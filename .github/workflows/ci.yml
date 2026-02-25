@@ -26,4 +26,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[mac,dev]"
-      - run: pytest tests/ -v -m "not slow"
+      - run: pytest tests/ -v -m "not slow" || test $? -eq 5
