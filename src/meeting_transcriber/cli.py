@@ -85,6 +85,14 @@ def main():
         help="Record microphone only, no app audio (macOS only)",
     )
 
+    # Claude CLI
+    parser.add_argument(
+        "--claude",
+        type=str,
+        default="claude",
+        help="Claude CLI binary name (default: 'claude', e.g. 'claude-work')",
+    )
+
     # Diarization
     parser.add_argument(
         "--diarize",
@@ -184,7 +192,9 @@ def main():
 
     # 4. Protocol via Claude CLI
     diarized = "[SPEAKER_" in transcript
-    protocol_md = generate_protocol_cli(transcript, title=args.title, diarized=diarized)
+    protocol_md = generate_protocol_cli(
+        transcript, title=args.title, diarized=diarized, claude_bin=args.claude
+    )
 
     # 5. Save protocol
     out_path = save_protocol(protocol_md, args.title, args.output_dir)
