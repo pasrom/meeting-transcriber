@@ -23,7 +23,8 @@ load_dotenv()
 console = Console()
 
 SPEAKERS_DB = Path("./speakers.json")
-SIMILARITY_THRESHOLD = 0.75  # cosine similarity threshold for speaker matching
+SIMILARITY_THRESHOLD = 0.75  # cosine similarity threshold for speaker recognition
+MERGE_THRESHOLD = 0.85  # cosine similarity threshold for merging duplicate speakers
 
 
 @dataclass
@@ -143,10 +144,61 @@ def prompt_speaker_names(
 # ── Diarization ──────────────────────────────────────────────────────────────
 
 
+def merge_similar_speakers(
+    turns: list[tuple[float, float, str]],
+    embeddings: dict[str, np.ndarray],
+) -> tuple[list[tuple[float, float, str]], dict[str, np.ndarray]]:
+    """Merge speakers with very similar embeddings (likely the same person).
+
+    Returns updated turns and embeddings with duplicates merged.
+    """
+    if len(embeddings) < 2:
+        return turns, embeddings
+
+    labels = list(embeddings.keys())
+    merge_map: dict[str, str] = {}
+
+    for i, label_a in enumerate(labels):
+        if label_a in merge_map:
+            continue
+        for label_b in labels[i + 1 :]:
+            if label_b in merge_map:
+                continue
+            score = cosine_similarity(embeddings[label_a], embeddings[label_b])
+            if score >= MERGE_THRESHOLD:
+                merge_map[label_b] = label_a
+                console.print(
+                    f"  [dim]Merged {label_b} into {label_a}"
+                    f" (similarity: {score:.0%})[/dim]"
+                )
+
+    if not merge_map:
+        return turns, embeddings
+
+    # Apply merge to turns
+    merged_turns = [
+        (start, end, merge_map.get(s, s)) for start, end, s in turns
+    ]
+
+    # Remove merged embeddings
+    merged_embeddings = {
+        k: v for k, v in embeddings.items() if k not in merge_map
+    }
+
+    return merged_turns, merged_embeddings
+
+
 def diarize(
-    audio_path: Path, interactive: bool = True
+    audio_path: Path,
+    num_speakers: int | None = None,
+    interactive: bool = True,
 ) -> list[tuple[float, float, str]]:
     """Run pyannote speaker diarization with speaker recognition.
+
+    Args:
+        audio_path: Path to audio file.
+        num_speakers: Expected number of speakers (helps accuracy).
+        interactive: Whether to prompt for unknown speaker names.
 
     Returns list of (start_sec, end_sec, speaker_name) tuples.
     """
@@ -165,11 +217,17 @@ def diarize(
 
     console.print("[dim]Diarization model loaded. Analyzing speakers ...[/dim]")
 
+    # Pass num_speakers hint to pyannote if provided
+    pipeline_params: dict = {}
+    if num_speakers:
+        pipeline_params["num_speakers"] = num_speakers
+        console.print(f"[dim]Expected speakers: {num_speakers}[/dim]")
+
     with Progress(
         SpinnerColumn(), TextColumn("{task.description}"), transient=True
     ) as progress:
         progress.add_task("Diarizing audio ...", total=None)
-        result = pipeline(str(audio_path))
+        result = pipeline(str(audio_path), **pipeline_params)
 
     # pyannote 4.x returns DiarizeOutput, 3.x returns Annotation directly
     annotation = getattr(result, "speaker_diarization", result)
@@ -180,23 +238,30 @@ def diarize(
     for turn, _, speaker in annotation.itertracks(yield_label=True):
         turns.append((turn.start, turn.end, speaker))
 
-    # Get unique speakers and their total speaking time
+    # Build embeddings dict {label: numpy_array}
     speaker_labels = sorted(set(t[2] for t in turns))
+    embeddings: dict[str, np.ndarray] = {}
+    if raw_embeddings is not None:
+        for i, label in enumerate(speaker_labels):
+            if i < len(raw_embeddings):
+                embeddings[label] = np.array(raw_embeddings[i])
+
+    # Auto-merge similar speakers (unless num_speakers was explicitly set)
+    if not num_speakers and len(speaker_labels) > 1:
+        turns, embeddings = merge_similar_speakers(turns, embeddings)
+        speaker_labels = sorted(set(t[2] for t in turns))
+
+    # Compute speaking times
     speaking_times = {}
     for label in speaker_labels:
-        speaking_times[label] = sum(end - start for start, end, s in turns if s == label)
+        speaking_times[label] = sum(
+            end - start for start, end, s in turns if s == label
+        )
 
     console.print(
         f"[green]Diarization complete: {len(speaker_labels)} speakers, "
         f"{len(turns)} segments[/green]"
     )
-
-    # Build embeddings dict {label: numpy_array}
-    embeddings = {}
-    if raw_embeddings is not None:
-        for i, label in enumerate(speaker_labels):
-            if i < len(raw_embeddings):
-                embeddings[label] = np.array(raw_embeddings[i])
 
     # Match against saved speaker profiles
     db = load_speaker_db()

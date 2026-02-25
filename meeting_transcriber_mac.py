@@ -277,7 +277,9 @@ def record_audio(
 # ── Transcription ────────────────────────────────────────────────────────────
 
 
-def transcribe(audio_path: Path, diarize_enabled: bool = False) -> str:
+def transcribe(
+    audio_path: Path, diarize_enabled: bool = False, num_speakers: int | None = None
+) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp)."""
     from pywhispercpp.model import Model
 
@@ -323,7 +325,7 @@ def transcribe(audio_path: Path, diarize_enabled: bool = False) -> str:
         for seg in segments
     ]
 
-    turns = diarize(audio_path)
+    turns = diarize(audio_path, num_speakers=num_speakers)
     ts_segments = assign_speakers(ts_segments, turns)
     text = format_diarized_transcript(ts_segments)
 
@@ -465,6 +467,12 @@ def main():
         action="store_true",
         help="Enable speaker diarization (requires pyannote.audio + HuggingFace token)",
     )
+    parser.add_argument(
+        "--speakers",
+        type=int,
+        default=None,
+        help="Expected number of speakers (improves diarization accuracy)",
+    )
     args = parser.parse_args()
     WHISPER_MODEL = args.model
 
@@ -509,7 +517,11 @@ def main():
             record_audio(audio_path, app_pid=app_pid, mic_only=args.mic_only)
 
         # 2. Transcription
-        transcript = transcribe(audio_path, diarize_enabled=args.diarize)
+        transcript = transcribe(
+            audio_path,
+            diarize_enabled=args.diarize,
+            num_speakers=args.speakers,
+        )
 
         # 3. Save transcript
         txt_path = save_transcript(transcript, args.title)
