@@ -14,7 +14,10 @@ console = Console()
 
 
 def generate_protocol_cli(
-    transcript: str, title: str = "Meeting", diarized: bool = False
+    transcript: str,
+    title: str = "Meeting",
+    diarized: bool = False,
+    claude_bin: str = "claude",
 ) -> str:
     """Call claude --print and pass the transcript via stdin."""
     prompt = PROTOCOL_PROMPT
@@ -46,24 +49,16 @@ def generate_protocol_cli(
             open(in_file, encoding="utf-8") as fin,
             open(out_file, "w", encoding="utf-8") as fout,
         ):
-            if sys.platform == "win32":
-                subprocess.run(
-                    "claude --print",
+            subprocess.run(
+                    f"{claude_bin} --print",
                     shell=True,
-                    stdin=fin,
-                    stdout=fout,
-                    timeout=300,
-                )
-            else:
-                subprocess.run(
-                    ["claude", "--print"],
                     stdin=fin,
                     stdout=fout,
                     timeout=300,
                 )
     except FileNotFoundError:
         console.print(
-            "[red]'claude' CLI not found. Please install:"
+            f"[red]'{claude_bin}' CLI not found. Please install:"
             " npm install -g @anthropic-ai/claude-code[/red]"
         )
         sys.exit(1)
