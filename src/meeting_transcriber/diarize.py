@@ -38,11 +38,33 @@ class TimestampedSegment:
 
 
 def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
-    """Load saved speaker embeddings from JSON. Returns {name: embedding_vector}."""
+    """Load saved speaker embeddings from JSON. Returns {name: embedding_vector}.
+
+    Normalizes names to capitalize() and merges duplicates by averaging embeddings.
+    """
     if not db_path.exists():
         return {}
-    data = json.loads(db_path.read_text(encoding="utf-8"))
-    return data
+    raw = json.loads(db_path.read_text(encoding="utf-8"))
+
+    # Merge entries that differ only by case
+    merged: dict[str, list[list[float]]] = {}
+    for name, emb in raw.items():
+        key = name.capitalize()
+        merged.setdefault(key, []).append(emb)
+
+    db = {}
+    for name, embs in merged.items():
+        if len(embs) == 1:
+            db[name] = embs[0]
+        else:
+            db[name] = np.mean(embs, axis=0).tolist()
+            console.print(f"[dim]Merged {len(embs)} profiles for '{name}'[/dim]")
+
+    # Persist cleanup if any merges happened
+    if len(db) < len(raw):
+        save_speaker_db(db, db_path)
+
+    return db
 
 
 def save_speaker_db(db: dict[str, list[float]], db_path: Path = SPEAKERS_DB) -> None:
@@ -182,6 +204,7 @@ def prompt_speaker_names(
             name = input(prompt).strip()
 
         if name:
+            name = name.capitalize()
             mapping[label] = name
             db[name] = embeddings[label].tolist()
             updated = True
