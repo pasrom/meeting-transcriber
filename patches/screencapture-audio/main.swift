@@ -12,7 +12,11 @@ func writeAllToStdout(_ ptr: UnsafeRawPointer, count: Int) {
     var offset = 0
     while remaining > 0 {
         let written = write(STDOUT_FILENO, ptr + offset, remaining)
-        if written <= 0 { break }
+        if written < 0 {
+            if errno == EINTR { continue }  // interrupted by signal — retry
+            break
+        }
+        if written == 0 { break }  // stdout closed
         remaining -= written
         offset += written
     }
@@ -27,7 +31,8 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
     private let sampleRate: Int
     private let channels: Int
     private var isRunning = false
-    private let writeQueue = DispatchQueue(label: "audio.stdout.writer")
+    private let writeQueue = DispatchQueue(label: "audio.stdout.writer", qos: .userInteractive)
+    // Accessed only from writeQueue (the sampleHandlerQueue) — no additional synchronization needed
     private var didLogFormat = false
     private var interleaveBuffer = [Float]()  // reusable — avoids alloc per callback
 
@@ -57,7 +62,7 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 
         guard checkScreenRecordingPermission() else {
             fputs("ERROR: Screen Recording permission not granted\n", stderr)
-            fputs("Please enable: System Settings \u{2192} Privacy & Security \u{2192} Screen Recording\n", stderr)
+            fputs("Please enable: System Settings → Privacy & Security → Screen Recording\n", stderr)
             throw NSError(domain: "AudioCapture", code: 1,
                          userInfo: [NSLocalizedDescriptionKey: "Screen Recording permission required"])
         }
@@ -203,6 +208,11 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 
         if isNonInterleaved {
             // ── Non-interleaved (planar): separate buffer per channel ──
+            // ScreenCaptureKit on macOS 13+ typically delivers planar float32:
+            //   Buffer 0: [L0, L1, ..., Ln]
+            //   Buffer 1: [R0, R1, ..., Rn]
+            // We must interleave to [L0, R0, L1, R1, ...] for stdout.
+
             // Use size-query pattern: first call gets required size, second fills the list
             var sizeNeeded: Int = 0
             let sizeStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -229,6 +239,7 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 
             let ablPtr = ablRaw.bindMemory(to: AudioBufferList.self, capacity: 1)
 
+            // blockBuffer must be retained for the lifetime of the AudioBufferList pointers
             var blockBuffer: CMBlockBuffer?
             let fillStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
                 sampleBuffer,
@@ -278,6 +289,8 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
                     let idx = frame * channelPtrs.count + ch
                     if frame < channelPtrs[ch].count {
                         interleaveBuffer[idx] = channelPtrs[ch][frame]
+                    } else {
+                        interleaveBuffer[idx] = 0.0  // zero-fill if channel is shorter
                     }
                 }
             }
@@ -350,7 +363,7 @@ struct ScreenCaptureAudio {
               Progress/errors are written to stderr
 
             Required Permissions:
-              - Screen Recording (System Settings \u{2192} Privacy & Security \u{2192} Screen Recording)
+              - Screen Recording (System Settings → Privacy & Security → Screen Recording)
 
             """, stderr)
             exit(1)

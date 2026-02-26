@@ -19,7 +19,7 @@ mac = [
     "pywhispercpp",
     "scipy",
     "sounddevice",
-    "proc-tap",
+    "proc-tap @ git+https://github.com/pasrom/ProcTap.git@fix/screencapture-audio-interleaving",
     "pyobjc-framework-Cocoa",
 ]
 windows = [
@@ -36,6 +36,9 @@ dev = [
 
 [project.scripts]
 transcribe = "meeting_transcriber.cli:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/meeting_transcriber"]
