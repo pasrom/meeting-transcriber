@@ -85,6 +85,11 @@ def main():
         help="Record microphone only, no app audio (macOS only)",
     )
     parser.add_argument(
+        "--no-mic",
+        action="store_true",
+        help="Record app audio only, no microphone (macOS only)",
+    )
+    parser.add_argument(
         "--list-mics",
         action="store_true",
         help="List available microphone devices and exit (macOS only)",
@@ -125,6 +130,7 @@ def main():
         or args.pid
         or args.list_apps
         or args.mic_only
+        or args.no_mic
         or args.list_mics
         or args.mic
     ):
@@ -136,7 +142,13 @@ def main():
 
     # Resolve mic device (interactive selection if --mic not given)
     mic_device = None
-    if IS_MAC and not args.file and not args.list_mics and not args.list_apps:
+    if (
+        IS_MAC
+        and not args.file
+        and not args.list_mics
+        and not args.list_apps
+        and not args.no_mic
+    ):
         from meeting_transcriber.audio.mac import choose_mic
 
         mic_device = choose_mic(args.mic)
@@ -206,6 +218,7 @@ def main():
                     audio_path,
                     app_pid=app_pid,
                     mic_only=args.mic_only,
+                    no_mic=args.no_mic,
                     mic_device=mic_device,
                 )
             else:

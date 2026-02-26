@@ -38,9 +38,8 @@ App audio (ProcTap) + Microphone → mix → 16kHz mono WAV → Whisper → [pya
 source .venv/bin/activate
 pip install -e ".[mac,diarize,dev]"
 
-# Build ProcTap Swift binary (required!):
-cd .venv/lib/python3.14/site-packages/proctap/swift/screencapture-audio
-swift build -c release
+# Build ProcTap Swift binary with audio fix (required!):
+./scripts/build_proctap.sh
 ```
 
 ## Key Commands

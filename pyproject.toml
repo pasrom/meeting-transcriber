@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 mac = [
     "pywhispercpp",
+    "scipy",
     "sounddevice",
     "proc-tap",
     "pyobjc-framework-Cocoa",

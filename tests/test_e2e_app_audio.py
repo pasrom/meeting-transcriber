@@ -4,8 +4,8 @@ E2E Test: App Audio Pipeline → Whisper Transcription
 Tests the complete pipeline as the macOS transcriber runs it:
 1. macOS `say` generates speech as WAV (simulates app output)
 2. Audio is converted to ProcTap format (48kHz stereo float32 chunks)
-3. Chunks go through the identical mix pipeline (stereo→mono, resample→16kHz, WAV)
-4. WAV is transcribed with pywhispercpp
+3. Chunks go through the identical mix pipeline (stereo→mono, 48kHz WAV)
+4. WAV is transcribed with pywhispercpp (whisper.cpp resamples internally)
 5. Transcription is verified against the original text
 6. ProcTap connection to a real app is verified separately
 """
@@ -19,8 +19,6 @@ from tempfile import NamedTemporaryFile
 
 import numpy as np
 import pytest
-
-from meeting_transcriber.config import TARGET_RATE
 
 APP_RATE = 48000
 APP_CHANNELS = 2
@@ -136,19 +134,8 @@ def mix_pipeline(frames_app: list[bytes]) -> Path:
     if APP_CHANNELS == 2 and len(raw) >= 2:
         raw = raw.reshape(-1, 2).mean(axis=1)
 
-    if APP_RATE != TARGET_RATE and len(raw) > 1:
-        ratio = TARGET_RATE / APP_RATE
-        new_len = int(len(raw) * ratio)
-        audio_app = np.interp(
-            np.linspace(0, len(raw) - 1, new_len),
-            np.arange(len(raw)),
-            raw,
-        )
-    else:
-        audio_app = raw
-
-    mixed = audio_app
-    audio_int16 = (np.clip(mixed, -1.0, 1.0) * 32767).astype(np.int16)
+    # No resampling — save at native rate, whisper.cpp resamples internally
+    audio_int16 = (np.clip(raw, -1.0, 1.0) * 32767).astype(np.int16)
 
     tmp = NamedTemporaryFile(suffix=".wav", delete=False)
     wav_path = Path(tmp.name)
@@ -157,7 +144,7 @@ def mix_pipeline(frames_app: list[bytes]) -> Path:
     with wave.open(str(wav_path), "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
-        wf.setframerate(TARGET_RATE)
+        wf.setframerate(APP_RATE)
         wf.writeframes(audio_int16.tobytes())
 
     return wav_path
@@ -250,13 +237,13 @@ class TestE2EAppAudio:
             assert len(chunk) > 0
 
     def test_mix_pipeline(self, speech_wav):
-        """Step 3: Mix pipeline produces valid 16kHz WAV."""
+        """Step 3: Mix pipeline produces valid 48kHz WAV."""
         chunks = convert_to_proctap_format(speech_wav)
         wav_path = mix_pipeline(chunks)
         try:
             assert wav_path.exists()
             with wave.open(str(wav_path), "rb") as wf:
-                assert wf.getframerate() == TARGET_RATE
+                assert wf.getframerate() == APP_RATE
                 assert wf.getnchannels() == 1
                 assert wf.getsampwidth() == 2
         finally:
