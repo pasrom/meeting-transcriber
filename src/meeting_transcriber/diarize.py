@@ -9,6 +9,7 @@ Features:
 
 import json
 import os
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -99,10 +100,50 @@ def match_speakers(
     return mapping
 
 
+def play_speaker_sample(
+    audio_path: Path,
+    turns: list[tuple[float, float, str]],
+    speaker_label: str,
+    max_duration: float = 10.0,
+) -> None:
+    """Play a representative audio sample for a speaker."""
+    import sounddevice as sd
+
+    # Find the longest segment for this speaker (most representative)
+    speaker_turns = [(s, e) for s, e, spk in turns if spk == speaker_label]
+    if not speaker_turns:
+        return
+
+    speaker_turns.sort(key=lambda t: t[1] - t[0], reverse=True)
+    start, end = speaker_turns[0]
+    # Limit playback duration
+    end = min(end, start + max_duration)
+
+    with wave.open(str(audio_path), "rb") as wf:
+        sr = wf.getframerate()
+        n_channels = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+
+        start_frame = int(start * sr)
+        end_frame = int(end * sr)
+        wf.setpos(start_frame)
+        frames = wf.readframes(end_frame - start_frame)
+
+    dtype = {1: np.int8, 2: np.int16, 4: np.int32}.get(sampwidth, np.int16)
+    audio = np.frombuffer(frames, dtype=dtype)
+    if n_channels > 1:
+        audio = audio.reshape(-1, n_channels)
+
+    sd.play(audio, samplerate=sr)
+    sd.wait()
+
+
 def prompt_speaker_names(
     mapping: dict[str, str],
     embeddings: dict[str, np.ndarray],
     speaking_times: dict[str, float],
+    turns: list[tuple[float, float, str]],
+    audio_path: Path,
     db: dict[str, list[float]],
     db_path: Path = SPEAKERS_DB,
 ) -> dict[str, str]:
@@ -119,9 +160,26 @@ def prompt_speaker_names(
         seconds = int(duration % 60)
         time_str = f"{minutes}:{seconds:02d}" if minutes else f"{seconds}s"
 
-        name = input(
-            f"  {label} (spoke {time_str}) – assign name (Enter to skip): "
-        ).strip()
+        # Play audio sample so user can identify the speaker
+        console.print(f"  [dim]Playing sample for {label} ...[/dim]")
+        try:
+            play_speaker_sample(audio_path, turns, label)
+        except Exception as e:
+            console.print(f"  [yellow]Could not play audio: {e}[/yellow]")
+
+        prompt = (
+            f"  {label} (spoke {time_str}) – name (p=replay, p15=15s, Enter=skip): "
+        )
+        name = input(prompt).strip()
+        while name.lower().startswith("p") and not name[1:].isalpha():
+            dur = 10.0
+            if len(name) > 1 and name[1:].isdigit():
+                dur = float(name[1:])
+            try:
+                play_speaker_sample(audio_path, turns, label, dur)
+            except Exception as e:
+                console.print(f"  [yellow]Could not play: {e}[/yellow]")
+            name = input(prompt).strip()
 
         if name:
             mapping[label] = name
@@ -292,7 +350,9 @@ def diarize(
         unrecognized = [label for label, name in mapping.items() if label == name]
         if unrecognized:
             console.print("\n[bold]Unknown speakers:[/bold]")
-            mapping = prompt_speaker_names(mapping, embeddings, speaking_times, db)
+            mapping = prompt_speaker_names(
+                mapping, embeddings, speaking_times, turns, audio_path, db
+            )
 
     # Apply name mapping to turns
     named_turns = [(start, end, mapping.get(s, s) or s) for start, end, s in turns]
