@@ -7,6 +7,11 @@ DEFAULT_WHISPER_MODEL_WIN = "large"
 DEFAULT_OUTPUT_DIR = Path("./protocols")
 TARGET_RATE = 16000
 
+# Watch mode defaults
+DEFAULT_POLL_INTERVAL = 3.0
+DEFAULT_END_GRACE_PERIOD = 15.0
+DEFAULT_CONFIRMATION_COUNT = 2
+
 PROTOCOL_PROMPT = """You are a professional meeting minute taker.
 Create a structured meeting protocol in German from the following transcript.
 

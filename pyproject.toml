@@ -21,6 +21,7 @@ mac = [
     "sounddevice",
     "proc-tap @ git+https://github.com/pasrom/ProcTap.git@fix/screencapture-audio-interleaving",
     "pyobjc-framework-Cocoa",
+    "pyobjc-framework-Quartz",
 ]
 windows = [
     "faster-whisper",

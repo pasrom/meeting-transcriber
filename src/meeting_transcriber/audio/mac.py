@@ -199,11 +199,16 @@ def record_audio(
     mic_only: bool = False,
     no_mic: bool = False,
     mic_device: int | None = None,
+    stop_event: threading.Event | None = None,
 ) -> Path:
-    """Record app audio (ProcTap) and/or microphone (sounddevice)."""
+    """Record app audio (ProcTap) and/or microphone (sounddevice).
+
+    If stop_event is provided, recording is controlled externally (watch mode).
+    Otherwise, the user presses Enter to stop (interactive mode).
+    """
     frames_app: list[bytes] = []
     frames_mic: list[np.ndarray] = []
-    stop_event = threading.Event()
+    _stop = stop_event if stop_event is not None else threading.Event()
     app_rate = RECORD_RATE
     app_channels = 2
 
@@ -242,7 +247,7 @@ def record_audio(
 
                 def _read_app_audio():
                     chunk_size = RECORD_RATE * app_channels * 4 * 10 // 1000
-                    while not stop_event.is_set():
+                    while not _stop.is_set():
                         data = app_proc.stdout.read(chunk_size)
                         if not data:
                             break
@@ -270,7 +275,7 @@ def record_audio(
     if not no_mic:
 
         def mic_callback(indata, frame_count, time_info, status):
-            if not stop_event.is_set():
+            if not _stop.is_set():
                 frames_mic.append(indata[:, 0].copy())
 
         mic_stream = sd.InputStream(
@@ -289,11 +294,19 @@ def record_audio(
         console.print("[dim]Microphone disabled (--no-mic)[/dim]")
 
     # ── Recording loop ───────────────────────────────────────────────────
-    console.print(
-        "\n[bold green]Recording ...[/bold green]  [dim]Press Enter to stop[/dim]\n"
-    )
-    input()
-    stop_event.set()
+    if stop_event is None:
+        # Interactive mode: user presses Enter to stop
+        console.print(
+            "\n[bold green]Recording ...[/bold green]  [dim]Press Enter to stop[/dim]\n"
+        )
+        input()
+        _stop.set()
+    else:
+        # Watch mode: externally controlled via stop_event
+        console.print(
+            "\n[bold green]Recording ...[/bold green]  [dim](auto-stop)[/dim]\n"
+        )
+        _stop.wait()
 
     if mic_stream:
         mic_stream.stop()
