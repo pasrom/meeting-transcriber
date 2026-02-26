@@ -9,7 +9,10 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from meeting_transcriber.config import (
+    DEFAULT_CONFIRMATION_COUNT,
+    DEFAULT_END_GRACE_PERIOD,
     DEFAULT_OUTPUT_DIR,
+    DEFAULT_POLL_INTERVAL,
     DEFAULT_WHISPER_MODEL_MAC,
     DEFAULT_WHISPER_MODEL_WIN,
 )
@@ -122,6 +125,35 @@ def main():
         help="Expected number of speakers (improves diarization accuracy)",
     )
 
+    # Watch mode
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Watch mode: auto-detect meetings and record (macOS only)",
+    )
+    parser.add_argument(
+        "--watch-apps",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Apps to watch (default: Teams, Zoom, Webex)",
+    )
+    parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=DEFAULT_POLL_INTERVAL,
+        help=f"Seconds between polls in watch mode (default: {DEFAULT_POLL_INTERVAL})",
+    )
+    parser.add_argument(
+        "--end-grace",
+        type=float,
+        default=DEFAULT_END_GRACE_PERIOD,
+        help=(
+            "Grace period in seconds before meeting is considered ended"
+            f" (default: {DEFAULT_END_GRACE_PERIOD})"
+        ),
+    )
+
     args = parser.parse_args()
 
     # Validate macOS-only flags on Windows
@@ -133,12 +165,55 @@ def main():
         or args.no_mic
         or args.list_mics
         or args.mic
+        or args.watch
     ):
         console.print(
-            "[red]--app, --pid, --list-apps, --mic-only, --list-mics, --mic"
-            " are macOS only.[/red]"
+            "[red]--app, --pid, --list-apps, --mic-only, --list-mics, --mic,"
+            " --watch are macOS only.[/red]"
         )
         sys.exit(1)
+
+    # Watch mode: auto-detect meetings
+    if args.watch:
+        from meeting_transcriber.watch.patterns import ALL_PATTERNS, PATTERN_BY_NAME
+        from meeting_transcriber.watch.watcher import MeetingWatcher
+
+        if args.watch_apps:
+            patterns = []
+            for name in args.watch_apps:
+                key = name.lower()
+                if key not in PATTERN_BY_NAME:
+                    console.print(
+                        f"[red]Unknown app '{name}'."
+                        f" Available: {', '.join(PATTERN_BY_NAME)}[/red]"
+                    )
+                    sys.exit(1)
+                patterns.append(PATTERN_BY_NAME[key])
+        else:
+            patterns = list(ALL_PATTERNS)
+
+        # Resolve mic before entering watch mode
+        mic_device = None
+        if not args.no_mic:
+            from meeting_transcriber.audio.mac import choose_mic
+
+            mic_device = choose_mic(args.mic)
+
+        watcher = MeetingWatcher(
+            patterns=patterns,
+            poll_interval=args.poll_interval,
+            end_grace=args.end_grace,
+            confirmation_count=DEFAULT_CONFIRMATION_COUNT,
+            output_dir=args.output_dir,
+            whisper_model=args.model,
+            diarize=args.diarize,
+            num_speakers=args.speakers,
+            no_mic=args.no_mic,
+            mic_device=mic_device,
+            claude_bin=args.claude,
+        )
+        watcher.run()
+        sys.exit(0)
 
     # Resolve mic device (interactive selection if --mic not given)
     mic_device = None
