@@ -53,28 +53,37 @@ def window_exists(title: str) -> bool:
 
 
 def applescript_fill_names(names: dict[str, str]) -> None:
-    """Fill in speaker names via AppleScript targeting text fields by index."""
+    """Fill in speaker names via AppleScript.
+
+    Text fields are inside GroupBox groups within the main content group.
+    """
     for i, (_label, name) in enumerate(names.items()):
-        idx = i + 1
+        grp = i + 1  # group 1 = SPEAKER_00, group 2 = SPEAKER_01
         applescript(
             'tell application "System Events"\n'
             '    tell process "MeetingTranscriber"\n'
-            f"        set value of text field {idx}"
-            f' of window "Name Speakers" to "{name}"\n'
+            "        tell group 1 of "
+            'window "Name Speakers"\n'
+            f"            set value of text field 1"
+            f' of group {grp} to "{name}"\n'
+            "        end tell\n"
             "    end tell\n"
             "end tell"
         )
 
 
 def applescript_click_confirm() -> None:
-    """Click the Confirm button in the speaker naming window."""
-    applescript("""
-        tell application "System Events"
-            tell process "MeetingTranscriber"
-                click button "Confirm" of window "Name Speakers"
-            end tell
-        end tell
-    """)
+    """Click the Confirm button (button 2 inside the content group)."""
+    applescript(
+        'tell application "System Events"\n'
+        '    tell process "MeetingTranscriber"\n'
+        "        tell group 1 of "
+        'window "Name Speakers"\n'
+        "            click button 2\n"
+        "        end tell\n"
+        "    end tell\n"
+        "end tell"
+    )
 
 
 # ── Test data helpers ────────────────────────────────────────────────────────
