@@ -11,5 +11,10 @@ let package = Package(
             path: "Sources",
             exclude: ["Info.plist"]
         ),
+        .testTarget(
+            name: "MeetingTranscriberTests",
+            dependencies: ["MeetingTranscriber"],
+            path: "Tests"
+        ),
     ]
 )
