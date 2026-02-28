@@ -82,6 +82,13 @@ def choose_mic(mic_spec: str | None) -> int | None:
         console.print(f"[red]No microphone matching '{mic_spec}' found.[/red]")
         sys.exit(1)
 
+    # Non-interactive: use system default when no TTY (e.g. launched from app)
+    if not sys.stdin.isatty():
+        default_idx = sd.default.device[0]
+        mic_name = sd.query_devices(default_idx)["name"]
+        console.print(f"[dim]Using default mic (non-interactive): {mic_name}[/dim]")
+        return None
+
     # Interactive selection
     default_idx = sd.default.device[0]
     console.print("\n[bold]Microphone devices:[/bold]")
@@ -138,6 +145,12 @@ def choose_app(app_name: str | None) -> dict | None:
             )
             return matches[0]
         if len(matches) > 1:
+            if not sys.stdin.isatty():
+                console.print(
+                    f"[dim]Multiple matches for '{app_name}',"
+                    f" using first: {matches[0]['name']}[/dim]"
+                )
+                return matches[0]
             console.print(f"[yellow]Multiple matches for '{app_name}':[/yellow]")
             for i, a in enumerate(matches, 1):
                 console.print(f"  {i}. {a['name']} (PID {a['pid']})")
