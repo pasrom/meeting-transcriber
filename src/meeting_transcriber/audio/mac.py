@@ -1,5 +1,7 @@
 """macOS audio recording via ScreenCaptureKit (direct) and sounddevice."""
 
+import logging
+import os
 import shutil
 import signal
 import subprocess
@@ -11,6 +13,8 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 from rich.console import Console
+
+log = logging.getLogger(__name__)
 
 RECORD_RATE = 48000  # native rate for ScreenCaptureKit
 
@@ -173,11 +177,24 @@ def _pid_to_bundle_id(pid: int) -> str | None:
 
 
 def _find_swift_binary() -> Path | None:
-    """Find the screencapture-audio Swift binary in the venv."""
-    # Walk up from this file to find the venv
+    """Find the screencapture-audio Swift binary.
+
+    Search order:
+    1. PROCTAP_BINARY environment variable
+    2. Known venv paths (with executable check)
+    3. shutil.which() fallback
+    """
+    # 1. Explicit env var
+    env_path = os.environ.get("PROCTAP_BINARY")
+    if env_path:
+        p = Path(env_path)
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+        log.warning("PROCTAP_BINARY=%s is not an executable file", env_path)
+
+    # 2. Known venv build output paths
     venv = Path(sys.prefix)
     base = venv / "lib"
-    # Search for the binary in known build output paths
     for python_dir in sorted(base.glob("python*"), reverse=True):
         swift_dir = (
             python_dir / "site-packages/proctap/swift/screencapture-audio/.build"
@@ -188,8 +205,14 @@ def _find_swift_binary() -> Path | None:
             "x86_64-apple-macosx/release",
         ]:
             candidate = swift_dir / sub / "screencapture-audio"
-            if candidate.exists():
+            if candidate.is_file() and os.access(candidate, os.X_OK):
                 return candidate
+
+    # 3. Fall back to PATH lookup
+    which = shutil.which("screencapture-audio")
+    if which:
+        return Path(which)
+
     return None
 
 
@@ -287,6 +310,16 @@ def record_audio(
             device=mic_device,
         )
         mic_stream.start()
+
+        # Validate actual sample rate matches requested rate
+        actual_rate = mic_stream.samplerate
+        if actual_rate != mic_rate:
+            console.print(
+                f"[yellow]Mic rate mismatch: requested {mic_rate} Hz,"
+                f" got {actual_rate} Hz. Adjusting.[/yellow]"
+            )
+            mic_rate = int(actual_rate)
+
         dev_idx = mic_device if mic_device is not None else sd.default.device[0]
         mic_name = sd.query_devices(dev_idx)["name"]
         console.print(f"[dim]Microphone active: {mic_name} ({mic_rate} Hz, mono)[/dim]")
