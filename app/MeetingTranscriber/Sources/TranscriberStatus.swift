@@ -23,6 +23,7 @@ enum TranscriberState: String, Codable {
     case recording
     case transcribing
     case generatingProtocol = "generating_protocol"
+    case waitingForSpeakerNames = "waiting_for_speaker_names"
     case protocolReady = "protocol_ready"
     case error
 
@@ -33,6 +34,7 @@ enum TranscriberState: String, Codable {
         case .recording: "Recording"
         case .transcribing: "Transcribing..."
         case .generatingProtocol: "Generating Protocol..."
+        case .waitingForSpeakerNames: "Name Speakers"
         case .protocolReady: "Protocol Ready"
         case .error: "Error"
         }
@@ -45,6 +47,7 @@ enum TranscriberState: String, Codable {
         case .recording: "record.circle.fill"
         case .transcribing: "waveform"
         case .generatingProtocol: "waveform"
+        case .waitingForSpeakerNames: "person.2.fill"
         case .protocolReady: "checkmark.circle.fill"
         case .error: "exclamationmark.triangle.fill"
         }

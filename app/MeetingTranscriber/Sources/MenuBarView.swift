@@ -7,6 +7,7 @@ struct MenuBarView: View {
     let onOpenLastProtocol: () -> Void
     let onOpenProtocolsFolder: () -> Void
     let onOpenSettings: () -> Void
+    let onNameSpeakers: (() -> Void)?
     let onQuit: () -> Void
 
     private var state: TranscriberState {
@@ -63,6 +64,15 @@ struct MenuBarView: View {
             }
         }
         .keyboardShortcut("s")
+
+        if state == .waitingForSpeakerNames, let onNameSpeakers {
+            Button {
+                onNameSpeakers()
+            } label: {
+                Label("Name Speakers...", systemImage: "person.2.fill")
+            }
+            .keyboardShortcut("n")
+        }
 
         Divider()
 

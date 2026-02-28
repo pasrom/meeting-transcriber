@@ -65,6 +65,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
                 title: "Protocol Ready",
                 body: "Protocol for \"\(meetingTitle)\" is ready."
             )
+        case .waitingForSpeakerNames:
+            notify(
+                title: "Name Speakers",
+                body: "Speakers detected — open the app to assign names"
+            )
         case .error:
             if let error = status.error {
                 notify(title: "Transcriber Error", body: error)
