@@ -26,6 +26,7 @@ struct MeetingTranscriberApp: App {
                 onOpenSettings: { openWindow(id: "settings") },
                 onNameSpeakers: {
                     loadSpeakerRequest()
+                    NSApp.activate()
                     openWindow(id: "speaker-naming")
                 },
                 onQuit: quit
@@ -42,6 +43,7 @@ struct MeetingTranscriberApp: App {
 
             if newValue == .waitingForSpeakerNames {
                 loadSpeakerRequest()
+                NSApp.activate()
                 openWindow(id: "speaker-naming")
             }
         }
