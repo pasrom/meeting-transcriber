@@ -12,6 +12,7 @@ from meeting_transcriber.config import (
     DEFAULT_END_GRACE_PERIOD,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_POLL_INTERVAL,
+    MAX_RECORDING_SECONDS,
 )
 from meeting_transcriber.watch.detector import DetectedMeeting, MeetingDetector
 from meeting_transcriber.watch.patterns import AppMeetingPattern
@@ -108,13 +109,14 @@ class MeetingWatcher:
         )
         record_thread.start()
 
-        # Wait for meeting to end
-        self._wait_for_meeting_end(meeting)
-
-        # Stop recording
-        console.print("[yellow]Stopping recording...[/yellow]")
-        stop_event.set()
-        record_thread.join(timeout=10)
+        try:
+            # Wait for meeting to end
+            self._wait_for_meeting_end(meeting, start_time=time.monotonic())
+        finally:
+            # Always stop recording, even if _wait_for_meeting_end raises
+            console.print("[yellow]Stopping recording...[/yellow]")
+            stop_event.set()
+            record_thread.join(timeout=10)
 
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             console.print("[red]No audio recorded, skipping pipeline.[/red]")
@@ -145,12 +147,24 @@ class MeetingWatcher:
         except Exception as e:
             console.print(f"[red]Recording error: {e}[/red]")
 
-    def _wait_for_meeting_end(self, meeting: DetectedMeeting) -> None:
+    def _wait_for_meeting_end(
+        self, meeting: DetectedMeeting, start_time: float | None = None
+    ) -> None:
         """Poll until the meeting window disappears, with grace period."""
         grace_start: float | None = None
 
         try:
             while True:
+                # Enforce max recording duration
+                if start_time is not None:
+                    elapsed = time.monotonic() - start_time
+                    if elapsed > MAX_RECORDING_SECONDS:
+                        console.print(
+                            "[yellow]Max recording duration reached (4h)."
+                            " Stopping.[/yellow]"
+                        )
+                        return
+
                 active = self.detector.is_meeting_active(meeting)
 
                 if active:

@@ -15,6 +15,7 @@ STATUS_FILE = STATUS_DIR / "status.json"
 DEFAULT_POLL_INTERVAL = 3.0
 DEFAULT_END_GRACE_PERIOD = 15.0
 DEFAULT_CONFIRMATION_COUNT = 2
+MAX_RECORDING_SECONDS = 14400  # 4 hours
 
 PROTOCOL_PROMPT = """You are a professional meeting minute taker.
 Create a structured meeting protocol in German from the following transcript.
