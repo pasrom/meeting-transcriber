@@ -49,17 +49,19 @@ final class PythonProcess {
         env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin")"
         proc.environment = env
 
-        // Pipe stdout to /dev/null, stderr to log file for debugging
-        proc.standardOutput = FileHandle.nullDevice
+        // Pipe stdout + stderr to log file for debugging
         if let logHandle = try? FileHandle(forWritingTo: Self.logFileURL) {
             logHandle.seekToEndOfFile()
+            proc.standardOutput = logHandle
             proc.standardError = logHandle
         } else {
             // Create the file and retry
             FileManager.default.createFile(atPath: Self.logFileURL.path, contents: nil)
             if let logHandle = try? FileHandle(forWritingTo: Self.logFileURL) {
+                proc.standardOutput = logHandle
                 proc.standardError = logHandle
             } else {
+                proc.standardOutput = FileHandle.nullDevice
                 proc.standardError = FileHandle.nullDevice
             }
         }

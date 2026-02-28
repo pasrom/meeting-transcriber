@@ -1,5 +1,6 @@
 """Meeting detection via CGWindowListCopyWindowInfo polling."""
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -9,6 +10,7 @@ from rich.console import Console
 from meeting_transcriber.watch.patterns import AppMeetingPattern
 
 console = Console()
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,6 +35,7 @@ class MeetingDetector:
         self.patterns = patterns
         self.confirmation_count = confirmation_count
         self._consecutive_hits: dict[str, int] = {}  # pattern.app_name -> count
+        self._permission_warned = False
 
     def _get_windows(self) -> list[dict]:
         """Fetch on-screen window list via Quartz."""
@@ -45,7 +48,21 @@ class MeetingDetector:
         windows = CGWindowListCopyWindowInfo(
             kCGWindowListOptionOnScreenOnly, kCGNullWindowID
         )
-        return list(windows) if windows else []
+        result = list(windows) if windows else []
+
+        # Check if window names are missing (Screen Recording permission issue)
+        if result and not self._permission_warned:
+            has_names = any(w.get("kCGWindowName") for w in result)
+            if not has_names:
+                console.print(
+                    "[red]Cannot read window titles — Screen Recording"
+                    " permission required for this app.[/red]\n"
+                    "[dim]System Settings → Privacy & Security → Screen Recording"
+                    " → enable for MeetingTranscriber[/dim]"
+                )
+                self._permission_warned = True
+
+        return result
 
     def _match_window(self, window: dict, pattern: AppMeetingPattern) -> str | None:
         """Check if a window matches a meeting pattern. Returns title or None."""
