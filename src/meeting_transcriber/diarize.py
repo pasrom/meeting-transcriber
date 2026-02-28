@@ -297,6 +297,15 @@ def diarize(
 
     Returns list of (start_sec, end_sec, speaker_name) tuples.
     """
+    import sys
+
+    # Disable interactive prompts when no TTY (e.g. launched from menu bar app)
+    if interactive and not sys.stdin.isatty():
+        console.print(
+            "[dim]Non-interactive mode (no TTY): skipping speaker prompts[/dim]"
+        )
+        interactive = False
+
     from dotenv import load_dotenv
     from pyannote.audio import Pipeline
 
