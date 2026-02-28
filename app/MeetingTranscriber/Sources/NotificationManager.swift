@@ -14,6 +14,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// Set up delegate and request permission. Must be called after the app bundle is loaded.
     func setUp() {
         guard !isSetUp else { return }
+        // UNUserNotificationCenter crashes without a proper app bundle
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("NotificationManager: skipping setup (no app bundle)")
+            return
+        }
         isSetUp = true
 
         let center = UNUserNotificationCenter.current()
@@ -29,7 +34,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func notify(title: String, body: String) {
-        guard isSetUp else { return }
+        guard isSetUp, Bundle.main.bundleIdentifier != nil else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title
