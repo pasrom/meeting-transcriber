@@ -60,6 +60,17 @@ pytest tests/ -v -m "not slow"
 python tests/test_e2e_app_audio.py
 ```
 
+## Git Workflow
+
+Use the `/git-workflow` skill. Commit proactively after every logical unit of work — don't wait for user permission.
+
+- **Conventional Commits:** `<type>(<scope>): <description>` — types: feat, fix, docs, refactor, test, perf, chore, build
+- **Scopes:** cli, audio, transcription, protocol, diarize, watch, config, app (Swift), test
+- **Atomic commits:** one logical change per commit. If you need "and" in the message, split it.
+- **Stage explicitly:** `git add <file1> <file2>` — never `git add -A` or `git add .`
+- **Verify first:** run `ruff check src/ tests/` and tests before committing
+- **Commit body:** document the WHY for non-trivial changes (architecture decisions, rejected alternatives)
+
 ## Conventions
 
 - Use `ruff` for linting/formatting (config in pyproject.toml)
