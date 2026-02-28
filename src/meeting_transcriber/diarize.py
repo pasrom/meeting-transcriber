@@ -7,6 +7,7 @@ Features:
 - Interactive name assignment for unknown speakers
 """
 
+import fcntl
 import json
 import os
 import wave
@@ -41,10 +42,16 @@ def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
     """Load saved speaker embeddings from JSON. Returns {name: embedding_vector}.
 
     Normalizes names to capitalize() and merges duplicates by averaging embeddings.
+    Uses shared file lock to prevent corruption from concurrent access.
     """
     if not db_path.exists():
         return {}
-    raw = json.loads(db_path.read_text(encoding="utf-8"))
+    with open(db_path, encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_SH)
+        try:
+            raw = json.load(f)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
     # Merge entries that differ only by case
     merged: dict[str, list[list[float]]] = {}
@@ -68,8 +75,17 @@ def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
 
 
 def save_speaker_db(db: dict[str, list[float]], db_path: Path = SPEAKERS_DB) -> None:
-    """Save speaker embeddings to JSON."""
-    db_path.write_text(json.dumps(db, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Save speaker embeddings to JSON.
+
+    Uses exclusive file lock to prevent corruption from concurrent access.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(db_path, "w", encoding="utf-8") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            json.dump(db, f, indent=2, ensure_ascii=False)
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
