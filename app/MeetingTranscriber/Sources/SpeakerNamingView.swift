@@ -1,6 +1,62 @@
 import AVFoundation
 import SwiftUI
 
+/// NSTextField subclass that forwards accessibility `set value` (AppleScript)
+/// to the delegate so the SwiftUI Binding stays in sync.
+private final class AutomationTextField: NSTextField {
+    override func setAccessibilityValue(_ value: Any?) {
+        if let str = value as? String {
+            self.stringValue = str
+            // Post the same notification that user typing would trigger
+            NotificationCenter.default.post(
+                name: NSControl.textDidChangeNotification,
+                object: self
+            )
+        }
+    }
+}
+
+/// NSTextField wrapper that syncs accessibility `set value` to the Binding.
+/// Standard SwiftUI TextField ignores programmatic accessibility value changes
+/// (e.g. from AppleScript `set value of text field`), which breaks UI automation.
+struct AccessibleTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var identifier: String
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = AutomationTextField()
+        field.placeholderString = placeholder
+        field.setAccessibilityIdentifier(identifier)
+        field.bezelStyle = .roundedBezel
+        field.delegate = context.coordinator
+        return field
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let request: SpeakerRequest
@@ -78,9 +134,11 @@ struct SpeakerNamingView: View {
                     }
                     .controlSize(.small)
 
-                    TextField("Name", text: $names[index])
-                        .textFieldStyle(.roundedBorder)
-                        .accessibilityIdentifier("speaker-name-\(speaker.label)")
+                    AccessibleTextField(
+                        text: $names[index],
+                        placeholder: "Name",
+                        identifier: "speaker-name-\(speaker.label)"
+                    )
                 }
             }
             .padding(4)

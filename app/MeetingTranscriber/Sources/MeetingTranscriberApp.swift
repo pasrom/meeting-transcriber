@@ -13,6 +13,9 @@ struct MeetingTranscriberApp: App {
         // LSUIElement in Info.plist hides Dock icon.
         // Defer notification setup to after bundle is available.
         notifications.setUp()
+        // Always monitor status file so the app reacts to external
+        // transcriber processes (e.g. speaker naming requests).
+        monitor.start()
     }
 
     var body: some Scene {
