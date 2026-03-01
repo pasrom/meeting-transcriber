@@ -230,7 +230,41 @@ def cleanup_ipc_files() -> None:
         shutil.rmtree(SPEAKER_SAMPLES_DIR, ignore_errors=True)
 
 
-# ── E2E Test ─────────────────────────────────────────────────────────────────
+# ── E2E Tests ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.slow
+def test_transcription_with_diarization():
+    """E2E: pre-recorded two-speaker WAV through Whisper + pyannote diarization."""
+    fixture = PROJECT / "tests" / "fixtures" / "two_speakers_de.wav"
+    if not fixture.exists():
+        pytest.skip(
+            f"Fixture not found: {fixture} — run scripts/generate_test_audio.sh"
+        )
+    if not os.environ.get("HF_TOKEN"):
+        pytest.skip("HF_TOKEN not set (required for pyannote diarization)")
+
+    from meeting_transcriber.transcription.mac import transcribe
+
+    transcript = transcribe(
+        fixture,
+        model="base",
+        language="de",
+        diarize_enabled=True,
+        num_speakers=2,
+        meeting_title="Test Meeting",
+    )
+
+    # Diarization labels present
+    assert "[SPEAKER_" in transcript, f"No speaker labels in transcript:\n{transcript}"
+
+    # German keywords from the spoken text recognised
+    keywords = ["meeting", "projekt", "entwicklung", "status"]
+    found = [kw for kw in keywords if kw in transcript.lower()]
+    assert len(found) >= 2, (
+        f"Expected ≥2 keywords from {keywords}, found {found}.\n"
+        f"Transcript:\n{transcript}"
+    )
 
 
 @pytest.mark.slow
