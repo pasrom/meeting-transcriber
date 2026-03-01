@@ -6,6 +6,14 @@ import CoreAudio
 
 // MARK: - Helpers
 
+/// Convert mach_absolute_time() ticks to seconds.
+private func machTicksToSeconds(_ ticks: UInt64) -> Double {
+    var info = mach_timebase_info_data_t()
+    mach_timebase_info(&info)
+    let nanos = Double(ticks) * Double(info.numer) / Double(info.denom)
+    return nanos / 1_000_000_000.0
+}
+
 /// Write all bytes to stdout using POSIX write() — no Data copy, no Foundation overhead.
 func writeAllToStdout(_ ptr: UnsafeRawPointer, count: Int) {
     var remaining = count
@@ -22,6 +30,72 @@ func writeAllToStdout(_ ptr: UnsafeRawPointer, count: Int) {
     }
 }
 
+// MARK: - Mic Capture Handler (VoiceProcessingIO AEC)
+
+/// Records microphone audio with Apple's VoiceProcessingIO echo cancellation.
+/// VoiceProcessingIO monitors the system speaker output and subtracts it from the
+/// mic input in real-time — the same AEC that FaceTime uses.
+class MicCaptureHandler {
+    private let engine = AVAudioEngine()
+    private var outputFile: AVAudioFile?
+    private let outputPath: String
+    /// mach_absolute_time() of first audio buffer — for computing MIC_DELAY
+    var firstFrameTime: UInt64 = 0
+
+    init(outputPath: String) {
+        self.outputPath = outputPath
+    }
+
+    func start() throws {
+        let inputNode = engine.inputNode
+
+        // Enable VoiceProcessingIO — this activates AEC + noise suppression
+        try inputNode.setVoiceProcessingEnabled(true)
+        fputs("Mic: VoiceProcessingIO enabled (AEC active)\n", stderr)
+
+        // Query the format from the input node
+        let tapFormat = inputNode.outputFormat(forBus: 0)
+        fputs("Mic format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch\n", stderr)
+
+        // Create output WAV file — 16-bit PCM mono at the input node's sample rate
+        let url = URL(fileURLWithPath: outputPath)
+        let wavSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: tapFormat.sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        outputFile = try AVAudioFile(forWriting: url, settings: wavSettings)
+
+        // Install tap to capture audio buffers
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, when in
+            guard let self = self else { return }
+            if self.firstFrameTime == 0 {
+                self.firstFrameTime = mach_absolute_time()
+            }
+            do {
+                try self.outputFile?.write(from: buffer)
+            } catch {
+                fputs("WARNING: Mic write error: \(error)\n", stderr)
+            }
+        }
+
+        engine.prepare()
+        try engine.start()
+        fputs("Mic recording started: \(outputPath)\n", stderr)
+    }
+
+    func stop() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        outputFile = nil  // AVAudioFile finalizes WAV header on dealloc
+        fputs("Mic recording stopped\n", stderr)
+    }
+}
+
 // MARK: - Audio Capture Stream Handler
 
 @available(macOS 13.0, *)
@@ -35,6 +109,8 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
     // Accessed only from writeQueue (the sampleHandlerQueue) — no additional synchronization needed
     private var didLogFormat = false
     private var interleaveBuffer = [Float]()  // reusable — avoids alloc per callback
+    /// mach_absolute_time() of first audio callback — for computing MIC_DELAY
+    var appFirstFrameTime: UInt64 = 0
 
     init(bundleID: String, sampleRate: Int = 48000, channels: Int = 2) {
         self.bundleID = bundleID
@@ -164,10 +240,12 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
         }
     }
 
-    func stop() async throws {
+    func stop() {
         guard isRunning else { return }
         fputs("\nStopping audio capture...\n", stderr)
-        try await stream?.stopCapture()
+        // Synchronous stop: remove output and invalidate
+        // SCStream.stopCapture is async but we need to stop from a signal handler
+        // so we just mark as stopped; the process will exit shortly
         isRunning = false
         fputs("Audio capture stopped\n", stderr)
     }
@@ -192,9 +270,10 @@ class AudioCaptureHandler: NSObject, SCStreamDelegate, SCStreamOutput {
 
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
 
-        // Log format once
+        // Log format once + record first frame timestamp
         if !didLogFormat {
             didLogFormat = true
+            appFirstFrameTime = mach_absolute_time()
             fputs(String(format: "Audio format: %.0f Hz, %dch, %d-bit, flags=0x%X (nonInterleaved=%@)\n",
                          asbd.mSampleRate,
                          Int(asbd.mChannelsPerFrame),
@@ -348,15 +427,17 @@ struct ScreenCaptureAudio {
 
         guard arguments.count >= 2 else {
             fputs("""
-            Usage: screencapture-audio <bundleID> [sample_rate] [channels]
+            Usage: screencapture-audio <bundleID> [sample_rate] [channels] [--mic <wav_path>]
 
             Arguments:
               bundleID     - Application bundle identifier (e.g., com.apple.Safari)
               sample_rate  - Audio sample rate in Hz (default: 48000)
               channels     - Number of audio channels (default: 2)
+              --mic <path> - Also record microphone with AEC to WAV file
 
             Example:
               screencapture-audio com.google.Chrome 48000 2 > output.pcm
+              screencapture-audio com.google.Chrome 48000 2 --mic /tmp/mic.wav > output.pcm
 
             Output:
               Raw PCM audio data is written to stdout (interleaved float32)
@@ -364,19 +445,48 @@ struct ScreenCaptureAudio {
 
             Required Permissions:
               - Screen Recording (System Settings → Privacy & Security → Screen Recording)
+              - Microphone (if --mic is used)
 
             """, stderr)
             exit(1)
         }
 
-        let bundleID = arguments[1]
-        let sampleRate = arguments.count > 2 ? Int(arguments[2]) ?? 48000 : 48000
-        let channels = arguments.count > 3 ? Int(arguments[3]) ?? 2 : 2
+        // Parse positional args and --mic flag
+        var positionalArgs: [String] = []
+        var micPath: String? = nil
+        var i = 1
+        while i < arguments.count {
+            if arguments[i] == "--mic" {
+                if i + 1 < arguments.count {
+                    micPath = arguments[i + 1]
+                    i += 2
+                } else {
+                    fputs("ERROR: --mic requires a file path argument\n", stderr)
+                    exit(1)
+                }
+            } else {
+                positionalArgs.append(arguments[i])
+                i += 1
+            }
+        }
+
+        guard !positionalArgs.isEmpty else {
+            fputs("ERROR: bundleID is required\n", stderr)
+            exit(1)
+        }
+
+        let bundleID = positionalArgs[0]
+        let sampleRate = positionalArgs.count > 1 ? Int(positionalArgs[1]) ?? 48000 : 48000
+        let channels = positionalArgs.count > 2 ? Int(positionalArgs[2]) ?? 2 : 2
 
         fputs("=== ScreenCaptureKit Audio Capture ===\n", stderr)
         fputs("Target Bundle ID: \(bundleID)\n", stderr)
         fputs("Sample Rate: \(sampleRate) Hz\n", stderr)
-        fputs("Channels: \(channels)\n\n", stderr)
+        fputs("Channels: \(channels)\n", stderr)
+        if let micPath = micPath {
+            fputs("Mic output: \(micPath) (AEC enabled)\n", stderr)
+        }
+        fputs("\n", stderr)
 
         // Create capture handler
         let handler = AudioCaptureHandler(
@@ -385,28 +495,62 @@ struct ScreenCaptureAudio {
             channels: channels
         )
 
+        // Create mic handler if requested
+        var micHandler: MicCaptureHandler? = nil
+        if let micPath = micPath {
+            micHandler = MicCaptureHandler(outputPath: micPath)
+        }
+
         do {
-            // Start capture
+            // Start app audio capture
             try await handler.start()
 
-            // Keep running indefinitely
-            // Signal handling is delegated to parent process
-            // Note: Task.sleep with very large values can be optimized away,
-            // so we use a loop with reasonable intervals
-            while true {
-                try await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second
+            // Start mic capture (after app capture so AEC reference is active)
+            if let mic = micHandler {
+                do {
+                    try mic.start()
+                } catch {
+                    fputs("ERROR: Failed to start mic capture: \(error)\n", stderr)
+                    fputs("Continuing with app audio only.\n", stderr)
+                    micHandler = nil
+                }
             }
-
-        } catch is CancellationError {
-            fputs("\nReceived cancellation, stopping...\n", stderr)
-            try? await handler.stop()
         } catch {
             fputs("FATAL ERROR: \(error.localizedDescription)\n", stderr)
-            try? await handler.stop()
             exit(1)
         }
 
-        fputs("Exiting cleanly\n", stderr)
-        exit(0)
+        // Set up SIGTERM handler for clean shutdown
+        let sigSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        signal(SIGTERM, SIG_IGN)  // ignore default handler, let DispatchSource handle it
+
+        sigSource.setEventHandler {
+            fputs("\nReceived SIGTERM, stopping...\n", stderr)
+
+            // 1. Stop app audio capture
+            handler.stop()
+
+            // 2. Stop mic capture + finalize WAV
+            micHandler?.stop()
+
+            // 3. Compute and output MIC_DELAY
+            if let mic = micHandler {
+                let appTime = handler.appFirstFrameTime
+                let micTime = mic.firstFrameTime
+                if appTime > 0 && micTime > 0 {
+                    let delaySec = machTicksToSeconds(micTime) - machTicksToSeconds(appTime)
+                    fputs(String(format: "MIC_DELAY=%+.6f\n", delaySec), stderr)
+                } else {
+                    fputs("MIC_DELAY=+0.000000\n", stderr)
+                }
+            }
+
+            fputs("Exiting cleanly\n", stderr)
+            exit(0)
+        }
+        sigSource.resume()
+
+        // Run the main dispatch loop (replaces while-true sleep loop)
+        dispatchMain()
     }
 }
