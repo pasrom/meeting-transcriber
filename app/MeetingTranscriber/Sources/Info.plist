@@ -20,5 +20,7 @@
     <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Meeting Transcriber needs microphone access to record meeting audio for transcription.</string>
 </dict>
 </plist>
