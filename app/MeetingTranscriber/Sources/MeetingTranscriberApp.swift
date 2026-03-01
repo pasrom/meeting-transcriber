@@ -77,8 +77,16 @@ struct MeetingTranscriberApp: App {
         if pythonProcess.isRunning {
             pythonProcess.stop()
         } else {
-            monitor.start()
-            pythonProcess.start(arguments: settings.buildArguments())
+            Task {
+                let micOK = await PythonProcess.ensureMicrophoneAccess()
+                if !micOK {
+                    print("Warning: Microphone access denied — recording without mic")
+                }
+                await MainActor.run {
+                    monitor.start()
+                    pythonProcess.start(arguments: settings.buildArguments())
+                }
+            }
         }
     }
 

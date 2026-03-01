@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 
 /// Manages the lifecycle of the `transcribe --watch` Python process.
@@ -37,6 +38,18 @@ final class PythonProcess {
     func resetCrashLoop() {
         crashTimestamps.removeAll()
         crashLoopDetected = false
+    }
+
+    /// Request microphone permission so the child Python process can record.
+    /// Must be called from the app process — child processes can't trigger the dialog.
+    static func ensureMicrophoneAccess() async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .authorized { return true }
+        if status == .notDetermined {
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        }
+        // .denied or .restricted
+        return false
     }
 
     func start(arguments: [String] = ["--watch"]) {
