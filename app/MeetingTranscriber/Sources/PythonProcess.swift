@@ -47,6 +47,8 @@ final class PythonProcess {
         var env = ProcessInfo.processInfo.environment
         env["VIRTUAL_ENV"] = (projectRoot as NSString).appendingPathComponent(".venv")
         env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin")"
+        // Remove Claude Code session marker so protocol generation can spawn claude CLI
+        env.removeValue(forKey: "CLAUDECODE")
         proc.environment = env
 
         // Pipe stdout + stderr to log file for debugging
