@@ -23,6 +23,16 @@ class TestRecordingResult:
         r = RecordingResult(mix=Path("/tmp/mix.wav"))
         assert r.app is None
         assert r.mic is None
+        assert r.mic_delay == 0.0
+
+    def test_mic_delay(self):
+        r = RecordingResult(
+            mix=Path("/tmp/mix.wav"),
+            app=Path("/tmp/app.wav"),
+            mic=Path("/tmp/mic.wav"),
+            mic_delay=0.123,
+        )
+        assert r.mic_delay == 0.123
 
     def test_partial(self):
         r = RecordingResult(mix=Path("/tmp/mix.wav"), app=Path("/tmp/app.wav"))
@@ -98,6 +108,24 @@ class TestDualSourceDispatch:
         )
         mock_dual.assert_called_once()
         assert result == "[Me] hello [Remote] world"
+
+    @patch("meeting_transcriber.transcription.mac._transcribe_dual_source")
+    @patch("meeting_transcriber.transcription.mac._load_whisper_model")
+    def test_mic_delay_passed_through(self, mock_load, mock_dual):
+        """transcribe() passes mic_delay to dual-source."""
+        mock_load.return_value = MagicMock()
+        mock_dual.return_value = "[Me] test"
+
+        from meeting_transcriber.transcription.mac import transcribe
+
+        transcribe(
+            Path("/tmp/mix.wav"),
+            app_audio=Path("/tmp/app.wav"),
+            mic_audio=Path("/tmp/mic.wav"),
+            mic_delay=0.5,
+        )
+        _, kwargs = mock_dual.call_args
+        assert kwargs["mic_delay"] == 0.5
 
     @patch("meeting_transcriber.transcription.mac._load_whisper_model")
     def test_single_source_when_no_tracks(self, mock_load):

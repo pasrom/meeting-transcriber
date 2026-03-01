@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ class RecordingResult:
     mix: Path
     app: Path | None = None
     mic: Path | None = None
+    mic_delay: float = 0.0  # seconds: mic started this much later than app
 
 
 log = logging.getLogger(__name__)
@@ -258,6 +260,8 @@ def record_audio(
     _stop = stop_event if stop_event is not None else threading.Event()
     app_rate = RECORD_RATE
     app_channels = 2
+    app_first_frame_time: float | None = None
+    mic_first_frame_time: float | None = None
 
     # ── App audio via ScreenCaptureKit (direct subprocess) ──────────────
     app_proc = None
@@ -293,11 +297,14 @@ def record_audio(
                 )
 
                 def _read_app_audio():
+                    nonlocal app_first_frame_time
                     chunk_size = RECORD_RATE * app_channels * 4 * 10 // 1000
                     while not _stop.is_set():
                         data = app_proc.stdout.read(chunk_size)
                         if not data:
                             break
+                        if app_first_frame_time is None:
+                            app_first_frame_time = time.monotonic()
                         frames_app.append(data)
 
                 app_reader_thread = threading.Thread(
@@ -322,7 +329,10 @@ def record_audio(
     if not no_mic:
 
         def mic_callback(indata, frame_count, time_info, status):
+            nonlocal mic_first_frame_time
             if not _stop.is_set():
+                if mic_first_frame_time is None:
+                    mic_first_frame_time = time.monotonic()
                 frames_mic.append(indata[:, 0].copy())
 
         mic_stream = sd.InputStream(
@@ -448,9 +458,17 @@ def record_audio(
     # Copy to output_path for the pipeline (Whisper etc.)
     shutil.copy2(mix_path, output_path)
 
+    # Compute mic delay: how much later the mic started vs app
+    mic_delay = 0.0
+    if app_first_frame_time is not None and mic_first_frame_time is not None:
+        mic_delay = mic_first_frame_time - app_first_frame_time
+        console.print(f"[dim]Stream start delta: {mic_delay:+.3f}s (mic vs app)[/dim]")
+
     duration = len(mixed) / app_rate
     console.print(f"[green]Recording saved ({duration:.1f}s): {output_path}[/green]")
-    return RecordingResult(mix=output_path, app=app_path, mic=mic_path)
+    return RecordingResult(
+        mix=output_path, app=app_path, mic=mic_path, mic_delay=mic_delay
+    )
 
 
 def _save_wav(path: Path, audio: np.ndarray, rate: int) -> None:
