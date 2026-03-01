@@ -115,6 +115,7 @@ def _transcribe_dual_source(
     num_speakers: int | None = None,
     meeting_title: str = "Meeting",
     mic_label: str = "Me",
+    mic_delay: float = 0.0,
 ) -> str:
     """Transcribe app and mic tracks separately, merge by timestamp."""
     from meeting_transcriber.diarize import (
@@ -132,7 +133,20 @@ def _transcribe_dual_source(
     mic_segments = _transcribe_segments(whisper_model, mic_audio, language)
     console.print(f"[dim]Mic: {len(mic_segments)} segments[/dim]")
 
-    # 2. Label app segments
+    # 2. Align tracks using stream start-time delta
+    #    mic_delay > 0: mic started later → shift mic timestamps forward
+    #    mic_delay < 0: app started later → shift app timestamps forward
+    if mic_delay >= 0:
+        for seg in mic_segments:
+            seg.start += mic_delay
+            seg.end += mic_delay
+    else:
+        for seg in app_segments:
+            seg.start += abs(mic_delay)
+            seg.end += abs(mic_delay)
+    console.print(f"[dim]Track alignment: mic_delay={mic_delay:+.3f}s[/dim]")
+
+    # 3. Label app segments
     if diarize_enabled:
         try:
             turns = diarize(
@@ -150,7 +164,7 @@ def _transcribe_dual_source(
         for seg in app_segments:
             seg.speaker = "Remote"
 
-    # 3. Label mic segments
+    # 4. Label mic segments
     if mic_label:
         # Solo mode: single person at the mic
         for seg in mic_segments:
@@ -174,7 +188,7 @@ def _transcribe_dual_source(
             for seg in mic_segments:
                 seg.speaker = "Local"
 
-    # 4. Merge and format
+    # 5. Merge and format
     merged = _merge_segments(app_segments, mic_segments)
     text = format_diarized_transcript(merged)
 
@@ -195,6 +209,7 @@ def transcribe(
     app_audio: Path | None = None,
     mic_audio: Path | None = None,
     mic_label: str = "Me",
+    mic_delay: float = 0.0,
 ) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp).
 
@@ -216,6 +231,7 @@ def transcribe(
             num_speakers=num_speakers,
             meeting_title=meeting_title,
             mic_label=mic_label,
+            mic_delay=mic_delay,
         )
 
     # Single-source mode (original behavior)
