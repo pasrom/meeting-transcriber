@@ -1,5 +1,6 @@
 """Watch-mode orchestrator: detect meetings, record, run pipeline."""
 
+import logging
 import tempfile
 import threading
 import time
@@ -17,6 +18,7 @@ from meeting_transcriber.config import (
 from meeting_transcriber.watch.detector import DetectedMeeting, MeetingDetector
 from meeting_transcriber.watch.patterns import AppMeetingPattern
 
+log = logging.getLogger(__name__)
 console = Console()
 
 
@@ -67,7 +69,15 @@ class MeetingWatcher:
             while True:
                 meeting = self.detector.check_once()
                 if meeting:
-                    self._handle_meeting(meeting)
+                    try:
+                        self._handle_meeting(meeting)
+                    except Exception as exc:
+                        log.exception("Pipeline error in _handle_meeting")
+                        console.print(
+                            f"[red]Pipeline error: {exc}[/red]\n"
+                            "[dim]Resuming watch mode...[/dim]"
+                        )
+                        status.emit("error", error=f"Pipeline error: {exc}")
                     self.detector.reset()
                     status.emit("watching", detail=f"Polling {apps}...")
                 time.sleep(self.poll_interval)
@@ -117,6 +127,8 @@ class MeetingWatcher:
             console.print("[yellow]Stopping recording...[/yellow]")
             stop_event.set()
             record_thread.join(timeout=10)
+            if record_thread.is_alive():
+                log.warning("Recording thread did not terminate within 10s")
 
         if not audio_path.exists() or audio_path.stat().st_size == 0:
             console.print("[red]No audio recorded, skipping pipeline.[/red]")

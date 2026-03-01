@@ -477,13 +477,18 @@ def diarize(
         interactive = False
 
     from dotenv import load_dotenv
-    from pyannote.audio import Pipeline
 
     load_dotenv()
 
     token = os.environ.get("HF_TOKEN")
+    if not token:
+        raise RuntimeError(
+            "HF_TOKEN not set. Diarization requires a HuggingFace token. "
+            "Set it in .env or export HF_TOKEN=hf_..."
+        )
 
     import torch
+    from pyannote.audio import Pipeline
 
     # Use MPS (Apple Silicon GPU) if available, otherwise CPU
     if torch.backends.mps.is_available():

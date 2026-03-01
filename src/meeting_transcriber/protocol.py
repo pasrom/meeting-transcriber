@@ -3,7 +3,6 @@
 import datetime
 import json
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -54,16 +53,18 @@ def generate_protocol_cli(
             stderr=subprocess.PIPE,
         )
     except FileNotFoundError:
-        console.print(
-            f"[red]'{claude_bin}' CLI not found. Please install:"
-            " npm install -g @anthropic-ai/claude-code[/red]"
+        raise FileNotFoundError(
+            f"'{claude_bin}' CLI not found. "
+            "Please install: npm install -g @anthropic-ai/claude-code"
         )
-        sys.exit(1)
 
     # Write prompt in a thread to avoid deadlock if pipe buffer fills up
     def _feed_stdin():
-        proc.stdin.write(prompt.encode("utf-8"))
-        proc.stdin.close()
+        try:
+            proc.stdin.write(prompt.encode("utf-8"))
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # Process died early; handled via returncode check below
 
     writer = threading.Thread(target=_feed_stdin, daemon=True)
     writer.start()
@@ -83,25 +84,28 @@ def generate_protocol_cli(
     except TimeoutError:
         proc.kill()
         proc.wait()
-        console.print("[red]Timeout – Claude took too long (>10 min).[/red]")
-        sys.exit(1)
+        raise TimeoutError("Claude CLI took too long (>10 min)")
     finally:
         writer.join(timeout=5)
         stderr_thread.join(timeout=5)
 
-    proc.wait(timeout=10)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
 
     if proc.returncode != 0:
         stderr_text = "".join(stderr_lines).strip()
-        console.print(f"[red]Claude CLI exited with code {proc.returncode}[/red]")
-        if stderr_text:
-            console.print(f"[dim]{stderr_text}[/dim]")
-        sys.exit(1)
+        raise RuntimeError(
+            f"Claude CLI exited with code {proc.returncode}"
+            + (f": {stderr_text}" if stderr_text else "")
+        )
 
     if not text.strip():
-        console.print("[red]Protocol is empty.[/red]")
-        console.print("[dim]Tip: Test manually: echo Hello | claude --print[/dim]")
-        sys.exit(1)
+        raise RuntimeError(
+            "Protocol is empty. Tip: Test manually: echo Hello | claude --print"
+        )
 
     return text.strip()
 

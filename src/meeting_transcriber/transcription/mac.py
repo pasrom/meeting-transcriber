@@ -72,12 +72,19 @@ def transcribe(
         transient=True,
     ) as progress:
         progress.add_task(f"Loading Whisper model [bold]{model}[/bold] ...", total=None)
-        whisper = Model(
-            model,
-            n_threads=n_threads,
-            print_realtime=False,
-            print_progress=False,
-        )
+        try:
+            whisper = Model(
+                model,
+                n_threads=n_threads,
+                print_realtime=False,
+                print_progress=False,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to load Whisper model '{model}': {exc}. "
+                "Check that the model name is valid and you have internet "
+                "access for the initial download."
+            ) from exc
 
     console.print(f"[dim]Model loaded ({n_threads} threads). Transcribing ...[/dim]")
 
@@ -104,7 +111,18 @@ def transcribe(
         for seg in segments
     ]
 
-    turns = diarize(audio_path, num_speakers=num_speakers, meeting_title=meeting_title)
+    try:
+        turns = diarize(
+            audio_path, num_speakers=num_speakers, meeting_title=meeting_title
+        )
+    except Exception as exc:
+        console.print(
+            f"[red]Diarization failed: {exc}[/red]\n"
+            "[yellow]Falling back to transcript without speaker labels.[/yellow]"
+        )
+        text = " ".join(seg.text for seg in segments).strip()
+        return text
+
     ts_segments = assign_speakers(ts_segments, turns)
     text = format_diarized_transcript(ts_segments)
 
