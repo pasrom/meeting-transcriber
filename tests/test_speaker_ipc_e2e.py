@@ -1,27 +1,88 @@
 """E2E test for speaker naming IPC via the Swift menu bar app.
 
+Launches the real .app bundle (like run_app.sh), writes IPC files,
+drives the UI via AppleScript, and verifies the response.
+
 Requires:
-- Built app binary: app/MeetingTranscriber/.build/release/MeetingTranscriber
-- Accessibility permission for Terminal.app (System Settings → Privacy → Accessibility)
+- Built release binary: app/MeetingTranscriber/.build/release/MeetingTranscriber
+- Accessibility permission for Terminal.app
 """
 
 import json
 import os
+import shutil
 import subprocess
 import time
+import wave
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 PROJECT = Path(__file__).resolve().parent.parent
+SPM_DIR = PROJECT / "app" / "MeetingTranscriber"
+BUILD_BINARY = SPM_DIR / ".build" / "release" / "MeetingTranscriber"
+APP_BUNDLE = SPM_DIR / ".build" / "MeetingTranscriber.app"
+INFO_PLIST = SPM_DIR / "Sources" / "Info.plist"
+
 STATUS_DIR = Path.home() / ".meeting-transcriber"
 SPEAKER_REQUEST_FILE = STATUS_DIR / "speaker_request.json"
 SPEAKER_RESPONSE_FILE = STATUS_DIR / "speaker_response.json"
 SPEAKER_SAMPLES_DIR = STATUS_DIR / "speaker_samples"
 STATUS_FILE = STATUS_DIR / "status.json"
-APP_BINARY = (
-    PROJECT / "app" / "MeetingTranscriber" / ".build" / "release" / "MeetingTranscriber"
-)
+
+PROCESS_NAME = "MeetingTranscriber"
+
+
+# ── App lifecycle ────────────────────────────────────────────────────────────
+
+
+def assemble_app_bundle() -> None:
+    """Build the .app bundle from the release binary + Info.plist."""
+    macos_dir = APP_BUNDLE / "Contents" / "MacOS"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(INFO_PLIST, APP_BUNDLE / "Contents" / "Info.plist")
+    shutil.copy2(BUILD_BINARY, macos_dir / "MeetingTranscriber")
+
+
+def launch_app() -> None:
+    """Launch the .app bundle via `open` (like run_app.sh)."""
+    env = os.environ.copy()
+    env["TRANSCRIBER_ROOT"] = str(PROJECT)
+    subprocess.Popen(
+        ["open", str(APP_BUNDLE)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def quit_app() -> None:
+    """Quit the app gracefully via AppleScript."""
+    subprocess.run(
+        [
+            "osascript",
+            "-e",
+            f'tell application "{PROCESS_NAME}" to quit',
+        ],
+        capture_output=True,
+        timeout=5,
+    )
+    time.sleep(1)
+    # Force-kill if still running
+    subprocess.run(
+        ["pkill", "-f", "MeetingTranscriber.app"],
+        capture_output=True,
+    )
+
+
+def app_is_running() -> bool:
+    """Check if the app process exists."""
+    result = subprocess.run(
+        ["pgrep", "-f", "MeetingTranscriber.app"],
+        capture_output=True,
+    )
+    return result.returncode == 0
 
 
 # ── AppleScript helpers ──────────────────────────────────────────────────────
@@ -39,15 +100,15 @@ def applescript(script: str) -> str:
 
 
 def window_exists(title: str) -> bool:
-    """Check if a window with the given title exists in the app."""
+    """Check if a window with the given title exists."""
     return (
-        applescript(f'''
-        tell application "System Events"
-            tell process "MeetingTranscriber"
-                return exists window "{title}"
-            end tell
-        end tell
-    ''')
+        applescript(
+            'tell application "System Events"\n'
+            f'    tell process "{PROCESS_NAME}"\n'
+            f'        return exists window "{title}"\n'
+            "    end tell\n"
+            "end tell"
+        )
         == "true"
     )
 
@@ -55,15 +116,14 @@ def window_exists(title: str) -> bool:
 def applescript_fill_names(names: dict[str, str]) -> None:
     """Fill in speaker names via AppleScript.
 
-    Text fields are inside GroupBox groups within the main content group.
+    Text fields are inside GroupBox groups within the content group.
     """
     for i, (_label, name) in enumerate(names.items()):
-        grp = i + 1  # group 1 = SPEAKER_00, group 2 = SPEAKER_01
+        grp = i + 1
         applescript(
             'tell application "System Events"\n'
-            '    tell process "MeetingTranscriber"\n'
-            "        tell group 1 of "
-            'window "Name Speakers"\n'
+            f'    tell process "{PROCESS_NAME}"\n'
+            '        tell group 1 of window "Name Speakers"\n'
             f"            set value of text field 1"
             f' of group {grp} to "{name}"\n'
             "        end tell\n"
@@ -73,12 +133,11 @@ def applescript_fill_names(names: dict[str, str]) -> None:
 
 
 def applescript_click_confirm() -> None:
-    """Click the Confirm button (button 2 inside the content group)."""
+    """Click the Confirm button (button 2 in content group)."""
     applescript(
         'tell application "System Events"\n'
-        '    tell process "MeetingTranscriber"\n'
-        "        tell group 1 of "
-        'window "Name Speakers"\n'
+        f'    tell process "{PROCESS_NAME}"\n'
+        '        tell group 1 of window "Name Speakers"\n'
         "            click button 2\n"
         "        end tell\n"
         "    end tell\n"
@@ -86,22 +145,17 @@ def applescript_click_confirm() -> None:
     )
 
 
-# ── Test data helpers ────────────────────────────────────────────────────────
+# ── IPC test data ────────────────────────────────────────────────────────────
 
 
 def write_test_speaker_request() -> None:
-    """Write a speaker_request.json with 2 test speakers."""
+    """Write speaker_request.json with 2 test speakers + WAV samples."""
     STATUS_DIR.mkdir(parents=True, exist_ok=True)
     SPEAKER_SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Create dummy WAV files
-    import wave
-
-    import numpy as np
-
     for label in ("SPEAKER_00", "SPEAKER_01"):
         wav_path = SPEAKER_SAMPLES_DIR / f"{label}.wav"
-        silence = np.zeros(16000, dtype=np.int16)  # 1s silence
+        silence = np.zeros(16000, dtype=np.int16)
         with wave.open(str(wav_path), "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
@@ -138,7 +192,7 @@ def write_test_speaker_request() -> None:
 
 
 def write_test_status(state: str) -> None:
-    """Write a status.json with the given state."""
+    """Write status.json with the given state (atomic rename)."""
     data = {
         "version": 1,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -165,10 +219,8 @@ def read_speaker_response() -> dict | None:
         return json.load(f)
 
 
-def cleanup_test_files() -> None:
+def cleanup_ipc_files() -> None:
     """Remove all IPC test files."""
-    import shutil
-
     for f in (SPEAKER_REQUEST_FILE, SPEAKER_RESPONSE_FILE, STATUS_FILE):
         try:
             f.unlink(missing_ok=True)
@@ -183,32 +235,34 @@ def cleanup_test_files() -> None:
 
 @pytest.mark.slow
 def test_speaker_naming_e2e():
-    """Full E2E: Python writes IPC, app opens window,
-    AppleScript fills names, Python reads response.
+    """Full E2E: .app bundle launched via open, IPC triggers
+    naming window, AppleScript fills names, response verified.
     """
-    if not APP_BINARY.exists():
-        pytest.skip(f"App binary not found: {APP_BINARY}")
+    if not BUILD_BINARY.exists():
+        pytest.skip(f"Release binary not found: {BUILD_BINARY}")
 
-    app_proc = None
     try:
-        # 1. Start the app
-        app_proc = subprocess.Popen(
-            [str(APP_BINARY)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        time.sleep(2)  # Wait for app startup
+        # 1. Assemble .app bundle and launch (like run_app.sh)
+        assemble_app_bundle()
+        launch_app()
+        time.sleep(3)
+        assert app_is_running(), "App failed to start"
 
         # 2. Write speaker request + status
         write_test_speaker_request()
         write_test_status("waiting_for_speaker_names")
-        time.sleep(3)  # Wait for StatusMonitor poll
+        time.sleep(4)  # StatusMonitor poll interval
 
         # 3. Verify the naming window opened
         assert window_exists("Name Speakers"), "Naming window did not open"
 
         # 4. Fill in names and click Confirm
-        applescript_fill_names({"SPEAKER_00": "Roman", "SPEAKER_01": "Maria"})
+        applescript_fill_names(
+            {
+                "SPEAKER_00": "Roman",
+                "SPEAKER_01": "Maria",
+            }
+        )
         applescript_click_confirm()
 
         # 5. Wait for response and verify
@@ -220,7 +274,5 @@ def test_speaker_naming_e2e():
 
     finally:
         # 6. Cleanup
-        cleanup_test_files()
-        if app_proc is not None:
-            app_proc.terminate()
-            app_proc.wait(timeout=5)
+        quit_app()
+        cleanup_ipc_files()
