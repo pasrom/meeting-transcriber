@@ -38,6 +38,11 @@ final class AppSettings {
         didSet { defaults.set(noMic, forKey: "noMic") }
     }
 
+    /// CoreAudio device UID for mic selection. Empty string = system default.
+    var micDeviceUID: String = defaults.object(forKey: "micDeviceUID") as? String ?? "" {
+        didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
+    }
+
     /// Label for the local mic speaker in dual-source mode.
     /// Default "Me". Empty string = diarize mic track (multi-person room).
     var micName: String = defaults.object(forKey: "micName") as? String ?? "Me" {
@@ -110,6 +115,9 @@ final class AppSettings {
         }
         if noMic {
             args.append("--no-mic")
+        }
+        if !noMic && !micDeviceUID.isEmpty {
+            args += ["--mic-device", micDeviceUID]
         }
         if micName != "Me" {
             args += ["--mic-name", micName]

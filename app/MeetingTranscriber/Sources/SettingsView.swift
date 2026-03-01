@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct SettingsView: View {
@@ -5,6 +6,7 @@ struct SettingsView: View {
 
     @State private var tokenInput = ""
     @State private var hasToken = false
+    @State private var audioDevices: [(id: String, name: String)] = []
 
     private let whisperModels = [
         "large-v3-turbo-q5_0",
@@ -52,6 +54,14 @@ struct SettingsView: View {
                 Toggle("No Microphone (app audio only)", isOn: $settings.noMic)
 
                 if !settings.noMic {
+                    Picker("Microphone", selection: $settings.micDeviceUID) {
+                        Text("System Default").tag("")
+                        ForEach(audioDevices, id: \.id) { device in
+                            Text(device.name).tag(device.id)
+                        }
+                    }
+                    .onAppear { refreshAudioDevices() }
+
                     HStack {
                         Text("Mic Speaker Name")
                         Spacer()
@@ -126,7 +136,16 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: settings.diarize ? 540 : (settings.noMic ? 360 : 420))
+        .frame(width: 420, height: settings.diarize ? 580 : (settings.noMic ? 360 : 460))
         .onAppear { hasToken = settings.hasHFToken }
+    }
+
+    private func refreshAudioDevices() {
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone, .external],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
     }
 }

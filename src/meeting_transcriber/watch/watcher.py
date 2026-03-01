@@ -38,6 +38,7 @@ class MeetingWatcher:
         num_speakers: int | None = None,
         no_mic: bool = False,
         mic_device: int | None = None,
+        mic_device_uid: str | None = None,
         claude_bin: str = "claude",
         mic_label: str = "Me",
     ):
@@ -50,6 +51,7 @@ class MeetingWatcher:
         self.num_speakers = num_speakers
         self.no_mic = no_mic
         self.mic_device = mic_device
+        self.mic_device_uid = mic_device_uid
         self.claude_bin = claude_bin
         self.mic_label = mic_label
         self._last_recording = None  # RecordingResult from most recent recording
@@ -158,6 +160,7 @@ class MeetingWatcher:
                 app_pid=app_pid,
                 no_mic=self.no_mic,
                 mic_device=self.mic_device,
+                mic_device_uid=self.mic_device_uid,
                 stop_event=stop_event,
             )
         except Exception as e:

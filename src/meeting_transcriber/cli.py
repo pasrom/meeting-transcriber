@@ -104,6 +104,12 @@ def main():
         default=None,
         help="Microphone device index (int) or name substring (macOS only)",
     )
+    parser.add_argument(
+        "--mic-device",
+        type=str,
+        default=None,
+        help="CoreAudio device UID for mic (used with ProcTap AEC mode)",
+    )
 
     # Claude CLI
     parser.add_argument(
@@ -175,11 +181,12 @@ def main():
         or args.no_mic
         or args.list_mics
         or args.mic
+        or args.mic_device
         or args.watch
     ):
         console.print(
             "[red]--app, --pid, --list-apps, --mic-only, --list-mics, --mic,"
-            " --watch are macOS only.[/red]"
+            " --mic-device, --watch are macOS only.[/red]"
         )
         sys.exit(1)
 
@@ -220,6 +227,7 @@ def main():
             num_speakers=args.speakers,
             no_mic=args.no_mic,
             mic_device=mic_device,
+            mic_device_uid=args.mic_device,
             claude_bin=args.claude,
             mic_label=args.mic_name,
         )
@@ -307,6 +315,7 @@ def main():
                     mic_only=args.mic_only,
                     no_mic=args.no_mic,
                     mic_device=mic_device,
+                    mic_device_uid=args.mic_device,
                 )
             else:
                 from meeting_transcriber.audio.windows import record_audio

@@ -248,9 +248,13 @@ def record_audio(
     mic_only: bool = False,
     no_mic: bool = False,
     mic_device: int | None = None,
+    mic_device_uid: str | None = None,
     stop_event: threading.Event | None = None,
 ) -> RecordingResult:
     """Record app audio (ProcTap) and/or microphone (sounddevice).
+
+    Args:
+        mic_device_uid: CoreAudio device UID for ProcTap mic selection (AEC mode).
 
     If stop_event is provided, recording is controlled externally (watch mode).
     Otherwise, the user presses Enter to stop (interactive mode).
@@ -300,6 +304,8 @@ def record_audio(
                 if not no_mic:
                     mic_wav_path = rec_dir / f"{ts}_mic.wav"
                     cmd.extend(["--mic", str(mic_wav_path)])
+                    if mic_device_uid:
+                        cmd.extend(["--mic-device", mic_device_uid])
                     proctap_has_mic = True
                     aec_applied = True
 

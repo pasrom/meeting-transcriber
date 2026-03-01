@@ -46,8 +46,39 @@ class MicCaptureHandler {
         self.outputPath = outputPath
     }
 
-    func start() throws {
+    /// Translate a CoreAudio device UID string to an AudioDeviceID.
+    private static func deviceIDForUID(_ uid: String) -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
+        let qualifierSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+            &address, qualifierSize, &cfUID,
+            &size, &deviceID)
+        return deviceID
+    }
+
+    func start(deviceUID: String? = nil) throws {
         let inputNode = engine.inputNode
+
+        // Set specific mic device before enabling VoiceProcessingIO
+        if let uid = deviceUID {
+            var deviceID = Self.deviceIDForUID(uid)
+            if deviceID != kAudioObjectUnknown {
+                let audioUnit = inputNode.audioUnit!
+                AudioUnitSetProperty(audioUnit,
+                    kAudioOutputUnitProperty_CurrentDevice,
+                    kAudioUnitScope_Global, 0,
+                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+                fputs("Mic device set: \(uid) (ID \(deviceID))\n", stderr)
+            } else {
+                fputs("WARNING: Unknown mic device UID '\(uid)', using default\n", stderr)
+            }
+        }
 
         // Enable VoiceProcessingIO — this activates AEC + noise suppression
         try inputNode.setVoiceProcessingEnabled(true)
@@ -427,17 +458,19 @@ struct ScreenCaptureAudio {
 
         guard arguments.count >= 2 else {
             fputs("""
-            Usage: screencapture-audio <bundleID> [sample_rate] [channels] [--mic <wav_path>]
+            Usage: screencapture-audio <bundleID> [sample_rate] [channels] [--mic <wav_path>] [--mic-device <uid>]
 
             Arguments:
-              bundleID     - Application bundle identifier (e.g., com.apple.Safari)
-              sample_rate  - Audio sample rate in Hz (default: 48000)
-              channels     - Number of audio channels (default: 2)
-              --mic <path> - Also record microphone with AEC to WAV file
+              bundleID            - Application bundle identifier (e.g., com.apple.Safari)
+              sample_rate         - Audio sample rate in Hz (default: 48000)
+              channels            - Number of audio channels (default: 2)
+              --mic <path>        - Also record microphone with AEC to WAV file
+              --mic-device <uid>  - CoreAudio device UID for mic (e.g., "BuiltInMicrophoneDevice")
 
             Example:
               screencapture-audio com.google.Chrome 48000 2 > output.pcm
               screencapture-audio com.google.Chrome 48000 2 --mic /tmp/mic.wav > output.pcm
+              screencapture-audio com.google.Chrome 48000 2 --mic /tmp/mic.wav --mic-device "BuiltInMicrophoneDevice" > output.pcm
 
             Output:
               Raw PCM audio data is written to stdout (interleaved float32)
@@ -451,9 +484,10 @@ struct ScreenCaptureAudio {
             exit(1)
         }
 
-        // Parse positional args and --mic flag
+        // Parse positional args and --mic / --mic-device flags
         var positionalArgs: [String] = []
         var micPath: String? = nil
+        var micDeviceUID: String? = nil
         var i = 1
         while i < arguments.count {
             if arguments[i] == "--mic" {
@@ -462,6 +496,14 @@ struct ScreenCaptureAudio {
                     i += 2
                 } else {
                     fputs("ERROR: --mic requires a file path argument\n", stderr)
+                    exit(1)
+                }
+            } else if arguments[i] == "--mic-device" {
+                if i + 1 < arguments.count {
+                    micDeviceUID = arguments[i + 1]
+                    i += 2
+                } else {
+                    fputs("ERROR: --mic-device requires a device UID argument\n", stderr)
                     exit(1)
                 }
             } else {
@@ -486,6 +528,9 @@ struct ScreenCaptureAudio {
         if let micPath = micPath {
             fputs("Mic output: \(micPath) (AEC enabled)\n", stderr)
         }
+        if let micDeviceUID = micDeviceUID {
+            fputs("Mic device UID: \(micDeviceUID)\n", stderr)
+        }
         fputs("\n", stderr)
 
         // Create capture handler
@@ -508,7 +553,7 @@ struct ScreenCaptureAudio {
             // Start mic capture (after app capture so AEC reference is active)
             if let mic = micHandler {
                 do {
-                    try mic.start()
+                    try mic.start(deviceUID: micDeviceUID)
                 } catch {
                     fputs("ERROR: Failed to start mic capture: \(error)\n", stderr)
                     fputs("Continuing with app audio only.\n", stderr)
