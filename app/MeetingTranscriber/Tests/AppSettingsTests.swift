@@ -156,4 +156,48 @@ final class AppSettingsTests: XCTestCase {
         let args = settings.buildArguments()
         XCTAssertFalse(args.contains("--watch-apps"))
     }
+
+    // MARK: - HF Token (Keychain)
+
+    func testKeychainRoundTrip() {
+        // Clean up from any previous test run
+        KeychainHelper.delete(key: "HF_TOKEN_TEST")
+
+        // Initially empty
+        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
+        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
+
+        // Save
+        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_abc123")
+        XCTAssertTrue(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
+        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_abc123")
+
+        // Overwrite
+        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_xyz789")
+        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_xyz789")
+
+        // Delete
+        KeychainHelper.delete(key: "HF_TOKEN_TEST")
+        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
+        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
+    }
+
+    func testSetHFTokenStoresInKeychain() {
+        settings.setHFToken("hf_test_token")
+        XCTAssertTrue(settings.hasHFToken)
+        XCTAssertEqual(settings.hfToken, "hf_test_token")
+
+        // Clean up
+        settings.setHFToken("")
+        XCTAssertFalse(settings.hasHFToken)
+        XCTAssertNil(settings.hfToken)
+    }
+
+    func testSetHFTokenTrimsWhitespace() {
+        settings.setHFToken("  hf_trimmed  \n")
+        XCTAssertEqual(settings.hfToken, "hf_trimmed")
+
+        // Clean up
+        settings.setHFToken("")
+    }
 }

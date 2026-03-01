@@ -66,6 +66,10 @@ final class PythonProcess {
         env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin")"
         // Remove Claude Code session marker so protocol generation can spawn claude CLI
         env.removeValue(forKey: "CLAUDECODE")
+        // Inject HuggingFace token from Keychain for speaker diarization
+        if let hfToken = KeychainHelper.read(key: "HF_TOKEN") {
+            env["HF_TOKEN"] = hfToken
+        }
         proc.environment = env
 
         // Pipe stdout + stderr to log file for debugging

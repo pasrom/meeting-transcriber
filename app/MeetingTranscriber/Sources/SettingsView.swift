@@ -3,6 +3,9 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var settings: AppSettings
 
+    @State private var tokenInput = ""
+    @State private var hasToken = false
+
     private let whisperModels = [
         "large-v3-turbo-q5_0",
         "large-v3-turbo",
@@ -68,10 +71,49 @@ struct SettingsView: View {
                         Stepper("", value: $settings.numSpeakers, in: 2...10)
                             .labelsHidden()
                     }
+
+                    // HuggingFace Token
+                    HStack {
+                        if hasToken {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text("HuggingFace token set")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text("HuggingFace token required")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    SecureField("hf_...", text: $tokenInput)
+
+                    HStack {
+                        Button("Save Token") {
+                            settings.setHFToken(tokenInput)
+                            tokenInput = ""
+                            hasToken = settings.hasHFToken
+                        }
+                        .disabled(tokenInput.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                        Button("Clear") {
+                            settings.setHFToken("")
+                            tokenInput = ""
+                            hasToken = false
+                        }
+                        .disabled(!hasToken)
+
+                        Spacer()
+
+                        Link("Get token",
+                             destination: URL(string: "https://huggingface.co/settings/tokens")!)
+                    }
                 }
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: settings.diarize ? 400 : 360)
+        .frame(width: 420, height: settings.diarize ? 500 : 360)
+        .onAppear { hasToken = settings.hasHFToken }
     }
 }

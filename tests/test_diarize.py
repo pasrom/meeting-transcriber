@@ -2,13 +2,16 @@
 
 import fcntl
 import json
-from unittest.mock import patch
+import os
+import subprocess
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from meeting_transcriber.diarize import (
     TimestampedSegment,
+    _resolve_hf_token,
     assign_speakers,
     cosine_similarity,
     format_diarized_transcript,
@@ -172,3 +175,45 @@ class TestSpeakerDbFileLocking:
         save_speaker_db(original, db_path)
         loaded = load_speaker_db(db_path)
         assert loaded == original
+
+
+class TestResolveHFToken:
+    def test_env_var_takes_priority(self, monkeypatch):
+        monkeypatch.setenv("HF_TOKEN", "hf_from_env")
+        assert _resolve_hf_token() == "hf_from_env"
+
+    def test_dotenv_fallback(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+
+        # Simulate load_dotenv setting the env var from a .env file
+        def fake_load_dotenv():
+            os.environ["HF_TOKEN"] = "hf_from_dotenv"
+
+        with patch("dotenv.load_dotenv", side_effect=fake_load_dotenv):
+            assert _resolve_hf_token() == "hf_from_dotenv"
+
+    @patch("meeting_transcriber.diarize.subprocess.run")
+    def test_keychain_fallback(self, mock_run, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        # Patch load_dotenv to do nothing (no .env file)
+        with patch("dotenv.load_dotenv"):
+            mock_run.return_value = MagicMock(returncode=0, stdout="hf_from_keychain\n")
+            token = _resolve_hf_token()
+        assert token == "hf_from_keychain"
+        mock_run.assert_called_once()
+
+    @patch("meeting_transcriber.diarize.subprocess.run")
+    def test_raises_when_all_fail(self, mock_run, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch("dotenv.load_dotenv"):
+            mock_run.return_value = MagicMock(returncode=44, stdout="")
+            with pytest.raises(RuntimeError, match="HF_TOKEN not set"):
+                _resolve_hf_token()
+
+    @patch("meeting_transcriber.diarize.subprocess.run")
+    def test_keychain_timeout_falls_through(self, mock_run, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with patch("dotenv.load_dotenv"):
+            mock_run.side_effect = subprocess.TimeoutExpired(cmd="security", timeout=5)
+            with pytest.raises(RuntimeError, match="HF_TOKEN not set"):
+                _resolve_hf_token()

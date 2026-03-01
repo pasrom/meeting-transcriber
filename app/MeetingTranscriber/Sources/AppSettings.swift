@@ -55,6 +55,27 @@ final class AppSettings {
         }
     }
 
+    /// Whether a HuggingFace token is stored in the Keychain.
+    var hasHFToken: Bool {
+        KeychainHelper.exists(key: "HF_TOKEN")
+    }
+
+    /// The HuggingFace token from the Keychain, or `nil` if not set.
+    var hfToken: String? {
+        KeychainHelper.read(key: "HF_TOKEN")
+    }
+
+    /// Store or clear the HuggingFace token.
+    /// Pass an empty string to delete the token.
+    func setHFToken(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            KeychainHelper.delete(key: "HF_TOKEN")
+        } else {
+            KeychainHelper.save(key: "HF_TOKEN", value: trimmed)
+        }
+    }
+
     // MARK: - Computed
 
     var watchApps: [String] {

@@ -12,6 +12,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import time
 import wave
 from dataclasses import dataclass
@@ -408,6 +410,64 @@ def cleanup_speaker_ipc() -> None:
         shutil.rmtree(SPEAKER_SAMPLES_DIR, ignore_errors=True)
 
 
+# ── Token Resolution ─────────────────────────────────────────────────────────
+
+
+def _resolve_hf_token() -> str:
+    """Resolve HuggingFace token with fallback chain.
+
+    Priority:
+    1. HF_TOKEN environment variable (set by Swift app or manually exported)
+    2. .env file via python-dotenv (legacy)
+    3. macOS Keychain via `security` CLI
+    4. RuntimeError with helpful message
+    """
+    # 1. Already in environment (e.g. injected by Swift PythonProcess)
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token
+
+    # 2. Legacy .env file
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token
+
+    # 3. macOS Keychain (only on macOS)
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                [
+                    "security",
+                    "find-generic-password",
+                    "-s",
+                    "com.meetingtranscriber.app",
+                    "-a",
+                    "HF_TOKEN",
+                    "-w",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                token = result.stdout.strip()
+                os.environ["HF_TOKEN"] = token
+                return token
+        except (subprocess.TimeoutExpired, OSError) as e:
+            log.debug("Keychain lookup failed: %s", e)
+
+    raise RuntimeError(
+        "HF_TOKEN not set. Diarization requires a HuggingFace token.\n"
+        "Options:\n"
+        "  - Set it in the MeetingTranscriber app settings\n"
+        "  - Add HF_TOKEN=hf_... to .env file\n"
+        "  - Export HF_TOKEN=hf_... in your shell"
+    )
+
+
 # ── Diarization ──────────────────────────────────────────────────────────────
 
 
@@ -467,8 +527,6 @@ def diarize(
 
     Returns list of (start_sec, end_sec, speaker_name) tuples.
     """
-    import sys
-
     # Disable interactive prompts when no TTY (e.g. launched from menu bar app)
     if interactive and not sys.stdin.isatty():
         console.print(
@@ -476,16 +534,7 @@ def diarize(
         )
         interactive = False
 
-    from dotenv import load_dotenv
-
-    load_dotenv()
-
-    token = os.environ.get("HF_TOKEN")
-    if not token:
-        raise RuntimeError(
-            "HF_TOKEN not set. Diarization requires a HuggingFace token. "
-            "Set it in .env or export HF_TOKEN=hf_..."
-        )
+    token = _resolve_hf_token()
 
     import torch
     from pyannote.audio import Pipeline
