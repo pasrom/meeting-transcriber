@@ -68,22 +68,18 @@ def _suppress_echo(
     windows (~40 ms) before and 10 windows (~200 ms) after each active
     region to catch onset/reverb tails.
     """
-    rate = TARGET_RATE  # both files are 16 kHz at this point
+    # Ensure both inputs are 16 kHz mono before processing
+    app_path = _ensure_16khz(app_path)
+    mic_path = _ensure_16khz(mic_path)
+
+    rate = TARGET_RATE
     window = int(0.020 * rate)  # 20 ms analysis window
 
     # --- load both WAVs as float32 mono ---
     def _load_wav(path: Path) -> np.ndarray:
         with wave.open(str(path), "rb") as wf:
-            sw = wf.getsampwidth()
-            ch = wf.getnchannels()
             raw = wf.readframes(wf.getnframes())
-        if sw == 2:
-            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        else:
-            samples = np.frombuffer(raw, dtype=np.float32)
-        if ch > 1:
-            samples = samples.reshape(-1, ch).mean(axis=1)
-        return samples
+        return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
     app = _load_wav(app_path)
     mic = _load_wav(mic_path)
