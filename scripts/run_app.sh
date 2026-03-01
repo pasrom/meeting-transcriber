@@ -28,6 +28,14 @@ mkdir -p "$APP_MACOS"
 cp "$INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
 cp "$BUILD_BINARY" "$APP_BINARY"
 
+# Code-sign so macOS keeps Screen Recording permission across rebuilds.
+# Uses SHA-1 hash to avoid "ambiguous identity" errors with duplicate names.
+SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
+if [ -n "$SIGN_HASH" ]; then
+    codesign --force --sign "$SIGN_HASH" "$APP_BUNDLE" 2>/dev/null && \
+        echo "  Signed with: $SIGN_HASH"
+fi
+
 echo "Starting Meeting Transcriber..."
 echo "  TRANSCRIBER_ROOT=$TRANSCRIBER_ROOT"
 
