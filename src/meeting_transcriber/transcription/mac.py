@@ -222,6 +222,7 @@ def _transcribe_dual_source(
     meeting_title: str = "Meeting",
     mic_label: str = "Me",
     mic_delay: float = 0.0,
+    aec_applied: bool = False,
 ) -> str:
     """Transcribe app and mic tracks separately, merge by timestamp."""
     from meeting_transcriber.diarize import (
@@ -230,9 +231,15 @@ def _transcribe_dual_source(
         format_diarized_transcript,
     )
 
-    # 1. Suppress echo in mic track using app audio as reference
-    console.print("[dim]Suppressing echo in mic track ...[/dim]")
-    mic_clean = _suppress_echo(app_audio, mic_audio, mic_delay=mic_delay)
+    # 1. Suppress echo in mic track (skip if hardware AEC was applied)
+    if aec_applied:
+        console.print(
+            "[dim]AEC active (VoiceProcessingIO), skipping echo suppression[/dim]"
+        )
+        mic_clean = mic_audio
+    else:
+        console.print("[dim]Suppressing echo in mic track ...[/dim]")
+        mic_clean = _suppress_echo(app_audio, mic_audio, mic_delay=mic_delay)
 
     # 2. Transcribe both tracks
     console.print("[dim]Transcribing app audio ...[/dim]")
@@ -320,6 +327,7 @@ def transcribe(
     mic_audio: Path | None = None,
     mic_label: str = "Me",
     mic_delay: float = 0.0,
+    aec_applied: bool = False,
 ) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp).
 
@@ -342,6 +350,7 @@ def transcribe(
             meeting_title=meeting_title,
             mic_label=mic_label,
             mic_delay=mic_delay,
+            aec_applied=aec_applied,
         )
 
     # Single-source mode (original behavior)

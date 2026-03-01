@@ -7,7 +7,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +24,7 @@ class RecordingResult:
     app: Path | None = None
     mic: Path | None = None
     mic_delay: float = 0.0  # seconds: mic started this much later than app
+    aec_applied: bool = False  # True when VoiceProcessingIO AEC was used
 
 
 log = logging.getLogger(__name__)
@@ -260,12 +260,13 @@ def record_audio(
     _stop = stop_event if stop_event is not None else threading.Event()
     app_rate = RECORD_RATE
     app_channels = 2
-    app_first_frame_time: float | None = None
-    mic_first_frame_time: float | None = None
+    aec_applied = False  # True when ProcTap handles mic with VoiceProcessingIO
+    mic_wav_path: Path | None = None  # mic WAV written by ProcTap (AEC mode)
 
     # ── App audio via ScreenCaptureKit (direct subprocess) ──────────────
     app_proc = None
     app_reader_thread = None
+    proctap_has_mic = False  # ProcTap is recording mic with --mic flag
     if app_pid and not mic_only:
         bundle_id = _pid_to_bundle_id(app_pid)
         if not bundle_id:
@@ -283,12 +284,25 @@ def record_audio(
                 sys.exit(1)
 
             try:
+                # Save individual tracks to recordings/
+                rec_dir = Path("recordings")
+                rec_dir.mkdir(exist_ok=True)
+                ts = output_path.stem
+
                 cmd = [
                     str(binary),
                     bundle_id,
                     str(RECORD_RATE),
                     str(app_channels),
                 ]
+
+                # Pass --mic to ProcTap for AEC when mic is enabled
+                if not no_mic:
+                    mic_wav_path = rec_dir / f"{ts}_mic.wav"
+                    cmd.extend(["--mic", str(mic_wav_path)])
+                    proctap_has_mic = True
+                    aec_applied = True
+
                 app_proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -297,14 +311,11 @@ def record_audio(
                 )
 
                 def _read_app_audio():
-                    nonlocal app_first_frame_time
                     chunk_size = RECORD_RATE * app_channels * 4 * 10 // 1000
                     while not _stop.is_set():
                         data = app_proc.stdout.read(chunk_size)
                         if not data:
                             break
-                        if app_first_frame_time is None:
-                            app_first_frame_time = time.monotonic()
                         frames_app.append(data)
 
                 app_reader_thread = threading.Thread(
@@ -315,24 +326,28 @@ def record_audio(
                     f"[dim]App audio active: {bundle_id} (PID {app_pid},"
                     f" {RECORD_RATE} Hz, {app_channels}ch)[/dim]"
                 )
+                if proctap_has_mic:
+                    console.print(
+                        "[dim]Mic recording via ProcTap (VoiceProcessingIO AEC)[/dim]"
+                    )
             except Exception as e:
                 console.print(
                     f"[yellow]App audio failed ({type(e).__name__}: {e}),"
                     " microphone only.[/yellow]"
                 )
                 app_proc = None
+                proctap_has_mic = False
+                aec_applied = False
+                mic_wav_path = None
 
-    # ── Microphone via sounddevice ───────────────────────────────────────
+    # ── Microphone via sounddevice (only when ProcTap is NOT handling mic) ──
     mic_rate = app_rate  # match app rate so we can mix without resampling
     mic_stream = None
 
-    if not no_mic:
+    if not no_mic and not proctap_has_mic:
 
         def mic_callback(indata, frame_count, time_info, status):
-            nonlocal mic_first_frame_time
             if not _stop.is_set():
-                if mic_first_frame_time is None:
-                    mic_first_frame_time = time.monotonic()
                 frames_mic.append(indata[:, 0].copy())
 
         mic_stream = sd.InputStream(
@@ -357,7 +372,7 @@ def record_audio(
         dev_idx = mic_device if mic_device is not None else sd.default.device[0]
         mic_name = sd.query_devices(dev_idx)["name"]
         console.print(f"[dim]Microphone active: {mic_name} ({mic_rate} Hz, mono)[/dim]")
-    else:
+    elif no_mic:
         console.print("[dim]Microphone disabled (--no-mic)[/dim]")
 
     # ── Recording loop ───────────────────────────────────────────────────
@@ -392,22 +407,30 @@ def record_audio(
             if app_reader_thread:
                 app_reader_thread.join(timeout=2)
             try:
-                stderr_out = app_proc.stderr.read().decode("utf-8", errors="ignore")
-                if stderr_out:
-                    for line in stderr_out.strip().splitlines():
-                        if (
-                            "Audio format:" in line
-                            or "WARNING" in line
-                            or "ERROR" in line
-                        ):
-                            console.print(f"[dim]{line}[/dim]")
-            except Exception:
-                pass
-            try:
                 app_proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 app_proc.kill()
                 app_proc.wait()
+
+    # ── Parse ProcTap stderr (MIC_DELAY, format info, warnings) ───────
+    mic_delay = 0.0
+    if app_proc:
+        try:
+            stderr_out = app_proc.stderr.read().decode("utf-8", errors="ignore")
+            if stderr_out:
+                for line in stderr_out.strip().splitlines():
+                    if line.startswith("MIC_DELAY="):
+                        mic_delay = float(line.split("=", 1)[1])
+                        console.print(
+                            f"[dim]Stream start delta: {mic_delay:+.3f}s"
+                            " (mic vs app, from ProcTap)[/dim]"
+                        )
+                    elif (
+                        "Audio format:" in line or "WARNING" in line or "ERROR" in line
+                    ):
+                        console.print(f"[dim]{line}[/dim]")
+        except Exception:
+            pass
 
     # ── Mix → WAV ────────────────────────────────────────────────────────
     audio_mic = np.concatenate(frames_mic) if frames_mic else np.zeros(0)
@@ -431,7 +454,29 @@ def record_audio(
         app_path = rec_dir / f"{ts}_app.wav"
         _save_wav(app_path, audio_app, app_rate)
         console.print(f"[dim]App audio saved: {app_path}[/dim]")
-    if len(audio_mic) > 0:
+
+    # Mic track: from ProcTap WAV (AEC mode) or sounddevice frames
+    if proctap_has_mic and mic_wav_path and mic_wav_path.exists():
+        if mic_wav_path.stat().st_size > 44:  # WAV header is 44 bytes
+            mic_path = mic_wav_path
+            console.print(f"[dim]Mic audio saved (AEC): {mic_path}[/dim]")
+            # Load mic WAV for mixing
+            with wave.open(str(mic_path), "rb") as wf:
+                mic_channels = wf.getnchannels()
+                mic_rate = wf.getframerate()
+                mic_sampwidth = wf.getsampwidth()
+                mic_raw = wf.readframes(wf.getnframes())
+            if mic_sampwidth == 2:
+                audio_mic = (
+                    np.frombuffer(mic_raw, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+            else:
+                audio_mic = np.frombuffer(mic_raw, dtype=np.float32)
+            if mic_channels > 1:
+                audio_mic = audio_mic.reshape(-1, mic_channels).mean(axis=1)
+        else:
+            console.print("[yellow]Mic WAV from ProcTap is empty.[/yellow]")
+    elif len(audio_mic) > 0:
         mic_path = rec_dir / f"{ts}_mic.wav"
         _save_wav(mic_path, audio_mic, mic_rate)
         console.print(f"[dim]Mic audio saved: {mic_path}[/dim]")
@@ -458,16 +503,14 @@ def record_audio(
     # Copy to output_path for the pipeline (Whisper etc.)
     shutil.copy2(mix_path, output_path)
 
-    # Compute mic delay: how much later the mic started vs app
-    mic_delay = 0.0
-    if app_first_frame_time is not None and mic_first_frame_time is not None:
-        mic_delay = mic_first_frame_time - app_first_frame_time
-        console.print(f"[dim]Stream start delta: {mic_delay:+.3f}s (mic vs app)[/dim]")
-
     duration = len(mixed) / app_rate
     console.print(f"[green]Recording saved ({duration:.1f}s): {output_path}[/green]")
     return RecordingResult(
-        mix=output_path, app=app_path, mic=mic_path, mic_delay=mic_delay
+        mix=output_path,
+        app=app_path,
+        mic=mic_path,
+        mic_delay=mic_delay,
+        aec_applied=aec_applied,
     )
 
 
