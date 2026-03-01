@@ -12,7 +12,7 @@ final class AppSettingsTests: XCTestCase {
         // Clean UserDefaults keys before each test
         let keys = [
             "watchTeams", "watchZoom", "watchWebex",
-            "pollInterval", "endGrace", "noMic",
+            "pollInterval", "endGrace", "noMic", "micName",
             "whisperModel", "diarize", "numSpeakers",
         ]
         for key in keys {
@@ -31,6 +31,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.watchZoom)
         XCTAssertTrue(settings.watchWebex)
         XCTAssertFalse(settings.noMic)
+        XCTAssertEqual(settings.micName, "Me")
         XCTAssertFalse(settings.diarize)
         XCTAssertEqual(settings.whisperModel, "large-v3-turbo-q5_0")
     }
@@ -131,6 +132,31 @@ final class AppSettingsTests: XCTestCase {
         settings.noMic = true
         let args = settings.buildArguments()
         XCTAssertTrue(args.contains("--no-mic"))
+    }
+
+    func testBuildArgumentsMicNameDefault() {
+        // Default "Me" → no --mic-name flag
+        let args = settings.buildArguments()
+        XCTAssertFalse(args.contains("--mic-name"))
+    }
+
+    func testBuildArgumentsMicNameCustom() {
+        settings.micName = "Roman"
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--mic-name"))
+        XCTAssertTrue(args.contains("Roman"))
+    }
+
+    func testBuildArgumentsMicNameEmpty() {
+        settings.micName = ""
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--mic-name"))
+        XCTAssertTrue(args.contains(""))
+    }
+
+    func testMicNameSavedToDefaults() {
+        settings.micName = "Roman"
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "micName"), "Roman")
     }
 
     func testBuildArgumentsDiarize() {

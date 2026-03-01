@@ -38,6 +38,12 @@ final class AppSettings {
         didSet { defaults.set(noMic, forKey: "noMic") }
     }
 
+    /// Label for the local mic speaker in dual-source mode.
+    /// Default "Me". Empty string = diarize mic track (multi-person room).
+    var micName: String = defaults.object(forKey: "micName") as? String ?? "Me" {
+        didSet { defaults.set(micName, forKey: "micName") }
+    }
+
     // MARK: - Transcription
 
     var whisperModel: String = defaults.object(forKey: "whisperModel") as? String ?? "large-v3-turbo-q5_0" {
@@ -104,6 +110,9 @@ final class AppSettings {
         }
         if noMic {
             args.append("--no-mic")
+        }
+        if micName != "Me" {
+            args += ["--mic-name", micName]
         }
 
         // Transcription

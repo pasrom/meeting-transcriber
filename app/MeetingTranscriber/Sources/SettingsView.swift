@@ -50,6 +50,19 @@ struct SettingsView: View {
                 }
 
                 Toggle("No Microphone (app audio only)", isOn: $settings.noMic)
+
+                if !settings.noMic {
+                    HStack {
+                        Text("Mic Speaker Name")
+                        Spacer()
+                        TextField("Me", text: $settings.micName)
+                            .frame(width: 120)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Text("Your name for dual-source mode. Leave empty to diarize mic track (multi-person room).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Transcription") {
@@ -113,7 +126,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: settings.diarize ? 500 : 360)
+        .frame(width: 420, height: settings.diarize ? 540 : (settings.noMic ? 360 : 420))
         .onAppear { hasToken = settings.hasHFToken }
     }
 }
