@@ -410,6 +410,64 @@ def cleanup_speaker_ipc() -> None:
         shutil.rmtree(SPEAKER_SAMPLES_DIR, ignore_errors=True)
 
 
+# ── Speaker Count IPC (ask before diarization) ───────────────────────────────
+
+
+def write_speaker_count_request(meeting_title: str) -> None:
+    """Write speaker_count_request.json for the menu bar app."""
+    from meeting_transcriber.config import SPEAKER_COUNT_REQUEST_FILE
+
+    data = {
+        "version": 1,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "meeting_title": meeting_title,
+    }
+
+    SPEAKER_COUNT_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = SPEAKER_COUNT_REQUEST_FILE.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, SPEAKER_COUNT_REQUEST_FILE)
+    log.info("Wrote speaker count request: %s", SPEAKER_COUNT_REQUEST_FILE)
+
+
+def poll_speaker_count_response(timeout: int = 120) -> int | None:
+    """Poll for speaker_count_response.json (written by the Swift app).
+
+    Returns speaker count (0 = auto-detect) or None on timeout.
+    """
+    from meeting_transcriber.config import SPEAKER_COUNT_RESPONSE_FILE
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if SPEAKER_COUNT_RESPONSE_FILE.exists():
+            try:
+                with open(SPEAKER_COUNT_RESPONSE_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get("speaker_count", 0)
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning("Failed to read speaker count response: %s", e)
+                return None
+        time.sleep(2)
+
+    log.info("Speaker count request timed out after %ds", timeout)
+    return None
+
+
+def cleanup_speaker_count_ipc() -> None:
+    """Remove speaker count IPC files."""
+    from meeting_transcriber.config import (
+        SPEAKER_COUNT_REQUEST_FILE,
+        SPEAKER_COUNT_RESPONSE_FILE,
+    )
+
+    for f in (SPEAKER_COUNT_REQUEST_FILE, SPEAKER_COUNT_RESPONSE_FILE):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 # ── Token Resolution ─────────────────────────────────────────────────────────
 
 
@@ -558,6 +616,25 @@ def diarize(
     console.print(
         f"[dim]Diarization model loaded ({device}). Analyzing speakers ...[/dim]"
     )
+
+    # Ask for speaker count before diarization (improves accuracy)
+    if interactive and not num_speakers:
+        answer = input("  Number of speakers? (Enter = auto-detect): ").strip()
+        if answer.isdigit() and int(answer) > 0:
+            num_speakers = int(answer)
+    elif not interactive and _status_enabled() and not num_speakers:
+        from meeting_transcriber.config import SPEAKER_COUNT_TIMEOUT
+
+        write_speaker_count_request(meeting_title)
+        _emit_status("waiting_for_speaker_count", detail="How many speakers?")
+        console.print(
+            f"[dim]Waiting for speaker count via app "
+            f"(timeout {SPEAKER_COUNT_TIMEOUT}s)...[/dim]"
+        )
+        response = poll_speaker_count_response(SPEAKER_COUNT_TIMEOUT)
+        if response and response > 0:
+            num_speakers = response
+        cleanup_speaker_count_ipc()
 
     # Pass num_speakers hint to pyannote if provided
     pipeline_params: dict = {}

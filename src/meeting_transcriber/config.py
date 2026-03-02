@@ -17,6 +17,11 @@ SPEAKER_RESPONSE_FILE = STATUS_DIR / "speaker_response.json"
 SPEAKER_SAMPLES_DIR = STATUS_DIR / "speaker_samples"
 SPEAKER_NAMING_TIMEOUT = 300  # 5 minutes
 
+# Speaker count IPC (ask user before diarization)
+SPEAKER_COUNT_REQUEST_FILE = STATUS_DIR / "speaker_count_request.json"
+SPEAKER_COUNT_RESPONSE_FILE = STATUS_DIR / "speaker_count_response.json"
+SPEAKER_COUNT_TIMEOUT = 120  # 2 minutes
+
 # Watch mode defaults
 DEFAULT_POLL_INTERVAL = 3.0
 DEFAULT_END_GRACE_PERIOD = 15.0
