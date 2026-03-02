@@ -485,7 +485,7 @@ def record_audio(
         _save_wav(app_path, audio_app, app_rate)
         console.print(f"[dim]App audio saved: {app_path}[/dim]")
 
-    # Mic track: from ProcTap WAV (AEC mode) or sounddevice frames
+    # Mic track: from ProcTap WAV or sounddevice frames
     if proctap_has_mic and mic_wav_path and mic_wav_path.exists():
         if mic_wav_path.stat().st_size > 44:  # WAV header is 44 bytes
             mic_path = mic_wav_path
@@ -504,6 +504,17 @@ def record_audio(
                 audio_mic = np.frombuffer(mic_raw, dtype=np.float32)
             if mic_channels > 1:
                 audio_mic = audio_mic.reshape(-1, mic_channels).mean(axis=1)
+            # Resample mic to app_rate if rates differ (e.g. 24kHz mic → 48kHz app)
+            if mic_rate != app_rate:
+                from math import gcd
+
+                from scipy.signal import resample_poly
+
+                g = gcd(app_rate, mic_rate)
+                audio_mic = resample_poly(audio_mic, app_rate // g, mic_rate // g)
+                console.print(
+                    f"[dim]Mic resampled {mic_rate}→{app_rate} Hz for mix[/dim]"
+                )
         else:
             console.print("[yellow]Mic WAV from ProcTap is empty.[/yellow]")
     elif len(audio_mic) > 0:
@@ -511,7 +522,7 @@ def record_audio(
         _save_wav(mic_path, audio_mic, mic_rate)
         console.print(f"[dim]Mic audio saved: {mic_path}[/dim]")
 
-    # Mix (both streams are at app_rate, no resampling needed)
+    # Mix (resample above ensures both streams are at app_rate)
     min_len = min(len(audio_mic), len(audio_app))
     if min_len > 0:
         mixed = (audio_mic[:min_len] + audio_app[:min_len]) / 2
