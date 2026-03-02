@@ -291,6 +291,7 @@ def _transcribe_dual_source(
     mic_label: str = "Me",
     mic_delay: float = 0.0,
     mute_timeline: list | None = None,
+    recording_start: float = 0.0,
 ) -> str:
     """Transcribe app and mic tracks separately, merge by timestamp."""
     from meeting_transcriber.diarize import (
@@ -300,7 +301,12 @@ def _transcribe_dual_source(
     )
 
     # 1a. Apply mute mask (zero mic during muted periods)
-    mic_masked = _apply_mute_mask(mic_audio, mute_timeline or [], mic_delay=mic_delay)
+    mic_masked = _apply_mute_mask(
+        mic_audio,
+        mute_timeline or [],
+        mic_delay=mic_delay,
+        recording_start=recording_start,
+    )
 
     # 1b. Suppress echo in mic track
     console.print("[dim]Suppressing echo in mic track ...[/dim]")
@@ -393,6 +399,7 @@ def transcribe(
     mic_label: str = "Me",
     mic_delay: float = 0.0,
     mute_timeline: list | None = None,
+    recording_start: float = 0.0,
 ) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp).
 
@@ -416,6 +423,7 @@ def transcribe(
             mic_label=mic_label,
             mic_delay=mic_delay,
             mute_timeline=mute_timeline,
+            recording_start=recording_start,
         )
 
     # Single-source mode (original behavior)

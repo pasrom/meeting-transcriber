@@ -336,6 +336,7 @@ def main():
                 extra_kwargs["mic_label"] = args.mic_name
                 extra_kwargs["mic_delay"] = recording.mic_delay
                 extra_kwargs["mute_timeline"] = recording.mute_timeline
+                extra_kwargs["recording_start"] = recording.recording_start
             transcript = transcribe(
                 audio_path,
                 model=args.model,

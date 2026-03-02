@@ -26,6 +26,7 @@ class RecordingResult:
     mic_delay: float = 0.0  # seconds: mic started this much later than app
     aec_applied: bool = False  # kept for backward compat
     mute_timeline: list = field(default_factory=list)
+    recording_start: float = 0.0  # time.monotonic() when recording began
 
 
 log = logging.getLogger(__name__)
@@ -389,6 +390,9 @@ def record_audio(
             log.debug("Mute tracker not available: %s", exc)
 
     # ── Recording loop ───────────────────────────────────────────────────
+    import time as _time
+
+    recording_start = _time.monotonic()
     try:
         if stop_event is None:
             # Interactive mode: user presses Enter to stop
@@ -526,6 +530,7 @@ def record_audio(
         mic=mic_path,
         mic_delay=mic_delay,
         mute_timeline=mute_tracker.timeline if mute_tracker else [],
+        recording_start=recording_start,
     )
 
 
