@@ -231,7 +231,7 @@ def prompt_speaker_names(
             name = input(prompt).strip()
 
         if name:
-            name = name.capitalize()
+            name = " ".join(w.capitalize() for w in name.split())
             mapping[label] = name
             if label in embeddings:
                 db[name] = embeddings[label].tolist()
