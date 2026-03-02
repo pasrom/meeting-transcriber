@@ -63,7 +63,7 @@ def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
     # Merge entries that differ only by case
     merged: dict[str, list[list[float]]] = {}
     for name, emb in raw.items():
-        key = name.capitalize()
+        key = " ".join(w.capitalize() for w in name.split())
         merged.setdefault(key, []).append(emb)
 
     db = {}
@@ -741,9 +741,10 @@ def diarize(
         if response:
             for label, name in response.items():
                 if name:
-                    mapping[label] = name.capitalize()
+                    proper = " ".join(w.capitalize() for w in name.split())
+                    mapping[label] = proper
                     if label in embeddings:
-                        db[name.capitalize()] = embeddings[label].tolist()
+                        db[proper] = embeddings[label].tolist()
             save_speaker_db(db)
             console.print("[green]Speaker names received from app.[/green]")
         else:
