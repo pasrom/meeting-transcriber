@@ -1,4 +1,4 @@
-"""Unit tests for speaker naming IPC functions in diarize.py."""
+"""Unit tests for speaker IPC functions in diarize.py."""
 
 import json
 import threading
@@ -10,9 +10,12 @@ import numpy as np
 import pytest
 
 from meeting_transcriber.diarize import (
+    cleanup_speaker_count_ipc,
     cleanup_speaker_ipc,
     extract_speaker_samples,
+    poll_speaker_count_response,
     poll_speaker_response,
+    write_speaker_count_request,
     write_speaker_request,
 )
 
@@ -247,3 +250,88 @@ def test_ipc_roundtrip(ipc_dir, sample_wav, sample_turns):
     thread.join()
 
     assert result == {"SPEAKER_00": "Roman", "SPEAKER_01": "Maria"}
+
+
+# ── Speaker Count IPC ────────────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def count_ipc_dir(tmp_path, monkeypatch):
+    """Patch speaker count IPC file paths to use tmp_path."""
+    import meeting_transcriber.config as cfg
+
+    request = tmp_path / "speaker_count_request.json"
+    response = tmp_path / "speaker_count_response.json"
+
+    monkeypatch.setattr(cfg, "SPEAKER_COUNT_REQUEST_FILE", request)
+    monkeypatch.setattr(cfg, "SPEAKER_COUNT_RESPONSE_FILE", response)
+
+    return {"request": request, "response": response}
+
+
+def test_write_speaker_count_request_creates_valid_json(count_ipc_dir):
+    write_speaker_count_request("Sprint Planning")
+
+    assert count_ipc_dir["request"].exists()
+    data = json.loads(count_ipc_dir["request"].read_text())
+
+    assert data["version"] == 1
+    assert data["meeting_title"] == "Sprint Planning"
+    assert "timestamp" in data
+
+
+def test_poll_speaker_count_response_reads_count(count_ipc_dir):
+    """Pre-written response file is read correctly."""
+    response_data = {"version": 1, "speaker_count": 5}
+    count_ipc_dir["response"].write_text(json.dumps(response_data))
+
+    result = poll_speaker_count_response(timeout=1)
+    assert result == 5
+
+
+def test_poll_speaker_count_response_auto_detect(count_ipc_dir):
+    """speaker_count=0 means auto-detect."""
+    response_data = {"version": 1, "speaker_count": 0}
+    count_ipc_dir["response"].write_text(json.dumps(response_data))
+
+    result = poll_speaker_count_response(timeout=1)
+    assert result == 0
+
+
+def test_poll_speaker_count_response_timeout_returns_none(count_ipc_dir):
+    """No response file → returns None after timeout."""
+    result = poll_speaker_count_response(timeout=0)
+    assert result is None
+
+
+def test_poll_speaker_count_response_waits_for_delayed_file(count_ipc_dir):
+    """Response written after 1s via thread → poll finds it."""
+
+    def write_delayed():
+        time.sleep(1)
+        response_data = {"version": 1, "speaker_count": 3}
+        count_ipc_dir["response"].write_text(json.dumps(response_data))
+
+    thread = threading.Thread(target=write_delayed)
+    thread.start()
+
+    result = poll_speaker_count_response(timeout=10)
+    thread.join()
+
+    assert result == 3
+
+
+def test_cleanup_speaker_count_ipc_removes_files(count_ipc_dir):
+    """Request + response files are removed."""
+    count_ipc_dir["request"].write_text("{}")
+    count_ipc_dir["response"].write_text("{}")
+
+    cleanup_speaker_count_ipc()
+
+    assert not count_ipc_dir["request"].exists()
+    assert not count_ipc_dir["response"].exists()
+
+
+def test_cleanup_speaker_count_ipc_no_error_when_missing(count_ipc_dir):
+    """Cleanup with no existing files raises no error."""
+    cleanup_speaker_count_ipc()  # Should not raise
