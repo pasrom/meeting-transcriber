@@ -36,6 +36,7 @@ class MeetingWatcher:
         whisper_model: str | None = None,
         diarize: bool = False,
         num_speakers: int | None = None,
+        merge_threshold: float | None = None,
         no_mic: bool = False,
         mic_device: int | None = None,
         mic_device_uid: str | None = None,
@@ -49,6 +50,7 @@ class MeetingWatcher:
         self.whisper_model = whisper_model
         self.diarize = diarize
         self.num_speakers = num_speakers
+        self.merge_threshold = merge_threshold
         self.no_mic = no_mic
         self.mic_device = mic_device
         self.mic_device_uid = mic_device_uid
@@ -242,6 +244,8 @@ class MeetingWatcher:
                 extra_kwargs["mic_delay"] = recording.mic_delay
                 extra_kwargs["mute_timeline"] = recording.mute_timeline
                 extra_kwargs["recording_start"] = recording.recording_start
+            if self.merge_threshold is not None:
+                extra_kwargs["merge_threshold"] = self.merge_threshold
             transcript = transcribe(
                 audio_path,
                 model=self.whisper_model,

@@ -132,6 +132,13 @@ def main():
         help="Expected number of speakers (improves diarization accuracy)",
     )
     parser.add_argument(
+        "--merge-threshold",
+        type=float,
+        default=None,
+        help="Cosine similarity threshold for merging "
+        "duplicate speakers (default: 0.92)",
+    )
+    parser.add_argument(
         "--mic-name",
         type=str,
         default="Me",
@@ -225,6 +232,7 @@ def main():
             whisper_model=args.model,
             diarize=args.diarize,
             num_speakers=args.speakers,
+            merge_threshold=args.merge_threshold,
             no_mic=args.no_mic,
             mic_device=mic_device,
             mic_device_uid=args.mic_device,
@@ -337,6 +345,8 @@ def main():
                 extra_kwargs["mic_delay"] = recording.mic_delay
                 extra_kwargs["mute_timeline"] = recording.mute_timeline
                 extra_kwargs["recording_start"] = recording.recording_start
+            if args.merge_threshold is not None:
+                extra_kwargs["merge_threshold"] = args.merge_threshold
             transcript = transcribe(
                 audio_path,
                 model=args.model,

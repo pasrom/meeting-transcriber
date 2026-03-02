@@ -292,6 +292,7 @@ def _transcribe_dual_source(
     mic_delay: float = 0.0,
     mute_timeline: list | None = None,
     recording_start: float = 0.0,
+    merge_threshold: float | None = None,
 ) -> str:
     """Transcribe app and mic tracks separately, merge by timestamp."""
     from meeting_transcriber.diarize import (
@@ -340,8 +341,14 @@ def _transcribe_dual_source(
     # 4. Label app segments
     if diarize_enabled:
         try:
+            extra: dict = {}
+            if merge_threshold is not None:
+                extra["merge_threshold"] = merge_threshold
             turns = diarize(
-                app_audio, num_speakers=num_speakers, meeting_title=meeting_title
+                app_audio,
+                num_speakers=num_speakers,
+                meeting_title=meeting_title,
+                **extra,
             )
             app_segments = assign_speakers(app_segments, turns)
         except Exception as exc:
@@ -364,8 +371,14 @@ def _transcribe_dual_source(
         # Multi mode: diarize the mic track too
         if diarize_enabled:
             try:
+                mic_extra: dict = {}
+                if merge_threshold is not None:
+                    mic_extra["merge_threshold"] = merge_threshold
                 mic_turns = diarize(
-                    mic_audio, num_speakers=None, meeting_title=meeting_title
+                    mic_audio,
+                    num_speakers=None,
+                    meeting_title=meeting_title,
+                    **mic_extra,
                 )
                 mic_segments = assign_speakers(mic_segments, mic_turns)
             except Exception as exc:
@@ -403,6 +416,7 @@ def transcribe(
     mic_delay: float = 0.0,
     mute_timeline: list | None = None,
     recording_start: float = 0.0,
+    merge_threshold: float | None = None,
 ) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp).
 
@@ -427,6 +441,7 @@ def transcribe(
             mic_delay=mic_delay,
             mute_timeline=mute_timeline,
             recording_start=recording_start,
+            merge_threshold=merge_threshold,
         )
 
     # Single-source mode (original behavior)
@@ -458,8 +473,14 @@ def transcribe(
     ]
 
     try:
+        extra: dict = {}
+        if merge_threshold is not None:
+            extra["merge_threshold"] = merge_threshold
         turns = diarize(
-            audio_path, num_speakers=num_speakers, meeting_title=meeting_title
+            audio_path,
+            num_speakers=num_speakers,
+            meeting_title=meeting_title,
+            **extra,
         )
     except Exception as exc:
         console.print(

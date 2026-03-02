@@ -29,7 +29,7 @@ console = Console()
 
 SPEAKERS_DB = Path("./speakers.json")
 SIMILARITY_THRESHOLD = 0.75  # cosine similarity threshold for speaker recognition
-MERGE_THRESHOLD = 0.85  # cosine similarity threshold for merging duplicate speakers
+MERGE_THRESHOLD = 0.92  # cosine similarity threshold for merging duplicate speakers
 
 
 @dataclass
@@ -532,6 +532,7 @@ def _resolve_hf_token() -> str:
 def merge_similar_speakers(
     turns: list[tuple[float, float, str]],
     embeddings: dict[str, np.ndarray],
+    threshold: float = MERGE_THRESHOLD,
 ) -> tuple[list[tuple[float, float, str]], dict[str, np.ndarray]]:
     """Merge speakers with very similar embeddings (likely the same person).
 
@@ -550,7 +551,7 @@ def merge_similar_speakers(
             if label_b in merge_map:
                 continue
             score = cosine_similarity(embeddings[label_a], embeddings[label_b])
-            if score >= MERGE_THRESHOLD:
+            if score >= threshold:
                 merge_map[label_b] = label_a
                 console.print(
                     f"  [dim]Merged {label_b} into {label_a}"
@@ -574,6 +575,7 @@ def diarize(
     num_speakers: int | None = None,
     interactive: bool = True,
     meeting_title: str = "Meeting",
+    merge_threshold: float = MERGE_THRESHOLD,
 ) -> list[tuple[float, float, str]]:
     """Run pyannote speaker diarization with speaker recognition.
 
@@ -667,7 +669,7 @@ def diarize(
 
     # Auto-merge similar speakers (unless num_speakers was explicitly set)
     if not num_speakers and len(speaker_labels) > 1:
-        turns, embeddings = merge_similar_speakers(turns, embeddings)
+        turns, embeddings = merge_similar_speakers(turns, embeddings, merge_threshold)
         speaker_labels = sorted(set(t[2] for t in turns))
 
     # Compute speaking times
@@ -703,6 +705,7 @@ def diarize(
                 num_speakers=corrected,
                 interactive=interactive,
                 meeting_title=meeting_title,
+                merge_threshold=merge_threshold,
             )
 
     # Match against saved speaker profiles
