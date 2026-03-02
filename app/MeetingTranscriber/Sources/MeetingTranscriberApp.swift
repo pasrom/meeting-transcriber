@@ -5,6 +5,7 @@ struct MeetingTranscriberApp: App {
     @State private var monitor = StatusMonitor()
     @State private var settings = AppSettings()
     @State private var speakerRequest: SpeakerRequest?
+    @State private var speakerCountRequest: SpeakerCountRequest?
     @Environment(\.openWindow) private var openWindow
     private let pythonProcess = PythonProcess()
     private let notifications = NotificationManager.shared
@@ -47,6 +48,12 @@ struct MeetingTranscriberApp: App {
             guard let newValue, let status = monitor.status else { return }
             notifications.handleTransition(from: oldValue, to: newValue, status: status)
 
+            if newValue == .waitingForSpeakerCount {
+                loadSpeakerCountRequest()
+                NSApp.activate()
+                openWindow(id: "speaker-count")
+            }
+
             if newValue == .waitingForSpeakerNames {
                 loadSpeakerRequest()
                 NSApp.activate()
@@ -62,6 +69,19 @@ struct MeetingTranscriberApp: App {
                 }
             } else {
                 Text("No speaker data available.")
+                    .padding()
+            }
+        }
+        .windowResizability(.contentSize)
+
+        Window("Speaker Count", id: "speaker-count") {
+            if let request = speakerCountRequest {
+                SpeakerCountView(request: request) { count in
+                    writeSpeakerCountResponse(count)
+                    speakerCountRequest = nil
+                }
+            } else {
+                Text("No speaker count request available.")
                     .padding()
             }
         }
@@ -118,6 +138,36 @@ struct MeetingTranscriberApp: App {
         else { return }
 
         speakerRequest = request
+    }
+
+    private func loadSpeakerCountRequest() {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meeting-transcriber")
+            .appendingPathComponent("speaker_count_request.json")
+
+        guard let data = try? Data(contentsOf: url),
+              let request = try? JSONDecoder().decode(SpeakerCountRequest.self, from: data)
+        else { return }
+
+        speakerCountRequest = request
+    }
+
+    private func writeSpeakerCountResponse(_ count: Int) {
+        let response = SpeakerCountResponse(version: 1, speakerCount: count)
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meeting-transcriber")
+            .appendingPathComponent("speaker_count_response.json")
+
+        guard let data = try? JSONEncoder().encode(response) else { return }
+
+        let tmpURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".speaker_count_response.tmp")
+        do {
+            try data.write(to: tmpURL, options: .atomic)
+            try FileManager.default.moveItem(at: tmpURL, to: url)
+        } catch {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     private func writeSpeakerResponse(_ mapping: [String: String]) {

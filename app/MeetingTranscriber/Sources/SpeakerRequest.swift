@@ -37,3 +37,28 @@ struct SpeakerResponse: Codable {
     let version: Int
     let speakers: [String: String]
 }
+
+// MARK: - Speaker Count IPC
+
+/// IPC model: Python writes this before diarization to ask how many speakers.
+struct SpeakerCountRequest: Codable {
+    let version: Int
+    let timestamp: String
+    let meetingTitle: String
+
+    enum CodingKeys: String, CodingKey {
+        case version, timestamp
+        case meetingTitle = "meeting_title"
+    }
+}
+
+/// IPC model: the app writes this after the user picks a speaker count.
+struct SpeakerCountResponse: Codable {
+    let version: Int
+    let speakerCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case version
+        case speakerCount = "speaker_count"
+    }
+}
