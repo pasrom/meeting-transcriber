@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -24,7 +24,8 @@ class RecordingResult:
     app: Path | None = None
     mic: Path | None = None
     mic_delay: float = 0.0  # seconds: mic started this much later than app
-    aec_applied: bool = False  # True when VoiceProcessingIO AEC was used
+    aec_applied: bool = False  # kept for backward compat
+    mute_timeline: list = field(default_factory=list)
 
 
 log = logging.getLogger(__name__)
@@ -254,7 +255,7 @@ def record_audio(
     """Record app audio (ProcTap) and/or microphone (sounddevice).
 
     Args:
-        mic_device_uid: CoreAudio device UID for ProcTap mic selection (AEC mode).
+        mic_device_uid: CoreAudio device UID for ProcTap mic selection.
 
     If stop_event is provided, recording is controlled externally (watch mode).
     Otherwise, the user presses Enter to stop (interactive mode).
@@ -264,8 +265,7 @@ def record_audio(
     _stop = stop_event if stop_event is not None else threading.Event()
     app_rate = RECORD_RATE
     app_channels = 2
-    aec_applied = False  # True when ProcTap handles mic with VoiceProcessingIO
-    mic_wav_path: Path | None = None  # mic WAV written by ProcTap (AEC mode)
+    mic_wav_path: Path | None = None  # mic WAV written by ProcTap
 
     # ── App audio via ScreenCaptureKit (direct subprocess) ──────────────
     app_proc = None
@@ -300,14 +300,13 @@ def record_audio(
                     str(app_channels),
                 ]
 
-                # Pass --mic to ProcTap for AEC when mic is enabled
+                # Pass --mic to ProcTap when mic is enabled
                 if not no_mic:
                     mic_wav_path = rec_dir / f"{ts}_mic.wav"
                     cmd.extend(["--mic", str(mic_wav_path)])
                     if mic_device_uid:
                         cmd.extend(["--mic-device", mic_device_uid])
                     proctap_has_mic = True
-                    aec_applied = True
 
                 app_proc = subprocess.Popen(
                     cmd,
@@ -333,9 +332,7 @@ def record_audio(
                     f" {RECORD_RATE} Hz, {app_channels}ch)[/dim]"
                 )
                 if proctap_has_mic:
-                    console.print(
-                        "[dim]Mic recording via ProcTap (VoiceProcessingIO AEC)[/dim]"
-                    )
+                    console.print("[dim]Mic recording via ProcTap[/dim]")
             except Exception as e:
                 console.print(
                     f"[yellow]App audio failed ({type(e).__name__}: {e}),"
@@ -343,7 +340,6 @@ def record_audio(
                 )
                 app_proc = None
                 proctap_has_mic = False
-                aec_applied = False
                 mic_wav_path = None
 
     # ── Microphone via sounddevice (only when ProcTap is NOT handling mic) ──
@@ -465,7 +461,7 @@ def record_audio(
     if proctap_has_mic and mic_wav_path and mic_wav_path.exists():
         if mic_wav_path.stat().st_size > 44:  # WAV header is 44 bytes
             mic_path = mic_wav_path
-            console.print(f"[dim]Mic audio saved (AEC): {mic_path}[/dim]")
+            console.print(f"[dim]Mic audio saved: {mic_path}[/dim]")
             # Load mic WAV for mixing
             with wave.open(str(mic_path), "rb") as wf:
                 mic_channels = wf.getnchannels()
@@ -516,7 +512,6 @@ def record_audio(
         app=app_path,
         mic=mic_path,
         mic_delay=mic_delay,
-        aec_applied=aec_applied,
     )
 
 

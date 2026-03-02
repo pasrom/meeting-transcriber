@@ -108,7 +108,7 @@ def main():
         "--mic-device",
         type=str,
         default=None,
-        help="CoreAudio device UID for mic (used with ProcTap AEC mode)",
+        help="CoreAudio device UID for mic (used with ProcTap)",
     )
 
     # Claude CLI
@@ -335,7 +335,7 @@ def main():
                 extra_kwargs["mic_audio"] = recording.mic
                 extra_kwargs["mic_label"] = args.mic_name
                 extra_kwargs["mic_delay"] = recording.mic_delay
-                extra_kwargs["aec_applied"] = recording.aec_applied
+                extra_kwargs["mute_timeline"] = recording.mute_timeline
             transcript = transcribe(
                 audio_path,
                 model=args.model,

@@ -30,11 +30,9 @@ func writeAllToStdout(_ ptr: UnsafeRawPointer, count: Int) {
     }
 }
 
-// MARK: - Mic Capture Handler (VoiceProcessingIO AEC)
+// MARK: - Mic Capture Handler
 
-/// Records microphone audio with Apple's VoiceProcessingIO echo cancellation.
-/// VoiceProcessingIO monitors the system speaker output and subtracts it from the
-/// mic input in real-time — the same AEC that FaceTime uses.
+/// Records microphone audio to a WAV file via AVAudioEngine.
 class MicCaptureHandler {
     private let engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
@@ -65,7 +63,7 @@ class MicCaptureHandler {
     func start(deviceUID: String? = nil) throws {
         let inputNode = engine.inputNode
 
-        // Set specific mic device before enabling VoiceProcessingIO
+        // Set specific mic device
         if let uid = deviceUID {
             var deviceID = Self.deviceIDForUID(uid)
             if deviceID != kAudioObjectUnknown {
@@ -80,13 +78,7 @@ class MicCaptureHandler {
             }
         }
 
-        // Enable VoiceProcessingIO — this activates AEC + noise suppression
-        try inputNode.setVoiceProcessingEnabled(true)
-        fputs("Mic: VoiceProcessingIO enabled (AEC active)\n", stderr)
-
         // Query the hardware format, then create a mono tap format.
-        // VoiceProcessingIO may report multi-channel (e.g. 9ch) but we
-        // only need mono for the mic recording.
         let hwFormat = inputNode.outputFormat(forBus: 0)
         fputs("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch\n", stderr)
 
@@ -128,11 +120,8 @@ class MicCaptureHandler {
     func stop() {
         let inputNode = engine.inputNode
 
-        // Remove tap first (before disabling VoiceProcessingIO)
+        // Remove tap first
         inputNode.removeTap(onBus: 0)
-
-        // Disable VoiceProcessingIO — releases exclusive mic lock
-        try? inputNode.setVoiceProcessingEnabled(false)
 
         // Stop and reset engine to fully release audio resources
         engine.stop()
@@ -482,7 +471,7 @@ struct ScreenCaptureAudio {
               bundleID            - Application bundle identifier (e.g., com.apple.Safari)
               sample_rate         - Audio sample rate in Hz (default: 48000)
               channels            - Number of audio channels (default: 2)
-              --mic <path>        - Also record microphone with AEC to WAV file
+              --mic <path>        - Also record microphone to WAV file
               --mic-device <uid>  - CoreAudio device UID for mic (e.g., "BuiltInMicrophoneDevice")
 
             Example:
@@ -544,7 +533,7 @@ struct ScreenCaptureAudio {
         fputs("Sample Rate: \(sampleRate) Hz\n", stderr)
         fputs("Channels: \(channels)\n", stderr)
         if let micPath = micPath {
-            fputs("Mic output: \(micPath) (AEC enabled)\n", stderr)
+            fputs("Mic output: \(micPath)\n", stderr)
         }
         if let micDeviceUID = micDeviceUID {
             fputs("Mic device UID: \(micDeviceUID)\n", stderr)
