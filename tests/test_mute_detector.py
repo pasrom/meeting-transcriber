@@ -47,6 +47,7 @@ class TestMuteTrackerGracefulDegradation:
         """When AX is not trusted, tracker starts but records nothing."""
         tracker = MuteTracker(teams_pid=12345)
         tracker.start()
+        assert not tracker.is_active
         tracker.stop()
         assert tracker.timeline == []
 

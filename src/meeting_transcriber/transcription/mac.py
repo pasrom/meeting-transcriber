@@ -301,9 +301,12 @@ def _transcribe_dual_source(
     )
 
     # 1a. Apply mute mask (zero mic during muted periods)
+    tl = mute_timeline or []
+    if tl:
+        console.print(f"[dim]Applying mute mask ({len(tl)} transitions) ...[/dim]")
     mic_masked = _apply_mute_mask(
         mic_audio,
-        mute_timeline or [],
+        tl,
         mic_delay=mic_delay,
         recording_start=recording_start,
     )
