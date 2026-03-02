@@ -2,6 +2,8 @@
 
 Polls the Teams UI for the mute/unmute button state and records
 transitions as a timeline that can be used to mask mic audio.
+
+Requires: pip install pyobjc-framework-ApplicationServices
 """
 
 import logging
@@ -11,8 +13,18 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-# Button labels across locales (lowercase for comparison)
-_MUTE_LABELS = {"mute", "unmute", "stummschalten", "stummschaltung aufheben"}
+# Mute-button description prefixes across locales (lowercase).
+# Teams buttons have descriptions like "Mute (⌘ ⇧ M)" or "Unmute (⌘ ⇧ M)".
+_MUTED_PREFIXES = ("unmute", "stummschaltung aufheben")  # button says "Unmute" → muted
+_UNMUTED_PREFIXES = ("mute", "stummschalten")  # button says "Mute" → unmuted
+
+# All known labels (for tests)
+_MUTE_LABELS = {
+    "mute",
+    "unmute",
+    "stummschalten",
+    "stummschaltung aufheben",
+}
 
 
 @dataclass
@@ -23,76 +35,63 @@ class MuteTransition:
     is_muted: bool
 
 
-def _load_ax_functions():
-    """Load Accessibility API functions from HIServices via pyobjc.
-
-    Returns (AXIsProcessTrusted, AXUIElementCreateApplication,
-             AXUIElementCopyAttributeValue) or raises ImportError.
-    """
-    import objc
-    from Foundation import NSBundle
-
-    bundle = NSBundle.bundleWithPath_(
-        "/System/Library/Frameworks/ApplicationServices.framework"
-        "/Frameworks/HIServices.framework"
-    )
-    if not bundle:
-        raise ImportError("HIServices framework not found")
-
-    functions = [
-        ("AXIsProcessTrusted", b"B"),
-        ("AXUIElementCreateApplication", b"@i"),
-    ]
-    d = {}
-    objc.loadBundleFunctions(bundle, d, functions)
-    return d["AXIsProcessTrusted"], d["AXUIElementCreateApplication"]
-
-
 def _is_accessibility_trusted() -> bool:
     """Check whether this process has Accessibility permission."""
     try:
-        ax_trusted, _ = _load_ax_functions()
-        return bool(ax_trusted())
+        from ApplicationServices import AXIsProcessTrusted
+
+        return bool(AXIsProcessTrusted())
     except Exception:
         return False
 
 
-def _find_mute_button(element, depth: int = 0, max_depth: int = 10):
-    """Recursively search AX tree for a button matching mute labels.
+def _get_ax_attr(element, attr):
+    """Read a single AX attribute. Returns value or None."""
+    from ApplicationServices import (
+        AXUIElementCopyAttributeValue,
+        kAXErrorSuccess,
+    )
+
+    err, val = AXUIElementCopyAttributeValue(element, attr, None)
+    return val if err == kAXErrorSuccess else None
+
+
+def _find_mute_button(element, depth: int = 0, max_depth: int = 25):
+    """Recursively search AX tree for a button whose description starts
+    with a mute/unmute label.
+
+    Teams (Electron) nests buttons deep in the web content — up to
+    depth ~20.  Buttons use AXDescription (not AXTitle) for their label,
+    and include the keyboard shortcut, e.g. "Mute (⌘ ⇧ M)".
 
     Returns the element if found, None otherwise.
     """
     if depth > max_depth:
         return None
 
-    import CoreFoundation
-
     try:
-        err, role = CoreFoundation.AXUIElementCopyAttributeValue(
-            element, "AXRole", None
-        )
-        if err != 0:
+        role = _get_ax_attr(element, "AXRole")
+        if not role:
             return None
 
-        if role == "AXButton":
-            err, title = CoreFoundation.AXUIElementCopyAttributeValue(
-                element, "AXTitle", None
-            )
-            if err == 0 and title and str(title).lower() in _MUTE_LABELS:
-                return element
+        if str(role) == "AXButton":
+            # Teams buttons use AXDescription, not AXTitle
+            desc = _get_ax_attr(element, "AXDescription")
+            if desc:
+                desc_lower = str(desc).lower()
+                if desc_lower.startswith(_MUTED_PREFIXES + _UNMUTED_PREFIXES):
+                    return element
 
-            # Also check AXDescription (some buttons use description instead)
-            err, desc = CoreFoundation.AXUIElementCopyAttributeValue(
-                element, "AXDescription", None
-            )
-            if err == 0 and desc and str(desc).lower() in _MUTE_LABELS:
-                return element
+            # Fallback: check AXTitle too (other apps)
+            title = _get_ax_attr(element, "AXTitle")
+            if title:
+                title_lower = str(title).lower()
+                if title_lower.startswith(_MUTED_PREFIXES + _UNMUTED_PREFIXES):
+                    return element
 
         # Recurse into children
-        err, children = CoreFoundation.AXUIElementCopyAttributeValue(
-            element, "AXChildren", None
-        )
-        if err != 0 or not children:
+        children = _get_ax_attr(element, "AXChildren")
+        if not children:
             return None
 
         for child in children:
@@ -112,10 +111,9 @@ def _read_mute_state(pid: int) -> bool | None:
     Returns True if muted, False if unmuted, None if can't determine.
     """
     try:
-        import CoreFoundation
+        from ApplicationServices import AXUIElementCreateApplication
 
-        _, ax_create_app = _load_ax_functions()
-        app_element = ax_create_app(pid)
+        app_element = AXUIElementCreateApplication(pid)
         if not app_element:
             return None
 
@@ -123,23 +121,17 @@ def _read_mute_state(pid: int) -> bool | None:
         if button is None:
             return None
 
-        # Check the button title — "Unmute" means currently muted
-        err, title = CoreFoundation.AXUIElementCopyAttributeValue(
-            button, "AXTitle", None
-        )
-        if err != 0 or not title:
-            # Try description
-            err, title = CoreFoundation.AXUIElementCopyAttributeValue(
-                button, "AXDescription", None
-            )
-            if err != 0 or not title:
-                return None
+        # Check description first (Teams), then title (fallback)
+        for attr in ("AXDescription", "AXTitle"):
+            text = _get_ax_attr(button, attr)
+            if not text:
+                continue
+            text_lower = str(text).lower()
+            if text_lower.startswith(_MUTED_PREFIXES):
+                return True  # muted (button says "Unmute")
+            if text_lower.startswith(_UNMUTED_PREFIXES):
+                return False  # unmuted (button says "Mute")
 
-        title_lower = str(title).lower()
-        if title_lower in {"unmute", "stummschaltung aufheben"}:
-            return True  # muted (button says "Unmute")
-        if title_lower in {"mute", "stummschalten"}:
-            return False  # unmuted (button says "Mute")
         return None
 
     except Exception as exc:
