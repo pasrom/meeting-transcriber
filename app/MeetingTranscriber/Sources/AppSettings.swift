@@ -59,9 +59,10 @@ final class AppSettings {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
 
-    var numSpeakers: Int = defaults.object(forKey: "numSpeakers") as? Int ?? 2 {
+    /// Number of expected speakers. 0 = auto-detect.
+    var numSpeakers: Int = defaults.object(forKey: "numSpeakers") as? Int ?? 0 {
         didSet {
-            if numSpeakers < 2 { numSpeakers = 2 }
+            if numSpeakers < 0 { numSpeakers = 0 }
             defaults.set(numSpeakers, forKey: "numSpeakers")
         }
     }
@@ -129,7 +130,9 @@ final class AppSettings {
         }
         if diarize {
             args.append("--diarize")
-            args += ["--speakers", String(numSpeakers)]
+            if numSpeakers > 0 {
+                args += ["--speakers", String(numSpeakers)]
+            }
         }
 
         return args

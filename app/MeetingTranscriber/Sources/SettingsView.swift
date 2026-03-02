@@ -88,10 +88,10 @@ struct SettingsView: View {
                     HStack {
                         Text("Expected Speakers")
                         Spacer()
-                        TextField("", value: $settings.numSpeakers, format: .number)
+                        Text(settings.numSpeakers == 0 ? "Auto" : "\(settings.numSpeakers)")
                             .frame(width: 40)
                             .multilineTextAlignment(.trailing)
-                        Stepper("", value: $settings.numSpeakers, in: 2...10)
+                        Stepper("", value: $settings.numSpeakers, in: 0...10)
                             .labelsHidden()
                     }
 
