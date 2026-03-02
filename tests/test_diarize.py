@@ -169,6 +169,26 @@ class TestSpeakerDbFileLocking:
         # Average of [1,0] and [0,1] = [0.5, 0.5]
         assert result["Alice"] == pytest.approx([0.5, 0.5])
 
+    def test_load_capitalizes_multi_word_names(self, tmp_path):
+        db_path = tmp_path / "speakers.json"
+        db_path.write_text(
+            json.dumps({"roman passler": [1.0, 0.0], "tobias jaschke": [0.0, 1.0]})
+        )
+        result = load_speaker_db(db_path)
+        assert "Roman Passler" in result
+        assert "Tobias Jaschke" in result
+        assert "roman passler" not in result
+
+    def test_load_merges_multi_word_case_duplicates(self, tmp_path):
+        db_path = tmp_path / "speakers.json"
+        db_path.write_text(
+            json.dumps({"Roman": [1.0, 0.0], "roman passler": [0.0, 1.0]})
+        )
+        result = load_speaker_db(db_path)
+        # "Roman" and "roman passler" are different keys, both should exist
+        assert "Roman" in result
+        assert "Roman Passler" in result
+
     def test_save_roundtrip(self, tmp_path):
         db_path = tmp_path / "speakers.json"
         original = {"Alice": [0.1, 0.2], "Bob": [0.3, 0.4]}
