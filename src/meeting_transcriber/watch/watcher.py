@@ -240,7 +240,7 @@ class MeetingWatcher:
                 extra_kwargs["mic_audio"] = recording.mic
                 extra_kwargs["mic_label"] = self.mic_label
                 extra_kwargs["mic_delay"] = recording.mic_delay
-                extra_kwargs["aec_applied"] = recording.aec_applied
+                extra_kwargs["mute_timeline"] = recording.mute_timeline
             transcript = transcribe(
                 audio_path,
                 model=self.whisper_model,

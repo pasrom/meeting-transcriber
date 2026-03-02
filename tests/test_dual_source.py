@@ -142,21 +142,22 @@ class TestDualSourceDispatch:
 
     @patch("meeting_transcriber.transcription.mac._transcribe_dual_source")
     @patch("meeting_transcriber.transcription.mac._load_whisper_model")
-    def test_aec_applied_passed_through(self, mock_load, mock_dual):
-        """transcribe() passes aec_applied to dual-source."""
+    def test_mute_timeline_passed_through(self, mock_load, mock_dual):
+        """transcribe() passes mute_timeline to dual-source."""
         mock_load.return_value = MagicMock()
         mock_dual.return_value = "[Me] test"
 
         from meeting_transcriber.transcription.mac import transcribe
 
+        timeline = [{"timestamp": 1.0, "is_muted": True}]
         transcribe(
             Path("/tmp/mix.wav"),
             app_audio=Path("/tmp/app.wav"),
             mic_audio=Path("/tmp/mic.wav"),
-            aec_applied=True,
+            mute_timeline=timeline,
         )
         _, kwargs = mock_dual.call_args
-        assert kwargs["aec_applied"] is True
+        assert kwargs["mute_timeline"] is timeline
 
     @patch("meeting_transcriber.transcription.mac._load_whisper_model")
     def test_single_source_when_no_tracks(self, mock_load):
@@ -217,35 +218,12 @@ def _write_wav(path: Path, samples: np.ndarray, rate: int = 16000) -> None:
         wf.writeframes(audio_int16.tobytes())
 
 
-class TestAECBypass:
+class TestEchoSuppression:
     @patch("meeting_transcriber.transcription.mac._suppress_echo")
     @patch("meeting_transcriber.transcription.mac._transcribe_segments")
     @patch("meeting_transcriber.transcription.mac._load_whisper_model")
-    def test_suppress_echo_skipped_when_aec_applied(
-        self, mock_load, mock_segments, mock_suppress
-    ):
-        """_suppress_echo is NOT called when aec_applied=True."""
-        mock_load.return_value = MagicMock()
-        mock_segments.return_value = []
-
-        from meeting_transcriber.transcription.mac import _transcribe_dual_source
-
-        _transcribe_dual_source(
-            mock_load.return_value,
-            Path("/tmp/app.wav"),
-            Path("/tmp/mic.wav"),
-            aec_applied=True,
-        )
-
-        mock_suppress.assert_not_called()
-
-    @patch("meeting_transcriber.transcription.mac._suppress_echo")
-    @patch("meeting_transcriber.transcription.mac._transcribe_segments")
-    @patch("meeting_transcriber.transcription.mac._load_whisper_model")
-    def test_suppress_echo_called_when_no_aec(
-        self, mock_load, mock_segments, mock_suppress
-    ):
-        """_suppress_echo IS called when aec_applied=False."""
+    def test_suppress_echo_always_called(self, mock_load, mock_segments, mock_suppress):
+        """_suppress_echo is always called in dual-source mode."""
         mock_load.return_value = MagicMock()
         mock_segments.return_value = []
         mock_suppress.return_value = Path("/tmp/mic_clean.wav")
@@ -256,7 +234,6 @@ class TestAECBypass:
             mock_load.return_value,
             Path("/tmp/app.wav"),
             Path("/tmp/mic.wav"),
-            aec_applied=False,
         )
 
         mock_suppress.assert_called_once()
