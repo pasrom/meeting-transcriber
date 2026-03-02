@@ -63,10 +63,9 @@ def _suppress_echo(
     """Suppress echo in mic track using app audio as reference.
 
     Where the app track has energy above *threshold*, the mic track is
-    attenuated by -40 dB (factor 0.01) instead of being zeroed — this
-    avoids Whisper hallucinations on silence.  Asymmetric margin: 2
-    windows (~40 ms) before and 10 windows (~200 ms) after each active
-    region to catch onset/reverb tails.
+    zeroed out.  Asymmetric margin: 2 windows (~40 ms) before and
+    10 windows (~200 ms) after each active region to catch onset/reverb
+    tails.
     """
     # Ensure both inputs are 16 kHz mono before processing
     app_path = _ensure_16khz(app_path)
@@ -123,7 +122,7 @@ def _suppress_echo(
             expanded[lo:hi] = True
 
     # --- apply soft gate to mic ---
-    attenuation = 0.01  # -40 dB
+    attenuation = 0.0
     suppressed_windows = 0
     for i in range(n_windows):
         if expanded[i]:
