@@ -29,6 +29,10 @@ class TestRecordingResult:
         assert r.mic_delay == 0.0
         assert r.aec_applied is False
 
+    def test_mute_timeline_default_empty(self):
+        r = RecordingResult(mix=Path("/tmp/mix.wav"))
+        assert r.mute_timeline == []
+
     def test_mic_delay(self):
         r = RecordingResult(
             mix=Path("/tmp/mix.wav"),
