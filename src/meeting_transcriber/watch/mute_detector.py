@@ -157,6 +157,11 @@ class MuteTracker:
         self._thread: threading.Thread | None = None
         self._last_state: bool | None = None
 
+    @property
+    def is_active(self) -> bool:
+        """Whether the polling thread is running."""
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
         """Start polling in a daemon thread."""
         if not _is_accessibility_trusted():

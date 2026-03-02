@@ -1,3 +1,4 @@
+import ApplicationServices
 import AVFoundation
 import Foundation
 
@@ -50,6 +51,15 @@ final class PythonProcess {
         }
         // .denied or .restricted
         return false
+    }
+
+    /// Check (and prompt for) Accessibility permission.
+    /// Required for mute-button detection in Teams via AXUIElement.
+    /// macOS TCC checks the "responsible process" (this app), not the
+    /// Python subprocess, so the prompt must come from here.
+    static func ensureAccessibilityAccess() -> Bool {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
     }
 
     func start(arguments: [String] = ["--watch"]) {

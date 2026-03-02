@@ -82,6 +82,10 @@ struct MeetingTranscriberApp: App {
                 if !micOK {
                     print("Warning: Microphone access denied — recording without mic")
                 }
+                let axOK = PythonProcess.ensureAccessibilityAccess()
+                if !axOK {
+                    print("Warning: Accessibility access not granted — mute detection disabled")
+                }
                 await MainActor.run {
                     monitor.start()
                     pythonProcess.start(arguments: settings.buildArguments())

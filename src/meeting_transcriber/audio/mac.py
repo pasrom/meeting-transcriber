@@ -386,8 +386,16 @@ def record_audio(
 
             mute_tracker = MuteTracker(teams_pid=app_pid)
             mute_tracker.start()
+            if mute_tracker.is_active:
+                console.print(f"[dim]Mute detection active (PID {app_pid})[/dim]")
+            else:
+                console.print(
+                    "[yellow]Mute detection unavailable"
+                    " (Accessibility permission needed)[/yellow]"
+                )
+                mute_tracker = None
         except Exception as exc:
-            log.debug("Mute tracker not available: %s", exc)
+            console.print(f"[yellow]Mute tracker not available: {exc}[/yellow]")
 
     # ── Recording loop ───────────────────────────────────────────────────
     import time as _time
@@ -412,6 +420,9 @@ def record_audio(
         # Always clean up resources, even if an exception occurs
         if mute_tracker:
             mute_tracker.stop()
+            console.print(
+                f"[dim]Mute tracker: {len(mute_tracker.timeline)} transitions[/dim]"
+            )
         if mic_stream:
             try:
                 mic_stream.stop()
