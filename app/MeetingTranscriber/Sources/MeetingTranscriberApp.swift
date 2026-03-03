@@ -9,6 +9,7 @@ struct MeetingTranscriberApp: App {
     @Environment(\.openWindow) private var openWindow
     private let pythonProcess = PythonProcess()
     private let notifications = NotificationManager.shared
+    private let ipc = IPCManager()
 
     init() {
         // LSUIElement in Info.plist hides Dock icon.
@@ -46,6 +47,7 @@ struct MeetingTranscriberApp: App {
         }
         .onChange(of: monitor.status?.state) { oldValue, newValue in
             guard let newValue, let status = monitor.status else { return }
+            NSLog("State change: \(oldValue?.rawValue ?? "nil") → \(newValue.rawValue)")
             notifications.handleTransition(from: oldValue, to: newValue, status: status)
 
             if newValue == .waitingForSpeakerCount {
@@ -55,9 +57,12 @@ struct MeetingTranscriberApp: App {
             }
 
             if newValue == .waitingForSpeakerNames {
+                NSLog("Speaker naming: loading request...")
                 loadSpeakerRequest()
+                NSLog("Speaker naming: request loaded = \(speakerRequest != nil)")
                 NSApp.activate()
                 openWindow(id: "speaker-naming")
+                NSLog("Speaker naming: openWindow called")
             }
         }
 
@@ -129,65 +134,31 @@ struct MeetingTranscriberApp: App {
     }
 
     private func loadSpeakerRequest() {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
-            .appendingPathComponent("speaker_request.json")
-
-        guard let data = try? Data(contentsOf: url),
-              let request = try? JSONDecoder().decode(SpeakerRequest.self, from: data)
-        else { return }
-
-        speakerRequest = request
+        if let request = ipc.loadSpeakerRequest() {
+            NSLog("Speaker naming: loaded \(request.speakers.count) speakers for '\(request.meetingTitle)'")
+            speakerRequest = request
+        } else {
+            NSLog("Speaker naming: file not found or unreadable")
+        }
     }
 
     private func loadSpeakerCountRequest() {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
-            .appendingPathComponent("speaker_count_request.json")
-
-        guard let data = try? Data(contentsOf: url),
-              let request = try? JSONDecoder().decode(SpeakerCountRequest.self, from: data)
-        else { return }
-
-        speakerCountRequest = request
+        speakerCountRequest = ipc.loadSpeakerCountRequest()
     }
 
     private func writeSpeakerCountResponse(_ count: Int) {
-        let response = SpeakerCountResponse(version: 1, speakerCount: count)
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
-            .appendingPathComponent("speaker_count_response.json")
-
-        guard let data = try? JSONEncoder().encode(response) else {
-            NSLog("SpeakerCount: failed to encode response")
-            return
-        }
-
         do {
-            // .atomic writes to a temp file and renames, replacing any existing file
-            try data.write(to: url, options: .atomic)
+            try ipc.writeSpeakerCountResponse(count)
         } catch {
             NSLog("SpeakerCount: failed to write response: \(error)")
         }
     }
 
     private func writeSpeakerResponse(_ mapping: [String: String]) {
-        let response = SpeakerResponse(version: 1, speakers: mapping)
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
-            .appendingPathComponent("speaker_response.json")
-
-        guard let data = try? JSONEncoder().encode(response) else { return }
-
-        // Atomic write: tmp file + rename
-        let tmpURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".speaker_response.tmp")
         do {
-            try data.write(to: tmpURL, options: .atomic)
-            try FileManager.default.moveItem(at: tmpURL, to: url)
+            try ipc.writeSpeakerResponse(mapping)
         } catch {
-            // Fallback: direct write (moveItem fails if target exists on some FS)
-            try? data.write(to: url, options: .atomic)
+            NSLog("Speaker naming: failed to write response: \(error)")
         }
     }
 
