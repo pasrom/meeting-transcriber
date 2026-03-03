@@ -50,37 +50,40 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(request)
     }
 
+    /// Pure function: determines notification content for a state transition.
+    /// Returns nil if no notification should be sent.
+    static func notificationContent(
+        for state: TranscriberState,
+        status: TranscriberStatus
+    ) -> (title: String, body: String)? {
+        switch state {
+        case .recording:
+            let meetingTitle = status.meeting?.title ?? "Unknown"
+            let app = status.meeting?.app ?? ""
+            return ("Meeting Detected", "Recording: \(meetingTitle) (\(app))")
+        case .protocolReady:
+            let meetingTitle = status.meeting?.title ?? "Meeting"
+            return ("Protocol Ready", "Protocol for \"\(meetingTitle)\" is ready.")
+        case .waitingForSpeakerNames:
+            return ("Name Speakers", "Speakers detected — open the app to assign names")
+        case .error:
+            if let error = status.error {
+                return ("Transcriber Error", error)
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
     /// Handle state transitions and send appropriate notifications.
     func handleTransition(
         from oldState: TranscriberState?,
         to newState: TranscriberState,
         status: TranscriberStatus
     ) {
-        switch newState {
-        case .recording:
-            let meetingTitle = status.meeting?.title ?? "Unknown"
-            let app = status.meeting?.app ?? ""
-            notify(
-                title: "Meeting Detected",
-                body: "Recording: \(meetingTitle) (\(app))"
-            )
-        case .protocolReady:
-            let meetingTitle = status.meeting?.title ?? "Meeting"
-            notify(
-                title: "Protocol Ready",
-                body: "Protocol for \"\(meetingTitle)\" is ready."
-            )
-        case .waitingForSpeakerNames:
-            notify(
-                title: "Name Speakers",
-                body: "Speakers detected — open the app to assign names"
-            )
-        case .error:
-            if let error = status.error {
-                notify(title: "Transcriber Error", body: error)
-            }
-        default:
-            break
+        if let content = Self.notificationContent(for: newState, status: status) {
+            notify(title: content.title, body: content.body)
         }
     }
 

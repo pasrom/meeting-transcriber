@@ -127,13 +127,28 @@ final class StatusMonitor {
         }
 
         let oldState = status?.state
+        if oldState != decoded.state {
+            NSLog("StatusMonitor: \(oldState?.rawValue ?? "nil") → \(decoded.state.rawValue)")
+        }
         DispatchQueue.main.async { [weak self] in
             self?.previousState = oldState
             self?.status = decoded
         }
     }
 
-    private static func processIsAlive(_ pid: Int) -> Bool {
+    static func processIsAlive(_ pid: Int) -> Bool {
         kill(Int32(pid), 0) == 0
+    }
+
+    /// Parse a status JSON file, returning nil for invalid JSON or dead PIDs.
+    static func parseStatus(from url: URL) -> TranscriberStatus? {
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(TranscriberStatus.self, from: data)
+        else { return nil }
+
+        if let pid = decoded.pid, !processIsAlive(pid) {
+            return nil
+        }
+        return decoded
     }
 }

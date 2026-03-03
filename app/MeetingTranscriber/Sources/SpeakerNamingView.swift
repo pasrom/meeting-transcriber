@@ -57,6 +57,28 @@ struct AccessibleTextField: NSViewRepresentable {
     }
 }
 
+/// Format seconds as "Xs" or "M:SS".
+func formattedTime(_ seconds: Double) -> String {
+    let m = Int(seconds) / 60
+    let s = Int(seconds) % 60
+    return m > 0 ? "\(m):\(String(format: "%02d", s))" : "\(s)s"
+}
+
+/// Build speaker label→name mapping from parallel arrays.
+func buildSpeakerMapping(
+    names: [String],
+    speakers: [SpeakerInfo]
+) -> [String: String] {
+    var mapping: [String: String] = [:]
+    for (index, speaker) in speakers.enumerated() {
+        let name = names[index].trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty {
+            mapping[speaker.label] = name
+        }
+    }
+    return mapping
+}
+
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let request: SpeakerRequest
@@ -160,12 +182,6 @@ struct SpeakerNamingView: View {
         }
     }
 
-    private func formattedTime(_ seconds: Double) -> String {
-        let m = Int(seconds) / 60
-        let s = Int(seconds) % 60
-        return m > 0 ? "\(m):\(String(format: "%02d", s))" : "\(s)s"
-    }
-
     private func playSample(speaker: SpeakerInfo) {
         let dir = (request.audioSamplesDir as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: dir)
@@ -182,13 +198,6 @@ struct SpeakerNamingView: View {
     }
 
     private func confirm() {
-        var mapping: [String: String] = [:]
-        for (index, speaker) in request.speakers.enumerated() {
-            let name = names[index].trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty {
-                mapping[speaker.label] = name
-            }
-        }
-        onComplete(mapping)
+        onComplete(buildSpeakerMapping(names: names, speakers: request.speakers))
     }
 }
