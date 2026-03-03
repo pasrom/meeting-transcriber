@@ -158,15 +158,16 @@ struct MeetingTranscriberApp: App {
             .appendingPathComponent(".meeting-transcriber")
             .appendingPathComponent("speaker_count_response.json")
 
-        guard let data = try? JSONEncoder().encode(response) else { return }
+        guard let data = try? JSONEncoder().encode(response) else {
+            NSLog("SpeakerCount: failed to encode response")
+            return
+        }
 
-        let tmpURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".speaker_count_response.tmp")
         do {
-            try data.write(to: tmpURL, options: .atomic)
-            try FileManager.default.moveItem(at: tmpURL, to: url)
+            // .atomic writes to a temp file and renames, replacing any existing file
+            try data.write(to: url, options: .atomic)
         } catch {
-            try? data.write(to: url, options: .atomic)
+            NSLog("SpeakerCount: failed to write response: \(error)")
         }
     }
 

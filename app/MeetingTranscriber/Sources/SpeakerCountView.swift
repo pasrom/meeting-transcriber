@@ -25,16 +25,12 @@ struct SpeakerCountView: View {
 
             HStack(spacing: 12) {
                 Button("Auto-detect") {
-                    guard !completed else { return }
-                    completed = true
-                    onComplete(0)
+                    confirm(count: 0)
                 }
                 .keyboardShortcut(.escape)
 
                 Button("Confirm") {
-                    guard !completed else { return }
-                    completed = true
-                    onComplete(speakerCount)
+                    confirm(count: speakerCount)
                 }
                 .keyboardShortcut(.return)
                 .buttonStyle(.borderedProminent)
@@ -50,6 +46,16 @@ struct SpeakerCountView: View {
                 completed = true
                 onComplete(0)
             }
+        }
+    }
+
+    private func confirm(count: Int) {
+        guard !completed else { return }
+        completed = true
+        onComplete(count)
+        // Close the window so the user sees the app proceeding
+        DispatchQueue.main.async {
+            NSApp.keyWindow?.close()
         }
     }
 }
