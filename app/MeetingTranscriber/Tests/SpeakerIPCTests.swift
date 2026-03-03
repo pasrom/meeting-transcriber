@@ -96,6 +96,101 @@ final class SpeakerIPCTests: XCTestCase {
         XCTAssertEqual(speakers["SPEAKER_01"], "Maria")
     }
 
+    // MARK: - SpeakerCountRequest
+
+    func testDecodeSpeakerCountRequest() throws {
+        let json = """
+        {
+            "version": 1,
+            "timestamp": "2026-03-03T10:00:00",
+            "meeting_title": "Sprint Planning"
+        }
+        """.data(using: .utf8)!
+
+        let request = try JSONDecoder().decode(SpeakerCountRequest.self, from: json)
+
+        XCTAssertEqual(request.version, 1)
+        XCTAssertEqual(request.meetingTitle, "Sprint Planning")
+    }
+
+    // MARK: - SpeakerCountResponse
+
+    func testEncodeSpeakerCountResponse() throws {
+        let response = SpeakerCountResponse(version: 1, speakerCount: 3)
+
+        let data = try JSONEncoder().encode(response)
+        let decoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        XCTAssertEqual(decoded["version"] as? Int, 1)
+        XCTAssertEqual(decoded["speaker_count"] as? Int, 3)
+    }
+
+    // MARK: - SpeakerInfo
+
+    func testSpeakerInfoId() {
+        let json = """
+        {
+            "label": "SPEAKER_02",
+            "auto_name": null,
+            "confidence": 0.0,
+            "speaking_time_seconds": 30.0,
+            "sample_file": "SPEAKER_02.wav"
+        }
+        """.data(using: .utf8)!
+
+        let speaker = try! JSONDecoder().decode(SpeakerInfo.self, from: json)
+        XCTAssertEqual(speaker.id, "SPEAKER_02")
+        XCTAssertEqual(speaker.id, speaker.label)
+    }
+
+    // MARK: - Decode TranscriberStatus with meeting
+
+    func testDecodeTranscriberStatusWithMeeting() throws {
+        let json = """
+        {
+            "version": 1,
+            "timestamp": "2026-03-03T10:00:00",
+            "state": "recording",
+            "detail": "Recording in progress",
+            "meeting": {
+                "app": "Microsoft Teams",
+                "title": "Sprint Planning",
+                "pid": 42
+            },
+            "protocol_path": null,
+            "error": null,
+            "pid": 12345
+        }
+        """.data(using: .utf8)!
+
+        let status = try JSONDecoder().decode(TranscriberStatus.self, from: json)
+
+        XCTAssertEqual(status.state, .recording)
+        XCTAssertEqual(status.meeting?.app, "Microsoft Teams")
+        XCTAssertEqual(status.meeting?.title, "Sprint Planning")
+        XCTAssertEqual(status.meeting?.pid, 42)
+    }
+
+    func testDecodeTranscriberStatusProtocolReady() throws {
+        let json = """
+        {
+            "version": 1,
+            "timestamp": "2026-03-03T10:00:00",
+            "state": "protocol_ready",
+            "detail": "Protocol generated",
+            "meeting": null,
+            "protocol_path": "/tmp/protocol.md",
+            "error": null,
+            "pid": 12345
+        }
+        """.data(using: .utf8)!
+
+        let status = try JSONDecoder().decode(TranscriberStatus.self, from: json)
+
+        XCTAssertEqual(status.state, .protocolReady)
+        XCTAssertEqual(status.protocolPath, "/tmp/protocol.md")
+    }
+
     // MARK: - Decode TranscriberStatus with waiting state
 
     func testDecodeTranscriberStatusWaitingState() throws {
