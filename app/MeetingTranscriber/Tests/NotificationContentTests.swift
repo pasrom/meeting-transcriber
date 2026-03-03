@@ -103,4 +103,43 @@ final class NotificationContentTests: XCTestCase {
 
         XCTAssertNil(content)
     }
+
+    // MARK: - No notification for intermediate states
+
+    func testWatchingNoNotification() {
+        let status = makeStatus(state: .watching)
+        XCTAssertNil(NotificationManager.notificationContent(for: .watching, status: status))
+    }
+
+    func testTranscribingNoNotification() {
+        let status = makeStatus(state: .transcribing)
+        XCTAssertNil(NotificationManager.notificationContent(for: .transcribing, status: status))
+    }
+
+    func testGeneratingProtocolNoNotification() {
+        let status = makeStatus(state: .generatingProtocol)
+        XCTAssertNil(NotificationManager.notificationContent(for: .generatingProtocol, status: status))
+    }
+
+    func testWaitingForSpeakerCountNoNotification() {
+        let status = makeStatus(state: .waitingForSpeakerCount)
+        XCTAssertNil(NotificationManager.notificationContent(for: .waitingForSpeakerCount, status: status))
+    }
+
+    // MARK: - Recording with missing fields
+
+    func testRecordingMissingApp() {
+        let meeting = MeetingInfo(app: "", title: "Sprint", pid: 1)
+        let status = makeStatus(state: .recording, meeting: meeting)
+        let content = NotificationManager.notificationContent(for: .recording, status: status)
+        XCTAssertEqual(content?.body, "Recording: Sprint ()")
+    }
+
+    // MARK: - Protocol ready with nil meeting fallback
+
+    func testProtocolReadyFallbackTitle() {
+        let status = makeStatus(state: .protocolReady)
+        let content = NotificationManager.notificationContent(for: .protocolReady, status: status)
+        XCTAssertEqual(content?.body, "Protocol for \"Meeting\" is ready.")
+    }
 }

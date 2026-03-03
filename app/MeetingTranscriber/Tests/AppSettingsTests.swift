@@ -12,7 +12,7 @@ final class AppSettingsTests: XCTestCase {
         // Clean UserDefaults keys before each test
         let keys = [
             "watchTeams", "watchZoom", "watchWebex",
-            "pollInterval", "endGrace", "noMic", "micName",
+            "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
             "whisperModel", "diarize", "numSpeakers",
         ]
         for key in keys {
@@ -181,6 +181,104 @@ final class AppSettingsTests: XCTestCase {
         // All 3 apps enabled → no --watch-apps flag needed
         let args = settings.buildArguments()
         XCTAssertFalse(args.contains("--watch-apps"))
+    }
+
+    func testBuildArgumentsNoMicSuppressesMicDevice() {
+        // When noMic=true, --mic-device should NOT appear even if UID is set
+        settings.noMic = true
+        settings.micDeviceUID = "BuiltInMicrophoneDevice"
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--no-mic"))
+        XCTAssertFalse(args.contains("--mic-device"))
+    }
+
+    func testBuildArgumentsMicDeviceWithoutNoMic() {
+        settings.noMic = false
+        settings.micDeviceUID = "BuiltInMicrophoneDevice"
+        let args = settings.buildArguments()
+        XCTAssertFalse(args.contains("--no-mic"))
+        XCTAssertTrue(args.contains("--mic-device"))
+        XCTAssertTrue(args.contains("BuiltInMicrophoneDevice"))
+    }
+
+    func testBuildArgumentsEmptyMicDeviceOmitsFlag() {
+        settings.noMic = false
+        settings.micDeviceUID = ""
+        let args = settings.buildArguments()
+        XCTAssertFalse(args.contains("--mic-device"))
+    }
+
+    func testBuildArgumentsDiarizeFalseIgnoresNumSpeakers() {
+        settings.diarize = false
+        settings.numSpeakers = 4
+        let args = settings.buildArguments()
+        XCTAssertFalse(args.contains("--diarize"))
+        XCTAssertFalse(args.contains("--speakers"))
+        XCTAssertFalse(args.contains("4"))
+    }
+
+    func testBuildArgumentsDiarizeWithAutoDetect() {
+        settings.diarize = true
+        settings.numSpeakers = 0
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--diarize"))
+        XCTAssertFalse(args.contains("--speakers"))
+    }
+
+    func testBuildArgumentsAllCustom() {
+        settings.watchTeams = true
+        settings.watchZoom = false
+        settings.watchWebex = false
+        settings.pollInterval = 10.0
+        settings.endGrace = 30.0
+        settings.noMic = false
+        settings.micDeviceUID = "USB-Mic-42"
+        settings.micName = "Roman"
+        settings.whisperModel = "tiny"
+        settings.diarize = true
+        settings.numSpeakers = 3
+        let args = settings.buildArguments()
+
+        XCTAssertTrue(args.contains("--watch"))
+        XCTAssertTrue(args.contains("--watch-apps"))
+        XCTAssertTrue(args.contains("Microsoft Teams"))
+        XCTAssertTrue(args.contains("--poll-interval"))
+        XCTAssertTrue(args.contains("10.0"))
+        XCTAssertTrue(args.contains("--end-grace"))
+        XCTAssertTrue(args.contains("30.0"))
+        XCTAssertTrue(args.contains("--mic-device"))
+        XCTAssertTrue(args.contains("USB-Mic-42"))
+        XCTAssertTrue(args.contains("--mic-name"))
+        XCTAssertTrue(args.contains("Roman"))
+        XCTAssertTrue(args.contains("--model"))
+        XCTAssertTrue(args.contains("tiny"))
+        XCTAssertTrue(args.contains("--diarize"))
+        XCTAssertTrue(args.contains("--speakers"))
+        XCTAssertTrue(args.contains("3"))
+        XCTAssertFalse(args.contains("--no-mic"))
+    }
+
+    func testBuildArgumentsNoAppsOmitsWatchApps() {
+        settings.watchTeams = false
+        settings.watchZoom = false
+        settings.watchWebex = false
+        let args = settings.buildArguments()
+        // 0 apps → no --watch-apps flag (empty list)
+        XCTAssertFalse(args.contains("--watch-apps"))
+    }
+
+    func testBuildArgumentsCustomWhisperModel() {
+        settings.whisperModel = "small"
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--model"))
+        XCTAssertTrue(args.contains("small"))
+    }
+
+    func testBuildArgumentsCustomEndGrace() {
+        settings.endGrace = 60.0
+        let args = settings.buildArguments()
+        XCTAssertTrue(args.contains("--end-grace"))
+        XCTAssertTrue(args.contains("60.0"))
     }
 
     // MARK: - HF Token (Keychain)

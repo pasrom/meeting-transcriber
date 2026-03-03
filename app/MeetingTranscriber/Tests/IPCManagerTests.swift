@@ -125,4 +125,59 @@ final class IPCManagerTests: XCTestCase {
         let speakers = decoded["speakers"] as! [String: String]
         XCTAssertTrue(speakers.isEmpty)
     }
+
+    // MARK: - Write to missing directory throws
+
+    func testWriteSpeakerCountResponseMissingDirThrows() {
+        let missing = tmpDir.appendingPathComponent("nonexistent/subdir")
+        let badIPC = IPCManager(baseDir: missing)
+        XCTAssertThrowsError(try badIPC.writeSpeakerCountResponse(2))
+    }
+
+    func testWriteSpeakerResponseMissingDirThrows() {
+        let missing = tmpDir.appendingPathComponent("nonexistent/subdir")
+        let badIPC = IPCManager(baseDir: missing)
+        XCTAssertThrowsError(try badIPC.writeSpeakerResponse(["A": "B"]))
+    }
+
+    // MARK: - Default init uses home directory
+
+    func testDefaultInitUsesHomeDir() {
+        let defaultIPC = IPCManager()
+        let expected = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meeting-transcriber")
+        XCTAssertEqual(defaultIPC.baseDir, expected)
+    }
+
+    // MARK: - Load invalid speaker count request
+
+    func testLoadSpeakerCountRequestInvalidJSON() {
+        let garbage = "{{garbage}}".data(using: .utf8)!
+        try! garbage.write(to: tmpDir.appendingPathComponent("speaker_count_request.json"))
+
+        XCTAssertNil(ipc.loadSpeakerCountRequest())
+    }
+
+    // MARK: - Write overwrites existing file
+
+    func testWriteSpeakerCountResponseOverwrites() throws {
+        try ipc.writeSpeakerCountResponse(2)
+        try ipc.writeSpeakerCountResponse(5)
+
+        let url = tmpDir.appendingPathComponent("speaker_count_response.json")
+        let data = try Data(contentsOf: url)
+        let decoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(decoded["speaker_count"] as? Int, 5)
+    }
+
+    func testWriteSpeakerResponseOverwrites() throws {
+        try ipc.writeSpeakerResponse(["S0": "Alice"])
+        try ipc.writeSpeakerResponse(["S0": "Bob"])
+
+        let url = tmpDir.appendingPathComponent("speaker_response.json")
+        let data = try Data(contentsOf: url)
+        let decoded = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let speakers = decoded["speakers"] as! [String: String]
+        XCTAssertEqual(speakers["S0"], "Bob")
+    }
 }
