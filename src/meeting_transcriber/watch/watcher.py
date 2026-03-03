@@ -227,6 +227,25 @@ class MeetingWatcher:
             "pid": meeting.window_pid,
         }
 
+        # Try to read participant names from the meeting app via AX
+        participants = None
+        if self.diarize and meeting.window_pid:
+            try:
+                from meeting_transcriber.watch.mute_detector import (
+                    read_participants,
+                    write_participants,
+                )
+
+                participants = read_participants(meeting.window_pid)
+                if participants:
+                    console.print(
+                        f"[dim]Detected {len(participants)} participants: "
+                        f"{', '.join(participants)}[/dim]"
+                    )
+                    write_participants(participants, meeting_title=title)
+            except Exception as exc:
+                log.debug("Could not read participants: %s", exc)
+
         status.emit(
             "transcribing",
             detail=f"Transcribing: {title}",
@@ -246,6 +265,8 @@ class MeetingWatcher:
                 extra_kwargs["recording_start"] = recording.recording_start
             if self.merge_threshold is not None:
                 extra_kwargs["merge_threshold"] = self.merge_threshold
+            if participants:
+                extra_kwargs["expected_names"] = participants
             transcript = transcribe(
                 audio_path,
                 model=self.whisper_model,

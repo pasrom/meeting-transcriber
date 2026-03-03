@@ -22,6 +22,9 @@ SPEAKER_COUNT_REQUEST_FILE = STATUS_DIR / "speaker_count_request.json"
 SPEAKER_COUNT_RESPONSE_FILE = STATUS_DIR / "speaker_count_response.json"
 SPEAKER_COUNT_TIMEOUT = 120  # 2 minutes
 
+# Participants detected from meeting app (e.g. Teams AX API)
+PARTICIPANTS_FILE = STATUS_DIR / "participants.json"
+
 # Watch mode defaults
 DEFAULT_POLL_INTERVAL = 3.0
 DEFAULT_END_GRACE_PERIOD = 15.0

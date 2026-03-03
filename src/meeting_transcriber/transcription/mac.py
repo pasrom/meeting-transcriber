@@ -293,6 +293,7 @@ def _transcribe_dual_source(
     mute_timeline: list | None = None,
     recording_start: float = 0.0,
     merge_threshold: float | None = None,
+    expected_names: list[str] | None = None,
 ) -> str:
     """Transcribe app and mic tracks separately, merge by timestamp."""
     from meeting_transcriber.diarize import (
@@ -344,6 +345,8 @@ def _transcribe_dual_source(
             extra: dict = {}
             if merge_threshold is not None:
                 extra["merge_threshold"] = merge_threshold
+            if expected_names is not None:
+                extra["expected_names"] = expected_names
             turns = diarize(
                 app_audio,
                 num_speakers=num_speakers,
@@ -417,6 +420,7 @@ def transcribe(
     mute_timeline: list | None = None,
     recording_start: float = 0.0,
     merge_threshold: float | None = None,
+    expected_names: list[str] | None = None,
 ) -> str:
     """Transcribe an audio file with pywhispercpp (whisper.cpp).
 
@@ -442,6 +446,7 @@ def transcribe(
             mute_timeline=mute_timeline,
             recording_start=recording_start,
             merge_threshold=merge_threshold,
+            expected_names=expected_names,
         )
 
     # Single-source mode (original behavior)
@@ -476,6 +481,8 @@ def transcribe(
         extra: dict = {}
         if merge_threshold is not None:
             extra["merge_threshold"] = merge_threshold
+        if expected_names is not None:
+            extra["expected_names"] = expected_names
         turns = diarize(
             audio_path,
             num_speakers=num_speakers,

@@ -139,6 +139,256 @@ def _read_mute_state(pid: int) -> bool | None:
         return None
 
 
+def _find_elements_by_role(element, role: str, depth: int = 0, max_depth: int = 25):
+    """Recursively collect all AX elements with the given role."""
+    if depth > max_depth:
+        return []
+
+    results = []
+    try:
+        el_role = _get_ax_attr(element, "AXRole")
+        if el_role and str(el_role) == role:
+            results.append(element)
+
+        children = _get_ax_attr(element, "AXChildren")
+        if children:
+            for child in children:
+                results.extend(
+                    _find_elements_by_role(child, role, depth + 1, max_depth)
+                )
+    except Exception:
+        pass
+    return results
+
+
+def _find_element_by_identifier(
+    element, identifier: str, depth: int = 0, max_depth: int = 25
+):
+    """Find the first AX element whose AXIdentifier matches."""
+    if depth > max_depth:
+        return None
+
+    try:
+        eid = _get_ax_attr(element, "AXIdentifier")
+        if eid and str(eid) == identifier:
+            return element
+
+        children = _get_ax_attr(element, "AXChildren")
+        if children:
+            for child in children:
+                result = _find_element_by_identifier(
+                    child, identifier, depth + 1, max_depth
+                )
+                if result is not None:
+                    return result
+    except Exception:
+        pass
+    return None
+
+
+def _extract_text_values(element, depth: int = 0, max_depth: int = 10):
+    """Collect all non-empty AXValue/AXTitle strings from AXStaticText elements."""
+    if depth > max_depth:
+        return []
+
+    texts = []
+    try:
+        role = _get_ax_attr(element, "AXRole")
+        if role and str(role) == "AXStaticText":
+            for attr in ("AXValue", "AXTitle"):
+                val = _get_ax_attr(element, attr)
+                if val:
+                    text = str(val).strip()
+                    if text:
+                        texts.append(text)
+
+        children = _get_ax_attr(element, "AXChildren")
+        if children:
+            for child in children:
+                texts.extend(_extract_text_values(child, depth + 1, max_depth))
+    except Exception:
+        pass
+    return texts
+
+
+def read_participants(pid: int) -> list[str] | None:
+    """Read participant names from Teams meeting roster via AX.
+
+    Searches the AX tree for the participant/roster panel and extracts
+    display names. Tries multiple strategies since Teams' AX structure
+    varies between versions and meeting states.
+
+    Returns list of participant display names, or None if roster
+    not found (e.g. not in a meeting, panel not open).
+    """
+    try:
+        from ApplicationServices import AXUIElementCreateApplication
+
+        app_element = AXUIElementCreateApplication(pid)
+        if not app_element:
+            return None
+
+        # Strategy 1: Look for a roster/people panel by known identifiers.
+        # Teams Electron uses identifiers like "roster-list", "people-pane",
+        # "participant-list" etc.
+        for panel_id in (
+            "roster-list",
+            "people-pane",
+            "participant-list",
+            "roster-container",
+        ):
+            panel = _find_element_by_identifier(app_element, panel_id)
+            if panel:
+                texts = _extract_text_values(panel)
+                names = _filter_participant_names(texts)
+                if names:
+                    log.info(
+                        "Found %d participants via identifier '%s'",
+                        len(names),
+                        panel_id,
+                    )
+                    return names
+
+        # Strategy 2: Look for AXList/AXTable/AXOutline elements that
+        # contain multiple AXCell/AXRow children with text — likely a
+        # participant roster.
+        for container_role in ("AXList", "AXTable", "AXOutline"):
+            containers = _find_elements_by_role(app_element, container_role)
+            for container in containers:
+                children = _get_ax_attr(container, "AXChildren")
+                if not children or len(children) < 2:
+                    continue
+
+                # Extract text from each row/cell
+                row_texts = []
+                for child in children:
+                    texts = _extract_text_values(child, max_depth=5)
+                    if texts:
+                        row_texts.append(texts[0])  # First text is usually the name
+
+                names = _filter_participant_names(row_texts)
+                if len(names) >= 2:
+                    log.info(
+                        "Found %d participants via %s container",
+                        len(names),
+                        container_role,
+                    )
+                    return names
+
+        # Strategy 3: Look for the meeting window title bar — it sometimes
+        # shows "Meeting with X, Y, Z" or similar.
+        windows = _find_elements_by_role(app_element, "AXWindow", max_depth=1)
+        for window in windows:
+            title = _get_ax_attr(window, "AXTitle")
+            if not title:
+                continue
+            title_str = str(title)
+            # Skip non-meeting windows
+            if "Chat |" in title_str or "Microsoft Teams" == title_str:
+                continue
+            # Some meeting titles list participants
+            if " | Microsoft Teams" in title_str:
+                meeting_part = title_str.replace(" | Microsoft Teams", "")
+                # "John, Jane, Bob" style titles
+                if "," in meeting_part:
+                    parts = [p.strip() for p in meeting_part.split(",")]
+                    names = _filter_participant_names(parts)
+                    if len(names) >= 2:
+                        log.info("Found %d participants from window title", len(names))
+                        return names
+
+        log.debug("No participant roster found in AX tree")
+        return None
+
+    except Exception as exc:
+        log.debug("Failed to read participants: %s", exc)
+        return None
+
+
+def _filter_participant_names(texts: list[str]) -> list[str]:
+    """Filter a list of text strings to likely participant names.
+
+    Removes UI labels, timestamps, status indicators, and other
+    non-name strings that appear in the Teams AX tree.
+    """
+    # Common non-name strings in the Teams UI
+    _SKIP_PATTERNS = {
+        "mute",
+        "unmute",
+        "muted",
+        "unmuted",
+        "camera",
+        "share",
+        "chat",
+        "people",
+        "raise hand",
+        "leave",
+        "more",
+        "reactions",
+        "participants",
+        "in this meeting",
+        "invited",
+        "in the lobby",
+        "presenter",
+        "attendee",
+        "organizer",
+        "guest",
+        "(you)",
+        "search",
+        "recording",
+        "transcription",
+    }
+
+    names = []
+    seen = set()
+    for text in texts:
+        text = text.strip()
+        if not text:
+            continue
+        lower = text.lower()
+        # Skip single characters, pure numbers, timestamps
+        if len(text) <= 1:
+            continue
+        if text.isdigit():
+            continue
+        if ":" in text and any(c.isdigit() for c in text):
+            continue  # Likely a timestamp like "10:30"
+        # Skip known UI labels
+        if lower in _SKIP_PATTERNS:
+            continue
+        if any(lower.startswith(p) for p in _SKIP_PATTERNS):
+            continue
+        # Remove "(you)" suffix from own name
+        if lower.endswith("(you)"):
+            text = text[: text.lower().rfind("(you)")].strip()
+        if text and text not in seen:
+            names.append(text)
+            seen.add(text)
+
+    return names
+
+
+def write_participants(names: list[str], meeting_title: str = "") -> None:
+    """Write detected participant names to participants.json for the Swift app."""
+    import json
+    import os
+
+    from meeting_transcriber.config import PARTICIPANTS_FILE
+
+    data = {
+        "version": 1,
+        "meeting_title": meeting_title,
+        "participants": names,
+    }
+
+    PARTICIPANTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = PARTICIPANTS_FILE.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp_path, PARTICIPANTS_FILE)
+    log.info("Wrote %d participants to %s", len(names), PARTICIPANTS_FILE)
+
+
 class MuteTracker:
     """Polls Teams mute state and records transitions.
 

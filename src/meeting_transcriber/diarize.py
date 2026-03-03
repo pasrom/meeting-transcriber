@@ -326,6 +326,7 @@ def write_speaker_request(
     audio_path: Path,
     turns: list[tuple[float, float, str]],
     meeting_title: str,
+    expected_names: list[str] | None = None,
 ) -> None:
     """Extract audio samples and write speaker_request.json for the menu bar app."""
     from meeting_transcriber.config import SPEAKER_REQUEST_FILE, SPEAKER_SAMPLES_DIR
@@ -360,6 +361,7 @@ def write_speaker_request(
         "meeting_title": meeting_title,
         "audio_samples_dir": str(SPEAKER_SAMPLES_DIR),
         "speakers": speakers,
+        "expected_names": expected_names or [],
     }
 
     SPEAKER_REQUEST_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -576,6 +578,7 @@ def diarize(
     interactive: bool = True,
     meeting_title: str = "Meeting",
     merge_threshold: float = MERGE_THRESHOLD,
+    expected_names: list[str] | None = None,
 ) -> list[tuple[float, float, str]]:
     """Run pyannote speaker diarization with speaker recognition.
 
@@ -584,6 +587,9 @@ def diarize(
         num_speakers: Expected number of speakers (helps accuracy).
         interactive: Whether to prompt for unknown speaker names.
         meeting_title: Title for speaker naming IPC request.
+        merge_threshold: Cosine similarity threshold for merging duplicate speakers.
+        expected_names: Participant names from meeting app (e.g. Teams AX).
+            Used as num_speakers hint and pre-fill for speaker naming.
 
     Returns list of (start_sec, end_sec, speaker_name) tuples.
     """
@@ -618,6 +624,14 @@ def diarize(
     console.print(
         f"[dim]Diarization model loaded ({device}). Analyzing speakers ...[/dim]"
     )
+
+    # Use expected_names as num_speakers hint if not explicitly set
+    if expected_names and not num_speakers:
+        num_speakers = len(expected_names)
+        console.print(
+            f"[dim]Using participant count from meeting app: "
+            f"{num_speakers} ({', '.join(expected_names)})[/dim]"
+        )
 
     # Ask for speaker count before diarization (improves accuracy)
     if interactive and not num_speakers:
@@ -706,6 +720,7 @@ def diarize(
                 interactive=interactive,
                 meeting_title=meeting_title,
                 merge_threshold=merge_threshold,
+                expected_names=expected_names,
             )
 
     # Match against saved speaker profiles
@@ -715,6 +730,24 @@ def diarize(
             f"[dim]Matching against {len(db)} saved speaker profiles ...[/dim]"
         )
     mapping = match_speakers(embeddings, db)
+
+    # Pre-fill unmatched speakers with expected_names (by speaking time order)
+    if expected_names:
+        unmatched_labels = [
+            label
+            for label in sorted(
+                mapping.keys(),
+                key=lambda lbl: speaking_times.get(lbl, 0),
+                reverse=True,
+            )
+            if mapping[label] == label  # not yet matched by voice profile
+        ]
+        unused_names = [n for n in expected_names if n not in mapping.values()]
+        for label, name in zip(unmatched_labels, unused_names):
+            mapping[label] = name
+            console.print(
+                f"  [cyan]Suggested:[/cyan] {label} → {name} (from participant list)"
+            )
 
     # Let user confirm/name all speakers
     if interactive and embeddings:
@@ -727,7 +760,13 @@ def diarize(
         from meeting_transcriber.config import SPEAKER_NAMING_TIMEOUT
 
         write_speaker_request(
-            mapping, embeddings, speaking_times, audio_path, turns, meeting_title
+            mapping,
+            embeddings,
+            speaking_times,
+            audio_path,
+            turns,
+            meeting_title,
+            expected_names=expected_names,
         )
         _emit_status(
             "waiting_for_speaker_names",
