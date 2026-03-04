@@ -3,11 +3,11 @@ E2E Test: App Audio Pipeline → Whisper Transcription
 
 Tests the complete pipeline as the macOS transcriber runs it:
 1. macOS `say` generates speech as WAV (simulates app output)
-2. Audio is converted to ProcTap format (48kHz stereo float32 chunks)
+2. Audio is converted to audiotap format (48kHz stereo float32 chunks)
 3. Chunks go through the identical mix pipeline (stereo→mono, 48kHz WAV)
 4. WAV is transcribed with pywhispercpp (whisper.cpp resamples internally)
 5. Transcription is verified against the original text
-6. ProcTap connection to a real app is verified separately
+6. audiotap connection to a real app is verified separately
 """
 
 import os
@@ -82,7 +82,7 @@ def speech_wav(lang):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def convert_to_proctap_format(speech_path: Path) -> list[bytes]:
+def convert_to_audiotap_format(speech_path: Path) -> list[bytes]:
     """WAV → ProcTap-identical chunks (48kHz stereo float32)."""
     with wave.open(str(speech_path), "rb") as wf:
         orig_rate = wf.getframerate()
@@ -228,9 +228,9 @@ class TestE2EAppAudio:
         assert speech_wav.exists()
         assert speech_wav.stat().st_size > 0
 
-    def test_proctap_format_conversion(self, speech_wav):
-        """Step 2: WAV converts to ProcTap format chunks."""
-        chunks = convert_to_proctap_format(speech_wav)
+    def test_audiotap_format_conversion(self, speech_wav):
+        """Step 2: WAV converts to audiotap format chunks."""
+        chunks = convert_to_audiotap_format(speech_wav)
         assert len(chunks) > 0
         for chunk in chunks:
             assert isinstance(chunk, bytes)
@@ -238,7 +238,7 @@ class TestE2EAppAudio:
 
     def test_mix_pipeline(self, speech_wav):
         """Step 3: Mix pipeline produces valid 48kHz WAV."""
-        chunks = convert_to_proctap_format(speech_wav)
+        chunks = convert_to_audiotap_format(speech_wav)
         wav_path = mix_pipeline(chunks)
         try:
             assert wav_path.exists()
@@ -255,7 +255,7 @@ class TestE2EAppAudio:
 
         from meeting_transcriber.transcription.mac import _ensure_16khz
 
-        chunks = convert_to_proctap_format(speech_wav)
+        chunks = convert_to_audiotap_format(speech_wav)
         wav_path = mix_pipeline(chunks)
 
         try:
@@ -285,11 +285,13 @@ class TestE2EAppAudio:
             if whisper_path != wav_path:
                 whisper_path.unlink(missing_ok=True)
 
-    def test_proctap_live_capture(self, speech_wav):
-        """Step 6: Real ProcTap capture receives audio data."""
-        import threading
+    def test_audiotap_live_capture(self, speech_wav):
+        """Step 6: Real audiotap capture receives audio data."""
+        from meeting_transcriber.audio.mac import _find_swift_binary
 
-        from proctap import ProcessAudioCapture
+        binary = _find_swift_binary()
+        if not binary:
+            pytest.skip("audiotap binary not found — run: ./scripts/build_audiotap.sh")
 
         ensure_player_app()
         subprocess.run(["pkill", "-f", "TestAudioPlayer"], capture_output=True)
@@ -305,28 +307,25 @@ class TestE2EAppAudio:
         if r.returncode != 0 or not r.stdout.strip():
             pytest.skip("Could not start player app")
 
-        pid = int(r.stdout.strip().split()[-1])
-        frames: list[bytes] = []
-        stop = threading.Event()
+        pid = r.stdout.strip().split()[-1]
 
-        def on_data(pcm: bytes, frame_count: int) -> None:
-            if not stop.is_set():
-                frames.append(pcm)
+        # Capture 5 seconds of audio via audiotap subprocess
+        import signal
 
-        tap = ProcessAudioCapture(pid=pid, on_data=on_data)
-        tap.start()
+        proc = subprocess.Popen(
+            [str(binary), pid, "48000", "2"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         time.sleep(5)
-        stop.set()
-        tap.close()
+        proc.send_signal(signal.SIGTERM)
+        stdout_data, _ = proc.communicate(timeout=5)
 
         subprocess.run(["pkill", "-f", "TestAudioPlayer"], capture_output=True)
 
-        assert len(frames) > 0, (
-            "No audio data received! "
-            "Check: System Settings → Privacy & Security → Screen Recording"
-        )
+        assert len(stdout_data) > 0, "No audio data received from audiotap!"
 
-        raw = np.frombuffer(b"".join(frames), dtype=np.float32)
+        raw = np.frombuffer(stdout_data, dtype=np.float32)
         peak = float(np.max(np.abs(raw)))
         assert peak > 0.001, "Audio is silence only"
 

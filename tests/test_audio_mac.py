@@ -9,127 +9,113 @@ from meeting_transcriber.audio.mac import _find_swift_binary
 
 class TestFindSwiftBinary:
     def test_env_var_valid(self, tmp_path):
-        binary = tmp_path / "screencapture-audio"
+        binary = tmp_path / "audiotap"
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
 
-        with patch.dict(os.environ, {"PROCTAP_BINARY": str(binary)}):
+        with patch.dict(os.environ, {"AUDIOTAP_BINARY": str(binary)}):
             result = _find_swift_binary()
             assert result == binary
 
     def test_env_var_not_executable(self, tmp_path):
-        binary = tmp_path / "screencapture-audio"
+        binary = tmp_path / "audiotap"
         binary.write_text("not executable")
         binary.chmod(0o644)
 
         with (
-            patch.dict(os.environ, {"PROCTAP_BINARY": str(binary)}),
-            patch("sys.prefix", str(tmp_path / "empty_venv")),
+            patch.dict(os.environ, {"AUDIOTAP_BINARY": str(binary)}),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[],
+            ),
             patch("meeting_transcriber.audio.mac.shutil.which", return_value=None),
         ):
             result = _find_swift_binary()
-            # Should skip env var (not executable) and fall through
             assert result is None
 
     def test_env_var_missing_file(self, tmp_path):
         with (
-            patch.dict(os.environ, {"PROCTAP_BINARY": str(tmp_path / "nonexistent")}),
-            patch("sys.prefix", str(tmp_path / "empty_venv")),
+            patch.dict(os.environ, {"AUDIOTAP_BINARY": str(tmp_path / "nonexistent")}),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[],
+            ),
             patch("meeting_transcriber.audio.mac.shutil.which", return_value=None),
         ):
             result = _find_swift_binary()
             assert result is None
 
-    def test_venv_path_found(self, tmp_path):
-        # Create fake venv structure
-        binary_dir = (
-            tmp_path
-            / "lib"
-            / "python3.14"
-            / "site-packages"
-            / "proctap"
-            / "swift"
-            / "screencapture-audio"
-            / ".build"
-            / "arm64-apple-macosx"
-            / "release"
-        )
+    def test_project_local_path_found(self, tmp_path):
+        # Create fake project-local build output
+        binary_dir = tmp_path / "tools" / "audiotap" / ".build" / "release"
         binary_dir.mkdir(parents=True)
-        binary = binary_dir / "screencapture-audio"
+        binary = binary_dir / "audiotap"
         binary.write_text("#!/bin/sh\n")
         binary.chmod(0o755)
 
+        env = os.environ.copy()
+        env.pop("AUDIOTAP_BINARY", None)
         with (
-            patch.dict(os.environ, {}, clear=False),
-            patch("sys.prefix", str(tmp_path)),
-            patch("shutil.which", return_value=None),
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[tmp_path / "dummy_file.py"],
+            ),
+            patch("meeting_transcriber.audio.mac.shutil.which", return_value=None),
         ):
-            # Remove PROCTAP_BINARY if set
-            env = os.environ.copy()
-            env.pop("PROCTAP_BINARY", None)
-            with patch.dict(os.environ, env, clear=True):
-                result = _find_swift_binary()
-                assert result == binary
+            result = _find_swift_binary()
+            assert result == binary
 
     def test_shutil_which_fallback(self, tmp_path):
+        env = os.environ.copy()
+        env.pop("AUDIOTAP_BINARY", None)
         with (
-            patch.dict(os.environ, {}, clear=False),
-            patch("sys.prefix", str(tmp_path)),  # empty venv, no binary
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[],
+            ),
+            patch(
+                "meeting_transcriber.audio.mac.shutil.which",
+                return_value="/usr/local/bin/audiotap",
+            ),
         ):
-            env = os.environ.copy()
-            env.pop("PROCTAP_BINARY", None)
-            with (
-                patch.dict(os.environ, env, clear=True),
-                patch(
-                    "meeting_transcriber.audio.mac.shutil.which",
-                    return_value="/usr/local/bin/screencapture-audio",
-                ),
-            ):
-                result = _find_swift_binary()
-                assert result == Path("/usr/local/bin/screencapture-audio")
+            result = _find_swift_binary()
+            assert result == Path("/usr/local/bin/audiotap")
 
     def test_nothing_found(self, tmp_path):
+        env = os.environ.copy()
+        env.pop("AUDIOTAP_BINARY", None)
         with (
-            patch.dict(os.environ, {}, clear=False),
-            patch("sys.prefix", str(tmp_path)),
+            patch.dict(os.environ, env, clear=True),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[],
+            ),
+            patch("meeting_transcriber.audio.mac.shutil.which", return_value=None),
         ):
-            env = os.environ.copy()
-            env.pop("PROCTAP_BINARY", None)
-            with (
-                patch.dict(os.environ, env, clear=True),
-                patch("meeting_transcriber.audio.mac.shutil.which", return_value=None),
-            ):
-                result = _find_swift_binary()
-                assert result is None
+            result = _find_swift_binary()
+            assert result is None
 
-    def test_env_var_takes_priority_over_venv(self, tmp_path):
-        """Env var should be checked before venv paths."""
+    def test_env_var_takes_priority_over_project(self, tmp_path):
+        """Env var should be checked before project-local paths."""
         env_binary = tmp_path / "env_binary"
         env_binary.write_text("#!/bin/sh\n")
         env_binary.chmod(0o755)
 
-        # Also create a venv binary
-        venv_dir = (
-            tmp_path
-            / "venv"
-            / "lib"
-            / "python3.14"
-            / "site-packages"
-            / "proctap"
-            / "swift"
-            / "screencapture-audio"
-            / ".build"
-            / "arm64-apple-macosx"
-            / "release"
-        )
-        venv_dir.mkdir(parents=True)
-        venv_binary = venv_dir / "screencapture-audio"
-        venv_binary.write_text("#!/bin/sh\n")
-        venv_binary.chmod(0o755)
+        # Also create a project-local binary
+        proj_dir = tmp_path / "project" / "tools" / "audiotap" / ".build" / "release"
+        proj_dir.mkdir(parents=True)
+        proj_binary = proj_dir / "audiotap"
+        proj_binary.write_text("#!/bin/sh\n")
+        proj_binary.chmod(0o755)
 
         with (
-            patch.dict(os.environ, {"PROCTAP_BINARY": str(env_binary)}),
-            patch("sys.prefix", str(tmp_path / "venv")),
+            patch.dict(os.environ, {"AUDIOTAP_BINARY": str(env_binary)}),
+            patch(
+                "meeting_transcriber.audio.mac._project_search_anchors",
+                return_value=[tmp_path / "project" / "src" / "dummy.py"],
+            ),
         ):
             result = _find_swift_binary()
             assert result == env_binary

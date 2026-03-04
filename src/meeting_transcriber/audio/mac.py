@@ -192,6 +192,11 @@ def choose_app(app_name: str | None) -> dict | None:
         sys.exit(1)
 
 
+def _project_search_anchors() -> list[Path]:
+    """Return anchor paths to search upward for the project root."""
+    return [Path(__file__).resolve(), Path.cwd()]
+
+
 def _find_swift_binary() -> Path | None:
     """Find the audiotap Swift binary.
 
@@ -208,9 +213,8 @@ def _find_swift_binary() -> Path | None:
             return p
         log.warning("AUDIOTAP_BINARY=%s is not an executable file", env_path)
 
-    # 2. Project-local build output (walk up from package to find tools/)
-    # Also check relative to the source file location
-    for anchor in [Path(__file__).resolve(), Path.cwd()]:
+    # 2. Project-local build output (walk up from package/cwd to find tools/)
+    for anchor in _project_search_anchors():
         d = anchor
         for _ in range(6):
             d = d.parent
