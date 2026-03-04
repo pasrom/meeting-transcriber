@@ -85,32 +85,21 @@ exec "$DIR/python3" -m meeting_transcriber.cli "$@"
 WRAPPER_EOF
 chmod +x "$TRANSCRIBE_WRAPPER"
 
-# ── Step 3: Build ProcTap binary ──────────────────────────────────────────────
+# ── Step 3: Build audiotap binary ─────────────────────────────────────────────
 
 echo ""
-echo "Step 3: Building ProcTap binary..."
+echo "Step 3: Building audiotap binary..."
 
-# Find the ProcTap Swift source directory in the embedded env
-PROCTAP_SWIFT_DIR=$(find "$PYTHON_ENV/lib" -path "*/proctap/swift/screencapture-audio" -type d | head -1)
+AUDIOTAP_DIR="$PROJECT_ROOT/tools/audiotap"
+(cd "$AUDIOTAP_DIR" && swift build -c release --disable-sandbox)
 
-if [ -z "$PROCTAP_SWIFT_DIR" ]; then
-    echo "  WARNING: ProcTap Swift directory not found in embedded env."
-    echo "  App audio capture will not work."
+AUDIOTAP_BIN="$AUDIOTAP_DIR/.build/release/audiotap"
+if [ -f "$AUDIOTAP_BIN" ]; then
+    cp "$AUDIOTAP_BIN" "$RESOURCES/audiotap"
+    echo "  audiotap binary: $RESOURCES/audiotap"
 else
-    # Apply the audio interleaving patch
-    cp "$PROJECT_ROOT/patches/screencapture-audio/main.swift" \
-        "$PROCTAP_SWIFT_DIR/Sources/screencapture-audio/"
-
-    (cd "$PROCTAP_SWIFT_DIR" && swift build -c release --disable-sandbox)
-
-    # Copy binary to Resources/proctap/
-    PROCTAP_OUT="$RESOURCES/proctap"
-    mkdir -p "$PROCTAP_OUT"
-    PROCTAP_BIN=$(find "$PROCTAP_SWIFT_DIR/.build" -name "screencapture-audio" -type f -perm +111 | head -1)
-    if [ -n "$PROCTAP_BIN" ]; then
-        cp "$PROCTAP_BIN" "$PROCTAP_OUT/screencapture-audio"
-        echo "  ProcTap binary: $PROCTAP_OUT/screencapture-audio"
-    fi
+    echo "  WARNING: audiotap binary not found after build."
+    echo "  App audio capture will not work."
 fi
 
 # ── Step 4: Build Swift menu bar app ─────────────────────────────────────────
