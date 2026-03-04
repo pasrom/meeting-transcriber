@@ -5,6 +5,9 @@ import PackageDescription
 let package = Package(
     name: "MeetingTranscriber",
     platforms: [.macOS(.v14)],
+    dependencies: [
+        .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.0"),
+    ],
     targets: [
         .executableTarget(
             name: "MeetingTranscriber",
@@ -13,7 +16,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MeetingTranscriberTests",
-            dependencies: ["MeetingTranscriber"],
+            dependencies: ["MeetingTranscriber", "ViewInspector"],
             path: "Tests"
         ),
     ]

@@ -1,6 +1,13 @@
 import AVFoundation
 import SwiftUI
 
+/// Token status icon and color based on whether a HuggingFace token is set.
+func tokenStatusInfo(hasToken: Bool) -> (icon: String, color: String) {
+    hasToken
+        ? ("checkmark.circle.fill", "green")
+        : ("exclamationmark.triangle.fill", "orange")
+}
+
 struct SettingsView: View {
     @Bindable var settings: AppSettings
 
@@ -97,17 +104,10 @@ struct SettingsView: View {
 
                     // HuggingFace Token
                     HStack {
-                        if hasToken {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Text("HuggingFace token set")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.orange)
-                            Text("HuggingFace token required")
-                                .foregroundStyle(.secondary)
-                        }
+                        Image(systemName: tokenStatusInfo(hasToken: hasToken).icon)
+                            .foregroundStyle(hasToken ? Color.green : Color.orange)
+                        Text(hasToken ? "HuggingFace token set" : "HuggingFace token required")
+                            .foregroundStyle(.secondary)
                     }
 
                     SecureField("hf_...", text: $tokenInput)
