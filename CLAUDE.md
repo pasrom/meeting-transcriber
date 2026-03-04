@@ -133,7 +133,7 @@ The app can be distributed as a self-contained `.app` via Homebrew Cask:
 ./scripts/build_release.sh
 
 # Install via Homebrew (once published)
-brew tap OWNER/meeting-transcriber
+brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
 ```
 
