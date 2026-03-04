@@ -849,17 +849,12 @@ def format_diarized_transcript(segments: list[TimestampedSegment]) -> str:
         return ""
 
     lines = []
-    current_speaker = None
 
     for seg in segments:
         ts = _format_timestamp(seg.start)
         text = seg.text.strip()
         if not text:
             continue
-        if seg.speaker != current_speaker:
-            current_speaker = seg.speaker
-            lines.append(f"{ts} [{current_speaker}] {text}")
-        else:
-            lines.append(f"{ts} {text}")
+        lines.append(f"{ts} [{seg.speaker}] {text}")
 
     return "\n".join(lines)

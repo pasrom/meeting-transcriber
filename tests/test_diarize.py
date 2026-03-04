@@ -115,8 +115,8 @@ class TestFormatDiarizedTranscript:
         result = format_diarized_transcript(segments)
         assert "[Alice]" in result
         assert "[Bob]" in result
-        # Alice appears once despite two segments
-        assert result.count("[Alice]") == 1
+        # Speaker label shown on every line
+        assert result.count("[Alice]") == 2
 
     def test_empty_segments(self):
         assert format_diarized_transcript([]) == ""
