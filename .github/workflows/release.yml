@@ -55,9 +55,27 @@ jobs:
             ```
           generate_release_notes: true
 
-      - name: Update Cask SHA256
+      - name: Update Homebrew tap with new version and SHA256
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sed -i '' "s/sha256 \"PLACEHOLDER\"/sha256 \"${{ steps.sha.outputs.sha256 }}\"/" Casks/meeting-transcriber.rb
-          sed -i '' "s/version \".*\"/version \"${{ steps.version.outputs.version }}\"/" Casks/meeting-transcriber.rb
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA="${{ steps.sha.outputs.sha256 }}"
+
+          # Clone the tap repo
+          git clone https://x-access-token:${GH_TOKEN}@github.com/pasrom/homebrew-meeting-transcriber.git /tmp/tap
+          cd /tmp/tap
+
+          # Update version and SHA256 in the formula
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/meeting-transcriber.rb
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/meeting-transcriber.rb
+
           echo "Updated Cask formula:"
           cat Casks/meeting-transcriber.rb
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/meeting-transcriber.rb
+          git commit -m "Update meeting-transcriber to v${VERSION}"
+          git push
