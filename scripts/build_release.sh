@@ -40,10 +40,11 @@ mkdir -p "$MACOS_DIR" "$RESOURCES"
 
 # ── Step 1: Download python-build-standalone ──────────────────────────────────
 
-PYTHON_VERSION="3.14"
-# Use cpython-3.14 from Astral's python-build-standalone releases
-PYTHON_ARCHIVE="cpython-${PYTHON_VERSION}.0+20250317-aarch64-apple-darwin-install_only.tar.gz"
-PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/20250317/${PYTHON_ARCHIVE}"
+PYTHON_VERSION="3.14.3"
+PBS_RELEASE="20260303"
+# Use cpython from Astral's python-build-standalone releases (stripped = smaller)
+PYTHON_ARCHIVE="cpython-${PYTHON_VERSION}+${PBS_RELEASE}-aarch64-apple-darwin-install_only_stripped.tar.gz"
+PYTHON_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/${PYTHON_ARCHIVE}"
 
 mkdir -p "$CACHE_DIR"
 CACHED_ARCHIVE="$CACHE_DIR/$PYTHON_ARCHIVE"
