@@ -39,8 +39,11 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     SpeakerRequest.swift   # Speaker IPC models
     Info.plist             # Bundle metadata
   Tests/                   # 218 Swift tests (XCTest + ViewInspector)
+tools/audiotap/            # CATapDescription-based app audio capture (Swift CLI)
+  Package.swift            # SPM manifest (macOS 14+)
+  Sources/main.swift       # PID → CATapDescription → stdout (interleaved float32)
 scripts/
-  build_proctap.sh         # Build ProcTap Swift binary with audio fix
+  build_audiotap.sh        # Build audiotap Swift binary
   build_release.sh         # Build self-contained .app bundle + DMG
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture
@@ -48,7 +51,7 @@ scripts/
   dump_teams_ax.py         # Debug Teams accessibility API
 tests/
   conftest.py              # Shared fixtures, markers
-  test_e2e_app_audio.py    # E2E test (automated, incl. real ScreenCaptureKit capture)
+  test_e2e_app_audio.py    # E2E test (automated, incl. real audiotap capture)
   test_audio_mac.py        # Audio recording tests
   test_diarize.py          # Diarization unit tests
   test_dual_source.py      # Dual-source transcription tests
@@ -60,7 +63,6 @@ tests/
   test_watch_detector.py   # Meeting detector tests
   test_watcher.py          # Watcher loop tests
   fixtures/                # Test audio files (two_speakers_de.wav, etc.)
-patches/screencapture-audio/ # ProcTap audio interleaving fix (Swift)
 pyproject.toml             # Build config, deps, entry points, ruff, pytest
 entitlements.plist         # macOS entitlements for notarized builds
 Casks/meeting-transcriber.rb # Homebrew Cask formula
@@ -76,7 +78,7 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-App audio (ProcTap) + Microphone → mix → 16kHz mono WAV → Whisper → [pyannote diarization] → Claude CLI → Markdown protocol
+App audio (audiotap/CATapDescription) + Microphone → mix → 16kHz mono WAV → Whisper → [pyannote diarization] → Claude CLI → Markdown protocol
 ```
 
 ## Setup
@@ -87,8 +89,8 @@ App audio (ProcTap) + Microphone → mix → 16kHz mono WAV → Whisper → [pya
 source .venv/bin/activate
 pip install -e ".[mac,diarize,dev]"
 
-# Build ProcTap Swift binary with audio fix (required!):
-./scripts/build_proctap.sh
+# Build audiotap Swift binary (app audio capture):
+./scripts/build_audiotap.sh
 
 # Swift menu bar app
 cd app/MeetingTranscriber && swift build -c release
@@ -162,13 +164,13 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - All code and UI text in English
 - Protocol output generated in German (via Claude prompt)
 - Python 3.14 via homebrew
-- Lazy imports for optional dependencies (pyannote, proctap, pywhispercpp)
+- Lazy imports for optional dependencies (pyannote, pywhispercpp)
 
 ## Critical Notes
 
-- ProcTap Swift binary must be built manually after pip install
-- Screen Recording permission required **twice**: for Terminal (CLI use) AND for MeetingTranscriber.app (menu bar app) — without it, `CGWindowListCopyWindowInfo` returns no window titles and meetings are not detected
-- ScreenCaptureKit only sees apps with windows + bundle ID
+- audiotap Swift binary must be built: `./scripts/build_audiotap.sh` (uses CATapDescription, macOS 14.2+)
+- Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`) — for Terminal (CLI) AND MeetingTranscriber.app
+- Audio capture (audiotap) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - pyannote diarization requires HuggingFace token + license acceptance for 3 models:
   - pyannote/speaker-diarization-3.1
   - pyannote/segmentation-3.0
