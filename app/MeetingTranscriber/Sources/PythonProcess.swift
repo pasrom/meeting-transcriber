@@ -25,6 +25,14 @@ final class PythonProcess {
 
     var isRunning: Bool { process?.isRunning == true }
 
+    /// Whether the app is running from a self-contained .app bundle
+    /// (with embedded Python env) vs. dev mode (using .venv/).
+    var isBundled: Bool {
+        guard let res = Bundle.main.resourcePath else { return false }
+        return FileManager.default.fileExists(
+            atPath: (res as NSString).appendingPathComponent("python-env"))
+    }
+
     /// Open a log file for appending, creating it if needed. Falls back to /dev/null.
     static func openLogHandle(at url: URL) -> FileHandle {
         if let handle = try? FileHandle(forWritingTo: url) {
@@ -95,23 +103,51 @@ final class PythonProcess {
             return
         }
 
-        let venvBin = (projectRoot as NSString).appendingPathComponent(".venv/bin")
-        let transcribePath = (venvBin as NSString).appendingPathComponent("transcribe")
+        let proc = Process()
+        var env = ProcessInfo.processInfo.environment
 
-        guard FileManager.default.fileExists(atPath: transcribePath) else {
-            print("Error: transcribe binary not found at \(transcribePath)")
-            return
+        if isBundled {
+            // ── Bundle mode: use embedded Python env from Resources/ ──
+            let res = Bundle.main.resourcePath!
+            let pythonEnv = (res as NSString).appendingPathComponent("python-env")
+            let pythonBin = (pythonEnv as NSString).appendingPathComponent("bin")
+            let transcribePath = (pythonBin as NSString).appendingPathComponent("transcribe")
+
+            guard FileManager.default.fileExists(atPath: transcribePath) else {
+                print("Error: transcribe not found in bundle at \(transcribePath)")
+                return
+            }
+
+            proc.executableURL = URL(fileURLWithPath: transcribePath)
+
+            env["VIRTUAL_ENV"] = pythonEnv
+            env["PATH"] = "\(pythonBin):\(env["PATH"] ?? "/usr/bin")"
+            env["MEETING_TRANSCRIBER_BUNDLED"] = "1"
+
+            // ProcTap binary from bundle
+            let proctapPath = (res as NSString).appendingPathComponent("proctap/screencapture-audio")
+            if FileManager.default.fileExists(atPath: proctapPath) {
+                env["PROCTAP_BINARY"] = proctapPath
+            }
+        } else {
+            // ── Dev mode: use .venv/ from project root ──
+            let venvBin = (projectRoot as NSString).appendingPathComponent(".venv/bin")
+            let transcribePath = (venvBin as NSString).appendingPathComponent("transcribe")
+
+            guard FileManager.default.fileExists(atPath: transcribePath) else {
+                print("Error: transcribe binary not found at \(transcribePath)")
+                return
+            }
+
+            proc.executableURL = URL(fileURLWithPath: transcribePath)
+            proc.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+
+            env["VIRTUAL_ENV"] = (projectRoot as NSString).appendingPathComponent(".venv")
+            env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin")"
         }
 
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: transcribePath)
         proc.arguments = arguments
-        proc.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
 
-        // Set up environment so Python finds the venv
-        var env = ProcessInfo.processInfo.environment
-        env["VIRTUAL_ENV"] = (projectRoot as NSString).appendingPathComponent(".venv")
-        env["PATH"] = "\(venvBin):\(env["PATH"] ?? "/usr/bin")"
         // Remove Claude Code session marker so protocol generation can spawn claude CLI
         env.removeValue(forKey: "CLAUDECODE")
         // Inject HuggingFace token from Keychain for speaker diarization

@@ -125,8 +125,14 @@ struct MeetingTranscriberApp: App {
     }
 
     private func openProtocolsFolder() {
-        let protocols = URL(fileURLWithPath: pythonProcess.projectRoot)
-            .appendingPathComponent("protocols")
+        let protocols: URL
+        if pythonProcess.isBundled {
+            protocols = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/MeetingTranscriber/protocols")
+        } else {
+            protocols = URL(fileURLWithPath: pythonProcess.projectRoot)
+                .appendingPathComponent("protocols")
+        }
 
         // Create if needed, then open
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
