@@ -207,52 +207,57 @@ else
     echo "  Ad-hoc signed (install via right-click → Open)"
 fi
 
-# ── Step 8: Create DMG ───────────────────────────────────────────────────────
-
-echo ""
-echo "Step 8: Creating DMG..."
+# ── Step 8: Create DMG (skip if BUILD_DIR is not writable, e.g. Homebrew) ────
 
 DMG_NAME="MeetingTranscriber-${VERSION}.dmg"
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
-# Remove old DMG if it exists
-rm -f "$DMG_PATH"
-
-# Create a temporary directory for DMG contents
-DMG_STAGING="$BUILD_DIR/dmg-staging"
-rm -rf "$DMG_STAGING"
-mkdir -p "$DMG_STAGING"
-cp -a "$APP_BUNDLE" "$DMG_STAGING/"
-
-# Create a symlink to /Applications for drag-and-drop install
-ln -s /Applications "$DMG_STAGING/Applications"
-
-hdiutil create -volname "MeetingTranscriber" \
-    -srcfolder "$DMG_STAGING" \
-    -ov -format UDZO \
-    "$DMG_PATH"
-
-rm -rf "$DMG_STAGING"
-
-# ── Step 9: Notarize (optional) ──────────────────────────────────────────────
-
-if [ "$NOTARIZE" = true ]; then
+if mkdir -p "$BUILD_DIR" 2>/dev/null; then
     echo ""
-    echo "Step 9: Notarizing DMG..."
+    echo "Step 8: Creating DMG..."
 
-    if [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
-        echo "  ERROR: APPLE_ID, TEAM_ID, and APP_PASSWORD must be set for notarization."
-        exit 1
+    # Remove old DMG if it exists
+    rm -f "$DMG_PATH"
+
+    # Create a temporary directory for DMG contents
+    DMG_STAGING="$BUILD_DIR/dmg-staging"
+    rm -rf "$DMG_STAGING"
+    mkdir -p "$DMG_STAGING"
+    cp -a "$APP_BUNDLE" "$DMG_STAGING/"
+
+    # Create a symlink to /Applications for drag-and-drop install
+    ln -s /Applications "$DMG_STAGING/Applications"
+
+    hdiutil create -volname "MeetingTranscriber" \
+        -srcfolder "$DMG_STAGING" \
+        -ov -format UDZO \
+        "$DMG_PATH"
+
+    rm -rf "$DMG_STAGING"
+
+    # ── Step 9: Notarize (optional) ──────────────────────────────────────────
+
+    if [ "$NOTARIZE" = true ]; then
+        echo ""
+        echo "Step 9: Notarizing DMG..."
+
+        if [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
+            echo "  ERROR: APPLE_ID, TEAM_ID, and APP_PASSWORD must be set for notarization."
+            exit 1
+        fi
+
+        xcrun notarytool submit "$DMG_PATH" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$TEAM_ID" \
+            --password "$APP_PASSWORD" \
+            --wait
+
+        xcrun stapler staple "$DMG_PATH"
+        echo "  DMG notarized and stapled"
     fi
-
-    xcrun notarytool submit "$DMG_PATH" \
-        --apple-id "$APPLE_ID" \
-        --team-id "$TEAM_ID" \
-        --password "$APP_PASSWORD" \
-        --wait
-
-    xcrun stapler staple "$DMG_PATH"
-    echo "  DMG notarized and stapled"
+else
+    echo ""
+    echo "Step 8: Skipping DMG (build dir not writable — Homebrew mode)"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
@@ -260,8 +265,10 @@ fi
 echo ""
 echo "======================================="
 BUNDLE_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
-DMG_SIZE=$(du -sh "$DMG_PATH" | cut -f1)
 echo "App bundle: $APP_BUNDLE ($BUNDLE_SIZE)"
-echo "DMG:        $DMG_PATH ($DMG_SIZE)"
-echo ""
-echo "To test: open $DMG_PATH"
+if [ -f "$DMG_PATH" ]; then
+    DMG_SIZE=$(du -sh "$DMG_PATH" | cut -f1)
+    echo "DMG:        $DMG_PATH ($DMG_SIZE)"
+    echo ""
+    echo "To test: open $DMG_PATH"
+fi
