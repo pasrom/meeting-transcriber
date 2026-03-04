@@ -6,7 +6,7 @@
 src/meeting_transcriber/
   __init__.py              # __version__, package docstring
   cli.py                   # Unified CLI entry point (argparse)
-  config.py                # PROTOCOL_PROMPT, defaults, IPC paths (~/.meeting-transcriber/)
+  config.py                # PROTOCOL_PROMPT, defaults, IPC paths, get_data_dir()
   protocol.py              # generate_protocol_cli(), save_transcript(), save_protocol()
   diarize.py               # Speaker diarization + voice recognition (pyannote-audio)
   status.py                # Atomic JSON status emitter for menu bar app
@@ -29,7 +29,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     SettingsView.swift     # Settings window
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
     SpeakerCountView.swift # Speaker count dialog
-    PythonProcess.swift    # Launches/manages Python transcribe process
+    PythonProcess.swift    # Launches/manages Python transcribe process (dev + bundle mode)
     StatusMonitor.swift    # Polls ~/.meeting-transcriber/status.json
     IPCManager.swift       # Read/write speaker request/response JSON
     NotificationManager.swift # macOS notifications
@@ -41,6 +41,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
   Tests/                   # 218 Swift tests (XCTest + ViewInspector)
 scripts/
   build_proctap.sh         # Build ProcTap Swift binary with audio fix
+  build_release.sh         # Build self-contained .app bundle + DMG
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture
@@ -61,6 +62,9 @@ tests/
   fixtures/                # Test audio files (two_speakers_de.wav, etc.)
 patches/screencapture-audio/ # ProcTap audio interleaving fix (Swift)
 pyproject.toml             # Build config, deps, entry points, ruff, pytest
+entitlements.plist         # macOS entitlements for notarized builds
+Casks/meeting-transcriber.rb # Homebrew Cask formula
+.github/workflows/release.yml # CI: build DMG + GitHub Release on tag push
 docs/
   mac_implementation_notes.md  # Implementation notes & pain points
   dmg_distribution_plan.md     # DMG distribution planning
@@ -112,7 +116,33 @@ cd app/MeetingTranscriber && swift test
 
 # Run E2E test standalone
 python tests/test_e2e_app_audio.py
+
+# Build self-contained .app + DMG for distribution
+./scripts/build_release.sh
+
+# Test bundle-aware paths without building full bundle
+MEETING_TRANSCRIBER_BUNDLED=1 transcribe --file test.wav --title "Test"
 ```
+
+## Distribution
+
+The app can be distributed as a self-contained `.app` via Homebrew Cask:
+
+```bash
+# Build DMG locally
+./scripts/build_release.sh
+
+# Install via Homebrew (once published)
+brew tap OWNER/meeting-transcriber
+brew install --cask meeting-transcriber
+```
+
+**Bundle mode:** When `MEETING_TRANSCRIBER_BUNDLED=1` is set, all output files go to
+`~/Library/Application Support/MeetingTranscriber/` instead of CWD. The Swift app sets
+this automatically when running from a bundle with embedded `Resources/python-env/`.
+
+**Release workflow:** Push a `v*` tag to trigger `.github/workflows/release.yml` which
+builds the DMG on a macOS-14 runner and creates a GitHub Release.
 
 ## Git Workflow
 
