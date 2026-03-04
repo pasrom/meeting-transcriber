@@ -94,4 +94,79 @@ final class SpeakerNamingViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(button: "Confirm"))
         XCTAssertNoThrow(try body.find(button: "Skip"))
     }
+
+    // MARK: - Button taps
+
+    func testSkipButtonCallsOnCompleteWithEmptyMapping() throws {
+        var result: [String: String]?
+        let sut = SpeakerNamingView(
+            request: makeRequest(),
+            onComplete: { result = $0 }
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Skip").tap()
+        XCTAssertEqual(result, [:])
+    }
+
+    func testConfirmButtonCallsOnComplete() throws {
+        var result: [String: String]?
+        let sut = SpeakerNamingView(
+            request: makeRequest(),
+            onComplete: { result = $0 }
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Confirm").tap()
+        XCTAssertNotNil(result)
+    }
+
+    // MARK: - Speaker details
+
+    func testShowsSpeakerLabel() throws {
+        let speaker = makeSpeaker(label: "SPEAKER_02", time: 120.0)
+        let sut = SpeakerNamingView(
+            request: makeRequest(speakers: [speaker]),
+            onComplete: { _ in }
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "SPEAKER_02"))
+    }
+
+    func testShowsSpeakingTime() throws {
+        let speaker = makeSpeaker(label: "SPEAKER_00", time: 125.0)
+        let sut = SpeakerNamingView(
+            request: makeRequest(speakers: [speaker]),
+            onComplete: { _ in }
+        )
+        let body = try sut.inspect()
+        // formattedTime(125) = "2:05"
+        let texts = body.findAll(ViewType.Text.self)
+        let found = texts.contains { (try? $0.string())?.contains("2:05") == true }
+        XCTAssertTrue(found, "Speaking time '2:05' should appear")
+    }
+
+    func testPlayButtonExists() throws {
+        let sut = SpeakerNamingView(
+            request: makeRequest(),
+            onComplete: { _ in }
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Play"))
+    }
+
+    func testPreFillsAutoNameInNames() throws {
+        let speaker = makeSpeaker(label: "SPEAKER_00", autoName: "Maria", confidence: 0.9)
+        let sut = SpeakerNamingView(
+            request: makeRequest(speakers: [speaker]),
+            onComplete: { _ in }
+        )
+        // The confirm button triggers buildSpeakerMapping with pre-filled names
+        var result: [String: String]?
+        let sut2 = SpeakerNamingView(
+            request: makeRequest(speakers: [speaker]),
+            onComplete: { result = $0 }
+        )
+        let body = try sut2.inspect()
+        try body.find(button: "Confirm").tap()
+        XCTAssertEqual(result?["SPEAKER_00"], "Maria")
+    }
 }
