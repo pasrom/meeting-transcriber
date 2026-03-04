@@ -41,4 +41,32 @@ final class SpeakerCountViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Auto-detect"))
     }
+
+    // MARK: - Button taps
+
+    func testConfirmButtonCallsOnComplete() throws {
+        var result: Int?
+        let sut = SpeakerCountView(request: makeRequest(), onComplete: { result = $0 })
+        let body = try sut.inspect()
+        try body.find(button: "Confirm").tap()
+        XCTAssertEqual(result, 0) // default speakerCount is 0
+    }
+
+    func testAutoDetectButtonCallsOnCompleteWithZero() throws {
+        var result: Int?
+        let sut = SpeakerCountView(request: makeRequest(), onComplete: { result = $0 })
+        let body = try sut.inspect()
+        try body.find(button: "Auto-detect").tap()
+        XCTAssertEqual(result, 0)
+    }
+
+    func testSpeakerCountLabelOne() {
+        XCTAssertEqual(speakerCountLabel(1), "1 speakers")
+    }
+
+    func testInitialStepperShowsAutoDetect() throws {
+        let sut = SpeakerCountView(request: makeRequest(), onComplete: { _ in })
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Auto-detect"))
+    }
 }
