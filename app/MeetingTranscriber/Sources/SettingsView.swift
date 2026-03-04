@@ -156,7 +156,7 @@ struct SettingsView: View {
             Section("Permissions") {
                 PermissionRow(
                     label: "Screen Recording",
-                    detail: "Required for meeting detection",
+                    detail: "Required for meeting detection (window titles)",
                     granted: screenRecordingOK
                 )
                 PermissionRow(

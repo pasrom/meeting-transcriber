@@ -124,10 +124,10 @@ final class PythonProcess {
             env["PATH"] = "\(pythonBin):\(env["PATH"] ?? "/usr/bin")"
             env["MEETING_TRANSCRIBER_BUNDLED"] = "1"
 
-            // ProcTap binary from bundle
-            let proctapPath = (res as NSString).appendingPathComponent("proctap/screencapture-audio")
-            if FileManager.default.fileExists(atPath: proctapPath) {
-                env["PROCTAP_BINARY"] = proctapPath
+            // audiotap binary from bundle
+            let audiotapPath = (res as NSString).appendingPathComponent("audiotap")
+            if FileManager.default.fileExists(atPath: audiotapPath) {
+                env["AUDIOTAP_BINARY"] = audiotapPath
             }
         } else {
             // ── Dev mode: use .venv/ from project root ──
