@@ -1,3 +1,4 @@
+import ApplicationServices
 import AVFoundation
 import SwiftUI
 
@@ -8,12 +9,29 @@ func tokenStatusInfo(hasToken: Bool) -> (icon: String, color: String) {
         : ("exclamationmark.triangle.fill", "orange")
 }
 
+/// Check if Screen Recording permission is granted.
+/// If CGWindowListCopyWindowInfo returns window titles for other apps, the permission is granted.
+func checkScreenRecordingPermission() -> Bool {
+    guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+        return false
+    }
+    // If we can see window names from other apps, permission is granted
+    let ownPID = ProcessInfo.processInfo.processIdentifier
+    return windowList.contains { info in
+        guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
+        return info[kCGWindowName as String] as? String != nil
+    }
+}
+
 struct SettingsView: View {
     @Bindable var settings: AppSettings
 
     @State private var tokenInput = ""
     @State private var hasToken = false
     @State private var audioDevices: [(id: String, name: String)] = []
+    @State private var micPermission: AVAuthorizationStatus = .notDetermined
+    @State private var screenRecordingOK = false
+    @State private var accessibilityOK = false
 
     private let whisperModels = [
         "large-v3-turbo-q5_0",
@@ -134,10 +152,47 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            Section("Permissions") {
+                PermissionRow(
+                    label: "Screen Recording",
+                    detail: "Required for meeting detection",
+                    granted: screenRecordingOK
+                )
+                PermissionRow(
+                    label: "Microphone",
+                    detail: micPermission == .authorized ? "Granted"
+                        : micPermission == .notDetermined ? "Will prompt on first recording"
+                        : "Denied — grant in System Settings",
+                    granted: micPermission == .authorized,
+                    warning: micPermission == .notDetermined
+                )
+                PermissionRow(
+                    label: "Accessibility",
+                    detail: "Optional — enables mute detection",
+                    granted: accessibilityOK,
+                    optional: true
+                )
+
+                Button("Open Privacy & Security Settings") {
+                    NSWorkspace.shared.open(
+                        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+                }
+                .font(.caption)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: settings.diarize ? 580 : (settings.noMic ? 360 : 460))
-        .onAppear { hasToken = settings.hasHFToken }
+        .frame(width: 420, height: settings.diarize ? 680 : (settings.noMic ? 460 : 560))
+        .onAppear {
+            hasToken = settings.hasHFToken
+            refreshPermissions()
+        }
+    }
+
+    private func refreshPermissions() {
+        micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
+        screenRecordingOK = checkScreenRecordingPermission()
+        accessibilityOK = AXIsProcessTrusted()
     }
 
     private func refreshAudioDevices() {
@@ -147,5 +202,39 @@ struct SettingsView: View {
             position: .unspecified
         )
         audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+}
+
+/// A row showing permission status with a colored icon.
+struct PermissionRow: View {
+    let label: String
+    let detail: String
+    var granted: Bool
+    var warning: Bool = false
+    var optional: Bool = false
+
+    private var icon: String {
+        if granted { return "checkmark.circle.fill" }
+        if warning || optional { return "exclamationmark.triangle.fill" }
+        return "xmark.circle.fill"
+    }
+
+    private var iconColor: Color {
+        if granted { return .green }
+        if warning || optional { return .orange }
+        return .red
+    }
+
+    var body: some View {
+        HStack {
+            Image(systemName: icon)
+                .foregroundStyle(iconColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
