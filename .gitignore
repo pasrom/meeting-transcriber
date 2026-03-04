@@ -11,3 +11,6 @@ dist/
 
 # Swift build artifacts
 app/MeetingTranscriber/.build/
+
+# Release build artifacts
+.build/
