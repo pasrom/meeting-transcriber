@@ -2,10 +2,10 @@ cask "meeting-transcriber" do
   version "1.0.0"
   sha256 "PLACEHOLDER"
 
-  url "https://github.com/OWNER/Transcriber/releases/download/v#{version}/MeetingTranscriber-#{version}.dmg"
+  url "https://github.com/pasrom/Transcriber/releases/download/v#{version}/MeetingTranscriber-#{version}.dmg"
   name "Meeting Transcriber"
   desc "Auto-transcribe and summarize meetings"
-  homepage "https://github.com/OWNER/Transcriber"
+  homepage "https://github.com/pasrom/Transcriber"
 
   depends_on macos: ">= :sonoma"
 
