@@ -101,7 +101,7 @@ else
     cp "$PROJECT_ROOT/patches/screencapture-audio/main.swift" \
         "$PROCTAP_SWIFT_DIR/Sources/screencapture-audio/"
 
-    (cd "$PROCTAP_SWIFT_DIR" && swift build -c release)
+    (cd "$PROCTAP_SWIFT_DIR" && swift build -c release --disable-sandbox)
 
     # Copy binary to Resources/proctap/
     PROCTAP_OUT="$RESOURCES/proctap"
@@ -119,7 +119,7 @@ echo ""
 echo "Step 4: Building Swift menu bar app..."
 
 SPM_DIR="$PROJECT_ROOT/app/MeetingTranscriber"
-(cd "$SPM_DIR" && swift build -c release)
+(cd "$SPM_DIR" && swift build -c release --disable-sandbox)
 
 # Copy binary to app bundle
 cp "$SPM_DIR/.build/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
