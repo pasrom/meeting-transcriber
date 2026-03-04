@@ -1,5 +1,10 @@
 import SwiftUI
 
+/// Label for speaker count: 0 → "Auto-detect", N → "N speakers".
+func speakerCountLabel(_ count: Int) -> String {
+    count == 0 ? "Auto-detect" : "\(count) speakers"
+}
+
 /// Dialog that asks the user how many speakers participated in the meeting.
 struct SpeakerCountView: View {
     let request: SpeakerCountRequest
@@ -16,7 +21,7 @@ struct SpeakerCountView: View {
 
             HStack(spacing: 16) {
                 Stepper(value: $speakerCount, in: 0...20) {
-                    Text(speakerCount == 0 ? "Auto-detect" : "\(speakerCount) speakers")
+                    Text(speakerCountLabel(speakerCount))
                         .monospacedDigit()
                         .frame(minWidth: 120, alignment: .leading)
                 }

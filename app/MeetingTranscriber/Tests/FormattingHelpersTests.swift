@@ -79,6 +79,16 @@ final class FormattingHelpersTests: XCTestCase {
         XCTAssertEqual(url.path, "/data/meeting/subdir/file.wav")
     }
 
+    // MARK: - speakerCountLabel
+
+    func testSpeakerCountLabelAutoDetect() {
+        XCTAssertEqual(speakerCountLabel(0), "Auto-detect")
+    }
+
+    func testSpeakerCountLabelThree() {
+        XCTAssertEqual(speakerCountLabel(3), "3 speakers")
+    }
+
     func testSampleURLFileExistsCheck() throws {
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("sample-test-\(UUID().uuidString)")
