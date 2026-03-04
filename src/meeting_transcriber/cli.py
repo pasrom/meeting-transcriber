@@ -12,10 +12,10 @@ from rich.markdown import Markdown
 from meeting_transcriber.config import (
     DEFAULT_CONFIRMATION_COUNT,
     DEFAULT_END_GRACE_PERIOD,
-    DEFAULT_OUTPUT_DIR,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_WHISPER_MODEL_MAC,
     DEFAULT_WHISPER_MODEL_WIN,
+    default_output_dir,
 )
 from meeting_transcriber.protocol import (
     generate_protocol_cli,
@@ -60,8 +60,8 @@ def main():
         "--output-dir",
         "-o",
         type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
+        default=None,
+        help="Output directory (default: ./protocols)",
     )
 
     # macOS-only flags
@@ -178,6 +178,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Resolve output-dir default lazily (depends on MEETING_TRANSCRIBER_BUNDLED)
+    if args.output_dir is None:
+        args.output_dir = default_output_dir()
 
     # Validate macOS-only flags on Windows
     if IS_WIN and (

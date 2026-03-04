@@ -12,9 +12,9 @@ from rich.console import Console
 from meeting_transcriber import status
 from meeting_transcriber.config import (
     DEFAULT_END_GRACE_PERIOD,
-    DEFAULT_OUTPUT_DIR,
     DEFAULT_POLL_INTERVAL,
     MAX_RECORDING_SECONDS,
+    default_output_dir,
 )
 from meeting_transcriber.watch.detector import DetectedMeeting, MeetingDetector
 from meeting_transcriber.watch.patterns import AppMeetingPattern
@@ -32,7 +32,7 @@ class MeetingWatcher:
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         end_grace: float = DEFAULT_END_GRACE_PERIOD,
         confirmation_count: int = 2,
-        output_dir: Path = DEFAULT_OUTPUT_DIR,
+        output_dir: Path | None = None,
         whisper_model: str | None = None,
         diarize: bool = False,
         num_speakers: int | None = None,
@@ -46,7 +46,7 @@ class MeetingWatcher:
         self.detector = MeetingDetector(patterns, confirmation_count=confirmation_count)
         self.poll_interval = poll_interval
         self.end_grace = end_grace
-        self.output_dir = output_dir
+        self.output_dir = output_dir if output_dir is not None else default_output_dir()
         self.whisper_model = whisper_model
         self.diarize = diarize
         self.num_speakers = num_speakers

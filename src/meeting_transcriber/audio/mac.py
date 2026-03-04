@@ -290,7 +290,9 @@ def record_audio(
 
             try:
                 # Save individual tracks to recordings/
-                rec_dir = Path("recordings")
+                from meeting_transcriber.config import get_data_dir
+
+                rec_dir = get_data_dir() / "recordings"
                 rec_dir.mkdir(exist_ok=True)
                 ts = output_path.stem
 
@@ -475,8 +477,10 @@ def record_audio(
         audio_app = raw
 
     # Save individual tracks to recordings/
-    rec_dir = Path("recordings")
-    rec_dir.mkdir(exist_ok=True)
+    from meeting_transcriber.config import get_data_dir
+
+    rec_dir = get_data_dir() / "recordings"
+    rec_dir.mkdir(parents=True, exist_ok=True)
     ts = output_path.stem
     app_path: Path | None = None
     mic_path: Path | None = None

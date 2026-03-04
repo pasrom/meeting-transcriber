@@ -27,9 +27,15 @@ log = logging.getLogger(__name__)
 
 console = Console()
 
-SPEAKERS_DB = Path("./speakers.json")
 SIMILARITY_THRESHOLD = 0.75  # cosine similarity threshold for speaker recognition
 MERGE_THRESHOLD = 0.92  # cosine similarity threshold for merging duplicate speakers
+
+
+def _get_speakers_db() -> Path:
+    """Return path to speakers.json, respecting bundle mode."""
+    from meeting_transcriber.config import get_data_dir
+
+    return get_data_dir() / "speakers.json"
 
 
 @dataclass
@@ -45,12 +51,14 @@ class TimestampedSegment:
 # ── Speaker Database ─────────────────────────────────────────────────────────
 
 
-def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
+def load_speaker_db(db_path: Path | None = None) -> dict[str, list[float]]:
     """Load saved speaker embeddings from JSON. Returns {name: embedding_vector}.
 
     Normalizes names to capitalize() and merges duplicates by averaging embeddings.
     Uses shared file lock to prevent corruption from concurrent access.
     """
+    if db_path is None:
+        db_path = _get_speakers_db()
     if not db_path.exists():
         return {}
     with open(db_path, encoding="utf-8") as f:
@@ -81,11 +89,13 @@ def load_speaker_db(db_path: Path = SPEAKERS_DB) -> dict[str, list[float]]:
     return db
 
 
-def save_speaker_db(db: dict[str, list[float]], db_path: Path = SPEAKERS_DB) -> None:
+def save_speaker_db(db: dict[str, list[float]], db_path: Path | None = None) -> None:
     """Save speaker embeddings to JSON.
 
     Uses exclusive file lock to prevent corruption from concurrent access.
     """
+    if db_path is None:
+        db_path = _get_speakers_db()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with open(db_path, "w", encoding="utf-8") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
@@ -190,9 +200,11 @@ def prompt_speaker_names(
     turns: list[tuple[float, float, str]],
     audio_path: Path,
     db: dict[str, list[float]],
-    db_path: Path = SPEAKERS_DB,
+    db_path: Path | None = None,
 ) -> dict[str, str]:
     """Play audio samples and let user name or confirm all speakers."""
+    if db_path is None:
+        db_path = _get_speakers_db()
     updated = False
 
     for label, current_name in sorted(mapping.items()):

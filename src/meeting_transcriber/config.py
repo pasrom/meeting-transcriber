@@ -1,11 +1,31 @@
 """Shared configuration constants."""
 
+import os
 from pathlib import Path
 
 DEFAULT_WHISPER_MODEL_MAC = "large-v3-turbo-q5_0"
 DEFAULT_WHISPER_MODEL_WIN = "large"
-DEFAULT_OUTPUT_DIR = Path("./protocols")
 TARGET_RATE = 16000
+
+
+def get_data_dir() -> Path:
+    """Return the data directory for output files.
+
+    When MEETING_TRANSCRIBER_BUNDLED is set (app bundle mode),
+    uses ~/Library/Application Support/MeetingTranscriber/.
+    Otherwise uses the current working directory.
+    """
+    if os.environ.get("MEETING_TRANSCRIBER_BUNDLED"):
+        d = Path.home() / "Library" / "Application Support" / "MeetingTranscriber"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    return Path.cwd()
+
+
+def default_output_dir() -> Path:
+    """Return the default protocol output directory."""
+    return get_data_dir() / "protocols"
+
 
 # Status file for menu bar app communication
 STATUS_DIR = Path.home() / ".meeting-transcriber"
