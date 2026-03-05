@@ -29,7 +29,7 @@ final class NotificationManagerTests: XCTestCase {
             version: 1, timestamp: "2026-03-03T10:00:00",
             state: .recording, detail: "",
             meeting: MeetingInfo(app: "Teams", title: "Standup", pid: 1),
-            protocolPath: nil, error: nil, pid: nil
+            protocolPath: nil, error: nil, audioPath: nil, pid: nil
         )
         // recording state would normally trigger a notification, but setUp was
         // never called so notify() should be a no-op
@@ -41,7 +41,7 @@ final class NotificationManagerTests: XCTestCase {
         let status = TranscriberStatus(
             version: 1, timestamp: "2026-03-03T10:00:00",
             state: .idle, detail: "", meeting: nil,
-            protocolPath: nil, error: nil, pid: nil
+            protocolPath: nil, error: nil, audioPath: nil, pid: nil
         )
         manager.handleTransition(from: nil, to: .idle, status: status)
     }
@@ -51,7 +51,7 @@ final class NotificationManagerTests: XCTestCase {
         let status = TranscriberStatus(
             version: 1, timestamp: "2026-03-03T10:00:00",
             state: .recording, detail: "", meeting: nil,
-            protocolPath: nil, error: nil, pid: nil
+            protocolPath: nil, error: nil, audioPath: nil, pid: nil
         )
         manager.handleTransition(from: nil, to: .recording, status: status)
         manager.handleTransition(from: .recording, to: .recording, status: status)

@@ -14,7 +14,7 @@ final class NotificationContentTests: XCTestCase {
         TranscriberStatus(
             version: 1, timestamp: "2026-03-03T10:00:00",
             state: state, detail: "", meeting: meeting,
-            protocolPath: protocolPath, error: error, pid: nil
+            protocolPath: protocolPath, error: error, audioPath: nil, pid: nil
         )
     }
 

@@ -154,13 +154,19 @@ final class AppSettings {
         }
 
         // Transcription
-        if whisperModel != "large-v3-turbo-q5_0" {
-            args += ["--model", whisperModel]
-        }
-        if diarize {
-            args.append("--diarize")
-            if numSpeakers > 0 {
-                args += ["--speakers", String(numSpeakers)]
+        if transcriptionEngine == .whisperKit {
+            // Native transcription: Python only records, Swift handles transcription
+            args.append("--native-transcription")
+            // Diarization not supported with native transcription
+        } else {
+            if whisperModel != "large-v3-turbo-q5_0" {
+                args += ["--model", whisperModel]
+            }
+            if diarize {
+                args.append("--diarize")
+                if numSpeakers > 0 {
+                    args += ["--speakers", String(numSpeakers)]
+                }
             }
         }
 

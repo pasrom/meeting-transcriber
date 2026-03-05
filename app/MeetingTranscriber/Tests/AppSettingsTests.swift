@@ -13,7 +13,7 @@ final class AppSettingsTests: XCTestCase {
         let keys = [
             "watchTeams", "watchZoom", "watchWebex",
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
-            "whisperModel", "diarize", "numSpeakers",
+            "whisperModel", "diarize", "numSpeakers", "transcriptionEngine",
         ]
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
