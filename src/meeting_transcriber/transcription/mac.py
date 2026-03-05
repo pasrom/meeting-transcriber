@@ -267,10 +267,17 @@ def _transcribe_segments(whisper_model, audio_path: Path, language: str | None =
         progress.add_task(f"Transcribing {audio_path.name} ...", total=None)
         segments = whisper_model.transcribe(str(whisper_path), language=language)
 
-    return [
-        TimestampedSegment(start=seg.t0 * 0.01, end=seg.t1 * 0.01, text=seg.text)
-        for seg in segments
-    ]
+    result = []
+    for seg in segments:
+        text = seg.text.strip()
+        if not text:
+            continue
+        ts = TimestampedSegment(start=seg.t0 * 0.01, end=seg.t1 * 0.01, text=text)
+        # Filter Whisper hallucinations: repeated identical lines
+        if result and text == result[-1].text:
+            continue
+        result.append(ts)
+    return result
 
 
 def _merge_segments(app_segments: list, mic_segments: list) -> list:
