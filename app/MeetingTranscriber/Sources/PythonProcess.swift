@@ -90,7 +90,12 @@ final class PythonProcess {
     /// Required for mute-button detection in Teams via AXUIElement.
     /// macOS TCC checks the "responsible process" (this app), not the
     /// Python subprocess, so the prompt must come from here.
+    /// Only prompts once per app launch to avoid repeated dialogs.
+    private static var hasPromptedAccessibility = false
     static func ensureAccessibilityAccess() -> Bool {
+        if AXIsProcessTrusted() { return true }
+        guard !hasPromptedAccessibility else { return false }
+        hasPromptedAccessibility = true
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
