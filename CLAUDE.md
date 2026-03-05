@@ -37,8 +37,10 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     KeychainHelper.swift   # Keychain CRUD for HF token
     TranscriberStatus.swift # Status + MeetingInfo models
     SpeakerRequest.swift   # Speaker IPC models
+    WhisperKitEngine.swift # Native WhisperKit transcription (CoreML/ANE)
+    NativeTranscriptionManager.swift  # Coordinates WhisperKit → Python protocol handoff
     Info.plist             # Bundle metadata
-  Tests/                   # 218 Swift tests (XCTest + ViewInspector)
+  Tests/                   # 223 Swift tests (XCTest + ViewInspector)
 tools/audiotap/            # CATapDescription-based app audio capture (Swift CLI)
   Package.swift            # SPM manifest (macOS 14+)
   Sources/main.swift       # PID → CATapDescription → stdout (interleaved float32)
@@ -78,7 +80,11 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-App audio (audiotap/CATapDescription) + Microphone → mix → 16kHz mono WAV → Whisper → [pyannote diarization] → Claude CLI → Markdown protocol
+Python engine (default):
+  App audio (audiotap/CATapDescription) + Microphone → mix → 16kHz mono WAV → Whisper (pywhispercpp) → [pyannote diarization] → Claude CLI → Markdown protocol
+
+WhisperKit engine (native Swift, no diarization):
+  App audio → mix → 16kHz mono WAV → WhisperKit (CoreML/ANE) → transcript.txt → Claude CLI → Markdown protocol
 ```
 
 ## Setup
