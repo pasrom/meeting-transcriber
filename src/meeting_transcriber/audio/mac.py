@@ -411,7 +411,8 @@ def record_audio(
                 need_restart = True
                 log.info(
                     "Default input device changed: %s → %s",
-                    _current_default, new_default,
+                    _current_default,
+                    new_default,
                 )
             if not need_restart:
                 continue
@@ -432,9 +433,7 @@ def record_audio(
                 )
             except Exception as exc:
                 log.error("Failed to restart mic stream: %s", exc)
-                console.print(
-                    f"[red]Mic stream lost (device change): {exc}[/red]"
-                )
+                console.print(f"[red]Mic stream lost (device change): {exc}[/red]")
 
     if mic_stream is not None:
         _mic_watcher = threading.Thread(
