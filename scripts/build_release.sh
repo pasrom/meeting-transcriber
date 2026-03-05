@@ -201,9 +201,17 @@ ENTITLEMENTS_EOF
         "$APP_BUNDLE"
     echo "  Signed with Developer ID for notarization"
 else
-    # Ad-hoc signing (no Apple Developer account needed)
-    codesign --deep --force --sign - "$APP_BUNDLE"
-    echo "  Ad-hoc signed (install via right-click → Open)"
+    # Use local development certificate if available (stable identity
+    # preserves Screen Recording permission across rebuilds).
+    # Falls back to ad-hoc signing if no certificate is found.
+    SIGN_HASH=$(security find-identity -v -p codesigning 2>/dev/null | head -1 | awk '{print $2}')
+    if [ -n "$SIGN_HASH" ] && [ "$SIGN_HASH" != "0" ]; then
+        codesign --deep --force --sign "$SIGN_HASH" "$APP_BUNDLE"
+        echo "  Signed with certificate: $SIGN_HASH"
+    else
+        codesign --deep --force --sign - "$APP_BUNDLE"
+        echo "  Ad-hoc signed (install via right-click → Open)"
+    fi
 fi
 
 # ── Step 8: Create DMG (skip if BUILD_DIR is not writable, e.g. Homebrew) ────
