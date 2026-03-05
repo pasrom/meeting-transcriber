@@ -13,6 +13,11 @@ final class WhisperKitEngineTests: XCTestCase {
         XCTAssertEqual(engine.modelState, .unloaded)
     }
 
+    func testDownloadProgressStartsAtZero() {
+        let engine = WhisperKitEngine()
+        XCTAssertEqual(engine.downloadProgress, 0, accuracy: 0.001)
+    }
+
     func testLanguageDefault() {
         let engine = WhisperKitEngine()
         XCTAssertNil(engine.language, "Should auto-detect by default")

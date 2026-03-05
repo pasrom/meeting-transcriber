@@ -6,17 +6,36 @@ final class WhisperKitEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
     var language: String?
     private(set) var modelState: ModelState = .unloaded
+    private(set) var downloadProgress: Double = 0
     private var pipe: WhisperKit?
 
     func loadModel() async {
-        modelState = .loading
+        modelState = .downloading
+        downloadProgress = 0
         do {
+            // Step 1: Download with progress tracking
+            let modelFolder = try await WhisperKit.download(
+                variant: modelVariant,
+                progressCallback: { progress in
+                    Task { @MainActor in
+                        self.downloadProgress = progress.fractionCompleted
+                    }
+                }
+            )
+
+            // Step 2: Init with local model folder (skips download)
+            modelState = .loading
+            downloadProgress = 1.0
             pipe = try await WhisperKit(
-                WhisperKitConfig(model: modelVariant)
+                WhisperKitConfig(
+                    model: modelVariant,
+                    modelFolder: modelFolder.path()
+                )
             )
             modelState = .loaded
         } catch {
             modelState = .unloaded
+            downloadProgress = 0
         }
     }
 

@@ -32,6 +32,7 @@ struct SettingsView: View {
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
+    @State private var whisperKitEngine = WhisperKitEngine()
 
     private let whisperModels = [
         "large-v3-turbo-q5_0",
@@ -120,6 +121,34 @@ struct SettingsView: View {
                         TextField("Model variant", text: $settings.whisperKitModel)
                             .frame(width: 200)
                             .multilineTextAlignment(.trailing)
+                    }
+
+                    // Model status
+                    switch whisperKitEngine.modelState {
+                    case .downloading:
+                        ProgressView(value: whisperKitEngine.downloadProgress)
+                            .progressViewStyle(.linear)
+                        Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    case .loading:
+                        HStack {
+                            ProgressView().controlSize(.small)
+                            Text("Loading model...")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    case .loaded:
+                        Label("Model ready", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    case .unloaded:
+                        Button("Load Model") {
+                            whisperKitEngine.modelVariant = settings.whisperKitModel
+                            Task { await whisperKitEngine.loadModel() }
+                        }
+                    default:
+                        EmptyView()
                     }
                 }
 
