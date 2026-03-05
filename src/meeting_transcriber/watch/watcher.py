@@ -1,7 +1,9 @@
 """Watch-mode orchestrator: detect meetings, record, run pipeline."""
 
 import logging
+import os
 import re
+import signal
 import tempfile
 import threading
 import time
@@ -14,6 +16,7 @@ from meeting_transcriber.config import (
     DEFAULT_END_GRACE_PERIOD,
     DEFAULT_POLL_INTERVAL,
     MAX_RECORDING_SECONDS,
+    STATUS_DIR,
     default_output_dir,
 )
 from meeting_transcriber.watch.detector import DetectedMeeting, MeetingDetector
@@ -21,6 +24,73 @@ from meeting_transcriber.watch.patterns import AppMeetingPattern
 
 log = logging.getLogger(__name__)
 console = Console()
+
+WATCHER_PID_FILE = STATUS_DIR / "watcher.pid"
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with the given PID is still running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _acquire_pid_lock() -> bool:
+    """Write our PID to the lock file. Returns False if another watcher is running."""
+    STATUS_DIR.mkdir(parents=True, exist_ok=True)
+    if WATCHER_PID_FILE.exists():
+        try:
+            existing_pid = int(WATCHER_PID_FILE.read_text().strip())
+        except (ValueError, OSError):
+            existing_pid = None
+        if existing_pid and existing_pid != os.getpid() and _is_pid_alive(existing_pid):
+            return False
+    WATCHER_PID_FILE.write_text(str(os.getpid()))
+    return True
+
+
+def _release_pid_lock() -> None:
+    """Remove the PID lock file if it belongs to us."""
+    try:
+        if WATCHER_PID_FILE.exists():
+            pid = int(WATCHER_PID_FILE.read_text().strip())
+            if pid == os.getpid():
+                WATCHER_PID_FILE.unlink(missing_ok=True)
+    except (ValueError, OSError):
+        WATCHER_PID_FILE.unlink(missing_ok=True)
+
+
+def kill_stale_watcher() -> bool:
+    """Kill any existing watcher process and clean up the PID file.
+
+    Returns True if a stale process was killed, False if none was running.
+    """
+    STATUS_DIR.mkdir(parents=True, exist_ok=True)
+    if not WATCHER_PID_FILE.exists():
+        return False
+    try:
+        existing_pid = int(WATCHER_PID_FILE.read_text().strip())
+    except (ValueError, OSError):
+        WATCHER_PID_FILE.unlink(missing_ok=True)
+        return False
+    if not _is_pid_alive(existing_pid):
+        WATCHER_PID_FILE.unlink(missing_ok=True)
+        return False
+    try:
+        os.kill(existing_pid, signal.SIGTERM)
+        # Wait briefly for it to exit
+        for _ in range(10):
+            time.sleep(0.5)
+            if not _is_pid_alive(existing_pid):
+                break
+        else:
+            os.kill(existing_pid, signal.SIGKILL)
+    except OSError:
+        pass
+    WATCHER_PID_FILE.unlink(missing_ok=True)
+    return True
 
 
 class MeetingWatcher:
@@ -62,6 +132,19 @@ class MeetingWatcher:
 
     def run(self) -> None:
         """Main loop: poll for meetings, record, run pipeline. Blocks until Ctrl+C."""
+        if not _acquire_pid_lock():
+            try:
+                existing_pid = int(WATCHER_PID_FILE.read_text().strip())
+            except (ValueError, OSError):
+                existing_pid = "?"
+            console.print(
+                "[red bold]Another watcher is already running"
+                f" (PID {existing_pid}).[/red bold]\n"
+                "[dim]Kill it first or use the menu bar app"
+                " to manage the process.[/dim]"
+            )
+            raise SystemExit(1)
+
         console.print(
             "\n[bold]Watch mode active[/bold] — waiting for meetings...\n"
             f"  Poll interval: {self.poll_interval}s\n"
@@ -95,6 +178,8 @@ class MeetingWatcher:
             console.print("\n[yellow]Watch mode stopped.[/yellow]")
             status.emit("idle")
             status.disable()
+        finally:
+            _release_pid_lock()
 
     def _handle_meeting(self, meeting: DetectedMeeting) -> None:
         """Record a meeting, wait for it to end, then run the pipeline."""

@@ -100,6 +100,42 @@ final class PythonProcess {
         return AXIsProcessTrustedWithOptions(options)
     }
 
+    private static var pidFileURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meeting-transcriber")
+            .appendingPathComponent("watcher.pid")
+    }
+
+    /// Kill any stale watcher process found via the PID lock file.
+    private func killStaleWatcher() {
+        let pidFile = Self.pidFileURL
+        guard FileManager.default.fileExists(atPath: pidFile.path),
+              let contents = try? String(contentsOf: pidFile, encoding: .utf8),
+              let pid = Int32(contents.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return }
+
+        // Check if process is alive (kill with signal 0)
+        guard kill(pid, 0) == 0 else {
+            // Process is dead — clean up stale PID file
+            try? FileManager.default.removeItem(at: pidFile)
+            return
+        }
+
+        print("Killing stale watcher process (PID \(pid))")
+        kill(pid, SIGTERM)
+
+        // Wait up to 5 seconds for it to exit
+        for _ in 0..<10 {
+            usleep(500_000)
+            if kill(pid, 0) != 0 { break }
+        }
+        // Force kill if still alive
+        if kill(pid, 0) == 0 {
+            kill(pid, SIGKILL)
+        }
+        try? FileManager.default.removeItem(at: pidFile)
+    }
+
     func start(arguments: [String] = ["--watch"]) {
         guard process == nil || process?.isRunning == false else { return }
 
@@ -107,6 +143,9 @@ final class PythonProcess {
             print("Refusing to start: crash loop detected (\(Self.maxCrashes) crashes in \(Int(Self.crashWindow))s)")
             return
         }
+
+        // Kill any stale watcher from a previous dev/release session
+        killStaleWatcher()
 
         let proc = Process()
         var env = ProcessInfo.processInfo.environment
