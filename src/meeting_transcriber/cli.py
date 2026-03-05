@@ -63,6 +63,15 @@ def main():
         default=None,
         help="Output directory (default: ./protocols)",
     )
+    parser.add_argument(
+        "--engine",
+        choices=["whisper", "whisperkit"],
+        default="whisper",
+        help=(
+            "Transcription engine: 'whisper' (Python/pywhispercpp)"
+            " or 'whisperkit' (native Swift CLI)"
+        ),
+    )
 
     # macOS-only flags
     parser.add_argument(
@@ -347,7 +356,13 @@ def main():
                 record_audio(audio_path)
 
         # 2. Transcription
-        if IS_MAC:
+        if args.engine == "whisperkit":
+            from meeting_transcriber.transcription.whisperkit import (
+                transcribe as wk_transcribe,
+            )
+
+            transcript = wk_transcribe(audio_path)
+        elif IS_MAC:
             from meeting_transcriber.transcription.mac import transcribe
 
             extra_kwargs = {}
