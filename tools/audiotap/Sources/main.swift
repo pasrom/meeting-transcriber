@@ -54,16 +54,21 @@ func getDefaultOutputDeviceUID() -> String? {
 // MARK: - Mic Capture Handler
 
 /// Records microphone audio to a WAV file via AVAudioEngine.
-/// Monitors for audio device changes (e.g. AirPods connected) and
-/// automatically restarts the engine on the new default input device.
+/// Monitors for default input device changes (e.g. AirPods connected) via
+/// CoreAudio property listener and automatically restarts the engine.
 class MicCaptureHandler {
     private var engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
     private let outputPath: String
-    private var fixedDeviceUID: String?
     private var isRecording = false
-    private var configObserver: NSObjectProtocol?
+    private var listenerInstalled = false
     var firstFrameTime: UInt64 = 0
+
+    /// CoreAudio property address for default input device changes.
+    private var defaultInputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
 
     init(outputPath: String) {
         self.outputPath = outputPath
@@ -85,41 +90,9 @@ class MicCaptureHandler {
         return deviceID
     }
 
-    /// Get the UID of the current default input device.
-    private static func getDefaultInputDeviceUID() -> String? {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var deviceID = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
-        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
-
-        var uidAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyDeviceUID,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        var uid: Unmanaged<CFString>?
-        var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        let uidStatus = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
-        guard uidStatus == noErr, let cfUID = uid?.takeRetainedValue() else { return nil }
-        return cfUID as String
-    }
-
     func start(deviceUID: String? = nil) throws {
-        fixedDeviceUID = deviceUID
         try startEngine(deviceUID: deviceUID)
-
-        // Monitor for audio configuration changes (device connected/disconnected)
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.handleConfigurationChange()
-        }
+        installDeviceChangeListener()
     }
 
     private func startEngine(deviceUID: String? = nil) throws {
@@ -182,9 +155,28 @@ class MicCaptureHandler {
         fputs("Mic recording started: \(outputPath)\n", stderr)
     }
 
-    private func handleConfigurationChange() {
+    /// Listen for default input device changes via CoreAudio property listener.
+    /// This fires reliably even in CLI tools (unlike NSNotification).
+    private func installDeviceChangeListener() {
+        guard !listenerInstalled else { return }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultInputAddress,
+            DispatchQueue.main
+        ) { [weak self] _, _ in
+            self?.handleDefaultInputDeviceChanged()
+        }
+        if status == noErr {
+            listenerInstalled = true
+            fputs("Mic: listening for default input device changes\n", stderr)
+        } else {
+            fputs("WARNING: Failed to install device change listener (status: \(status))\n", stderr)
+        }
+    }
+
+    private func handleDefaultInputDeviceChanged() {
         guard isRecording else { return }
-        fputs("Mic: audio configuration changed, restarting engine...\n", stderr)
+        fputs("Mic: default input device changed, restarting engine...\n", stderr)
 
         // Stop current engine
         engine.inputNode.removeTap(onBus: 0)
@@ -194,11 +186,10 @@ class MicCaptureHandler {
         // Create a fresh engine (AVAudioEngine can be in a bad state after config change)
         engine = AVAudioEngine()
 
-        // Restart — use system default (not the fixed UID which may be gone)
+        // Restart with new system default
         do {
-            let newUID = Self.getDefaultInputDeviceUID()
-            fputs("Mic: restarting on device: \(newUID ?? "system default")\n", stderr)
-            try startEngine(deviceUID: newUID)
+            try startEngine(deviceUID: nil)
+            fputs("Mic: engine restarted on new default device\n", stderr)
         } catch {
             fputs("ERROR: Failed to restart mic after device change: \(error)\n", stderr)
         }
@@ -206,9 +197,13 @@ class MicCaptureHandler {
 
     func stop() {
         isRecording = false
-        if let observer = configObserver {
-            NotificationCenter.default.removeObserver(observer)
-            configObserver = nil
+        if listenerInstalled {
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &defaultInputAddress,
+                DispatchQueue.main,
+                { _, _ in })
+            listenerInstalled = false
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
