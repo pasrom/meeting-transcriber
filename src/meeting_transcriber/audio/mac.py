@@ -390,30 +390,51 @@ def record_audio(
     recording_start = _time.monotonic()
 
     def _mic_restart_loop():
-        """Background thread: restart mic stream when device changes."""
+        """Background thread: restart mic stream when device changes.
+
+        Detects changes two ways:
+        1. Callback status errors (device disappears / hardware issue)
+        2. Polling: system default input device changes (e.g. AirPods connected)
+        """
         nonlocal mic_stream
+        _current_default = sd.default.device[0]
         while not _stop.is_set():
-            if _mic_restart_needed.wait(timeout=0.5):
-                if _stop.is_set():
-                    break
-                _mic_restart_needed.clear()
-                try:
-                    mic_stream.stop()
-                    mic_stream.close()
-                except Exception:
-                    pass
-                try:
-                    # Re-open with system default device
-                    mic_stream = _open_mic_stream(device=None)
-                    new_dev = sd.query_devices(sd.default.device[0])["name"]
-                    console.print(
-                        f"[yellow]Mic device changed → restarted on: {new_dev}[/yellow]"
-                    )
-                except Exception as exc:
-                    log.error("Failed to restart mic stream: %s", exc)
-                    console.print(
-                        f"[red]Mic stream lost (device change): {exc}[/red]"
-                    )
+            need_restart = _mic_restart_needed.wait(timeout=2.0)
+            if _stop.is_set():
+                break
+            # Also check if the system default input device changed
+            try:
+                new_default = sd.default.device[0]
+            except Exception:
+                continue
+            if not need_restart and new_default != _current_default:
+                need_restart = True
+                log.info(
+                    "Default input device changed: %s → %s",
+                    _current_default, new_default,
+                )
+            if not need_restart:
+                continue
+            _mic_restart_needed.clear()
+            _current_default = new_default
+            try:
+                mic_stream.stop()
+                mic_stream.close()
+            except Exception:
+                pass
+            try:
+                # Re-open with new system default device
+                mic_stream = _open_mic_stream(device=None)
+                new_dev = sd.query_devices(sd.default.device[0])["name"]
+                _current_default = sd.default.device[0]
+                console.print(
+                    f"[yellow]Mic device changed → restarted on: {new_dev}[/yellow]"
+                )
+            except Exception as exc:
+                log.error("Failed to restart mic stream: %s", exc)
+                console.print(
+                    f"[red]Mic stream lost (device change): {exc}[/red]"
+                )
 
     if mic_stream is not None:
         _mic_watcher = threading.Thread(
