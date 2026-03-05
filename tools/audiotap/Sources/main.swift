@@ -62,6 +62,10 @@ class MicCaptureHandler {
     private let outputPath: String
     private var isRecording = false
     private var listenerInstalled = false
+    /// Sample rate of the WAV file (set on first start, stays fixed).
+    private var fileSampleRate: Double = 0
+    /// Resampler for when device sample rate differs from file sample rate.
+    private var converter: AVAudioConverter?
     var firstFrameTime: UInt64 = 0
 
     /// CoreAudio property address for default input device changes.
@@ -121,12 +125,13 @@ class MicCaptureHandler {
             standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1)!
         fputs("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch\n", stderr)
 
-        // Append to existing file if restarting after device change
+        // Create WAV file on first start; keep its sample rate for the entire recording
         if outputFile == nil {
+            fileSampleRate = tapFormat.sampleRate
             let url = URL(fileURLWithPath: outputPath)
             let wavSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: tapFormat.sampleRate,
+                AVSampleRateKey: fileSampleRate,
                 AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
@@ -136,6 +141,17 @@ class MicCaptureHandler {
             outputFile = try AVAudioFile(forWriting: url, settings: wavSettings)
         }
 
+        // Set up resampler if device sample rate differs from file sample rate
+        converter = nil
+        if tapFormat.sampleRate != fileSampleRate {
+            let outputFormat = AVAudioFormat(
+                standardFormatWithSampleRate: fileSampleRate, channels: 1)!
+            converter = AVAudioConverter(from: tapFormat, to: outputFormat)
+            fputs(
+                "Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(fileSampleRate)) Hz\n",
+                stderr)
+        }
+
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
             guard let self = self else { return }
@@ -143,7 +159,34 @@ class MicCaptureHandler {
                 self.firstFrameTime = mach_absolute_time()
             }
             do {
-                try self.outputFile?.write(from: buffer)
+                if let converter = self.converter {
+                    // Resample to match the WAV file's sample rate
+                    let ratio = self.fileSampleRate / tapFormat.sampleRate
+                    let outputFrames = AVAudioFrameCount(
+                        Double(buffer.frameLength) * ratio)
+                    guard let outputBuffer = AVAudioPCMBuffer(
+                        pcmFormat: converter.outputFormat,
+                        frameCapacity: outputFrames
+                    ) else { return }
+                    var error: NSError?
+                    var consumed = false
+                    converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+                        if consumed {
+                            outStatus.pointee = .noDataNow
+                            return nil
+                        }
+                        consumed = true
+                        outStatus.pointee = .haveData
+                        return buffer
+                    }
+                    if let error {
+                        fputs("WARNING: Mic resample error: \(error)\n", stderr)
+                    } else {
+                        try self.outputFile?.write(from: outputBuffer)
+                    }
+                } else {
+                    try self.outputFile?.write(from: buffer)
+                }
             } catch {
                 fputs("WARNING: Mic write error: \(error)\n", stderr)
             }
