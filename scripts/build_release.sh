@@ -230,7 +230,7 @@ if [ -z "${HOMEBREW_TEMP:-}" ]; then
     DMG_STAGING="$BUILD_DIR/dmg-staging"
     rm -rf "$DMG_STAGING"
     mkdir -p "$DMG_STAGING"
-    cp -a "$APP_BUNDLE" "$DMG_STAGING/"
+    ditto "$APP_BUNDLE" "$DMG_STAGING/MeetingTranscriber.app"
 
     # Create a symlink to /Applications for drag-and-drop install
     ln -s /Applications "$DMG_STAGING/Applications"
