@@ -54,10 +54,15 @@ func getDefaultOutputDeviceUID() -> String? {
 // MARK: - Mic Capture Handler
 
 /// Records microphone audio to a WAV file via AVAudioEngine.
+/// Monitors for audio device changes (e.g. AirPods connected) and
+/// automatically restarts the engine on the new default input device.
 class MicCaptureHandler {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
     private let outputPath: String
+    private var fixedDeviceUID: String?
+    private var isRecording = false
+    private var configObserver: NSObjectProtocol?
     var firstFrameTime: UInt64 = 0
 
     init(outputPath: String) {
@@ -80,7 +85,44 @@ class MicCaptureHandler {
         return deviceID
     }
 
+    /// Get the UID of the current default input device.
+    private static func getDefaultInputDeviceUID() -> String? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var deviceID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+
+        var uidAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var uid: Unmanaged<CFString>?
+        var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let uidStatus = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
+        guard uidStatus == noErr, let cfUID = uid?.takeRetainedValue() else { return nil }
+        return cfUID as String
+    }
+
     func start(deviceUID: String? = nil) throws {
+        fixedDeviceUID = deviceUID
+        try startEngine(deviceUID: deviceUID)
+
+        // Monitor for audio configuration changes (device connected/disconnected)
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleConfigurationChange()
+        }
+    }
+
+    private func startEngine(deviceUID: String? = nil) throws {
         let inputNode = engine.inputNode
 
         if let uid = deviceUID {
@@ -106,17 +148,20 @@ class MicCaptureHandler {
             standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1)!
         fputs("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch\n", stderr)
 
-        let url = URL(fileURLWithPath: outputPath)
-        let wavSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: tapFormat.sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsNonInterleaved: false,
-        ]
-        outputFile = try AVAudioFile(forWriting: url, settings: wavSettings)
+        // Append to existing file if restarting after device change
+        if outputFile == nil {
+            let url = URL(fileURLWithPath: outputPath)
+            let wavSettings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatLinearPCM,
+                AVSampleRateKey: tapFormat.sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false,
+            ]
+            outputFile = try AVAudioFile(forWriting: url, settings: wavSettings)
+        }
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
@@ -133,10 +178,38 @@ class MicCaptureHandler {
 
         engine.prepare()
         try engine.start()
+        isRecording = true
         fputs("Mic recording started: \(outputPath)\n", stderr)
     }
 
+    private func handleConfigurationChange() {
+        guard isRecording else { return }
+        fputs("Mic: audio configuration changed, restarting engine...\n", stderr)
+
+        // Stop current engine
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine.reset()
+
+        // Create a fresh engine (AVAudioEngine can be in a bad state after config change)
+        engine = AVAudioEngine()
+
+        // Restart — use system default (not the fixed UID which may be gone)
+        do {
+            let newUID = Self.getDefaultInputDeviceUID()
+            fputs("Mic: restarting on device: \(newUID ?? "system default")\n", stderr)
+            try startEngine(deviceUID: newUID)
+        } catch {
+            fputs("ERROR: Failed to restart mic after device change: \(error)\n", stderr)
+        }
+    }
+
     func stop() {
+        isRecording = false
+        if let observer = configObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configObserver = nil
+        }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         engine.reset()
