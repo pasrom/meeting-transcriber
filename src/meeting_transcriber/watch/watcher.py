@@ -42,6 +42,7 @@ class MeetingWatcher:
         mic_device_uid: str | None = None,
         claude_bin: str = "claude",
         mic_label: str = "Me",
+        native_transcription: bool = False,
     ):
         self.detector = MeetingDetector(patterns, confirmation_count=confirmation_count)
         self.poll_interval = poll_interval
@@ -56,6 +57,7 @@ class MeetingWatcher:
         self.mic_device_uid = mic_device_uid
         self.claude_bin = claude_bin
         self.mic_label = mic_label
+        self.native_transcription = native_transcription
         self._last_recording = None  # RecordingResult from most recent recording
 
     def run(self) -> None:
@@ -245,6 +247,19 @@ class MeetingWatcher:
                     write_participants(participants, meeting_title=title)
             except Exception as exc:
                 log.debug("Could not read participants: %s", exc)
+
+        if self.native_transcription:
+            # Emit recording_done with audio path — Swift app will handle transcription
+            status.emit(
+                "recording_done",
+                detail=f"Recording complete: {title}",
+                meeting=meeting_info,
+                audio_path=str(audio_path),
+            )
+            console.print(
+                "[dim]Native transcription mode: waiting for Swift app...[/dim]"
+            )
+            return
 
         status.emit(
             "transcribing",

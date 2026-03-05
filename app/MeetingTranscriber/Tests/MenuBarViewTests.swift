@@ -22,6 +22,7 @@ final class MenuBarViewTests: XCTestCase {
             meeting: meeting,
             protocolPath: protocolPath,
             error: error,
+            audioPath: nil,
             pid: nil
         )
     }

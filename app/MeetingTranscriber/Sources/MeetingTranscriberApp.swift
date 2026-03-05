@@ -6,6 +6,7 @@ struct MeetingTranscriberApp: App {
     @State private var settings = AppSettings()
     @State private var speakerRequest: SpeakerRequest?
     @State private var speakerCountRequest: SpeakerCountRequest?
+    @State private var nativeTranscription = NativeTranscriptionManager()
     @Environment(\.openWindow) private var openWindow
     private let pythonProcess = PythonProcess()
     private let notifications = NotificationManager.shared
@@ -49,6 +50,20 @@ struct MeetingTranscriberApp: App {
             guard let newValue, let status = monitor.status else { return }
             NSLog("State change: \(oldValue?.rawValue ?? "nil") → \(newValue.rawValue)")
             notifications.handleTransition(from: oldValue, to: newValue, status: status)
+
+            if newValue == .recordingDone,
+               let audioPath = status.audioPath,
+               let meetingTitle = status.meeting?.title
+            {
+                NSLog("Native transcription: recording done, starting WhisperKit transcription")
+                Task {
+                    await nativeTranscription.handleRecordingDone(
+                        audioPath: audioPath,
+                        meetingTitle: meetingTitle,
+                        pythonProcess: pythonProcess
+                    )
+                }
+            }
 
             if newValue == .waitingForSpeakerCount {
                 loadSpeakerCountRequest()

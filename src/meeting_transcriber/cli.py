@@ -176,6 +176,14 @@ def main():
             f" (default: {DEFAULT_END_GRACE_PERIOD})"
         ),
     )
+    parser.add_argument(
+        "--native-transcription",
+        action="store_true",
+        help=(
+            "Native transcription mode: emit recording_done"
+            " and let the calling app handle transcription"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -242,6 +250,7 @@ def main():
             mic_device_uid=args.mic_device,
             claude_bin=args.claude,
             mic_label=args.mic_name,
+            native_transcription=args.native_transcription,
         )
         watcher.run()
         sys.exit(0)
