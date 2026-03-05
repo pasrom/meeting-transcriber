@@ -9,6 +9,7 @@ struct MeetingTranscriberApp: App {
     @State private var nativeTranscription = NativeTranscriptionManager()
     @Environment(\.openWindow) private var openWindow
     private let pythonProcess = PythonProcess()
+    private let windowListWriter = WindowListWriter()
     private let notifications = NotificationManager.shared
     private let ipc = IPCManager()
 
@@ -25,7 +26,7 @@ struct MeetingTranscriberApp: App {
             forName: PythonProcess.unexpectedTermination,
             object: nil,
             queue: .main
-        ) { [pythonProcess, settings] notification in
+        ) { [pythonProcess, settings, windowListWriter] notification in
             let crashLoop = notification.userInfo?["crashLoop"] as? Bool ?? false
             if crashLoop {
                 NSLog("Python process crash loop detected — not restarting")
@@ -33,6 +34,7 @@ struct MeetingTranscriberApp: App {
             }
             NSLog("Python process terminated unexpectedly — restarting in 2s")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                windowListWriter.start(interval: Double(settings.pollInterval))
                 pythonProcess.start(arguments: settings.buildArguments())
             }
         }
@@ -133,6 +135,7 @@ struct MeetingTranscriberApp: App {
     private func toggleWatching() {
         if pythonProcess.isRunning {
             pythonProcess.stop()
+            windowListWriter.stop()
         } else {
             Task {
                 let micOK = await PythonProcess.ensureMicrophoneAccess()
@@ -149,6 +152,7 @@ struct MeetingTranscriberApp: App {
                 }
                 await MainActor.run {
                     monitor.start()
+                    windowListWriter.start(interval: Double(settings.pollInterval))
                     pythonProcess.start(arguments: settings.buildArguments())
                 }
             }
@@ -205,6 +209,7 @@ struct MeetingTranscriberApp: App {
     }
 
     private func quit() {
+        windowListWriter.stop()
         if pythonProcess.isRunning {
             pythonProcess.stop()
             // Give Python time to clean up (graceful SIGINT shutdown)

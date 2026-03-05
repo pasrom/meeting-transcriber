@@ -1,12 +1,15 @@
-"""Meeting detection via CGWindowListCopyWindowInfo polling."""
+"""Meeting detection via window list polling."""
 
+import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
 
 from rich.console import Console
 
+from meeting_transcriber.config import WINDOWS_FILE
 from meeting_transcriber.watch.patterns import AppMeetingPattern
 
 console = Console()
@@ -25,7 +28,12 @@ class DetectedMeeting:
 
 
 class MeetingDetector:
-    """Polls CGWindowListCopyWindowInfo to detect active meeting windows."""
+    """Polls window list to detect active meeting windows.
+
+    In bundled mode, reads window info from a JSON file written by the
+    Swift app (which has Screen Recording permission).  In dev/CLI mode,
+    calls CGWindowListCopyWindowInfo directly.
+    """
 
     def __init__(
         self,
@@ -34,11 +42,34 @@ class MeetingDetector:
     ):
         self.patterns = patterns
         self.confirmation_count = confirmation_count
-        self._consecutive_hits: dict[str, int] = {}  # pattern.app_name -> count
+        self._consecutive_hits: dict[str, int] = {}
         self._permission_warned = False
+        self._bundled = bool(os.environ.get("MEETING_TRANSCRIBER_BUNDLED"))
 
     def _get_windows(self) -> list[dict]:
-        """Fetch on-screen window list via Quartz."""
+        """Fetch on-screen window list.
+
+        Bundled mode: read from ~/.meeting-transcriber/windows.json
+        (written by the Swift app which has Screen Recording permission).
+        Dev mode: call CGWindowListCopyWindowInfo directly.
+        """
+        if self._bundled:
+            return self._get_windows_from_ipc()
+        return self._get_windows_from_quartz()
+
+    def _get_windows_from_ipc(self) -> list[dict]:
+        """Read window list from IPC file written by Swift app."""
+        try:
+            data = WINDOWS_FILE.read_text()
+            windows = json.loads(data)
+            if not isinstance(windows, list):
+                return []
+            return windows
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    def _get_windows_from_quartz(self) -> list[dict]:
+        """Fetch window list directly via Quartz API."""
         from Quartz import (
             CGWindowListCopyWindowInfo,
             kCGNullWindowID,
@@ -50,17 +81,16 @@ class MeetingDetector:
         )
         result = list(windows) if windows else []
 
-        # Check if window names are missing (Screen Recording permission issue)
         if result and not self._permission_warned:
             has_names = any(w.get("kCGWindowName") for w in result)
             if not has_names:
                 console.print(
                     "[red]Cannot read window titles — Screen Recording"
                     " permission required for this app.[/red]\n"
-                    "[dim]System Settings → Privacy & Security → Screen Recording"
-                    " → enable for MeetingTranscriber[/dim]"
+                    "[dim]System Settings → Privacy & Security"
+                    " → Screen Recording → enable for this app[/dim]"
                 )
-                self._permission_warned = True
+            self._permission_warned = True
 
         return result
 
