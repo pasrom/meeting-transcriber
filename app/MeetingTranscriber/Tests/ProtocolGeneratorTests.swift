@@ -1,0 +1,148 @@
+import XCTest
+
+@testable import MeetingTranscriber
+
+final class ProtocolGeneratorTests: XCTestCase {
+
+    // MARK: - Stream JSON Parsing
+
+    func testParseContentBlockDelta() {
+        let line = """
+            {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello world"}}
+            """
+        XCTAssertEqual(ProtocolGenerator.parseStreamJSONLine(line), "Hello world")
+    }
+
+    func testParseAssistantMessage() {
+        let line = """
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Full protocol text"}]}}
+            """
+        XCTAssertEqual(ProtocolGenerator.parseStreamJSONLine(line), "Full protocol text")
+    }
+
+    func testParseIrrelevantType() {
+        let line = """
+            {"type":"message_start","message":{"id":"msg_123"}}
+            """
+        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
+    }
+
+    func testParseInvalidJSON() {
+        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine("not json"))
+    }
+
+    func testParseEmptyLine() {
+        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(""))
+    }
+
+    func testParseContentBlockDeltaNonTextType() {
+        let line = """
+            {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}
+            """
+        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
+    }
+
+    func testParseAssistantMessageNoTextBlock() {
+        let line = """
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"123"}]}}
+            """
+        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
+    }
+
+    // MARK: - Prompt Construction
+
+    func testProtocolPromptContainsStructure() {
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("# Meeting Protocol"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Summary"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Participants"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Topics Discussed"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Decisions"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Tasks"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("## Open Questions"))
+    }
+
+    func testProtocolPromptEndsWithTranscriptMarker() {
+        let trimmed = ProtocolGenerator.protocolPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        XCTAssertTrue(trimmed.hasSuffix("Transcript:"))
+    }
+
+    func testDiarizationNoteContainsSpeakerFormats() {
+        let note = ProtocolGenerator.diarizationNote
+        XCTAssertTrue(note.contains("[SPEAKER_00]"))
+        XCTAssertTrue(note.contains("[Me]"))
+        XCTAssertTrue(note.contains("[Remote]"))
+    }
+
+    // MARK: - Filename Generation
+
+    func testFilenameFormat() {
+        let name = ProtocolGenerator.filename(title: "Team Meeting", ext: "md")
+        // Format: yyyyMMdd_HHmm_team_meeting.md
+        XCTAssertTrue(name.hasSuffix("_team_meeting.md"))
+        // Should start with date pattern (8 digits _ 4 digits)
+        let prefix = String(name.prefix(13))
+        XCTAssertTrue(prefix.range(of: #"^\d{8}_\d{4}$"#, options: .regularExpression) != nil,
+                       "Expected date prefix, got: \(prefix)")
+    }
+
+    func testFilenameSlugLowercase() {
+        let name = ProtocolGenerator.filename(title: "Daily Standup", ext: "txt")
+        XCTAssertTrue(name.contains("daily_standup"))
+    }
+
+    func testFilenameExtension() {
+        let md = ProtocolGenerator.filename(title: "Test", ext: "md")
+        XCTAssertTrue(md.hasSuffix(".md"))
+
+        let txt = ProtocolGenerator.filename(title: "Test", ext: "txt")
+        XCTAssertTrue(txt.hasSuffix(".txt"))
+    }
+
+    // MARK: - File Save Operations
+
+    func testSaveTranscript() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("proto_test_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let text = "[00:00] Hello\n[00:05] World"
+        let url = try ProtocolGenerator.saveTranscript(text, title: "Test", dir: tmpDir)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(url.lastPathComponent.hasSuffix("_test.txt"))
+
+        let loaded = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(loaded, text)
+    }
+
+    func testSaveProtocol() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("proto_test_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let markdown = "# Meeting Protocol\n\n## Summary\nTest meeting."
+        let url = try ProtocolGenerator.saveProtocol(markdown, title: "Standup", dir: tmpDir)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertTrue(url.lastPathComponent.hasSuffix("_standup.md"))
+
+        let loaded = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(loaded, markdown)
+    }
+
+    func testSaveCreatesDirectory() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("proto_test_\(UUID().uuidString)")
+            .appendingPathComponent("nested")
+        defer {
+            try? FileManager.default.removeItem(
+                at: tmpDir.deletingLastPathComponent()
+            )
+        }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmpDir.path))
+
+        let url = try ProtocolGenerator.saveTranscript("test", title: "X", dir: tmpDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+}
