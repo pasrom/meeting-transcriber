@@ -1,6 +1,36 @@
 import Foundation
 import WhisperKit
 
+/// A transcribed segment with timestamps and optional speaker label.
+struct TimestampedSegment {
+    let start: TimeInterval  // seconds
+    let end: TimeInterval    // seconds
+    let text: String
+    var speaker: String = ""
+}
+
+extension TimestampedSegment {
+    /// Format timestamp as [MM:SS] or [H:MM:SS] for long recordings.
+    var formattedTimestamp: String {
+        let total = Int(start)
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        return h > 0
+            ? String(format: "[%d:%02d:%02d]", h, m, s)
+            : String(format: "[%02d:%02d]", m, s)
+    }
+
+    /// Format as "[MM:SS] Speaker: text" or "[MM:SS] text" if no speaker.
+    var formattedLine: String {
+        let ts = formattedTimestamp
+        if speaker.isEmpty {
+            return "\(ts) \(text)"
+        }
+        return "\(ts) \(speaker): \(text)"
+    }
+}
+
 @Observable
 final class WhisperKitEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
@@ -80,6 +110,83 @@ final class WhisperKitEngine {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// Transcribe a WAV file and return structured segments.
+    func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
+        guard let pipe else {
+            throw TranscriptionError.modelNotLoaded
+        }
+
+        let options = DecodingOptions(
+            language: language,
+            wordTimestamps: false
+        )
+
+        let results = await pipe.transcribe(
+            audioPaths: [audioPath.path()],
+            decodeOptions: options
+        )
+
+        guard let firstResult = results.first, let transcriptionResults = firstResult else {
+            return []
+        }
+
+        var segments: [TimestampedSegment] = []
+        var lastText = ""
+        for segment in transcriptionResults.flatMap({ $0.segments }) {
+            let text = segment.text.trimmingCharacters(in: .whitespaces)
+            // Filter hallucinations: skip consecutive identical text
+            if text.isEmpty || text == lastText { continue }
+            lastText = text
+            segments.append(TimestampedSegment(
+                start: TimeInterval(segment.start),
+                end: TimeInterval(segment.end),
+                text: text
+            ))
+        }
+        return segments
+    }
+
+    /// Transcribe app and mic audio separately, then merge by timestamp.
+    ///
+    /// Labels mic segments with `micLabel` and app segments as "Remote".
+    func transcribeDualSource(
+        appAudio: URL,
+        micAudio: URL,
+        micDelay: TimeInterval = 0,
+        micLabel: String = "Me"
+    ) async throws -> String {
+        // Transcribe both tracks
+        var appSegments = try await transcribeSegments(audioPath: appAudio)
+        var micSegments = try await transcribeSegments(audioPath: micAudio)
+
+        // Shift mic timestamps by delay
+        if micDelay != 0 {
+            micSegments = micSegments.map { seg in
+                TimestampedSegment(
+                    start: seg.start + micDelay,
+                    end: seg.end + micDelay,
+                    text: seg.text,
+                    speaker: seg.speaker
+                )
+            }
+        }
+
+        // Label speakers
+        for i in appSegments.indices { appSegments[i].speaker = "Remote" }
+        for i in micSegments.indices { micSegments[i].speaker = micLabel }
+
+        // Merge by start timestamp
+        let merged = Self.mergeSegments(appSegments, micSegments)
+        return merged.map(\.formattedLine).joined(separator: "\n")
+    }
+
+    /// Merge two segment arrays sorted by start timestamp.
+    static func mergeSegments(_ a: [TimestampedSegment], _ b: [TimestampedSegment]) -> [TimestampedSegment] {
+        var result = a + b
+        result.sort { $0.start < $1.start }
+        return result
     }
 }
 
