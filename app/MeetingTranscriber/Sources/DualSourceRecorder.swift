@@ -14,9 +14,15 @@ struct RecordingResult {
     let recordingStart: TimeInterval  // ProcessInfo.systemUptime
 }
 
+/// Abstraction for recording, enabling mock injection in tests.
+protocol RecordingProvider {
+    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?) throws
+    func stop() throws -> RecordingResult
+}
+
 /// Orchestrates audiotap (app audio) + mic recording, then mixes.
 @Observable
-class DualSourceRecorder {
+class DualSourceRecorder: RecordingProvider {
     private var audiotapProcess: Process?
     private var micRecorder: MicRecorder?
     private var muteDetector: MuteDetector?
