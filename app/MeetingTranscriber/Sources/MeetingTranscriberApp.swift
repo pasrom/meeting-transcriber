@@ -6,27 +6,37 @@ struct MeetingTranscriberApp: App {
     @State private var settings = AppSettings()
     @State private var speakerRequest: SpeakerRequest?
     @State private var speakerCountRequest: SpeakerCountRequest?
-    @State private var nativeTranscription = NativeTranscriptionManager()
+    @State private var watchLoop: WatchLoop?
     @Environment(\.openWindow) private var openWindow
     private let pythonProcess = PythonProcess()
-    private let windowListWriter = WindowListWriter()
     private let notifications = NotificationManager.shared
     private let ipc = IPCManager()
 
+    /// Whether the native Swift pipeline is active (vs Python).
+    private var isNativeMode: Bool {
+        settings.transcriptionEngine == .whisperKit
+    }
+
+    /// Whether any watching mode is active.
+    private var isWatching: Bool {
+        if isNativeMode {
+            return watchLoop?.isActive == true
+        }
+        return pythonProcess.isRunning
+    }
+
     init() {
-        // LSUIElement in Info.plist hides Dock icon.
-        // Defer notification setup to after bundle is available.
         notifications.setUp()
-        // Always monitor status file so the app reacts to external
-        // transcriber processes (e.g. speaker naming requests).
+        // Monitor status file for Python-mode state and speaker naming IPC
         monitor.start()
 
-        // Auto-restart Python process on unexpected termination
+        // Auto-restart Python process on unexpected termination (Python mode only)
         NotificationCenter.default.addObserver(
             forName: PythonProcess.unexpectedTermination,
             object: nil,
             queue: .main
-        ) { [pythonProcess, settings, windowListWriter] notification in
+        ) { [pythonProcess, settings] notification in
+            guard settings.transcriptionEngine == .python else { return }
             let crashLoop = notification.userInfo?["crashLoop"] as? Bool ?? false
             if crashLoop {
                 NSLog("Python process crash loop detected — not restarting")
@@ -34,7 +44,6 @@ struct MeetingTranscriberApp: App {
             }
             NSLog("Python process terminated unexpectedly — restarting in 2s")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                windowListWriter.start(interval: Double(settings.pollInterval))
                 pythonProcess.start(arguments: settings.buildArguments())
             }
         }
@@ -43,8 +52,8 @@ struct MeetingTranscriberApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(
-                status: monitor.status,
-                isWatching: pythonProcess.isRunning,
+                status: nativeStatus ?? monitor.status,
+                isWatching: isWatching,
                 onStartStop: toggleWatching,
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocolsFolder: openProtocolsFolder,
@@ -61,28 +70,16 @@ struct MeetingTranscriberApp: App {
             )
         } label: {
             Label(
-                monitor.status?.state.label ?? "Idle",
-                systemImage: monitor.status?.state.icon ?? "waveform.circle"
+                currentStateLabel,
+                systemImage: currentStateIcon
             )
         }
         .onChange(of: monitor.status?.state) { oldValue, newValue in
+            // Python mode state changes
+            guard !isNativeMode else { return }
             guard let newValue, let status = monitor.status else { return }
             NSLog("State change: \(oldValue?.rawValue ?? "nil") → \(newValue.rawValue)")
             notifications.handleTransition(from: oldValue, to: newValue, status: status)
-
-            if newValue == .recordingDone,
-               let audioPath = status.audioPath,
-               let meetingTitle = status.meeting?.title
-            {
-                NSLog("Native transcription: recording done, starting WhisperKit transcription")
-                Task {
-                    await nativeTranscription.handleRecordingDone(
-                        audioPath: audioPath,
-                        meetingTitle: meetingTitle,
-                        pythonProcess: pythonProcess
-                    )
-                }
-            }
 
             if newValue == .waitingForSpeakerCount {
                 loadSpeakerCountRequest()
@@ -91,12 +88,9 @@ struct MeetingTranscriberApp: App {
             }
 
             if newValue == .waitingForSpeakerNames {
-                NSLog("Speaker naming: loading request...")
                 loadSpeakerRequest()
-                NSLog("Speaker naming: request loaded = \(speakerRequest != nil)")
                 NSApp.activate()
                 openWindow(id: "speaker-naming")
-                NSLog("Speaker naming: openWindow called")
             }
         }
 
@@ -132,56 +126,174 @@ struct MeetingTranscriberApp: App {
         .windowResizability(.contentSize)
     }
 
+    // MARK: - Native Mode Status Bridge
+
+    /// Build a TranscriberStatus from WatchLoop state for the UI.
+    private var nativeStatus: TranscriberStatus? {
+        guard let loop = watchLoop, loop.isActive else { return nil }
+
+        let meeting: MeetingInfo? = loop.currentMeeting.map {
+            MeetingInfo(
+                app: $0.pattern.appName,
+                title: $0.windowTitle,
+                pid: Int($0.windowPID)
+            )
+        }
+
+        return TranscriberStatus(
+            version: 1,
+            timestamp: ISO8601DateFormatter().string(from: Date()),
+            state: loop.transcriberState,
+            detail: loop.detail,
+            meeting: meeting,
+            protocolPath: loop.lastProtocolPath?.path,
+            error: loop.lastError,
+            audioPath: nil,
+            pid: Int(ProcessInfo.processInfo.processIdentifier)
+        )
+    }
+
+    private var currentStateLabel: String {
+        if isNativeMode, let loop = watchLoop, loop.isActive {
+            return loop.transcriberState.label
+        }
+        return monitor.status?.state.label ?? "Idle"
+    }
+
+    private var currentStateIcon: String {
+        if isNativeMode, let loop = watchLoop, loop.isActive {
+            return loop.transcriberState.icon
+        }
+        return monitor.status?.state.icon ?? "waveform.circle"
+    }
+
+    // MARK: - Start / Stop
+
     private func toggleWatching() {
-        if pythonProcess.isRunning {
-            pythonProcess.stop()
-            windowListWriter.stop()
+        if isNativeMode {
+            toggleNativeWatching()
+        } else {
+            togglePythonWatching()
+        }
+    }
+
+    private func toggleNativeWatching() {
+        if let loop = watchLoop, loop.isActive {
+            loop.stop()
+            watchLoop = nil
         } else {
             Task {
                 let micOK = await PythonProcess.ensureMicrophoneAccess()
                 if !micOK {
-                    print("Warning: Microphone access denied — recording without mic")
+                    NSLog("Warning: Microphone access denied — recording without mic")
                 }
                 let axOK = PythonProcess.ensureAccessibilityAccess()
                 if !axOK {
-                    print("Warning: Accessibility access not granted — mute detection disabled")
+                    NSLog("Warning: Accessibility access not granted — mute detection disabled")
                 }
-                // Pre-load WhisperKit model if native transcription selected
-                if settings.transcriptionEngine == .whisperKit {
-                    await nativeTranscription.engine.loadModel()
+
+                // Build patterns from settings
+                var patterns: [AppMeetingPattern] = []
+                if settings.watchTeams { patterns.append(.teams) }
+                if settings.watchZoom { patterns.append(.zoom) }
+                if settings.watchWebex { patterns.append(.webex) }
+                if patterns.isEmpty { patterns = AppMeetingPattern.all }
+
+                let engine = WhisperKitEngine()
+                engine.modelVariant = settings.whisperKitModel
+                await engine.loadModel()
+
+                await MainActor.run {
+                    let loop = WatchLoop(
+                        detector: MeetingDetector(patterns: patterns),
+                        whisperKit: engine,
+                        pollInterval: settings.pollInterval,
+                        endGracePeriod: settings.endGrace,
+                        outputDir: WatchLoop.defaultOutputDir,
+                        diarizeEnabled: settings.diarize,
+                        micLabel: settings.micName,
+                        noMic: settings.noMic
+                    )
+
+                    loop.onStateChange = { [notifications] _, newState in
+                        // Send notifications for key state changes
+                        let label = WatchLoop.State.idle  // just to map
+                        _ = label  // suppress warning
+                        switch newState {
+                        case .recording:
+                            if let meeting = loop.currentMeeting {
+                                notifications.notify(
+                                    title: "Meeting Detected",
+                                    body: "Recording: \(meeting.windowTitle)"
+                                )
+                            }
+                        case .done:
+                            notifications.notify(
+                                title: "Protocol Ready",
+                                body: "Protocol is ready."
+                            )
+                        case .error:
+                            if let err = loop.lastError {
+                                notifications.notify(title: "Error", body: err)
+                            }
+                        default:
+                            break
+                        }
+                    }
+
+                    watchLoop = loop
+                    loop.start()
+                }
+            }
+        }
+    }
+
+    private func togglePythonWatching() {
+        if pythonProcess.isRunning {
+            pythonProcess.stop()
+        } else {
+            Task {
+                let micOK = await PythonProcess.ensureMicrophoneAccess()
+                if !micOK {
+                    NSLog("Warning: Microphone access denied — recording without mic")
+                }
+                let axOK = PythonProcess.ensureAccessibilityAccess()
+                if !axOK {
+                    NSLog("Warning: Accessibility access not granted — mute detection disabled")
                 }
                 await MainActor.run {
                     monitor.start()
-                    windowListWriter.start(interval: Double(settings.pollInterval))
                     pythonProcess.start(arguments: settings.buildArguments())
                 }
             }
         }
     }
 
+    // MARK: - Actions
+
     private func openLastProtocol() {
-        guard let path = monitor.status?.protocolPath else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        if isNativeMode, let path = watchLoop?.lastProtocolPath {
+            NSWorkspace.shared.open(path)
+        } else if let path = monitor.status?.protocolPath {
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        }
     }
 
     private func openProtocolsFolder() {
         let protocols: URL
-        if pythonProcess.isBundled {
-            protocols = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/MeetingTranscriber/protocols")
+        if isNativeMode || pythonProcess.isBundled {
+            protocols = WatchLoop.defaultOutputDir
         } else {
             protocols = URL(fileURLWithPath: pythonProcess.projectRoot)
                 .appendingPathComponent("protocols")
         }
-
-        // Create if needed, then open
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
         NSWorkspace.shared.open(protocols)
     }
 
     private func loadSpeakerRequest() {
         if let request = ipc.loadSpeakerRequest() {
-            NSLog("Speaker naming: loaded \(request.speakers.count) speakers for '\(request.meetingTitle)'")
+            NSLog("Speaker naming: loaded \(request.speakers.count) speakers")
             speakerRequest = request
         } else {
             NSLog("Speaker naming: file not found or unreadable")
@@ -209,10 +321,9 @@ struct MeetingTranscriberApp: App {
     }
 
     private func quit() {
-        windowListWriter.stop()
+        watchLoop?.stop()
         if pythonProcess.isRunning {
             pythonProcess.stop()
-            // Give Python time to clean up (graceful SIGINT shutdown)
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 NSApplication.shared.terminate(nil)
             }
