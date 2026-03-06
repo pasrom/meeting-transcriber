@@ -285,4 +285,60 @@ final class MeetingDetectorTests: XCTestCase {
         }
         XCTAssertNotNil(detector.checkOnce())
     }
+
+    // MARK: - Cooldown
+
+    func testCooldownPreventsRedetection() {
+        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let windows = [
+            makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
+        ]
+        detector.windowListProvider = { windows }
+
+        // First detection
+        let result = detector.checkOnce()
+        XCTAssertNotNil(result)
+
+        // Reset with cooldown
+        detector.reset(appName: "Microsoft Teams")
+
+        // Same window should NOT be detected during cooldown
+        XCTAssertNil(detector.checkOnce())
+    }
+
+    func testCooldownDoesNotAffectOtherApps() {
+        let detector = MeetingDetector(patterns: [.teams, .zoom], confirmationCount: 1)
+
+        // First detect Teams
+        detector.windowListProvider = {
+            [makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams")]
+        }
+        XCTAssertNotNil(detector.checkOnce())
+
+        // Put Teams on cooldown
+        detector.reset(appName: "Microsoft Teams")
+
+        // Zoom should still be detectable
+        detector.windowListProvider = {
+            [makeWindow(owner: "zoom.us", name: "Zoom Meeting")]
+        }
+        let result = detector.checkOnce()
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.pattern.appName, "Zoom")
+    }
+
+    func testResetWithoutAppNameNoCooldown() {
+        let detector = MeetingDetector(patterns: [.teams], confirmationCount: 1)
+        let windows = [
+            makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
+        ]
+        detector.windowListProvider = { windows }
+
+        // Detect and reset without cooldown
+        XCTAssertNotNil(detector.checkOnce())
+        detector.reset()
+
+        // Should be detectable again immediately (no cooldown)
+        XCTAssertNotNil(detector.checkOnce())
+    }
 }

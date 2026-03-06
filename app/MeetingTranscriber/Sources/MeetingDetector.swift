@@ -33,6 +33,8 @@ class MeetingDetector {
     private let patterns: [AppMeetingPattern]
     private let confirmationCount: Int
     private var consecutiveHits: [String: Int] = [:]
+    private var cooldownUntil: [String: Date] = [:]
+    private let cooldownDuration: TimeInterval = 60  // ignore same app for 60s after meeting
 
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
@@ -53,6 +55,10 @@ class MeetingDetector {
 
         for window in windows {
             for pattern in patterns {
+                // Skip apps in cooldown (just handled a meeting)
+                if let until = cooldownUntil[pattern.appName], Date() < until {
+                    continue
+                }
                 if let title = matchWindow(window, pattern: pattern) {
                     hitsThisRound.insert(pattern.appName)
                     consecutiveHits[pattern.appName, default: 0] += 1
@@ -91,9 +97,12 @@ class MeetingDetector {
         return false
     }
 
-    /// Reset all confirmation counters.
-    func reset() {
+    /// Reset confirmation counters and start cooldown for the given app.
+    func reset(appName: String? = nil) {
         consecutiveHits.removeAll()
+        if let appName {
+            cooldownUntil[appName] = Date().addingTimeInterval(cooldownDuration)
+        }
     }
 
     // MARK: - Private
