@@ -16,6 +16,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Load .env if present (APP_PASSWORD, DEVELOPER_ID, etc.)
+if [ -f "$PROJECT_ROOT/.env" ]; then
+    set -a
+    source "$PROJECT_ROOT/.env"
+    set +a
+fi
 BUILD_DIR="$PROJECT_ROOT/.build/release"
 CACHE_DIR="$PROJECT_ROOT/.build/python-standalone-cache"
 APP_BUNDLE="$BUILD_DIR/MeetingTranscriber.app"
@@ -198,13 +205,14 @@ ENTITLEMENTS_EOF
 
     # Sign all binaries and dylibs individually with hardened runtime
     # (--deep doesn't apply --options runtime to nested binaries)
-    echo "  Signing embedded binaries..."
+    echo "  Signing embedded libraries..."
     find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.a" \) -print0 | \
         xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
             --options runtime --timestamp "{}"
 
-    # Sign all executable binaries in python-env/bin/
-    find "$RESOURCES/python-env/bin" -type f -perm +111 -print0 2>/dev/null | \
+    # Sign ALL executable binaries anywhere in python-env (bin/, torch/bin/, etc.)
+    echo "  Signing embedded executables..."
+    find "$RESOURCES/python-env" -type f -perm +111 -not -name "*.py" -not -name "*.sh" -print0 2>/dev/null | \
         xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
             --options runtime --timestamp "{}"
 
