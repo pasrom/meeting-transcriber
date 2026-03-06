@@ -245,11 +245,12 @@ if [ -z "${HOMEBREW_TEMP:-}" ]; then
     # Remove old DMG if it exists
     rm -f "$DMG_PATH"
 
-    # Create a temporary directory for DMG contents
+    # Move app bundle into a staging directory (mv avoids permission
+    # issues that ditto/cp have with Developer ID signed bundles).
     DMG_STAGING="$BUILD_DIR/dmg-staging"
     rm -rf "$DMG_STAGING"
     mkdir -p "$DMG_STAGING"
-    ditto "$APP_BUNDLE" "$DMG_STAGING/MeetingTranscriber.app"
+    mv "$APP_BUNDLE" "$DMG_STAGING/MeetingTranscriber.app"
 
     # Create a symlink to /Applications for drag-and-drop install
     ln -s /Applications "$DMG_STAGING/Applications"
@@ -259,6 +260,8 @@ if [ -z "${HOMEBREW_TEMP:-}" ]; then
         -ov -format UDZO \
         "$DMG_PATH"
 
+    # Move the app bundle back so it remains available after DMG creation
+    mv "$DMG_STAGING/MeetingTranscriber.app" "$APP_BUNDLE"
     rm -rf "$DMG_STAGING"
 
     # ── Step 9: Notarize (optional) ──────────────────────────────────────────
