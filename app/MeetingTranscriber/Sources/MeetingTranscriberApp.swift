@@ -1,4 +1,9 @@
+import Combine
 import SwiftUI
+
+extension Notification.Name {
+    static let autoWatchStart = Notification.Name("autoWatchStart")
+}
 
 @main
 struct MeetingTranscriberApp: App {
@@ -23,6 +28,19 @@ struct MeetingTranscriberApp: App {
             engine.modelVariant = AppSettings().whisperKitModel
             await engine.loadModel()
         }
+        // Auto-watch: schedule on main run loop after app finishes launching
+        if CommandLine.arguments.contains("--auto-watch")
+            || UserDefaults.standard.bool(forKey: "autoWatch") {
+            NSLog("Auto-watch: scheduling start in 3s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                NotificationCenter.default.post(name: .autoWatchStart, object: nil)
+            }
+        }
+    }
+
+    /// Whether the app should auto-start watching.
+    private var shouldAutoWatch: Bool {
+        CommandLine.arguments.contains("--auto-watch") || settings.autoWatch
     }
 
     var body: some Scene {
@@ -49,6 +67,12 @@ struct MeetingTranscriberApp: App {
                 currentStateLabel,
                 systemImage: currentStateIcon
             )
+            .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
+                if !isWatching {
+                    NSLog("Auto-watch: starting via notification")
+                    toggleWatching()
+                }
+            }
         }
 
         Window("Name Speakers", id: "speaker-naming") {
@@ -126,7 +150,9 @@ struct MeetingTranscriberApp: App {
     // MARK: - Start / Stop
 
     private func toggleWatching() {
+        NSLog("toggleWatching called, isWatching=\(isWatching)")
         if let loop = watchLoop, loop.isActive {
+            NSLog("Stopping watch loop")
             loop.stop()
             watchLoop = nil
         } else {
@@ -145,7 +171,12 @@ struct MeetingTranscriberApp: App {
                 if settings.watchZoom { patterns.append(.zoom) }
                 if settings.watchWebex { patterns.append(.webex) }
                 if patterns.isEmpty { patterns = AppMeetingPattern.all }
+                // Always include simulator for debug/testing
+                if !patterns.contains(where: { $0.appName == "MeetingSimulator" }) {
+                    patterns.append(.simulator)
+                }
 
+                NSLog("Creating WatchLoop with patterns: \(patterns.map(\.appName)), diarize=\(settings.diarize)")
                 await MainActor.run {
                     let loop = WatchLoop(
                         detector: MeetingDetector(patterns: patterns),

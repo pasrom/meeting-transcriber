@@ -18,6 +18,11 @@ final class AppSettings {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
+    /// Auto-start watching on app launch.
+    var autoWatch: Bool = defaults.object(forKey: "autoWatch") as? Bool ?? false {
+        didSet { defaults.set(autoWatch, forKey: "autoWatch") }
+    }
+
     // MARK: - Recording
 
     var pollInterval: Double = defaults.object(forKey: "pollInterval") as? Double ?? 3.0 {

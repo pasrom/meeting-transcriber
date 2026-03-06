@@ -36,6 +36,9 @@ class MeetingDetector {
     private var cooldownUntil: [String: Date] = [:]
     private let cooldownDuration: TimeInterval = 60  // ignore same app for 60s after meeting
 
+    /// Names of all active patterns (for debug logging).
+    var patternNames: [String] { patterns.map(\.appName) }
+
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList

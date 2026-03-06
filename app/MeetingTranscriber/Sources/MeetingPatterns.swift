@@ -76,7 +76,19 @@ extension AppMeetingPattern {
         ]
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex]
+    /// Debug simulator for testing the full pipeline without a real meeting app.
+    /// Run: cd tools/meeting-simulator && swift run
+    static let simulator = AppMeetingPattern(
+        appName: "MeetingSimulator",
+        ownerNames: ["meeting-simulator"],
+        meetingPatterns: [
+            #"Simulator Meeting"#,
+        ],
+        minWindowWidth: 100,
+        minWindowHeight: 100
+    )
+
+    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]
