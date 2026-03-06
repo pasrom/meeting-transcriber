@@ -225,6 +225,16 @@ struct SettingsView: View {
                 }
                 .font(.caption)
             }
+
+            Section("About") {
+                HStack {
+                    Text("Build Date")
+                    Spacer()
+                    Text(Self.buildDate)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(width: 420, height: settings.diarize ? 710 : (settings.noMic ? 490 : 590))
@@ -233,6 +243,16 @@ struct SettingsView: View {
             refreshPermissions()
         }
     }
+
+    private static let buildDate: String = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        guard let url = Bundle.main.executableURL,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let date = attrs[.modificationDate] as? Date
+        else { return "unknown" }
+        return fmt.string(from: date)
+    }()
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
