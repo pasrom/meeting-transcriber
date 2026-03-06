@@ -43,6 +43,7 @@ extension AppMeetingPattern {
             #"^Files \|"#,
             #"^Assignments \|"#,
             #"^Settings \|"#,
+            #"^Echo \|"#,
         ]
     )
 
