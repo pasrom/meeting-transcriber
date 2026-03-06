@@ -156,6 +156,41 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertLessThan(elapsed, 1.0, "Should not wait too long")
     }
 
+    // MARK: - Diarization Configuration
+
+    func testDiarizeEnabledDefault() {
+        let loop = makeLoop()
+        XCTAssertFalse(loop.diarizeEnabled, "Diarization should be disabled by default")
+    }
+
+    func testDiarizeEnabledInit() {
+        let loop = WatchLoop(
+            detector: MeetingDetector(patterns: AppMeetingPattern.all),
+            diarizeEnabled: true
+        )
+        XCTAssertTrue(loop.diarizeEnabled)
+    }
+
+    func testMicLabelDefault() {
+        let loop = makeLoop()
+        XCTAssertEqual(loop.micLabel, "Me")
+    }
+
+    func testMicLabelCustom() {
+        let loop = WatchLoop(
+            detector: MeetingDetector(patterns: AppMeetingPattern.all),
+            micLabel: "Roman"
+        )
+        XCTAssertEqual(loop.micLabel, "Roman")
+    }
+
+    func testNoMicDefault() {
+        let loop = makeLoop()
+        XCTAssertFalse(loop.noMic)
+    }
+
+    // MARK: - Meeting End Detection
+
     func testWaitForMeetingEndMaxDuration() async throws {
         let detector = MeetingDetector(patterns: AppMeetingPattern.all)
         // Mock: meeting stays active forever

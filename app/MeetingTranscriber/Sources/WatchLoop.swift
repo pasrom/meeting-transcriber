@@ -106,15 +106,24 @@ class WatchLoop {
                 do {
                     try await handleMeeting(meeting)
                 } catch {
-                    logger.error("Pipeline error: \(error.localizedDescription)")
+                    let msg = "Pipeline error: \(error)"
+                    NSLog(msg)
+                    logger.error("\(msg)")
+                    // Write to file for debugging
+                    let logFile = Self.defaultOutputDir.deletingLastPathComponent().appendingPathComponent("error.log")
+                    try? (msg + "\n").data(using: .utf8)?.write(to: logFile)
                     lastError = error.localizedDescription
                     transition(to: .error)
                     detail = "Pipeline error: \(error.localizedDescription)"
                 }
 
-                detector.reset()
+                detector.reset(appName: meeting.pattern.appName)
 
                 if !Task.isCancelled {
+                    // Keep done/error state visible for 30 seconds
+                    if state == .done || state == .error {
+                        try? await Task.sleep(for: .seconds(30))
+                    }
                     transition(to: .watching)
                     detail = "Polling for meetings..."
                 }
@@ -158,46 +167,100 @@ class WatchLoop {
         logger.info("Meeting ended: \(title)")
 
         // --- Transcription ---
+        NSLog("Starting transcription for: \(title)")
+        NSLog("WhisperKit model state: \(whisperKit.modelState)")
         transition(to: .transcribing)
         detail = "Transcribing: \(title)"
 
         // Resample to 16kHz for WhisperKit
-        let resampled = DualSourceRecorder.recordingsDir.appendingPathComponent("mix_16k.wav")
-        let samples = try AudioMixer.loadWAVAsFloat32(url: recording.mixPath)
-        let downsampled = AudioMixer.resample(samples, from: 48000, to: 16000)
-        try AudioMixer.saveWAV(samples: downsampled, sampleRate: 16000, url: resampled)
+        let recDir = DualSourceRecorder.recordingsDir
 
         let transcript: String
-        // Use dual-source if we have separate tracks
         if let appPath = recording.appPath, let micPath = recording.micPath {
+            // Resample both tracks to 16kHz
+            let app16k = recDir.appendingPathComponent("app_16k.wav")
+            let appSamples = try AudioMixer.loadWAVAsFloat32(url: appPath)
+            try AudioMixer.saveWAV(samples: AudioMixer.resample(appSamples, from: 48000, to: 16000), sampleRate: 16000, url: app16k)
+
+            let mic16k = recDir.appendingPathComponent("mic_16k.wav")
+            let micSamples = try AudioMixer.loadWAVAsFloat32(url: micPath)
+            try AudioMixer.saveWAV(samples: AudioMixer.resample(micSamples, from: 48000, to: 16000), sampleRate: 16000, url: mic16k)
+
             transcript = try await whisperKit.transcribeDualSource(
-                appAudio: appPath,
-                micAudio: micPath,
+                appAudio: app16k,
+                micAudio: mic16k,
                 micDelay: recording.micDelay,
                 micLabel: micLabel
             )
         } else {
-            transcript = try await whisperKit.transcribe(audioPath: resampled)
+            let mix16k = recDir.appendingPathComponent("mix_16k.wav")
+            let mixSamples = try AudioMixer.loadWAVAsFloat32(url: recording.mixPath)
+            try AudioMixer.saveWAV(samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000), sampleRate: 16000, url: mix16k)
+            transcript = try await whisperKit.transcribe(audioPath: mix16k)
         }
 
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            logger.warning("Empty transcript, skipping protocol generation")
             lastError = "Empty transcript"
             transition(to: .error)
             return
         }
 
+        // --- Diarization (optional) ---
+        var finalTranscript = transcript
+        if diarizeEnabled {
+            let diarizeProcess = DiarizationProcess()
+            if diarizeProcess.isAvailable {
+                detail = "Diarizing: \(title)"
+                logger.info("Running diarization...")
+
+                // Use mix audio for diarization
+                let mix16k = DualSourceRecorder.recordingsDir.appendingPathComponent("mix_16k.wav")
+                let mixSamples = try AudioMixer.loadWAVAsFloat32(url: recording.mixPath)
+                try AudioMixer.saveWAV(
+                    samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000),
+                    sampleRate: 16000, url: mix16k
+                )
+
+                do {
+                    let diarization = try await diarizeProcess.run(
+                        audioPath: mix16k,
+                        numSpeakers: nil,
+                        meetingTitle: title
+                    )
+
+                    // Re-transcribe segments and assign speakers
+                    let appSegments = recording.appPath != nil
+                        ? try await whisperKit.transcribeSegments(
+                            audioPath: recDir.appendingPathComponent("app_16k.wav"))
+                        : try await whisperKit.transcribeSegments(
+                            audioPath: mix16k)
+
+                    let labeled = DiarizationProcess.assignSpeakers(
+                        transcript: appSegments,
+                        diarization: diarization
+                    )
+                    finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
+                    logger.info("Diarization complete: \(diarization.segments.count) segments")
+                } catch {
+                    logger.warning("Diarization failed, using undiarized transcript: \(error.localizedDescription)")
+                    // Continue with original transcript
+                }
+            } else {
+                logger.info("Diarization not available (python-diarize not in bundle)")
+            }
+        }
+
         // Save transcript
-        let txtPath = try ProtocolGenerator.saveTranscript(transcript, title: title, dir: outputDir)
+        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: outputDir)
         logger.info("Transcript saved: \(txtPath.lastPathComponent)")
 
         // --- Protocol Generation ---
         transition(to: .generatingProtocol)
         detail = "Generating protocol: \(title)"
 
-        let diarized = transcript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
+        let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
         let protocolMD = try await ProtocolGenerator.generate(
-            transcript: transcript,
+            transcript: finalTranscript,
             title: title,
             diarized: diarized,
             claudeBin: claudeBin
