@@ -196,8 +196,27 @@ if [ "$NOTARIZE" = true ]; then
 </plist>
 ENTITLEMENTS_EOF
 
-    codesign --deep --force --sign "$DEVELOPER_ID" \
-        --options runtime --entitlements "$ENTITLEMENTS" \
+    # Sign all binaries and dylibs individually with hardened runtime
+    # (--deep doesn't apply --options runtime to nested binaries)
+    echo "  Signing embedded binaries..."
+    find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" -o -name "*.a" \) -print0 | \
+        xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
+            --options runtime --timestamp "{}"
+
+    # Sign all executable binaries in python-env/bin/
+    find "$RESOURCES/python-env/bin" -type f -perm +111 -print0 2>/dev/null | \
+        xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
+            --options runtime --timestamp "{}"
+
+    # Sign audiotap binary
+    if [ -f "$RESOURCES/audiotap" ]; then
+        codesign --force --sign "$DEVELOPER_ID" \
+            --options runtime --timestamp "$RESOURCES/audiotap"
+    fi
+
+    # Sign the main app binary with entitlements
+    codesign --force --sign "$DEVELOPER_ID" \
+        --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
         "$APP_BUNDLE"
     echo "  Signed with Developer ID for notarization"
 else
