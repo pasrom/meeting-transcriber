@@ -60,7 +60,7 @@ struct SpeakerCountView: View {
         onComplete(count)
         // Close the window so the user sees the app proceeding
         DispatchQueue.main.async {
-            NSApp.keyWindow?.close()
+            (NSApp as NSApplication?)?.keyWindow?.close()
         }
     }
 }
