@@ -69,7 +69,7 @@ final class AppSettings {
         {
             return engine
         }
-        return .python
+        return .whisperKit
     }() {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }

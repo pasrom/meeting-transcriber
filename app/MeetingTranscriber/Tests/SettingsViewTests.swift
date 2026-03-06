@@ -128,10 +128,10 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Grace Period"))
     }
 
-    func testWhisperModelPickerExists() throws {
+    func testWhisperKitModelPickerExists() throws {
         let settings = AppSettings()
         let sut = SettingsView(settings: settings)
         let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Whisper Model"))
+        XCTAssertNoThrow(try body.find(text: "Model"))
     }
 }
