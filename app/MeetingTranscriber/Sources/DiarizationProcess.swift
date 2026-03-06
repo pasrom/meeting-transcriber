@@ -33,11 +33,22 @@ class DiarizationProcess {
         scriptPath: URL? = nil,
         ipcDir: URL? = nil
     ) {
+        let fm = FileManager.default
+
         if let pythonPath {
             self.pythonPath = pythonPath
         } else if let res = Bundle.main.resourcePath {
-            self.pythonPath = URL(fileURLWithPath: res)
+            let bundled = URL(fileURLWithPath: res)
                 .appendingPathComponent("python-diarize/bin/python3")
+            if fm.fileExists(atPath: bundled.path) {
+                self.pythonPath = bundled
+            } else if let root = Permissions.findProjectRoot(from: nil) {
+                // Dev mode: use project venv
+                self.pythonPath = URL(fileURLWithPath: root)
+                    .appendingPathComponent(".venv/bin/python")
+            } else {
+                self.pythonPath = URL(fileURLWithPath: "/usr/bin/python3")
+            }
         } else {
             self.pythonPath = URL(fileURLWithPath: "/usr/bin/python3")
         }
@@ -45,13 +56,22 @@ class DiarizationProcess {
         if let scriptPath {
             self.scriptPath = scriptPath
         } else if let res = Bundle.main.resourcePath {
-            self.scriptPath = URL(fileURLWithPath: res)
+            let bundled = URL(fileURLWithPath: res)
                 .appendingPathComponent("python-diarize/diarize.py")
+            if fm.fileExists(atPath: bundled.path) {
+                self.scriptPath = bundled
+            } else if let root = Permissions.findProjectRoot(from: nil) {
+                // Dev mode: use standalone diarize script
+                self.scriptPath = URL(fileURLWithPath: root)
+                    .appendingPathComponent("tools/diarize/diarize.py")
+            } else {
+                self.scriptPath = URL(fileURLWithPath: "diarize.py")
+            }
         } else {
             self.scriptPath = URL(fileURLWithPath: "diarize.py")
         }
 
-        self.ipcDir = ipcDir ?? FileManager.default.homeDirectoryForCurrentUser
+        self.ipcDir = ipcDir ?? fm.homeDirectoryForCurrentUser
             .appendingPathComponent(".meeting-transcriber")
     }
 
