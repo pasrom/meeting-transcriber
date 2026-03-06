@@ -98,6 +98,11 @@ struct ProtocolGenerator {
             "--model", "sonnet",
         ]
 
+        // Remove CLAUDECODE env var to allow nested Claude CLI invocation
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CLAUDECODE")
+        process.environment = env
+
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

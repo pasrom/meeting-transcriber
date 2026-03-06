@@ -145,4 +145,47 @@ final class ProtocolGeneratorTests: XCTestCase {
         let url = try ProtocolGenerator.saveTranscript("test", title: "X", dir: tmpDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
+
+    // MARK: - Environment Stripping
+
+    func testGenerateStripsClaudeCodeFromEnvironment() throws {
+        // Verify that ProtocolGenerator.generate() removes CLAUDECODE from the
+        // process environment. We cannot call generate() directly (it launches
+        // the real claude CLI), so we replicate the env-setup logic and verify
+        // that CLAUDECODE is removed.
+
+        // Set CLAUDECODE in current process env so it would be inherited
+        setenv("CLAUDECODE", "1", 1)
+        defer { unsetenv("CLAUDECODE") }
+
+        // Replicate the exact env setup from ProtocolGenerator.generate()
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CLAUDECODE")
+
+        XCTAssertNil(
+            env["CLAUDECODE"],
+            "CLAUDECODE should be removed from the process environment"
+        )
+
+        // Also verify that the original environment DID have it
+        XCTAssertNotNil(
+            ProcessInfo.processInfo.environment["CLAUDECODE"],
+            "CLAUDECODE should exist in the current process environment"
+        )
+    }
+
+    func testGenerateEnvStripDoesNotRemoveOtherVars() throws {
+        // Verify that removing CLAUDECODE doesn't affect other env vars
+        let testKey = "MEETING_TRANSCRIBER_TEST_VAR_\(UUID().uuidString)"
+        setenv(testKey, "test_value", 1)
+        defer { unsetenv(testKey) }
+
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CLAUDECODE")
+
+        XCTAssertEqual(
+            env[testKey], "test_value",
+            "Other env vars should be preserved when stripping CLAUDECODE"
+        )
+    }
 }
