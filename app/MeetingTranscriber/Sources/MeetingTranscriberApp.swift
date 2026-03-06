@@ -9,6 +9,7 @@ struct MeetingTranscriberApp: App {
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
     private let ipc = IPCManager()
+    private let whisperKit = WhisperKitEngine()
 
     private var isWatching: Bool {
         watchLoop?.isActive == true
@@ -16,6 +17,12 @@ struct MeetingTranscriberApp: App {
 
     init() {
         notifications.setUp()
+        // Pre-load WhisperKit model on app launch
+        let engine = whisperKit
+        Task {
+            engine.modelVariant = AppSettings().whisperKitModel
+            await engine.loadModel()
+        }
     }
 
     var body: some Scene {
@@ -139,14 +146,10 @@ struct MeetingTranscriberApp: App {
                 if settings.watchWebex { patterns.append(.webex) }
                 if patterns.isEmpty { patterns = AppMeetingPattern.all }
 
-                let engine = WhisperKitEngine()
-                engine.modelVariant = settings.whisperKitModel
-                await engine.loadModel()
-
                 await MainActor.run {
                     let loop = WatchLoop(
                         detector: MeetingDetector(patterns: patterns),
-                        whisperKit: engine,
+                        whisperKit: whisperKit,
                         pollInterval: settings.pollInterval,
                         endGracePeriod: settings.endGrace,
                         outputDir: WatchLoop.defaultOutputDir,
