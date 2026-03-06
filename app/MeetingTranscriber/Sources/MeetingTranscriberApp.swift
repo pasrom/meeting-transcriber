@@ -3,6 +3,8 @@ import SwiftUI
 
 extension Notification.Name {
     static let autoWatchStart = Notification.Name("autoWatchStart")
+    static let showSpeakerCount = Notification.Name("showSpeakerCount")
+    static let showSpeakerNaming = Notification.Name("showSpeakerNaming")
 }
 
 @main
@@ -14,6 +16,7 @@ struct MeetingTranscriberApp: App {
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
     private let ipc = IPCManager()
+    private let ipcPoller = IPCPoller()
     private let whisperKit = WhisperKitEngine()
 
     private var isWatching: Bool {
@@ -72,6 +75,14 @@ struct MeetingTranscriberApp: App {
                     NSLog("Auto-watch: starting via notification")
                     toggleWatching()
                 }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .showSpeakerCount)) { _ in
+                NSApp.activate()
+                openWindow(id: "speaker-count")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
+                NSApp.activate()
+                openWindow(id: "speaker-naming")
             }
         }
 
@@ -189,7 +200,21 @@ struct MeetingTranscriberApp: App {
                         noMic: settings.noMic
                     )
 
-                    loop.onStateChange = { [notifications] _, newState in
+                    // IPC polling for speaker dialogs during diarization
+                    ipcPoller.onSpeakerCountRequest = { request in
+                        DispatchQueue.main.async {
+                            speakerCountRequest = request
+                            NotificationCenter.default.post(name: .showSpeakerCount, object: nil)
+                        }
+                    }
+                    ipcPoller.onSpeakerRequest = { request in
+                        DispatchQueue.main.async {
+                            speakerRequest = request
+                            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+                        }
+                    }
+
+                    loop.onStateChange = { [notifications, ipcPoller] _, newState in
                         switch newState {
                         case .recording:
                             if let meeting = loop.currentMeeting {
@@ -198,12 +223,18 @@ struct MeetingTranscriberApp: App {
                                     body: "Recording: \(meeting.windowTitle)"
                                 )
                             }
+                        case .diarizing:
+                            ipcPoller.start()
                         case .done:
+                            ipcPoller.stop()
+                            ipcPoller.reset()
                             notifications.notify(
                                 title: "Protocol Ready",
                                 body: "Protocol is ready."
                             )
                         case .error:
+                            ipcPoller.stop()
+                            ipcPoller.reset()
                             if let err = loop.lastError {
                                 notifications.notify(title: "Error", body: err)
                             }
