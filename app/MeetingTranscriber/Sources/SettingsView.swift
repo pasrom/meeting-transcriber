@@ -34,14 +34,13 @@ struct SettingsView: View {
     @State private var accessibilityOK = false
     @State private var whisperKitEngine = WhisperKitEngine()
 
-    private let whisperModels = [
-        "large-v3-turbo-q5_0",
-        "large-v3-turbo",
-        "large-v3",
-        "medium",
-        "small",
-        "base",
-        "tiny",
+    private let whisperKitModels: [(variant: String, label: String)] = [
+        ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
+        ("openai_whisper-large-v3-v20240930", "Large V3"),
+        ("openai_whisper-large-v2", "Large V2"),
+        ("openai_whisper-small", "Small"),
+        ("openai_whisper-base", "Base"),
+        ("openai_whisper-tiny", "Tiny"),
     ]
 
     var body: some View {
@@ -102,54 +101,38 @@ struct SettingsView: View {
             }
 
             Section("Transcription") {
-                Picker("Engine", selection: $settings.transcriptionEngine) {
-                    ForEach(TranscriptionEngine.allCases, id: \.self) { engine in
-                        Text(engine.displayName).tag(engine)
+                Picker("Model", selection: $settings.whisperKitModel) {
+                    ForEach(whisperKitModels, id: \.variant) { model in
+                        Text(model.label).tag(model.variant)
                     }
                 }
 
-                if settings.transcriptionEngine == .python {
-                    Picker("Whisper Model", selection: $settings.whisperModel) {
-                        ForEach(whisperModels, id: \.self) { model in
-                            Text(model).tag(model)
-                        }
-                    }
-                } else {
+                // Model status
+                switch whisperKitEngine.modelState {
+                case .downloading:
+                    ProgressView(value: whisperKitEngine.downloadProgress)
+                        .progressViewStyle(.linear)
+                    Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .loading:
                     HStack {
-                        Text("WhisperKit Model")
-                        Spacer()
-                        TextField("Model variant", text: $settings.whisperKitModel)
-                            .frame(width: 200)
-                            .multilineTextAlignment(.trailing)
-                    }
-
-                    // Model status
-                    switch whisperKitEngine.modelState {
-                    case .downloading:
-                        ProgressView(value: whisperKitEngine.downloadProgress)
-                            .progressViewStyle(.linear)
-                        Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
+                        ProgressView().controlSize(.small)
+                        Text("Loading model...")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    case .loading:
-                        HStack {
-                            ProgressView().controlSize(.small)
-                            Text("Loading model...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    case .loaded:
-                        Label("Model ready", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .font(.caption)
-                    case .unloaded:
-                        Button("Load Model") {
-                            whisperKitEngine.modelVariant = settings.whisperKitModel
-                            Task { await whisperKitEngine.loadModel() }
-                        }
-                    default:
-                        EmptyView()
                     }
+                case .loaded:
+                    Label("Model ready", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                case .unloaded:
+                    Button("Load Model") {
+                        whisperKitEngine.modelVariant = settings.whisperKitModel
+                        Task { await whisperKitEngine.loadModel() }
+                    }
+                default:
+                    EmptyView()
                 }
 
                 Toggle("Speaker Diarization", isOn: $settings.diarize)

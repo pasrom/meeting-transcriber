@@ -116,9 +116,9 @@ final class AppSettingsTests: XCTestCase {
     // MARK: - buildArguments
 
     func testBuildArgumentsDefaults() {
-        // All defaults → only --watch
+        // Default engine is WhisperKit → --native-transcription
         let args = settings.buildArguments()
-        XCTAssertEqual(args, ["--watch"])
+        XCTAssertEqual(args, ["--watch", "--native-transcription"])
     }
 
     func testBuildArgumentsCustomPollInterval() {
@@ -160,6 +160,7 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testBuildArgumentsDiarize() {
+        settings.transcriptionEngine = .python
         settings.diarize = true
         settings.numSpeakers = 4
         let args = settings.buildArguments()
@@ -218,6 +219,7 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testBuildArgumentsDiarizeWithAutoDetect() {
+        settings.transcriptionEngine = .python
         settings.diarize = true
         settings.numSpeakers = 0
         let args = settings.buildArguments()
@@ -225,7 +227,8 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(args.contains("--speakers"))
     }
 
-    func testBuildArgumentsAllCustom() {
+    func testBuildArgumentsAllCustomPythonMode() {
+        settings.transcriptionEngine = .python
         settings.watchTeams = true
         settings.watchZoom = false
         settings.watchWebex = false
@@ -268,6 +271,7 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testBuildArgumentsCustomWhisperModel() {
+        settings.transcriptionEngine = .python
         settings.whisperModel = "small"
         let args = settings.buildArguments()
         XCTAssertTrue(args.contains("--model"))
