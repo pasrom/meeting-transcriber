@@ -64,6 +64,7 @@ final class WhisperKitEngine {
             )
             modelState = .loaded
         } catch {
+            NSLog("WhisperKit model load failed: \(error)")
             modelState = .unloaded
             downloadProgress = 0
         }
@@ -74,8 +75,21 @@ final class WhisperKitEngine {
         modelState = .unloaded
     }
 
+    /// Ensure model is loaded, loading it if necessary.
+    private func ensureModel() async throws {
+        if pipe != nil { return }
+        NSLog("WhisperKit: model not loaded, loading \(modelVariant)...")
+        await loadModel()
+        guard pipe != nil else {
+            NSLog("WhisperKit: model load FAILED, state=\(modelState)")
+            throw TranscriptionError.modelNotLoaded
+        }
+        NSLog("WhisperKit: model loaded successfully")
+    }
+
     /// Transcribe a WAV file. Returns lines in `[MM:SS] text` format matching Python output.
     func transcribe(audioPath: URL) async throws -> String {
+        try await ensureModel()
         guard let pipe else {
             throw TranscriptionError.modelNotLoaded
         }
@@ -86,7 +100,7 @@ final class WhisperKitEngine {
         )
 
         let results = await pipe.transcribe(
-            audioPaths: [audioPath.path()],
+            audioPaths: [audioPath.path],
             decodeOptions: options
         )
 
@@ -104,7 +118,7 @@ final class WhisperKitEngine {
             let ts = h > 0
                 ? String(format: "[%d:%02d:%02d]", h, m, s)
                 : String(format: "[%02d:%02d]", m, s)
-            let text = segment.text.trimmingCharacters(in: .whitespaces)
+            let text = Self.stripWhisperTokens(segment.text).trimmingCharacters(in: .whitespaces)
             if !text.isEmpty {
                 lines.append("\(ts) \(text)")
             }
@@ -114,9 +128,12 @@ final class WhisperKitEngine {
 
     /// Transcribe a WAV file and return structured segments.
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
+        try await ensureModel()
         guard let pipe else {
             throw TranscriptionError.modelNotLoaded
         }
+
+        NSLog("WhisperKit transcribing: \(audioPath.path)")
 
         let options = DecodingOptions(
             language: language,
@@ -124,18 +141,30 @@ final class WhisperKitEngine {
         )
 
         let results = await pipe.transcribe(
-            audioPaths: [audioPath.path()],
+            audioPaths: [audioPath.path],
             decodeOptions: options
         )
 
+        NSLog("WhisperKit results count: \(results.count), first nil: \(results.first == nil)")
+        if let firstResult = results.first {
+            NSLog("WhisperKit firstResult nil: \(firstResult == nil)")
+            if let tr = firstResult {
+                NSLog("WhisperKit transcription results: \(tr.count)")
+                for r in tr {
+                    NSLog("WhisperKit segments: \(r.segments.count), text: \(r.text.prefix(100))")
+                }
+            }
+        }
+
         guard let firstResult = results.first, let transcriptionResults = firstResult else {
+            NSLog("WhisperKit: no results returned")
             return []
         }
 
         var segments: [TimestampedSegment] = []
         var lastText = ""
         for segment in transcriptionResults.flatMap({ $0.segments }) {
-            let text = segment.text.trimmingCharacters(in: .whitespaces)
+            let text = Self.stripWhisperTokens(segment.text).trimmingCharacters(in: .whitespaces)
             // Filter hallucinations: skip consecutive identical text
             if text.isEmpty || text == lastText { continue }
             lastText = text
@@ -187,6 +216,11 @@ final class WhisperKitEngine {
         var result = a + b
         result.sort { $0.start < $1.start }
         return result
+    }
+
+    /// Remove Whisper special tokens like <|startoftranscript|>, <|en|>, <|0.00|>, etc.
+    static func stripWhisperTokens(_ text: String) -> String {
+        text.replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression)
     }
 }
 
