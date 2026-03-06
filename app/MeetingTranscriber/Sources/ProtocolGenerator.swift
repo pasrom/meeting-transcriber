@@ -3,6 +3,18 @@ import os.log
 
 private let logger = Logger(subsystem: "com.meetingtranscriber", category: "ProtocolGenerator")
 
+/// Abstraction for protocol generation, enabling mock injection in tests.
+protocol ProtocolGenerating {
+    func generate(transcript: String, title: String, diarized: Bool, claudeBin: String) async throws -> String
+}
+
+/// Default implementation that delegates to `ProtocolGenerator.generate(...)`.
+struct DefaultProtocolGenerator: ProtocolGenerating {
+    func generate(transcript: String, title: String, diarized: Bool, claudeBin: String) async throws -> String {
+        try await ProtocolGenerator.generate(transcript: transcript, title: title, diarized: diarized, claudeBin: claudeBin)
+    }
+}
+
 /// Generates meeting protocols by calling the Claude CLI as a subprocess.
 struct ProtocolGenerator {
 

@@ -27,6 +27,9 @@ class WatchLoop {
     // Dependencies
     let detector: MeetingDetector
     let whisperKit: WhisperKitEngine
+    let recorderFactory: () -> RecordingProvider
+    let diarizationFactory: () -> DiarizationProvider
+    let protocolGenerator: ProtocolGenerating
 
     // Settings
     let pollInterval: TimeInterval
@@ -46,6 +49,9 @@ class WatchLoop {
     init(
         detector: MeetingDetector = MeetingDetector(patterns: AppMeetingPattern.all),
         whisperKit: WhisperKitEngine = WhisperKitEngine(),
+        recorderFactory: @escaping () -> RecordingProvider = { DualSourceRecorder() },
+        diarizationFactory: @escaping () -> DiarizationProvider = { DiarizationProcess() },
+        protocolGenerator: ProtocolGenerating = DefaultProtocolGenerator(),
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
         maxDuration: TimeInterval = 14400,
@@ -57,6 +63,9 @@ class WatchLoop {
     ) {
         self.detector = detector
         self.whisperKit = whisperKit
+        self.recorderFactory = recorderFactory
+        self.diarizationFactory = diarizationFactory
+        self.protocolGenerator = protocolGenerator
         self.pollInterval = pollInterval
         self.endGracePeriod = endGracePeriod
         self.maxDuration = maxDuration
@@ -135,7 +144,7 @@ class WatchLoop {
 
     // MARK: - Meeting Handling
 
-    private func handleMeeting(_ meeting: DetectedMeeting) async throws {
+    func handleMeeting(_ meeting: DetectedMeeting) async throws {
         currentMeeting = meeting
         let title = Self.cleanTitle(meeting.windowTitle)
         logger.info("Meeting detected: \(meeting.windowTitle)")
@@ -144,7 +153,7 @@ class WatchLoop {
         transition(to: .recording)
         detail = "Recording: \(title)"
 
-        let recorder = DualSourceRecorder()
+        let recorder = recorderFactory()
         try recorder.start(
             appPID: meeting.windowPID,
             noMic: noMic,
@@ -208,7 +217,7 @@ class WatchLoop {
         // --- Diarization (optional) ---
         var finalTranscript = transcript
         if diarizeEnabled {
-            let diarizeProcess = DiarizationProcess()
+            let diarizeProcess = diarizationFactory()
             if diarizeProcess.isAvailable {
                 detail = "Diarizing: \(title)"
                 logger.info("Running diarization...")
@@ -259,7 +268,7 @@ class WatchLoop {
         detail = "Generating protocol: \(title)"
 
         let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
-        let protocolMD = try await ProtocolGenerator.generate(
+        let protocolMD = try await protocolGenerator.generate(
             transcript: finalTranscript,
             title: title,
             diarized: diarized,

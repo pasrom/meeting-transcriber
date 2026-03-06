@@ -16,8 +16,14 @@ struct DiarizationResult {
     let autoNames: [String: String]
 }
 
+/// Abstraction for diarization, enabling mock injection in tests.
+protocol DiarizationProvider {
+    var isAvailable: Bool { get }
+    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult
+}
+
 /// Runs the standalone Python diarization script as a subprocess.
-class DiarizationProcess {
+class DiarizationProcess: DiarizationProvider {
     private let pythonPath: URL
     private let scriptPath: URL
     private let ipcDir: URL
@@ -164,6 +170,11 @@ class DiarizationProcess {
     // Convenience alias for testing
     func parseOutput(_ data: Data) throws -> DiarizationResult {
         try Self.parseOutput(data)
+    }
+
+    /// Bridge method satisfying `DiarizationProvider` protocol (fewer parameters).
+    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult {
+        try await run(audioPath: audioPath, numSpeakers: numSpeakers, expectedNames: [], speakersDB: nil, meetingTitle: meetingTitle)
     }
 
     /// Assign speaker labels to transcript segments by maximum temporal overlap.
