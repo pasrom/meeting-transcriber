@@ -91,7 +91,6 @@ class WatchLoop {
 
         transition(to: .watching)
         detail = "Polling for meetings..."
-        debugWrite("start() called, creating watchTask")
         logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
         watchTask = Task { [weak self] in
@@ -111,40 +110,14 @@ class WatchLoop {
 
     // MARK: - Watch Loop
 
-    private static let debugLog: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MeetingTranscriber")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("watchloop.log")
-    }()
-
-    private func debugWrite(_ msg: String) {
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(msg)\n"
-        if let data = line.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: Self.debugLog.path) {
-                if let handle = try? FileHandle(forWritingTo: Self.debugLog) {
-                    handle.seekToEndOfFile()
-                    handle.write(data)
-                    handle.closeFile()
-                }
-            } else {
-                try? data.write(to: Self.debugLog)
-            }
-        }
-    }
-
     private func watchLoop() async {
-        debugWrite("watchLoop started, state=\(state.rawValue), diarize=\(diarizeEnabled), patterns=\(detector.patternNames)")
         while !Task.isCancelled {
             if let meeting = detector.checkOnce() {
-                debugWrite("Meeting detected: \(meeting.windowTitle) (PID \(meeting.windowPID))")
                 do {
                     try await handleMeeting(meeting)
                 } catch {
                     let msg = "Pipeline error: \(error)"
-                    NSLog(msg)
                     logger.error("\(msg)")
-                    // Write to file for debugging
                     let logFile = Self.defaultOutputDir.deletingLastPathComponent().appendingPathComponent("error.log")
                     try? (msg + "\n").data(using: .utf8)?.write(to: logFile)
                     lastError = error.localizedDescription
@@ -173,20 +146,17 @@ class WatchLoop {
     func handleMeeting(_ meeting: DetectedMeeting) async throws {
         currentMeeting = meeting
         let title = Self.cleanTitle(meeting.windowTitle)
-        debugWrite("handleMeeting: \(title), PID=\(meeting.windowPID)")
 
         // --- Recording ---
         transition(to: .recording)
         detail = "Recording: \(title)"
 
         let recorder = recorderFactory()
-        debugWrite("recorder.start(PID=\(meeting.windowPID), noMic=\(noMic))")
         try recorder.start(
             appPID: meeting.windowPID,
             noMic: noMic,
             micDeviceUID: nil
         )
-        debugWrite("recorder started, waiting for meeting end...")
 
         // Read participants (Teams)
         if meeting.pattern.appName == "Microsoft Teams",
@@ -198,16 +168,11 @@ class WatchLoop {
 
         // Wait for meeting to end
         try await waitForMeetingEnd(meeting)
-        debugWrite("waitForMeetingEnd returned, stopping recorder...")
 
         // Stop recording
         let recording = try recorder.stop()
-        debugWrite("recorder stopped. mix=\(recording.mixPath.lastPathComponent), app=\(recording.appPath?.lastPathComponent ?? "nil"), mic=\(recording.micPath?.lastPathComponent ?? "nil")")
 
         // --- Transcription ---
-        debugWrite("Starting transcription...")
-        NSLog("Starting transcription for: \(title)")
-        NSLog("WhisperKit model state: \(whisperKit.modelState)")
         transition(to: .transcribing)
         detail = "Transcribing: \(title)"
 
@@ -238,10 +203,7 @@ class WatchLoop {
             transcript = try await whisperKit.transcribe(audioPath: mix16k)
         }
 
-        debugWrite("Transcription done (\(transcript.count) chars)")
-
         guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            debugWrite("ERROR: Empty transcript")
             lastError = "Empty transcript"
             transition(to: .error)
             return
@@ -251,11 +213,9 @@ class WatchLoop {
         var finalTranscript = transcript
         if diarizeEnabled {
             let diarizeProcess = diarizationFactory()
-            debugWrite("Diarization: available=\(diarizeProcess.isAvailable)")
             if diarizeProcess.isAvailable {
                 transition(to: .diarizing)
                 detail = "Diarizing: \(title)"
-                debugWrite("Running diarization...")
 
                 // Use mix audio for diarization
                 let mix16k = DualSourceRecorder.recordingsDir.appendingPathComponent("mix_16k.wav")
@@ -294,6 +254,14 @@ class WatchLoop {
             }
         }
 
+        // Clean up IPC files from diarize.py
+        let ipcDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".meeting-transcriber")
+        for name in ["speaker_request.json", "speaker_response.json",
+                     "speaker_count_request.json", "speaker_count_response.json"] {
+            try? FileManager.default.removeItem(at: ipcDir.appendingPathComponent(name))
+        }
+
         // Save transcript
         let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: outputDir)
         logger.info("Transcript saved: \(txtPath.lastPathComponent)")
@@ -324,7 +292,6 @@ class WatchLoop {
     func waitForMeetingEnd(_ meeting: DetectedMeeting) async throws {
         var graceStart: Date?
         let startTime = Date()
-        debugWrite("waitForMeetingEnd: starting poll loop")
 
         while !Task.isCancelled {
             // Enforce max duration
@@ -337,15 +304,12 @@ class WatchLoop {
 
             if active {
                 if graceStart != nil {
-                    debugWrite("waitForMeetingEnd: window reappeared")
                     graceStart = nil
                 }
             } else {
                 if graceStart == nil {
-                    debugWrite("waitForMeetingEnd: window GONE, grace=\(endGracePeriod)s")
                     graceStart = Date()
                 } else if let start = graceStart, Date().timeIntervalSince(start) >= endGracePeriod {
-                    debugWrite("waitForMeetingEnd: grace expired → stopping")
                     return
                 }
             }
