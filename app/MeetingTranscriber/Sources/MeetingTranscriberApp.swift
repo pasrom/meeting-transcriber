@@ -54,13 +54,11 @@ struct MeetingTranscriberApp: App {
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocolsFolder: openProtocolsFolder,
                 onOpenSettings: {
-                    NSApp.activate()
-                    openWindow(id: "settings")
+                    bringWindowToFront(id: "settings")
                 },
                 onNameSpeakers: {
                     loadSpeakerRequest()
-                    NSApp.activate()
-                    openWindow(id: "speaker-naming")
+                    bringWindowToFront(id: "speaker-naming")
                 },
                 onQuit: quit
             )
@@ -75,12 +73,10 @@ struct MeetingTranscriberApp: App {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerCount)) { _ in
-                NSApp.activate()
-                openWindow(id: "speaker-count")
+                bringWindowToFront(id: "speaker-count")
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
-                NSApp.activate()
-                openWindow(id: "speaker-naming")
+                bringWindowToFront(id: "speaker-naming")
             }
         }
 
@@ -89,6 +85,7 @@ struct MeetingTranscriberApp: App {
                 SpeakerNamingView(request: request) { mapping in
                     writeSpeakerResponse(mapping)
                     speakerRequest = nil
+                    closeWindow(id: "speaker-naming")
                 }
             } else {
                 Text("No speaker data available.")
@@ -102,6 +99,7 @@ struct MeetingTranscriberApp: App {
                 SpeakerCountView(request: request) { count in
                     writeSpeakerCountResponse(count)
                     speakerCountRequest = nil
+                    closeWindow(id: "speaker-count")
                 }
             } else {
                 Text("No speaker count request available.")
@@ -244,6 +242,23 @@ struct MeetingTranscriberApp: App {
     private func openLastProtocol() {
         if let path = watchLoop?.lastProtocolPath {
             NSWorkspace.shared.open(path)
+        }
+    }
+
+    private func bringWindowToFront(id: String) {
+        openWindow(id: id)
+        NSApp.activate(ignoringOtherApps: true)
+        // Ensure the window is brought to front even if already open
+        DispatchQueue.main.async {
+            for window in NSApp.windows where window.identifier?.rawValue == id {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+
+    private func closeWindow(id: String) {
+        for window in NSApp.windows where window.identifier?.rawValue == id {
+            window.close()
         }
     }
 
