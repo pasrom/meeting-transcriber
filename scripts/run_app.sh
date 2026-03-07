@@ -16,12 +16,10 @@ APP_MACOS="$APP_BUNDLE/Contents/MacOS"
 APP_BINARY="$APP_MACOS/MeetingTranscriber"
 INFO_PLIST="$SPM_DIR/Sources/Info.plist"
 
-# Build if needed
-if [ ! -f "$BUILD_BINARY" ]; then
-    echo "Building Meeting Transcriber app..."
-    cd "$SPM_DIR"
-    swift build -c release
-fi
+# Always rebuild to pick up code changes
+echo "Building Meeting Transcriber app..."
+cd "$SPM_DIR"
+swift build -c release
 
 # Assemble .app bundle
 mkdir -p "$APP_MACOS"
