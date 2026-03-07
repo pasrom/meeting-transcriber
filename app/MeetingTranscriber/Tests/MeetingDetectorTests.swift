@@ -38,8 +38,8 @@ final class MeetingPatternsTests: XCTestCase {
         XCTAssertFalse(AppMeetingPattern.webex.ownerNames.isEmpty)
     }
 
-    func testAllPatternsContainsThree() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 3)
+    func testAllPatternsContainsFour() {
+        XCTAssertEqual(AppMeetingPattern.all.count, 4)
     }
 
     func testByNameLookup() {
