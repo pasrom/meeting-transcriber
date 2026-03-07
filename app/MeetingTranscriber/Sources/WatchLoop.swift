@@ -212,6 +212,14 @@ class WatchLoop {
         // --- Diarization (optional) ---
         var finalTranscript = transcript
         if diarizeEnabled {
+            // Clean stale IPC files before diarization
+            let ipcDir = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".meeting-transcriber")
+            for name in ["speaker_request.json", "speaker_response.json",
+                         "speaker_count_request.json", "speaker_count_response.json"] {
+                try? FileManager.default.removeItem(at: ipcDir.appendingPathComponent(name))
+            }
+
             let diarizeProcess = diarizationFactory()
             if diarizeProcess.isAvailable {
                 transition(to: .diarizing)

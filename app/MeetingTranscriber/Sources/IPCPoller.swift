@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: "com.meetingtranscriber", category: "IPCPoller")
 
 /// Polls the IPC directory for speaker request files from diarize.py.
 /// Fires callbacks when requests appear.
@@ -23,6 +26,7 @@ class IPCPoller {
     func start() {
         stop()
         seenFiles.removeAll()
+        logger.info("Started, watching: \(self.ipcDir.path)")
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.poll()
@@ -32,6 +36,9 @@ class IPCPoller {
     }
 
     func stop() {
+        if pollTask != nil {
+            logger.info("Stopped")
+        }
         pollTask?.cancel()
         pollTask = nil
     }
@@ -48,9 +55,13 @@ class IPCPoller {
     private func checkFile<T: Decodable>(_ filename: String, handler: (T) -> Void) {
         guard !seenFiles.contains(filename) else { return }
         let url = ipcDir.appendingPathComponent(filename)
-        guard let data = try? Data(contentsOf: url),
-              let request = try? JSONDecoder().decode(T.self, from: data) else { return }
+        guard let data = try? Data(contentsOf: url) else { return }
+        guard let request = try? JSONDecoder().decode(T.self, from: data) else {
+            logger.warning("Decode failed for \(filename), \(data.count) bytes")
+            return
+        }
         seenFiles.insert(filename)
+        logger.info("Detected \(filename)")
         handler(request)
     }
 

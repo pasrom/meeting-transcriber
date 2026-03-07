@@ -90,15 +90,13 @@ struct SpeakerNamingView: View {
     let request: SpeakerRequest
     let onComplete: ([String: String]) -> Void
 
-    @State private var names: [String]
+    @State private var names: [String] = []
     @State private var audioPlayer: AVAudioPlayer?
     @State private var completed = false
 
     init(request: SpeakerRequest, onComplete: @escaping ([String: String]) -> Void) {
         self.request = request
         self.onComplete = onComplete
-        // Pre-fill with auto-detected names
-        _names = State(initialValue: request.speakers.map { $0.autoName ?? "" })
     }
 
     var body: some View {
@@ -133,6 +131,10 @@ struct SpeakerNamingView: View {
         }
         .padding()
         .frame(minWidth: 400)
+        .id(request.meetingTitle)
+        .onAppear {
+            names = request.speakers.map { $0.autoName ?? "" }
+        }
         .onDisappear {
             audioPlayer?.stop()
             audioPlayer = nil
@@ -177,11 +179,13 @@ struct SpeakerNamingView: View {
                     }
                     .controlSize(.small)
 
-                    AccessibleTextField(
-                        text: $names[index],
-                        placeholder: "Name",
-                        identifier: "speaker-name-\(speaker.label)"
-                    )
+                    if index < names.count {
+                        AccessibleTextField(
+                            text: $names[index],
+                            placeholder: "Name",
+                            identifier: "speaker-name-\(speaker.label)"
+                        )
+                    }
                 }
             }
             .padding(4)
@@ -202,6 +206,10 @@ struct SpeakerNamingView: View {
     }
 
     private func confirm() {
+        guard names.count == request.speakers.count else {
+            onComplete([:])
+            return
+        }
         onComplete(buildSpeakerMapping(names: names, speakers: request.speakers))
     }
 }
