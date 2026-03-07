@@ -127,15 +127,30 @@ class DiarizationProcess: DiarizationProvider {
         logger.info("Starting diarization: \(audioPath.lastPathComponent)")
 
         try process.run()
-        process.waitUntilExit()
+
+        // Read stdout/stderr concurrently to prevent pipe buffer deadlock (>64KB)
+        async let stdoutRead = Task.detached {
+            stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        }.value
+        async let stderrRead = Task.detached {
+            stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        }.value
+
+        // Await process exit without blocking cooperative thread pool
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            process.terminationHandler = { _ in
+                continuation.resume()
+            }
+        }
+
+        let stdoutData = await stdoutRead
+        let stderrData = await stderrRead
 
         guard process.terminationStatus == 0 else {
-            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
             let stderr = String(data: stderrData, encoding: .utf8) ?? ""
             throw DiarizationError.processFailed(Int(process.terminationStatus), stderr)
         }
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         return try parseOutput(stdoutData)
     }
 
