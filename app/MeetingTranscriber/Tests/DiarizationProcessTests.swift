@@ -165,4 +165,39 @@ final class DiarizationProcessTests: XCTestCase {
         )
         XCTAssertTrue(result.isEmpty)
     }
+
+    // MARK: - Pipe Deadlock (C1+C2)
+
+    func testRunWithLargeOutputDoesNotDeadlock() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diarize_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let scriptPath = tmpDir.appendingPathComponent("big_output.py")
+        // Generate >64KB of JSON output (512-dim embeddings x 200 speakers)
+        let script = """
+            import json, sys
+            segments = [{"start": float(i), "end": float(i+1), "speaker": f"SPEAKER_{i:02d}"}
+                        for i in range(200)]
+            embeddings = {f"SPEAKER_{i:02d}": [0.1] * 512 for i in range(200)}
+            result = {"segments": segments, "embeddings": embeddings,
+                      "speaking_times": {}, "auto_names": {}}
+            json.dump(result, sys.stdout)
+            """
+        try script.write(to: scriptPath, atomically: true, encoding: .utf8)
+
+        let proc = DiarizationProcess(
+            pythonPath: URL(fileURLWithPath: "/usr/bin/python3"),
+            scriptPath: scriptPath
+        )
+
+        // This would deadlock before the fix
+        let result = try await proc.run(
+            audioPath: scriptPath, // dummy, script ignores it
+            numSpeakers: nil,
+            meetingTitle: "Test"
+        )
+        XCTAssertGreaterThan(result.segments.count, 100)
+    }
 }
