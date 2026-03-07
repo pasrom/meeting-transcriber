@@ -147,7 +147,7 @@ class MeetingDetector {
     /// Default window list provider using CGWindowListCopyWindowInfo.
     static func systemWindowList() -> [[String: Any]] {
         guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly], kCGNullWindowID
+            [.optionAll, .excludeDesktopElements], kCGNullWindowID
         ) as? [[String: Any]] else {
             return []
         }

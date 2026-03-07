@@ -73,11 +73,12 @@ class MeetingDetector:
         from Quartz import (
             CGWindowListCopyWindowInfo,
             kCGNullWindowID,
-            kCGWindowListOptionOnScreenOnly,
+            kCGWindowListExcludeDesktopElements,
+            kCGWindowListOptionAll,
         )
 
         windows = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+            kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID
         )
         result = list(windows) if windows else []
 
