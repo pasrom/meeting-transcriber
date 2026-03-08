@@ -126,4 +126,27 @@ final class PipelineQueueTests: XCTestCase {
         let pQueue = makeProcessingQueue()
         XCTAssertFalse(pQueue.isProcessing)
     }
+
+    // MARK: - Auto-Removal Tests
+
+    func testCompletedJobAutoRemovedAfterDelay() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+        XCTAssertEqual(queue.jobs.count, 1)
+
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(queue.jobs.count, 0, "Done job should be auto-removed")
+    }
+
+    func testErrorJobNotAutoRemoved() async throws {
+        let queue = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .error, error: "Test error")
+
+        try await Task.sleep(for: .milliseconds(400))
+        XCTAssertEqual(queue.jobs.count, 1, "Error job should NOT be auto-removed")
+    }
 }

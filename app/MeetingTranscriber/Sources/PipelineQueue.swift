@@ -18,6 +18,8 @@ class PipelineQueue {
     let micLabel: String
     let claudeBin: String
 
+    let completedJobLifetime: TimeInterval
+
     private(set) var isProcessing = false
     private var processTask: Task<Void, Never>?
 
@@ -25,7 +27,7 @@ class PipelineQueue {
     var onJobStateChange: ((PipelineJob, JobState, JobState) -> Void)?
 
     /// Simple init for skeleton tests and basic queue usage.
-    init(logDir: URL? = nil) {
+    init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
         self.logDir = logDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".meeting-transcriber")
         self.whisperKit = nil
@@ -35,6 +37,7 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.micLabel = "Me"
         self.claudeBin = "claude"
+        self.completedJobLifetime = completedJobLifetime
     }
 
     /// Full init with all processing dependencies.
@@ -46,7 +49,8 @@ class PipelineQueue {
         outputDir: URL,
         diarizeEnabled: Bool = false,
         micLabel: String = "Me",
-        claudeBin: String = "claude"
+        claudeBin: String = "claude",
+        completedJobLifetime: TimeInterval = 60
     ) {
         self.logDir = logDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".meeting-transcriber")
@@ -57,6 +61,7 @@ class PipelineQueue {
         self.diarizeEnabled = diarizeEnabled
         self.micLabel = micLabel
         self.claudeBin = claudeBin
+        self.completedJobLifetime = completedJobLifetime
     }
 
     var activeJobs: [PipelineJob] {
@@ -96,6 +101,13 @@ class PipelineQueue {
         appendLog(jobID: id, event: "state_change", from: oldState, to: newState)
         writeSnapshot()
         onJobStateChange?(jobs[index], oldState, newState)
+
+        if newState == .done {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
+                self?.removeJob(id: id)
+            }
+        }
     }
 
     // MARK: - Processing
