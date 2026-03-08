@@ -5,7 +5,7 @@ private let logger = Logger(subsystem: "com.meetingtranscriber", category: "Watc
 
 /// Native Swift watch loop that replaces the Python watcher.
 ///
-/// Orchestrates: meeting detection → recording → transcription → protocol generation.
+/// Orchestrates: meeting detection → recording → enqueue to PipelineQueue.
 @MainActor
 @Observable
 class WatchLoop {
@@ -13,35 +13,24 @@ class WatchLoop {
         case idle
         case watching
         case recording
-        case transcribing
-        case diarizing
-        case generatingProtocol
-        case done
         case error
     }
 
     private(set) var state: State = .idle
     private(set) var currentMeeting: DetectedMeeting?
-    private(set) var lastProtocolPath: URL?
     private(set) var lastError: String?
     private(set) var detail: String = ""
 
     // Dependencies
     let detector: MeetingDetector
-    let whisperKit: WhisperKitEngine
     let recorderFactory: () -> RecordingProvider
-    let diarizationFactory: () -> DiarizationProvider
-    let protocolGenerator: ProtocolGenerating
+    var pipelineQueue: PipelineQueue?
 
     // Settings
     let pollInterval: TimeInterval
     let endGracePeriod: TimeInterval
     let maxDuration: TimeInterval
-    let outputDir: URL
-    let diarizeEnabled: Bool
-    let micLabel: String
     let noMic: Bool
-    let claudeBin: String
 
     private var watchTask: Task<Void, Never>?
 
@@ -50,32 +39,20 @@ class WatchLoop {
 
     init(
         detector: MeetingDetector = MeetingDetector(patterns: AppMeetingPattern.all),
-        whisperKit: WhisperKitEngine = WhisperKitEngine(),
         recorderFactory: @escaping () -> RecordingProvider = { DualSourceRecorder() },
-        diarizationFactory: @escaping () -> DiarizationProvider = { DiarizationProcess() },
-        protocolGenerator: ProtocolGenerating = DefaultProtocolGenerator(),
+        pipelineQueue: PipelineQueue? = nil,
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
         maxDuration: TimeInterval = 14400,
-        outputDir: URL = WatchLoop.defaultOutputDir,
-        diarizeEnabled: Bool = false,
-        micLabel: String = "Me",
-        noMic: Bool = false,
-        claudeBin: String = "claude"
+        noMic: Bool = false
     ) {
         self.detector = detector
-        self.whisperKit = whisperKit
         self.recorderFactory = recorderFactory
-        self.diarizationFactory = diarizationFactory
-        self.protocolGenerator = protocolGenerator
+        self.pipelineQueue = pipelineQueue
         self.pollInterval = pollInterval
         self.endGracePeriod = endGracePeriod
         self.maxDuration = maxDuration
-        self.outputDir = outputDir
-        self.diarizeEnabled = diarizeEnabled
-        self.micLabel = micLabel
         self.noMic = noMic
-        self.claudeBin = claudeBin
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -117,22 +94,17 @@ class WatchLoop {
                 do {
                     try await handleMeeting(meeting)
                 } catch {
-                    let msg = "Pipeline error: \(error)"
+                    let msg = "Recording error: \(error)"
                     logger.error("\(msg)")
-                    let logFile = Self.defaultOutputDir.deletingLastPathComponent().appendingPathComponent("error.log")
-                    try? (msg + "\n").data(using: .utf8)?.write(to: logFile)
                     lastError = error.localizedDescription
                     transition(to: .error)
-                    detail = "Pipeline error: \(error.localizedDescription)"
+                    detail = "Recording error: \(error.localizedDescription)"
+                    try? await Task.sleep(for: .seconds(10))
                 }
 
                 detector.reset(appName: meeting.pattern.appName)
 
                 if !Task.isCancelled {
-                    // Keep done/error state visible for 30 seconds
-                    if state == .done || state == .error {
-                        try? await Task.sleep(for: .seconds(30))
-                    }
                     transition(to: .watching)
                     detail = "Polling for meetings..."
                 }
@@ -173,127 +145,17 @@ class WatchLoop {
         // Stop recording
         let recording = try recorder.stop()
 
-        // --- Transcription ---
-        transition(to: .transcribing)
-        detail = "Transcribing: \(title)"
-
-        // Resample to 16kHz for WhisperKit
-        let recDir = DualSourceRecorder.recordingsDir
-
-        let transcript: String
-        if let appPath = recording.appPath, let micPath = recording.micPath {
-            // Resample both tracks to 16kHz
-            let app16k = recDir.appendingPathComponent("app_16k.wav")
-            let appSamples = try AudioMixer.loadWAVAsFloat32(url: appPath)
-            try AudioMixer.saveWAV(samples: AudioMixer.resample(appSamples, from: 48000, to: 16000), sampleRate: 16000, url: app16k)
-
-            let mic16k = recDir.appendingPathComponent("mic_16k.wav")
-            let micSamples = try AudioMixer.loadWAVAsFloat32(url: micPath)
-            try AudioMixer.saveWAV(samples: AudioMixer.resample(micSamples, from: 48000, to: 16000), sampleRate: 16000, url: mic16k)
-
-            transcript = try await whisperKit.transcribeDualSource(
-                appAudio: app16k,
-                micAudio: mic16k,
-                micDelay: recording.micDelay,
-                micLabel: micLabel
-            )
-        } else {
-            let mix16k = recDir.appendingPathComponent("mix_16k.wav")
-            let mixSamples = try AudioMixer.loadWAVAsFloat32(url: recording.mixPath)
-            try AudioMixer.saveWAV(samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000), sampleRate: 16000, url: mix16k)
-            transcript = try await whisperKit.transcribe(audioPath: mix16k)
-        }
-
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            lastError = "Empty transcript"
-            transition(to: .error)
-            return
-        }
-
-        // --- Diarization (optional) ---
-        var finalTranscript = transcript
-        if diarizeEnabled {
-            // Clean stale IPC files before diarization
-            let ipcDir = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".meeting-transcriber")
-            for name in ["speaker_request.json", "speaker_response.json",
-                         "speaker_count_request.json", "speaker_count_response.json"] {
-                try? FileManager.default.removeItem(at: ipcDir.appendingPathComponent(name))
-            }
-
-            let diarizeProcess = diarizationFactory()
-            if diarizeProcess.isAvailable {
-                transition(to: .diarizing)
-                detail = "Diarizing: \(title)"
-
-                // Use mix audio for diarization
-                let mix16k = DualSourceRecorder.recordingsDir.appendingPathComponent("mix_16k.wav")
-                let mixSamples = try AudioMixer.loadWAVAsFloat32(url: recording.mixPath)
-                try AudioMixer.saveWAV(
-                    samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000),
-                    sampleRate: 16000, url: mix16k
-                )
-
-                do {
-                    let diarization = try await diarizeProcess.run(
-                        audioPath: mix16k,
-                        numSpeakers: nil,
-                        meetingTitle: title
-                    )
-
-                    // Re-transcribe segments and assign speakers
-                    let appSegments = recording.appPath != nil
-                        ? try await whisperKit.transcribeSegments(
-                            audioPath: recDir.appendingPathComponent("app_16k.wav"))
-                        : try await whisperKit.transcribeSegments(
-                            audioPath: mix16k)
-
-                    let labeled = DiarizationProcess.assignSpeakers(
-                        transcript: appSegments,
-                        diarization: diarization
-                    )
-                    finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
-                    logger.info("Diarization complete: \(diarization.segments.count) segments")
-                } catch {
-                    logger.warning("Diarization failed, using undiarized transcript: \(error.localizedDescription)")
-                    // Continue with original transcript
-                }
-            } else {
-                logger.info("Diarization not available (python-diarize not in bundle)")
-            }
-        }
-
-        // Clean up IPC files from diarize.py
-        let ipcDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
-        for name in ["speaker_request.json", "speaker_response.json",
-                     "speaker_count_request.json", "speaker_count_response.json"] {
-            try? FileManager.default.removeItem(at: ipcDir.appendingPathComponent(name))
-        }
-
-        // Save transcript
-        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: outputDir)
-        logger.info("Transcript saved: \(txtPath.lastPathComponent)")
-
-        // --- Protocol Generation ---
-        transition(to: .generatingProtocol)
-        detail = "Generating protocol: \(title)"
-
-        let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
-        let protocolMD = try await protocolGenerator.generate(
-            transcript: finalTranscript,
-            title: title,
-            diarized: diarized,
-            claudeBin: claudeBin
+        // --- Enqueue for background processing ---
+        let job = PipelineJob(
+            meetingTitle: title,
+            appName: meeting.pattern.appName,
+            mixPath: recording.mixPath,
+            appPath: recording.appPath,
+            micPath: recording.micPath,
+            micDelay: recording.micDelay
         )
-
-        let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
-        let mdPath = try ProtocolGenerator.saveProtocol(fullMD, title: title, dir: outputDir)
-        logger.info("Protocol saved: \(mdPath.lastPathComponent)")
-
-        lastProtocolPath = mdPath
-        transition(to: .done)
-        detail = "Protocol ready: \(title)"
+        pipelineQueue?.enqueue(job)
+        logger.info("Enqueued pipeline job for: \(title)")
     }
 
     // MARK: - Meeting End Detection
@@ -354,10 +216,6 @@ class WatchLoop {
         case .idle: .idle
         case .watching: .watching
         case .recording: .recording
-        case .transcribing: .transcribing
-        case .diarizing: .transcribing
-        case .generatingProtocol: .generatingProtocol
-        case .done: .protocolReady
         case .error: .error
         }
     }

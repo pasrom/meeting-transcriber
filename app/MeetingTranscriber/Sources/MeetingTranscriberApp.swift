@@ -131,7 +131,7 @@ struct MeetingTranscriberApp: App {
             state: loop.transcriberState,
             detail: loop.detail,
             meeting: meeting,
-            protocolPath: loop.lastProtocolPath?.path,
+            protocolPath: nil,
             error: loop.lastError,
             audioPath: nil,
             pid: Int(ProcessInfo.processInfo.processIdentifier)
@@ -174,14 +174,20 @@ struct MeetingTranscriberApp: App {
                 }
 
                 await MainActor.run {
-                    let loop = WatchLoop(
-                        detector: MeetingDetector(patterns: patterns),
+                    let queue = PipelineQueue(
                         whisperKit: whisperKit,
-                        pollInterval: settings.pollInterval,
-                        endGracePeriod: settings.endGrace,
+                        diarizationFactory: { DiarizationProcess() },
+                        protocolGenerator: DefaultProtocolGenerator(),
                         outputDir: WatchLoop.defaultOutputDir,
                         diarizeEnabled: settings.diarize,
-                        micLabel: settings.micName,
+                        micLabel: settings.micName
+                    )
+
+                    let loop = WatchLoop(
+                        detector: MeetingDetector(patterns: patterns),
+                        pipelineQueue: queue,
+                        pollInterval: settings.pollInterval,
+                        endGracePeriod: settings.endGrace,
                         noMic: settings.noMic
                     )
 
@@ -199,7 +205,7 @@ struct MeetingTranscriberApp: App {
                         }
                     }
 
-                    loop.onStateChange = { [notifications, ipcPoller] _, newState in
+                    loop.onStateChange = { [notifications] _, newState in
                         switch newState {
                         case .recording:
                             if let meeting = loop.currentMeeting {
@@ -208,18 +214,7 @@ struct MeetingTranscriberApp: App {
                                     body: "Recording: \(meeting.windowTitle)"
                                 )
                             }
-                        case .diarizing:
-                            ipcPoller.start()
-                        case .done:
-                            ipcPoller.stop()
-                            ipcPoller.reset()
-                            notifications.notify(
-                                title: "Protocol Ready",
-                                body: "Protocol is ready."
-                            )
                         case .error:
-                            ipcPoller.stop()
-                            ipcPoller.reset()
                             if let err = loop.lastError {
                                 notifications.notify(title: "Error", body: err)
                             }
@@ -227,6 +222,8 @@ struct MeetingTranscriberApp: App {
                             break
                         }
                     }
+
+                    // TODO: Task 7 will wire queue.onJobStateChange for notifications + IPC polling
 
                     watchLoop = loop
                     loop.start()
@@ -238,7 +235,9 @@ struct MeetingTranscriberApp: App {
     // MARK: - Actions
 
     private func openLastProtocol() {
-        if let path = watchLoop?.lastProtocolPath {
+        // TODO: Task 7 will wire this to PipelineQueue's most recent completed job
+        if let job = watchLoop?.pipelineQueue?.completedJobs.last,
+           let path = job.protocolPath {
             NSWorkspace.shared.open(path)
         }
     }
