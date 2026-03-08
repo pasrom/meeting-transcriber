@@ -151,6 +151,12 @@ struct MeetingTranscriberApp: App {
 
     private var currentStateIcon: String {
         if let loop = watchLoop, loop.isActive {
+            if loop.state == .recording {
+                return "record.circle.fill"
+            }
+            if !pipelineQueue.activeJobs.isEmpty {
+                return "gearshape.2.fill"
+            }
             return loop.transcriberState.icon
         }
         return "waveform.circle"
@@ -227,7 +233,24 @@ struct MeetingTranscriberApp: App {
                         }
                     }
 
-                    // TODO: Task 7 will wire queue.onJobStateChange for notifications + IPC polling
+                    pipelineQueue.onJobStateChange = { [notifications, ipcPoller] job, oldState, newState in
+                        switch newState {
+                        case .diarizing:
+                            ipcPoller.start()
+                        case .done:
+                            ipcPoller.stop()
+                            ipcPoller.reset()
+                            notifications.notify(title: "Protocol Ready", body: job.meetingTitle)
+                        case .error:
+                            ipcPoller.stop()
+                            ipcPoller.reset()
+                            if let err = job.error {
+                                notifications.notify(title: "Error", body: err)
+                            }
+                        default:
+                            break
+                        }
+                    }
 
                     watchLoop = loop
                     loop.start()
@@ -239,8 +262,7 @@ struct MeetingTranscriberApp: App {
     // MARK: - Actions
 
     private func openLastProtocol() {
-        // TODO: Task 7 will wire this to PipelineQueue's most recent completed job
-        if let job = watchLoop?.pipelineQueue?.completedJobs.last,
+        if let job = pipelineQueue.completedJobs.last,
            let path = job.protocolPath {
             NSWorkspace.shared.open(path)
         }
