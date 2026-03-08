@@ -116,6 +116,7 @@ class PipelineQueue {
     private func triggerProcessing() {
         guard !isProcessing else { return }
         guard pendingJobs.first != nil else { return }
+        isProcessing = true
         processTask = Task { [weak self] in
             await self?.processNext()
         }
@@ -124,13 +125,15 @@ class PipelineQueue {
     /// Process the first waiting job through the full pipeline:
     /// resample → transcribe → (diarize) → save transcript → generate protocol → save protocol.
     func processNext() async {
-        guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else { return }
-        guard let whisperKit, let protocolGenerator, let outputDir else {
-            logger.warning("Processing dependencies not configured — skipping")
+        guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else {
+            isProcessing = false
             return
         }
-
-        isProcessing = true
+        guard let whisperKit, let protocolGenerator, let outputDir else {
+            logger.warning("Processing dependencies not configured — skipping")
+            isProcessing = false
+            return
+        }
         let jobID = jobs[index].id
         let title = jobs[index].meetingTitle
         let mixPath = jobs[index].mixPath
