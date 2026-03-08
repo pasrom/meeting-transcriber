@@ -2,13 +2,12 @@ import ApplicationServices
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "ParticipantReader")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ParticipantReader")
 
 /// Reads participant names from Teams meeting roster via Accessibility API
 /// and writes them to a JSON file for use during diarization.
 struct ParticipantReader {
-    private static let ipcDir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".meeting-transcriber")
+    private static let ipcDir = AppPaths.ipcDir
     private static let participantsFile = ipcDir.appendingPathComponent("participants.json")
 
     /// Known non-name strings in the Teams UI that should be filtered out.
@@ -48,7 +47,7 @@ struct ParticipantReader {
         for containerRole in ["AXList", "AXTable", "AXOutline"] {
             let containers = findElementsByRole(appElement, role: containerRole)
             for container in containers {
-                guard let children = MuteDetector.getAXAttribute(container, attribute: kAXChildrenAttribute) as? [AXUIElement],
+                guard let children = AXHelper.getAttribute(container, attribute: kAXChildrenAttribute) as? [AXUIElement],
                       children.count >= 2 else { continue }
 
                 var rowTexts: [String] = []
@@ -69,7 +68,7 @@ struct ParticipantReader {
         // Strategy 3: Window title parsing
         let windows = findElementsByRole(appElement, role: kAXWindowRole as String, maxDepth: 1)
         for window in windows {
-            guard let title = MuteDetector.getAXAttribute(window, attribute: kAXTitleAttribute) as? String else {
+            guard let title = AXHelper.getAttribute(window, attribute: kAXTitleAttribute) as? String else {
                 continue
             }
             if title.hasPrefix("Chat |") || title == "Microsoft Teams" { continue }
@@ -155,11 +154,11 @@ struct ParticipantReader {
     private static func findElementByIdentifier(_ element: AXUIElement, identifier: String, depth: Int = 0, maxDepth: Int = 25) -> AXUIElement? {
         if depth > maxDepth { return nil }
 
-        if let eid = MuteDetector.getAXAttribute(element, attribute: "AXIdentifier") as? String, eid == identifier {
+        if let eid = AXHelper.getAttribute(element, attribute: "AXIdentifier") as? String, eid == identifier {
             return element
         }
 
-        guard let children = MuteDetector.getAXAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] else {
+        guard let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] else {
             return nil
         }
         for child in children {
@@ -175,11 +174,11 @@ struct ParticipantReader {
 
         var results: [AXUIElement] = []
 
-        if let elRole = MuteDetector.getAXAttribute(element, attribute: kAXRoleAttribute) as? String, elRole == role {
+        if let elRole = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String, elRole == role {
             results.append(element)
         }
 
-        if let children = MuteDetector.getAXAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
+        if let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
             for child in children {
                 results.append(contentsOf: findElementsByRole(child, role: role, depth: depth + 1, maxDepth: maxDepth))
             }
@@ -192,17 +191,17 @@ struct ParticipantReader {
 
         var texts: [String] = []
 
-        if let role = MuteDetector.getAXAttribute(element, attribute: kAXRoleAttribute) as? String,
+        if let role = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String,
            role == kAXStaticTextRole as String {
             for attr in [kAXValueAttribute, kAXTitleAttribute] as [String] {
-                if let val = MuteDetector.getAXAttribute(element, attribute: attr) as? String {
+                if let val = AXHelper.getAttribute(element, attribute: attr) as? String {
                     let trimmed = val.trimmingCharacters(in: .whitespaces)
                     if !trimmed.isEmpty { texts.append(trimmed) }
                 }
             }
         }
 
-        if let children = MuteDetector.getAXAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
+        if let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] {
             for child in children {
                 texts.append(contentsOf: extractTextValues(child, depth: depth + 1, maxDepth: maxDepth))
             }

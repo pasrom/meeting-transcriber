@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "PipelineQueue")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "PipelineQueue")
 
 @MainActor
 @Observable
@@ -28,8 +28,7 @@ class PipelineQueue {
 
     /// Simple init for skeleton tests and basic queue usage.
     init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
-        self.logDir = logDir ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
+        self.logDir = logDir ?? AppPaths.ipcDir
         self.whisperKit = nil
         self.diarizationFactory = nil
         self.protocolGenerator = nil
@@ -52,8 +51,7 @@ class PipelineQueue {
         claudeBin: String = "claude",
         completedJobLifetime: TimeInterval = 60
     ) {
-        self.logDir = logDir ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
+        self.logDir = logDir ?? AppPaths.ipcDir
         self.whisperKit = whisperKit
         self.diarizationFactory = diarizationFactory
         self.protocolGenerator = protocolGenerator

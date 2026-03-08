@@ -2,7 +2,7 @@ import ApplicationServices
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "MuteDetector")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MuteDetector")
 
 /// A point in time where the mute state changed.
 struct MuteTransition: Sendable {
@@ -81,6 +81,7 @@ class MuteDetector {
     /// Teams buttons have descriptions like "Mute (⌘ ⇧ M)" or "Unmute (⌘ ⇧ M)".
     static let mutedPrefixes = ["unmute", "stummschaltung aufheben"]
     static let unmutedPrefixes = ["mute", "stummschalten"]
+    static let allPrefixes = mutedPrefixes + unmutedPrefixes
 
     /// Read the mute state from Teams UI for the given PID.
     /// Returns true if muted, false if unmuted, nil if can't determine.
@@ -101,12 +102,10 @@ class MuteDetector {
         return nil
     }
 
-    // MARK: - AX Helpers
+    // MARK: - AX Helpers (delegates to AXHelper)
 
     static func getAXAttribute(_ element: AXUIElement, attribute: String) -> AnyObject? {
-        var value: AnyObject?
-        let err = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        return err == .success ? value : nil
+        AXHelper.getAttribute(element, attribute: attribute)
     }
 
     /// Recursively search AX tree for a button whose description starts
@@ -119,7 +118,6 @@ class MuteDetector {
         }
 
         if role == kAXButtonRole as String {
-            let allPrefixes = mutedPrefixes + unmutedPrefixes
             // Teams buttons use AXDescription
             if let desc = getAXAttribute(element, attribute: kAXDescriptionAttribute) as? String {
                 let lower = desc.lowercased()

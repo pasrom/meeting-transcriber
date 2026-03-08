@@ -8,8 +8,7 @@ struct IPCManager {
     let baseDir: URL
 
     init(baseDir: URL? = nil) {
-        self.baseDir = baseDir ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
+        self.baseDir = baseDir ?? AppPaths.ipcDir
     }
 
     // MARK: - Load

@@ -3,7 +3,7 @@ import AVFoundation
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "AudioMixer")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMixer")
 
 /// Audio mixing, echo suppression, mute masking, and resampling utilities.
 struct AudioMixer {

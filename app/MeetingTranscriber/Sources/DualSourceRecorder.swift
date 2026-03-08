@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "DualSourceRecorder")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DualSourceRecorder")
 
 /// Result of a recording session.
 struct RecordingResult {
@@ -30,6 +30,7 @@ class DualSourceRecorder: RecordingProvider {
     private var readerTask: Task<Void, Never>?
     private(set) var isRecording = false
     private(set) var recordingStartTime: TimeInterval = 0
+    private var startTimestamp: String?
 
     private let recordRate = 48000
     private let appChannels = 2
@@ -66,8 +67,7 @@ class DualSourceRecorder: RecordingProvider {
 
     /// Recordings directory.
     static var recordingsDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MeetingTranscriber/recordings")
+        AppPaths.recordingsDir
     }
 
     /// Start recording app audio and optionally mic.
@@ -82,6 +82,7 @@ class DualSourceRecorder: RecordingProvider {
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
 
         let ts = Self.timestamp()
+        startTimestamp = ts
 
         // ── audiotap subprocess ──
         guard let audiotapBin = Self.findAudiotap() else {
@@ -195,13 +196,15 @@ class DualSourceRecorder: RecordingProvider {
         audiotapProcess = nil
 
         let recDir = Self.recordingsDir
-        let ts = Self.timestamp()
+        let ts = startTimestamp ?? Self.timestamp()
+        startTimestamp = nil
 
         // ── Convert app audio frames to Float32 mono ──
         var appPath: URL?
         var appSamples: [Float] = []
         if !appAudioFrames.isEmpty {
-            let raw = appAudioFrames.reduce(Data()) { $0 + $1 }
+            var raw = Data()
+            for frame in appAudioFrames { raw.append(frame) }
             appAudioFrames = []
 
             let floatCount = raw.count / MemoryLayout<Float>.size
@@ -245,16 +248,10 @@ class DualSourceRecorder: RecordingProvider {
         var micPath: URL?
         var micSamples: [Float] = []
         let expectedMicPath = recDir.appendingPathComponent("\(ts)_mic.wav")
-        // audiotap writes to the path we passed in start(), try to find it
-        let micFiles = try? FileManager.default.contentsOfDirectory(at: recDir, includingPropertiesForKeys: nil)
-        let latestMic = micFiles?
-            .filter { $0.lastPathComponent.hasSuffix("_mic.wav") }
-            .sorted { $0.lastPathComponent > $1.lastPathComponent }
-            .first
 
-        if let micFile = latestMic,
-           FileManager.default.fileExists(atPath: micFile.path),
-           (try? FileManager.default.attributesOfItem(atPath: micFile.path)[.size] as? Int) ?? 0 > 44 {
+        if FileManager.default.fileExists(atPath: expectedMicPath.path),
+           (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
+            let micFile = expectedMicPath
             micSamples = try AudioMixer.loadWAVAsFloat32(url: micFile)
             micPath = micFile
             logger.info("Mic audio loaded: \(micFile.lastPathComponent)")
@@ -315,10 +312,14 @@ class DualSourceRecorder: RecordingProvider {
         )
     }
 
-    private static func timestamp() -> String {
+    private static let timestampFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd_HHmmss"
-        return fmt.string(from: Date())
+        return fmt
+    }()
+
+    private static func timestamp() -> String {
+        timestampFormatter.string(from: Date())
     }
 }
 

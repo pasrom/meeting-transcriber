@@ -3,7 +3,7 @@ import CoreAudio
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "MicRecorder")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MicRecorder")
 
 /// Records microphone audio using AVAudioEngine.
 /// Outputs 48kHz mono Float32 samples to a WAV file.

@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "IPCPoller")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "IPCPoller")
 
 /// Polls the IPC directory for speaker request files from diarize.py.
 /// Fires callbacks when requests appear.
@@ -20,8 +20,7 @@ class IPCPoller {
         ipcDir: URL? = nil,
         pollInterval: TimeInterval = 1.0
     ) {
-        self.ipcDir = ipcDir ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
+        self.ipcDir = ipcDir ?? AppPaths.ipcDir
         self.pollInterval = pollInterval
     }
 

@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "WatchLoop")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLoop")
 
 /// Native Swift watch loop that replaces the Python watcher.
 ///
@@ -56,8 +56,7 @@ class WatchLoop {
     }
 
     nonisolated static var defaultOutputDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MeetingTranscriber/protocols")
+        AppPaths.protocolsDir
     }
 
     var isActive: Bool { state != .idle }

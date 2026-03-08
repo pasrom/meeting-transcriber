@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "ProtocolGenerator")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ProtocolGenerator")
 
 /// Abstraction for protocol generation, enabling mock injection in tests.
 protocol ProtocolGenerating {

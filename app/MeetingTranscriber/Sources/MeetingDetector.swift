@@ -36,6 +36,10 @@ class MeetingDetector {
     private var cooldownUntil: [String: Date] = [:]
     private let cooldownDuration: TimeInterval = 60  // ignore same app for 60s after meeting
 
+    /// Pre-compiled regex for each pattern to avoid re-compilation on every poll.
+    private let compiledMeetingPatterns: [String: [NSRegularExpression]]
+    private let compiledIdlePatterns: [String: [NSRegularExpression]]
+
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
@@ -43,6 +47,15 @@ class MeetingDetector {
     init(patterns: [AppMeetingPattern], confirmationCount: Int = 2) {
         self.patterns = patterns
         self.confirmationCount = confirmationCount
+
+        var meeting: [String: [NSRegularExpression]] = [:]
+        var idle: [String: [NSRegularExpression]] = [:]
+        for p in patterns {
+            meeting[p.appName] = p.meetingPatterns.compactMap { try? NSRegularExpression(pattern: $0) }
+            idle[p.appName] = p.idlePatterns.compactMap { try? NSRegularExpression(pattern: $0) }
+        }
+        self.compiledMeetingPatterns = meeting
+        self.compiledIdlePatterns = idle
     }
 
     /// Single poll: check all windows against all patterns.
@@ -138,17 +151,22 @@ class MeetingDetector {
             }
         }
 
-        // Skip idle patterns
-        for idlePattern in pattern.idlePatterns {
-            if title.range(of: idlePattern, options: .regularExpression) != nil {
-                return nil
+        // Skip idle patterns (pre-compiled)
+        let range = NSRange(title.startIndex..., in: title)
+        if let idleRegexes = compiledIdlePatterns[pattern.appName] {
+            for regex in idleRegexes {
+                if regex.firstMatch(in: title, range: range) != nil {
+                    return nil
+                }
             }
         }
 
-        // Match meeting patterns
-        for meetingPattern in pattern.meetingPatterns {
-            if title.range(of: meetingPattern, options: .regularExpression) != nil {
-                return title
+        // Match meeting patterns (pre-compiled)
+        if let meetingRegexes = compiledMeetingPatterns[pattern.appName] {
+            for regex in meetingRegexes {
+                if regex.firstMatch(in: title, range: range) != nil {
+                    return title
+                }
             }
         }
 

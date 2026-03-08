@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: "com.meetingtranscriber", category: "DiarizationProcess")
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DiarizationProcess")
 
 /// Result from the standalone diarize.py script.
 struct DiarizationResult {
@@ -77,8 +77,7 @@ class DiarizationProcess: DiarizationProvider {
             self.scriptPath = URL(fileURLWithPath: "diarize.py")
         }
 
-        self.ipcDir = ipcDir ?? fm.homeDirectoryForCurrentUser
-            .appendingPathComponent(".meeting-transcriber")
+        self.ipcDir = ipcDir ?? AppPaths.ipcDir
     }
 
     /// Run diarization on an audio file.
@@ -151,7 +150,7 @@ class DiarizationProcess: DiarizationProvider {
             throw DiarizationError.processFailed(Int(process.terminationStatus), stderr)
         }
 
-        return try parseOutput(stdoutData)
+        return try Self.parseOutput(stdoutData)
     }
 
     /// Parse the JSON output from diarize.py.
@@ -183,15 +182,9 @@ class DiarizationProcess: DiarizationProvider {
         )
     }
 
-    // Convenience alias for testing
-    func parseOutput(_ data: Data) throws -> DiarizationResult {
-        try Self.parseOutput(data)
-    }
-
     /// Bridge method satisfying `DiarizationProvider` protocol (fewer parameters).
     func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult {
-        let defaultDB = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/MeetingTranscriber/speakers.json")
+        let defaultDB = AppPaths.speakersDB
         return try await run(audioPath: audioPath, numSpeakers: numSpeakers, expectedNames: [], speakersDB: defaultDB, meetingTitle: meetingTitle)
     }
 

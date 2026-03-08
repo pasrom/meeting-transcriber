@@ -9,19 +9,6 @@ func tokenStatusInfo(hasToken: Bool) -> (icon: String, color: String) {
         : ("exclamationmark.triangle.fill", "orange")
 }
 
-/// Check if Screen Recording permission is granted.
-/// If CGWindowListCopyWindowInfo returns window titles for other apps, the permission is granted.
-func checkScreenRecordingPermission() -> Bool {
-    guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
-        return false
-    }
-    // If we can see window names from other apps, permission is granted
-    let ownPID = ProcessInfo.processInfo.processIdentifier
-    return windowList.contains { info in
-        guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
-        return info[kCGWindowName as String] as? String != nil
-    }
-}
 
 struct SettingsView: View {
     @Bindable var settings: AppSettings
@@ -252,7 +239,7 @@ struct SettingsView: View {
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
-        screenRecordingOK = checkScreenRecordingPermission()
+        screenRecordingOK = Permissions.checkScreenRecording()
         accessibilityOK = AXIsProcessTrusted()
     }
 
