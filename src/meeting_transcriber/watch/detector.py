@@ -77,9 +77,8 @@ class MeetingDetector:
             kCGWindowListOptionAll,
         )
 
-        windows = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements, kCGNullWindowID
-        )
+        options = kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements
+        windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
         result = list(windows) if windows else []
 
         if result and not self._permission_warned:
