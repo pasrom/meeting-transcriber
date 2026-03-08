@@ -7,6 +7,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: macos-26
@@ -57,9 +61,9 @@ jobs:
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         run: |
           if [ -n "$DEVELOPER_ID" ]; then
-            ./scripts/build_release.sh --notarize
-          else
             ./scripts/build_release.sh
+          else
+            ./scripts/build_release.sh --no-notarize --no-diarize
           fi
 
       - name: Get version
