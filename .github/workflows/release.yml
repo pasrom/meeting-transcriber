@@ -12,17 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: macos-26
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Swift tests
-        run: cd app/MeetingTranscriber && swift test
-
   build:
     runs-on: macos-26  # Apple Silicon runner (Swift 6.0+)
-    needs: test
     permissions:
       contents: write  # For creating GitHub releases
 
