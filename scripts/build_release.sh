@@ -39,12 +39,12 @@ CONTENTS="$APP_BUNDLE/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
-NOTARIZE=false
-WITH_DIARIZE=false
+NOTARIZE=true
+WITH_DIARIZE=true
 for arg in "$@"; do
     case "$arg" in
-        --notarize) NOTARIZE=true ;;
-        --with-diarize) WITH_DIARIZE=true ;;
+        --no-notarize) NOTARIZE=false ;;
+        --no-diarize) WITH_DIARIZE=false ;;
     esac
 done
 
