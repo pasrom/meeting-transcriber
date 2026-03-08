@@ -62,7 +62,7 @@ final class AppSettings {
         didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
     }
 
-    var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? false {
+    var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
 
