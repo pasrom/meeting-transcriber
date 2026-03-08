@@ -29,6 +29,7 @@ class DualSourceRecorder: RecordingProvider {
     private var appAudioFrames: [Data] = []
     private var readerTask: Task<Void, Never>?
     private(set) var isRecording = false
+    private(set) var recordingStartTime: TimeInterval = 0
 
     private let recordRate = 48000
     private let appChannels = 2
@@ -113,6 +114,7 @@ class DualSourceRecorder: RecordingProvider {
         try proc.run()
         audiotapProcess = proc
         isRecording = true
+        recordingStartTime = ProcessInfo.processInfo.systemUptime
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
 
@@ -147,7 +149,7 @@ class DualSourceRecorder: RecordingProvider {
             throw RecorderError.notRecording
         }
 
-        let recordingStart = ProcessInfo.processInfo.systemUptime
+        let recordingStart = recordingStartTime
         isRecording = false
 
         // Stop mute detector
