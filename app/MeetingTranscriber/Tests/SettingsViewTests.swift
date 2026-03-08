@@ -23,13 +23,13 @@ final class SettingsViewTests: XCTestCase {
 
     func testViewRendersWithDefaults() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         XCTAssertNoThrow(try sut.inspect())
     }
 
     func testDiarizeToggleExists() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Speaker Diarization"))
     }
@@ -39,7 +39,7 @@ final class SettingsViewTests: XCTestCase {
     func testDiarizeEnabledShowsExpectedSpeakers() throws {
         let settings = AppSettings()
         settings.diarize = true
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Expected Speakers"))
     }
@@ -47,7 +47,7 @@ final class SettingsViewTests: XCTestCase {
     func testDiarizeEnabledShowsTokenSection() throws {
         let settings = AppSettings()
         settings.diarize = true
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Save Token"))
     }
@@ -55,7 +55,7 @@ final class SettingsViewTests: XCTestCase {
     func testDiarizeEnabledShowsClearButton() throws {
         let settings = AppSettings()
         settings.diarize = true
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Clear"))
     }
@@ -63,7 +63,7 @@ final class SettingsViewTests: XCTestCase {
     func testDiarizeEnabledShowsGetTokenLink() throws {
         let settings = AppSettings()
         settings.diarize = true
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Get token"))
     }
@@ -71,7 +71,7 @@ final class SettingsViewTests: XCTestCase {
     func testDiarizeDisabledHidesTokenSection() throws {
         let settings = AppSettings()
         settings.diarize = false
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertThrowsError(try body.find(text: "Save Token"))
     }
@@ -80,7 +80,7 @@ final class SettingsViewTests: XCTestCase {
 
     func testNoMicToggleExists() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "No Microphone (app audio only)"))
     }
@@ -88,7 +88,7 @@ final class SettingsViewTests: XCTestCase {
     func testMicSectionShownWhenMicEnabled() throws {
         let settings = AppSettings()
         settings.noMic = false
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Mic Speaker Name"))
     }
@@ -96,7 +96,7 @@ final class SettingsViewTests: XCTestCase {
     func testMicSectionHiddenWhenNoMic() throws {
         let settings = AppSettings()
         settings.noMic = true
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertThrowsError(try body.find(text: "Mic Speaker Name"))
     }
@@ -105,7 +105,7 @@ final class SettingsViewTests: XCTestCase {
 
     func testAppsToWatchSection() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Microsoft Teams"))
         XCTAssertNoThrow(try body.find(text: "Zoom"))
@@ -116,21 +116,21 @@ final class SettingsViewTests: XCTestCase {
 
     func testPollIntervalFieldExists() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Poll Interval"))
     }
 
     func testGracePeriodFieldExists() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Grace Period"))
     }
 
     func testWhisperKitModelPickerExists() throws {
         let settings = AppSettings()
-        let sut = SettingsView(settings: settings)
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
     }

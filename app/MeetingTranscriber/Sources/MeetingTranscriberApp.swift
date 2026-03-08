@@ -25,12 +25,6 @@ struct MeetingTranscriberApp: App {
 
     init() {
         notifications.setUp()
-        // Pre-load WhisperKit model on app launch
-        let engine = whisperKit
-        Task {
-            engine.modelVariant = AppSettings().whisperKitModel
-            await engine.loadModel()
-        }
         // Auto-watch: schedule on main run loop after app finishes launching
         if CommandLine.arguments.contains("--auto-watch")
             || UserDefaults.standard.bool(forKey: "autoWatch") {
@@ -78,6 +72,10 @@ struct MeetingTranscriberApp: App {
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
                 bringWindowToFront(id: "speaker-naming")
             }
+            .task {
+                whisperKit.modelVariant = settings.whisperKitModel
+                await whisperKit.loadModel()
+            }
         }
 
         Window("Name Speakers", id: "speaker-naming") {
@@ -109,7 +107,7 @@ struct MeetingTranscriberApp: App {
         .windowResizability(.contentSize)
 
         Window("Settings", id: "settings") {
-            SettingsView(settings: settings)
+            SettingsView(settings: settings, whisperKitEngine: whisperKit)
         }
         .windowResizability(.contentSize)
     }

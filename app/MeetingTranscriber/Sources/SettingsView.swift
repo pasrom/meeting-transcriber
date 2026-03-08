@@ -32,7 +32,7 @@ struct SettingsView: View {
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
-    @State private var whisperKitEngine = WhisperKitEngine()
+    var whisperKitEngine: WhisperKitEngine
 
     private let whisperKitModels: [(variant: String, label: String)] = [
         ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
