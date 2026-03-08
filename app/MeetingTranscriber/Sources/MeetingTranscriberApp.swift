@@ -13,6 +13,7 @@ struct MeetingTranscriberApp: App {
     @State private var speakerRequest: SpeakerRequest?
     @State private var speakerCountRequest: SpeakerCountRequest?
     @State private var watchLoop: WatchLoop?
+    @State private var pipelineQueue = PipelineQueue()
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
     private let ipc = IPCManager()
@@ -44,8 +45,10 @@ struct MeetingTranscriberApp: App {
             MenuBarView(
                 status: currentStatus,
                 isWatching: isWatching,
+                pipelineQueue: pipelineQueue,
                 onStartStop: toggleWatching,
                 onOpenLastProtocol: openLastProtocol,
+                onOpenProtocol: { url in NSWorkspace.shared.open(url) },
                 onOpenProtocolsFolder: openProtocolsFolder,
                 onOpenSettings: {
                     bringWindowToFront(id: "settings")
@@ -54,6 +57,7 @@ struct MeetingTranscriberApp: App {
                     loadSpeakerRequest()
                     bringWindowToFront(id: "speaker-naming")
                 },
+                onDismissJob: { id in pipelineQueue.removeJob(id: id) },
                 onQuit: quit
             )
         } label: {
@@ -174,7 +178,7 @@ struct MeetingTranscriberApp: App {
                 }
 
                 await MainActor.run {
-                    let queue = PipelineQueue(
+                    pipelineQueue = PipelineQueue(
                         whisperKit: whisperKit,
                         diarizationFactory: { DiarizationProcess() },
                         protocolGenerator: DefaultProtocolGenerator(),
@@ -185,7 +189,7 @@ struct MeetingTranscriberApp: App {
 
                     let loop = WatchLoop(
                         detector: MeetingDetector(patterns: patterns),
-                        pipelineQueue: queue,
+                        pipelineQueue: pipelineQueue,
                         pollInterval: settings.pollInterval,
                         endGracePeriod: settings.endGrace,
                         noMic: settings.noMic

@@ -7,6 +7,18 @@ enum JobState: String, Codable, Sendable {
     case generatingProtocol
     case done
     case error
+
+    /// Human-readable label for this job state.
+    var label: String {
+        switch self {
+        case .waiting: "Waiting..."
+        case .transcribing: "Transcribing..."
+        case .diarizing: "Diarizing..."
+        case .generatingProtocol: "Generating Protocol..."
+        case .done: "Done"
+        case .error: "Error"
+        }
+    }
 }
 
 struct PipelineJob: Identifiable, Codable, Sendable {
