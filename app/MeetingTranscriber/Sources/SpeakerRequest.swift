@@ -7,11 +7,13 @@ struct SpeakerRequest: Codable {
     let meetingTitle: String
     let audioSamplesDir: String
     let speakers: [SpeakerInfo]
+    let expectedNames: [String]?
 
     enum CodingKeys: String, CodingKey {
         case version, timestamp, speakers
         case meetingTitle = "meeting_title"
         case audioSamplesDir = "audio_samples_dir"
+        case expectedNames = "expected_names"
     }
 }
 

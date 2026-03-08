@@ -31,7 +31,8 @@ final class SpeakerNamingViewTests: XCTestCase {
             timestamp: "2024-01-01T00:00:00",
             meetingTitle: title,
             audioSamplesDir: "/tmp/samples",
-            speakers: speakers ?? [makeSpeaker()]
+            speakers: speakers ?? [makeSpeaker()],
+            expectedNames: nil
         )
     }
 
