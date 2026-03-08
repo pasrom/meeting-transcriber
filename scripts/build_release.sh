@@ -117,39 +117,21 @@ if [ "$WITH_DIARIZE" = true ]; then
         echo "  Using cached Python archive"
     fi
 
-    # Extract to a temporary location, create venv, install only diarize deps
-    PYTHON_TMP="$BUILD_DIR/python-tmp"
-    rm -rf "$PYTHON_TMP"
-    mkdir -p "$PYTHON_TMP"
-    tar xzf "$CACHED_ARCHIVE" -C "$PYTHON_TMP" --strip-components=1
-
+    # Extract standalone Python directly as the diarize environment
+    # (no venv — avoids broken symlinks and missing stdlib)
     DIARIZE_ENV="$RESOURCES/python-diarize"
-    "$PYTHON_TMP/bin/python3" -m venv "$DIARIZE_ENV"
+    rm -rf "$DIARIZE_ENV"
+    mkdir -p "$DIARIZE_ENV"
+    tar xzf "$CACHED_ARCHIVE" -C "$DIARIZE_ENV" --strip-components=1
 
     echo "  Installing diarization dependencies..."
-    "$DIARIZE_ENV/bin/pip" install --upgrade pip --quiet
-    "$DIARIZE_ENV/bin/pip" install -r "$PROJECT_ROOT/tools/diarize/requirements.txt" --quiet
+    "$DIARIZE_ENV/bin/pip3" install --upgrade pip --quiet
+    "$DIARIZE_ENV/bin/pip3" install -r "$PROJECT_ROOT/tools/diarize/requirements.txt" --quiet
 
     # Copy standalone diarize script
     cp "$PROJECT_ROOT/tools/diarize/diarize.py" "$DIARIZE_ENV/diarize.py"
 
-    # Replace broken symlinks in venv bin/ with real Python binary
-    # (venv symlinks point to $PYTHON_TMP which gets deleted below)
-    REAL_PYTHON="$PYTHON_TMP/bin/python3.14"
-    for link in "$DIARIZE_ENV/bin/python3" "$DIARIZE_ENV/bin/python" "$DIARIZE_ENV/bin/python3.14"; do
-        if [ -L "$link" ]; then
-            rm "$link"
-            cp "$REAL_PYTHON" "$link"
-        fi
-    done
-    # Fix the unicode alias too
-    if [ -L "$DIARIZE_ENV/bin/𝜋thon" ]; then
-        rm "$DIARIZE_ENV/bin/𝜋thon"
-        cp "$REAL_PYTHON" "$DIARIZE_ENV/bin/𝜋thon"
-    fi
-
-    # Clean up temp Python and venv cruft
-    rm -rf "$PYTHON_TMP"
+    # Clean up cruft to reduce bundle size
     rm -rf "$DIARIZE_ENV"/lib/python*/site-packages/pip
     rm -rf "$DIARIZE_ENV"/lib/python*/site-packages/setuptools
     rm -rf "$DIARIZE_ENV"/lib/python*/site-packages/pkg_resources
@@ -158,15 +140,18 @@ if [ "$WITH_DIARIZE" = true ]; then
     find "$DIARIZE_ENV" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find "$DIARIZE_ENV" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
     find "$DIARIZE_ENV" -type d -name "test" -exec rm -rf {} + 2>/dev/null || true
-    find "$DIARIZE_ENV" -name "*cuda*" -delete 2>/dev/null || true
-    find "$DIARIZE_ENV" -name "*cudnn*" -delete 2>/dev/null || true
-    find "$DIARIZE_ENV" -name "*rocm*" -delete 2>/dev/null || true
+    # Remove large CUDA/ROCm binary libraries (not Python source referencing CUDA)
+    find "$DIARIZE_ENV" -name "*.so" -path "*cuda*" -delete 2>/dev/null || true
+    find "$DIARIZE_ENV" -name "*.dylib" -path "*cuda*" -delete 2>/dev/null || true
+    find "$DIARIZE_ENV" -name "*.so" -path "*cudnn*" -delete 2>/dev/null || true
+    find "$DIARIZE_ENV" -name "*.so" -path "*rocm*" -delete 2>/dev/null || true
     find "$DIARIZE_ENV" -name "*.pyc" -delete 2>/dev/null || true
     rm -f "$DIARIZE_ENV"/lib/libpython*.a
     rm -rf "$DIARIZE_ENV/share"
+    rm -rf "$DIARIZE_ENV/include"
 
     DIARIZE_SIZE=$(du -sh "$DIARIZE_ENV" | cut -f1)
-    echo "  Diarization venv: $DIARIZE_SIZE"
+    echo "  Diarization env: $DIARIZE_SIZE"
 else
     echo ""
     echo "Step 4: Skipping diarization (use --with-diarize to include)"
