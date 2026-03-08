@@ -77,6 +77,7 @@ jobs:
         with:
           name: MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
           path: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
+          retention-days: 3
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
