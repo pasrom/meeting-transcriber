@@ -53,8 +53,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testEndGraceClampedToMinimum() {
-        settings.endGrace = 2.0
-        XCTAssertEqual(settings.endGrace, 5.0)
+        settings.endGrace = 0.5
+        XCTAssertEqual(settings.endGrace, 1.0)
     }
 
     func testEndGraceAcceptsValidValue() {
