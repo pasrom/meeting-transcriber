@@ -190,18 +190,20 @@ if [ "$NOTARIZE" = true ]; then
 </plist>
 ENTITLEMENTS_EOF
 
-    # Sign all dylibs/shared objects
+    # Sign all dylibs/shared objects (one at a time to avoid xargs arg length limits)
     echo "  Signing embedded libraries..."
     find "$APP_BUNDLE" -type f \( -name "*.dylib" -o -name "*.so" \) -print0 | \
-        xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
-            --options runtime --timestamp "{}"
+        while IFS= read -r -d '' lib; do
+            codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$lib"
+        done
 
     # Sign executables in diarization venv (if present)
     if [ -d "$RESOURCES/python-diarize" ]; then
         echo "  Signing diarization executables..."
         find "$RESOURCES/python-diarize" -type f -perm +111 -not -name "*.py" -not -name "*.sh" -print0 2>/dev/null | \
-            xargs -0 -I{} codesign --force --sign "$DEVELOPER_ID" \
-                --options runtime --timestamp "{}"
+            while IFS= read -r -d '' exe; do
+                codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$exe"
+            done
     fi
 
     # Sign audiotap binary
