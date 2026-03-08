@@ -102,13 +102,14 @@ struct ProtocolGenerator {
         prompt += transcript
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [
-            claudeBin, "-p", "-",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--model", "sonnet",
-        ]
+        let resolvedBin = Self.resolveClaudePath(claudeBin)
+        process.executableURL = URL(fileURLWithPath: resolvedBin)
+        var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
+        // If using /usr/bin/env fallback, prepend the binary name
+        if resolvedBin == "/usr/bin/env" {
+            args.insert(claudeBin, at: 0)
+        }
+        process.arguments = args
 
         // Remove CLAUDECODE env var to allow nested Claude CLI invocation
         var env = ProcessInfo.processInfo.environment
@@ -229,6 +230,29 @@ struct ProtocolGenerator {
         }
 
         return nil
+    }
+
+    // MARK: - CLI Resolution
+
+    /// Resolve the claude CLI binary path.
+    /// App bundles have a restricted PATH, so check common install locations.
+    static func resolveClaudePath(_ bin: String) -> String {
+        // If already an absolute path, use it
+        if bin.hasPrefix("/") { return bin }
+
+        let candidates = [
+            "\(NSHomeDirectory())/.local/bin/\(bin)",
+            "/usr/local/bin/\(bin)",
+            "\(NSHomeDirectory())/.npm-global/bin/\(bin)",
+            "/opt/homebrew/bin/\(bin)",
+        ]
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        // Fallback: hope it's in PATH
+        return "/usr/bin/env"
     }
 
     // MARK: - File Operations
