@@ -2,6 +2,7 @@ import XCTest
 
 @testable import MeetingTranscriber
 
+@MainActor
 final class WatchLoopTests: XCTestCase {
 
     private func makeLoop() -> WatchLoop {

@@ -81,6 +81,7 @@ private class MockProtocolGen: ProtocolGenerating {
 
 // MARK: - Tests
 
+@MainActor
 final class WatchLoopE2ETests: XCTestCase {
 
     private var tmpDir: URL!

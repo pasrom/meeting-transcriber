@@ -6,6 +6,7 @@ private let logger = Logger(subsystem: "com.meetingtranscriber", category: "Watc
 /// Native Swift watch loop that replaces the Python watcher.
 ///
 /// Orchestrates: meeting detection → recording → transcription → protocol generation.
+@MainActor
 @Observable
 class WatchLoop {
     enum State: String, Sendable {
@@ -77,7 +78,7 @@ class WatchLoop {
         self.claudeBin = claudeBin
     }
 
-    static var defaultOutputDir: URL {
+    nonisolated static var defaultOutputDir: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/MeetingTranscriber/protocols")
     }
