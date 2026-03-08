@@ -31,7 +31,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.watchWebex)
         XCTAssertFalse(settings.noMic)
         XCTAssertEqual(settings.micName, "Me")
-        XCTAssertFalse(settings.diarize)
+        XCTAssertTrue(settings.diarize)
         XCTAssertEqual(settings.whisperKitModel, "openai_whisper-large-v3-v20240930_turbo")
     }
 
