@@ -5,6 +5,8 @@ private let logger = Logger(subsystem: "com.meetingtranscriber", category: "IPCP
 
 /// Polls the IPC directory for speaker request files from diarize.py.
 /// Fires callbacks when requests appear.
+/// @MainActor ensures thread-safe access to seenFiles (accessed from poll Task and main thread).
+@MainActor
 class IPCPoller {
     private let ipcDir: URL
     private let pollInterval: TimeInterval

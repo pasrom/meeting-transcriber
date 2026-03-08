@@ -1,6 +1,7 @@
 import XCTest
 @testable import MeetingTranscriber
 
+@MainActor
 final class IPCPollerTests: XCTestCase {
     private var tmpDir: URL!
     private var poller: IPCPoller!
@@ -49,7 +50,8 @@ final class IPCPollerTests: XCTestCase {
             version: 1, timestamp: "2026-03-06T12:00:00",
             meetingTitle: "Test", audioSamplesDir: "/tmp",
             speakers: [SpeakerInfo(label: "SPEAKER_00", autoName: "Alice",
-                                   confidence: 0.9, speakingTimeSeconds: 30, sampleFile: "s0.wav")]
+                                   confidence: 0.9, speakingTimeSeconds: 30, sampleFile: "s0.wav")],
+            expectedNames: nil
         )
         let data = try JSONEncoder().encode(request)
         try data.write(to: tmpDir.appendingPathComponent("speaker_request.json"))
