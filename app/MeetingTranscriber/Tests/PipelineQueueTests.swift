@@ -88,4 +88,42 @@ final class PipelineQueueTests: XCTestCase {
         queue.removeJob(id: job.id)
         XCTAssertEqual(queue.jobs.count, 0)
     }
+
+    // MARK: - Processing Tests
+
+    private func makeProcessingQueue() -> PipelineQueue {
+        PipelineQueue(
+            logDir: tmpDir,
+            whisperKit: WhisperKitEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGenerator: MockProtocolGen(),
+            outputDir: tmpDir,
+            diarizeEnabled: false,
+            micLabel: "Me"
+        )
+    }
+
+    func testProcessNextPicksFirstWaitingJob() async throws {
+        let pQueue = makeProcessingQueue()
+
+        let job = makeJob()
+        pQueue.enqueue(job)
+        XCTAssertEqual(pQueue.jobs[0].state, .waiting)
+
+        await pQueue.processNext()
+
+        // Job should have been picked up (state != waiting)
+        XCTAssertNotEqual(pQueue.jobs[0].state, .waiting)
+    }
+
+    func testProcessNextSkipsWhenNoWaitingJobs() async {
+        let pQueue = makeProcessingQueue()
+        await pQueue.processNext()
+        XCTAssertTrue(pQueue.jobs.isEmpty)
+    }
+
+    func testIsProcessingFlag() async {
+        let pQueue = makeProcessingQueue()
+        XCTAssertFalse(pQueue.isProcessing)
+    }
 }
