@@ -202,20 +202,6 @@ struct MeetingTranscriberApp: App {
                         noMic: settings.noMic
                     )
 
-                    // IPC polling for speaker dialogs during diarization
-                    ipcPoller.onSpeakerCountRequest = { request in
-                        DispatchQueue.main.async {
-                            speakerCountRequest = request
-                            NotificationCenter.default.post(name: .showSpeakerCount, object: nil)
-                        }
-                    }
-                    ipcPoller.onSpeakerRequest = { request in
-                        DispatchQueue.main.async {
-                            speakerRequest = request
-                            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
-                        }
-                    }
-
                     loop.onStateChange = { [notifications] _, newState in
                         switch newState {
                         case .recording:
@@ -246,6 +232,19 @@ struct MeetingTranscriberApp: App {
     // MARK: - Pipeline Callbacks
 
     private func configurePipelineCallbacks() {
+        ipcPoller.onSpeakerCountRequest = { request in
+            DispatchQueue.main.async {
+                self.speakerCountRequest = request
+                NotificationCenter.default.post(name: .showSpeakerCount, object: nil)
+            }
+        }
+        ipcPoller.onSpeakerRequest = { request in
+            DispatchQueue.main.async {
+                self.speakerRequest = request
+                NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+            }
+        }
+
         pipelineQueue.onJobStateChange = { [notifications, ipcPoller] job, _, newState in
             switch newState {
             case .diarizing:
