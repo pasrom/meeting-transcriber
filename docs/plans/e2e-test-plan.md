@@ -77,7 +77,7 @@ Make `handleMeeting()` internal (remove `private`).
 | MeetingDetector | MOCK | Injectable `windowListProvider` |
 | DualSourceRecorder | MOCK | Needs real PID + audiotap. Return fixture WAVs as RecordingResult |
 | WhisperKit | REAL | Core quality gate. Catches sample rate + token bugs |
-| DiarizationProcess | MOCK | Slow + needs HF_TOKEN. Mock returns known segments, real `assignSpeakers()` still runs |
+| DiarizationProcess | MOCK (fast tests) + REAL (slow test) | Fast tests mock for speed. Slow test runs real pyannote to verify end-to-end diarization. Skips if .venv/HF_TOKEN unavailable. |
 | ProtocolGenerator | MOCK | Claude CLI expensive/slow. Return canned Markdown |
 
 ## Test Audio
@@ -112,6 +112,14 @@ For dual-source test: split fixture in half (first half = app, second half = mic
 
 ### 6. `testResamplePathProduces16kHzForWhisperKit`
 - Create 48kHz WAV, resample, verify file header, verify WhisperKit transcribes it
+
+### 7. `testFullPipelineWithRealDiarization` (slow)
+- Skip if `!DiarizationProcess().isAvailable` or no HF_TOKEN in Keychain
+- Mock recorder returns 48kHz fixture WAV
+- REAL DiarizationProcess runs pyannote via .venv/bin/python + tools/diarize/diarize.py
+- REAL WhisperKit transcribes
+- Mock protocol gen captures transcript
+- **Asserts:** Diarization returns segments, speaker labels assigned, transcript contains SPEAKER_ labels
 
 ## Bug Regression Coverage
 
