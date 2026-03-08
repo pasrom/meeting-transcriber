@@ -119,6 +119,8 @@ struct MeetingTranscriberApp: App {
 
     // MARK: - Status
 
+    private static let isoFormatter = ISO8601DateFormatter()
+
     private var currentStatus: TranscriberStatus? {
         guard let loop = watchLoop, loop.isActive else { return nil }
 
@@ -132,7 +134,7 @@ struct MeetingTranscriberApp: App {
 
         return TranscriberStatus(
             version: 1,
-            timestamp: ISO8601DateFormatter().string(from: Date()),
+            timestamp: Self.isoFormatter.string(from: Date()),
             state: loop.transcriberState,
             detail: loop.detail,
             meeting: meeting,
@@ -185,14 +187,7 @@ struct MeetingTranscriberApp: App {
                 }
 
                 await MainActor.run {
-                    pipelineQueue = PipelineQueue(
-                        whisperKit: whisperKit,
-                        diarizationFactory: { DiarizationProcess() },
-                        protocolGenerator: DefaultProtocolGenerator(),
-                        outputDir: WatchLoop.defaultOutputDir,
-                        diarizeEnabled: settings.diarize,
-                        micLabel: settings.micName
-                    )
+                    pipelineQueue = makePipelineQueue()
 
                     let loop = WatchLoop(
                         detector: MeetingDetector(patterns: patterns),
@@ -229,7 +224,18 @@ struct MeetingTranscriberApp: App {
         }
     }
 
-    // MARK: - Pipeline Callbacks
+    // MARK: - Pipeline
+
+    private func makePipelineQueue() -> PipelineQueue {
+        PipelineQueue(
+            whisperKit: whisperKit,
+            diarizationFactory: { DiarizationProcess() },
+            protocolGenerator: DefaultProtocolGenerator(),
+            outputDir: WatchLoop.defaultOutputDir,
+            diarizeEnabled: settings.diarize,
+            micLabel: settings.micName
+        )
+    }
 
     private func configurePipelineCallbacks() {
         ipcPoller.onSpeakerCountRequest = { request in
@@ -278,14 +284,7 @@ struct MeetingTranscriberApp: App {
 
         // Ensure queue has processing dependencies
         if pipelineQueue.whisperKit == nil {
-            pipelineQueue = PipelineQueue(
-                whisperKit: whisperKit,
-                diarizationFactory: { DiarizationProcess() },
-                protocolGenerator: DefaultProtocolGenerator(),
-                outputDir: WatchLoop.defaultOutputDir,
-                diarizeEnabled: settings.diarize,
-                micLabel: settings.micName
-            )
+            pipelineQueue = makePipelineQueue()
             configurePipelineCallbacks()
         }
 

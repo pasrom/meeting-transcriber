@@ -86,9 +86,7 @@ struct MenuBarView: View {
         .keyboardShortcut("p")
 
         // Processing queue
-        if !pipelineQueue.activeJobs.isEmpty || !pipelineQueue.pendingJobs.isEmpty
-            || !pipelineQueue.completedJobs.isEmpty || !pipelineQueue.errorJobs.isEmpty
-        {
+        if !pipelineQueue.jobs.isEmpty {
             Divider()
             Label("Processing", systemImage: "gearshape.2.fill")
                 .font(.caption)

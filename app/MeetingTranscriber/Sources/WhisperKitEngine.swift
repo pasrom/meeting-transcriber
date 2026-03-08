@@ -101,41 +101,8 @@ final class WhisperKitEngine {
 
     /// Transcribe a WAV file. Returns lines in `[MM:SS] text` format matching Python output.
     func transcribe(audioPath: URL) async throws -> String {
-        try await ensureModel()
-        guard let pipe else {
-            throw TranscriptionError.modelNotLoaded
-        }
-
-        let options = DecodingOptions(
-            language: language,
-            wordTimestamps: false
-        )
-
-        let results = await pipe.transcribe(
-            audioPaths: [audioPath.path],
-            decodeOptions: options
-        )
-
-        guard let firstResult = results.first, let transcriptionResults = firstResult else {
-            return ""
-        }
-
-        var lines: [String] = []
-        let segments = transcriptionResults.flatMap { $0.segments }
-        for segment in segments {
-            let total = Int(segment.start)
-            let h = total / 3600
-            let m = (total % 3600) / 60
-            let s = total % 60
-            let ts = h > 0
-                ? String(format: "[%d:%02d:%02d]", h, m, s)
-                : String(format: "[%02d:%02d]", m, s)
-            let text = Self.stripWhisperTokens(segment.text).trimmingCharacters(in: .whitespaces)
-            if !text.isEmpty {
-                lines.append("\(ts) \(text)")
-            }
-        }
-        return lines.joined(separator: "\n")
+        let segments = try await transcribeSegments(audioPath: audioPath)
+        return segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
     }
 
     /// Transcribe a WAV file and return structured segments.
@@ -145,8 +112,6 @@ final class WhisperKitEngine {
             throw TranscriptionError.modelNotLoaded
         }
 
-        NSLog("WhisperKit transcribing: \(audioPath.path)")
-
         let options = DecodingOptions(
             language: language,
             wordTimestamps: false
@@ -157,19 +122,7 @@ final class WhisperKitEngine {
             decodeOptions: options
         )
 
-        NSLog("WhisperKit results count: \(results.count), first nil: \(results.first == nil)")
-        if let firstResult = results.first {
-            NSLog("WhisperKit firstResult nil: \(firstResult == nil)")
-            if let tr = firstResult {
-                NSLog("WhisperKit transcription results: \(tr.count)")
-                for r in tr {
-                    NSLog("WhisperKit segments: \(r.segments.count), text: \(r.text.prefix(100))")
-                }
-            }
-        }
-
         guard let firstResult = results.first, let transcriptionResults = firstResult else {
-            NSLog("WhisperKit: no results returned")
             return []
         }
 

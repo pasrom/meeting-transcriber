@@ -222,6 +222,17 @@ struct AudioMixer {
         return output
     }
 
+    // MARK: - Convenience
+
+    /// Load a WAV file, resample to a target rate, and save to a new file.
+    static func resampleFile(from source: URL, to destination: URL, targetRate: Int = 16000) throws {
+        let file = try AVAudioFile(forReading: source)
+        let sourceRate = Int(file.processingFormat.sampleRate)
+        let samples = try loadWAVAsFloat32(url: source)
+        let resampled = resample(samples, from: sourceRate, to: targetRate)
+        try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)
+    }
+
     // MARK: - WAV I/O
 
     /// Load a WAV file as mono Float32 samples.

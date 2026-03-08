@@ -151,21 +151,15 @@ class PipelineQueue {
             defer { try? FileManager.default.removeItem(at: workDir) }
 
             let transcript: String
+            // Segments cached for potential diarization reuse (avoids double transcription)
+            var cachedSegments: [TimestampedSegment]?
             if let appAudioPath = appPath, let micAudioPath = micPath {
                 // Dual-source: resample both tracks to 16kHz
                 let app16k = workDir.appendingPathComponent("app_16k.wav")
-                let appSamples = try AudioMixer.loadWAVAsFloat32(url: appAudioPath)
-                try AudioMixer.saveWAV(
-                    samples: AudioMixer.resample(appSamples, from: 48000, to: 16000),
-                    sampleRate: 16000, url: app16k
-                )
+                try AudioMixer.resampleFile(from: appAudioPath, to: app16k)
 
                 let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-                let micSamples = try AudioMixer.loadWAVAsFloat32(url: micAudioPath)
-                try AudioMixer.saveWAV(
-                    samples: AudioMixer.resample(micSamples, from: 48000, to: 16000),
-                    sampleRate: 16000, url: mic16k
-                )
+                try AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
 
                 transcript = try await whisperKit.transcribeDualSource(
                     appAudio: app16k,
@@ -176,12 +170,12 @@ class PipelineQueue {
             } else {
                 // Single-source: resample mix to 16kHz
                 let mix16k = workDir.appendingPathComponent("mix_16k.wav")
-                let mixSamples = try AudioMixer.loadWAVAsFloat32(url: mixPath)
-                try AudioMixer.saveWAV(
-                    samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000),
-                    sampleRate: 16000, url: mix16k
-                )
-                transcript = try await whisperKit.transcribe(audioPath: mix16k)
+                try AudioMixer.resampleFile(from: mixPath, to: mix16k)
+
+                // Use transcribeSegments to cache results for diarization
+                let segments = try await whisperKit.transcribeSegments(audioPath: mix16k)
+                cachedSegments = segments
+                transcript = segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
             }
 
             guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -198,14 +192,10 @@ class PipelineQueue {
                 if diarizeProcess.isAvailable {
                     updateJobState(id: jobID, to: .diarizing)
 
-                    // Use mix audio for diarization
+                    // Use mix audio for diarization (already resampled in single-source path)
                     let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                     if !FileManager.default.fileExists(atPath: mix16k.path) {
-                        let mixSamples = try AudioMixer.loadWAVAsFloat32(url: mixPath)
-                        try AudioMixer.saveWAV(
-                            samples: AudioMixer.resample(mixSamples, from: 48000, to: 16000),
-                            sampleRate: 16000, url: mix16k
-                        )
+                        try AudioMixer.resampleFile(from: mixPath, to: mix16k)
                     }
 
                     do {
@@ -215,20 +205,21 @@ class PipelineQueue {
                             meetingTitle: title
                         )
 
-                        // Re-transcribe segments and assign speakers
-                        let segmentAudioPath: URL
-                        if appPath != nil {
-                            segmentAudioPath = workDir.appendingPathComponent("app_16k.wav")
+                        // Use cached segments if available, otherwise transcribe
+                        let segments: [TimestampedSegment]
+                        if let cached = cachedSegments {
+                            segments = cached
                         } else {
-                            segmentAudioPath = mix16k
+                            let segmentAudioPath = appPath != nil
+                                ? workDir.appendingPathComponent("app_16k.wav")
+                                : mix16k
+                            segments = try await whisperKit.transcribeSegments(
+                                audioPath: segmentAudioPath
+                            )
                         }
 
-                        let appSegments = try await whisperKit.transcribeSegments(
-                            audioPath: segmentAudioPath
-                        )
-
                         let labeled = DiarizationProcess.assignSpeakers(
-                            transcript: appSegments,
+                            transcript: segments,
                             diarization: diarization
                         )
                         finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
@@ -278,9 +269,18 @@ class PipelineQueue {
 
     // MARK: - JSON Logging
 
+    private static let isoFormatter = ISO8601DateFormatter()
+    private var logDirCreated = false
+
+    private func ensureLogDir() {
+        guard !logDirCreated else { return }
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        logDirCreated = true
+    }
+
     private func writeSnapshot() {
         do {
-            try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            ensureLogDir()
             let data = try JSONEncoder().encode(jobs)
             let tmpPath = logDir.appendingPathComponent("pipeline_queue.tmp")
             try data.write(to: tmpPath)
@@ -293,14 +293,14 @@ class PipelineQueue {
 
     private func appendLog(jobID: UUID, event: String, from: JobState?, to: JobState) {
         let entry: [String: String] = [
-            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "timestamp": Self.isoFormatter.string(from: Date()),
             "job_id": jobID.uuidString,
             "event": event,
             "from": from?.rawValue ?? "-",
             "to": to.rawValue,
         ]
         do {
-            try FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+            ensureLogDir()
             let data = try JSONEncoder().encode(entry)
             let logPath = logDir.appendingPathComponent("pipeline_log.jsonl")
             let line = String(data: data, encoding: .utf8)! + "\n"
