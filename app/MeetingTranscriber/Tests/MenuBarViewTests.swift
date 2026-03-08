@@ -3,6 +3,7 @@ import XCTest
 
 @testable import MeetingTranscriber
 
+@MainActor
 final class MenuBarViewTests: XCTestCase {
 
     // MARK: - Helpers
@@ -35,11 +36,14 @@ final class MenuBarViewTests: XCTestCase {
         MenuBarView(
             status: status,
             isWatching: isWatching,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: onNameSpeakers,
+            onDismissJob: { _ in },
             onQuit: {}
         )
     }
@@ -159,11 +163,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .idle),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: { called = true },
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: nil,
+            onDismissJob: { _ in },
             onQuit: {}
         )
         let body = try sut.inspect()
@@ -176,11 +183,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .idle),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: nil,
+            onDismissJob: { _ in },
             onQuit: { called = true }
         )
         let body = try sut.inspect()
@@ -193,11 +203,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .idle),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: { called = true },
             onNameSpeakers: nil,
+            onDismissJob: { _ in },
             onQuit: {}
         )
         let body = try sut.inspect()
@@ -210,11 +223,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .idle),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: { called = true },
             onOpenSettings: {},
             onNameSpeakers: nil,
+            onDismissJob: { _ in },
             onQuit: {}
         )
         let body = try sut.inspect()
@@ -227,11 +243,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .protocolReady, protocolPath: "/tmp/p.md"),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: { called = true },
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: nil,
+            onDismissJob: { _ in },
             onQuit: {}
         )
         let body = try sut.inspect()
@@ -244,11 +263,14 @@ final class MenuBarViewTests: XCTestCase {
         let sut = MenuBarView(
             status: makeStatus(state: .waitingForSpeakerNames),
             isWatching: false,
+            pipelineQueue: PipelineQueue(),
             onStartStop: {},
             onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
             onOpenSettings: {},
             onNameSpeakers: { called = true },
+            onDismissJob: { _ in },
             onQuit: {}
         )
         let body = try sut.inspect()
@@ -271,5 +293,106 @@ final class MenuBarViewTests: XCTestCase {
         let texts = body.findAll(ViewType.Text.self)
         let found = texts.contains { (try? $0.string())?.contains("Zoom") == true }
         XCTAssertTrue(found, "App name 'Zoom' should appear in meeting info")
+    }
+
+    // MARK: - Processing section
+
+    func testProcessingSectionHiddenWhenNoJobs() throws {
+        let sut = makeView(status: makeStatus())
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Processing"))
+    }
+
+    func testProcessingSectionShownWithActiveJob() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .transcribing)
+
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            onStartStop: {},
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Processing"))
+        XCTAssertNoThrow(try body.find(text: "Standup"))
+        XCTAssertNoThrow(try body.find(text: "Transcribing..."))
+    }
+
+    func testDismissButtonShownForCompletedJob() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Retro",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            onStartStop: {},
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Dismiss"))
+    }
+
+    func testDismissButtonShownForErrorJob() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Webex",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .error, error: "Failed")
+
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            onStartStop: {},
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Dismiss"))
+        XCTAssertNoThrow(try body.find(text: "Error"))
     }
 }
