@@ -120,9 +120,9 @@ def three_speaker_wav():
 
 @pytest.fixture
 def isolated_speaker_db(tmp_path, monkeypatch):
-    """Redirect SPEAKERS_DB to tmp_path so tests don't touch real profiles."""
+    """Redirect _get_speakers_db to tmp_path so tests don't touch real profiles."""
     db_path = tmp_path / "speakers.json"
-    monkeypatch.setattr("meeting_transcriber.diarize.SPEAKERS_DB", db_path)
+    monkeypatch.setattr("meeting_transcriber.diarize._get_speakers_db", lambda: db_path)
     return db_path
 
 
