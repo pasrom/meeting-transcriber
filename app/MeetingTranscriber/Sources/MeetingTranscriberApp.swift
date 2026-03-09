@@ -209,6 +209,7 @@ struct MeetingTranscriberApp: App {
             protocolGenerator: DefaultProtocolGenerator(),
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
+            numSpeakers: settings.numSpeakers,
             micLabel: settings.micName
         )
     }

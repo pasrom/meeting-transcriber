@@ -15,6 +15,7 @@ class PipelineQueue {
     let protocolGenerator: ProtocolGenerating?
     let outputDir: URL?
     let diarizeEnabled: Bool
+    let numSpeakers: Int
     let micLabel: String
     let claudeBin: String
     let speakerMatcherFactory: () -> SpeakerMatcher
@@ -64,6 +65,7 @@ class PipelineQueue {
         self.protocolGenerator = nil
         self.outputDir = nil
         self.diarizeEnabled = false
+        self.numSpeakers = 0
         self.micLabel = "Me"
         self.claudeBin = "claude"
         self.speakerMatcherFactory = { SpeakerMatcher() }
@@ -78,6 +80,7 @@ class PipelineQueue {
         protocolGenerator: ProtocolGenerating,
         outputDir: URL,
         diarizeEnabled: Bool = false,
+        numSpeakers: Int = 0,
         micLabel: String = "Me",
         claudeBin: String = "claude",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
@@ -89,6 +92,7 @@ class PipelineQueue {
         self.protocolGenerator = protocolGenerator
         self.outputDir = outputDir
         self.diarizeEnabled = diarizeEnabled
+        self.numSpeakers = numSpeakers
         self.micLabel = micLabel
         self.claudeBin = claudeBin
         self.speakerMatcherFactory = speakerMatcherFactory
@@ -232,7 +236,7 @@ class PipelineQueue {
                     do {
                         let diarization = try await diarizeProcess.run(
                             audioPath: mix16k,
-                            numSpeakers: nil,
+                            numSpeakers: numSpeakers > 0 ? numSpeakers : nil,
                             meetingTitle: title
                         )
 
@@ -253,35 +257,28 @@ class PipelineQueue {
                                 segments: diarization.segments
                             )
 
-                            // Check if any speakers are unmatched (name == label)
-                            let unmatched = matched.filter { $0.value == $0.key }
-                            if !unmatched.isEmpty {
-                                let userMapping: [String: String]
-                                if let handler = speakerNamingHandler {
-                                    userMapping = await handler(namingData)
-                                } else {
-                                    // Default: show naming popup via continuation
-                                    userMapping = await withCheckedContinuation { continuation in
-                                        self.speakerNamingContinuation = continuation
-                                        self.pendingSpeakerNaming = namingData
-                                        NotificationCenter.default.post(
-                                            name: .showSpeakerNaming,
-                                            object: nil
-                                        )
-                                    }
-                                }
-
-                                // Merge user names into autoNames
-                                for (label, name) in userMapping where !name.isEmpty {
-                                    autoNames[label] = name
-                                }
-
-                                // Save to DB
-                                matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                            // Always show naming popup so user can verify/correct
+                            let userMapping: [String: String]
+                            if let handler = speakerNamingHandler {
+                                userMapping = await handler(namingData)
                             } else {
-                                // All matched — update DB with fresh embeddings
-                                matcher.updateDB(mapping: matched, embeddings: embeddings)
+                                userMapping = await withCheckedContinuation { continuation in
+                                    self.speakerNamingContinuation = continuation
+                                    self.pendingSpeakerNaming = namingData
+                                    NotificationCenter.default.post(
+                                        name: .showSpeakerNaming,
+                                        object: nil
+                                    )
+                                }
                             }
+
+                            // Merge user names into autoNames
+                            for (label, name) in userMapping where !name.isEmpty {
+                                autoNames[label] = name
+                            }
+
+                            // Save to DB
+                            matcher.updateDB(mapping: autoNames, embeddings: embeddings)
                         }
 
                         // Apply speaker names to segments
