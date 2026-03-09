@@ -130,7 +130,7 @@ transcribe --file recording.wav --title "Meeting"
 pytest tests/ -v
 pytest tests/ -v -m "not slow"
 
-# Swift tests (~240 tests)
+# Swift tests (~250 tests)
 cd app/MeetingTranscriber && swift test
 
 # Run E2E test standalone
