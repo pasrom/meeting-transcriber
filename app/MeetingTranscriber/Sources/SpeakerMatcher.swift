@@ -12,6 +12,22 @@ class SpeakerMatcher {
     init(dbPath: URL? = nil, threshold: Float = 0.65) {
         self.dbPath = dbPath ?? AppPaths.speakersDB
         self.threshold = threshold
+        Self.migrateIfNeeded(dbPath: self.dbPath)
+    }
+
+    /// Reset old pyannote-format speakers.json (incompatible embeddings).
+    /// Old format: `{ "name": [[float]] }` dict.
+    /// New format: `[{ "name": str, "embedding": [float] }]` array.
+    static func migrateIfNeeded(dbPath: URL) {
+        guard let data = try? Data(contentsOf: dbPath),
+              let json = try? JSONSerialization.jsonObject(with: data) else { return }
+
+        // Old format is a dictionary, new format is an array
+        if json is [String: Any] {
+            let backup = dbPath.deletingLastPathComponent()
+                .appendingPathComponent("speakers.json.bak")
+            try? FileManager.default.moveItem(at: dbPath, to: backup)
+        }
     }
 
     /// Match diarization embeddings against stored speakers.

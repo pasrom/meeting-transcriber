@@ -133,4 +133,32 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(loaded.count, 1)
         XCTAssertEqual(loaded[0].name, "Roman")
     }
+
+    // MARK: - Migration
+
+    func testMigrateOldFormatResetsDB() {
+        // Write old dict format (pyannote-style)
+        let oldData = try! JSONSerialization.data(withJSONObject: [
+            "Roman": [[1.0, 0.0, 0.0]],
+        ])
+        try! oldData.write(to: dbPath)
+
+        SpeakerMatcher.migrateIfNeeded(dbPath: dbPath)
+
+        // Old file should be gone (backed up)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dbPath.path))
+        let backup = dbPath.deletingLastPathComponent()
+            .appendingPathComponent("speakers.json.bak")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: backup.path))
+    }
+
+    func testMigrateNewFormatKeepsDB() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Roman", embedding: [1, 0, 0])])
+
+        SpeakerMatcher.migrateIfNeeded(dbPath: dbPath)
+
+        // Should still exist
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dbPath.path))
+    }
 }
