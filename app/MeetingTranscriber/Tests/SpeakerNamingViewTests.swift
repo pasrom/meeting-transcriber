@@ -17,7 +17,9 @@ final class SpeakerNamingViewTests: XCTestCase {
             meetingTitle: title,
             mapping: mapping ?? ["SPEAKER_00": "SPEAKER_00"],
             speakingTimes: speakingTimes ?? ["SPEAKER_00": 60.0],
-            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]]
+            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
+            audioPath: nil,
+            segments: []
         )
     }
 

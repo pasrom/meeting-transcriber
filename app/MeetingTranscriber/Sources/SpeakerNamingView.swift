@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 /// NSTextField subclass that forwards accessibility `set value` (AppleScript)
@@ -70,6 +71,8 @@ struct SpeakerNamingView: View {
 
     @State private var names: [String] = []
     @State private var completed = false
+    @State private var player: AVAudioPlayer?
+    @State private var playingLabel: String?
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
@@ -143,6 +146,19 @@ struct SpeakerNamingView: View {
                     Text(speaker.label)
                         .font(.subheadline)
                         .fontWeight(.medium)
+
+                    if data.audioPath != nil {
+                        Button {
+                            playSpeakerSnippet(label: speaker.label)
+                        } label: {
+                            Image(systemName: playingLabel == speaker.label
+                                  ? "stop.circle.fill" : "play.circle.fill")
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("play-\(speaker.label)")
+                    }
+
                     Spacer()
                     Text("(\(formattedTime(speaker.speakingTime)))")
                         .font(.caption)
@@ -168,6 +184,54 @@ struct SpeakerNamingView: View {
                 }
             }
             .padding(4)
+        }
+    }
+
+    /// Play the longest segment of a speaker from the audio file.
+    private func playSpeakerSnippet(label: String) {
+        // Stop if already playing this speaker
+        if playingLabel == label {
+            player?.stop()
+            player = nil
+            playingLabel = nil
+            return
+        }
+
+        guard let audioPath = data.audioPath else { return }
+
+        // Find the longest segment for this speaker
+        let speakerSegments = data.segments.filter { $0.speaker == label }
+        guard let longest = speakerSegments.max(by: { ($0.end - $0.start) < ($1.end - $1.start) }) else { return }
+
+        do {
+            let samples = try AudioMixer.loadWAVAsFloat32(url: audioPath)
+            let sampleRate = 16000
+            let startSample = max(0, Int(longest.start) * sampleRate)
+            let endSample = min(samples.count, Int(longest.end) * sampleRate)
+            guard startSample < endSample else { return }
+
+            let snippet = Array(samples[startSample..<endSample])
+            let tmpPath = FileManager.default.temporaryDirectory
+                .appendingPathComponent("speaker_\(label).wav")
+            try AudioMixer.saveWAV(samples: snippet, sampleRate: sampleRate, url: tmpPath)
+
+            player?.stop()
+            player = try AVAudioPlayer(contentsOf: tmpPath)
+            player?.play()
+            playingLabel = label
+
+            // Reset icon when done
+            let duration = player?.duration ?? 0
+            Task {
+                try? await Task.sleep(for: .seconds(duration + 0.1))
+                await MainActor.run {
+                    if playingLabel == label {
+                        playingLabel = nil
+                    }
+                }
+            }
+        } catch {
+            // Silently fail — playback is best-effort
         }
     }
 

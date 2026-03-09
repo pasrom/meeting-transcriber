@@ -36,6 +36,8 @@ class PipelineQueue {
         let mapping: [String: String]       // label → auto-matched name or label
         let speakingTimes: [String: TimeInterval]
         let embeddings: [String: [Float]]
+        let audioPath: URL?                 // 16kHz mix for playback
+        let segments: [DiarizationResult.Segment]  // for extracting speaker snippets
     }
 
     /// Set when the pipeline is waiting for the user to name speakers.
@@ -246,7 +248,9 @@ class PipelineQueue {
                                 meetingTitle: title,
                                 mapping: matched,
                                 speakingTimes: diarization.speakingTimes,
-                                embeddings: embeddings
+                                embeddings: embeddings,
+                                audioPath: mix16k,
+                                segments: diarization.segments
                             )
 
                             // Check if any speakers are unmatched (name == label)
