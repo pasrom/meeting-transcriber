@@ -3,20 +3,16 @@ import SwiftUI
 
 extension Notification.Name {
     static let autoWatchStart = Notification.Name("autoWatchStart")
-    static let showSpeakerCount = Notification.Name("showSpeakerCount")
     static let showSpeakerNaming = Notification.Name("showSpeakerNaming")
 }
 
 @main
 struct MeetingTranscriberApp: App {
     @State private var settings = AppSettings()
-    @State private var speakerCountRequest: SpeakerCountRequest?
     @State private var watchLoop: WatchLoop?
     @State private var pipelineQueue = PipelineQueue()
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
-    private let ipc = IPCManager()
-    private let ipcPoller = IPCPoller()
     private let whisperKit = WhisperKitEngine()
 
     private var isWatching: Bool {
@@ -69,9 +65,6 @@ struct MeetingTranscriberApp: App {
                     toggleWatching()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .showSpeakerCount)) { _ in
-                bringWindowToFront(id: "speaker-count")
-            }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
                 bringWindowToFront(id: "speaker-naming")
             }
@@ -89,20 +82,6 @@ struct MeetingTranscriberApp: App {
                 }
             } else {
                 Text("No speaker data available.")
-                    .padding()
-            }
-        }
-        .windowResizability(.contentSize)
-
-        Window("Speaker Count", id: "speaker-count") {
-            if let request = speakerCountRequest {
-                SpeakerCountView(request: request) { count in
-                    writeSpeakerCountResponse(count)
-                    speakerCountRequest = nil
-                    closeWindow(id: "speaker-count")
-                }
-            } else {
-                Text("No speaker count request available.")
                     .padding()
             }
         }
@@ -235,13 +214,6 @@ struct MeetingTranscriberApp: App {
     }
 
     private func configurePipelineCallbacks() {
-        ipcPoller.onSpeakerCountRequest = { request in
-            DispatchQueue.main.async {
-                self.speakerCountRequest = request
-                NotificationCenter.default.post(name: .showSpeakerCount, object: nil)
-            }
-        }
-
         pipelineQueue.onJobStateChange = { [notifications] job, _, newState in
             switch newState {
             case .done:
@@ -315,18 +287,6 @@ struct MeetingTranscriberApp: App {
         let protocols = WatchLoop.defaultOutputDir
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
         NSWorkspace.shared.open(protocols)
-    }
-
-    private func loadSpeakerCountRequest() {
-        speakerCountRequest = ipc.loadSpeakerCountRequest()
-    }
-
-    private func writeSpeakerCountResponse(_ count: Int) {
-        do {
-            try ipc.writeSpeakerCountResponse(count)
-        } catch {
-            NSLog("SpeakerCount: failed to write response: \(error)")
-        }
     }
 
     private func quit() {

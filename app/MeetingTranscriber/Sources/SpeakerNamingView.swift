@@ -63,27 +63,6 @@ func formattedTime(_ seconds: Double) -> String {
     return m > 0 ? "\(m):\(String(format: "%02d", s))" : "\(s)s"
 }
 
-/// Build speaker label→name mapping from parallel arrays.
-func buildSpeakerMapping(
-    names: [String],
-    speakers: [SpeakerInfo]
-) -> [String: String] {
-    var mapping: [String: String] = [:]
-    for (index, speaker) in speakers.enumerated() {
-        let name = names[index].trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty {
-            mapping[speaker.label] = name
-        }
-    }
-    return mapping
-}
-
-/// Resolve a speaker sample file path, expanding ~ in the base directory.
-func sampleURL(baseDir: String, sampleFile: String) -> URL {
-    let dir = (baseDir as NSString).expandingTildeInPath
-    return URL(fileURLWithPath: dir).appendingPathComponent(sampleFile)
-}
-
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let data: PipelineQueue.SpeakerNamingData

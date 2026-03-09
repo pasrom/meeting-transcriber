@@ -1,9 +1,7 @@
 import Foundation
 import os.log
 
-private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DiarizationProcess")
-
-/// Result from the standalone diarize.py script.
+/// Result from diarization.
 struct DiarizationResult {
     struct Segment {
         let start: TimeInterval
@@ -23,173 +21,8 @@ protocol DiarizationProvider {
     func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult
 }
 
-/// Runs the standalone Python diarization script as a subprocess.
-class DiarizationProcess: DiarizationProvider {
-    private let pythonPath: URL
-    private let scriptPath: URL
-    private let ipcDir: URL
-
-    /// Whether the diarization venv exists in the bundle.
-    var isAvailable: Bool {
-        FileManager.default.fileExists(atPath: pythonPath.path)
-            && FileManager.default.fileExists(atPath: scriptPath.path)
-    }
-
-    init(
-        pythonPath: URL? = nil,
-        scriptPath: URL? = nil,
-        ipcDir: URL? = nil
-    ) {
-        let fm = FileManager.default
-
-        if let pythonPath {
-            self.pythonPath = pythonPath
-        } else if let res = Bundle.main.resourcePath {
-            let bundled = URL(fileURLWithPath: res)
-                .appendingPathComponent("python-diarize/bin/python3")
-            if fm.fileExists(atPath: bundled.path) {
-                self.pythonPath = bundled
-            } else if let root = Permissions.findProjectRoot(from: nil) {
-                // Dev mode: use project venv
-                self.pythonPath = URL(fileURLWithPath: root)
-                    .appendingPathComponent(".venv/bin/python")
-            } else {
-                self.pythonPath = URL(fileURLWithPath: "/usr/bin/python3")
-            }
-        } else {
-            self.pythonPath = URL(fileURLWithPath: "/usr/bin/python3")
-        }
-
-        if let scriptPath {
-            self.scriptPath = scriptPath
-        } else if let res = Bundle.main.resourcePath {
-            let bundled = URL(fileURLWithPath: res)
-                .appendingPathComponent("python-diarize/diarize.py")
-            if fm.fileExists(atPath: bundled.path) {
-                self.scriptPath = bundled
-            } else if let root = Permissions.findProjectRoot(from: nil) {
-                // Dev mode: use standalone diarize script
-                self.scriptPath = URL(fileURLWithPath: root)
-                    .appendingPathComponent("tools/diarize/diarize.py")
-            } else {
-                self.scriptPath = URL(fileURLWithPath: "diarize.py")
-            }
-        } else {
-            self.scriptPath = URL(fileURLWithPath: "diarize.py")
-        }
-
-        self.ipcDir = ipcDir ?? AppPaths.ipcDir
-    }
-
-    /// Run diarization on an audio file.
-    func run(
-        audioPath: URL,
-        numSpeakers: Int? = nil,
-        expectedNames: [String] = [],
-        speakersDB: URL? = nil,
-        meetingTitle: String = "Meeting"
-    ) async throws -> DiarizationResult {
-        guard isAvailable else {
-            throw DiarizationError.notAvailable
-        }
-
-        var arguments = [scriptPath.path, audioPath.path]
-
-        if let n = numSpeakers, n > 0 {
-            arguments += ["--speakers", String(n)]
-        }
-        if let db = speakersDB {
-            arguments += ["--speakers-db", db.path]
-        }
-        if !expectedNames.isEmpty {
-            arguments += ["--expected-names", expectedNames.joined(separator: ",")]
-        }
-        arguments += ["--ipc-dir", ipcDir.path]
-        arguments += ["--meeting-title", meetingTitle]
-
-        let process = Process()
-        process.executableURL = pythonPath
-        process.arguments = arguments
-
-        // Set HF_TOKEN: Keychain first, then fall back to environment variable
-        var env = ProcessInfo.processInfo.environment
-        if let hfToken = KeychainHelper.read(key: "HF_TOKEN") {
-            env["HF_TOKEN"] = hfToken
-        }
-        // env already contains HF_TOKEN if set via process environment
-        process.environment = env
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        logger.info("Starting diarization: \(audioPath.lastPathComponent)")
-
-        try process.run()
-
-        // Read stdout/stderr concurrently to prevent pipe buffer deadlock (>64KB)
-        async let stdoutRead = Task.detached {
-            stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        }.value
-        async let stderrRead = Task.detached {
-            stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        }.value
-
-        // Await process exit without blocking cooperative thread pool
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in
-                continuation.resume()
-            }
-        }
-
-        let stdoutData = await stdoutRead
-        let stderrData = await stderrRead
-
-        guard process.terminationStatus == 0 else {
-            let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-            throw DiarizationError.processFailed(Int(process.terminationStatus), stderr)
-        }
-
-        return try Self.parseOutput(stdoutData)
-    }
-
-    /// Parse the JSON output from diarize.py.
-    static func parseOutput(_ data: Data) throws -> DiarizationResult {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw DiarizationError.invalidOutput
-        }
-
-        // Parse segments
-        let rawSegments = json["segments"] as? [[String: Any]] ?? []
-        let segments = rawSegments.compactMap { seg -> DiarizationResult.Segment? in
-            guard let start = seg["start"] as? Double,
-                  let end = seg["end"] as? Double,
-                  let speaker = seg["speaker"] as? String else { return nil }
-            return DiarizationResult.Segment(start: start, end: end, speaker: speaker)
-        }
-
-        // Parse speaking times
-        let rawTimes = json["speaking_times"] as? [String: Double] ?? [:]
-        let speakingTimes = rawTimes.mapValues { TimeInterval($0) }
-
-        // Parse auto names
-        let autoNames = json["auto_names"] as? [String: String] ?? [:]
-
-        return DiarizationResult(
-            segments: segments,
-            speakingTimes: speakingTimes,
-            autoNames: autoNames,
-            embeddings: nil
-        )
-    }
-
-    /// Bridge method satisfying `DiarizationProvider` protocol (fewer parameters).
-    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult {
-        let defaultDB = AppPaths.speakersDB
-        return try await run(audioPath: audioPath, numSpeakers: numSpeakers, expectedNames: [], speakersDB: defaultDB, meetingTitle: meetingTitle)
-    }
-
+/// Speaker assignment utilities.
+enum DiarizationProcess {
     /// Assign speaker labels to transcript segments by maximum temporal overlap.
     static func assignSpeakers(
         transcript: [TimestampedSegment],
@@ -225,7 +58,7 @@ enum DiarizationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAvailable: "Diarization not available (python-diarize not found in bundle)"
+        case .notAvailable: "Diarization not available"
         case .processFailed(let code, let stderr):
             "Diarization failed (exit \(code))\(stderr.isEmpty ? "" : ": \(stderr.prefix(200))")"
         case .invalidOutput: "Failed to parse diarization output"

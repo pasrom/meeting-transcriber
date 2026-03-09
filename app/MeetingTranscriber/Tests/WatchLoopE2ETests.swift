@@ -395,7 +395,7 @@ final class WatchLoopE2ETests: XCTestCase {
     func testFullPipelineWithRealDiarization() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model + diarization"
+            "Skipping in CI: requires WhisperKit model + FluidAudio diarization"
         )
 
         let fixture = fixtureURL()
@@ -404,29 +404,8 @@ final class WatchLoopE2ETests: XCTestCase {
             "Test fixture not found at \(fixture.path)"
         )
 
-        // Resolve project root from fixture path
-        let projectRoot = fixtureURL()
-            .deletingLastPathComponent()  // fixtures/
-            .deletingLastPathComponent()  // tests/
-            .deletingLastPathComponent()  // Transcriber/
-        let pythonPath = projectRoot.appendingPathComponent(".venv/bin/python")
-        let scriptPath = projectRoot.appendingPathComponent("tools/diarize/diarize.py")
-
-        // Check that diarization is available
-        let realDiarize = DiarizationProcess(pythonPath: pythonPath, scriptPath: scriptPath)
-        try XCTSkipUnless(realDiarize.isAvailable, "Diarization not available (no python-diarize in bundle/venv)")
-
-        // Check HF_TOKEN from .env if not in environment
-        var hasToken = ProcessInfo.processInfo.environment["HF_TOKEN"] != nil
-        if !hasToken {
-            let envPath = projectRoot.appendingPathComponent(".env")
-            if let envContents = try? String(contentsOf: envPath, encoding: .utf8),
-               envContents.contains("HF_TOKEN=") {
-                // Load HF_TOKEN from .env for subprocess
-                hasToken = true
-            }
-        }
-        try XCTSkipUnless(hasToken, "HF_TOKEN not set — skipping real diarization test")
+        let realDiarize = FluidDiarizer()
+        try XCTSkipUnless(realDiarize.isAvailable, "FluidAudio diarization not available")
 
         let mixPath = try prepare48kHzFixture()
         let recorder = MockRecorder()
@@ -440,7 +419,7 @@ final class WatchLoopE2ETests: XCTestCase {
         let queue = PipelineQueue(
             logDir: tmpDir,
             whisperKit: engine,
-            diarizationFactory: { DiarizationProcess(pythonPath: pythonPath, scriptPath: scriptPath) },
+            diarizationFactory: { FluidDiarizer() },
             protocolGenerator: mockProtocol,
             outputDir: tmpDir,
             diarizeEnabled: true,
