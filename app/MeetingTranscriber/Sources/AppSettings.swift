@@ -67,6 +67,11 @@ final class AppSettings {
         didSet { defaults.set(whisperLanguage, forKey: "whisperLanguage") }
     }
 
+    /// Language as Optional for WhisperKit. Empty string → nil (auto-detect).
+    var whisperLanguageOrNil: String? {
+        whisperLanguage.isEmpty ? nil : whisperLanguage
+    }
+
     var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }

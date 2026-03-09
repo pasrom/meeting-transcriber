@@ -29,8 +29,8 @@ struct SettingsView: View {
         ("it", "Italiano"),
         ("nl", "Nederlands"),
         ("pt", "Portugu\u{00EA}s"),
-        ("ja", "Japanese"),
-        ("zh", "Chinese"),
+        ("ja", "日本語"),
+        ("zh", "中文"),
     ]
 
     var body: some View {
