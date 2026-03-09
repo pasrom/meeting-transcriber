@@ -20,6 +20,19 @@ struct SettingsView: View {
         ("openai_whisper-tiny", "Tiny"),
     ]
 
+    private let whisperLanguages: [(code: String, label: String)] = [
+        ("", "Auto-detect"),
+        ("de", "Deutsch"),
+        ("en", "English"),
+        ("fr", "Fran\u{00E7}ais"),
+        ("es", "Espa\u{00F1}ol"),
+        ("it", "Italiano"),
+        ("nl", "Nederlands"),
+        ("pt", "Portugu\u{00EA}s"),
+        ("ja", "Japanese"),
+        ("zh", "Chinese"),
+    ]
+
     var body: some View {
         Form {
             Section("Apps to Watch") {
@@ -81,6 +94,12 @@ struct SettingsView: View {
                 Picker("Model", selection: $settings.whisperKitModel) {
                     ForEach(whisperKitModels, id: \.variant) { model in
                         Text(model.label).tag(model.variant)
+                    }
+                }
+
+                Picker("Language", selection: $settings.whisperLanguage) {
+                    ForEach(whisperLanguages, id: \.code) { lang in
+                        Text(lang.label).tag(lang.code)
                     }
                 }
 

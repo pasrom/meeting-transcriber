@@ -70,6 +70,7 @@ struct MeetingTranscriberApp: App {
             }
             .task {
                 whisperKit.modelVariant = settings.whisperKitModel
+                whisperKit.language = settings.whisperLanguage.isEmpty ? nil : settings.whisperLanguage
                 await whisperKit.loadModel()
             }
         }
@@ -163,6 +164,7 @@ struct MeetingTranscriberApp: App {
                 }
 
                 await MainActor.run {
+                    whisperKit.language = settings.whisperLanguage.isEmpty ? nil : settings.whisperLanguage
                     pipelineQueue = makePipelineQueue()
 
                     let loop = WatchLoop(
@@ -242,6 +244,7 @@ struct MeetingTranscriberApp: App {
 
         // Ensure queue has processing dependencies
         if pipelineQueue.whisperKit == nil {
+            whisperKit.language = settings.whisperLanguage.isEmpty ? nil : settings.whisperLanguage
             pipelineQueue = makePipelineQueue()
             configurePipelineCallbacks()
         }
