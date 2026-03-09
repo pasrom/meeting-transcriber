@@ -7,49 +7,49 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "FluidDi
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
 class FluidDiarizer: DiarizationProvider {
     private var manager: OfflineDiarizerManager?
+    private var currentNumSpeakers: Int?
 
     var isAvailable: Bool { true }
 
-    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> MeetingTranscriber.DiarizationResult {
-        var config = OfflineDiarizerConfig()
-        if let n = numSpeakers, n > 0 {
-            config = config.withSpeakers(exactly: n)
-        }
+    /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
+    private static func normalizeSpeakerId(_ id: String) -> String {
+        id.replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
+    }
 
-        if manager == nil {
+    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> MeetingTranscriber.DiarizationResult {
+        // Recreate manager if numSpeakers changed
+        if manager == nil || numSpeakers != currentNumSpeakers {
+            var config = OfflineDiarizerConfig()
+            if let n = numSpeakers, n > 0 {
+                config = config.withSpeakers(exactly: n)
+            }
             manager = OfflineDiarizerManager(config: config)
             try await manager!.prepareModels()
+            currentNumSpeakers = numSpeakers
             logger.info("FluidAudio models ready")
         }
 
         logger.info("Starting diarization: \(audioPath.lastPathComponent)")
         let fluidResult = try await manager!.process(audioPath)
 
-        // Convert FluidAudio segments to our DiarizationResult.Segment
-        // speakerId is a String like "Speaker 0" — we normalize to "SPEAKER_0"
         let segments = fluidResult.segments.map { seg in
-            let normalizedSpeaker = seg.speakerId
-                .replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
-            return MeetingTranscriber.DiarizationResult.Segment(
+            MeetingTranscriber.DiarizationResult.Segment(
                 start: TimeInterval(seg.startTimeSeconds),
                 end: TimeInterval(seg.endTimeSeconds),
-                speaker: normalizedSpeaker
+                speaker: Self.normalizeSpeakerId(seg.speakerId)
             )
         }
 
-        // Compute speaking times
         var speakingTimes: [String: TimeInterval] = [:]
         for seg in segments {
             speakingTimes[seg.speaker, default: 0] += seg.end - seg.start
         }
 
-        // Convert speaker database embeddings (normalize keys too)
         var embeddings: [String: [Float]]?
         if let db = fluidResult.speakerDatabase {
             embeddings = [:]
             for (id, emb) in db {
-                let normalizedKey = id.replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
-                embeddings![normalizedKey] = emb
+                embeddings![Self.normalizeSpeakerId(id)] = emb
             }
         }
 

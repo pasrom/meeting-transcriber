@@ -1,5 +1,4 @@
 import Foundation
-import os.log
 
 /// Result from diarization.
 struct DiarizationResult {
@@ -24,6 +23,7 @@ protocol DiarizationProvider {
 /// Speaker assignment utilities.
 enum DiarizationProcess {
     /// Assign speaker labels to transcript segments by maximum temporal overlap.
+    /// Uses `autoNames` to replace raw labels (e.g. "SPEAKER_0") with human names.
     static func assignSpeakers(
         transcript: [TimestampedSegment],
         diarization: DiarizationResult
@@ -39,7 +39,7 @@ enum DiarizationProcess {
 
                 if overlap > bestOverlap {
                     bestOverlap = overlap
-                    best.speaker = dSeg.speaker
+                    best.speaker = diarization.autoNames[dSeg.speaker] ?? dSeg.speaker
                 }
             }
 
@@ -53,15 +53,10 @@ enum DiarizationProcess {
 
 enum DiarizationError: LocalizedError {
     case notAvailable
-    case processFailed(Int, String)
-    case invalidOutput
 
     var errorDescription: String? {
         switch self {
         case .notAvailable: "Diarization not available"
-        case .processFailed(let code, let stderr):
-            "Diarization failed (exit \(code))\(stderr.isEmpty ? "" : ": \(stderr.prefix(200))")"
-        case .invalidOutput: "Failed to parse diarization output"
         }
     }
 }

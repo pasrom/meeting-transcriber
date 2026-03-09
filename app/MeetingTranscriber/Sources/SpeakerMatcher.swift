@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "SpeakerMatcher")
 
 struct StoredSpeaker: Codable {
     let name: String
@@ -84,11 +87,15 @@ class SpeakerMatcher {
     }
 
     func saveDB(_ speakers: [StoredSpeaker]) {
-        guard let data = try? JSONEncoder().encode(speakers) else { return }
-        let tmp = dbPath.deletingLastPathComponent()
-            .appendingPathComponent("speakers.json.tmp")
-        try? data.write(to: tmp, options: .atomic)
-        _ = try? FileManager.default.replaceItemAt(dbPath, withItemAt: tmp)
+        do {
+            let data = try JSONEncoder().encode(speakers)
+            let tmp = dbPath.deletingLastPathComponent()
+                .appendingPathComponent("speakers.json.tmp")
+            try data.write(to: tmp)
+            _ = try FileManager.default.replaceItemAt(dbPath, withItemAt: tmp)
+        } catch {
+            logger.error("Failed to save speaker DB: \(error)")
+        }
     }
 
     /// Cosine distance: 0 = identical, 2 = opposite.

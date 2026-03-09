@@ -53,6 +53,30 @@ final class DiarizationProcessTests: XCTestCase {
         XCTAssertEqual(result[0].speaker, "UNKNOWN")
     }
 
+    func testAssignSpeakersUsesAutoNames() {
+        let transcript = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+            TimestampedSegment(start: 5, end: 10, text: "World"),
+        ]
+
+        let diarization = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 6, speaker: "SPEAKER_0"),
+                .init(start: 6, end: 10, speaker: "SPEAKER_1"),
+            ],
+            speakingTimes: ["SPEAKER_0": 6, "SPEAKER_1": 4],
+            autoNames: ["SPEAKER_0": "Roman", "SPEAKER_1": "Anna"],
+            embeddings: nil
+        )
+
+        let result = DiarizationProcess.assignSpeakers(
+            transcript: transcript, diarization: diarization
+        )
+
+        XCTAssertEqual(result[0].speaker, "Roman")
+        XCTAssertEqual(result[1].speaker, "Anna")
+    }
+
     func testAssignSpeakersEmpty() {
         let result = DiarizationProcess.assignSpeakers(
             transcript: [],
