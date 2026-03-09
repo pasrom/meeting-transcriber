@@ -41,21 +41,28 @@ class PipelineQueue {
         let segments: [DiarizationResult.Segment]  // for extracting speaker snippets
     }
 
+    /// Result from the speaker naming popup.
+    enum SpeakerNamingResult {
+        case confirmed([String: String])   // user confirmed with mapping
+        case rerun(Int)                     // re-run diarization with N speakers
+        case skipped                        // user skipped
+    }
+
     /// Set when the pipeline is waiting for the user to name speakers.
     var pendingSpeakerNaming: SpeakerNamingData?
-    private var speakerNamingContinuation: CheckedContinuation<[String: String], Never>?
+    private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
 
     /// Called by the UI when the user confirms or skips speaker naming.
-    func completeSpeakerNaming(mapping: [String: String]) {
+    func completeSpeakerNaming(result: SpeakerNamingResult) {
         pendingSpeakerNaming = nil
-        speakerNamingContinuation?.resume(returning: mapping)
+        speakerNamingContinuation?.resume(returning: result)
         speakerNamingContinuation = nil
     }
 
     /// Handler for speaker naming. When set, called instead of the default
-    /// continuation-based popup. Receives naming data, returns final mapping.
+    /// continuation-based popup. Receives naming data, returns result.
     /// Used by tests to auto-complete without UI interaction.
-    var speakerNamingHandler: ((SpeakerNamingData) async -> [String: String])?
+    var speakerNamingHandler: ((SpeakerNamingData) async -> SpeakerNamingResult)?
 
     /// Simple init for skeleton tests and basic queue usage.
     init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
@@ -234,15 +241,21 @@ class PipelineQueue {
                     }
 
                     do {
-                        let diarization = try await diarizeProcess.run(
-                            audioPath: mix16k,
-                            numSpeakers: numSpeakers > 0 ? numSpeakers : nil,
-                            meetingTitle: title
-                        )
+                        // Diarization + naming loop: re-runs if user requests different speaker count
+                        var speakerCount = numSpeakers > 0 ? numSpeakers : nil
+                        var diarization: DiarizationResult
+                        var autoNames: [String: String]
 
-                        // Speaker matching via embeddings
-                        var autoNames = diarization.autoNames
-                        if let embeddings = diarization.embeddings {
+                        diarizationLoop: while true {
+                            diarization = try await diarizeProcess.run(
+                                audioPath: mix16k,
+                                numSpeakers: speakerCount,
+                                meetingTitle: title
+                            )
+
+                            autoNames = diarization.autoNames
+                            guard let embeddings = diarization.embeddings else { break }
+
                             let matcher = speakerMatcherFactory()
                             let matched = matcher.match(embeddings: embeddings)
                             autoNames = matched
@@ -257,12 +270,11 @@ class PipelineQueue {
                                 segments: diarization.segments
                             )
 
-                            // Always show naming popup so user can verify/correct
-                            let userMapping: [String: String]
+                            let namingResult: SpeakerNamingResult
                             if let handler = speakerNamingHandler {
-                                userMapping = await handler(namingData)
+                                namingResult = await handler(namingData)
                             } else {
-                                userMapping = await withCheckedContinuation { continuation in
+                                namingResult = await withCheckedContinuation { continuation in
                                     self.speakerNamingContinuation = continuation
                                     self.pendingSpeakerNaming = namingData
                                     NotificationCenter.default.post(
@@ -272,13 +284,23 @@ class PipelineQueue {
                                 }
                             }
 
-                            // Merge user names into autoNames
-                            for (label, name) in userMapping where !name.isEmpty {
-                                autoNames[label] = name
-                            }
+                            switch namingResult {
+                            case .confirmed(let userMapping):
+                                for (label, name) in userMapping where !name.isEmpty {
+                                    autoNames[label] = name
+                                }
+                                matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                                break diarizationLoop
 
-                            // Save to DB
-                            matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                            case .rerun(let count):
+                                speakerCount = count
+                                updateJobState(id: jobID, to: .diarizing)
+                                logger.info("Re-running diarization with \(count) speakers")
+                                continue diarizationLoop
+
+                            case .skipped:
+                                break diarizationLoop
+                            }
                         }
 
                         // Apply speaker names to segments

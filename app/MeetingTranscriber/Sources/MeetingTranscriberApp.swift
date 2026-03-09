@@ -76,8 +76,8 @@ struct MeetingTranscriberApp: App {
 
         Window("Name Speakers", id: "speaker-naming") {
             if let data = pipelineQueue.pendingSpeakerNaming {
-                SpeakerNamingView(data: data) { mapping in
-                    pipelineQueue.completeSpeakerNaming(mapping: mapping)
+                SpeakerNamingView(data: data) { result in
+                    pipelineQueue.completeSpeakerNaming(result: result)
                     closeWindow(id: "speaker-naming")
                 }
             } else {

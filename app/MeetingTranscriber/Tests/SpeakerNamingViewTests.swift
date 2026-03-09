@@ -82,26 +82,34 @@ final class SpeakerNamingViewTests: XCTestCase {
 
     // MARK: - Button taps
 
-    func testSkipButtonCallsOnCompleteWithEmptyMapping() throws {
-        var result: [String: String]?
+    func testSkipButtonCallsOnCompleteWithSkipped() throws {
+        var result: PipelineQueue.SpeakerNamingResult?
         let sut = SpeakerNamingView(
             data: makeData(),
             onComplete: { result = $0 }
         )
         let body = try sut.inspect()
         try body.find(button: "Skip").tap()
-        XCTAssertEqual(result, [:])
+        if case .skipped = result {
+            // expected
+        } else {
+            XCTFail("Expected .skipped, got \(String(describing: result))")
+        }
     }
 
     func testConfirmButtonCallsOnComplete() throws {
-        var result: [String: String]?
+        var result: PipelineQueue.SpeakerNamingResult?
         let sut = SpeakerNamingView(
             data: makeData(),
             onComplete: { result = $0 }
         )
         let body = try sut.inspect()
         try body.find(button: "Confirm").tap()
-        XCTAssertNotNil(result)
+        if case .confirmed = result {
+            // expected
+        } else {
+            XCTFail("Expected .confirmed, got \(String(describing: result))")
+        }
     }
 
     // MARK: - Speaker details

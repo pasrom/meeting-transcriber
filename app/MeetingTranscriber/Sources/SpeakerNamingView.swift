@@ -67,12 +67,13 @@ func formattedTime(_ seconds: Double) -> String {
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let data: PipelineQueue.SpeakerNamingData
-    let onComplete: ([String: String]) -> Void
+    let onComplete: (PipelineQueue.SpeakerNamingResult) -> Void
 
     @State private var names: [String] = []
     @State private var completed = false
     @State private var player: AVAudioPlayer?
     @State private var playingLabel: String?
+    @State private var rerunCount: Int = 2
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
@@ -86,7 +87,7 @@ struct SpeakerNamingView: View {
         }
     }
 
-    init(data: PipelineQueue.SpeakerNamingData, onComplete: @escaping ([String: String]) -> Void) {
+    init(data: PipelineQueue.SpeakerNamingData, onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void) {
         self.data = data
         self.onComplete = onComplete
     }
@@ -101,11 +102,30 @@ struct SpeakerNamingView: View {
                 speakerRow(index: index, speaker: speaker)
             }
 
+            Divider()
+
+            HStack(spacing: 8) {
+                Text("Wrong count?")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Stepper("\(rerunCount) speakers", value: $rerunCount, in: 1...10)
+                    .font(.caption)
+                    .accessibilityIdentifier("rerun-stepper")
+                Button("Re-run") {
+                    guard !completed else { return }
+                    completed = true
+                    player?.stop()
+                    onComplete(.rerun(rerunCount))
+                }
+                .font(.caption)
+                .accessibilityIdentifier("rerun-button")
+            }
+
             HStack(spacing: 12) {
                 Button("Skip") {
                     guard !completed else { return }
                     completed = true
-                    onComplete([:])
+                    onComplete(.skipped)
                 }
                 .keyboardShortcut(.escape)
                 .accessibilityIdentifier("skip-button")
@@ -126,11 +146,12 @@ struct SpeakerNamingView: View {
         .id(data.meetingTitle)
         .onAppear {
             names = speakers.map { $0.autoName ?? "" }
+            rerunCount = max(2, speakers.count + 1)
         }
         .onDisappear {
             if !completed {
                 completed = true
-                onComplete([:])
+                onComplete(.skipped)
             }
         }
     }
@@ -236,6 +257,7 @@ struct SpeakerNamingView: View {
     }
 
     private func confirm() {
+        player?.stop()
         var mapping: [String: String] = [:]
         for (index, speaker) in speakers.enumerated() {
             let name = index < names.count
@@ -244,6 +266,6 @@ struct SpeakerNamingView: View {
                 mapping[speaker.label] = name
             }
         }
-        onComplete(mapping)
+        onComplete(.confirmed(mapping))
     }
 }

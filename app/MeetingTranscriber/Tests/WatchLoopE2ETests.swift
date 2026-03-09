@@ -438,7 +438,7 @@ final class WatchLoopE2ETests: XCTestCase {
                     mapping[label] = "TestSpeaker"
                 }
             }
-            return mapping
+            return .confirmed(mapping)
         }
 
         let loop = makeLoop(recorder: recorder, pipelineQueue: queue)
