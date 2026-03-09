@@ -425,6 +425,19 @@ final class WatchLoopE2ETests: XCTestCase {
             diarizeEnabled: true,
             micLabel: "Roman"
         )
+
+        // Auto-complete speaker naming when the popup would appear
+        let observer = NotificationCenter.default.addObserver(
+            forName: .showSpeakerNaming, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                if let data = queue.pendingSpeakerNaming {
+                    queue.completeSpeakerNaming(mapping: data.mapping)
+                }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
         let loop = makeLoop(recorder: recorder, pipelineQueue: queue)
 
         let meeting = makeMeeting()
