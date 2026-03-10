@@ -157,7 +157,7 @@ final class SpeakerNamingViewTests: XCTestCase {
 
     // MARK: - Mic Speaker Locked Row
 
-    func testMicSpeakerShowsLockedName() throws {
+    func testMicSpeakerShowsAutoLabel() throws {
         let sut = SpeakerNamingView(
             data: makeData(
                 mapping: ["SPEAKER_00": "SPEAKER_00", "SPEAKER_01": "SPEAKER_01"],
@@ -168,10 +168,12 @@ final class SpeakerNamingViewTests: XCTestCase {
             onComplete: { _ in }
         )
         let body = try sut.inspect()
-        // Mic speaker should show the locked name text
+        // Mic speaker should show "Mic" indicator and "Auto: Roman"
         let texts = body.findAll(ViewType.Text.self)
-        let found = texts.contains { (try? $0.string()) == "Roman" }
-        XCTAssertTrue(found, "Mic speaker locked name 'Roman' should appear")
+        let foundMic = texts.contains { (try? $0.string()) == "Mic" }
+        let foundAuto = texts.contains { (try? $0.string()) == "Auto: Roman" }
+        XCTAssertTrue(foundMic, "Mic indicator should appear")
+        XCTAssertTrue(foundAuto, "Mic speaker auto name should appear")
     }
 
     func testMicSpeakerConfirmIncludesMicLabel() throws {
@@ -186,6 +188,7 @@ final class SpeakerNamingViewTests: XCTestCase {
             onComplete: { result = $0 }
         )
         let body = try sut.inspect()
+        // Mic speaker name is pre-filled via onAppear; confirm should include it
         try body.find(button: "Confirm").tap()
         if case .confirmed(let mapping) = result {
             XCTAssertEqual(mapping["SPEAKER_00"], "Roman", "Mic speaker should be in confirmed mapping")
