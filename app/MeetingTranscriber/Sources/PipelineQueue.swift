@@ -40,8 +40,6 @@ class PipelineQueue {
         let audioPath: URL?                 // 16kHz mix for playback
         let segments: [DiarizationResult.Segment]  // for extracting speaker snippets
         let participants: [String]          // Teams participant names as suggestions
-        let micSpeakerID: String?           // diarization label identified as mic user
-        let micLabel: String?               // display name for mic speaker (locked row)
     }
 
     /// Result from the speaker naming popup.
@@ -317,9 +315,7 @@ class PipelineQueue {
                                 embeddings: embeddings,
                                 audioPath: mix16k,
                                 segments: currentDiarization.segments,
-                                participants: participants,
-                                micSpeakerID: nil,
-                                micLabel: nil
+                                participants: participants
                             )
 
                             let namingResult: SpeakerNamingResult

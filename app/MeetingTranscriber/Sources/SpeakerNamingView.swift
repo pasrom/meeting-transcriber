@@ -75,17 +75,8 @@ struct SpeakerNamingView: View {
     @State private var playingLabel: String?
     @State private var rerunCount: Int = 2
 
-    /// Whether a given label is the identified mic speaker (locked row).
-    private func isMicSpeaker(_ label: String) -> Bool {
-        data.micSpeakerID != nil && label == data.micSpeakerID
-    }
-
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
-            // Mic speaker always shows micLabel as the auto name
-            if isMicSpeaker(label), let micName = data.micLabel {
-                return (label: label, autoName: micName, speakingTime: data.speakingTimes[label] ?? 0)
-            }
             let autoName = data.mapping[label]
             let isAutoNamed = autoName != nil && autoName != label
             return (
@@ -170,16 +161,9 @@ struct SpeakerNamingView: View {
         index: Int,
         speaker: (label: String, autoName: String?, speakingTime: Double)
     ) -> some View {
-        let locked = isMicSpeaker(speaker.label)
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    if locked {
-                        Image(systemName: "mic.fill")
-                            .foregroundStyle(.blue)
-                            .accessibilityIdentifier("mic-icon-\(speaker.label)")
-                    }
-
                     Text(speaker.label)
                         .font(.subheadline)
                         .fontWeight(.medium)
@@ -203,16 +187,9 @@ struct SpeakerNamingView: View {
                 }
 
                 if let autoName = speaker.autoName {
-                    HStack(spacing: 4) {
-                        if locked {
-                            Text("Mic")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
-                        }
-                        Text("Auto: \(autoName)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("Auto: \(autoName)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } else {
                     Text("Unknown")
                         .font(.caption)
@@ -311,9 +288,6 @@ struct SpeakerNamingView: View {
                 ? names[index].trimmingCharacters(in: .whitespaces) : ""
             if !name.isEmpty {
                 mapping[speaker.label] = name
-            } else if isMicSpeaker(speaker.label), let micName = data.micLabel {
-                // Fallback: use micLabel if user didn't override
-                mapping[speaker.label] = micName
             }
         }
         onComplete(.confirmed(mapping))
