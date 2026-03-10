@@ -75,8 +75,17 @@ struct SpeakerNamingView: View {
     @State private var playingLabel: String?
     @State private var rerunCount: Int = 2
 
+    /// Whether a given label is the identified mic speaker (locked row).
+    private func isMicSpeaker(_ label: String) -> Bool {
+        data.micSpeakerID != nil && label == data.micSpeakerID
+    }
+
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
+            // Mic speaker always shows micLabel as the auto name
+            if isMicSpeaker(label), let micName = data.micLabel {
+                return (label: label, autoName: micName, speakingTime: data.speakingTimes[label] ?? 0)
+            }
             let autoName = data.mapping[label]
             let isAutoNamed = autoName != nil && autoName != label
             return (
@@ -161,9 +170,16 @@ struct SpeakerNamingView: View {
         index: Int,
         speaker: (label: String, autoName: String?, speakingTime: Double)
     ) -> some View {
+        let locked = isMicSpeaker(speaker.label)
         GroupBox {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
+                    if locked {
+                        Image(systemName: "mic.fill")
+                            .foregroundStyle(.blue)
+                            .accessibilityIdentifier("mic-icon-\(speaker.label)")
+                    }
+
                     Text(speaker.label)
                         .font(.subheadline)
                         .fontWeight(.medium)
@@ -186,32 +202,40 @@ struct SpeakerNamingView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                if let autoName = speaker.autoName {
-                    Text("Auto: \(autoName)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if locked, let micName = data.micLabel {
+                    // Mic speaker: show locked name (non-editable)
+                    Text(micName)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .accessibilityIdentifier("mic-name-\(speaker.label)")
                 } else {
-                    Text("Unknown")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                    if let autoName = speaker.autoName {
+                        Text("Auto: \(autoName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Unknown")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
-                if index < names.count {
-                    AccessibleTextField(
-                        text: $names[index],
-                        placeholder: "Name",
-                        identifier: "speaker-name-\(speaker.label)"
-                    )
+                    if index < names.count {
+                        AccessibleTextField(
+                            text: $names[index],
+                            placeholder: "Name",
+                            identifier: "speaker-name-\(speaker.label)"
+                        )
 
-                    if !unusedParticipants(currentIndex: index).isEmpty {
-                        HStack(spacing: 4) {
-                            ForEach(unusedParticipants(currentIndex: index), id: \.self) { name in
-                                Button(name) {
-                                    names[index] = name
+                        if !unusedParticipants(currentIndex: index).isEmpty {
+                            HStack(spacing: 4) {
+                                ForEach(unusedParticipants(currentIndex: index), id: \.self) { name in
+                                    Button(name) {
+                                        names[index] = name
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .font(.caption)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .font(.caption)
                             }
                         }
                     }
@@ -283,7 +307,13 @@ struct SpeakerNamingView: View {
     private func confirm() {
         player?.stop()
         var mapping: [String: String] = [:]
+        // Include mic speaker with its locked label
+        if let micID = data.micSpeakerID, let micName = data.micLabel {
+            mapping[micID] = micName
+        }
         for (index, speaker) in speakers.enumerated() {
+            // Skip mic speaker — already added with locked name
+            if isMicSpeaker(speaker.label) { continue }
             let name = index < names.count
                 ? names[index].trimmingCharacters(in: .whitespaces) : ""
             if !name.isEmpty {

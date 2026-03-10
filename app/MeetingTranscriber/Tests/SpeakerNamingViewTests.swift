@@ -10,7 +10,9 @@ final class SpeakerNamingViewTests: XCTestCase {
     private func makeData(
         title: String = "Standup",
         mapping: [String: String]? = nil,
-        speakingTimes: [String: TimeInterval]? = nil
+        speakingTimes: [String: TimeInterval]? = nil,
+        micSpeakerID: String? = nil,
+        micLabel: String? = nil
     ) -> PipelineQueue.SpeakerNamingData {
         PipelineQueue.SpeakerNamingData(
             jobID: UUID(),
@@ -20,7 +22,9 @@ final class SpeakerNamingViewTests: XCTestCase {
             embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
             audioPath: nil,
             segments: [],
-            participants: []
+            participants: [],
+            micSpeakerID: micSpeakerID,
+            micLabel: micLabel
         )
     }
 
@@ -149,5 +153,59 @@ final class SpeakerNamingViewTests: XCTestCase {
         }
         let names = speakers.map { $0.autoName ?? "" }
         XCTAssertEqual(names.first, "Maria")
+    }
+
+    // MARK: - Mic Speaker Locked Row
+
+    func testMicSpeakerShowsLockedName() throws {
+        let sut = SpeakerNamingView(
+            data: makeData(
+                mapping: ["SPEAKER_00": "SPEAKER_00", "SPEAKER_01": "SPEAKER_01"],
+                speakingTimes: ["SPEAKER_00": 60, "SPEAKER_01": 30],
+                micSpeakerID: "SPEAKER_00",
+                micLabel: "Roman"
+            ),
+            onComplete: { _ in }
+        )
+        let body = try sut.inspect()
+        // Mic speaker should show the locked name text
+        let texts = body.findAll(ViewType.Text.self)
+        let found = texts.contains { (try? $0.string()) == "Roman" }
+        XCTAssertTrue(found, "Mic speaker locked name 'Roman' should appear")
+    }
+
+    func testMicSpeakerConfirmIncludesMicLabel() throws {
+        var result: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(
+            data: makeData(
+                mapping: ["SPEAKER_00": "SPEAKER_00", "SPEAKER_01": "SPEAKER_01"],
+                speakingTimes: ["SPEAKER_00": 60, "SPEAKER_01": 30],
+                micSpeakerID: "SPEAKER_00",
+                micLabel: "Roman"
+            ),
+            onComplete: { result = $0 }
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Confirm").tap()
+        if case .confirmed(let mapping) = result {
+            XCTAssertEqual(mapping["SPEAKER_00"], "Roman", "Mic speaker should be in confirmed mapping")
+        } else {
+            XCTFail("Expected .confirmed, got \(String(describing: result))")
+        }
+    }
+
+    func testNoMicSpeakerShowsNormalRows() throws {
+        // When micSpeakerID is nil, all rows should be editable (no locked row)
+        let sut = SpeakerNamingView(
+            data: makeData(
+                mapping: ["SPEAKER_00": "SPEAKER_00"],
+                micSpeakerID: nil,
+                micLabel: nil
+            ),
+            onComplete: { _ in }
+        )
+        let body = try sut.inspect()
+        // Should show "Unknown" for unmatched speaker, not a locked name
+        XCTAssertNoThrow(try body.find(text: "Unknown"))
     }
 }
