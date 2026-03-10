@@ -15,7 +15,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
     AXHelper.swift         # Shared accessibility API helper
     NotificationManager.swift # macOS notifications
-    KeychainHelper.swift   # Keychain CRUD (legacy, token now file-based)
+    KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
     WhisperKitEngine.swift # Native WhisperKit transcription (CoreML/ANE)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device)
@@ -41,7 +41,9 @@ tools/audiotap/            # CATapDescription-based app audio capture (Swift CLI
   Sources/main.swift       # PID → CATapDescription → stdout (interleaved float32)
 scripts/
   build_audiotap.sh        # Build audiotap Swift binary
+  build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG
+  notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)

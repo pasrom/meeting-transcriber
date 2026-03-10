@@ -121,7 +121,6 @@ class DualSourceRecorder: RecordingProvider {
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
 
         // Read stdout in background
-        let chunkSize = recordRate * appChannels * 4 * 10 / 1000  // 10ms of float32 stereo
         readerTask = Task.detached { [weak self] in
             let handle = stdoutPipe.fileHandleForReading
             while !Task.isCancelled {
@@ -131,7 +130,6 @@ class DualSourceRecorder: RecordingProvider {
                     self?.appAudioFrames.append(data)
                 }
             }
-            _ = chunkSize  // suppress warning
         }
 
         // ── Mute detection ──

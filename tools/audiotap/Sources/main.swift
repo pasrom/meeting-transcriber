@@ -62,6 +62,8 @@ class MicCaptureHandler {
     private let outputPath: String
     private var isRecording = false
     private var listenerInstalled = false
+    /// Stored listener block so we can pass the same instance to remove.
+    private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     /// Sample rate of the WAV file (set on first start, stays fixed).
     private var fileSampleRate: Double = 0
     /// Resampler for when device sample rate differs from file sample rate.
@@ -202,14 +204,16 @@ class MicCaptureHandler {
     /// This fires reliably even in CLI tools (unlike NSNotification).
     private func installDeviceChangeListener() {
         guard !listenerInstalled else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleDefaultInputDeviceChanged()
+        }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &defaultInputAddress,
-            DispatchQueue.main
-        ) { [weak self] _, _ in
-            self?.handleDefaultInputDeviceChanged()
-        }
+            DispatchQueue.main,
+            listener)
         if status == noErr {
+            deviceChangeListener = listener
             listenerInstalled = true
             fputs("Mic: listening for default input device changes\n", stderr)
         } else {
@@ -240,12 +244,13 @@ class MicCaptureHandler {
 
     func stop() {
         isRecording = false
-        if listenerInstalled {
+        if listenerInstalled, let listener = deviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultInputAddress,
                 DispatchQueue.main,
-                { _, _ in })
+                listener)
+            deviceChangeListener = nil
             listenerInstalled = false
         }
         engine.inputNode.removeTap(onBus: 0)
@@ -271,6 +276,8 @@ class AppAudioCapture {
     private var procID: AudioDeviceIOProcID?
     private var isRunning = false
     private var outputListenerInstalled = false
+    /// Stored listener block so we can pass the same instance to remove.
+    private var outputDeviceChangeListener: AudioObjectPropertyListenerBlock?
     private let writeQueue = DispatchQueue(
         label: "audiotap.writer", qos: .userInteractive)
 
@@ -465,14 +472,16 @@ class AppAudioCapture {
 
     private func installOutputDeviceChangeListener() {
         guard !outputListenerInstalled else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleOutputDeviceChanged()
+        }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &defaultOutputAddress,
-            DispatchQueue.main
-        ) { [weak self] _, _ in
-            self?.handleOutputDeviceChanged()
-        }
+            DispatchQueue.main,
+            listener)
         if status == noErr {
+            outputDeviceChangeListener = listener
             outputListenerInstalled = true
             fputs("App audio: listening for default output device changes\n", stderr)
         }
@@ -515,12 +524,13 @@ class AppAudioCapture {
 
     func stop() {
         stopCapture()
-        if outputListenerInstalled {
+        if outputListenerInstalled, let listener = outputDeviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultOutputAddress,
                 DispatchQueue.main,
-                { _, _ in })
+                listener)
+            outputDeviceChangeListener = nil
             outputListenerInstalled = false
         }
         fputs("Audio capture stopped\n", stderr)

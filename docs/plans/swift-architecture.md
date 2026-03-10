@@ -374,7 +374,7 @@ protocol ProtocolGenerating {
 
 **AXHelper** (`Sources/AXHelper.swift`): Shared enum with a single `getAttribute(_:attribute:)` method wrapping `AXUIElementCopyAttributeValue`. Used by `MuteDetector` and `ParticipantReader`.
 
-**Permissions** (`Sources/Permissions.swift`): Static methods for checking/requesting Screen Recording, Microphone, and Accessibility permissions. `findProjectRoot()` walks up from the executable to find the project root (directory containing `pyproject.toml`).
+**Permissions** (`Sources/Permissions.swift`): Static methods for checking/requesting Screen Recording, Microphone, and Accessibility permissions. `findProjectRoot()` walks up from the executable to find the project root (directory containing `VERSION`).
 
 **NotificationManager** (`Sources/NotificationManager.swift`): Singleton wrapping `UNUserNotificationCenter`. Shows banners for meeting detection, protocol ready, speaker naming prompt, and errors. Shows notifications even when app is in foreground.
 
@@ -475,7 +475,7 @@ Each recording session produces up to three files in `AppPaths.recordingsDir`:
 | CoreAudio | Device enumeration, device property queries, aggregate device creation |
 | CoreGraphics | `CGWindowListCopyWindowInfo` for meeting detection |
 | ApplicationServices | Accessibility API (AXUIElement) for mute detection and participant reading |
-| Accelerate | Imported in AudioMixer (available for future vDSP optimizations) |
+| Accelerate | Available for future vDSP optimizations (not currently imported) |
 | UserNotifications | macOS notification banners |
 
 ### External Tool
@@ -562,7 +562,7 @@ await withCheckedContinuation { continuation in
 
 ### Test Count and Framework
 
-328 Swift tests using XCTest + ViewInspector. Run with `cd app/MeetingTranscriber && swift test`.
+341 Swift tests using XCTest + ViewInspector. Run with `cd app/MeetingTranscriber && swift test`.
 
 ### Mock/Protocol DI Pattern
 

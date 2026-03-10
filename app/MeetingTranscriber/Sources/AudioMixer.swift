@@ -1,4 +1,3 @@
-import Accelerate
 import AVFoundation
 import Foundation
 import os.log

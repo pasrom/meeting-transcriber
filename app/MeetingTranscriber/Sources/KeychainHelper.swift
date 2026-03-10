@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - Test-only utility (no production references)
+
 /// File-based secret storage in the app's data directory.
 /// Stored with POSIX 600 permissions (owner read/write only).
 /// Same API as the previous Keychain-based implementation but survives
