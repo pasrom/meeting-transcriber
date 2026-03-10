@@ -265,6 +265,152 @@ final class DiarizationProcessTests: XCTestCase {
         XCTAssertEqual(result[2].speaker, "Max")   // app overlaps SPEAKER_2, mic speaker excluded
     }
 
+    // MARK: - Dual-Track Diarization
+
+    func testMergeDualTrackDiarization() {
+        let appDiarization = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_0"),
+                .init(start: 5, end: 10, speaker: "SPEAKER_1"),
+            ],
+            speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0], "SPEAKER_1": [0, 1]]
+        )
+
+        let micDiarization = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 8, speaker: "SPEAKER_0"),
+            ],
+            speakingTimes: ["SPEAKER_0": 8],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [0.5, 0.5]]
+        )
+
+        let merged = DiarizationProcess.mergeDualTrackDiarization(
+            appDiarization: appDiarization,
+            micDiarization: micDiarization
+        )
+
+        // App speakers prefixed with R_, mic with M_
+        XCTAssertEqual(merged.segments.count, 3)
+        let speakers = Set(merged.segments.map { $0.speaker })
+        XCTAssertTrue(speakers.contains("R_SPEAKER_0"))
+        XCTAssertTrue(speakers.contains("R_SPEAKER_1"))
+        XCTAssertTrue(speakers.contains("M_SPEAKER_0"))
+
+        // Speaking times prefixed
+        XCTAssertEqual(merged.speakingTimes["R_SPEAKER_0"], 5)
+        XCTAssertEqual(merged.speakingTimes["R_SPEAKER_1"], 5)
+        XCTAssertEqual(merged.speakingTimes["M_SPEAKER_0"], 8)
+
+        // Embeddings prefixed
+        XCTAssertEqual(merged.embeddings?["R_SPEAKER_0"], [1, 0])
+        XCTAssertEqual(merged.embeddings?["R_SPEAKER_1"], [0, 1])
+        XCTAssertEqual(merged.embeddings?["M_SPEAKER_0"], [0.5, 0.5])
+
+        // Segments sorted by start time
+        XCTAssertEqual(merged.segments[0].start, 0)
+        XCTAssertEqual(merged.segments[1].start, 0)
+        // Both start at 0 — order between them is stable
+    }
+
+    func testMergeDualTrackDiarization_emptyMic() {
+        let appDiarization = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0]]
+        )
+
+        let micDiarization = DiarizationResult(
+            segments: [],
+            speakingTimes: [:],
+            autoNames: [:],
+            embeddings: nil
+        )
+
+        let merged = DiarizationProcess.mergeDualTrackDiarization(
+            appDiarization: appDiarization,
+            micDiarization: micDiarization
+        )
+
+        XCTAssertEqual(merged.segments.count, 1)
+        XCTAssertEqual(merged.segments[0].speaker, "R_SPEAKER_0")
+    }
+
+    func testAssignSpeakersDualTrack() {
+        let appSegments = [
+            TimestampedSegment(start: 0, end: 5, text: "Remote talking"),
+            TimestampedSegment(start: 10, end: 15, text: "Another remote"),
+        ]
+        let micSegments = [
+            TimestampedSegment(start: 5, end: 10, text: "Local talking"),
+        ]
+
+        let appDiarization = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 6, speaker: "R_SPEAKER_0"),
+                .init(start: 8, end: 15, speaker: "R_SPEAKER_1"),
+            ],
+            speakingTimes: ["R_SPEAKER_0": 6, "R_SPEAKER_1": 7],
+            autoNames: ["R_SPEAKER_0": "Anna", "R_SPEAKER_1": "Max"],
+            embeddings: nil
+        )
+
+        let micDiarization = DiarizationResult(
+            segments: [
+                .init(start: 4, end: 11, speaker: "M_SPEAKER_0"),
+            ],
+            speakingTimes: ["M_SPEAKER_0": 7],
+            autoNames: ["M_SPEAKER_0": "Roman"],
+            embeddings: nil
+        )
+
+        let result = DiarizationProcess.assignSpeakersDualTrack(
+            appSegments: appSegments,
+            micSegments: micSegments,
+            appDiarization: appDiarization,
+            micDiarization: micDiarization
+        )
+
+        // Sorted by start time
+        XCTAssertEqual(result.count, 3)
+        XCTAssertEqual(result[0].speaker, "Anna")    // app 0-5 overlaps R_SPEAKER_0
+        XCTAssertEqual(result[1].speaker, "Roman")   // mic 5-10 overlaps M_SPEAKER_0
+        XCTAssertEqual(result[2].speaker, "Max")     // app 10-15 overlaps R_SPEAKER_1
+    }
+
+    func testAssignSpeakersDualTrack_noOverlapFallback() {
+        let appSegments = [
+            TimestampedSegment(start: 50, end: 55, text: "Far away"),
+        ]
+
+        let appDiarization = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "R_SPEAKER_0")],
+            speakingTimes: ["R_SPEAKER_0": 5],
+            autoNames: ["R_SPEAKER_0": "Anna"],
+            embeddings: nil
+        )
+
+        let micDiarization = DiarizationResult(
+            segments: [],
+            speakingTimes: [:],
+            autoNames: [:],
+            embeddings: nil
+        )
+
+        let result = DiarizationProcess.assignSpeakersDualTrack(
+            appSegments: appSegments,
+            micSegments: [],
+            appDiarization: appDiarization,
+            micDiarization: micDiarization
+        )
+
+        // Nearest fallback: Anna
+        XCTAssertEqual(result[0].speaker, "Anna")
+    }
+
     func testAssignSpeakersHybrid_appNoOverlapKeepsRemote() {
         let appSegments = [
             TimestampedSegment(start: 50, end: 55, text: "Far away segment"),
