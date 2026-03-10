@@ -201,15 +201,58 @@ struct AudioMixer {
 
     // MARK: - Resampling
 
-    /// Resample audio from one sample rate to another using linear interpolation.
-    /// For production use, consider vDSP_desamp or polyphase resampling.
+    /// Resample audio using AVAudioConverter (proper anti-aliasing filter).
     static func resample(_ samples: [Float], from sourceRate: Int, to targetRate: Int) -> [Float] {
         guard sourceRate != targetRate, !samples.isEmpty else { return samples }
 
+        guard let srcFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(sourceRate), channels: 1, interleaved: false
+        ), let dstFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(targetRate), channels: 1, interleaved: false
+        ), let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
+            logger.warning("AVAudioConverter init failed, falling back to linear interpolation")
+            return resampleLinear(samples, from: sourceRate, to: targetRate)
+        }
+
+        let frameCount = AVAudioFrameCount(samples.count)
+        guard let srcBuffer = AVAudioPCMBuffer(pcmFormat: srcFormat, frameCapacity: frameCount) else {
+            return resampleLinear(samples, from: sourceRate, to: targetRate)
+        }
+        srcBuffer.frameLength = frameCount
+        samples.withUnsafeBufferPointer { ptr in
+            srcBuffer.floatChannelData![0].initialize(from: ptr.baseAddress!, count: samples.count)
+        }
+
+        let outputCount = AVAudioFrameCount(Double(samples.count) * Double(targetRate) / Double(sourceRate))
+        guard let dstBuffer = AVAudioPCMBuffer(pcmFormat: dstFormat, frameCapacity: outputCount) else {
+            return resampleLinear(samples, from: sourceRate, to: targetRate)
+        }
+
+        var error: NSError?
+        var inputConsumed = false
+        converter.convert(to: dstBuffer, error: &error) { _, outStatus in
+            if inputConsumed {
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            inputConsumed = true
+            outStatus.pointee = .haveData
+            return srcBuffer
+        }
+
+        if let error {
+            logger.warning("AVAudioConverter failed: \(error.localizedDescription), falling back")
+            return resampleLinear(samples, from: sourceRate, to: targetRate)
+        }
+
+        return Array(UnsafeBufferPointer(start: dstBuffer.floatChannelData![0], count: Int(dstBuffer.frameLength)))
+    }
+
+    /// Linear interpolation fallback (no anti-aliasing).
+    private static func resampleLinear(_ samples: [Float], from sourceRate: Int, to targetRate: Int) -> [Float] {
         let ratio = Double(targetRate) / Double(sourceRate)
         let outputCount = Int(Double(samples.count) * ratio)
         var output = [Float](repeating: 0, count: outputCount)
-
         for i in 0..<outputCount {
             let srcIdx = Double(i) / ratio
             let lo = Int(srcIdx)
@@ -217,7 +260,6 @@ struct AudioMixer {
             let frac = Float(srcIdx - Double(lo))
             output[i] = samples[lo] * (1 - frac) + samples[hi] * frac
         }
-
         return output
     }
 
