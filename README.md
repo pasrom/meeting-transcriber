@@ -5,7 +5,7 @@
 A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 
 ```
-Meeting Detected → App Audio + Mic → Mix → WhisperKit (CoreML) → FluidAudio Diarization (CoreML) → Claude CLI → Markdown Protocol
+Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI → Markdown Protocol
 ```
 
 ---
@@ -16,7 +16,7 @@ Meeting Detected → App Audio + Mic → Mix → WhisperKit (CoreML) → FluidAu
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — [WhisperKit](https://github.com/argmaxinc/WhisperKit) running on CoreML/Apple Neural Engine
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidAudio) via CoreML/ANE — no HuggingFace token needed
-- **Hybrid speaker identification** — Dual-source recording identifies the local speaker; FluidAudio distinguishes remote speakers
+- **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
 - **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording

@@ -47,7 +47,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
 | `SpeakerMatcher.swift` | Speaker embedding DB + cosine similarity matching |
-| `DiarizationProcess.swift` | Diarization result types, DiarizationProvider protocol, speaker assignment algorithms (standard + hybrid) |
+| `DiarizationProcess.swift` | Diarization result types, DiarizationProvider protocol, speaker assignment (standard + dual-track) |
 | `ProtocolGenerator.swift` | Claude CLI invocation, stream-json parsing |
 
 ### Audio Processing
@@ -158,7 +158,7 @@ Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → `OfflineDiarizerManager` �
 
 ### Speaker Matching
 
-`SpeakerMatcher` matches diarization speaker embeddings against a persistent speaker database (`speakers.json`) using cosine similarity (threshold: 0.65). Enables recognition of returning speakers across meetings.
+`SpeakerMatcher` matches diarization speaker embeddings against a persistent speaker database (`speakers.json`) using cosine similarity (threshold: 0.40, confidence margin: 0.10). Stores up to 5 embeddings per speaker (FIFO). Enables recognition of returning speakers across meetings.
 
 ### Speaker Assignment
 
@@ -168,19 +168,21 @@ overlap = max(0, min(seg.end, dSeg.end) - max(seg.start, dSeg.start))
 ```
 No overlap → nearest-segment fallback by gap distance. Only if no diarization segments exist → "UNKNOWN".
 
-### Hybrid Dual-Source Diarization
+### Dual-Track Diarization
 
-When dual-source recording (app + mic) is available with a mic label:
+When dual-source recording (app + mic) is available:
 1. Transcribe app/mic tracks separately → "Remote" / micLabel segments
-2. Run FluidAudio diarization on mixed audio
-3. `identifyMicSpeaker()` — correlate mic segments with diarization speakers by temporal overlap
+2. Diarize app track and mic track separately via FluidAudio
+3. `mergeDualTrackDiarization()` — prefix speaker IDs (`R_` for remote, `M_` for local), merge segments by time
 4. `preMatchParticipants()` — heuristic assignment of Teams participants to unmatched speakers by speaking time
-5. Speaker naming UI — mic speaker row locked, others editable with participant suggestions
-6. `assignSpeakersHybrid()` — mic segments keep micLabel, app segments get diarization names (mic speaker excluded)
+5. Speaker naming UI — all speakers editable with participant suggestions
+6. `assignSpeakersDualTrack()` — app segments matched against app diarization, mic segments against mic diarization
+
+**Single-source fallback:** When only mix audio is available, diarize the mix and use `assignSpeakers()` with nearest-segment fallback.
 
 ### Speaker Naming UI
 
-`SpeakerNamingView` shown when diarization finds speakers. Each row shows label, auto-matched name, speaking time, and audio playback. In hybrid mode, mic speaker row is locked (mic icon, non-editable). Supports re-run with different speaker count.
+`SpeakerNamingView` shown when diarization finds speakers. Each row shows label, auto-matched name, speaking time, and audio playback. All rows are editable. Supports re-run with different speaker count.
 
 ---
 
@@ -278,4 +280,4 @@ AppSettings (UserDefaults)
 6. **Pre-loaded model** — WhisperKit loaded at app launch, prevents delay on first meeting
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
-9. **Hybrid diarization** — Dual-source recording identifies local speaker reliably, FluidAudio distinguishes remote speakers
+9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference

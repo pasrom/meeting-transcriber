@@ -243,9 +243,9 @@ Audio Capture Detail:
 
 **Speaker assignment:** `assignSpeakers(transcript:diarization:)` assigns speakers to transcript segments by maximum temporal overlap. For each `TimestampedSegment`, it finds the `DiarizationResult.Segment` with the most overlapping time and applies the auto-named speaker label. When no overlap exists, falls back to nearest diarization segment by gap distance.
 
-**Hybrid speaker assignment methods:**
-- `identifyMicSpeaker(micSegments:diarization:overlapThreshold:)` → `String?` — Identifies which diarization speaker corresponds to the mic user by computing temporal overlap ratio between mic transcript segments and each diarization speaker. Returns the speaker label if overlap ratio exceeds threshold (default 0.3), else nil.
-- `assignSpeakersHybrid(appSegments:micSegments:diarization:micSpeakerID:micLabel:)` → `[TimestampedSegment]` — Hybrid speaker assignment for dual-source recordings. Mic segments keep `micLabel` unchanged. App ("Remote") segments are matched against diarization speakers by maximum temporal overlap, excluding the mic speaker. If no overlap found, app segments keep "Remote" label (not "UNKNOWN"). Result merged sorted by start time.
+**Dual-track speaker assignment methods:**
+- `mergeDualTrackDiarization(appDiarization:micDiarization:)` → `DiarizationResult` — Merges two separate diarization results, prefixing speaker IDs with `R_` (remote/app) and `M_` (mic/local). Segments sorted by time.
+- `assignSpeakersDualTrack(appSegments:micSegments:appDiarization:micDiarization:)` → `[TimestampedSegment]` — Assigns speakers from respective diarizations: app segments matched against app diarization, mic segments against mic diarization. Result merged sorted by start time.
 
 **Protocol for DI:** `DiarizationProvider` is the abstraction used by `PipelineQueue`:
 ```swift
@@ -382,19 +382,19 @@ protocol ProtocolGenerating {
 
 **MicRecorder** (`Sources/MicRecorder.swift`): Standalone mic recorder using AVAudioEngine (used for standalone mic recording, separate from audiotap's built-in mic capture). Supports device selection by CoreAudio UID.
 
-### 3.21 Hybrid Dual-Source Diarization
+### 3.21 Dual-Track Diarization
 
-When a dual-source recording (app + mic) is available and micLabel is set, the pipeline uses a hybrid approach combining source-based speaker identification with neural diarization:
+When a dual-source recording (app + mic) is available, the pipeline diarizes each track independently:
 
 1. **Dual-source transcription** — WhisperKit transcribes app and mic tracks separately, labeling segments "Remote" and micLabel
-2. **FluidAudio diarization** — Runs on the mixed audio to identify individual speakers
-3. **Mic speaker identification** — `identifyMicSpeaker()` correlates mic transcript segments with diarization speakers by temporal overlap to find which diarization speaker is the local user
-4. **Speaker matching** — Embeddings matched against speaker DB, mic speaker pre-filled with micLabel
+2. **Separate diarization** — FluidAudio runs on app track (remote speakers) and mic track (local speakers) independently
+3. **Merge** — `mergeDualTrackDiarization()` prefixes speaker IDs (`R_` for remote, `M_` for local), merges segments by time
+4. **Speaker matching** — Merged embeddings matched against speaker DB
 5. **Participant pre-matching** — If Teams participants available and unmatched count matches, assigns by speaking time
-6. **Speaker naming UI** — Shows naming dialog with mic speaker row locked (non-editable)
-7. **Hybrid assignment** — `assignSpeakersHybrid()` keeps mic segments as micLabel, assigns diarization names only to app segments (excluding mic speaker)
+6. **Speaker naming UI** — Shows naming dialog, all rows editable with participant suggestions
+7. **Dual-track assignment** — `assignSpeakersDualTrack()` matches app segments against app diarization, mic segments against mic diarization
 
-This gives better results than either approach alone: dual-source reliably identifies local vs. remote, while diarization distinguishes individual remote speakers.
+Separate diarization avoids echo interference (mic picking up speaker output) and produces cleaner speaker clusters per track. Single-source recordings fall back to diarizing the mix with `assignSpeakers()`.
 
 ## 4. Data Flow
 
