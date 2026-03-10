@@ -123,33 +123,52 @@ struct ProtocolGenerator {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        // C5 fix: Set terminationHandler BEFORE process.run() to avoid race
+        // where the process exits before the handler is installed.
+        // AsyncStream buffers the yield, so even if the process exits before
+        // we iterate, the value is not lost.
+        let exitStream = AsyncStream<Void> { continuation in
+            process.terminationHandler = { _ in
+                continuation.yield()
+                continuation.finish()
+            }
+        }
+
         do {
             try process.run()
         } catch {
             throw ProtocolError.cliNotFound(claudeBin)
         }
 
+        // C5 fix: Guard against process having already exited before we awaited.
+        // If the process already exited, terminationHandler may have already fired,
+        // but AsyncStream buffers the yield so we won't miss it.
+        // No additional check needed — AsyncStream handles the race.
+
         logger.info("Generating protocol with Claude CLI ...")
 
-        // Write prompt to stdin in background
+        // C6 fix: Write stdin in a detached task to avoid deadlock on large transcripts.
+        // The pipe buffer is finite (~64KB); if the prompt exceeds it, a synchronous
+        // write blocks until the reader drains — but we haven't started reading yet.
         let promptData = Data(prompt.utf8)
-        stdinPipe.fileHandleForWriting.write(promptData)
-        stdinPipe.fileHandleForWriting.closeFile()
+        let stdinWriteTask = Task.detached {
+            stdinPipe.fileHandleForWriting.write(promptData)
+            stdinPipe.fileHandleForWriting.closeFile()
+        }
 
-        // Read stream-json output (drains stdout to prevent pipe buffer deadlock)
+        // Read stream-json output concurrently with stdin write
         let text = try await readStreamJSON(from: stdoutPipe, process: process)
+
+        // Ensure stdin write completes (should be done by now)
+        _ = await stdinWriteTask.value
 
         // Read stderr in background to prevent pipe buffer issues
         async let stderrRead = Task.detached {
             stderrPipe.fileHandleForReading.readDataToEndOfFile()
         }.value
 
-        // Await process exit without blocking cooperative thread pool
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in
-                continuation.resume()
-            }
-        }
+        // Await process exit via the stream installed before launch
+        for await _ in exitStream { break }
 
         if process.terminationStatus != 0 {
             let stderrData = await stderrRead
@@ -179,7 +198,10 @@ struct ProtocolGenerator {
                 throw ProtocolError.timeout
             }
 
-            let chunk = handle.availableData
+            // I1 fix: Wrap blocking availableData in Task.detached to avoid
+            // blocking Swift's cooperative thread pool. availableData blocks
+            // until data is available or EOF, which would starve other tasks.
+            let chunk = await Task.detached { handle.availableData }.value
             if chunk.isEmpty { break } // EOF
 
             buffer.append(chunk)
