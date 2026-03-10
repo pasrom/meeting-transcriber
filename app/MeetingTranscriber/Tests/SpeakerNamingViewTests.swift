@@ -19,7 +19,8 @@ final class SpeakerNamingViewTests: XCTestCase {
             speakingTimes: speakingTimes ?? ["SPEAKER_00": 60.0],
             embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
             audioPath: nil,
-            segments: []
+            segments: [],
+            participants: []
         )
     }
 

@@ -202,6 +202,19 @@ struct SpeakerNamingView: View {
                         placeholder: "Name",
                         identifier: "speaker-name-\(speaker.label)"
                     )
+
+                    if !unusedParticipants(currentIndex: index).isEmpty {
+                        HStack(spacing: 4) {
+                            ForEach(unusedParticipants(currentIndex: index), id: \.self) { name in
+                                Button(name) {
+                                    names[index] = name
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .font(.caption)
+                            }
+                        }
+                    }
                 }
             }
             .padding(4)
@@ -255,6 +268,16 @@ struct SpeakerNamingView: View {
         } catch {
             // Silently fail — playback is best-effort
         }
+    }
+
+    /// Participant names not yet assigned to any other speaker.
+    private func unusedParticipants(currentIndex: Int) -> [String] {
+        let usedNames = Set(
+            names.enumerated()
+                .filter { $0.offset != currentIndex && !$0.element.isEmpty }
+                .map(\.element)
+        )
+        return data.participants.filter { !usedNames.contains($0) }
     }
 
     private func confirm() {
