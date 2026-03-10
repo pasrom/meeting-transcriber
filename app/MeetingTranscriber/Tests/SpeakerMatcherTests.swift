@@ -161,4 +161,122 @@ final class SpeakerMatcherTests: XCTestCase {
         // Should still exist
         XCTAssertTrue(FileManager.default.fileExists(atPath: dbPath.path))
     }
+
+    // MARK: - Pre-match participants
+
+    func testPreMatchParticipants_exactMatch() {
+        // 2 unmatched speakers, 2 participants → assigns by speaking time
+        let mapping: [String: String] = [
+            "SPEAKER_0": "SPEAKER_0",
+            "SPEAKER_1": "SPEAKER_1",
+        ]
+        let speakingTimes: [String: TimeInterval] = [
+            "SPEAKER_0": 30.0,
+            "SPEAKER_1": 90.0,
+        ]
+        let participants = ["Alice", "Bob"]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: participants
+        )
+
+        // SPEAKER_1 spoke more → gets first participant (Alice)
+        XCTAssertEqual(result["SPEAKER_1"], "Alice")
+        XCTAssertEqual(result["SPEAKER_0"], "Bob")
+    }
+
+    func testPreMatchParticipants_countMismatch() {
+        // 2 unmatched, 3 participants → no change
+        let mapping: [String: String] = [
+            "SPEAKER_0": "SPEAKER_0",
+            "SPEAKER_1": "SPEAKER_1",
+        ]
+        let speakingTimes: [String: TimeInterval] = [
+            "SPEAKER_0": 30.0,
+            "SPEAKER_1": 90.0,
+        ]
+        let participants = ["Alice", "Bob", "Charlie"]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: participants
+        )
+
+        XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
+        XCTAssertEqual(result["SPEAKER_1"], "SPEAKER_1")
+    }
+
+    func testPreMatchParticipants_excludeLabels() {
+        // Mic speaker excluded, remaining match → assigns
+        let mapping: [String: String] = [
+            "SPEAKER_0": "Roman",   // already matched (mic speaker)
+            "SPEAKER_1": "SPEAKER_1",
+            "SPEAKER_2": "SPEAKER_2",
+        ]
+        let speakingTimes: [String: TimeInterval] = [
+            "SPEAKER_0": 50.0,
+            "SPEAKER_1": 80.0,
+            "SPEAKER_2": 20.0,
+        ]
+        let participants = ["Roman", "Alice", "Bob"]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: participants,
+            excludeLabels: ["SPEAKER_0"]
+        )
+
+        // Roman is already used, so unused = [Alice, Bob]
+        // SPEAKER_1 spoke more → Alice, SPEAKER_2 → Bob
+        XCTAssertEqual(result["SPEAKER_0"], "Roman")
+        XCTAssertEqual(result["SPEAKER_1"], "Alice")
+        XCTAssertEqual(result["SPEAKER_2"], "Bob")
+    }
+
+    func testPreMatchParticipants_noUnmatched() {
+        // All already named → no change
+        let mapping: [String: String] = [
+            "SPEAKER_0": "Roman",
+            "SPEAKER_1": "Anna",
+        ]
+        let speakingTimes: [String: TimeInterval] = [
+            "SPEAKER_0": 50.0,
+            "SPEAKER_1": 80.0,
+        ]
+        let participants = ["Roman", "Anna"]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: participants
+        )
+
+        XCTAssertEqual(result["SPEAKER_0"], "Roman")
+        XCTAssertEqual(result["SPEAKER_1"], "Anna")
+    }
+
+    func testPreMatchParticipants_emptyParticipants() {
+        // No participants → no change
+        let mapping: [String: String] = [
+            "SPEAKER_0": "SPEAKER_0",
+            "SPEAKER_1": "SPEAKER_1",
+        ]
+        let speakingTimes: [String: TimeInterval] = [
+            "SPEAKER_0": 50.0,
+            "SPEAKER_1": 80.0,
+        ]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: []
+        )
+
+        XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
+        XCTAssertEqual(result["SPEAKER_1"], "SPEAKER_1")
+    }
 }

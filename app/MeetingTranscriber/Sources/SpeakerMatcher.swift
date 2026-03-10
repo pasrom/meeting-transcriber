@@ -98,6 +98,51 @@ class SpeakerMatcher {
         }
     }
 
+    /// Pre-assign participant names to unmatched speakers by speaking time.
+    /// When unmatched remote speaker count == unmatched participant count,
+    /// assign by descending speaking time order.
+    /// This is a heuristic — the naming popup lets users correct mistakes.
+    ///
+    /// - Parameters:
+    ///   - mapping: Current label → name mapping (from `match()`)
+    ///   - speakingTimes: Speaking time per label
+    ///   - participants: Meeting participant names (e.g. from Teams)
+    ///   - excludeLabels: Labels to exclude (e.g. mic speaker already identified)
+    /// - Returns: Updated mapping with participants pre-assigned
+    static func preMatchParticipants(
+        mapping: [String: String],
+        speakingTimes: [String: TimeInterval],
+        participants: [String],
+        excludeLabels: Set<String> = []
+    ) -> [String: String] {
+        // Find unmatched labels: name equals raw label (not yet named) and not excluded
+        let unmatchedLabels = mapping.keys.filter { label in
+            mapping[label] == label && !excludeLabels.contains(label)
+        }
+
+        // Find unused participants: not already assigned as a value in mapping
+        let usedNames = Set(mapping.values)
+        let unusedParticipants = participants.filter { !usedNames.contains($0) }
+
+        // Only assign when counts match exactly
+        guard unmatchedLabels.count == unusedParticipants.count,
+              !unmatchedLabels.isEmpty else {
+            return mapping
+        }
+
+        // Sort unmatched labels by speaking time descending
+        let sortedLabels = unmatchedLabels.sorted { a, b in
+            (speakingTimes[a] ?? 0) > (speakingTimes[b] ?? 0)
+        }
+
+        var updated = mapping
+        for (label, participant) in zip(sortedLabels, unusedParticipants) {
+            updated[label] = participant
+        }
+
+        return updated
+    }
+
     /// Cosine distance: 0 = identical, 2 = opposite.
     static func cosineDistance(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count == b.count, !a.isEmpty else { return 2 }
