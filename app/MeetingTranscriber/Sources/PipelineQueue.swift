@@ -248,59 +248,64 @@ class PipelineQueue {
                     }
 
                     do {
-                        // Determine if hybrid mode: dual-source + non-empty micLabel
-                        let useHybrid = isDualSource && !micLabel.isEmpty
+                        let useDualTrack = isDualSource
 
                         // Diarization + naming loop: re-runs if user requests different speaker count
                         var speakerCount = numSpeakers > 0 ? numSpeakers : nil
-                        var diarization: DiarizationResult
-                        var autoNames: [String: String]
+                        var autoNames: [String: String] = [:]
 
-                        // Identify mic speaker from diarization (hybrid mode only)
-                        var micSpeakerID: String?
+                        // Dual-track: separate diarization results
+                        var appDiarization: DiarizationResult?
+                        var micDiarization: DiarizationResult?
+                        // Single-source: combined diarization
+                        var diarization: DiarizationResult?
 
                         diarizationLoop: while true {
-                            diarization = try await diarizeProcess.run(
-                                audioPath: mix16k,
-                                numSpeakers: speakerCount,
-                                meetingTitle: title
-                            )
+                            if useDualTrack {
+                                // Diarize app and mic tracks separately
+                                let app16k = workDir.appendingPathComponent("app_16k.wav")
+                                let mic16k_ = workDir.appendingPathComponent("mic_16k.wav")
 
-                            autoNames = diarization.autoNames
-
-                            // In hybrid mode, identify which diarization speaker is the mic user
-                            if useHybrid, let cached = cachedSegments {
-                                let micSegs = cached.filter { $0.speaker == micLabel }
-                                micSpeakerID = DiarizationProcess.identifyMicSpeaker(
-                                    micSegments: micSegs,
-                                    diarization: diarization
+                                appDiarization = try await diarizeProcess.run(
+                                    audioPath: app16k,
+                                    numSpeakers: speakerCount,
+                                    meetingTitle: title
                                 )
-                                if let micID = micSpeakerID {
-                                    autoNames[micID] = micLabel
-                                    logger.info("Identified mic speaker: \(micID) → \(self.micLabel)")
-                                }
+                                micDiarization = try await diarizeProcess.run(
+                                    audioPath: mic16k_,
+                                    numSpeakers: nil,  // auto-detect local speakers
+                                    meetingTitle: title
+                                )
+
+                                // Merge for speaker naming (prefixed IDs: R_, M_)
+                                diarization = DiarizationProcess.mergeDualTrackDiarization(
+                                    appDiarization: appDiarization!,
+                                    micDiarization: micDiarization!
+                                )
+                            } else {
+                                diarization = try await diarizeProcess.run(
+                                    audioPath: mix16k,
+                                    numSpeakers: speakerCount,
+                                    meetingTitle: title
+                                )
                             }
 
-                            guard let embeddings = diarization.embeddings else { break }
+                            guard let currentDiarization = diarization else { break }
+                            autoNames = currentDiarization.autoNames
+
+                            guard let embeddings = currentDiarization.embeddings else { break }
 
                             let matcher = speakerMatcherFactory()
                             let matched = matcher.match(embeddings: embeddings)
                             autoNames = matched
 
-                            // Pre-fill mic speaker name (overrides matcher result)
-                            if let micID = micSpeakerID {
-                                autoNames[micID] = micLabel
-                            }
-
                             // Pre-match participants to remaining speakers
                             let participants = jobs[index].participants
                             if !participants.isEmpty {
-                                let excludeLabels: Set<String> = micSpeakerID.map { [$0] } ?? []
                                 autoNames = SpeakerMatcher.preMatchParticipants(
                                     mapping: autoNames,
-                                    speakingTimes: diarization.speakingTimes,
-                                    participants: participants,
-                                    excludeLabels: excludeLabels
+                                    speakingTimes: currentDiarization.speakingTimes,
+                                    participants: participants
                                 )
                             }
 
@@ -308,13 +313,13 @@ class PipelineQueue {
                                 jobID: jobID,
                                 meetingTitle: title,
                                 mapping: autoNames,
-                                speakingTimes: diarization.speakingTimes,
+                                speakingTimes: currentDiarization.speakingTimes,
                                 embeddings: embeddings,
                                 audioPath: mix16k,
-                                segments: diarization.segments,
+                                segments: currentDiarization.segments,
                                 participants: participants,
-                                micSpeakerID: micSpeakerID,
-                                micLabel: useHybrid ? micLabel : nil
+                                micSpeakerID: nil,
+                                micLabel: nil
                             )
 
                             let namingResult: SpeakerNamingResult
@@ -341,7 +346,6 @@ class PipelineQueue {
 
                             case .rerun(let count):
                                 speakerCount = count
-                                micSpeakerID = nil
                                 updateJobState(id: jobID, to: .diarizing)
                                 logger.info("Re-running diarization with \(count) speakers")
                                 continue diarizationLoop
@@ -352,27 +356,41 @@ class PipelineQueue {
                         }
 
                         // Apply speaker names to segments
-                        let namedDiarization = DiarizationResult(
-                            segments: diarization.segments,
-                            speakingTimes: diarization.speakingTimes,
-                            autoNames: autoNames,
-                            embeddings: diarization.embeddings
-                        )
+                        if useDualTrack, let appDiar = appDiarization, let micDiar = micDiarization,
+                           let cached = cachedSegments {
+                            // Dual-track: assign from respective diarizations
+                            let namedAppDiar = DiarizationResult(
+                                segments: appDiar.segments,
+                                speakingTimes: appDiar.speakingTimes,
+                                autoNames: autoNames.filter { $0.key.hasPrefix("R_") }
+                                    .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
+                                embeddings: appDiar.embeddings
+                            )
+                            let namedMicDiar = DiarizationResult(
+                                segments: micDiar.segments,
+                                speakingTimes: micDiar.speakingTimes,
+                                autoNames: autoNames.filter { $0.key.hasPrefix("M_") }
+                                    .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
+                                embeddings: micDiar.embeddings
+                            )
 
-                        if useHybrid, let cached = cachedSegments {
-                            // Hybrid: mic segments keep micLabel, app segments get diarization names
                             let appSegs = cached.filter { $0.speaker == "Remote" }
                             let micSegs = cached.filter { $0.speaker == micLabel }
-                            let labeled = DiarizationProcess.assignSpeakersHybrid(
+                            let labeled = DiarizationProcess.assignSpeakersDualTrack(
                                 appSegments: appSegs,
                                 micSegments: micSegs,
-                                diarization: namedDiarization,
-                                micSpeakerID: micSpeakerID,
-                                micLabel: micLabel
+                                appDiarization: namedAppDiar,
+                                micDiarization: namedMicDiar
                             )
                             finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
-                        } else {
-                            // Single-source or empty micLabel: standard assignment
+                        } else if let currentDiarization = diarization {
+                            // Single-source: standard assignment
+                            let namedDiarization = DiarizationResult(
+                                segments: currentDiarization.segments,
+                                speakingTimes: currentDiarization.speakingTimes,
+                                autoNames: autoNames,
+                                embeddings: currentDiarization.embeddings
+                            )
                             let segments: [TimestampedSegment]
                             if let cached = cachedSegments {
                                 segments = cached
@@ -387,7 +405,8 @@ class PipelineQueue {
                             )
                             finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
                         }
-                        logger.info("Diarization complete: \(namedDiarization.segments.count) segments")
+                        let segCount = diarization?.segments.count ?? 0
+                        logger.info("Diarization complete: \(segCount) segments")
                     } catch {
                         logger.warning("Diarization failed, using undiarized transcript: \(error.localizedDescription)")
                         // Continue with original transcript
