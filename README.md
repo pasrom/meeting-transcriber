@@ -2,53 +2,61 @@
 
 [![CI](https://github.com/meanstone/Transcriber/actions/workflows/ci.yml/badge.svg)](https://github.com/meanstone/Transcriber/actions/workflows/ci.yml)
 
-Record meetings, transcribe with Whisper, and generate structured protocols with Claude — fully local, no cloud transcription costs.
+A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 
 ```
-App/System Audio + Microphone → Whisper → [Speaker Diarization] → Claude → Markdown Protocol
+Meeting Detected → App Audio + Mic → Mix → WhisperKit (CoreML) → FluidAudio Diarization (CoreML) → Claude CLI → Markdown Protocol
 ```
 
 ---
 
 ## Features
 
-- **Dual audio recording** — Microphone + app audio simultaneously (Teams, Zoom, etc.)
-  - macOS: ProcTap / ScreenCaptureKit
-  - Windows: WASAPI Loopback
-- **Local transcription** — [pywhispercpp](https://github.com/aarnphm/pywhispercpp) (macOS) / [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (Windows)
-- **Speaker diarization** — Identify and label speakers via [pyannote-audio](https://github.com/pyannote/pyannote-audio), with saved voice profiles
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling
+- **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
+- **On-device transcription** — [WhisperKit](https://github.com/argmaxinc/WhisperKit) running on CoreML/Apple Neural Engine
+- **On-device speaker diarization** — [FluidAudio](https://github.com/FluidAudio) via CoreML/ANE — no HuggingFace token needed
+- **Hybrid speaker identification** — Dual-source recording identifies the local speaker; FluidAudio distinguishes remote speakers
+- **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
-- **Flexible input** — Live recording, audio file (wav, mp3, m4a), or existing transcript (.txt)
-
----
-
-## Output
-
-All files are saved to `./protocols/`:
-
-| File | Content |
-|------|---------|
-| `20260225_1400_meeting.txt` | Raw transcript |
-| `20260225_1400_meeting.md` | Structured protocol |
-
-**Protocol structure:** Summary, Participants, Topics Discussed, Decisions, Tasks (table with responsible person, deadline, priority), Open Questions, Full Transcript.
+- **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
+- **Distribution** — Install via Homebrew Cask or build from source
 
 ---
 
 ## Prerequisites
 
-- Python 3.12+
+- macOS 14.2+ (required for CATapDescription audio capture)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed and logged in (`claude --version`)
 
-For diarization (optional):
-- HuggingFace token in `.env` (`HF_TOKEN=...`)
-- Accepted licenses for pyannote models
+No HuggingFace token needed — FluidAudio downloads its models automatically on first run (~50 MB).
 
 ---
 
 ## Installation
 
-### macOS
+### Native App (recommended)
+
+```bash
+# Via Homebrew Cask
+brew tap pasrom/meeting-transcriber
+brew install --cask meeting-transcriber
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/meanstone/Transcriber
+cd Transcriber
+./scripts/build_audiotap.sh
+cd app/MeetingTranscriber && swift build -c release
+cd ../..
+./scripts/run_app.sh
+```
+
+### Python CLI (alternative)
+
+For manual transcription without the menu bar app:
 
 ```bash
 git clone https://github.com/meanstone/Transcriber
@@ -56,76 +64,50 @@ cd Transcriber
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[mac,dev]"
-
-# Optional: speaker diarization
-pip install -e ".[mac,diarize,dev]"
+./scripts/build_audiotap.sh
 ```
 
-ProcTap Swift binary must be built manually for app audio capture:
+---
 
-```bash
-cd .venv/lib/python3.*/site-packages/proctap/swift/screencapture-audio
-swift build -c release
-```
+## Permissions
 
-### Windows
-
-```bash
-git clone https://github.com/meanstone/Transcriber
-cd Transcriber
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[windows,dev]"
-```
-
-For GPU acceleration (optional):
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
+| Permission | Required for | Notes |
+|------------|-------------|-------|
+| Screen Recording | Meeting detection (window titles) | System Settings → Privacy & Security |
+| Microphone | Mic recording | Prompted on first use |
+| Accessibility | Mute detection, participant reading (Teams) | System Settings → Privacy & Security |
+| App audio capture | — | No permission needed (purple dot indicator only) |
 
 ---
 
 ## Usage
 
-### Live recording
+### Menu Bar App
+
+Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
+
+You can also batch-process existing audio files via the menu (⌘P).
+
+### Python CLI
 
 ```bash
-# macOS — record app audio + microphone
+# Record app audio + microphone
 transcribe --app "Microsoft Teams" --title "Sprint Review"
 
-# macOS — microphone only
+# Microphone only
 transcribe --mic-only --title "Interview"
 
-# Windows — system audio + microphone
-transcribe --title "Project Meeting"
-```
-
-Press **Enter** to stop recording.
-
-### Transcribe audio file
-
-```bash
+# Transcribe audio file
 transcribe --file recording.mp3 --title "Sprint Review"
-```
 
-### With speaker diarization
-
-```bash
-transcribe --file recording.wav --diarize --title "Team Meeting"
-transcribe --file recording.wav --diarize --speakers 3 --title "Team Meeting"
-```
-
-### Protocol from existing transcript
-
-```bash
+# Protocol from existing transcript
 transcribe --file protocols/transcript.txt --title "Standup"
-```
 
-### List available apps (macOS)
-
-```bash
+# List available apps
 transcribe --list-apps
 ```
+
+Press **Enter** to stop a live recording.
 
 ---
 
@@ -136,15 +118,28 @@ transcribe --list-apps
 | `--file, -f` | Audio file or transcript (.txt) |
 | `--title, -t` | Meeting title (default: "Meeting") |
 | `--output-dir, -o` | Output directory (default: `./protocols`) |
-| `--model, -m` | Whisper model (macOS default: `large-v3-turbo-q5_0`, Windows: `large`) |
-| `--app, -a` | App name for audio capture (macOS) |
-| `--pid` | Process ID for app audio (macOS) |
-| `--list-apps` | List running apps and exit (macOS) |
-| `--mic-only` | Microphone only, no app audio (macOS) |
-| `--list-mics` | List available microphone devices and exit (macOS) |
-| `--mic` | Microphone device index or name substring (macOS) |
+| `--model, -m` | Whisper model (default: `large-v3-turbo-q5_0`) |
+| `--app, -a` | App name for audio capture |
+| `--pid` | Process ID for app audio |
+| `--list-apps` | List running apps and exit |
+| `--mic-only` | Microphone only, no app audio |
+| `--list-mics` | List available microphone devices and exit |
+| `--mic` | Microphone device index or name substring |
 | `--diarize` | Enable speaker diarization |
 | `--speakers` | Expected number of speakers |
+
+---
+
+## Output
+
+Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/` (app) or `./protocols/` (CLI):
+
+| File | Content |
+|------|---------|
+| `20260225_1400_meeting.txt` | Raw transcript |
+| `20260225_1400_meeting.md` | Structured protocol |
+
+**Protocol structure:** Summary, Participants, Topics Discussed, Decisions, Tasks (with responsible person, deadline, priority), Open Questions, Full Transcript.
 
 ---
 
@@ -153,10 +148,10 @@ transcribe --list-apps
 | Problem | Solution |
 |---------|----------|
 | `claude not found` | Install Claude Code CLI, run `claude --version` |
-| No app audio (macOS) | Grant Screen Recording permission (System Settings → Privacy & Security) |
-| ProcTap delivers 0 chunks | Build the Swift binary (see Installation) |
-| No system audio (Windows) | Check default output device in Windows sound settings |
-| GPU not detected (Windows) | Install torch with CUDA, check `nvidia-smi` |
+| No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
+| No app audio | Build audiotap: `./scripts/build_audiotap.sh` (macOS 14.2+ required) |
+| Empty transcription | Ensure audio is 16 kHz mono WAV — WhisperKit requires this format |
+| Models not loading | FluidAudio models download on first run; check internet connectivity |
 
 ---
 
