@@ -374,6 +374,60 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
     }
 
+    func testProcessFilesButtonCallsCallback() throws {
+        var called = false
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: PipelineQueue(),
+            onStartStop: {},
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: { called = true },
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Process Audio Files...").tap()
+        XCTAssertTrue(called)
+    }
+
+    func testDismissButtonCallsCallbackWithJobID() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        var dismissedID: UUID?
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            onStartStop: {},
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { dismissedID = $0 },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Dismiss").tap()
+        XCTAssertEqual(dismissedID, job.id)
+    }
+
     func testDismissButtonShownForErrorJob() throws {
         let queue = PipelineQueue()
         let job = PipelineJob(
