@@ -50,13 +50,12 @@ class MicRecorder {
         )
         self.outputFile = file
 
-        // Install tap — AVAudioEngine handles format conversion automatically
-        // when the tap format differs from the hardware format
+        // Install tap at the requested sample rate — AVAudioEngine handles
+        // format conversion automatically when the tap format differs from
+        // the hardware format
         let tapFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: hwFormat.sampleRate,
-            channels: 1,
-            interleaved: false
+            standardFormatWithSampleRate: sampleRate,
+            channels: 1
         )
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
@@ -121,12 +120,22 @@ class MicRecorder {
             guard AudioObjectGetPropertyDataSize(deviceID, &inputAddress, 0, nil, &bufListSize) == noErr,
                   bufListSize > 0 else { continue }
 
-            let bufListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
-            defer { bufListPtr.deallocate() }
+            // Allocate raw memory sized for the actual AudioBufferList
+            // (which may contain multiple AudioBuffer entries for multi-stream devices)
+            let bufListRaw = UnsafeMutableRawPointer.allocate(
+                byteCount: Int(bufListSize),
+                alignment: MemoryLayout<AudioBufferList>.alignment
+            )
+            defer { bufListRaw.deallocate() }
+            let bufListPtr = bufListRaw.bindMemory(to: AudioBufferList.self, capacity: 1)
             guard AudioObjectGetPropertyData(deviceID, &inputAddress, 0, nil, &bufListSize, bufListPtr) == noErr else { continue }
 
-            let bufList = bufListPtr.pointee
-            let inputChannels = bufList.mBuffers.mNumberChannels
+            // Sum channels across all buffers (multi-stream devices have multiple AudioBuffer entries)
+            let bufList = UnsafeMutableAudioBufferListPointer(bufListPtr)
+            var inputChannels: UInt32 = 0
+            for buf in bufList {
+                inputChannels += buf.mNumberChannels
+            }
             guard inputChannels > 0 else { continue }
 
             // Get UID
