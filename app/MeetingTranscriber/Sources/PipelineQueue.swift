@@ -53,11 +53,17 @@ class PipelineQueue {
     var pendingSpeakerNaming: SpeakerNamingData?
     private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
 
+    /// Timeout for the speaker naming popup (seconds). If the user does not respond
+    /// within this time, the continuation resumes with `.skipped`.
+    static let speakerNamingTimeout: TimeInterval = 120
+
     /// Called by the UI when the user confirms or skips speaker naming.
     func completeSpeakerNaming(result: SpeakerNamingResult) {
         pendingSpeakerNaming = nil
-        speakerNamingContinuation?.resume(returning: result)
+        // Guard against double-resume: only resume if continuation is still set
+        guard let continuation = speakerNamingContinuation else { return }
         speakerNamingContinuation = nil
+        continuation.resume(returning: result)
     }
 
     /// Handler for speaker naming. When set, called instead of the default
@@ -182,6 +188,8 @@ class PipelineQueue {
         let mixPath = jobs[index].mixPath
         let appPath = jobs[index].appPath
         let micPath = jobs[index].micPath
+        let micDelay = jobs[index].micDelay
+        let participants = jobs[index].participants
 
         do {
             // --- Transcription ---
@@ -209,7 +217,7 @@ class PipelineQueue {
                 let segments = try await whisperKit.transcribeDualSourceSegments(
                     appAudio: app16k,
                     micAudio: mic16k,
-                    micDelay: jobs[index].micDelay,
+                    micDelay: micDelay,
                     micLabel: micLabel
                 )
                 cachedSegments = segments
@@ -298,7 +306,6 @@ class PipelineQueue {
                             autoNames = matched
 
                             // Pre-match participants to remaining speakers
-                            let participants = jobs[index].participants
                             if !participants.isEmpty {
                                 autoNames = SpeakerMatcher.preMatchParticipants(
                                     mapping: autoNames,
@@ -322,6 +329,11 @@ class PipelineQueue {
                             if let handler = speakerNamingHandler {
                                 namingResult = await handler(namingData)
                             } else {
+                                // Start a timeout task that auto-skips if user doesn't respond
+                                let timeoutTask = Task { [weak self] in
+                                    try await Task.sleep(for: .seconds(Self.speakerNamingTimeout))
+                                    await self?.completeSpeakerNaming(result: .skipped)
+                                }
                                 namingResult = await withCheckedContinuation { continuation in
                                     self.speakerNamingContinuation = continuation
                                     self.pendingSpeakerNaming = namingData
@@ -330,6 +342,7 @@ class PipelineQueue {
                                         object: nil
                                     )
                                 }
+                                timeoutTask.cancel()
                             }
 
                             switch namingResult {
