@@ -131,11 +131,12 @@ class WatchLoop {
         )
 
         // Read participants (Teams)
+        var participants: [String] = []
         if meeting.pattern.appName == "Microsoft Teams",
-           let participants = ParticipantReader.readParticipants(pid: meeting.windowPID),
-           !participants.isEmpty {
-            logger.info("Detected \(participants.count) participants")
-            ParticipantReader.writeParticipants(participants, meetingTitle: title)
+           let names = ParticipantReader.readParticipants(pid: meeting.windowPID),
+           !names.isEmpty {
+            logger.info("Detected \(names.count) participants")
+            participants = names
         }
 
         // Wait for meeting to end
@@ -151,7 +152,8 @@ class WatchLoop {
             mixPath: recording.mixPath,
             appPath: recording.appPath,
             micPath: recording.micPath,
-            micDelay: recording.micDelay
+            micDelay: recording.micDelay,
+            participants: participants
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")

@@ -29,6 +29,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
     let appPath: URL?
     let micPath: URL?
     let micDelay: TimeInterval
+    let participants: [String]
     let enqueuedAt: Date
     var state: JobState
     var error: String?
@@ -40,7 +41,8 @@ struct PipelineJob: Identifiable, Codable, Sendable {
         mixPath: URL,
         appPath: URL?,
         micPath: URL?,
-        micDelay: TimeInterval
+        micDelay: TimeInterval,
+        participants: [String] = []
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -49,6 +51,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
         self.appPath = appPath
         self.micPath = micPath
         self.micDelay = micDelay
+        self.participants = participants
         self.enqueuedAt = Date()
         self.state = .waiting
         self.error = nil

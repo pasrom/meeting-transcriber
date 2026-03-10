@@ -39,6 +39,7 @@ class PipelineQueue {
         let embeddings: [String: [Float]]
         let audioPath: URL?                 // 16kHz mix for playback
         let segments: [DiarizationResult.Segment]  // for extracting speaker snippets
+        let participants: [String]          // Teams participant names as suggestions
     }
 
     /// Result from the speaker naming popup.
@@ -267,7 +268,8 @@ class PipelineQueue {
                                 speakingTimes: diarization.speakingTimes,
                                 embeddings: embeddings,
                                 audioPath: mix16k,
-                                segments: diarization.segments
+                                segments: diarization.segments,
+                                participants: jobs[index].participants
                             )
 
                             let namingResult: SpeakerNamingResult
