@@ -1,16 +1,12 @@
 protocols/
 recordings/
-.venv/
-__pycache__/
-.ruff_cache/
 .env
 speakers.json
-dist/
-*.egg-info
 .DS_Store
 
 # Swift build artifacts
 app/MeetingTranscriber/.build/
+tools/audiotap/.build/
 
 # Release build artifacts
 .build/

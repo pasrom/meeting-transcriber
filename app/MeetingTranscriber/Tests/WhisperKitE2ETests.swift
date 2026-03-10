@@ -297,11 +297,7 @@ final class WhisperKitE2ETests: XCTestCase {
     private func fixtureURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // MeetingTranscriber/
-            .deletingLastPathComponent()  // app/
-            .deletingLastPathComponent()  // Transcriber/
-            .appendingPathComponent("tests")
-            .appendingPathComponent("fixtures")
+            .appendingPathComponent("Fixtures")
             .appendingPathComponent("two_speakers_de.wav")
     }
 }

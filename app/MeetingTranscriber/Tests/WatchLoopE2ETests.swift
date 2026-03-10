@@ -32,19 +32,10 @@ final class WatchLoopE2ETests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Project root derived from #filePath (works in xctest, unlike Bundle.main).
-    private var projectRoot: URL {
+    private func fixtureURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // MeetingTranscriber/
-            .deletingLastPathComponent()  // app/
-            .deletingLastPathComponent()  // Transcriber/
-    }
-
-    private func fixtureURL() -> URL {
-        projectRoot
-            .appendingPathComponent("tests")
-            .appendingPathComponent("fixtures")
+            .appendingPathComponent("Fixtures")
             .appendingPathComponent("two_speakers_de.wav")
     }
 

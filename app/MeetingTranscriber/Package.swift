@@ -23,7 +23,8 @@ let package = Package(
         .testTarget(
             name: "MeetingTranscriberTests",
             dependencies: ["MeetingTranscriber", "ViewInspector"],
-            path: "Tests"
+            path: "Tests",
+            exclude: ["Fixtures"]
         ),
     ]
 )

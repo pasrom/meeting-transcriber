@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Generate a three-speaker German test WAV for E2E diarization tests.
 #
-# Produces: tests/fixtures/three_speakers_de.wav (~25s, 16kHz mono)
-# Requires: macOS `say` command with voices Anna, Flo, and Sandy installed.
+# Produces: app/MeetingTranscriber/Tests/Fixtures/three_speakers_de.wav (~25s, 16kHz mono)
+# Requires: macOS `say` command with voices Anna, Flo, and Sandy installed, and `sox`.
 set -euo pipefail
+
+command -v sox >/dev/null 2>&1 || { echo "ERROR: sox is required. Install with: brew install sox"; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-FIXTURE_DIR="$PROJECT_DIR/tests/fixtures"
+FIXTURE_DIR="$PROJECT_DIR/app/MeetingTranscriber/Tests/Fixtures"
 OUTPUT="$FIXTURE_DIR/three_speakers_de.wav"
 TMPDIR_AUDIO="$(mktemp -d)"
 
@@ -34,75 +36,31 @@ say -v Flo "Die API Entwicklung ist abgeschlossen. Alle Tests sind grün." \
 say -v Sandy "Das Frontend ist zu achtzig Prozent fertig. Nächste Woche sind wir bereit." \
     --file-format=WAVE --data-format=LEI16 -o "$TMPDIR_AUDIO/seg6_sandy.wav"
 
+# Generate 0.8s silence at 16kHz mono
+sox -n -r 16000 -c 1 -b 16 "$TMPDIR_AUDIO/silence.wav" trim 0.0 0.8
+
 echo "Assembling final WAV …"
 
-# Concatenate with 0.8s silence gaps, resample to 16kHz mono
-python3 - "$TMPDIR_AUDIO" "$OUTPUT" <<'PYEOF'
-import sys
-import wave
-from pathlib import Path
+# Resample all segments to 16kHz mono, then concatenate with silence gaps
+for i in 1 2 3 4 5 6; do
+    seg=$(ls "$TMPDIR_AUDIO"/seg${i}_*.wav)
+    sox "$seg" -r 16000 -c 1 "$TMPDIR_AUDIO/seg${i}_16k.wav"
+done
 
-import numpy as np
+sox "$TMPDIR_AUDIO/seg1_16k.wav" \
+    "$TMPDIR_AUDIO/silence.wav" \
+    "$TMPDIR_AUDIO/seg2_16k.wav" \
+    "$TMPDIR_AUDIO/silence.wav" \
+    "$TMPDIR_AUDIO/seg3_16k.wav" \
+    "$TMPDIR_AUDIO/silence.wav" \
+    "$TMPDIR_AUDIO/seg4_16k.wav" \
+    "$TMPDIR_AUDIO/silence.wav" \
+    "$TMPDIR_AUDIO/seg5_16k.wav" \
+    "$TMPDIR_AUDIO/silence.wav" \
+    "$TMPDIR_AUDIO/seg6_16k.wav" \
+    "$OUTPUT"
 
-tmpdir = Path(sys.argv[1])
-output = Path(sys.argv[2])
-target_rate = 16000
-
-segments_order = [
-    "seg1_anna.wav",
-    "seg2_flo.wav",
-    "seg3_sandy.wav",
-    "seg4_anna.wav",
-    "seg5_flo.wav",
-    "seg6_sandy.wav",
-]
-silence_gap = np.zeros(int(target_rate * 0.8), dtype=np.int16)  # 0.8s silence
-
-
-def read_wav(path: Path) -> tuple[np.ndarray, int]:
-    with wave.open(str(path), "rb") as wf:
-        rate = wf.getframerate()
-        channels = wf.getnchannels()
-        raw = wf.readframes(wf.getnframes())
-    samples = np.frombuffer(raw, dtype=np.int16)
-    if channels > 1:
-        samples = samples.reshape(-1, channels).mean(axis=1).astype(np.int16)
-    return samples, rate
-
-
-def resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-    if src_rate == dst_rate:
-        return samples
-    from math import gcd
-
-    from scipy.signal import resample_poly
-
-    g = gcd(src_rate, dst_rate)
-    up, down = dst_rate // g, src_rate // g
-    float_samples = samples.astype(np.float32) / 32768.0
-    resampled = resample_poly(float_samples, up, down)
-    return (np.clip(resampled, -1.0, 1.0) * 32767).astype(np.int16)
-
-
-parts = []
-for i, name in enumerate(segments_order):
-    samples, rate = read_wav(tmpdir / name)
-    samples = resample(samples, rate, target_rate)
-    parts.append(samples)
-    if i < len(segments_order) - 1:
-        parts.append(silence_gap)
-
-combined = np.concatenate(parts)
-
-with wave.open(str(output), "wb") as wf:
-    wf.setnchannels(1)
-    wf.setsampwidth(2)
-    wf.setframerate(target_rate)
-    wf.writeframes(combined.tobytes())
-
-duration = len(combined) / target_rate
-size_kb = output.stat().st_size / 1024
-print(f"Created {output} ({duration:.1f}s, {size_kb:.0f}KB)")
-PYEOF
-
+DURATION=$(soxi -D "$OUTPUT" 2>/dev/null || echo "?")
+SIZE_KB=$(( $(stat -f%z "$OUTPUT") / 1024 ))
+echo "Created $OUTPUT (${DURATION}s, ${SIZE_KB}KB)"
 echo "Done: $OUTPUT"

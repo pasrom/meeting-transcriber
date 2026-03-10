@@ -61,7 +61,7 @@ jobs:
       - name: Get version
         id: version
         run: |
-          VERSION=$(grep '^version = ' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(cat VERSION | tr -d '[:space:]')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Compute DMG SHA256

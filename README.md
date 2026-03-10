@@ -35,15 +35,14 @@ No HuggingFace token needed — FluidAudio downloads its models automatically on
 
 ## Installation
 
-### Native App (recommended)
+### Via Homebrew Cask (recommended)
 
 ```bash
-# Via Homebrew Cask
 brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/meanstone/Transcriber
@@ -52,19 +51,6 @@ cd Transcriber
 cd app/MeetingTranscriber && swift build -c release
 cd ../..
 ./scripts/run_app.sh
-```
-
-### Python CLI (alternative)
-
-For manual transcription without the menu bar app:
-
-```bash
-git clone https://github.com/meanstone/Transcriber
-cd Transcriber
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[mac,dev]"
-./scripts/build_audiotap.sh
 ```
 
 ---
@@ -82,57 +68,15 @@ pip install -e ".[mac,dev]"
 
 ## Usage
 
-### Menu Bar App
-
 Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
 
 You can also batch-process existing audio files via the menu (⌘P).
-
-### Python CLI
-
-```bash
-# Record app audio + microphone
-transcribe --app "Microsoft Teams" --title "Sprint Review"
-
-# Microphone only
-transcribe --mic-only --title "Interview"
-
-# Transcribe audio file
-transcribe --file recording.mp3 --title "Sprint Review"
-
-# Protocol from existing transcript
-transcribe --file protocols/transcript.txt --title "Standup"
-
-# List available apps
-transcribe --list-apps
-```
-
-Press **Enter** to stop a live recording.
-
----
-
-## CLI Reference
-
-| Flag | Description |
-|------|-------------|
-| `--file, -f` | Audio file or transcript (.txt) |
-| `--title, -t` | Meeting title (default: "Meeting") |
-| `--output-dir, -o` | Output directory (default: `./protocols`) |
-| `--model, -m` | Whisper model (default: `large-v3-turbo-q5_0`) |
-| `--app, -a` | App name for audio capture |
-| `--pid` | Process ID for app audio |
-| `--list-apps` | List running apps and exit |
-| `--mic-only` | Microphone only, no app audio |
-| `--list-mics` | List available microphone devices and exit |
-| `--mic` | Microphone device index or name substring |
-| `--diarize` | Enable speaker diarization |
-| `--speakers` | Expected number of speakers |
 
 ---
 
 ## Output
 
-Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/` (app) or `./protocols/` (CLI):
+Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`:
 
 | File | Content |
 |------|---------|

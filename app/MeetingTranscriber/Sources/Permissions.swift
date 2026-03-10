@@ -34,14 +34,14 @@ enum Permissions {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// Walk up from executable to find the project root (directory containing pyproject.toml).
+    /// Walk up from executable to find the project root (directory containing VERSION).
     static func findProjectRoot(from startURL: URL? = nil) -> String? {
         let start = startURL ?? URL(fileURLWithPath: Bundle.main.executablePath ?? "")
         var dir = start.deletingLastPathComponent()
 
         for _ in 0..<10 {
-            let pyproject = dir.appendingPathComponent("pyproject.toml")
-            if FileManager.default.fileExists(atPath: pyproject.path) {
+            let marker = dir.appendingPathComponent("VERSION")
+            if FileManager.default.fileExists(atPath: marker.path) {
                 return dir.path
             }
             let parent = dir.deletingLastPathComponent()

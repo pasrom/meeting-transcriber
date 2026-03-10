@@ -36,8 +36,8 @@ for arg in "$@"; do
     esac
 done
 
-# Read version from pyproject.toml
-VERSION=$(grep '^version = ' "$PROJECT_ROOT/pyproject.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+# Read version from VERSION file
+VERSION=$(cat "$PROJECT_ROOT/VERSION" | tr -d '[:space:]')
 echo "Building MeetingTranscriber v${VERSION}"
 echo "  Notarize:    $NOTARIZE"
 echo "======================================="

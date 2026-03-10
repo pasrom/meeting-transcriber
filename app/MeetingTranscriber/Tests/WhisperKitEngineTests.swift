@@ -31,15 +31,9 @@ final class WhisperKitEngineTests: XCTestCase {
 
     /// Integration test: downloads whisper-small model and transcribes a German audio fixture.
     func testTranscribeGermanAudio() async throws {
-        let projectRoot = URL(fileURLWithPath: #filePath)
+        let fixture = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // MeetingTranscriber/
-            .deletingLastPathComponent()  // app/
-            .deletingLastPathComponent()  // Transcriber/
-
-        let fixture = projectRoot
-            .appendingPathComponent("tests")
-            .appendingPathComponent("fixtures")
+            .appendingPathComponent("Fixtures")
             .appendingPathComponent("two_speakers_de.wav")
 
         XCTAssertTrue(
