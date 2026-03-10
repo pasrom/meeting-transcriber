@@ -5,16 +5,47 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 
 struct StoredSpeaker: Codable {
     let name: String
-    let embedding: [Float]
+    let embeddings: [[Float]]
+
+    // Migrate old single-embedding format automatically
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        if let multi = try? container.decode([[Float]].self, forKey: .embeddings) {
+            embeddings = multi
+        } else if let single = try? container.decode([Float].self, forKey: .embedding) {
+            embeddings = [single]
+        } else {
+            embeddings = []
+        }
+    }
+
+    init(name: String, embeddings: [[Float]]) {
+        self.name = name
+        self.embeddings = embeddings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, embeddings, embedding
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(name, forKey: .name)
+        try container.encode(embeddings, forKey: .embeddings)
+    }
 }
 
 class SpeakerMatcher {
     private let dbPath: URL
     private let threshold: Float
+    private let confidenceMargin: Float
+    private static let maxEmbeddingsPerSpeaker = 5
 
-    init(dbPath: URL? = nil, threshold: Float = 0.65) {
+    init(dbPath: URL? = nil, threshold: Float = 0.40, confidenceMargin: Float = 0.10) {
         self.dbPath = dbPath ?? AppPaths.speakersDB
         self.threshold = threshold
+        self.confidenceMargin = confidenceMargin
         Self.migrateIfNeeded(dbPath: self.dbPath)
     }
 
@@ -34,6 +65,8 @@ class SpeakerMatcher {
     }
 
     /// Match diarization embeddings against stored speakers.
+    /// Uses min-distance across all stored embeddings per speaker,
+    /// with confidence margin to reject ambiguous matches.
     func match(embeddings: [String: [Float]]) -> [String: String] {
         let stored = loadDB()
         var mapping: [String: String] = [:]
@@ -44,16 +77,27 @@ class SpeakerMatcher {
         for (label, embedding) in sorted {
             var bestName: String?
             var bestDistance: Float = Float.greatestFiniteMagnitude
+            var secondBestDistance: Float = Float.greatestFiniteMagnitude
 
             for speaker in stored where !usedNames.contains(speaker.name) {
-                let dist = Self.cosineDistance(embedding, speaker.embedding)
-                if dist < bestDistance && dist < threshold {
+                // Min distance across all stored embeddings for this speaker
+                let dist = speaker.embeddings
+                    .map { Self.cosineDistance(embedding, $0) }
+                    .min() ?? Float.greatestFiniteMagnitude
+
+                if dist < bestDistance {
+                    secondBestDistance = bestDistance
                     bestDistance = dist
                     bestName = speaker.name
+                } else if dist < secondBestDistance {
+                    secondBestDistance = dist
                 }
             }
 
-            if let name = bestName {
+            // Must be below threshold AND have sufficient margin over second-best
+            if let name = bestName,
+               bestDistance < threshold,
+               secondBestDistance - bestDistance >= confidenceMargin {
                 mapping[label] = name
                 usedNames.insert(name)
             } else {
@@ -65,6 +109,7 @@ class SpeakerMatcher {
     }
 
     /// Update speaker DB with confirmed names and their embeddings.
+    /// Appends new embedding to the speaker's list (FIFO, max 5).
     func updateDB(mapping: [String: String], embeddings: [String: [Float]]) {
         var stored = loadDB()
 
@@ -72,9 +117,14 @@ class SpeakerMatcher {
             guard name != label, let embedding = embeddings[label] else { continue }
 
             if let idx = stored.firstIndex(where: { $0.name == name }) {
-                stored[idx] = StoredSpeaker(name: name, embedding: embedding)
+                var updated = stored[idx].embeddings
+                updated.append(embedding)
+                if updated.count > Self.maxEmbeddingsPerSpeaker {
+                    updated.removeFirst(updated.count - Self.maxEmbeddingsPerSpeaker)
+                }
+                stored[idx] = StoredSpeaker(name: name, embeddings: updated)
             } else {
-                stored.append(StoredSpeaker(name: name, embedding: embedding))
+                stored.append(StoredSpeaker(name: name, embeddings: [embedding]))
             }
         }
 
