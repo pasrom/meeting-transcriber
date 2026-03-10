@@ -41,7 +41,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     PipelineJob.swift      # Pipeline job model
     ProtocolGenerator.swift   # Async Claude CLI protocol generation via Process
-    WatchLoop.swift        # @MainActor watch loop: detect → record → transcribe → protocol
+    WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     DualSourceRecorder.swift  # App audio + mic recording (captures startTime in start())
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
     AudioMixer.swift       # Mixes app + mic audio to 16kHz mono WAV
@@ -81,8 +81,9 @@ entitlements.plist         # macOS entitlements for notarized builds
 Casks/meeting-transcriber.rb # Homebrew Cask formula
 .github/workflows/release.yml # CI: build DMG + GitHub Release on tag push
 docs/
-  mac_implementation_notes.md  # Implementation notes & pain points
-  dmg_distribution_plan.md     # DMG distribution planning
+  architecture-macos.md        # High-level architecture quick-reference
+  plans/
+    swift-architecture.md      # Detailed Swift pipeline architecture
 protocols/                 # Output directory (gitignored)
 speakers.json              # Saved voice profiles (gitignored, created at runtime)
 .env                       # Environment variables (gitignored)
@@ -130,7 +131,7 @@ transcribe --file recording.wav --title "Meeting"
 pytest tests/ -v
 pytest tests/ -v -m "not slow"
 
-# Swift tests (~250 tests)
+# Swift tests (328 tests)
 cd app/MeetingTranscriber && swift test
 
 # Run E2E test standalone
@@ -181,7 +182,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - All code and UI text in English
 - Protocol output generated in German (via Claude prompt)
 - Python 3.14 via homebrew
-- Lazy imports for optional dependencies (pyannote, pywhispercpp)
+- Lazy imports for optional dependencies (pywhispercpp)
 
 ## Architecture Notes
 
