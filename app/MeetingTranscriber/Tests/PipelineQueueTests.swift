@@ -89,6 +89,93 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.jobs.count, 0)
     }
 
+    // MARK: - Snapshot Recovery Tests (loadSnapshot)
+
+    func testLoadSnapshotRestoresWaitingJobs() throws {
+        let mixPath = tmpDir.appendingPathComponent("audio_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        let job = PipelineJob(
+            meetingTitle: "Restored Meeting",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0
+        )
+        let data = try JSONEncoder().encode([job])
+        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        try data.write(to: snapshotPath)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Restored Meeting")
+        XCTAssertEqual(freshQueue.jobs[0].state, .waiting)
+    }
+
+    func testLoadSnapshotResetsActiveToWaiting() throws {
+        let mixPath = tmpDir.appendingPathComponent("audio_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Active Meeting",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0
+        )
+        job.state = .transcribing
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].state, .waiting)
+    }
+
+    func testLoadSnapshotDiscardsDoneJobs() throws {
+        let mixPath = tmpDir.appendingPathComponent("audio_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Done Meeting",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0
+        )
+        job.state = .done
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+    }
+
+    func testLoadSnapshotDiscardsMissingAudio() throws {
+        let job = PipelineJob(
+            meetingTitle: "Ghost Meeting",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString).wav"),
+            appPath: nil, micPath: nil, micDelay: 0
+        )
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+    }
+
+    func testLoadSnapshotNoFileIsNoOp() {
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+        XCTAssertTrue(freshQueue.jobs.isEmpty)
+    }
+
     // MARK: - Processing Tests
 
     private func makeProcessingQueue() -> PipelineQueue {
