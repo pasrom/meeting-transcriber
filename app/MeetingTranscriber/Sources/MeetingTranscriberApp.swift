@@ -216,6 +216,7 @@ struct MeetingTranscriberApp: App {
             micLabel: settings.micName
         )
         queue.loadSnapshot()
+        queue.recoverOrphanedRecordings()
         return queue
     }
 
