@@ -176,6 +176,97 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(freshQueue.jobs.isEmpty)
     }
 
+    // MARK: - Orphaned Recording Recovery Tests
+
+    func testRecoverFindsUntrackedMixWav() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Recovered Recording (20260311_100000)")
+        XCTAssertEqual(
+            freshQueue.jobs[0].mixPath.standardizedFileURL,
+            mixFile.standardizedFileURL
+        )
+    }
+
+    func testRecoverSkipsTrackedFiles() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        let existing = PipelineJob(
+            meetingTitle: "Already Tracked",
+            appName: "Teams",
+            mixPath: mixFile,
+            appPath: nil, micPath: nil, micDelay: 0
+        )
+        freshQueue.enqueue(existing)
+
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Already Tracked")
+    }
+
+    func testRecoverSkipsTinyFiles() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0x00, count: 44).write(to: mixFile)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+    }
+
+    func testRecoverFindsCompanionTracks() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let prefix = "20260311_100000"
+        try Data(repeating: 0xFF, count: 100).write(to: recDir.appendingPathComponent("\(prefix)_mix.wav"))
+        try Data(repeating: 0xFF, count: 100).write(to: recDir.appendingPathComponent("\(prefix)_app.wav"))
+        try Data(repeating: 0xFF, count: 100).write(to: recDir.appendingPathComponent("\(prefix)_mic.wav"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertNotNil(freshQueue.jobs[0].appPath)
+        XCTAssertNotNil(freshQueue.jobs[0].micPath)
+    }
+
+    func testRecoverSkipsOldFiles() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let mixFile = recDir.appendingPathComponent("20250101_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir, maxAge: 0)
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+    }
+
+    func testRecoverEmptyDirIsNoOp() {
+        let recDir = tmpDir.appendingPathComponent("nonexistent_recordings")
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertTrue(freshQueue.jobs.isEmpty)
+    }
+
     // MARK: - Processing Tests
 
     private func makeProcessingQueue() -> PipelineQueue {

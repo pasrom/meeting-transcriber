@@ -504,6 +504,71 @@ class PipelineQueue {
         }
     }
 
+    // MARK: - Orphaned Recording Recovery
+
+    /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
+    /// Creates recovery jobs for untracked recordings younger than `maxAge`.
+    func recoverOrphanedRecordings(
+        recordingsDir: URL = AppPaths.recordingsDir,
+        maxAge: TimeInterval = 86400
+    ) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: recordingsDir,
+            includingPropertiesForKeys: [.fileSizeKey, .creationDateKey]
+        ) else { return }
+
+        let trackedPaths = Set(jobs.map { $0.mixPath.standardizedFileURL.path })
+        let now = Date()
+        var recovered = 0
+
+        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav") {
+            // Skip already tracked
+            guard !trackedPaths.contains(file.standardizedFileURL.path) else { continue }
+
+            // Skip files older than maxAge
+            if let attrs = try? fm.attributesOfItem(atPath: file.path),
+               let created = attrs[.creationDate] as? Date,
+               now.timeIntervalSince(created) > maxAge {
+                continue
+            }
+
+            // Skip empty WAVs (header only = 44 bytes)
+            if let attrs = try? fm.attributesOfItem(atPath: file.path),
+               let size = attrs[.size] as? Int, size <= 44 {
+                continue
+            }
+
+            // Derive timestamp prefix (e.g. "20260311_143000" from "20260311_143000_mix.wav")
+            let name = file.deletingPathExtension().lastPathComponent
+            let prefix = String(name.dropLast("_mix".count))
+
+            // Look for companion tracks
+            let appFile = recordingsDir.appendingPathComponent("\(prefix)_app.wav")
+            let micFile = recordingsDir.appendingPathComponent("\(prefix)_mic.wav")
+            let appPath = fm.fileExists(atPath: appFile.path) ? appFile : nil
+            let micPath = fm.fileExists(atPath: micFile.path) ? micFile : nil
+
+            let job = PipelineJob(
+                meetingTitle: "Recovered Recording (\(prefix))",
+                appName: "Unknown",
+                mixPath: file,
+                appPath: appPath,
+                micPath: micPath,
+                micDelay: 0
+            )
+            jobs.append(job)
+            appendLog(jobID: job.id, event: "recovered", from: nil, to: .waiting)
+            recovered += 1
+        }
+
+        if recovered > 0 {
+            writeSnapshot()
+            logger.info("Recovered \(recovered) orphaned recording(s)")
+            triggerProcessing()
+        }
+    }
+
     // MARK: - JSON Logging
 
     private static let isoFormatter = ISO8601DateFormatter()
