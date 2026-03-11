@@ -100,14 +100,13 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.jobs.count, 0)
     }
 
-    func testCancelActiveJobSetsError() {
+    func testCancelActiveJobRemovesIt() {
         let job = makeJob()
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .transcribing)
 
         queue.cancelJob(id: job.id)
-        XCTAssertEqual(queue.jobs[0].state, .error)
-        XCTAssertEqual(queue.jobs[0].error, "Cancelled")
+        XCTAssertEqual(queue.jobs.count, 0)
     }
 
     func testCancelDoneJobIsNoOp() {
@@ -115,8 +114,9 @@ final class PipelineQueueTests: XCTestCase {
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
 
+        let countBefore = queue.jobs.count
         queue.cancelJob(id: job.id)
-        XCTAssertEqual(queue.jobs[0].state, .done)
+        XCTAssertEqual(queue.jobs.count, countBefore)
     }
 
     // MARK: - Snapshot Recovery Tests (loadSnapshot)

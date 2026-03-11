@@ -24,6 +24,7 @@ class PipelineQueue {
 
     private(set) var isProcessing = false
     private var processTask: Task<Void, Never>?
+    private var cancelledJobIDs = Set<UUID>()
 
     /// Called when a job completes (success or error) — for notifications
     var onJobStateChange: ((PipelineJob, JobState, JobState) -> Void)?
@@ -142,9 +143,8 @@ class PipelineQueue {
         writeSnapshot()
     }
 
-    /// Cancel a job. Waiting jobs are removed directly. Active jobs (transcribing,
-    /// diarizing, generatingProtocol) have their processing task cancelled and are
-    /// marked as error with "Cancelled".
+    /// Cancel a job. Removes waiting/active jobs from the queue and cancels the
+    /// processing task if the job is currently active. Done/error jobs are not affected.
     func cancelJob(id: UUID) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let state = jobs[index].state
@@ -153,9 +153,11 @@ class PipelineQueue {
             jobs.remove(at: index)
             writeSnapshot()
         case .transcribing, .diarizing, .generatingProtocol:
+            cancelledJobIDs.insert(id)
             processTask?.cancel()
-            updateJobState(id: id, to: .error, error: "Cancelled")
-        default:
+            jobs.remove(at: index)
+            writeSnapshot()
+        case .done, .error:
             break
         }
     }
@@ -471,10 +473,14 @@ class PipelineQueue {
 
         } catch is CancellationError {
             logger.info("Job \(jobID) cancelled")
-            // State already set to .error("Cancelled") by cancelJob()
+            // Job already removed by cancelJob()
         } catch {
-            logger.error("Pipeline error for job \(jobID): \(error)")
-            updateJobState(id: jobID, to: .error, error: error.localizedDescription)
+            if cancelledJobIDs.remove(jobID) != nil {
+                logger.info("Job \(jobID) cancelled")
+            } else {
+                logger.error("Pipeline error for job \(jobID): \(error)")
+                updateJobState(id: jobID, to: .error, error: error.localizedDescription)
+            }
         }
 
         isProcessing = false
