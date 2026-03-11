@@ -27,6 +27,31 @@ final class DualSourceRecorderTests: XCTestCase {
         DualSourceRecorder.killOrphanedAudiotap()
     }
 
+    // MARK: - Cleanup Temp Files
+
+    func testCleanupRemovesTmpButNotWav() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cleanup_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let tmpFile = tmpDir.appendingPathComponent("20260311_100000_app_raw.tmp")
+        let wavFile = tmpDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data("tmp".utf8).write(to: tmpFile)
+        try Data("wav".utf8).write(to: wavFile)
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmpFile.path), "tmp file should be removed")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: wavFile.path), "wav file should be kept")
+    }
+
+    func testCleanupNonexistentDirIsNoOp() {
+        let nowhere = URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString)")
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: nowhere)
+        // Should not crash
+    }
+
     // MARK: - Audiotap Discovery
 
     func testFindAudiotapReturnsNilWhenMissing() {

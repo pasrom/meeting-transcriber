@@ -118,6 +118,20 @@ class DualSourceRecorder: RecordingProvider {
         logger.info("Force-killed orphaned audiotap PID \(pid)")
     }
 
+    /// Remove leftover `*_app_raw.tmp` files from a previous crash.
+    static func cleanupTempFiles(recordingsDir: URL = AppPaths.recordingsDir) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: recordingsDir,
+            includingPropertiesForKeys: nil
+        ) else { return }
+
+        for file in entries where file.lastPathComponent.hasSuffix("_app_raw.tmp") {
+            try? fm.removeItem(at: file)
+            logger.info("Removed orphaned temp file: \(file.lastPathComponent)")
+        }
+    }
+
     /// Start recording app audio and optionally mic.
     func start(
         appPID: pid_t,
