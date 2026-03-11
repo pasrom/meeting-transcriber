@@ -61,10 +61,8 @@
 - **Problem:** Uses `pasrom/Transcriber` (capital T, old name) instead of `pasrom/meeting-transcriber`.
 - **Fix:** Update URL to match actual repo.
 
-### C11. APP_PASSWORD leaked via process arguments
-- **Files:** `scripts/build_release.sh:185`, `scripts/notarize_status.sh:28`
-- **Problem:** `--password "$APP_PASSWORD"` visible in `ps` output during notarization.
-- **Fix:** Use `--password @env:APP_PASSWORD` (notarytool supports `@env:` prefix since Xcode 15).
+### C11. ~~APP_PASSWORD leaked via process arguments~~
+- **Status:** Won't fix — `@env:` syntax is undocumented and broken. `--password "$APP_PASSWORD"` is the standard approach. For local use, consider `--keychain-profile` instead.
 
 ---
 
