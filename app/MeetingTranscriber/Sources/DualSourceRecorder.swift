@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 import os.log
 
@@ -72,6 +73,51 @@ class DualSourceRecorder: RecordingProvider {
         AppPaths.recordingsDir
     }
 
+    /// Path to the PID file for orphan detection.
+    static var pidFilePath: URL {
+        AppPaths.ipcDir.appendingPathComponent("audiotap.pid")
+    }
+
+    /// Kill an orphaned audiotap process from a previous crash.
+    /// Reads the PID file, verifies via `proc_pidpath` that it's actually audiotap,
+    /// sends SIGTERM, waits briefly, then SIGKILL if still alive.
+    static func killOrphanedAudiotap() {
+        let pidFile = pidFilePath
+        guard FileManager.default.fileExists(atPath: pidFile.path) else { return }
+        defer { try? FileManager.default.removeItem(at: pidFile) }
+
+        guard let content = try? String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+              let pid = pid_t(content), pid > 0 else {
+            return
+        }
+
+        // Verify this PID is actually an audiotap process
+        var pathBuf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let len = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
+        guard len > 0 else { return } // process doesn't exist
+
+        let procPath = String(cString: pathBuf)
+        guard procPath.hasSuffix("/audiotap") || procPath.hasSuffix("/audiotap.debug") else {
+            logger.info("PID \(pid) is not audiotap (\(procPath)), skipping kill")
+            return
+        }
+
+        logger.info("Killing orphaned audiotap PID \(pid)")
+        kill(pid, SIGTERM)
+
+        // Wait up to 500ms for graceful exit
+        var waited = 0
+        while waited < 5 {
+            Thread.sleep(forTimeInterval: 0.1)
+            waited += 1
+            if kill(pid, 0) != 0 { return } // process gone
+        }
+
+        // Force kill if still alive
+        kill(pid, SIGKILL)
+        logger.info("Force-killed orphaned audiotap PID \(pid)")
+    }
+
     /// Start recording app audio and optionally mic.
     func start(
         appPID: pid_t,
@@ -122,6 +168,12 @@ class DualSourceRecorder: RecordingProvider {
         audiotapProcess = proc
         isRecording = true
         recordingStartTime = ProcessInfo.processInfo.systemUptime
+
+        // Write PID file for orphan detection on crash recovery
+        let pidFile = Self.pidFilePath
+        try? FileManager.default.createDirectory(
+            at: pidFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? String(proc.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8)
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
 
@@ -197,6 +249,7 @@ class DualSourceRecorder: RecordingProvider {
             }
         }
         audiotapProcess = nil
+        try? FileManager.default.removeItem(at: Self.pidFilePath)
 
         let recDir = Self.recordingsDir
         let ts = startTimestamp ?? Self.timestamp()

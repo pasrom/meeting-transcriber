@@ -12,6 +12,21 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertFalse(recorder.isRecording)
     }
 
+    // MARK: - PID File Path
+
+    func testPidFilePath() {
+        let path = DualSourceRecorder.pidFilePath
+        XCTAssertTrue(path.path.contains(".meeting-transcriber"))
+        XCTAssertEqual(path.lastPathComponent, "audiotap.pid")
+    }
+
+    // MARK: - Kill Orphaned Audiotap
+
+    func testKillOrphanedNoPidFileIsNoOp() {
+        // Should not crash when no PID file exists
+        DualSourceRecorder.killOrphanedAudiotap()
+    }
+
     // MARK: - Audiotap Discovery
 
     func testFindAudiotapReturnsNilWhenMissing() {
