@@ -1,6 +1,9 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MeetingDetector")
 
 /// Represents a detected active meeting.
 struct DetectedMeeting {
@@ -193,22 +196,43 @@ class MeetingDetector {
     // MARK: - Meeting Verification
 
     /// Known "Leave" button labels across locales (lowercase).
-    private static let leaveLabels = ["leave", "verlassen", "leave call", "hang up"]
+    private static let leaveLabels = [
+        "leave", "verlassen", "leave call", "hang up", "hangup",
+        "quitter", "salir", "uscire",  // FR, ES, IT
+    ]
+
+    /// Known AX identifiers for the leave/hangup button.
+    private static let leaveIdentifiers = [
+        "leave-call", "hangup", "leave", "hang-up", "hangup-btn",
+        "leave-call-btn", "leave-meeting",
+    ]
 
     /// Verify that a Teams window is actually a meeting (not a pop-out chat).
     /// Checks for a "Leave" button which only exists in meeting windows.
     static func verifyTeamsMeeting(pid: pid_t) -> Bool {
         guard AXIsProcessTrusted() else { return true } // can't verify, assume meeting
         let app = AXUIElementCreateApplication(pid)
-        return findLeaveButton(app) != nil
+        let found = findLeaveButton(app) != nil
+        if !found {
+            logger.info("Teams AX verification: no Leave button found for PID \(pid) — skipping as chat")
+        }
+        return found
     }
 
-    /// Search AX tree for a button with a leave/hang-up label.
+    /// Search AX tree for a button with a leave/hang-up label or identifier.
     private static func findLeaveButton(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
-        if depth > 15 { return nil }
+        if depth > 20 { return nil }
 
         if let role = AXHelper.getAttribute(element, attribute: kAXRoleAttribute) as? String,
            role == kAXButtonRole as String {
+            // Check AXIdentifier
+            if let id = AXHelper.getAttribute(element, attribute: "AXIdentifier") as? String {
+                let lower = id.lowercased()
+                if leaveIdentifiers.contains(where: { lower.contains($0) }) {
+                    return element
+                }
+            }
+            // Check AXDescription and AXTitle
             for attr in [kAXDescriptionAttribute, kAXTitleAttribute] as [String] {
                 if let text = AXHelper.getAttribute(element, attribute: attr) as? String {
                     let lower = text.lowercased()

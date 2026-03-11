@@ -14,7 +14,7 @@ let windowTitle = CommandLine.arguments.count > 2
 // --- Find fixture audio ---
 func findFixture() -> String {
     // Walk up from executable to find project root
-    var dir = URL(fileURLWithPath: #filePath)
+    let dir = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()  // Sources/
         .deletingLastPathComponent()  // meeting-simulator/
         .deletingLastPathComponent()  // tools/
@@ -46,12 +46,47 @@ let window = NSWindow(
 window.title = windowTitle
 window.isReleasedWhenClosed = false
 
+// --- Build meeting-like UI ---
+let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+
 // Status label
 let label = NSTextField(labelWithString: "Loading audio...")
 label.font = .systemFont(ofSize: 24)
 label.alignment = .center
-label.frame = NSRect(x: 50, y: 250, width: 700, height: 100)
-window.contentView?.addSubview(label)
+label.frame = NSRect(x: 50, y: 300, width: 700, height: 100)
+contentView.addSubview(label)
+
+// Meeting toolbar (mimics Teams call controls)
+let toolbar = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 60))
+toolbar.wantsLayer = true
+toolbar.layer?.backgroundColor = NSColor.darkGray.cgColor
+
+// Mute button
+let muteBtn = NSButton(title: "Mute", target: nil, action: nil)
+muteBtn.frame = NSRect(x: 200, y: 15, width: 80, height: 30)
+muteBtn.setAccessibilityLabel("Mute")
+toolbar.addSubview(muteBtn)
+
+// Camera button
+let cameraBtn = NSButton(title: "Camera", target: nil, action: nil)
+cameraBtn.frame = NSRect(x: 300, y: 15, width: 80, height: 30)
+toolbar.addSubview(cameraBtn)
+
+// Share button
+let shareBtn = NSButton(title: "Share", target: nil, action: nil)
+shareBtn.frame = NSRect(x: 400, y: 15, width: 80, height: 30)
+toolbar.addSubview(shareBtn)
+
+// Leave button (red, like Teams)
+let leaveBtn = NSButton(title: "Leave", target: nil, action: #selector(AppDelegate.leaveClicked))
+leaveBtn.frame = NSRect(x: 520, y: 15, width: 80, height: 30)
+leaveBtn.bezelColor = .systemRed
+leaveBtn.setAccessibilityLabel("Leave")
+leaveBtn.setAccessibilityIdentifier("leave-call")
+toolbar.addSubview(leaveBtn)
+
+contentView.addSubview(toolbar)
+window.contentView = contentView
 
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
@@ -59,6 +94,7 @@ app.activate(ignoringOtherApps: true)
 print("Window: \"\(windowTitle)\"")
 print("PID: \(ProcessInfo.processInfo.processIdentifier)")
 print("Audio: \(fixturePath)")
+print("Leave button visible for AX verification")
 
 // --- Play audio ---
 let audioURL = URL(fileURLWithPath: fixturePath)
@@ -79,6 +115,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAudioPla
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             NSApplication.shared.terminate(nil)
         }
+    }
+
+    @objc func leaveClicked() {
+        print("Leave clicked — closing.")
+        NSApplication.shared.terminate(nil)
     }
 }
 
