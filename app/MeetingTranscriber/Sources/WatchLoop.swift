@@ -3,6 +3,13 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLoop")
 
+/// Info about a manually started recording session.
+struct ManualRecordingInfo {
+    let pid: pid_t
+    let appName: String
+    let title: String
+}
+
 /// Native Swift watch loop that replaces the Python watcher.
 ///
 /// Orchestrates: meeting detection → recording → enqueue to PipelineQueue.
@@ -20,6 +27,13 @@ class WatchLoop {
     private(set) var currentMeeting: DetectedMeeting?
     private(set) var lastError: String?
     private(set) var detail: String = ""
+
+    // Manual recording
+    private(set) var manualRecordingInfo: ManualRecordingInfo?
+    private var activeRecorder: RecordingProvider?
+    private var manualRecordingTask: Task<Void, Never>?
+
+    var isManualRecording: Bool { manualRecordingInfo != nil }
 
     // Dependencies
     let detector: MeetingDetector
@@ -83,9 +97,95 @@ class WatchLoop {
         watchTask?.cancel()
         watchTask = nil
         currentMeeting = nil
+        cleanupManualRecording()
         transition(to: .idle)
         detail = ""
         logger.info("Watch mode stopped")
+    }
+
+    // MARK: - Manual Recording
+
+    func startManualRecording(pid: pid_t, appName: String, title: String) throws {
+        guard state != .recording else {
+            logger.warning("Cannot start manual recording — already recording")
+            return
+        }
+
+        // Stop auto-watch if active
+        watchTask?.cancel()
+        watchTask = nil
+
+        let recorder = recorderFactory()
+        try recorder.start(appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID)
+
+        activeRecorder = recorder
+        manualRecordingInfo = ManualRecordingInfo(pid: pid, appName: appName, title: title)
+        transition(to: .recording)
+        detail = "Recording: \(title)"
+
+        manualRecordingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.monitorManualRecording(pid: pid)
+        }
+
+        logger.info("Manual recording started for \(appName) (PID \(pid)): \(title)")
+    }
+
+    func stopManualRecording() {
+        guard let recorder = activeRecorder, let info = manualRecordingInfo else { return }
+
+        manualRecordingTask?.cancel()
+        manualRecordingTask = nil
+
+        do {
+            let recording = try recorder.stop()
+            let job = PipelineJob(
+                meetingTitle: info.title,
+                appName: info.appName,
+                mixPath: recording.mixPath,
+                appPath: recording.appPath,
+                micPath: recording.micPath,
+                micDelay: recording.micDelay
+            )
+            pipelineQueue?.enqueue(job)
+            logger.info("Enqueued pipeline job for manual recording: \(info.title)")
+        } catch {
+            logger.error("Failed to stop manual recording: \(error)")
+            lastError = error.localizedDescription
+        }
+
+        activeRecorder = nil
+        manualRecordingInfo = nil
+        transition(to: .idle)
+        detail = ""
+    }
+
+    private func monitorManualRecording(pid: pid_t) async {
+        let startTime = Date()
+        while !Task.isCancelled {
+            // Check if process is still alive
+            if kill(pid, 0) != 0 {
+                logger.info("Monitored app (PID \(pid)) exited — stopping manual recording")
+                stopManualRecording()
+                return
+            }
+
+            // Enforce max duration
+            if Date().timeIntervalSince(startTime) > maxDuration {
+                logger.info("Max recording duration reached — stopping manual recording")
+                stopManualRecording()
+                return
+            }
+
+            try? await Task.sleep(for: .seconds(pollInterval))
+        }
+    }
+
+    private func cleanupManualRecording() {
+        manualRecordingTask?.cancel()
+        manualRecordingTask = nil
+        activeRecorder = nil
+        manualRecordingInfo = nil
     }
 
     // MARK: - Watch Loop

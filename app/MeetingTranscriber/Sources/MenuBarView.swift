@@ -5,6 +5,8 @@ struct MenuBarView: View {
     let isWatching: Bool
     let pipelineQueue: PipelineQueue
     let onStartStop: () -> Void
+    let onRecordApp: () -> Void
+    let onStopManualRecording: (() -> Void)?
     let onOpenLastProtocol: () -> Void
     let onOpenProtocol: (URL) -> Void
     let onOpenProtocolsFolder: () -> Void
@@ -68,6 +70,22 @@ struct MenuBarView: View {
             }
         }
         .keyboardShortcut("s")
+
+        if let onStopManualRecording {
+            Button {
+                onStopManualRecording()
+            } label: {
+                Label("Stop Recording", systemImage: "stop.circle.fill")
+            }
+            .keyboardShortcut(".")
+        } else if state != .recording {
+            Button {
+                onRecordApp()
+            } label: {
+                Label("Record App...", systemImage: "record.circle")
+            }
+            .keyboardShortcut("r")
+        }
 
         if state == .waitingForSpeakerNames, let onNameSpeakers {
             Button {

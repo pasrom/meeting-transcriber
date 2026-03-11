@@ -44,6 +44,11 @@ struct MeetingTranscriberApp: App {
                 isWatching: isWatching,
                 pipelineQueue: pipelineQueue,
                 onStartStop: toggleWatching,
+                onRecordApp: { bringWindowToFront(id: "record-app") },
+                onStopManualRecording: watchLoop?.isManualRecording == true ? {
+                    watchLoop?.stopManualRecording()
+                    watchLoop = nil
+                } : nil,
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocol: { url in NSWorkspace.shared.open(url) },
                 onOpenProtocolsFolder: openProtocolsFolder,
@@ -94,6 +99,17 @@ struct MeetingTranscriberApp: App {
             SettingsView(settings: settings, whisperKitEngine: whisperKit)
         }
         .windowResizability(.contentSize)
+
+        Window("Record App", id: "record-app") {
+            AppPickerView(
+                onStartRecording: { pid, appName, title in
+                    startManualRecording(pid: pid, appName: appName, title: title)
+                    closeWindow(id: "record-app")
+                },
+                onCancel: { closeWindow(id: "record-app") }
+            )
+        }
+        .windowResizability(.contentSize)
     }
 
     // MARK: - Status
@@ -103,12 +119,21 @@ struct MeetingTranscriberApp: App {
     private var currentStatus: TranscriberStatus? {
         guard let loop = watchLoop, loop.isActive else { return nil }
 
-        let meeting: MeetingInfo? = loop.currentMeeting.map {
-            MeetingInfo(
-                app: $0.pattern.appName,
-                title: $0.windowTitle,
-                pid: Int($0.windowPID)
+        let meeting: MeetingInfo?
+        if let manual = loop.manualRecordingInfo {
+            meeting = MeetingInfo(
+                app: manual.appName,
+                title: manual.title,
+                pid: Int(manual.pid)
             )
+        } else {
+            meeting = loop.currentMeeting.map {
+                MeetingInfo(
+                    app: $0.pattern.appName,
+                    title: $0.windowTitle,
+                    pid: Int($0.windowPID)
+                )
+            }
         }
 
         return TranscriberStatus(
@@ -146,7 +171,48 @@ struct MeetingTranscriberApp: App {
 
     // MARK: - Start / Stop
 
+    private func startManualRecording(pid: pid_t, appName: String, title: String) {
+        // Stop auto-watch if active
+        if let loop = watchLoop, loop.isActive, !loop.isManualRecording {
+            loop.stop()
+            watchLoop = nil
+        }
+
+        Task {
+            let _ = await Permissions.ensureMicrophoneAccess()
+
+            await MainActor.run {
+                if pipelineQueue.whisperKit == nil {
+                    whisperKit.language = settings.whisperLanguageOrNil
+                    pipelineQueue = makePipelineQueue()
+                    configurePipelineCallbacks()
+                }
+
+                let loop = WatchLoop(
+                    recorderFactory: { DualSourceRecorder() },
+                    pipelineQueue: pipelineQueue,
+                    pollInterval: settings.pollInterval,
+                    noMic: settings.noMic,
+                    micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
+                )
+                watchLoop = loop
+
+                do {
+                    try loop.startManualRecording(pid: pid, appName: appName, title: title)
+                    notifications.notify(
+                        title: "Manual Recording",
+                        body: "Recording: \(title)"
+                    )
+                } catch {
+                    notifications.notify(title: "Error", body: error.localizedDescription)
+                    watchLoop = nil
+                }
+            }
+        }
+    }
+
     private func toggleWatching() {
+        if let loop = watchLoop, loop.isManualRecording { return }
         if let loop = watchLoop, loop.isActive {
             loop.stop()
             watchLoop = nil

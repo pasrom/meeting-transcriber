@@ -31,13 +31,16 @@ final class MenuBarViewTests: XCTestCase {
     private func makeView(
         status: TranscriberStatus? = nil,
         isWatching: Bool = false,
-        onNameSpeakers: (() -> Void)? = nil
+        onNameSpeakers: (() -> Void)? = nil,
+        onStopManualRecording: (() -> Void)? = nil
     ) -> MenuBarView {
         MenuBarView(
             status: status,
             isWatching: isWatching,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: onStopManualRecording,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -166,6 +169,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: { called = true },
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -187,6 +192,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -208,6 +215,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -229,6 +238,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: { called = true },
@@ -250,6 +261,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: { called = true },
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -271,6 +284,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -328,6 +343,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: queue,
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -361,6 +378,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: queue,
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -381,6 +400,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: PipelineQueue(),
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -414,6 +435,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: queue,
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -446,6 +469,8 @@ final class MenuBarViewTests: XCTestCase {
             isWatching: false,
             pipelineQueue: queue,
             onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
             onOpenProtocolsFolder: {},
@@ -458,5 +483,82 @@ final class MenuBarViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
         XCTAssertNoThrow(try body.find(text: "Error"))
+    }
+
+    // MARK: - Record App button
+
+    func testRecordAppButtonExistsWhenIdle() throws {
+        let sut = makeView(status: makeStatus(state: .idle))
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Record App..."))
+    }
+
+    func testRecordAppButtonHiddenDuringRecording() throws {
+        let sut = makeView(status: makeStatus(state: .recording))
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Record App..."))
+    }
+
+    func testRecordAppButtonCallsCallback() throws {
+        var called = false
+        let sut = MenuBarView(
+            status: makeStatus(state: .idle),
+            isWatching: false,
+            pipelineQueue: PipelineQueue(),
+            onStartStop: {},
+            onRecordApp: { called = true },
+            onStopManualRecording: nil,
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Record App...").tap()
+        XCTAssertTrue(called)
+    }
+
+    // MARK: - Stop Recording button (manual)
+
+    func testStopRecordingButtonVisibleDuringManualRecording() throws {
+        let sut = makeView(
+            status: makeStatus(state: .recording),
+            onStopManualRecording: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Stop Recording"))
+    }
+
+    func testStopRecordingButtonHiddenWhenNoManualRecording() throws {
+        let sut = makeView(status: makeStatus(state: .recording))
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Stop Recording"))
+    }
+
+    func testStopRecordingButtonCallsCallback() throws {
+        var called = false
+        let sut = MenuBarView(
+            status: makeStatus(state: .recording),
+            isWatching: false,
+            pipelineQueue: PipelineQueue(),
+            onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: { called = true },
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { _ in },
+            onQuit: {}
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Stop Recording").tap()
+        XCTAssertTrue(called)
     }
 }

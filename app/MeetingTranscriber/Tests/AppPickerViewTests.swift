@@ -1,0 +1,78 @@
+import ViewInspector
+import XCTest
+
+@testable import MeetingTranscriber
+
+@MainActor
+final class AppPickerViewTests: XCTestCase {
+
+    struct MockAppsProvider: RunningAppsProvider {
+        let apps: [RunningApp]
+
+        func runningApps() -> [RunningApp] {
+            apps
+        }
+    }
+
+    private let testApps = [
+        RunningApp(id: 100, name: "Chrome", bundleIdentifier: "com.google.Chrome", icon: nil),
+        RunningApp(id: 200, name: "Safari", bundleIdentifier: "com.apple.Safari", icon: nil),
+    ]
+
+    // MARK: - Buttons
+
+    func testStartButtonExists() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Start Recording"))
+    }
+
+    func testStartButtonDisabledWithoutSelection() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: {}
+        )
+        let body = try sut.inspect()
+        let button = try body.find(button: "Start Recording")
+        XCTAssertTrue(try button.isDisabled())
+    }
+
+    func testCancelButtonExists() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Cancel"))
+    }
+
+    func testCancelCallsCallback() throws {
+        var called = false
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: { called = true }
+        )
+        let body = try sut.inspect()
+        try body.find(button: "Cancel").tap()
+        XCTAssertTrue(called)
+    }
+
+    // MARK: - Header
+
+    func testHeaderShown() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: {}
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Record App"))
+    }
+}
