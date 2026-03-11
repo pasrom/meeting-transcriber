@@ -25,10 +25,8 @@ for var in APPLE_ID TEAM_ID APP_PASSWORD; do
     fi
 done
 
-AUTH="--apple-id $APPLE_ID --team-id $TEAM_ID --password $APP_PASSWORD"
-
 if [ $# -ge 1 ]; then
-    xcrun notarytool info "$1" $AUTH
+    xcrun notarytool info "$1" --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
 else
-    xcrun notarytool history $AUTH
+    xcrun notarytool history --apple-id "$APPLE_ID" --team-id "$TEAM_ID" --password "$APP_PASSWORD"
 fi
