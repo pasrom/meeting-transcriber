@@ -31,6 +31,7 @@ class WatchLoop {
     let endGracePeriod: TimeInterval
     let maxDuration: TimeInterval
     let noMic: Bool
+    let micDeviceUID: String?
 
     private var watchTask: Task<Void, Never>?
 
@@ -44,7 +45,8 @@ class WatchLoop {
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
         maxDuration: TimeInterval = 14400,
-        noMic: Bool = false
+        noMic: Bool = false,
+        micDeviceUID: String? = nil
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -53,6 +55,7 @@ class WatchLoop {
         self.endGracePeriod = endGracePeriod
         self.maxDuration = maxDuration
         self.noMic = noMic
+        self.micDeviceUID = micDeviceUID
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -128,7 +131,7 @@ class WatchLoop {
         try recorder.start(
             appPID: meeting.windowPID,
             noMic: noMic,
-            micDeviceUID: nil
+            micDeviceUID: micDeviceUID
         )
 
         // Read participants (Teams)

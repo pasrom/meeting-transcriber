@@ -174,7 +174,8 @@ struct MeetingTranscriberApp: App {
                         pipelineQueue: pipelineQueue,
                         pollInterval: settings.pollInterval,
                         endGracePeriod: settings.endGrace,
-                        noMic: settings.noMic
+                        noMic: settings.noMic,
+                        micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
                     )
 
                     loop.onStateChange = { [weak loop, notifications] _, newState in
