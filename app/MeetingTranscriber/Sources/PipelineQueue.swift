@@ -142,6 +142,24 @@ class PipelineQueue {
         writeSnapshot()
     }
 
+    /// Cancel a job. Waiting jobs are removed directly. Active jobs (transcribing,
+    /// diarizing, generatingProtocol) have their processing task cancelled and are
+    /// marked as error with "Cancelled".
+    func cancelJob(id: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        let state = jobs[index].state
+        switch state {
+        case .waiting:
+            jobs.remove(at: index)
+            writeSnapshot()
+        case .transcribing, .diarizing, .generatingProtocol:
+            processTask?.cancel()
+            updateJobState(id: id, to: .error, error: "Cancelled")
+        default:
+            break
+        }
+    }
+
     func updateJobState(id: UUID, to newState: JobState, error: String? = nil) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let oldState = jobs[index].state
@@ -451,6 +469,9 @@ class PipelineQueue {
             }
             updateJobState(id: jobID, to: .done)
 
+        } catch is CancellationError {
+            logger.info("Job \(jobID) cancelled")
+            // State already set to .error("Cancelled") by cancelJob()
         } catch {
             logger.error("Pipeline error for job \(jobID): \(error)")
             updateJobState(id: jobID, to: .error, error: error.localizedDescription)
