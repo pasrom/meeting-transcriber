@@ -109,6 +109,11 @@ struct MenuBarView: View {
                         Button("Open") { onOpenProtocol(path) }
                             .font(.caption2)
                     }
+                    if job.state == .waiting || job.state == .transcribing
+                        || job.state == .diarizing || job.state == .generatingProtocol {
+                        Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
+                            .font(.caption2)
+                    }
                     if job.state == .done || job.state == .error {
                         Button("Dismiss") { onDismissJob(job.id) }
                             .font(.caption2)
