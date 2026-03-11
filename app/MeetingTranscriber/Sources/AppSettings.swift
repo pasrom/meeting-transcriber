@@ -84,6 +84,12 @@ final class AppSettings {
         }
     }
 
+    // MARK: - Protocol Generation
+
+    var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
+        didSet { defaults.set(claudeBin, forKey: "claudeBin") }
+    }
+
     // MARK: - Computed
 
     var watchApps: [String] {

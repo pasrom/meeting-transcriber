@@ -146,6 +146,18 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
+    // MARK: - Available Binaries
+
+    func testAvailableClaudeBinariesContainsClaude() {
+        let binaries = ProtocolGenerator.availableClaudeBinaries()
+        XCTAssertTrue(binaries.contains("claude"), "Available binaries should always contain 'claude'")
+    }
+
+    func testAvailableClaudeBinariesAreSorted() {
+        let binaries = ProtocolGenerator.availableClaudeBinaries()
+        XCTAssertEqual(binaries, binaries.sorted(), "Available binaries should be sorted")
+    }
+
     // MARK: - Environment Stripping
 
     func testGenerateStripsClaudeCodeFromEnvironment() throws {

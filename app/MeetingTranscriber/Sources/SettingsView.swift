@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Bindable var settings: AppSettings
 
     @State private var audioDevices: [(id: String, name: String)] = []
+    @State private var claudeBinaries: [String] = ["claude"]
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
@@ -151,6 +152,17 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Protocol Generation") {
+                Picker("Claude CLI", selection: $settings.claudeBin) {
+                    ForEach(claudeBinaries, id: \.self) { bin in
+                        Text(bin).tag(bin)
+                    }
+                }
+                Text("Binary used for protocol generation")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Permissions") {
                 PermissionRow(
                     label: "Screen Recording",
@@ -199,6 +211,7 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420)
         .onAppear {
+            claudeBinaries = ProtocolGenerator.availableClaudeBinaries()
             refreshPermissions()
         }
     }

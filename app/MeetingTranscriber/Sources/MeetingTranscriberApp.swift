@@ -214,7 +214,8 @@ struct MeetingTranscriberApp: App {
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
-            micLabel: settings.micName
+            micLabel: settings.micName,
+            claudeBin: settings.claudeBin
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()

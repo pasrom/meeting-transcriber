@@ -12,7 +12,7 @@ final class AppSettingsTests: XCTestCase {
         let keys = [
             "watchTeams", "watchZoom", "watchWebex",
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
-            "diarize", "numSpeakers", "whisperKitModel",
+            "diarize", "numSpeakers", "whisperKitModel", "claudeBin",
         ]
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
@@ -110,6 +110,17 @@ final class AppSettingsTests: XCTestCase {
         settings.watchZoom = false
         settings.watchWebex = false
         XCTAssertEqual(settings.watchApps, [])
+    }
+
+    // MARK: - Claude CLI
+
+    func testClaudeBinDefault() {
+        XCTAssertEqual(settings.claudeBin, "claude")
+    }
+
+    func testClaudeBinSavedToDefaults() {
+        settings.claudeBin = "claude-work"
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "claudeBin"), "claude-work")
     }
 
     // MARK: - WhisperKit Model

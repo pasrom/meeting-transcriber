@@ -256,19 +256,41 @@ struct ProtocolGenerator {
 
     // MARK: - CLI Resolution
 
+    /// Search paths for Claude CLI binaries.
+    static let searchPaths = [
+        "\(NSHomeDirectory())/.local/bin",
+        "/usr/local/bin",
+        "\(NSHomeDirectory())/.npm-global/bin",
+        "/opt/homebrew/bin",
+    ]
+
+    /// Scan known install locations for executables starting with "claude".
+    /// Always includes "claude" as a fallback even if not found.
+    static func availableClaudeBinaries() -> [String] {
+        let fm = FileManager.default
+        var names = Set<String>()
+
+        for dir in searchPaths {
+            guard let entries = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            for entry in entries where entry.hasPrefix("claude") {
+                let full = "\(dir)/\(entry)"
+                if fm.isExecutableFile(atPath: full) {
+                    names.insert(entry)
+                }
+            }
+        }
+
+        names.insert("claude")
+        return names.sorted()
+    }
+
     /// Resolve the claude CLI binary path.
     /// App bundles have a restricted PATH, so check common install locations.
     static func resolveClaudePath(_ bin: String) -> String {
         // If already an absolute path, use it
         if bin.hasPrefix("/") { return bin }
 
-        let candidates = [
-            "\(NSHomeDirectory())/.local/bin/\(bin)",
-            "/usr/local/bin/\(bin)",
-            "\(NSHomeDirectory())/.npm-global/bin/\(bin)",
-            "/opt/homebrew/bin/\(bin)",
-        ]
-        for path in candidates {
+        for path in searchPaths.map({ "\($0)/\(bin)" }) {
             if FileManager.default.isExecutableFile(atPath: path) {
                 return path
             }
