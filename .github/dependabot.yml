@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: "swift"
+    directory: "/app/MeetingTranscriber"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
