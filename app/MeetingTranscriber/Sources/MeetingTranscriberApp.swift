@@ -205,7 +205,7 @@ struct MeetingTranscriberApp: App {
     // MARK: - Pipeline
 
     private func makePipelineQueue() -> PipelineQueue {
-        PipelineQueue(
+        let queue = PipelineQueue(
             whisperKit: whisperKit,
             diarizationFactory: { FluidDiarizer() },
             protocolGenerator: DefaultProtocolGenerator(),
@@ -214,6 +214,8 @@ struct MeetingTranscriberApp: App {
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName
         )
+        queue.loadSnapshot()
+        return queue
     }
 
     private func configurePipelineCallbacks() {

@@ -459,6 +459,51 @@ class PipelineQueue {
         triggerProcessing()
     }
 
+    // MARK: - Snapshot Recovery
+
+    /// Load pipeline queue from the JSON snapshot written by `writeSnapshot()`.
+    /// Resets in-progress jobs to `.waiting`, discards `.done` jobs, and drops
+    /// jobs whose `mixPath` no longer exists on disk.
+    func loadSnapshot() {
+        let snapshotPath = logDir.appendingPathComponent("pipeline_queue.json")
+        guard FileManager.default.fileExists(atPath: snapshotPath.path) else {
+            logger.info("No pipeline snapshot to restore")
+            return
+        }
+        do {
+            let data = try Data(contentsOf: snapshotPath)
+            var loaded = try JSONDecoder().decode([PipelineJob].self, from: data)
+
+            // Reset active states back to waiting
+            for i in loaded.indices {
+                switch loaded[i].state {
+                case .transcribing, .diarizing, .generatingProtocol:
+                    loaded[i].state = .waiting
+                default:
+                    break
+                }
+            }
+
+            // Discard done jobs
+            loaded.removeAll { $0.state == .done }
+
+            // Discard jobs whose audio file no longer exists
+            loaded.removeAll { !FileManager.default.fileExists(atPath: $0.mixPath.path) }
+
+            guard !loaded.isEmpty else {
+                logger.info("Snapshot loaded but no recoverable jobs")
+                return
+            }
+
+            jobs = loaded
+            writeSnapshot()
+            logger.info("Restored \(loaded.count) jobs from snapshot")
+            triggerProcessing()
+        } catch {
+            logger.error("Failed to load pipeline snapshot: \(error)")
+        }
+    }
+
     // MARK: - JSON Logging
 
     private static let isoFormatter = ISO8601DateFormatter()
