@@ -122,18 +122,26 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           SHA="${{ steps.sha.outputs.sha256 }}"
 
-          # Clone the tap repo
+          DMG=".build/release/MeetingTranscriber-${VERSION}.dmg"
+
+          # Upload DMG to public tap repo (main repo is private)
+          gh release create "v${VERSION}" "$DMG" \
+            --repo pasrom/homebrew-meeting-transcriber \
+            --title "v${VERSION}" \
+            --notes "DMG for Homebrew Cask distribution" \
+            || gh release upload "v${VERSION}" "$DMG" \
+              --repo pasrom/homebrew-meeting-transcriber --clobber
+
+          # Clone the tap repo and update Cask formula
           git clone https://x-access-token:${GH_TOKEN}@github.com/pasrom/homebrew-meeting-transcriber.git /tmp/tap
           cd /tmp/tap
 
-          # Update version and SHA256 in the formula
           sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/meeting-transcriber.rb
           sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/meeting-transcriber.rb
 
           echo "Updated Cask formula:"
           cat Casks/meeting-transcriber.rb
 
-          # Commit and push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/meeting-transcriber.rb
