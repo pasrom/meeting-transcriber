@@ -319,6 +319,14 @@ class DualSourceRecorder: RecordingProvider {
             if actualRate != recordRate {
                 appSamples = AudioMixer.resample(appSamples, from: actualRate, to: recordRate)
             }
+        } else if let tempURL, FileManager.default.fileExists(atPath: tempURL.path) {
+            // Clean up empty temp file left by failed app audio capture
+            try? FileManager.default.removeItem(at: tempURL)
+            logger.warning("App audio capture produced 0 bytes — temp file cleaned up")
+        }
+
+        if appPath == nil {
+            logger.warning("No app audio captured — audiotap may have failed to create the tap")
         }
 
         // ── Load mic audio (written by audiotap) ──

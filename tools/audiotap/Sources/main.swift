@@ -494,12 +494,23 @@ class AppAudioCapture {
         // Tear down existing capture
         stopCapture()
 
+        // Small delay to let CoreAudio settle after device change
+        Thread.sleep(forTimeInterval: 0.5)
+
         // Recreate with new output device
         do {
             try startCapture()
             fputs("App audio: tap restarted on new output device\n", stderr)
         } catch {
             fputs("ERROR: Failed to restart app audio capture: \(error)\n", stderr)
+            // Retry once after a longer delay
+            Thread.sleep(forTimeInterval: 1.0)
+            do {
+                try startCapture()
+                fputs("App audio: tap restarted on retry\n", stderr)
+            } catch {
+                fputs("ERROR: Retry also failed: \(error)\n", stderr)
+            }
         }
     }
 
