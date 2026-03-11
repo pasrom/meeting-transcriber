@@ -174,7 +174,8 @@ class DualSourceRecorder: RecordingProvider {
 
         // Stream app audio to temp file instead of accumulating in RAM
         let tempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        FileManager.default.createFile(atPath: tempURL.path, contents: nil,
+                                       attributes: [.posixPermissions: 0o600])
         appAudioTempURL = tempURL
         appAudioFileHandle = try FileHandle(forWritingTo: tempURL)
 
