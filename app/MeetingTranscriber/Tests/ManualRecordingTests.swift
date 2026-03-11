@@ -51,22 +51,10 @@ final class ManualRecordingTests: XCTestCase {
     func testStartManualRecordingWhileAlreadyRecordingIsNoOp() throws {
         let (loop, _) = makeLoop()
         try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting 1")
-
-        // Create a second recorder to verify it's NOT started
-        let secondMock = MockRecorder()
-        secondMock.mixPath = URL(fileURLWithPath: "/tmp/test2.wav")
-        let loop2 = WatchLoop(
-            detector: MeetingDetector(patterns: AppMeetingPattern.all),
-            recorderFactory: { secondMock },
-            pollInterval: 0.05,
-            maxDuration: 10
-        )
-        // Manually set state to recording to simulate
-        loop.state == .recording  // already recording
+        XCTAssertEqual(loop.state, .recording)
 
         // Trying to start again on the same loop should be a no-op
         try loop.startManualRecording(pid: 5678, appName: "Firefox", title: "Meeting 2")
-        // Should still have original info
         XCTAssertEqual(loop.manualRecordingInfo?.pid, 1234)
         loop.stop()
     }

@@ -139,16 +139,7 @@ class WatchLoop {
 
         do {
             let recording = try recorder.stop()
-            let job = PipelineJob(
-                meetingTitle: info.title,
-                appName: info.appName,
-                mixPath: recording.mixPath,
-                appPath: recording.appPath,
-                micPath: recording.micPath,
-                micDelay: recording.micDelay
-            )
-            pipelineQueue?.enqueue(job)
-            logger.info("Enqueued pipeline job for manual recording: \(info.title)")
+            enqueueRecording(title: info.title, appName: info.appName, recording: recording)
         } catch {
             logger.error("Failed to stop manual recording: \(error)")
             lastError = error.localizedDescription
@@ -250,17 +241,12 @@ class WatchLoop {
         let recording = try recorder.stop()
 
         // --- Enqueue for background processing ---
-        let job = PipelineJob(
-            meetingTitle: title,
+        enqueueRecording(
+            title: title,
             appName: meeting.pattern.appName,
-            mixPath: recording.mixPath,
-            appPath: recording.appPath,
-            micPath: recording.micPath,
-            micDelay: recording.micDelay,
+            recording: recording,
             participants: participants
         )
-        pipelineQueue?.enqueue(job)
-        logger.info("Enqueued pipeline job for: \(title)")
     }
 
     // MARK: - Meeting End Detection
@@ -295,6 +281,25 @@ class WatchLoop {
     }
 
     // MARK: - Helpers
+
+    private func enqueueRecording(
+        title: String,
+        appName: String,
+        recording: RecordingResult,
+        participants: [String] = []
+    ) {
+        let job = PipelineJob(
+            meetingTitle: title,
+            appName: appName,
+            mixPath: recording.mixPath,
+            appPath: recording.appPath,
+            micPath: recording.micPath,
+            micDelay: recording.micDelay,
+            participants: participants
+        )
+        pipelineQueue?.enqueue(job)
+        logger.info("Enqueued pipeline job for: \(title)")
+    }
 
     private func transition(to newState: State) {
         let old = state

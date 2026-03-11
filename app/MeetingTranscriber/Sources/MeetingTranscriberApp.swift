@@ -179,34 +179,28 @@ struct MeetingTranscriberApp: App {
         }
 
         Task {
-            let _ = await Permissions.ensureMicrophoneAccess()
+            await Permissions.ensureMicrophoneAccess()
 
-            await MainActor.run {
-                if pipelineQueue.whisperKit == nil {
-                    whisperKit.language = settings.whisperLanguageOrNil
-                    pipelineQueue = makePipelineQueue()
-                    configurePipelineCallbacks()
-                }
+            ensurePipelineQueue()
 
-                let loop = WatchLoop(
-                    recorderFactory: { DualSourceRecorder() },
-                    pipelineQueue: pipelineQueue,
-                    pollInterval: settings.pollInterval,
-                    noMic: settings.noMic,
-                    micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
+            let loop = WatchLoop(
+                recorderFactory: { DualSourceRecorder() },
+                pipelineQueue: pipelineQueue,
+                pollInterval: settings.pollInterval,
+                noMic: settings.noMic,
+                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
+            )
+            watchLoop = loop
+
+            do {
+                try loop.startManualRecording(pid: pid, appName: appName, title: title)
+                notifications.notify(
+                    title: "Manual Recording",
+                    body: "Recording: \(title)"
                 )
-                watchLoop = loop
-
-                do {
-                    try loop.startManualRecording(pid: pid, appName: appName, title: title)
-                    notifications.notify(
-                        title: "Manual Recording",
-                        body: "Recording: \(title)"
-                    )
-                } catch {
-                    notifications.notify(title: "Error", body: error.localizedDescription)
-                    watchLoop = nil
-                }
+            } catch {
+                notifications.notify(title: "Error", body: error.localizedDescription)
+                watchLoop = nil
             }
         }
     }
@@ -273,6 +267,13 @@ struct MeetingTranscriberApp: App {
 
     // MARK: - Pipeline
 
+    private func ensurePipelineQueue() {
+        guard pipelineQueue.whisperKit == nil else { return }
+        whisperKit.language = settings.whisperLanguageOrNil
+        pipelineQueue = makePipelineQueue()
+        configurePipelineCallbacks()
+    }
+
     private func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
             whisperKit: whisperKit,
@@ -316,11 +317,7 @@ struct MeetingTranscriberApp: App {
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
 
         // Ensure queue has processing dependencies
-        if pipelineQueue.whisperKit == nil {
-            whisperKit.language = settings.whisperLanguageOrNil
-            pipelineQueue = makePipelineQueue()
-            configurePipelineCallbacks()
-        }
+        ensurePipelineQueue()
 
         for url in panel.urls {
             let title = url.deletingPathExtension().lastPathComponent
