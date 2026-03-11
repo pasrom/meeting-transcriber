@@ -81,7 +81,7 @@ jobs:
           echo "DMG SHA256: $SHA"
 
       - name: Upload DMG as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
           path: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
