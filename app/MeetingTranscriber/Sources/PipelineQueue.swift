@@ -139,7 +139,10 @@ class PipelineQueue {
     }
 
     func removeJob(id: UUID) {
-        jobs.removeAll { $0.id == id }
+        if let index = jobs.firstIndex(where: { $0.id == id }) {
+            markProcessed(mixPath: jobs[index].mixPath)
+            jobs.remove(at: index)
+        }
         writeSnapshot()
     }
 
