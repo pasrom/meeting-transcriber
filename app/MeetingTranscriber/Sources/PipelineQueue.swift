@@ -12,7 +12,7 @@ class PipelineQueue {
     // Dependencies for processing
     let whisperKit: WhisperKitEngine?
     let diarizationFactory: (() -> DiarizationProvider)?
-    let protocolGenerator: ProtocolGenerating?
+    let protocolGeneratorFactory: (() -> ProtocolGenerating)?
     let outputDir: URL?
     let diarizeEnabled: Bool
     let numSpeakers: Int
@@ -76,7 +76,7 @@ class PipelineQueue {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.whisperKit = nil
         self.diarizationFactory = nil
-        self.protocolGenerator = nil
+        self.protocolGeneratorFactory = nil
         self.outputDir = nil
         self.diarizeEnabled = false
         self.numSpeakers = 0
@@ -90,7 +90,7 @@ class PipelineQueue {
         logDir: URL? = nil,
         whisperKit: WhisperKitEngine,
         diarizationFactory: @escaping () -> DiarizationProvider,
-        protocolGenerator: ProtocolGenerating,
+        protocolGeneratorFactory: @escaping () -> ProtocolGenerating,
         outputDir: URL,
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
@@ -101,7 +101,7 @@ class PipelineQueue {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.whisperKit = whisperKit
         self.diarizationFactory = diarizationFactory
-        self.protocolGenerator = protocolGenerator
+        self.protocolGeneratorFactory = protocolGeneratorFactory
         self.outputDir = outputDir
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
@@ -198,7 +198,7 @@ class PipelineQueue {
             isProcessing = false
             return
         }
-        guard let whisperKit, let protocolGenerator, let outputDir else {
+        guard let whisperKit, let protocolGeneratorFactory, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             isProcessing = false
             return
@@ -453,6 +453,7 @@ class PipelineQueue {
             updateJobState(id: jobID, to: .generatingProtocol)
 
             let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
+            let protocolGenerator = protocolGeneratorFactory()
             let protocolMD = try await protocolGenerator.generate(
                 transcript: finalTranscript,
                 title: title,

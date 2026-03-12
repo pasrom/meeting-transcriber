@@ -80,7 +80,7 @@ final class WatchLoopE2ETests: XCTestCase {
             logDir: tmpDir,
             whisperKit: whisperKit ?? WhisperKitEngine(),
             diarizationFactory: { diarization },
-            protocolGenerator: protocolGen,
+            protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,
             diarizeEnabled: diarizeEnabled,
             micLabel: micLabel
@@ -415,7 +415,7 @@ final class WatchLoopE2ETests: XCTestCase {
             logDir: tmpDir,
             whisperKit: engine,
             diarizationFactory: { FluidDiarizer() },
-            protocolGenerator: mockProtocol,
+            protocolGeneratorFactory: { mockProtocol },
             outputDir: tmpDir,
             diarizeEnabled: true,
             micLabel: "Roman",

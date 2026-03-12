@@ -292,7 +292,7 @@ struct MeetingTranscriberApp: App {
         let queue = PipelineQueue(
             whisperKit: whisperKit,
             diarizationFactory: { FluidDiarizer() },
-            protocolGenerator: makeProtocolGenerator(),
+            protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,

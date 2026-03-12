@@ -341,7 +341,7 @@ final class PipelineQueueTests: XCTestCase {
             logDir: tmpDir,
             whisperKit: WhisperKitEngine(),
             diarizationFactory: { MockDiarization() },
-            protocolGenerator: MockProtocolGen(),
+            protocolGeneratorFactory: { MockProtocolGen() },
             outputDir: tmpDir,
             diarizeEnabled: false,
             micLabel: "Me"
