@@ -2,6 +2,18 @@ import SwiftUI
 
 private let defaults = UserDefaults.standard
 
+enum ProtocolProvider: String, CaseIterable {
+    case claudeCLI = "claudeCLI"
+    case openAICompatible = "openAICompatible"
+
+    var label: String {
+        switch self {
+        case .claudeCLI: "Claude CLI"
+        case .openAICompatible: "OpenAI-Compatible API"
+        }
+    }
+}
+
 @Observable
 final class AppSettings {
     // MARK: - Apps to Watch
@@ -86,8 +98,39 @@ final class AppSettings {
 
     // MARK: - Protocol Generation
 
+    var protocolProvider: ProtocolProvider = {
+        if let raw = defaults.string(forKey: "protocolProvider"),
+           let provider = ProtocolProvider(rawValue: raw) {
+            return provider
+        }
+        return .claudeCLI
+    }() {
+        didSet { defaults.set(protocolProvider.rawValue, forKey: "protocolProvider") }
+    }
+
     var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
         didSet { defaults.set(claudeBin, forKey: "claudeBin") }
+    }
+
+    var openAIEndpoint: String = defaults.object(forKey: "openAIEndpoint") as? String
+        ?? "http://localhost:11434/v1/chat/completions"
+    {
+        didSet { defaults.set(openAIEndpoint, forKey: "openAIEndpoint") }
+    }
+
+    var openAIModel: String = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1" {
+        didSet { defaults.set(openAIModel, forKey: "openAIModel") }
+    }
+
+    var openAIAPIKey: String {
+        get { KeychainHelper.read(key: "openAIAPIKey") ?? "" }
+        set {
+            if newValue.isEmpty {
+                KeychainHelper.delete(key: "openAIAPIKey")
+            } else {
+                KeychainHelper.save(key: "openAIAPIKey", value: newValue)
+            }
+        }
     }
 
     // MARK: - Computed

@@ -344,6 +344,8 @@ enum ProtocolError: LocalizedError {
     case cliFailed(Int, String)
     case emptyProtocol
     case timeout
+    case httpError(Int, String)
+    case connectionFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -351,6 +353,8 @@ enum ProtocolError: LocalizedError {
         case .cliFailed(let code, let stderr): "Claude CLI exited with code \(code)\(stderr.isEmpty ? "" : ": \(stderr)")"
         case .emptyProtocol: "Protocol is empty. Tip: Test manually: echo Hello | claude --print"
         case .timeout: "Claude CLI took too long (>10 min)"
+        case .httpError(let code, let body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
+        case .connectionFailed(let reason): "Connection failed: \(reason)"
         }
     }
 }
