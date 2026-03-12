@@ -27,6 +27,10 @@ mkdir -p "$APP_MACOS"
 sed 's/com\.meetingtranscriber\.app/com.meetingtranscriber.dev/' \
     "$INFO_PLIST" > "$APP_BUNDLE/Contents/Info.plist"
 
+# Inject version from VERSION file
+APP_VERSION=$(cat "$TRANSCRIBER_ROOT/VERSION" | tr -d '[:space:]')
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$APP_BUNDLE/Contents/Info.plist"
+
 # Inject git commit hash into Info.plist
 GIT_HASH=$(git -C "$TRANSCRIBER_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 /usr/libexec/PlistBuddy -c "Add :GitCommitHash string $GIT_HASH" "$APP_BUNDLE/Contents/Info.plist" 2>/dev/null || \
