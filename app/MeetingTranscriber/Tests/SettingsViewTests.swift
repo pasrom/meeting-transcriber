@@ -89,4 +89,31 @@ final class SettingsViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
     }
+
+    // MARK: - Protocol Provider
+
+    func testProviderPickerExists() throws {
+        let settings = AppSettings()
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Provider"))
+    }
+
+    func testClaudeCLIProviderShowsBinaryPicker() throws {
+        let settings = AppSettings()
+        settings.protocolProvider = .claudeCLI
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Claude CLI"))
+    }
+
+    func testOpenAIProviderShowsEndpointField() throws {
+        let settings = AppSettings()
+        settings.protocolProvider = .openAICompatible
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Endpoint"))
+        XCTAssertNoThrow(try body.find(text: "API Key"))
+        XCTAssertNoThrow(try body.find(text: "Test Connection"))
+    }
 }

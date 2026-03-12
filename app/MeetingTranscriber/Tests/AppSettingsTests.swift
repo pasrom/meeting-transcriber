@@ -13,7 +13,9 @@ final class AppSettingsTests: XCTestCase {
             "watchTeams", "watchZoom", "watchWebex",
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
             "diarize", "numSpeakers", "whisperKitModel", "claudeBin",
+            "protocolProvider", "openAIEndpoint", "openAIModel",
         ]
+        KeychainHelper.delete(key: "openAIAPIKey")
         for key in keys {
             UserDefaults.standard.removeObject(forKey: key)
         }
@@ -133,6 +135,56 @@ final class AppSettingsTests: XCTestCase {
     func testMicNameSavedToDefaults() {
         settings.micName = "Roman"
         XCTAssertEqual(UserDefaults.standard.string(forKey: "micName"), "Roman")
+    }
+
+    // MARK: - Protocol Provider
+
+    func testProtocolProviderDefault() {
+        XCTAssertEqual(settings.protocolProvider, .claudeCLI)
+    }
+
+    func testProtocolProviderPersistence() {
+        settings.protocolProvider = .openAICompatible
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: "protocolProvider"),
+            "openAICompatible"
+        )
+        // Verify a fresh instance reads it back
+        let fresh = AppSettings()
+        XCTAssertEqual(fresh.protocolProvider, .openAICompatible)
+    }
+
+    func testOpenAIEndpointDefault() {
+        XCTAssertEqual(settings.openAIEndpoint, "http://localhost:11434/v1/chat/completions")
+    }
+
+    func testOpenAIModelDefault() {
+        XCTAssertEqual(settings.openAIModel, "llama3.1")
+    }
+
+    func testOpenAIAPIKeyViaKeychainHelper() {
+        XCTAssertEqual(settings.openAIAPIKey, "")
+
+        settings.openAIAPIKey = "sk-test-key"
+        XCTAssertEqual(KeychainHelper.read(key: "openAIAPIKey"), "sk-test-key")
+        XCTAssertEqual(settings.openAIAPIKey, "sk-test-key")
+
+        settings.openAIAPIKey = ""
+        XCTAssertNil(KeychainHelper.read(key: "openAIAPIKey"))
+        XCTAssertEqual(settings.openAIAPIKey, "")
+    }
+
+    func testOpenAIEndpointSavedToDefaults() {
+        settings.openAIEndpoint = "http://localhost:8080/v1/chat/completions"
+        XCTAssertEqual(
+            UserDefaults.standard.string(forKey: "openAIEndpoint"),
+            "http://localhost:8080/v1/chat/completions"
+        )
+    }
+
+    func testOpenAIModelSavedToDefaults() {
+        settings.openAIModel = "mistral"
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "openAIModel"), "mistral")
     }
 
     // MARK: - Keychain
