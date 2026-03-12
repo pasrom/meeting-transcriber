@@ -114,6 +114,6 @@ final class SettingsViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Endpoint"))
         XCTAssertNoThrow(try body.find(text: "API Key"))
-        XCTAssertNoThrow(try body.find(text: "Test Connection"))
+        XCTAssertNoThrow(try body.find(text: "Fetch Models"))
     }
 }

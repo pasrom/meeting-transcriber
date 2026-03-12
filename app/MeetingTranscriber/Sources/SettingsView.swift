@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var accessibilityOK = false
     @State private var testingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
+    @State private var availableModels: [String] = []
     var whisperKitEngine: WhisperKitEngine
 
     enum ConnectionTestResult {
@@ -178,43 +179,51 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
 
                 case .openAICompatible:
-                    HStack {
+                    VStack(alignment: .leading, spacing: 4) {
                         Text("Endpoint")
-                        Spacer()
-                        TextField("http://localhost:11434/v1/chat/completions", text: $settings.openAIEndpoint)
-                            .frame(width: 280)
-                            .multilineTextAlignment(.trailing)
+                        TextField("", text: $settings.openAIEndpoint)
+                            .textFieldStyle(.roundedBorder)
                     }
 
-                    HStack {
-                        Text("Model")
-                        Spacer()
-                        TextField("llama3.1", text: $settings.openAIModel)
-                            .frame(width: 160)
-                            .multilineTextAlignment(.trailing)
+                    if !availableModels.isEmpty {
+                        Picker("Model", selection: $settings.openAIModel) {
+                            ForEach(modelPickerOptions, id: \.self) { model in
+                                Text(model).tag(model)
+                            }
+                        }
+                    } else {
+                        HStack {
+                            Text("Model")
+                            Spacer()
+                            TextField("", text: $settings.openAIModel)
+                                .frame(width: 200)
+                                .multilineTextAlignment(.trailing)
+                        }
                     }
 
                     HStack {
                         Text("API Key")
                         Spacer()
-                        SecureField("Optional", text: $settings.openAIAPIKey)
-                            .frame(width: 160)
-                            .multilineTextAlignment(.trailing)
+                        SecureField("", text: $settings.openAIAPIKey)
+                            .frame(width: 200)
                     }
                     Text("Leave empty if your local server doesn't require authentication")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
                     HStack {
-                        Button("Test Connection") {
+                        Button {
                             testConnection()
+                        } label: {
+                            HStack(spacing: 4) {
+                                if testingConnection {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text(availableModels.isEmpty ? "Fetch Models" : "Refresh Models")
+                            }
                         }
                         .disabled(testingConnection)
-
-                        if testingConnection {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
 
                         if let result = connectionTestResult {
                             switch result {
@@ -227,6 +236,11 @@ struct SettingsView: View {
                                     .foregroundStyle(.red)
                                     .font(.caption)
                             }
+                        }
+                    }
+                    .onAppear {
+                        if availableModels.isEmpty {
+                            testConnection()
                         }
                     }
                 }
@@ -278,7 +292,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
+        .frame(width: 520)
         .onAppear {
             claudeBinaries = ProtocolGenerator.availableClaudeBinaries()
             refreshPermissions()
@@ -320,15 +334,30 @@ struct SettingsView: View {
             testingConnection = false
             switch result {
             case .success(let models):
-                if models.isEmpty {
-                    connectionTestResult = .success("Connected")
-                } else {
+                availableModels = models
+                if !models.isEmpty {
+                    // Auto-select first model if current selection is not available
+                    if !models.contains(settings.openAIModel) {
+                        settings.openAIModel = models[0]
+                    }
                     connectionTestResult = .success("Connected (\(models.count) models)")
+                } else {
+                    connectionTestResult = .success("Connected")
                 }
             case .failure(let error):
+                availableModels = []
                 connectionTestResult = .failure(error.localizedDescription)
             }
         }
+    }
+
+    /// Options for the model picker: fetched models + current setting if not in list.
+    private var modelPickerOptions: [String] {
+        var options = availableModels
+        if !settings.openAIModel.isEmpty && !options.contains(settings.openAIModel) {
+            options.insert(settings.openAIModel, at: 0)
+        }
+        return options
     }
 
     private func refreshAudioDevices() {
