@@ -124,8 +124,10 @@ struct AudioMixer {
         }
 
         for range in mutedRanges {
-            let clamped = max(0, range.start)..<min(samples.count, range.end)
-            for i in clamped {
+            let lower = max(0, range.start)
+            let upper = min(samples.count, range.end)
+            guard lower < upper else { continue }
+            for i in lower..<upper {
                 samples[i] = 0
             }
         }
