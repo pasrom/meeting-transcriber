@@ -62,7 +62,7 @@ class MockProtocolGen: ProtocolGenerating {
     var capturedTitle: String?
     var capturedDiarized: Bool?
 
-    func generate(transcript: String, title: String, diarized: Bool, claudeBin: String) async throws -> String {
+    func generate(transcript: String, title: String, diarized: Bool) async throws -> String {
         generateCalled = true
         capturedTranscript = transcript
         capturedTitle = title

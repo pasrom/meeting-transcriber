@@ -5,12 +5,14 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Protoco
 
 /// Abstraction for protocol generation, enabling mock injection in tests.
 protocol ProtocolGenerating {
-    func generate(transcript: String, title: String, diarized: Bool, claudeBin: String) async throws -> String
+    func generate(transcript: String, title: String, diarized: Bool) async throws -> String
 }
 
-/// Default implementation that delegates to `ProtocolGenerator.generate(...)`.
-struct DefaultProtocolGenerator: ProtocolGenerating {
-    func generate(transcript: String, title: String, diarized: Bool, claudeBin: String) async throws -> String {
+/// Claude CLI implementation that delegates to `ProtocolGenerator.generate(...)`.
+struct ClaudeCLIProtocolGenerator: ProtocolGenerating {
+    let claudeBin: String
+
+    func generate(transcript: String, title: String, diarized: Bool) async throws -> String {
         try await ProtocolGenerator.generate(transcript: transcript, title: title, diarized: diarized, claudeBin: claudeBin)
     }
 }

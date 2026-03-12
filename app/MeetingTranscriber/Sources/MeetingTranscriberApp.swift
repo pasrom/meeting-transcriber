@@ -278,12 +278,11 @@ struct MeetingTranscriberApp: App {
         let queue = PipelineQueue(
             whisperKit: whisperKit,
             diarizationFactory: { FluidDiarizer() },
-            protocolGenerator: DefaultProtocolGenerator(),
+            protocolGenerator: ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin),
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
-            micLabel: settings.micName,
-            claudeBin: settings.claudeBin
+            micLabel: settings.micName
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()

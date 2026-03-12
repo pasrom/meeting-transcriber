@@ -17,7 +17,6 @@ class PipelineQueue {
     let diarizeEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
-    let claudeBin: String
     let speakerMatcherFactory: () -> SpeakerMatcher
 
     let completedJobLifetime: TimeInterval
@@ -82,7 +81,6 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
-        self.claudeBin = "claude"
         self.speakerMatcherFactory = { SpeakerMatcher() }
         self.completedJobLifetime = completedJobLifetime
     }
@@ -97,7 +95,6 @@ class PipelineQueue {
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
-        claudeBin: String = "claude",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
         completedJobLifetime: TimeInterval = 60
     ) {
@@ -109,7 +106,6 @@ class PipelineQueue {
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
         self.micLabel = micLabel
-        self.claudeBin = claudeBin
         self.speakerMatcherFactory = speakerMatcherFactory
         self.completedJobLifetime = completedJobLifetime
     }
@@ -460,8 +456,7 @@ class PipelineQueue {
             let protocolMD = try await protocolGenerator.generate(
                 transcript: finalTranscript,
                 title: title,
-                diarized: diarized,
-                claudeBin: claudeBin
+                diarized: diarized
             )
 
             let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + finalTranscript
