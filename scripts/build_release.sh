@@ -80,8 +80,8 @@ echo ""
 echo "Step 3: Assembling app bundle..."
 
 # Info.plist with version
-sed "s|<string>0.1.0</string>|<string>${VERSION}</string>|g" \
-    "$SPM_DIR/Sources/Info.plist" > "$CONTENTS/Info.plist"
+cp "$SPM_DIR/Sources/Info.plist" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
 
 # App icon
 ICONSET_SRC="$SPM_DIR/Sources/Assets.xcassets/AppIcon.appiconset"
