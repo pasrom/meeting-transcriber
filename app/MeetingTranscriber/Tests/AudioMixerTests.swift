@@ -85,6 +85,53 @@ final class AudioMixerTests: XCTestCase {
         XCTAssertTrue(samples.allSatisfy { $0 == 0.0 })
     }
 
+    func testMuteMaskLargeMicDelayDoesNotCrash() {
+        // micDelay larger than timeline timestamps → range.end < range.start
+        var samples = [Float](repeating: 1.0, count: 100)
+        let timeline = [
+            MuteTransition(timestamp: 10.0, isMuted: true),
+            MuteTransition(timestamp: 10.5, isMuted: false),
+        ]
+
+        AudioMixer.applyMuteMask(
+            samples: &samples,
+            timeline: timeline,
+            sampleRate: 100,
+            micDelay: 20.0,
+            recordingStart: 10.0
+        )
+
+        // All samples should remain untouched (mute range is entirely negative)
+        XCTAssertTrue(samples.allSatisfy { $0 == 1.0 })
+    }
+
+    func testMuteMaskPartiallyNegativeRange() {
+        // Mute starts before recording but ends during it
+        var samples = [Float](repeating: 1.0, count: 100)
+        let timeline = [
+            MuteTransition(timestamp: 5.0, isMuted: true),
+            MuteTransition(timestamp: 5.8, isMuted: false),
+        ]
+
+        AudioMixer.applyMuteMask(
+            samples: &samples,
+            timeline: timeline,
+            sampleRate: 100,
+            micDelay: 0.5,
+            recordingStart: 5.0
+        )
+
+        // Mute range: (5.0 - 5.0 - 0.5) to (5.8 - 5.0 - 0.5) = -0.5s to 0.3s
+        // Clamped start to 0; end ≈ sample 29-30 (floating point)
+        // Verify most of the range is muted and tail is untouched
+        for i in 0..<29 {
+            XCTAssertEqual(samples[i], 0.0, "Sample \(i) should be muted")
+        }
+        for i in 31..<100 {
+            XCTAssertEqual(samples[i], 1.0, "Sample \(i) should be untouched")
+        }
+    }
+
     func testMuteMaskEmptyTimeline() {
         var samples: [Float] = [1.0, 2.0, 3.0]
         AudioMixer.applyMuteMask(
