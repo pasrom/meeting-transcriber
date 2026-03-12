@@ -126,6 +126,22 @@ struct ParticipantReader {
 
             let lower = text.lowercased()
 
+            // Skip overly long strings — real names rarely exceed 60 chars
+            if text.count > 60 { continue }
+
+            // Skip strings with navigation arrows (screen-shared UI breadcrumbs)
+            if text.contains("→") || text.contains("›") { continue }
+
+            // Skip strings ending with ":" — UI labels, not names
+            if text.hasSuffix(":") || text.hasSuffix("::") { continue }
+
+            // Skip strings containing URL-like patterns
+            if lower.contains("://") || lower.contains(".com") || lower.contains(".ai")
+                || lower.contains(".io") || lower.contains(".org") || lower.contains(".net") { continue }
+
+            // Skip strings with path separators (UI navigation, file paths)
+            if text.contains("/") && text.filter({ $0 == "/" }).count >= 2 { continue }
+
             // Skip timestamps like "10:30"
             if text.contains(":") && text.contains(where: \.isNumber) { continue }
 
