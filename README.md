@@ -46,10 +46,8 @@ brew install --cask meeting-transcriber
 
 ```bash
 git clone https://github.com/pasrom/meeting-transcriber
-cd Transcriber
+cd meeting-transcriber
 ./scripts/build_audiotap.sh
-cd app/MeetingTranscriber && swift build -c release
-cd ../..
 ./scripts/run_app.sh
 ```
 

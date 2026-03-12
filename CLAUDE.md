@@ -73,8 +73,8 @@ Single-source: Audio → 16kHz mono WAV → WhisperKit → FluidAudio diarizatio
 # Build audiotap Swift binary (app audio capture):
 ./scripts/build_audiotap.sh
 
-# Swift menu bar app
-cd app/MeetingTranscriber && swift build -c release
+# Run menu bar app (builds automatically):
+./scripts/run_app.sh
 ```
 
 ## Key Commands
