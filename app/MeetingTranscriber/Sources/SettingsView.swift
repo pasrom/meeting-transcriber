@@ -250,26 +250,31 @@ struct SettingsView: View {
                 PermissionRow(
                     label: "Screen Recording",
                     detail: "Required for meeting detection (window titles)",
-                    granted: screenRecordingOK
+                    granted: screenRecordingOK,
+                    help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
                 )
                 PermissionRow(
                     label: "Microphone",
                     detail: micPermission == .authorized ? "Granted"
                         : micPermission == .notDetermined ? "Will prompt on first recording"
-                        : "Denied — grant in System Settings",
+                        : "Denied — click to open Settings",
                     granted: micPermission == .authorized,
-                    warning: micPermission == .notDetermined
+                    warning: micPermission == .notDetermined,
+                    help: "System Settings → Privacy & Security → Microphone → enable Meeting Transcriber",
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
                 )
                 PermissionRow(
                     label: "Accessibility",
                     detail: "Optional — enables mute detection",
                     granted: accessibilityOK,
-                    optional: true
+                    optional: true,
+                    help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
                 )
 
-                Button("Open Privacy & Security Settings") {
-                    NSWorkspace.shared.open(
-                        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy")!)
+                Button("Refresh") {
+                    refreshPermissions()
                 }
                 .font(.caption)
             }
@@ -370,13 +375,18 @@ struct SettingsView: View {
     }
 }
 
-/// A row showing permission status with a colored icon.
+/// A row showing permission status with a colored icon, tooltip, and click-to-open Settings.
+/// A row showing permission status with a colored icon, info popover, and click-to-open Settings.
 struct PermissionRow: View {
     let label: String
     let detail: String
     var granted: Bool
     var warning: Bool = false
     var optional: Bool = false
+    var help: String = ""
+    var settingsURL: String = ""
+
+    @State private var showingHelp = false
 
     private var icon: String {
         if granted { return "checkmark.circle.fill" }
@@ -399,6 +409,31 @@ struct PermissionRow: View {
                 Text(detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !help.isEmpty {
+                Button {
+                    showingHelp.toggle()
+                } label: {
+                    Image(systemName: "questionmark.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .popover(isPresented: $showingHelp) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(help)
+                            .font(.callout)
+                        if !settingsURL.isEmpty {
+                            Button("Open System Settings") {
+                                if let url = URL(string: settingsURL) {
+                                    NSWorkspace.shared.open(url)
+                                }
+                                showingHelp = false
+                            }
+                        }
+                    }
+                    .padding()
+                }
             }
         }
     }
