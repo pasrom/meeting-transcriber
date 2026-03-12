@@ -274,11 +274,25 @@ struct MeetingTranscriberApp: App {
         configurePipelineCallbacks()
     }
 
+    private func makeProtocolGenerator() -> ProtocolGenerating {
+        switch settings.protocolProvider {
+        case .claudeCLI:
+            ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
+        case .openAICompatible:
+            OpenAIProtocolGenerator(
+                endpoint: URL(string: settings.openAIEndpoint)
+                    ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
+                model: settings.openAIModel,
+                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey
+            )
+        }
+    }
+
     private func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
             whisperKit: whisperKit,
             diarizationFactory: { FluidDiarizer() },
-            protocolGenerator: ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin),
+            protocolGenerator: makeProtocolGenerator(),
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,

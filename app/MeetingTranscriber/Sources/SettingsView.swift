@@ -10,7 +10,14 @@ struct SettingsView: View {
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
+    @State private var testingConnection = false
+    @State private var connectionTestResult: ConnectionTestResult?
     var whisperKitEngine: WhisperKitEngine
+
+    enum ConnectionTestResult {
+        case success(String)
+        case failure(String)
+    }
 
     private let whisperKitModels: [(variant: String, label: String)] = [
         ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
@@ -153,14 +160,76 @@ struct SettingsView: View {
             }
 
             Section("Protocol Generation") {
-                Picker("Claude CLI", selection: $settings.claudeBin) {
-                    ForEach(claudeBinaries, id: \.self) { bin in
-                        Text(bin).tag(bin)
+                Picker("Provider", selection: $settings.protocolProvider) {
+                    ForEach(ProtocolProvider.allCases, id: \.self) { provider in
+                        Text(provider.label).tag(provider)
                     }
                 }
-                Text("Binary used for protocol generation")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                switch settings.protocolProvider {
+                case .claudeCLI:
+                    Picker("Claude CLI", selection: $settings.claudeBin) {
+                        ForEach(claudeBinaries, id: \.self) { bin in
+                            Text(bin).tag(bin)
+                        }
+                    }
+                    Text("Binary used for protocol generation")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                case .openAICompatible:
+                    HStack {
+                        Text("Endpoint")
+                        Spacer()
+                        TextField("http://localhost:11434/v1/chat/completions", text: $settings.openAIEndpoint)
+                            .frame(width: 280)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("Model")
+                        Spacer()
+                        TextField("llama3.1", text: $settings.openAIModel)
+                            .frame(width: 160)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    HStack {
+                        Text("API Key")
+                        Spacer()
+                        SecureField("Optional", text: $settings.openAIAPIKey)
+                            .frame(width: 160)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Text("Leave empty if your local server doesn't require authentication")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Button("Test Connection") {
+                            testConnection()
+                        }
+                        .disabled(testingConnection)
+
+                        if testingConnection {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+
+                        if let result = connectionTestResult {
+                            switch result {
+                            case .success(let msg):
+                                Label(msg, systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                            case .failure(let msg):
+                                Label(msg, systemImage: "xmark.circle.fill")
+                                    .foregroundStyle(.red)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
             }
 
             Section("Permissions") {
@@ -209,7 +278,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 420)
+        .frame(width: 480)
         .onAppear {
             claudeBinaries = ProtocolGenerator.availableClaudeBinaries()
             refreshPermissions()
@@ -236,6 +305,30 @@ struct SettingsView: View {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
         screenRecordingOK = Permissions.checkScreenRecording()
         accessibilityOK = AXIsProcessTrusted()
+    }
+
+    private func testConnection() {
+        testingConnection = true
+        connectionTestResult = nil
+        Task {
+            let apiKey = settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey
+            let result = await OpenAIProtocolGenerator.testConnection(
+                endpoint: settings.openAIEndpoint,
+                model: settings.openAIModel,
+                apiKey: apiKey
+            )
+            testingConnection = false
+            switch result {
+            case .success(let models):
+                if models.isEmpty {
+                    connectionTestResult = .success("Connected")
+                } else {
+                    connectionTestResult = .success("Connected (\(models.count) models)")
+                }
+            case .failure(let error):
+                connectionTestResult = .failure(error.localizedDescription)
+            }
+        }
     }
 
     private func refreshAudioDevices() {
