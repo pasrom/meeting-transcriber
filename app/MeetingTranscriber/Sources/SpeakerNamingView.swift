@@ -245,9 +245,7 @@ struct SpeakerNamingView: View {
         // Perform file I/O off the main thread
         Task.detached { [audioPath, longest] in
             do {
-                let samples = try AudioMixer.loadAudioFileAsFloat32(url: audioPath)
-                let audioFile = try AVAudioFile(forReading: audioPath)
-                let sampleRate = Int(audioFile.processingFormat.sampleRate)
+                let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
                 let startSample = max(0, Int(longest.start) * sampleRate)
                 let endSample = min(samples.count, Int(longest.end) * sampleRate)
                 guard startSample < endSample else { return }

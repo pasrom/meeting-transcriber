@@ -228,10 +228,10 @@ class PipelineQueue {
             if let appAudioPath = appPath, let micAudioPath = micPath {
                 // Dual-source: resample both tracks to 16kHz
                 let app16k = workDir.appendingPathComponent("app_16k.wav")
-                try AudioMixer.resampleFile(from: appAudioPath, to: app16k)
+                try await AudioMixer.resampleFile(from: appAudioPath, to: app16k)
 
                 let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-                try AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
+                try await AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
 
                 // Use segment-returning method to cache for hybrid diarization
                 let segments = try await whisperKit.transcribeDualSourceSegments(
@@ -245,7 +245,7 @@ class PipelineQueue {
             } else {
                 // Single-source: resample mix to 16kHz
                 let mix16k = workDir.appendingPathComponent("mix_16k.wav")
-                try AudioMixer.resampleFile(from: mixPath, to: mix16k)
+                try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
 
                 // Use transcribeSegments to cache results for diarization
                 let segments = try await whisperKit.transcribeSegments(audioPath: mix16k)
@@ -270,7 +270,7 @@ class PipelineQueue {
                     // Use mix audio for diarization (already resampled in single-source path)
                     let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                     if !FileManager.default.fileExists(atPath: mix16k.path) {
-                        try AudioMixer.resampleFile(from: mixPath, to: mix16k)
+                        try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
                     }
 
                     do {

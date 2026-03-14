@@ -267,16 +267,80 @@ struct AudioMixer {
 
     // MARK: - Convenience
 
-    /// Load a WAV file, resample to a target rate, and save to a new file.
-    static func resampleFile(from source: URL, to destination: URL, targetRate: Int = 16000) throws {
-        let file = try AVAudioFile(forReading: source)
-        let sourceRate = Int(file.processingFormat.sampleRate)
-        let samples = try loadAudioFileAsFloat32(url: source)
+    /// Load any audio or video file as mono Float32 samples.
+    ///
+    /// Tries AVAudioFile first (fast path for audio formats: WAV, MP3, M4A, AIFF, FLAC, CAF),
+    /// then falls back to AVAsset for video containers (MP4, MOV).
+    static func loadAudioAsFloat32(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
+        // Fast path: AVAudioFile handles all common audio formats
+        if let file = try? AVAudioFile(forReading: url) {
+            let sampleRate = Int(file.processingFormat.sampleRate)
+            let samples = try loadAudioFileAsFloat32(url: url)
+            return (samples, sampleRate)
+        }
+
+        // Fallback: AVAsset for video containers (MP4, MOV)
+        logger.info("AVAudioFile failed, trying AVAsset fallback for \(url.lastPathComponent)")
+        return try await loadAudioFromAVAsset(url: url)
+    }
+
+    /// Extract audio from a video container using AVAsset.
+    private static func loadAudioFromAVAsset(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        guard let audioTrack = tracks.first else {
+            throw AudioMixerError.noAudioTrack
+        }
+
+        let reader = try AVAssetReader(asset: asset)
+        let outputSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsNonInterleaved: false,
+            AVNumberOfChannelsKey: 1,
+            AVSampleRateKey: 16000,
+        ]
+        let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
+        reader.add(output)
+
+        guard reader.startReading() else {
+            throw AudioMixerError.audioExtractionFailed(
+                reader.error?.localizedDescription ?? "Unknown error"
+            )
+        }
+
+        var samples = [Float]()
+        while let sampleBuffer = output.copyNextSampleBuffer() {
+            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
+            let length = CMBlockBufferGetDataLength(blockBuffer)
+            let floatCount = length / MemoryLayout<Float>.size
+            let offset = samples.count
+            samples.append(contentsOf: repeatElement(Float(0), count: floatCount))
+            _ = samples.withUnsafeMutableBufferPointer { buf in
+                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length,
+                                           destination: buf.baseAddress! + offset)
+            }
+        }
+
+        if reader.status == .failed {
+            throw AudioMixerError.audioExtractionFailed(
+                reader.error?.localizedDescription ?? "Unknown error"
+            )
+        }
+
+        logger.info("AVAsset audio extracted: \(samples.count) samples at 16kHz")
+        return (samples, 16000)
+    }
+
+    /// Load an audio or video file, resample to a target rate, and save to a new WAV file.
+    static func resampleFile(from source: URL, to destination: URL, targetRate: Int = 16000) async throws {
+        let (samples, sourceRate) = try await loadAudioAsFloat32(url: source)
         let resampled = resample(samples, from: sourceRate, to: targetRate)
         try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)
     }
 
-    // MARK: - WAV I/O
+    // MARK: - Audio I/O
 
     /// Load an audio file as mono Float32 samples.
     /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC, CAF.
@@ -357,12 +421,16 @@ enum AudioMixerError: LocalizedError {
     case bufferCreationFailed
     case noFloatData
     case formatCreationFailed
+    case noAudioTrack
+    case audioExtractionFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .bufferCreationFailed: return "Failed to create audio buffer"
         case .noFloatData: return "Audio buffer has no float data"
         case .formatCreationFailed: return "Failed to create audio format"
+        case .noAudioTrack: return "File contains no audio track"
+        case .audioExtractionFailed(let detail): return "Audio extraction failed: \(detail)"
         }
     }
 }
