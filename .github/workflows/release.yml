@@ -63,16 +63,24 @@ jobs:
           TEAM_ID: ${{ secrets.TEAM_ID }}
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         run: |
+          # Use tag name as version (v0.3.0-rc1 → 0.3.0-rc1), fall back to VERSION file
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            BUILD_VERSION="--version=${GITHUB_REF_NAME#v}"
+          fi
           if [ -n "$DEVELOPER_ID" ]; then
-            ./scripts/build_release.sh
+            ./scripts/build_release.sh ${BUILD_VERSION:-}
           else
-            ./scripts/build_release.sh --no-notarize
+            ./scripts/build_release.sh --no-notarize ${BUILD_VERSION:-}
           fi
 
       - name: Get version
         id: version
         run: |
-          VERSION=$(cat VERSION | tr -d '[:space:]')
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(cat VERSION | tr -d '[:space:]')
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Compute DMG SHA256

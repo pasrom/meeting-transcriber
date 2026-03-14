@@ -30,14 +30,20 @@ MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
 NOTARIZE=true
+OVERRIDE_VERSION=""
 for arg in "$@"; do
     case "$arg" in
         --no-notarize) NOTARIZE=false ;;
+        --version=*) OVERRIDE_VERSION="${arg#--version=}" ;;
     esac
 done
 
-# Read version from VERSION file
-VERSION=$(cat "$PROJECT_ROOT/VERSION" | tr -d '[:space:]')
+# Read version: prefer --version flag, then VERSION file
+if [ -n "$OVERRIDE_VERSION" ]; then
+    VERSION="$OVERRIDE_VERSION"
+else
+    VERSION=$(cat "$PROJECT_ROOT/VERSION" | tr -d '[:space:]')
+fi
 echo "Building MeetingTranscriber v${VERSION}"
 echo "  Notarize:    $NOTARIZE"
 echo "======================================="
