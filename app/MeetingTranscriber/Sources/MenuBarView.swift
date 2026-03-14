@@ -4,6 +4,7 @@ struct MenuBarView: View {
     let status: TranscriberStatus?
     let isWatching: Bool
     let pipelineQueue: PipelineQueue
+    var updateChecker: UpdateChecker?
     let onStartStop: () -> Void
     let onRecordApp: () -> Void
     let onStopManualRecording: (() -> Void)?
@@ -158,6 +159,18 @@ struct MenuBarView: View {
             onOpenProtocolsFolder()
         } label: {
             Label("Open Protocols Folder", systemImage: "folder")
+        }
+
+        if let update = updateChecker?.availableUpdate {
+            Divider()
+            Button {
+                NSWorkspace.shared.open(update.dmgURL ?? update.htmlURL)
+            } label: {
+                Label(
+                    "Update Available: \(update.tagName)",
+                    systemImage: "arrow.down.circle.fill"
+                )
+            }
         }
 
         Divider()
