@@ -63,10 +63,11 @@ struct MeetingTranscriberApp: App {
                 onQuit: quit
             )
         } label: {
-            Label(
-                currentStateLabel,
-                systemImage: currentStateIcon
-            )
+            Label {
+                Text(currentStateLabel)
+            } icon: {
+                Image(nsImage: MenuBarIcon.image(badge: currentBadge))
+            }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !isWatching {
                     toggleWatching()
@@ -156,17 +157,19 @@ struct MeetingTranscriberApp: App {
         return "Idle"
     }
 
-    private var currentStateIcon: String {
+    private var currentBadge: BadgeKind {
         if let loop = watchLoop, loop.isActive {
-            if loop.state == .recording {
-                return "record.circle.fill"
+            if loop.state == .recording { return .recording }
+            if !pipelineQueue.activeJobs.isEmpty { return .processing }
+            switch loop.transcriberState {
+            case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
+            case .protocolReady: return .done
+            case .error: return .error
+            case .transcribing, .generatingProtocol, .recordingDone: return .processing
+            default: return .none
             }
-            if !pipelineQueue.activeJobs.isEmpty {
-                return "gearshape.2.fill"
-            }
-            return loop.transcriberState.icon
         }
-        return "waveform.circle"
+        return .none
     }
 
     // MARK: - Start / Stop
