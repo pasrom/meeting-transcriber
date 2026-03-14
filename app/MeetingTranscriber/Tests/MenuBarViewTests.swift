@@ -423,7 +423,7 @@ final class MenuBarViewTests: XCTestCase {
             onQuit: {}
         )
         let body = try sut.inspect()
-        try body.find(button: "Process Audio Files...").tap()
+        try body.find(button: "Process Audio/Video Files...").tap()
         XCTAssertTrue(called)
     }
 

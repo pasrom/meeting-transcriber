@@ -1,5 +1,6 @@
 import Combine
 import SwiftUI
+import UniformTypeIdentifiers
 
 extension Notification.Name {
     static let autoWatchStart = Notification.Name("autoWatchStart")
@@ -351,8 +352,11 @@ struct MeetingTranscriberApp: App {
 
     private func processAudioFiles() {
         let panel = NSOpenPanel()
-        panel.title = "Select Audio Files"
-        panel.allowedContentTypes = [.wav]
+        panel.title = "Select Audio or Video Files"
+        panel.allowedContentTypes = [
+            .wav, .mp3, .aiff, .mpeg4Audio,
+            .mpeg4Movie, .quickTimeMovie,
+        ] + [UTType("public.flac")].compactMap { $0 }
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 

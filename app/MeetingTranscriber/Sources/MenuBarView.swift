@@ -100,7 +100,7 @@ struct MenuBarView: View {
         Button {
             onProcessFiles()
         } label: {
-            Label("Process Audio Files...", systemImage: "doc.badge.plus")
+            Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
 
