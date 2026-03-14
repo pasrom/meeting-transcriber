@@ -14,6 +14,7 @@ final class AppSettingsTests: XCTestCase {
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
             "diarize", "numSpeakers", "whisperKitModel", "claudeBin",
             "protocolProvider", "openAIEndpoint", "openAIModel",
+            "checkForUpdates", "includePreReleases",
         ]
         KeychainHelper.delete(key: "openAIAPIKey")
         for key in keys {
@@ -185,6 +186,26 @@ final class AppSettingsTests: XCTestCase {
     func testOpenAIModelSavedToDefaults() {
         settings.openAIModel = "mistral"
         XCTAssertEqual(UserDefaults.standard.string(forKey: "openAIModel"), "mistral")
+    }
+
+    // MARK: - Update Settings
+
+    func testCheckForUpdatesDefault() {
+        XCTAssertTrue(settings.checkForUpdates)
+    }
+
+    func testIncludePreReleasesDefault() {
+        XCTAssertFalse(settings.includePreReleases)
+    }
+
+    func testCheckForUpdatesPersistence() {
+        settings.checkForUpdates = false
+        XCTAssertEqual(UserDefaults.standard.bool(forKey: "checkForUpdates"), false)
+    }
+
+    func testIncludePreReleasesPersistence() {
+        settings.includePreReleases = true
+        XCTAssertEqual(UserDefaults.standard.bool(forKey: "includePreReleases"), true)
     }
 
     // MARK: - Keychain

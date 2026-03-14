@@ -133,6 +133,16 @@ final class AppSettings {
         }
     }
 
+    // MARK: - Updates
+
+    var checkForUpdates: Bool = defaults.object(forKey: "checkForUpdates") as? Bool ?? true {
+        didSet { defaults.set(checkForUpdates, forKey: "checkForUpdates") }
+    }
+
+    var includePreReleases: Bool = defaults.object(forKey: "includePreReleases") as? Bool ?? false {
+        didSet { defaults.set(includePreReleases, forKey: "includePreReleases") }
+    }
+
     // MARK: - Computed
 
     var watchApps: [String] {
