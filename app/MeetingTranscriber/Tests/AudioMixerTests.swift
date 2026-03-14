@@ -257,4 +257,70 @@ final class AudioMixerTests: XCTestCase {
         let size = attrs[.size] as? Int ?? 0
         XCTAssertGreaterThan(size, 44)  // WAV header is 44 bytes minimum
     }
+
+    // MARK: - Multi-format Loading
+
+    func testLoadAudioAsFloat32WAV() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let wavURL = tmpDir.appendingPathComponent("test_multiformat_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+
+        let original: [Float] = [0.0, 0.5, -0.5, 0.25, -0.25]
+        try AudioMixer.saveWAV(samples: original, sampleRate: 16000, url: wavURL)
+
+        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: wavURL)
+        XCTAssertEqual(sampleRate, 16000)
+        XCTAssertEqual(samples.count, original.count)
+        for i in 0..<original.count {
+            XCTAssertEqual(samples[i], original[i], accuracy: 0.001, "Sample \(i) mismatch")
+        }
+    }
+
+    func testLoadAudioAsFloat32RoundTrip() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let wavURL = tmpDir.appendingPathComponent("test_async_roundtrip_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+
+        let original: [Float] = [0.1, -0.1, 0.3, -0.3, 0.0]
+        try AudioMixer.saveWAV(samples: original, sampleRate: 44100, url: wavURL)
+
+        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: wavURL)
+        XCTAssertEqual(sampleRate, 44100)
+        XCTAssertEqual(samples.count, original.count)
+        for i in 0..<original.count {
+            XCTAssertEqual(samples[i], original[i], accuracy: 0.001, "Sample \(i) mismatch")
+        }
+    }
+
+    func testLoadAudioAsFloat32NonexistentFile() async {
+        let bogus = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nonexistent_\(UUID().uuidString).wav")
+        do {
+            _ = try await AudioMixer.loadAudioAsFloat32(url: bogus)
+            XCTFail("Expected error for nonexistent file")
+        } catch {
+            // Expected
+        }
+    }
+
+    func testResampleFileAsyncRoundTrip() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let src = tmpDir.appendingPathComponent("test_resample_src_\(UUID().uuidString).wav")
+        let dst = tmpDir.appendingPathComponent("test_resample_dst_\(UUID().uuidString).wav")
+        defer {
+            try? FileManager.default.removeItem(at: src)
+            try? FileManager.default.removeItem(at: dst)
+        }
+
+        // Create a 48kHz source (480 samples = 10ms)
+        let samples48k = [Float](repeating: 0.5, count: 480)
+        try AudioMixer.saveWAV(samples: samples48k, sampleRate: 48000, url: src)
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dst.path))
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        // 480 samples at 48kHz → ~160 samples at 16kHz
+        XCTAssertEqual(loaded.count, 160)
+    }
 }
