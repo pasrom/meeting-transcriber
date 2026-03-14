@@ -22,8 +22,8 @@ struct AudioMixer {
         recordingStart: TimeInterval = 0,
         sampleRate: Int = 48000
     ) throws {
-        var appSamples = try loadWAVAsFloat32(url: appAudioPath)
-        var micSamples = try loadWAVAsFloat32(url: micAudioPath)
+        var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
+        var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
 
         // Apply mute mask to mic (zero samples during muted periods)
         if !muteTimeline.isEmpty {
@@ -271,15 +271,16 @@ struct AudioMixer {
     static func resampleFile(from source: URL, to destination: URL, targetRate: Int = 16000) throws {
         let file = try AVAudioFile(forReading: source)
         let sourceRate = Int(file.processingFormat.sampleRate)
-        let samples = try loadWAVAsFloat32(url: source)
+        let samples = try loadAudioFileAsFloat32(url: source)
         let resampled = resample(samples, from: sourceRate, to: targetRate)
         try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)
     }
 
     // MARK: - WAV I/O
 
-    /// Load a WAV file as mono Float32 samples.
-    static func loadWAVAsFloat32(url: URL) throws -> [Float] {
+    /// Load an audio file as mono Float32 samples.
+    /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC, CAF.
+    static func loadAudioFileAsFloat32(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
         let format = file.processingFormat
         let frameCount = AVAudioFrameCount(file.length)

@@ -235,7 +235,7 @@ final class AudioMixerTests: XCTestCase {
         let sampleRate = 16000
 
         try AudioMixer.saveWAV(samples: original, sampleRate: sampleRate, url: wavURL)
-        let loaded = try AudioMixer.loadWAVAsFloat32(url: wavURL)
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: wavURL)
 
         XCTAssertEqual(loaded.count, original.count)
         // 16-bit quantization introduces small error

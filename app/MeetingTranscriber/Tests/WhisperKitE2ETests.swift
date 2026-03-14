@@ -239,7 +239,7 @@ final class WhisperKitE2ETests: XCTestCase {
         )
 
         // Load fixture, resample 48kHz->16kHz, save as temp file, then transcribe
-        let samples = try AudioMixer.loadWAVAsFloat32(url: fixture)
+        let samples = try AudioMixer.loadAudioFileAsFloat32(url: fixture)
         XCTAssertFalse(samples.isEmpty, "Should load samples from fixture")
 
         // Determine source sample rate from AVAudioFile
