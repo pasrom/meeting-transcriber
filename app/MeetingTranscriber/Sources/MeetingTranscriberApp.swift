@@ -11,9 +11,11 @@ struct MeetingTranscriberApp: App {
     @State private var settings = AppSettings()
     @State private var watchLoop: WatchLoop?
     @State private var pipelineQueue = PipelineQueue()
+    @State private var iconAnimationFrame = 0
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
     private let whisperKit = WhisperKitEngine()
+    private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     private var isWatching: Bool {
         watchLoop?.isActive == true
@@ -66,7 +68,14 @@ struct MeetingTranscriberApp: App {
             Label {
                 Text(currentStateLabel)
             } icon: {
-                Image(nsImage: MenuBarIcon.image(badge: currentBadge))
+                Image(nsImage: MenuBarIcon.image(
+                    badge: currentBadge,
+                    animationFrame: currentBadge.isAnimated ? iconAnimationFrame : 0
+                ))
+            }
+            .onReceive(iconTimer) { _ in
+                guard currentBadge.isAnimated else { return }
+                iconAnimationFrame = (iconAnimationFrame + 1) % MenuBarIcon.frameCount
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !isWatching {
@@ -160,12 +169,19 @@ struct MeetingTranscriberApp: App {
     private var currentBadge: BadgeKind {
         if let loop = watchLoop, loop.isActive {
             if loop.state == .recording { return .recording }
-            if !pipelineQueue.activeJobs.isEmpty { return .processing }
+            if let activeJob = pipelineQueue.activeJobs.first {
+                switch activeJob.state {
+                case .transcribing: return .transcribing
+                case .diarizing: return .diarizing
+                default: return .processing
+                }
+            }
             switch loop.transcriberState {
             case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
             case .protocolReady: return .done
             case .error: return .error
-            case .transcribing, .generatingProtocol, .recordingDone: return .processing
+            case .transcribing, .recordingDone: return .transcribing
+            case .generatingProtocol: return .processing
             default: return .none
             }
         }
