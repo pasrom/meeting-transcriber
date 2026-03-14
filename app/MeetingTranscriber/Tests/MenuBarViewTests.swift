@@ -31,6 +31,7 @@ final class MenuBarViewTests: XCTestCase {
     private func makeView(
         status: TranscriberStatus? = nil,
         isWatching: Bool = false,
+        updateChecker: UpdateChecker? = nil,
         onNameSpeakers: (() -> Void)? = nil,
         onStopManualRecording: (() -> Void)? = nil
     ) -> MenuBarView {
@@ -38,6 +39,7 @@ final class MenuBarViewTests: XCTestCase {
             status: status,
             isWatching: isWatching,
             pipelineQueue: PipelineQueue(),
+            updateChecker: updateChecker,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: onStopManualRecording,
@@ -168,6 +170,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .idle),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: { called = true },
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -191,6 +194,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .idle),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -214,6 +218,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .idle),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -237,6 +242,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .idle),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -260,6 +266,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .protocolReady, protocolPath: "/tmp/p.md"),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -283,6 +290,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .waitingForSpeakerNames),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -342,6 +350,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(),
             isWatching: false,
             pipelineQueue: queue,
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -377,6 +386,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(),
             isWatching: false,
             pipelineQueue: queue,
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -399,6 +409,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -434,6 +445,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(),
             isWatching: false,
             pipelineQueue: queue,
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -468,6 +480,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(),
             isWatching: false,
             pipelineQueue: queue,
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: nil,
@@ -505,6 +518,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .idle),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: { called = true },
             onStopManualRecording: nil,
@@ -545,6 +559,7 @@ final class MenuBarViewTests: XCTestCase {
             status: makeStatus(state: .recording),
             isWatching: false,
             pipelineQueue: PipelineQueue(),
+            updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
             onStopManualRecording: { called = true },
@@ -560,5 +575,36 @@ final class MenuBarViewTests: XCTestCase {
         let body = try sut.inspect()
         try body.find(button: "Stop Recording").tap()
         XCTAssertTrue(called)
+    }
+
+    // MARK: - Update indicator
+
+    func testUpdateIndicatorShownWhenUpdateAvailable() throws {
+        let checker = UpdateChecker(provider: MockUpdateProvider())
+        checker.availableUpdate = ReleaseInfo(
+            tagName: "v1.0.0",
+            name: "Release v1.0.0",
+            prerelease: false,
+            htmlURL: URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")!,
+            dmgURL: URL(string: "https://example.com/app.dmg")
+        )
+
+        let sut = makeView(status: makeStatus(), updateChecker: checker)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Update Available: v1.0.0"))
+    }
+
+    func testUpdateIndicatorHiddenWhenNoUpdate() throws {
+        let checker = UpdateChecker(provider: MockUpdateProvider())
+
+        let sut = makeView(status: makeStatus(), updateChecker: checker)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Update Available:"))
+    }
+
+    func testUpdateIndicatorHiddenWhenNoChecker() throws {
+        let sut = makeView(status: makeStatus())
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Update Available:"))
     }
 }
