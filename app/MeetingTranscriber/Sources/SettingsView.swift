@@ -14,6 +14,7 @@ struct SettingsView: View {
     @State private var connectionTestResult: ConnectionTestResult?
     @State private var availableModels: [String] = []
     var whisperKitEngine: WhisperKitEngine
+    var updateChecker: UpdateChecker?
 
     enum ConnectionTestResult {
         case success(String)
@@ -277,6 +278,60 @@ struct SettingsView: View {
                     refreshPermissions()
                 }
                 .font(.caption)
+            }
+
+            if let updateChecker {
+                Section("Updates") {
+                    Toggle("Check for Updates", isOn: $settings.checkForUpdates)
+
+                    if settings.checkForUpdates {
+                        Toggle("Include Pre-Releases", isOn: $settings.includePreReleases)
+                    }
+
+                    HStack {
+                        Button {
+                            updateChecker.checkNow(
+                                includePreReleases: settings.includePreReleases)
+                        } label: {
+                            HStack(spacing: 4) {
+                                if updateChecker.isChecking {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                }
+                                Text("Check Now")
+                            }
+                        }
+                        .disabled(updateChecker.isChecking)
+
+                        if let error = updateChecker.lastError {
+                            Label(error, systemImage: "xmark.circle.fill")
+                                .foregroundStyle(.red)
+                                .font(.caption)
+                        } else if let update = updateChecker.availableUpdate {
+                            Label(
+                                "Update available: \(update.tagName)",
+                                systemImage: "arrow.down.circle.fill"
+                            )
+                            .foregroundStyle(.blue)
+                            .font(.caption)
+                        } else if updateChecker.lastCheckDate != nil {
+                            Label("Up to date", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+
+                    if let update = updateChecker.availableUpdate {
+                        Button {
+                            NSWorkspace.shared.open(update.dmgURL ?? update.htmlURL)
+                        } label: {
+                            Label(
+                                "Download \(update.tagName)",
+                                systemImage: "arrow.down.to.line"
+                            )
+                        }
+                    }
+                }
             }
 
             Section("About") {

@@ -116,4 +116,39 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "API Key"))
         XCTAssertNoThrow(try body.find(text: "Fetch Models"))
     }
+
+    // MARK: - Updates section
+
+    func testUpdatesSectionShownWhenCheckerProvided() throws {
+        let settings = AppSettings()
+        let checker = UpdateChecker(provider: MockUpdateProvider())
+        let sut = SettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            updateChecker: checker
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Check for Updates"))
+        XCTAssertNoThrow(try body.find(text: "Check Now"))
+    }
+
+    func testUpdatesSectionHiddenWhenNoChecker() throws {
+        let settings = AppSettings()
+        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Check Now"))
+    }
+
+    func testPreReleaseToggleShownWhenCheckEnabled() throws {
+        let settings = AppSettings()
+        settings.checkForUpdates = true
+        let checker = UpdateChecker(provider: MockUpdateProvider())
+        let sut = SettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            updateChecker: checker
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Include Pre-Releases"))
+    }
 }
