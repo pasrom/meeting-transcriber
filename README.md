@@ -64,6 +64,22 @@ cd meeting-transcriber
 
 ---
 
+## Menu Bar Icon
+
+The app uses an animated waveform icon in the menu bar that reflects the current pipeline stage:
+
+<p>
+<img src="docs/menu-bar-idle.gif" width="80" alt="Idle">&nbsp;&nbsp;
+<img src="docs/menu-bar-recording.gif" width="80" alt="Recording">&nbsp;&nbsp;
+<img src="docs/menu-bar-transcribing.gif" width="80" alt="Transcribing">&nbsp;&nbsp;
+<img src="docs/menu-bar-diarizing.gif" width="80" alt="Diarizing">&nbsp;&nbsp;
+<img src="docs/menu-bar-protocol.gif" width="80" alt="Protocol">
+</p>
+
+**Idle** → **Recording** (bars bounce) → **Transcribing** (bars morph to text) → **Diarizing** (bars split into groups) → **Protocol** (lines appear sequentially)
+
+---
+
 ## Usage
 
 Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
