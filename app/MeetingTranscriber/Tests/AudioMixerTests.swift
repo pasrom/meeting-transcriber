@@ -323,4 +323,135 @@ final class AudioMixerTests: XCTestCase {
         // 480 samples at 48kHz → ~160 samples at 16kHz
         XCTAssertEqual(loaded.count, 160)
     }
+
+    // MARK: - Multi-format Fixtures
+
+    private func fixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures")
+            .appendingPathComponent(name)
+    }
+
+    // -- Loading (AVAudioFile fast path) --
+
+    func testLoadAudioFileAsFloat32MP3() throws {
+        let url = fixtureURL("sine_440hz_44k.mp3")
+        let samples = try AudioMixer.loadAudioFileAsFloat32(url: url)
+        // 1s at 44.1kHz → ~44100 samples (MP3 adds encoder padding)
+        XCTAssertGreaterThan(samples.count, 40000)
+        XCTAssertLessThan(samples.count, 50000)
+    }
+
+    func testLoadAudioFileAsFloat32M4A() throws {
+        let url = fixtureURL("sine_440hz_44k.m4a")
+        let samples = try AudioMixer.loadAudioFileAsFloat32(url: url)
+        XCTAssertEqual(samples.count, 44100, "M4A 1s at 44.1kHz = exactly 44100 frames")
+    }
+
+    // -- Loading via loadAudioAsFloat32 entry point --
+
+    func testLoadAudioAsFloat32ReturnsCorrectSampleRate() async throws {
+        let url = fixtureURL("sine_440hz_44k.m4a")
+        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: url)
+        XCTAssertEqual(sampleRate, 44100, "Should detect 44.1kHz from M4A")
+        XCTAssertEqual(samples.count, 44100)
+    }
+
+    // -- AVAsset fallback (direct test, bypassing AVAudioFile) --
+
+    func testLoadAudioFromAVAssetMP4() async throws {
+        let url = fixtureURL("sine_440hz_44k.mp4")
+        // Call AVAsset path directly — this is the fallback for when AVAudioFile fails
+        let (samples, sampleRate) = try await AudioMixer.loadAudioFromAVAsset(url: url)
+        XCTAssertEqual(sampleRate, 16000, "AVAsset extracts at 16kHz")
+        // 1s at 16kHz → ~16000 samples
+        XCTAssertGreaterThan(samples.count, 14000)
+        XCTAssertLessThan(samples.count, 18000)
+    }
+
+    func testLoadAudioFromAVAssetM4A() async throws {
+        let url = fixtureURL("sine_440hz_44k.m4a")
+        let (samples, sampleRate) = try await AudioMixer.loadAudioFromAVAsset(url: url)
+        XCTAssertEqual(sampleRate, 16000)
+        XCTAssertGreaterThan(samples.count, 14000)
+        XCTAssertLessThan(samples.count, 18000)
+    }
+
+    func testLoadAudioFromAVAssetNoAudioThrows() async {
+        let url = fixtureURL("video_no_audio.mp4")
+        do {
+            _ = try await AudioMixer.loadAudioFromAVAsset(url: url)
+            XCTFail("Expected noAudioTrack error")
+        } catch let error as AudioMixerError {
+            XCTAssertEqual(error.errorDescription, "File contains no audio track")
+        } catch {
+            XCTFail("Expected AudioMixerError.noAudioTrack, got \(error)")
+        }
+    }
+
+    // -- Resampling from multi-format sources --
+
+    func testResampleFileM4A44kTo16k() async throws {
+        let src = fixtureURL("sine_440hz_44k.m4a")
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_resample_m4a_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: dst) }
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let dstFile = try AVAudioFile(forReading: dst)
+        XCTAssertEqual(Int(dstFile.processingFormat.sampleRate), 16000, "Output must be 16kHz")
+
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        // 44100 samples at 44.1kHz = 1.0s → 16000 samples at 16kHz
+        XCTAssertEqual(loaded.count, 16000, "1s at 44.1kHz → 16000 samples at 16kHz")
+    }
+
+    func testResampleFileMP3_44kTo16k() async throws {
+        let src = fixtureURL("sine_440hz_44k.mp3")
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_resample_mp3_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: dst) }
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let dstFile = try AVAudioFile(forReading: dst)
+        XCTAssertEqual(Int(dstFile.processingFormat.sampleRate), 16000, "Output must be 16kHz")
+
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        // MP3 has encoder padding, so ~1.0–1.05s → 16000–16800 samples
+        XCTAssertGreaterThan(loaded.count, 15000)
+        XCTAssertLessThan(loaded.count, 18000)
+    }
+
+    func testResampleFileDurationPreserved() async throws {
+        let src = fixtureURL("sine_440hz_44k.m4a")
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_duration_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: dst) }
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let srcFile = try AVAudioFile(forReading: src)
+        let dstFile = try AVAudioFile(forReading: dst)
+        let srcDuration = Double(srcFile.length) / srcFile.processingFormat.sampleRate
+        let dstDuration = Double(dstFile.length) / dstFile.processingFormat.sampleRate
+        XCTAssertEqual(srcDuration, dstDuration, accuracy: 0.01, "Duration must be preserved")
+    }
+
+    func testResampleFileAudioHasEnergy() async throws {
+        let src = fixtureURL("sine_440hz_44k.m4a")
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_energy_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: dst) }
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        // Sine wave should have significant energy (not silence)
+        let rms = sqrt(loaded.map { $0 * $0 }.reduce(0, +) / Float(loaded.count))
+        // AAC encoding + 16-bit quantization reduce amplitude; 0.05 confirms it's not silence
+        XCTAssertGreaterThan(rms, 0.05, "Resampled audio should not be silent")
+    }
 }
