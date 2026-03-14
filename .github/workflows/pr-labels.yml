@@ -1,0 +1,33 @@
+name: Auto-label PRs
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Label PR from conventional commit title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = context.payload.pull_request.title;
+            const labels = [];
+
+            if (/^feat(\(|:|!)/.test(title)) labels.push('enhancement');
+            else if (/^fix(\(|:|!)/.test(title)) labels.push('bug');
+            else if (/^docs(\(|:|!)/.test(title)) labels.push('documentation');
+            else if (/^(ci|build|chore)(\(|:|!)/.test(title)) labels.push('chore');
+            else if (/^(refactor|perf)(\(|:|!)/.test(title)) labels.push('chore');
+
+            if (labels.length > 0) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels
+              });
+            }
