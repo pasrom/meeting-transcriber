@@ -186,6 +186,65 @@ final class ProtocolGeneratorTests: XCTestCase {
         )
     }
 
+    // MARK: - Custom Prompt Loading
+
+    /// Run a test block with a temporary custom prompt file, restoring the original state afterwards.
+    private func withCustomPromptFile(_ body: (URL) throws -> Void) throws {
+        let url = AppPaths.customPromptFile
+        let fm = FileManager.default
+        let backup = fm.fileExists(atPath: url.path)
+            ? try? String(contentsOf: url, encoding: .utf8)
+            : nil
+        defer {
+            if let backup {
+                try? backup.write(to: url, atomically: true, encoding: .utf8)
+            } else {
+                try? fm.removeItem(at: url)
+            }
+        }
+        try body(url)
+    }
+
+    func testLoadPromptReturnsDefaultWhenNoFile() throws {
+        try withCustomPromptFile { url in
+            try? FileManager.default.removeItem(at: url)
+
+            let prompt = ProtocolGenerator.loadPrompt()
+            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
+        }
+    }
+
+    func testLoadPromptReadsCustomFile() throws {
+        try withCustomPromptFile { url in
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let custom = "Custom prompt for testing"
+            try custom.write(to: url, atomically: true, encoding: .utf8)
+
+            let prompt = ProtocolGenerator.loadPrompt()
+            XCTAssertEqual(prompt, custom)
+        }
+    }
+
+    func testLoadPromptIgnoresEmptyFile() throws {
+        try withCustomPromptFile { url in
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "".write(to: url, atomically: true, encoding: .utf8)
+
+            let prompt = ProtocolGenerator.loadPrompt()
+            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
+        }
+    }
+
+    func testLoadPromptIgnoresWhitespaceOnlyFile() throws {
+        try withCustomPromptFile { url in
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "   \n  \n  ".write(to: url, atomically: true, encoding: .utf8)
+
+            let prompt = ProtocolGenerator.loadPrompt()
+            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
+        }
+    }
+
     func testGenerateEnvStripDoesNotRemoveOtherVars() throws {
         // Verify that removing CLAUDECODE doesn't affect other env vars
         let testKey = "MEETING_TRANSCRIBER_TEST_VAR_\(UUID().uuidString)"

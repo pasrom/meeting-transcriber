@@ -83,6 +83,20 @@ struct ProtocolGenerator {
 
         """
 
+    /// Load the protocol prompt, preferring a custom file over the built-in default.
+    ///
+    /// Reads `AppPaths.customPromptFile` if it exists and is non-empty,
+    /// otherwise falls back to the hardcoded `protocolPrompt`.
+    static func loadPrompt() -> String {
+        let url = AppPaths.customPromptFile
+        if let custom = try? String(contentsOf: url, encoding: .utf8),
+           !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            logger.info("Using custom protocol prompt from \(url.path)")
+            return custom
+        }
+        return protocolPrompt
+    }
+
     /// Generate a meeting protocol from a transcript using the Claude CLI.
     ///
     /// - Parameters:
@@ -97,7 +111,7 @@ struct ProtocolGenerator {
         diarized: Bool = false,
         claudeBin: String = "claude"
     ) async throws -> String {
-        var prompt = protocolPrompt
+        var prompt = loadPrompt()
         if diarized {
             prompt += diarizationNote
         }

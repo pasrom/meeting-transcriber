@@ -1,6 +1,7 @@
 import ApplicationServices
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Bindable var settings: AppSettings
@@ -13,6 +14,8 @@ struct SettingsView: View {
     @State private var testingConnection = false
     @State private var connectionTestResult: ConnectionTestResult?
     @State private var availableModels: [String] = []
+    @State private var showResetPromptConfirmation = false
+    @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
     var whisperKitEngine: WhisperKitEngine
     var updateChecker: UpdateChecker?
 
@@ -245,6 +248,45 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                HStack {
+                    Button("Edit Prompt") {
+                        openCustomPrompt()
+                        refreshCustomPromptState()
+                    }
+
+                    Button("Import Prompt") {
+                        importCustomPrompt()
+                        refreshCustomPromptState()
+                    }
+
+                    Button("Reset to Default") {
+                        showResetPromptConfirmation = true
+                    }
+                    .disabled(!hasCustomPrompt)
+                    .confirmationDialog(
+                        "Reset protocol prompt to the built-in default?",
+                        isPresented: $showResetPromptConfirmation,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Reset", role: .destructive) {
+                            try? FileManager.default.removeItem(at: AppPaths.customPromptFile)
+                            refreshCustomPromptState()
+                        }
+                    }
+
+                    Spacer()
+
+                    if hasCustomPrompt {
+                        Label("Custom prompt active", systemImage: "doc.text.fill")
+                            .foregroundStyle(.blue)
+                            .font(.caption)
+                    } else {
+                        Label("Using default prompt", systemImage: "doc.text")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
             }
 
             Section("Permissions") {
@@ -418,6 +460,42 @@ struct SettingsView: View {
             options.insert(settings.openAIModel, at: 0)
         }
         return options
+    }
+
+    private func refreshCustomPromptState() {
+        hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
+    }
+
+    private func ensurePromptDirectory() {
+        try? FileManager.default.createDirectory(
+            at: AppPaths.customPromptFile.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+    }
+
+    private func openCustomPrompt() {
+        let url = AppPaths.customPromptFile
+        if !FileManager.default.fileExists(atPath: url.path) {
+            ensurePromptDirectory()
+            try? ProtocolGenerator.protocolPrompt.write(to: url, atomically: true, encoding: .utf8)
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func importCustomPrompt() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .init(filenameExtension: "md")].compactMap { $0 }
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Select a prompt file to import"
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        ensurePromptDirectory()
+        let dest = AppPaths.customPromptFile
+        if FileManager.default.fileExists(atPath: dest.path) {
+            _ = try? FileManager.default.replaceItemAt(dest, withItemAt: source)
+        } else {
+            try? FileManager.default.copyItem(at: source, to: dest)
+        }
     }
 
     private func refreshAudioDevices() {
