@@ -194,6 +194,7 @@ struct MeetingTranscriberApp: App {
             default: return .none
             }
         }
+        if updateChecker.availableUpdate != nil { return .updateAvailable }
         return .none
     }
 
