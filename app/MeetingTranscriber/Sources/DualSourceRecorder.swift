@@ -336,7 +336,7 @@ class DualSourceRecorder: RecordingProvider {
            (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
             let micAudioFile = try AVAudioFile(forReading: expectedMicPath)
             let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
-            micSamples = try AudioMixer.loadWAVAsFloat32(url: expectedMicPath)
+            micSamples = try AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath)
             micPath = expectedMicPath
             logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
 

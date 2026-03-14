@@ -42,7 +42,7 @@ final class WatchLoopE2ETests: XCTestCase {
     /// Upsample the fixture to 48kHz to simulate DualSourceRecorder output, save to tmpDir.
     private func prepare48kHzFixture(name: String = "mix.wav") throws -> URL {
         let fixture = fixtureURL()
-        let samples = try AudioMixer.loadWAVAsFloat32(url: fixture)
+        let samples = try AudioMixer.loadAudioFileAsFloat32(url: fixture)
 
         // Determine source sample rate
         let file = try AVAudioFile(forReading: fixture)
@@ -354,7 +354,7 @@ final class WatchLoopE2ETests: XCTestCase {
         let path48k = try prepare48kHzFixture(name: "resample_test.wav")
 
         // Resample to 16kHz (same path as PipelineQueue)
-        let samples48k = try AudioMixer.loadWAVAsFloat32(url: path48k)
+        let samples48k = try AudioMixer.loadAudioFileAsFloat32(url: path48k)
         let resampled = AudioMixer.resample(samples48k, from: 48000, to: 16000)
 
         let path16k = tmpDir.appendingPathComponent("resample_test_16k.wav")
