@@ -112,6 +112,8 @@ jobs:
             ${{ steps.sha.outputs.sha256 }}
             ```
           generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
       - name: Update Homebrew tap with new version and SHA256
         if: startsWith(github.ref, 'refs/tags/v')
