@@ -325,7 +325,31 @@ final class WhisperKitE2ETests: XCTestCase {
         return transcript
     }
 
-    func testTranscribeFromMP3() async throws {
+    /// Keywords expected in the transcript (from the fixture's TTS content).
+    /// The fixture contains: "Guten Tag, willkommen zum Projekt Meeting",
+    /// "Danke ... aktuellen Status berichten", "Wie läuft die Entwicklung",
+    /// "Entwicklung läuft nach Plan ... Zeitplan".
+    /// We check case-insensitively for key words that WhisperKit reliably recognizes.
+    private let expectedKeywords = [
+        "willkommen", "Projekt", "Status", "Entwicklung", "Zeitplan",
+    ]
+
+    private func assertTranscriptContent(_ transcript: String, format: String) {
+        let lower = transcript.lowercased()
+        var matched = 0
+        for keyword in expectedKeywords {
+            if lower.contains(keyword.lowercased()) {
+                matched += 1
+            }
+        }
+        // At least 3 of 5 keywords should appear (TTS + compression may cause minor variations)
+        XCTAssertGreaterThanOrEqual(
+            matched, 3,
+            "\(format): expected at least 3 of \(expectedKeywords) in transcript, found \(matched). Transcript:\n\(transcript)"
+        )
+    }
+
+    func testTranscribeMultiFormatContent() async throws {
         let isCI = ProcessInfo.processInfo.environment["CI"] != nil
         try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
 
@@ -337,44 +361,14 @@ final class WhisperKitE2ETests: XCTestCase {
 
         let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
         let mp3Transcript = try await transcribeFixture("two_speakers_de.mp3", engine: engine)
-
-        // Both should produce non-trivial output
-        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
-        XCTAssertGreaterThan(mp3Transcript.count, 50, "MP3 transcript too short")
-    }
-
-    func testTranscribeFromM4A() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
-
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
-        await engine.loadModel()
-        XCTAssertEqual(engine.modelState, .loaded)
-
-        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
         let m4aTranscript = try await transcribeFixture("two_speakers_de.m4a", engine: engine)
-
-        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
-        XCTAssertGreaterThan(m4aTranscript.count, 50, "M4A transcript too short")
-    }
-
-    func testTranscribeFromMP4Video() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
-
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
-        await engine.loadModel()
-        XCTAssertEqual(engine.modelState, .loaded)
-
-        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
         let mp4Transcript = try await transcribeFixture("two_speakers_de.mp4", engine: engine)
 
-        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
-        XCTAssertGreaterThan(mp4Transcript.count, 50, "MP4 transcript too short")
+        // Verify each format produces the expected German content
+        assertTranscriptContent(wavTranscript, format: "WAV")
+        assertTranscriptContent(mp3Transcript, format: "MP3")
+        assertTranscriptContent(m4aTranscript, format: "M4A")
+        assertTranscriptContent(mp4Transcript, format: "MP4")
     }
 
     // MARK: - Helpers
