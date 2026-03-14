@@ -293,12 +293,96 @@ final class WhisperKitE2ETests: XCTestCase {
         }
     }
 
+    // MARK: - Multi-format E2E (resample + transcribe from MP3/M4A/MP4)
+
+    /// Transcribe a multi-format file end-to-end: load → resample → transcribe → verify.
+    /// Returns the transcript for cross-format comparison.
+    private func transcribeFixture(_ filename: String, engine: WhisperKitEngine) async throws -> String {
+        let fixture = fixtureURL(filename)
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: fixture.path),
+            "Fixture \(filename) not found"
+        )
+
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("multiformat_e2e_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // resampleFile uses loadAudioAsFloat32 → AVAudioFile or AVAsset fallback
+        let resampled16k = tmpDir.appendingPathComponent("resampled_16k.wav")
+        try await AudioMixer.resampleFile(from: fixture, to: resampled16k, targetRate: 16000)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resampled16k.path))
+
+        // Verify output is 16kHz
+        let outFile = try AVAudioFile(forReading: resampled16k)
+        XCTAssertEqual(Int(outFile.processingFormat.sampleRate), 16000)
+
+        let transcript = try await engine.transcribe(audioPath: resampled16k)
+        XCTAssertFalse(transcript.isEmpty, "\(filename): transcript should not be empty")
+        XCTAssertFalse(transcript.contains("<|"), "\(filename): no special tokens")
+        return transcript
+    }
+
+    func testTranscribeFromMP3() async throws {
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "de"
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded)
+
+        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
+        let mp3Transcript = try await transcribeFixture("two_speakers_de.mp3", engine: engine)
+
+        // Both should produce non-trivial output
+        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
+        XCTAssertGreaterThan(mp3Transcript.count, 50, "MP3 transcript too short")
+    }
+
+    func testTranscribeFromM4A() async throws {
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "de"
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded)
+
+        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
+        let m4aTranscript = try await transcribeFixture("two_speakers_de.m4a", engine: engine)
+
+        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
+        XCTAssertGreaterThan(m4aTranscript.count, 50, "M4A transcript too short")
+    }
+
+    func testTranscribeFromMP4Video() async throws {
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "de"
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded)
+
+        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
+        let mp4Transcript = try await transcribeFixture("two_speakers_de.mp4", engine: engine)
+
+        XCTAssertGreaterThan(wavTranscript.count, 50, "WAV transcript too short")
+        XCTAssertGreaterThan(mp4Transcript.count, 50, "MP4 transcript too short")
+    }
+
     // MARK: - Helpers
 
-    private func fixtureURL() -> URL {
+    private func fixtureURL(_ name: String = "two_speakers_de.wav") -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // Tests/
             .appendingPathComponent("Fixtures")
-            .appendingPathComponent("two_speakers_de.wav")
+            .appendingPathComponent(name)
     }
 }
