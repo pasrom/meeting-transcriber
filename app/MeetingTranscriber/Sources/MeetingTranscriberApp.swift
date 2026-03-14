@@ -12,6 +12,7 @@ struct MeetingTranscriberApp: App {
     @State private var watchLoop: WatchLoop?
     @State private var pipelineQueue = PipelineQueue()
     @State private var iconAnimationFrame = 0
+    @State private var updateChecker = UpdateChecker()
     @Environment(\.openWindow) private var openWindow
     private let notifications = NotificationManager.shared
     private let whisperKit = WhisperKitEngine()
@@ -45,6 +46,7 @@ struct MeetingTranscriberApp: App {
                 status: currentStatus,
                 isWatching: isWatching,
                 pipelineQueue: pipelineQueue,
+                updateChecker: updateChecker,
                 onStartStop: toggleWatching,
                 onRecordApp: { bringWindowToFront(id: "record-app") },
                 onStopManualRecording: watchLoop?.isManualRecording == true ? {
@@ -90,6 +92,9 @@ struct MeetingTranscriberApp: App {
                 whisperKit.language = settings.whisperLanguageOrNil
                 await whisperKit.loadModel()
             }
+            .task {
+                updateChecker.startPeriodicChecks(settings: settings)
+            }
         }
 
         Window("Name Speakers", id: "speaker-naming") {
@@ -106,7 +111,11 @@ struct MeetingTranscriberApp: App {
         .windowResizability(.contentSize)
 
         Window("Settings", id: "settings") {
-            SettingsView(settings: settings, whisperKitEngine: whisperKit)
+            SettingsView(
+                settings: settings,
+                whisperKitEngine: whisperKit,
+                updateChecker: updateChecker
+            )
         }
         .windowResizability(.contentSize)
 
