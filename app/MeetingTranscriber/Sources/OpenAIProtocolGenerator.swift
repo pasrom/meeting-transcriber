@@ -18,7 +18,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     }
 
     func generate(transcript: String, title: String, diarized: Bool) async throws -> String {
-        var systemPrompt = ProtocolGenerator.protocolPrompt
+        var systemPrompt = ProtocolGenerator.loadPrompt()
         if diarized {
             systemPrompt += ProtocolGenerator.diarizationNote
         }

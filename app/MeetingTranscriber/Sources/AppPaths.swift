@@ -22,4 +22,7 @@ enum AppPaths {
 
     /// Speaker voice profiles DB.
     static let speakersDB = dataDir.appendingPathComponent("speakers.json")
+
+    /// Custom protocol prompt file.
+    static let customPromptFile = dataDir.appendingPathComponent("protocol_prompt.md")
 }
