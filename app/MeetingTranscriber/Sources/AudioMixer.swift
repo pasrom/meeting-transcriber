@@ -273,15 +273,16 @@ struct AudioMixer {
     /// then falls back to AVAsset for video containers (MP4, MOV).
     static func loadAudioAsFloat32(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
         // Fast path: AVAudioFile handles all common audio formats
-        if let file = try? AVAudioFile(forReading: url) {
+        do {
+            let file = try AVAudioFile(forReading: url)
             let sampleRate = Int(file.processingFormat.sampleRate)
-            let samples = try loadAudioFileAsFloat32(url: url)
+            let samples = try readSamplesFromAudioFile(file)
             return (samples, sampleRate)
+        } catch {
+            // Fallback: AVAsset for video containers (MP4, MOV)
+            logger.info("AVAudioFile failed for \(url.lastPathComponent): \(error.localizedDescription), trying AVAsset fallback")
+            return try await loadAudioFromAVAsset(url: url)
         }
-
-        // Fallback: AVAsset for video containers (MP4, MOV)
-        logger.info("AVAudioFile failed, trying AVAsset fallback for \(url.lastPathComponent)")
-        return try await loadAudioFromAVAsset(url: url)
     }
 
     /// Extract audio from a video container using AVAsset.
@@ -310,7 +311,13 @@ struct AudioMixer {
             )
         }
 
+        // Pre-allocate based on asset duration to avoid repeated array reallocations
         var samples = [Float]()
+        let duration = try await asset.load(.duration)
+        let estimatedSamples = Int(CMTimeGetSeconds(duration) * 16000)
+        if estimatedSamples > 0 {
+            samples.reserveCapacity(estimatedSamples)
+        }
         while let sampleBuffer = output.copyNextSampleBuffer() {
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             let length = CMBlockBufferGetDataLength(blockBuffer)
@@ -346,6 +353,11 @@ struct AudioMixer {
     /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC, CAF.
     static func loadAudioFileAsFloat32(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
+        return try readSamplesFromAudioFile(file)
+    }
+
+    /// Read mono Float32 samples from an already-opened AVAudioFile.
+    private static func readSamplesFromAudioFile(_ file: AVAudioFile) throws -> [Float] {
         let format = file.processingFormat
         let frameCount = AVAudioFrameCount(file.length)
         guard frameCount > 0 else { return [] }

@@ -226,12 +226,13 @@ class PipelineQueue {
             var cachedSegments: [TimestampedSegment]?
             let isDualSource = appPath != nil && micPath != nil
             if let appAudioPath = appPath, let micAudioPath = micPath {
-                // Dual-source: resample both tracks to 16kHz
+                // Dual-source: resample both tracks to 16kHz concurrently
                 let app16k = workDir.appendingPathComponent("app_16k.wav")
-                try await AudioMixer.resampleFile(from: appAudioPath, to: app16k)
-
                 let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-                try await AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
+                async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
+                async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
+                try await appResample
+                try await micResample
 
                 // Use segment-returning method to cache for hybrid diarization
                 let segments = try await whisperKit.transcribeDualSourceSegments(
