@@ -10,6 +10,7 @@ enum BadgeKind: CaseIterable {
     case userAction
     case done
     case error
+    case updateAvailable
 
     /// Whether this badge kind uses animation.
     var isAnimated: Bool {
@@ -74,6 +75,9 @@ enum MenuBarIcon {
                 drawDiarizingAnimation(in: rect, frame: frame)
             case .processing:
                 drawProtocolAnimation(in: rect, frame: frame)
+            case .updateAvailable:
+                drawRecordingAnimation(in: rect, frame: 0)
+                drawUpdateArrow(in: rect)
             default:
                 drawRecordingAnimation(in: rect, frame: frame)
             }
@@ -167,6 +171,29 @@ enum MenuBarIcon {
             NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: barH),
                          xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
         }
+    }
+
+    // MARK: - Update Available (small upward arrow badge in bottom-right)
+
+    private static func drawUpdateArrow(in rect: NSRect) {
+        let size: CGFloat = 6.0
+        let margin: CGFloat = 0.5
+        let cx = rect.maxX - size / 2 - margin
+        let cy = rect.minY + size / 2 + margin
+
+        // Arrow pointing up: triangle + stem
+        let arrow = NSBezierPath()
+        // Triangle head
+        arrow.move(to: NSPoint(x: cx, y: cy + size / 2))          // top
+        arrow.line(to: NSPoint(x: cx - size / 3, y: cy + 0.5))    // bottom-left
+        arrow.line(to: NSPoint(x: cx + size / 3, y: cy + 0.5))    // bottom-right
+        arrow.close()
+        arrow.fill()
+
+        // Stem
+        let stemWidth: CGFloat = 1.4
+        let stem = NSRect(x: cx - stemWidth / 2, y: cy - size / 3, width: stemWidth, height: size / 2)
+        NSBezierPath(roundedRect: stem, xRadius: stemWidth / 2, yRadius: stemWidth / 2).fill()
     }
 
     // MARK: - Protocol Generation Animation (text lines appearing sequentially)
