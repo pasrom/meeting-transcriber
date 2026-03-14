@@ -285,7 +285,7 @@ struct AudioMixer {
     }
 
     /// Extract audio from a video container using AVAsset.
-    private static func loadAudioFromAVAsset(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
+    static func loadAudioFromAVAsset(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
         let asset = AVURLAsset(url: url)
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard let audioTrack = tracks.first else {
