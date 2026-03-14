@@ -9,8 +9,10 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
   Sources/
     MeetingTranscriberApp.swift  # @main, menu bar scene
     MenuBarView.swift      # Menu bar dropdown UI
+    MenuBarIcon.swift      # Animated waveform menu bar icon (reflects pipeline state)
     SettingsView.swift     # Settings window
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
+    AppPickerView.swift    # App picker for manual recording
     AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
     AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
     AXHelper.swift         # Shared accessibility API helper
@@ -23,7 +25,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     PipelineJob.swift      # Pipeline job model
-    ProtocolGenerator.swift   # Async Claude CLI protocol generation via Process
+    ProtocolGenerator.swift   # Protocol generation via Claude CLI + configurable prompt file
+    OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     DualSourceRecorder.swift  # App audio + mic recording (captures startTime in start())
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
@@ -33,12 +36,17 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     Permissions.swift      # Permission checks (mic, screen recording)
     ParticipantReader.swift # Reads meeting participants via accessibility
     MeetingPatterns.swift  # App-specific window title patterns
+    UpdateChecker.swift    # GitHub release update checker
+    Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
   Tests/                   # Swift tests (XCTest + ViewInspector)
     Fixtures/              # Test audio files (two_speakers_de.wav, etc.)
 tools/audiotap/            # CATapDescription-based app audio capture (Swift CLI)
   Package.swift            # SPM manifest (macOS 14+)
   Sources/main.swift       # PID → CATapDescription → stdout (interleaved float32)
+tools/meeting-simulator/   # Meeting simulator tool for testing
+  Package.swift
+  Sources/main.swift
 scripts/
   build_audiotap.sh        # Build audiotap Swift binary
   build_whisperkit.sh      # Build WhisperKit CLI tool
@@ -47,14 +55,19 @@ scripts/
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
+  generate_test_audio_10speakers.sh # Generate 10-speaker test WAV fixture (requires sox)
+  generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
 Casks/meeting-transcriber.rb # Homebrew Cask formula
 .github/workflows/
   ci.yml                   # CI: Swift tests
   release.yml              # CI: build DMG + GitHub Release on tag push
+  pr-labels.yml            # Automatic PR labeling
 docs/
   architecture-macos.md        # High-level architecture quick-reference
+  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
   plans/
     swift-architecture.md      # Detailed Swift pipeline architecture
+FluidAudio/                # Local FluidAudio package (CoreML speaker diarization)
 protocols/                 # Output directory (gitignored)
 speakers.json              # Saved voice profiles (gitignored, created at runtime)
 .env                       # Environment variables (gitignored)
@@ -63,8 +76,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: App audio + Mic → separate 16kHz WAVs → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI → Markdown protocol
-Single-source: Audio → 16kHz mono WAV → WhisperKit → FluidAudio diarization → Claude CLI → Markdown protocol
+Dual-source: App audio + Mic → separate 16kHz WAVs → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio → 16kHz mono WAV → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -144,6 +157,17 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
 - `SpeakerMatcher` stores speaker embeddings in `speakers.json` and matches via cosine similarity (multi-embedding, max 5 per speaker, confidence margin 0.10).
 - `DiarizationProvider` protocol enables mock injection in tests.
+
+**Protocol generation:**
+- `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
+- `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible`) selects the provider.
+- `ProtocolGenerator.loadPrompt()` loads custom prompt from `AppPaths.customPromptFile` (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`), falls back to built-in default.
+- `OpenAIProtocolGenerator` supports any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.).
+
+**UI:**
+- `MenuBarIcon` renders animated waveform reflecting pipeline state (idle, recording, transcribing, diarizing, protocol).
+- `AppPickerView` enables manual recording of any app via app picker.
+- `UpdateChecker` checks GitHub releases for newer versions, shows badge on menu bar icon.
 
 ## Critical Notes
 

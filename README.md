@@ -5,7 +5,7 @@
 A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 
 ```
-Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI → Markdown Protocol
+Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
 ```
 
 ---
@@ -18,7 +18,10 @@ Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → Fluid
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidAudio) via CoreML/ANE — no HuggingFace token needed
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
 - **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity
-- **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+- **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or OpenAI-compatible APIs (Ollama, LM Studio, etc.)
+- **Configurable protocol prompt** — Custom prompt file support (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`)
+- **Manual recording** — Record any app via app picker, not just detected meetings
+- **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
 - **Distribution** — Install via Homebrew Cask or build from source
 
@@ -27,9 +30,20 @@ Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → Fluid
 ## Prerequisites
 
 - macOS 14.2+ (required for CATapDescription audio capture)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed and logged in (`claude --version`)
+- **One of:**
+  - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed and logged in (`claude --version`)
+  - An OpenAI-compatible API endpoint (e.g. [Ollama](https://ollama.com), LM Studio, llama.cpp) — configure in Settings
 
 No HuggingFace token needed — FluidAudio downloads its models automatically on first run (~50 MB).
+
+### Using Ollama as provider
+
+1. Install Ollama: `brew install ollama`
+2. Pull a model: `ollama pull llama3.1` (or any model that fits your hardware)
+3. Start the server: `ollama serve` (runs on `http://localhost:11434` by default)
+4. In the app's Settings, select **OpenAI-Compatible API** as provider and set:
+   - **Endpoint:** `http://localhost:11434/v1/chat/completions`
+   - **Model:** `llama3.1` (must match the pulled model name)
 
 ---
 
@@ -105,11 +119,12 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 
 | Problem | Solution |
 |---------|----------|
-| `claude not found` | Install Claude Code CLI, run `claude --version` |
+| `claude not found` | Install Claude Code CLI, run `claude --version` — or switch to OpenAI-compatible provider in Settings |
 | No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
 | No app audio | Build audiotap: `./scripts/build_audiotap.sh` (macOS 14.2+ required) |
 | Empty transcription | Ensure audio is 16 kHz mono WAV — WhisperKit requires this format |
 | Models not loading | FluidAudio models download on first run; check internet connectivity |
+| OpenAI-compatible API connection failed | Verify the endpoint URL and that the local model server is running |
 
 ---
 
