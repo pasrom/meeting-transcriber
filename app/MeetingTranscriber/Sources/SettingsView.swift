@@ -3,6 +3,7 @@ import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+// swiftlint:disable:next type_body_length
 struct SettingsView: View {
     @Bindable var settings: AppSettings
 
@@ -47,6 +48,7 @@ struct SettingsView: View {
     ]
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
             Section("Apps to Watch") {
                 Toggle("Microsoft Teams", isOn: $settings.watchTeams)
@@ -54,6 +56,7 @@ struct SettingsView: View {
                 Toggle("Webex", isOn: $settings.watchWebex)
             }
 
+            // swiftlint:disable:next closure_body_length
             Section("Recording") {
                 HStack {
                     Text("Poll Interval")
@@ -61,7 +64,7 @@ struct SettingsView: View {
                     TextField("", value: $settings.pollInterval, format: .number)
                         .frame(width: 60)
                         .multilineTextAlignment(.trailing)
-                    Stepper("", value: $settings.pollInterval, in: 1...30, step: 0.5)
+                    Stepper("", value: $settings.pollInterval, in: 1 ... 30, step: 0.5)
                         .labelsHidden()
                     Text("seconds")
                         .foregroundStyle(.secondary)
@@ -73,7 +76,7 @@ struct SettingsView: View {
                     TextField("", value: $settings.endGrace, format: .number)
                         .frame(width: 60)
                         .multilineTextAlignment(.trailing)
-                    Stepper("", value: $settings.endGrace, in: 1...120, step: 1)
+                    Stepper("", value: $settings.endGrace, in: 1 ... 120, step: 1)
                         .labelsHidden()
                     Text("seconds")
                         .foregroundStyle(.secondary)
@@ -103,6 +106,7 @@ struct SettingsView: View {
                 }
             }
 
+            // swiftlint:disable:next closure_body_length
             Section("Transcription") {
                 Picker("Model", selection: $settings.whisperKitModel) {
                     ForEach(whisperKitModels, id: \.variant) { model in
@@ -124,6 +128,7 @@ struct SettingsView: View {
                     Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+
                 case .loading:
                     HStack {
                         ProgressView().controlSize(.small)
@@ -131,15 +136,18 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
                 case .loaded:
                     Label("Model ready", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.caption)
+
                 case .unloaded, .unloading:
                     Button("Load Model") {
                         whisperKitEngine.modelVariant = settings.whisperKitModel
                         Task { await whisperKitEngine.loadModel() }
                     }
+
                 case .prewarming, .prewarmed, .downloaded:
                     HStack {
                         ProgressView().controlSize(.small)
@@ -158,12 +166,13 @@ struct SettingsView: View {
                         Text(settings.numSpeakers == 0 ? "Auto" : "\(settings.numSpeakers)")
                             .frame(width: 40)
                             .multilineTextAlignment(.trailing)
-                        Stepper("", value: $settings.numSpeakers, in: 0...10)
+                        Stepper("", value: $settings.numSpeakers, in: 0 ... 10)
                             .labelsHidden()
                     }
                 }
             }
 
+            // swiftlint:disable:next closure_body_length
             Section("Protocol Generation") {
                 Picker("Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in
@@ -231,11 +240,12 @@ struct SettingsView: View {
 
                         if let result = connectionTestResult {
                             switch result {
-                            case .success(let msg):
+                            case let .success(msg):
                                 Label(msg, systemImage: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
                                     .font(.caption)
-                            case .failure(let msg):
+
+                            case let .failure(msg):
                                 Label(msg, systemImage: "xmark.circle.fill")
                                     .foregroundStyle(.red)
                                     .font(.caption)
@@ -249,6 +259,7 @@ struct SettingsView: View {
                     }
                 }
 
+                // swiftlint:disable:next closure_body_length
                 HStack {
                     Button("Edit Prompt") {
                         openCustomPrompt()
@@ -267,7 +278,7 @@ struct SettingsView: View {
                     .confirmationDialog(
                         "Reset protocol prompt to the built-in default?",
                         isPresented: $showResetPromptConfirmation,
-                        titleVisibility: .visible
+                        titleVisibility: .visible,
                     ) {
                         Button("Reset", role: .destructive) {
                             try? FileManager.default.removeItem(at: AppPaths.customPromptFile)
@@ -295,7 +306,7 @@ struct SettingsView: View {
                     detail: "Required for meeting detection (window titles)",
                     granted: screenRecordingOK,
                     help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
                 )
                 PermissionRow(
                     label: "Microphone",
@@ -305,7 +316,7 @@ struct SettingsView: View {
                     granted: micPermission == .authorized,
                     warning: micPermission == .notDetermined,
                     help: "System Settings → Privacy & Security → Microphone → enable Meeting Transcriber",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
                 )
                 PermissionRow(
                     label: "Accessibility",
@@ -313,7 +324,7 @@ struct SettingsView: View {
                     granted: accessibilityOK,
                     optional: true,
                     help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
                 )
 
                 Button("Refresh") {
@@ -323,6 +334,7 @@ struct SettingsView: View {
             }
 
             if let updateChecker {
+                // swiftlint:disable:next closure_body_length
                 Section("Updates") {
                     Toggle("Check for Updates", isOn: $settings.checkForUpdates)
 
@@ -333,7 +345,8 @@ struct SettingsView: View {
                     HStack {
                         Button {
                             updateChecker.checkNow(
-                                includePreReleases: settings.includePreReleases)
+                                includePreReleases: settings.includePreReleases,
+                            )
                         } label: {
                             HStack(spacing: 4) {
                                 if updateChecker.isChecking {
@@ -352,7 +365,7 @@ struct SettingsView: View {
                         } else if let update = updateChecker.availableUpdate {
                             Label(
                                 "Update available: \(update.tagName)",
-                                systemImage: "arrow.down.circle.fill"
+                                systemImage: "arrow.down.circle.fill",
                             )
                             .foregroundStyle(.blue)
                             .font(.caption)
@@ -369,7 +382,7 @@ struct SettingsView: View {
                         } label: {
                             Label(
                                 "Download \(update.tagName)",
-                                systemImage: "arrow.down.to.line"
+                                systemImage: "arrow.down.to.line",
                             )
                         }
                     }
@@ -423,7 +436,7 @@ struct SettingsView: View {
         accessibilityOK = AXIsProcessTrusted()
     }
 
-    private func testConnection() {
+    func testConnection() {
         testingConnection = true
         connectionTestResult = nil
         Task {
@@ -431,11 +444,11 @@ struct SettingsView: View {
             let result = await OpenAIProtocolGenerator.testConnection(
                 endpoint: settings.openAIEndpoint,
                 model: settings.openAIModel,
-                apiKey: apiKey
+                apiKey: apiKey,
             )
             testingConnection = false
             switch result {
-            case .success(let models):
+            case let .success(models):
                 availableModels = models
                 if !models.isEmpty {
                     // Auto-select first model if current selection is not available
@@ -446,7 +459,8 @@ struct SettingsView: View {
                 } else {
                     connectionTestResult = .success("Connected")
                 }
-            case .failure(let error):
+
+            case let .failure(error):
                 availableModels = []
                 connectionTestResult = .failure(error.localizedDescription)
             }
@@ -469,7 +483,7 @@ struct SettingsView: View {
     private func ensurePromptDirectory() {
         try? FileManager.default.createDirectory(
             at: AppPaths.customPromptFile.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
         )
     }
 
@@ -484,7 +498,7 @@ struct SettingsView: View {
 
     private func importCustomPrompt() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.plainText, .init(filenameExtension: "md")].compactMap { $0 }
+        panel.allowedContentTypes = [.plainText, .init(filenameExtension: "md")].compactMap(\.self)
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "Select a prompt file to import"
@@ -502,7 +516,7 @@ struct SettingsView: View {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .external],
             mediaType: .audio,
-            position: .unspecified
+            position: .unspecified,
         )
         audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
     }
@@ -534,6 +548,7 @@ struct PermissionRow: View {
     }
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         HStack {
             Image(systemName: icon)
                 .foregroundStyle(iconColor)

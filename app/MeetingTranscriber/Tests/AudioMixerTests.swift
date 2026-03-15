@@ -1,10 +1,8 @@
 import AVFoundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class AudioMixerTests: XCTestCase {
-
     // MARK: - Mix Tracks
 
     func testMixTracksEqualLength() {
@@ -46,8 +44,8 @@ final class AudioMixerTests: XCTestCase {
         // 1 second at 100 Hz = 100 samples
         var samples = [Float](repeating: 1.0, count: 100)
         let timeline = [
-            MuteTransition(timestamp: 10.0, isMuted: true),   // mute at t=10
-            MuteTransition(timestamp: 10.5, isMuted: false),  // unmute at t=10.5
+            MuteTransition(timestamp: 10.0, isMuted: true), // mute at t=10
+            MuteTransition(timestamp: 10.5, isMuted: false), // unmute at t=10.5
         ]
 
         AudioMixer.applyMuteMask(
@@ -55,15 +53,15 @@ final class AudioMixerTests: XCTestCase {
             timeline: timeline,
             sampleRate: 100,
             micDelay: 0,
-            recordingStart: 10.0
+            recordingStart: 10.0,
         )
 
         // First 50 samples (0.0s-0.5s) should be zeroed (muted)
-        for i in 0..<50 {
+        for i in 0 ..< 50 {
             XCTAssertEqual(samples[i], 0.0, "Sample \(i) should be muted")
         }
         // Remaining should be untouched
-        for i in 50..<100 {
+        for i in 50 ..< 100 {
             XCTAssertEqual(samples[i], 1.0, "Sample \(i) should be untouched")
         }
     }
@@ -71,14 +69,14 @@ final class AudioMixerTests: XCTestCase {
     func testMuteMaskStillMutedAtEnd() {
         var samples = [Float](repeating: 1.0, count: 100)
         let timeline = [
-            MuteTransition(timestamp: 5.0, isMuted: true),  // mute, never unmuted
+            MuteTransition(timestamp: 5.0, isMuted: true), // mute, never unmuted
         ]
 
         AudioMixer.applyMuteMask(
             samples: &samples,
             timeline: timeline,
             sampleRate: 100,
-            recordingStart: 5.0
+            recordingStart: 5.0,
         )
 
         // All samples should be zeroed
@@ -98,7 +96,7 @@ final class AudioMixerTests: XCTestCase {
             timeline: timeline,
             sampleRate: 100,
             micDelay: 20.0,
-            recordingStart: 10.0
+            recordingStart: 10.0,
         )
 
         // All samples should remain untouched (mute range is entirely negative)
@@ -118,16 +116,16 @@ final class AudioMixerTests: XCTestCase {
             timeline: timeline,
             sampleRate: 100,
             micDelay: 0.5,
-            recordingStart: 5.0
+            recordingStart: 5.0,
         )
 
         // Mute range: (5.0 - 5.0 - 0.5) to (5.8 - 5.0 - 0.5) = -0.5s to 0.3s
         // Clamped start to 0; end ≈ sample 29-30 (floating point)
         // Verify most of the range is muted and tail is untouched
-        for i in 0..<29 {
+        for i in 0 ..< 29 {
             XCTAssertEqual(samples[i], 0.0, "Sample \(i) should be muted")
         }
-        for i in 31..<100 {
+        for i in 31 ..< 100 {
             XCTAssertEqual(samples[i], 1.0, "Sample \(i) should be untouched")
         }
     }
@@ -137,7 +135,7 @@ final class AudioMixerTests: XCTestCase {
         AudioMixer.applyMuteMask(
             samples: &samples,
             timeline: [],
-            sampleRate: 48000
+            sampleRate: 48000,
         )
         XCTAssertEqual(samples, [1.0, 2.0, 3.0])
     }
@@ -145,13 +143,13 @@ final class AudioMixerTests: XCTestCase {
     // MARK: - Echo Suppression
 
     func testEchoSuppressionSilencesOverlap() {
-        let sampleRate = 1000  // 20ms window = 20 samples
+        let sampleRate = 1000 // 20ms window = 20 samples
         let windowSize = 20
 
         // App has energy in first window
         var appSamples = [Float](repeating: 0, count: 100)
-        for i in 0..<windowSize {
-            appSamples[i] = 0.5  // loud
+        for i in 0 ..< windowSize {
+            appSamples[i] = 0.5 // loud
         }
 
         // Mic has energy everywhere
@@ -161,25 +159,25 @@ final class AudioMixerTests: XCTestCase {
             appSamples: appSamples,
             micSamples: &micSamples,
             sampleRate: sampleRate,
-            threshold: 0.01
+            threshold: 0.01,
         )
 
         // First window of mic should be suppressed (app has energy)
-        for i in 0..<windowSize {
+        for i in 0 ..< windowSize {
             XCTAssertEqual(micSamples[i], 0.0, "Sample \(i) should be suppressed")
         }
     }
 
     func testEchoSuppressionNoAppEnergy() {
         let sampleRate = 1000
-        let appSamples = [Float](repeating: 0, count: 100)  // silent
+        let appSamples = [Float](repeating: 0, count: 100) // silent
         var micSamples = [Float](repeating: 0.5, count: 100)
 
         AudioMixer.suppressEcho(
             appSamples: appSamples,
             micSamples: &micSamples,
             sampleRate: sampleRate,
-            threshold: 0.01
+            threshold: 0.01,
         )
 
         // Mic should be untouched
@@ -211,11 +209,11 @@ final class AudioMixerTests: XCTestCase {
         let sampleRate = 48000
         let targetRate = 16000
         let freq: Float = 440
-        let duration: Float = 0.01  // 10ms
+        let duration: Float = 0.01 // 10ms
         let sampleCount = Int(Float(sampleRate) * duration)
 
         var input = [Float](repeating: 0, count: sampleCount)
-        for i in 0..<sampleCount {
+        for i in 0 ..< sampleCount {
             input[i] = sin(2 * .pi * freq * Float(i) / Float(sampleRate))
         }
 
@@ -239,7 +237,7 @@ final class AudioMixerTests: XCTestCase {
 
         XCTAssertEqual(loaded.count, original.count)
         // 16-bit quantization introduces small error
-        for i in 0..<original.count {
+        for i in 0 ..< original.count {
             XCTAssertEqual(loaded[i], original[i], accuracy: 0.001, "Sample \(i) mismatch")
         }
     }
@@ -249,13 +247,13 @@ final class AudioMixerTests: XCTestCase {
         let wavURL = tmpDir.appendingPathComponent("test_create_\(UUID().uuidString).wav")
         defer { try? FileManager.default.removeItem(at: wavURL) }
 
-        let samples = [Float](repeating: 0, count: 48000)  // 1 second silence
+        let samples = [Float](repeating: 0, count: 48000) // 1 second silence
         try AudioMixer.saveWAV(samples: samples, sampleRate: 48000, url: wavURL)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: wavURL.path))
         let attrs = try FileManager.default.attributesOfItem(atPath: wavURL.path)
         let size = attrs[.size] as? Int ?? 0
-        XCTAssertGreaterThan(size, 44)  // WAV header is 44 bytes minimum
+        XCTAssertGreaterThan(size, 44) // WAV header is 44 bytes minimum
     }
 
     // MARK: - Multi-format Loading
@@ -271,7 +269,7 @@ final class AudioMixerTests: XCTestCase {
         let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: wavURL)
         XCTAssertEqual(sampleRate, 16000)
         XCTAssertEqual(samples.count, original.count)
-        for i in 0..<original.count {
+        for i in 0 ..< original.count {
             XCTAssertEqual(samples[i], original[i], accuracy: 0.001, "Sample \(i) mismatch")
         }
     }
@@ -287,7 +285,7 @@ final class AudioMixerTests: XCTestCase {
         let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: wavURL)
         XCTAssertEqual(sampleRate, 44100)
         XCTAssertEqual(samples.count, original.count)
-        for i in 0..<original.count {
+        for i in 0 ..< original.count {
             XCTAssertEqual(samples[i], original[i], accuracy: 0.001, "Sample \(i) mismatch")
         }
     }

@@ -1,8 +1,7 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class ParticipantReaderTests: XCTestCase {
-
     // MARK: - Basic Filtering
 
     func testFilterValidNames() {

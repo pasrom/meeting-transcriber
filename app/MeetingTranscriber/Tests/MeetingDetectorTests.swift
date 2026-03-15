@@ -1,6 +1,6 @@
-import XCTest
-
+// swiftlint:disable single_test_class
 @testable import MeetingTranscriber
+import XCTest
 
 // MARK: - Test Helpers
 
@@ -9,7 +9,7 @@ private func makeWindow(
     name: String,
     pid: Int32 = 1234,
     width: CGFloat = 800,
-    height: CGFloat = 600
+    height: CGFloat = 600,
 ) -> [String: Any] {
     [
         "kCGWindowOwnerName": owner,
@@ -22,7 +22,7 @@ private func makeWindow(
 /// Create a MeetingDetector with AX meeting verification bypassed (for unit tests).
 private func makeDetector(
     patterns: [AppMeetingPattern],
-    confirmationCount: Int = 1
+    confirmationCount: Int = 1,
 ) -> MeetingDetector {
     let detector = MeetingDetector(patterns: patterns, confirmationCount: confirmationCount)
     detector.meetingVerifier = { _ in true }
@@ -118,7 +118,7 @@ final class MeetingDetectorTests: XCTestCase {
         detector.windowListProvider = {
             [makeWindow(
                 owner: "Microsoft Teams",
-                name: "Echo | e.battery systems GmbH | user@company.com | Microsoft Teams"
+                name: "Echo | e.battery systems GmbH | user@company.com | Microsoft Teams",
             )]
         }
         // Echo test calls are allowed for testing purposes
@@ -131,7 +131,7 @@ final class MeetingDetectorTests: XCTestCase {
             [makeWindow(
                 owner: "Microsoft Teams",
                 name: "Sprint Review | Microsoft Teams",
-                width: 50, height: 50
+                width: 50, height: 50,
             )]
         }
         XCTAssertNil(detector.checkOnce())
@@ -169,9 +169,9 @@ final class MeetingDetectorTests: XCTestCase {
 
         // Window reappears — needs full confirmationCount again
         detector.windowListProvider = { meetingWindows }
-        XCTAssertNil(detector.checkOnce())  // count=1
-        XCTAssertNil(detector.checkOnce())  // count=2
-        XCTAssertNotNil(detector.checkOnce())  // count=3
+        XCTAssertNil(detector.checkOnce()) // count=1
+        XCTAssertNil(detector.checkOnce()) // count=2
+        XCTAssertNotNil(detector.checkOnce()) // count=3
     }
 
     func testDetectsZoomMeeting() {
@@ -214,8 +214,8 @@ final class MeetingDetectorTests: XCTestCase {
         let detector = makeDetector(patterns: [.teams, .zoom])
         detector.windowListProvider = {
             [
-                makeWindow(owner: "Microsoft Teams", name: "Microsoft Teams"),  // idle
-                makeWindow(owner: "zoom.us", name: "Zoom Meeting"),  // active
+                makeWindow(owner: "Microsoft Teams", name: "Microsoft Teams"), // idle
+                makeWindow(owner: "zoom.us", name: "Zoom Meeting"), // active
             ]
         }
         let result = detector.checkOnce()
@@ -223,24 +223,24 @@ final class MeetingDetectorTests: XCTestCase {
         XCTAssertEqual(result?.pattern.appName, "Zoom")
     }
 
-    func testIsMeetingActiveTrue() {
+    func testIsMeetingActiveTrue() throws {
         let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
         detector.windowListProvider = { windows }
-        let meeting = detector.checkOnce()!
+        let meeting = try XCTUnwrap(detector.checkOnce())
 
         XCTAssertTrue(detector.isMeetingActive(meeting))
     }
 
-    func testIsMeetingActiveFalse() {
+    func testIsMeetingActiveFalse() throws {
         let detector = makeDetector(patterns: [.teams])
         let windows = [
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
         detector.windowListProvider = { windows }
-        let meeting = detector.checkOnce()!
+        let meeting = try XCTUnwrap(detector.checkOnce())
 
         // Meeting window gone, only idle window
         detector.windowListProvider = {
@@ -255,12 +255,12 @@ final class MeetingDetectorTests: XCTestCase {
             makeWindow(owner: "Microsoft Teams", name: "Sprint Review | Microsoft Teams"),
         ]
         detector.windowListProvider = { windows }
-        XCTAssertNil(detector.checkOnce())  // count=1
+        XCTAssertNil(detector.checkOnce()) // count=1
 
         detector.reset()
 
         // After reset, needs full confirmation again
-        XCTAssertNil(detector.checkOnce())  // count=1
+        XCTAssertNil(detector.checkOnce()) // count=1
     }
 
     func testCustomPattern() {
@@ -268,7 +268,7 @@ final class MeetingDetectorTests: XCTestCase {
             appName: "Custom App",
             ownerNames: ["CustomApp"],
             meetingPatterns: [#"^Meeting:.*"#],
-            idlePatterns: [#"^Custom App$"#]
+            idlePatterns: [#"^Custom App$"#],
         )
         let detector = makeDetector(patterns: [custom])
         detector.windowListProvider = {
@@ -284,7 +284,7 @@ final class MeetingDetectorTests: XCTestCase {
         detector.windowListProvider = {
             [makeWindow(
                 owner: "Microsoft Teams (work or school)",
-                name: "Standup | Microsoft Teams"
+                name: "Standup | Microsoft Teams",
             )]
         }
         let result = detector.checkOnce()

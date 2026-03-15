@@ -3,8 +3,8 @@ import WhisperKit
 
 /// A transcribed segment with timestamps and optional speaker label.
 struct TimestampedSegment {
-    let start: TimeInterval  // seconds
-    let end: TimeInterval    // seconds
+    let start: TimeInterval // seconds
+    let end: TimeInterval // seconds
     let text: String
     var speaker: String = ""
 }
@@ -55,12 +55,11 @@ final class WhisperKitEngine {
                 // Step 1: Download with progress tracking
                 let modelFolder = try await WhisperKit.download(
                     variant: modelVariant,
-                    progressCallback: { progress in
-                        Task {
-                            self.downloadProgress = progress.fractionCompleted
-                        }
+                ) { progress in
+                    Task {
+                        self.downloadProgress = progress.fractionCompleted
                     }
-                )
+                }
 
                 // Step 2: Init with local model folder (skips download)
                 modelState = .loading
@@ -68,8 +67,8 @@ final class WhisperKitEngine {
                 pipe = try await WhisperKit(
                     WhisperKitConfig(
                         model: modelVariant,
-                        modelFolder: modelFolder.path()
-                    )
+                        modelFolder: modelFolder.path(),
+                    ),
                 )
                 modelState = .loaded
             } catch {
@@ -81,11 +80,6 @@ final class WhisperKitEngine {
         }
         loadingTask = task
         await task.value
-    }
-
-    func unloadModel() {
-        pipe = nil
-        modelState = .unloaded
     }
 
     /// Ensure model is loaded, loading it if necessary.
@@ -115,12 +109,12 @@ final class WhisperKitEngine {
 
         let options = DecodingOptions(
             language: language,
-            wordTimestamps: false
+            wordTimestamps: false,
         )
 
         let results = await pipe.transcribe(
             audioPaths: [audioPath.path],
-            decodeOptions: options
+            decodeOptions: options,
         )
 
         guard let firstResult = results.first, let transcriptionResults = firstResult else {
@@ -129,7 +123,7 @@ final class WhisperKitEngine {
 
         var segments: [TimestampedSegment] = []
         var lastText = ""
-        for segment in transcriptionResults.flatMap({ $0.segments }) {
+        for segment in transcriptionResults.flatMap(\.segments) {
             let text = Self.stripWhisperTokens(segment.text).trimmingCharacters(in: .whitespaces)
             // Filter hallucinations: skip consecutive identical text
             if text.isEmpty || text == lastText { continue }
@@ -137,7 +131,7 @@ final class WhisperKitEngine {
             segments.append(TimestampedSegment(
                 start: TimeInterval(segment.start),
                 end: TimeInterval(segment.end),
-                text: text
+                text: text,
             ))
         }
         return segments
@@ -151,7 +145,7 @@ final class WhisperKitEngine {
         appAudio: URL,
         micAudio: URL,
         micDelay: TimeInterval = 0,
-        micLabel: String = "Me"
+        micLabel: String = "Me",
     ) async throws -> [TimestampedSegment] {
         // Transcribe both tracks
         var appSegments = try await transcribeSegments(audioPath: appAudio)
@@ -164,36 +158,21 @@ final class WhisperKitEngine {
                     start: seg.start + micDelay,
                     end: seg.end + micDelay,
                     text: seg.text,
-                    speaker: seg.speaker
+                    speaker: seg.speaker,
                 )
             }
         }
 
         // Label speakers
-        for i in appSegments.indices { appSegments[i].speaker = "Remote" }
-        for i in micSegments.indices { micSegments[i].speaker = micLabel }
+        for i in appSegments.indices {
+            appSegments[i].speaker = "Remote"
+        }
+        for i in micSegments.indices {
+            micSegments[i].speaker = micLabel
+        }
 
         // Merge by start timestamp
         return Self.mergeSegments(appSegments, micSegments)
-    }
-
-    /// Transcribe app and mic audio separately, then merge by timestamp.
-    ///
-    /// Labels mic segments with `micLabel` and app segments as "Remote".
-    /// Returns formatted string with `[MM:SS] Speaker: text` lines.
-    func transcribeDualSource(
-        appAudio: URL,
-        micAudio: URL,
-        micDelay: TimeInterval = 0,
-        micLabel: String = "Me"
-    ) async throws -> String {
-        let segments = try await transcribeDualSourceSegments(
-            appAudio: appAudio,
-            micAudio: micAudio,
-            micDelay: micDelay,
-            micLabel: micLabel
-        )
-        return segments.map(\.formattedLine).joined(separator: "\n")
     }
 
     /// Merge two segment arrays sorted by start timestamp.

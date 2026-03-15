@@ -1,0 +1,163 @@
+# SwiftLint configuration for Meeting Transcriber
+
+included:
+  - app/MeetingTranscriber/Sources
+  - app/MeetingTranscriber/Tests
+  - tools/audiotap/Sources
+  - tools/meeting-simulator/Sources
+  - scripts/generate_menu_bar_gifs.swift
+
+excluded:
+  - FluidAudio
+  - .build
+  - app/MeetingTranscriber/.build
+  - tools/audiotap/.build
+  - tools/meeting-simulator/.build
+
+opt_in_rules:
+  - anonymous_argument_in_multiline_closure
+  - async_without_await
+  - attributes
+  - balanced_xctest_lifecycle
+  - closure_body_length
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - comma_inheritance
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - contains_over_range_nil_comparison
+  - convenience_type
+  - direct_return
+  - discarded_notification_center_observer
+  - discouraged_none_name
+  - discouraged_optional_boolean
+  - discouraged_optional_collection
+  - empty_collection_literal
+  - empty_count
+  - empty_string
+  - empty_xctest_method
+  - fatal_error_message
+  - file_name
+  - final_test_case
+  - first_where
+  - flatmap_over_map_reduce
+  - force_unwrapping
+  - function_default_parameter_at_end
+  - identical_operands
+  - implicit_return
+  - implicitly_unwrapped_optional
+  - joined_default_parameter
+  - last_where
+  - legacy_multiple
+  - legacy_objc_type
+  - local_doc_comment
+  - lower_acl_than_parent
+  - modifier_order
+  - non_overridable_class_declaration
+  - operator_usage_whitespace
+  - optional_enum_case_matching
+  - overridden_super_call
+  - period_spacing
+  - prefer_key_path
+  - prefer_self_in_static_references
+  - prefer_self_type_over_type_of_self
+  - prefer_zero_over_explicit_init
+  - private_swiftui_state
+  - raw_value_for_camel_cased_codable_enum
+  - reduce_into
+  - redundant_nil_coalescing
+  - redundant_type_annotation
+  - return_value_from_void_function
+  - self_binding
+  - shorthand_argument
+  - shorthand_optional_binding
+  - single_test_class
+  - sorted_first_last
+  - sorted_imports
+  - superfluous_else
+  - test_case_accessibility
+  - toggle_bool
+  - trailing_closure
+  - unhandled_throwing_task
+  - unneeded_escaping
+  - unneeded_parentheses_in_closure_argument
+  - unneeded_throws_rethrows
+  - unused_parameter
+  - unowned_variable_capture
+  - vertical_whitespace_between_cases
+  - vertical_whitespace_closing_braces
+  - vertical_whitespace_opening_braces
+  - weak_delegate
+  - xct_specific_matcher
+
+analyzer_rules:
+  - unused_declaration
+  # unused_import omitted: results differ between xcodebuild (CI) and swift build (local)
+  # due to implicit framework linking in Xcode SDK. Run locally with scripts/lint.sh if needed.
+
+disabled_rules:
+  - trailing_comma        # Project convention — intentional trailing commas (99 occurrences)
+  - todo                  # TODOs are tracked intentionally
+
+identifier_name:
+  min_length:
+    warning: 1
+  max_length:
+    warning: 60
+  excluded:
+    - id
+
+type_name:
+  min_length:
+    warning: 3
+  max_length:
+    warning: 50
+
+line_length:
+  warning: 160
+  error: 250
+  ignores_urls: true
+  ignores_comments: true
+  ignores_interpolated_strings: true
+
+file_length:
+  warning: 600
+  error: 1000
+
+type_body_length:
+  warning: 400
+  error: 600
+
+function_body_length:
+  warning: 60
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+
+large_tuple:
+  warning: 4
+  error: 6
+
+force_try:
+  severity: warning
+
+force_cast:
+  severity: warning
+
+force_unwrapping:
+  severity: warning
+
+nesting:
+  type_level: 2
+  function_level: 3
+
+file_name:
+  excluded:
+    - MeetingPatterns.swift
+    - TestHelpers.swift
+    - WhisperKitDualSourceTests.swift
+    - main.swift

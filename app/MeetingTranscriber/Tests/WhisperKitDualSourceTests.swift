@@ -1,10 +1,8 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class TimestampedSegmentTests: XCTestCase {
-
     // MARK: - Timestamp Formatting
 
     func testFormattedTimestampShort() {
@@ -105,8 +103,12 @@ final class TimestampedSegmentTests: XCTestCase {
             TimestampedSegment(start: 3, end: 6, text: "M1"),
             TimestampedSegment(start: 9, end: 12, text: "M2"),
         ]
-        for i in appSegs.indices { appSegs[i].speaker = "Remote" }
-        for i in micSegs.indices { micSegs[i].speaker = "Me" }
+        for i in appSegs.indices {
+            appSegs[i].speaker = "Remote"
+        }
+        for i in micSegs.indices {
+            micSegs[i].speaker = "Me"
+        }
 
         let merged = WhisperKitEngine.mergeSegments(appSegs, micSegs)
         XCTAssertEqual(merged.map(\.speaker), ["Remote", "Me", "Remote", "Me"])
@@ -134,7 +136,7 @@ final class TimestampedSegmentTests: XCTestCase {
         appSegments: [TimestampedSegment],
         micSegments: [TimestampedSegment],
         micDelay: TimeInterval = 0,
-        micLabel: String = "Me"
+        micLabel: String = "Me",
     ) -> [TimestampedSegment] {
         var app = appSegments
         var mic = micSegments
@@ -146,14 +148,18 @@ final class TimestampedSegmentTests: XCTestCase {
                     start: seg.start + micDelay,
                     end: seg.end + micDelay,
                     text: seg.text,
-                    speaker: seg.speaker
+                    speaker: seg.speaker,
                 )
             }
         }
 
         // Label speakers
-        for i in app.indices { app[i].speaker = "Remote" }
-        for i in mic.indices { mic[i].speaker = micLabel }
+        for i in app.indices {
+            app[i].speaker = "Remote"
+        }
+        for i in mic.indices {
+            mic[i].speaker = micLabel
+        }
 
         return WhisperKitEngine.mergeSegments(app, mic)
     }
@@ -176,7 +182,7 @@ final class TimestampedSegmentTests: XCTestCase {
         let micSegs = [TimestampedSegment(start: 1, end: 6, text: "Mic")]
 
         let result = simulateDualSourceSegments(
-            appSegments: appSegs, micSegments: micSegs, micLabel: "Alice"
+            appSegments: appSegs, micSegments: micSegs, micLabel: "Alice",
         )
 
         XCTAssertEqual(result[1].speaker, "Alice")
@@ -187,7 +193,7 @@ final class TimestampedSegmentTests: XCTestCase {
         let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Mic")]
 
         let result = simulateDualSourceSegments(
-            appSegments: appSegs, micSegments: micSegs, micDelay: 3.0
+            appSegments: appSegs, micSegments: micSegs, micDelay: 3.0,
         )
 
         // App at 0, mic shifted to 3
@@ -204,7 +210,7 @@ final class TimestampedSegmentTests: XCTestCase {
         let micSegs = [TimestampedSegment(start: 7, end: 12, text: "Mic")]
 
         let result = simulateDualSourceSegments(
-            appSegments: appSegs, micSegments: micSegs, micDelay: -2.0
+            appSegments: appSegs, micSegments: micSegs, micDelay: -2.0,
         )
 
         // Mic shifted from 7 to 5 — same start as app
@@ -219,7 +225,7 @@ final class TimestampedSegmentTests: XCTestCase {
         let micSegs = [TimestampedSegment(start: 3, end: 8, text: "Mic")]
 
         let result = simulateDualSourceSegments(
-            appSegments: [], micSegments: micSegs, micDelay: 0
+            appSegments: [], micSegments: micSegs, micDelay: 0,
         )
 
         XCTAssertEqual(result[0].start, 3.0)

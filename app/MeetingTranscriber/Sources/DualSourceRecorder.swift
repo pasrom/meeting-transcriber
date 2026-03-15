@@ -12,7 +12,7 @@ struct RecordingResult {
     let micPath: URL?
     let micDelay: TimeInterval
     let muteTimeline: [MuteTransition]
-    let recordingStart: TimeInterval  // ProcessInfo.systemUptime
+    let recordingStart: TimeInterval // ProcessInfo.systemUptime
 }
 
 /// Abstraction for recording, enabling mock injection in tests.
@@ -123,7 +123,7 @@ class DualSourceRecorder: RecordingProvider {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: recordingsDir,
-            includingPropertiesForKeys: nil
+            includingPropertiesForKeys: nil,
         ) else { return }
 
         for file in entries where file.lastPathComponent.hasSuffix("_app_raw.tmp") {
@@ -136,7 +136,7 @@ class DualSourceRecorder: RecordingProvider {
     func start(
         appPID: pid_t,
         noMic: Bool = false,
-        micDeviceUID: String? = nil
+        micDeviceUID: String? = nil,
     ) throws {
         guard !isRecording else { return }
 
@@ -184,12 +184,14 @@ class DualSourceRecorder: RecordingProvider {
         // Write PID file for orphan detection on crash recovery
         let pidFile = Self.pidFilePath
         try? FileManager.default.createDirectory(
-            at: pidFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+            at: pidFile.deletingLastPathComponent(), withIntermediateDirectories: true,
+        )
         try? String(proc.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8)
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
 
         // Stream stdout to temp file in background
+        // swiftlint:disable:next force_unwrapping
         let writeHandle = appAudioFileHandle!
         readerTask = Task.detached {
             let handle = stdoutPipe.fileHandleForReading
@@ -212,7 +214,7 @@ class DualSourceRecorder: RecordingProvider {
     }
 
     /// Stop recording and produce a mixed WAV.
-    func stop() throws -> RecordingResult {
+    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length cyclomatic_complexity
         guard isRecording else {
             throw RecorderError.notRecording
         }
@@ -287,9 +289,9 @@ class DualSourceRecorder: RecordingProvider {
             raw.withUnsafeBytes { ptr in
                 if let base = ptr.baseAddress {
                     floats.withUnsafeMutableBufferPointer { dest in
-                        dest.baseAddress!.initialize(
+                        dest.baseAddress!.initialize( // swiftlint:disable:this force_unwrapping
                             from: base.assumingMemoryBound(to: Float.self),
-                            count: floatCount
+                            count: floatCount,
                         )
                     }
                 }
@@ -299,7 +301,7 @@ class DualSourceRecorder: RecordingProvider {
             if appChannels == 2 && floats.count >= 2 {
                 let n = floats.count - (floats.count % 2)
                 var mono = [Float](repeating: 0, count: n / 2)
-                for i in 0..<mono.count {
+                for i in 0 ..< mono.count {
                     mono[i] = (floats[i * 2] + floats[i * 2 + 1]) / 2
                 }
                 appSamples = mono
@@ -358,7 +360,7 @@ class DualSourceRecorder: RecordingProvider {
                 micDelay: micDelay,
                 muteTimeline: muteTimeline,
                 recordingStart: recordingStart,
-                sampleRate: recordRate
+                sampleRate: recordRate,
             )
         } else if !appSamples.isEmpty {
             try AudioMixer.saveWAV(samples: appSamples, sampleRate: recordRate, url: mixPath)
@@ -376,7 +378,7 @@ class DualSourceRecorder: RecordingProvider {
             micPath: micPath,
             micDelay: micDelay,
             muteTimeline: muteTimeline,
-            recordingStart: recordingStart
+            recordingStart: recordingStart,
         )
     }
 

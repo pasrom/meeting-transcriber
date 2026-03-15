@@ -11,7 +11,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
+  lint:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install tools
+        run: brew install swiftformat swiftlint
+      - name: SwiftFormat
+        run: |
+          swiftformat --dryrun --lint \
+            app/MeetingTranscriber/Sources \
+            app/MeetingTranscriber/Tests \
+            tools/audiotap/Sources \
+            tools/meeting-simulator/Sources \
+            scripts/generate_menu_bar_gifs.swift
+      - name: SwiftLint
+        run: swiftlint lint --strict --reporter github-actions-logging
+
+  analyze:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Build & Analyze
+        run: |
+          cd app/MeetingTranscriber
+          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' build-for-testing 2>&1 | tee /tmp/xcodebuild.log
+          cd "$GITHUB_WORKSPACE"
+          swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
+
+  test:
     runs-on: macos-26
     timeout-minutes: 30
     steps:

@@ -1,12 +1,10 @@
+@testable import MeetingTranscriber
 import ViewInspector
 import XCTest
 
-@testable import MeetingTranscriber
-
 @MainActor
 final class AppPickerViewTests: XCTestCase {
-
-    struct MockAppsProvider: RunningAppsProvider {
+    private struct MockAppsProvider: RunningAppsProvider {
         let apps: [RunningApp]
 
         func runningApps() -> [RunningApp] {
@@ -25,7 +23,7 @@ final class AppPickerViewTests: XCTestCase {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
             onStartRecording: { _, _, _ in },
-            onCancel: {}
+            onCancel: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Start Recording"))
@@ -35,7 +33,7 @@ final class AppPickerViewTests: XCTestCase {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
             onStartRecording: { _, _, _ in },
-            onCancel: {}
+            onCancel: {},
         )
         let body = try sut.inspect()
         let button = try body.find(button: "Start Recording")
@@ -46,7 +44,7 @@ final class AppPickerViewTests: XCTestCase {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
             onStartRecording: { _, _, _ in },
-            onCancel: {}
+            onCancel: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Cancel"))
@@ -57,7 +55,7 @@ final class AppPickerViewTests: XCTestCase {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
             onStartRecording: { _, _, _ in },
-            onCancel: { called = true }
+            onCancel: { called = true },
         )
         let body = try sut.inspect()
         try body.find(button: "Cancel").tap()
@@ -70,7 +68,7 @@ final class AppPickerViewTests: XCTestCase {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
             onStartRecording: { _, _, _ in },
-            onCancel: {}
+            onCancel: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Record App"))

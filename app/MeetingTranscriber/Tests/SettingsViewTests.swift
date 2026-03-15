@@ -1,11 +1,9 @@
+@testable import MeetingTranscriber
 import ViewInspector
 import XCTest
 
-@testable import MeetingTranscriber
-
 @MainActor
 final class SettingsViewTests: XCTestCase {
-
     // MARK: - View rendering
 
     func testViewRendersWithDefaults() throws {
@@ -125,7 +123,7 @@ final class SettingsViewTests: XCTestCase {
         let sut = SettingsView(
             settings: settings,
             whisperKitEngine: WhisperKitEngine(),
-            updateChecker: checker
+            updateChecker: checker,
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Check for Updates"))
@@ -146,7 +144,7 @@ final class SettingsViewTests: XCTestCase {
         let sut = SettingsView(
             settings: settings,
             whisperKitEngine: WhisperKitEngine(),
-            updateChecker: checker
+            updateChecker: checker,
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Include Pre-Releases"))

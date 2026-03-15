@@ -1,20 +1,17 @@
-import Foundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class NotificationContentTests: XCTestCase {
-
     private func makeStatus(
         state: TranscriberState,
         meeting: MeetingInfo? = nil,
         protocolPath: String? = nil,
-        error: String? = nil
+        error: String? = nil,
     ) -> TranscriberStatus {
         TranscriberStatus(
             version: 1, timestamp: "2026-03-03T10:00:00",
             state: state, detail: "", meeting: meeting,
-            protocolPath: protocolPath, error: error, audioPath: nil, pid: nil
+            protocolPath: protocolPath, error: error, audioPath: nil, pid: nil,
         )
     }
 

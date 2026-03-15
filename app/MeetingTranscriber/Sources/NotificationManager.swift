@@ -44,7 +44,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
-            trigger: nil
+            trigger: nil,
         )
 
         UNUserNotificationCenter.current().add(request)
@@ -54,23 +54,27 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     /// Returns nil if no notification should be sent.
     static func notificationContent(
         for state: TranscriberState,
-        status: TranscriberStatus
+        status: TranscriberStatus,
     ) -> (title: String, body: String)? {
         switch state {
         case .recording:
             let meetingTitle = status.meeting?.title ?? "Unknown"
             let app = status.meeting?.app ?? ""
             return ("Meeting Detected", "Recording: \(meetingTitle) (\(app))")
+
         case .protocolReady:
             let meetingTitle = status.meeting?.title ?? "Meeting"
             return ("Protocol Ready", "Protocol for \"\(meetingTitle)\" is ready.")
+
         case .waitingForSpeakerNames:
             return ("Name Speakers", "Speakers detected — open the app to assign names")
+
         case .error:
             if let error = status.error {
                 return ("Transcriber Error", error)
             }
             return nil
+
         default:
             return nil
         }
@@ -78,9 +82,9 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
 
     /// Handle state transitions and send appropriate notifications.
     func handleTransition(
-        from oldState: TranscriberState?,
+        from _: TranscriberState?,
         to newState: TranscriberState,
-        status: TranscriberStatus
+        status: TranscriberStatus,
     ) {
         if let content = Self.notificationContent(for: newState, status: status) {
             notify(title: content.title, body: content.body)
@@ -88,10 +92,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     // Show notifications even when app is in foreground
-    func userNotificationCenter(
-        _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
+    // swiftlint:disable:next async_without_await
+    func userNotificationCenter(_: UNUserNotificationCenter, willPresent _: UNNotification) async -> UNNotificationPresentationOptions {
         [.banner, .sound]
     }
 }

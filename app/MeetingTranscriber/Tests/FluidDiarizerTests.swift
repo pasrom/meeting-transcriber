@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 final class FluidDiarizerTests: XCTestCase {
     func testIsAlwaysAvailable() {

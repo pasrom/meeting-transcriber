@@ -1,8 +1,7 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class PipelineJobTests: XCTestCase {
-
     func testInitialStateIsWaiting() {
         let job = PipelineJob(
             meetingTitle: "Standup",
@@ -10,7 +9,7 @@ final class PipelineJobTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
         XCTAssertEqual(job.state, .waiting)
         XCTAssertNil(job.error)
@@ -24,7 +23,7 @@ final class PipelineJobTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: URL(fileURLWithPath: "/tmp/app.wav"),
             micPath: URL(fileURLWithPath: "/tmp/mic.wav"),
-            micDelay: 0.5
+            micDelay: 0.5,
         )
         let data = try JSONEncoder().encode(job)
         let decoded = try JSONDecoder().decode(PipelineJob.self, from: data)
@@ -35,8 +34,14 @@ final class PipelineJobTests: XCTestCase {
     }
 
     func testJobStateIsCodable() throws {
-        for state in [JobState.waiting, .transcribing, .diarizing,
-                      .generatingProtocol, .done, .error] {
+        for state in [
+            JobState.waiting,
+            .transcribing,
+            .diarizing,
+            .generatingProtocol,
+            .done,
+            .error,
+        ] {
             let data = try JSONEncoder().encode(state)
             let decoded = try JSONDecoder().decode(JobState.self, from: data)
             XCTAssertEqual(decoded, state)

@@ -1,4 +1,4 @@
-import Foundation
+import CoreGraphics
 
 /// Pattern definition for detecting active meetings via window titles.
 struct AppMeetingPattern: Sendable {
@@ -15,7 +15,7 @@ struct AppMeetingPattern: Sendable {
         meetingPatterns: [String],
         idlePatterns: [String] = [],
         minWindowWidth: CGFloat = 200,
-        minWindowHeight: CGFloat = 200
+        minWindowHeight: CGFloat = 200,
     ) {
         self.appName = appName
         self.ownerNames = ownerNames
@@ -46,7 +46,7 @@ extension AppMeetingPattern {
             #"^Calls \|"#,
             #"^People \|"#,
             #"^Notifications \|"#,
-        ]
+        ],
     )
 
     static let zoom = AppMeetingPattern(
@@ -61,7 +61,7 @@ extension AppMeetingPattern {
             #"^Zoom$"#,
             #"^Zoom Workplace$"#,
             #"^Home$"#,
-        ]
+        ],
     )
 
     static let webex = AppMeetingPattern(
@@ -75,7 +75,7 @@ extension AppMeetingPattern {
         idlePatterns: [
             #"^Webex$"#,
             #"^Cisco Webex Meetings$"#,
-        ]
+        ],
     )
 
     /// Debug simulator for testing the full pipeline without a real meeting app.
@@ -87,7 +87,7 @@ extension AppMeetingPattern {
             #"Simulator Meeting"#,
         ],
         minWindowWidth: 100,
-        minWindowHeight: 100
+        minWindowHeight: 100,
     )
 
     static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator]

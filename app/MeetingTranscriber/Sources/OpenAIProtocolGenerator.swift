@@ -17,7 +17,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.timeoutSeconds = timeoutSeconds
     }
 
-    func generate(transcript: String, title: String, diarized: Bool) async throws -> String {
+    func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
         var systemPrompt = ProtocolGenerator.loadPrompt()
         if diarized {
             systemPrompt += ProtocolGenerator.diarizationNote
@@ -58,7 +58,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             throw ProtocolError.connectionFailed("Invalid response")
         }
 
-        guard (200...299).contains(httpResponse.statusCode) else {
+        guard (200 ... 299).contains(httpResponse.statusCode) else {
             // Try to read error body
             var errorBody = ""
             for try await line in bytes.lines {
@@ -106,7 +106,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
     /// Test connection to the API by querying available models.
     /// Returns model names on success.
-    static func testConnection(endpoint: String, model: String, apiKey: String?) async -> Result<[String], Error> {
+    static func testConnection(endpoint: String, model _: String, apiKey: String?) async -> Result<[String], Error> {
         // Derive models endpoint from chat completions endpoint
         guard let chatURL = URL(string: endpoint) else {
             return .failure(ProtocolError.connectionFailed("Invalid endpoint URL"))
@@ -126,7 +126,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
-                  (200...299).contains(httpResponse.statusCode)
+                  (200 ... 299).contains(httpResponse.statusCode)
             else {
                 let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                 return .failure(ProtocolError.httpError(code, "Failed to fetch models"))

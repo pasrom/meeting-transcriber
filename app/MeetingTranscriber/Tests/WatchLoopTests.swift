@@ -1,14 +1,12 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class WatchLoopTests: XCTestCase {
-
     private func makeLoop(pipelineQueue: PipelineQueue? = nil) -> WatchLoop {
         WatchLoop(
             detector: MeetingDetector(patterns: AppMeetingPattern.all),
-            pipelineQueue: pipelineQueue
+            pipelineQueue: pipelineQueue,
         )
     }
 
@@ -79,28 +77,28 @@ final class WatchLoopTests: XCTestCase {
     func testCleanTitleTeams() {
         XCTAssertEqual(
             WatchLoop.cleanTitle("Daily Standup | Microsoft Teams"),
-            "Daily Standup"
+            "Daily Standup",
         )
     }
 
     func testCleanTitleZoom() {
         XCTAssertEqual(
             WatchLoop.cleanTitle("Project Review - Zoom"),
-            "Project Review"
+            "Project Review",
         )
     }
 
     func testCleanTitleWebex() {
         XCTAssertEqual(
             WatchLoop.cleanTitle("Sprint Planning - Webex"),
-            "Sprint Planning"
+            "Sprint Planning",
         )
     }
 
     func testCleanTitleNoSuffix() {
         XCTAssertEqual(
             WatchLoop.cleanTitle("Just a Meeting"),
-            "Just a Meeting"
+            "Just a Meeting",
         )
     }
 
@@ -133,21 +131,21 @@ final class WatchLoopTests: XCTestCase {
         var callCount = 0
         detector.windowListProvider = {
             callCount += 1
-            return []  // no windows = meeting gone
+            return [] // no windows = meeting gone
         }
 
         let loop = WatchLoop(
             detector: detector,
             pollInterval: 0.05,
             endGracePeriod: 0.1,
-            maxDuration: 10
+            maxDuration: 10,
         )
 
         let meeting = DetectedMeeting(
             pattern: .teams,
             windowTitle: "Test | Microsoft Teams",
             ownerName: "Microsoft Teams",
-            windowPID: 1234
+            windowPID: 1234,
         )
 
         // Should return after grace period expires
@@ -199,14 +197,14 @@ final class WatchLoopTests: XCTestCase {
         let loop = WatchLoop(
             detector: detector,
             pollInterval: 0.05,
-            maxDuration: 0.15  // very short for testing
+            maxDuration: 0.15, // very short for testing
         )
 
         let meeting = DetectedMeeting(
             pattern: .teams,
             windowTitle: "Test | Microsoft Teams",
             ownerName: "Microsoft Teams",
-            windowPID: 1234
+            windowPID: 1234,
         )
 
         let start = Date()

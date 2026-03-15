@@ -6,7 +6,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MuteDet
 
 /// A point in time where the mute state changed.
 struct MuteTransition: Sendable {
-    let timestamp: TimeInterval  // ProcessInfo.processInfo.systemUptime
+    let timestamp: TimeInterval // ProcessInfo.processInfo.systemUptime
     let isMuted: Bool
 }
 
@@ -22,10 +22,13 @@ class MuteDetector {
     private let teamsPID: pid_t
     private let pollInterval: TimeInterval
     private var task: Task<Void, Never>?
+    // swiftlint:disable:next discouraged_optional_boolean
     private var lastState: Bool?
 
+    // swiftlint:disable discouraged_optional_boolean
     /// Override in tests to inject mock mute state.
     var muteStateProvider: ((pid_t) -> Bool?)?
+    // swiftlint:enable discouraged_optional_boolean
 
     init(teamsPID: pid_t, pollInterval: TimeInterval = 0.5) {
         self.teamsPID = teamsPID
@@ -45,17 +48,17 @@ class MuteDetector {
             while !Task.isCancelled {
                 guard let self else { return }
 
-                let state: Bool?
-                if let provider = self.muteStateProvider {
-                    state = provider(self.teamsPID)
+                // swiftlint:disable:next discouraged_optional_boolean
+                let state: Bool? = if let provider = self.muteStateProvider {
+                    provider(self.teamsPID)
                 } else {
-                    state = Self.readMuteState(pid: self.teamsPID)
+                    Self.readMuteState(pid: self.teamsPID)
                 }
 
                 if let state, state != self.lastState {
                     let transition = MuteTransition(
                         timestamp: ProcessInfo.processInfo.systemUptime,
-                        isMuted: state
+                        isMuted: state,
                     )
                     self.timeline.append(transition)
                     self.lastState = state
@@ -82,6 +85,7 @@ class MuteDetector {
     static let unmutedPrefixes = ["mute", "stummschalten"]
     static let allPrefixes = mutedPrefixes + unmutedPrefixes
 
+    // swiftlint:disable discouraged_optional_boolean
     /// Read the mute state from Teams UI for the given PID.
     /// Returns true if muted, false if unmuted, nil if can't determine.
     static func readMuteState(pid: pid_t) -> Bool? {
@@ -100,6 +104,8 @@ class MuteDetector {
         }
         return nil
     }
+
+    // swiftlint:enable discouraged_optional_boolean
 
     // MARK: - AX Helpers (delegates to AXHelper)
 

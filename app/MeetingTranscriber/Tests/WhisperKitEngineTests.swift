@@ -1,9 +1,8 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class WhisperKitEngineTests: XCTestCase {
-
     func testDefaultModel() {
         let engine = WhisperKitEngine()
         XCTAssertEqual(engine.modelVariant, "openai_whisper-large-v3-v20240930_turbo")
@@ -33,13 +32,13 @@ final class WhisperKitEngineTests: XCTestCase {
     /// Integration test: downloads whisper-small model and transcribes a German audio fixture.
     func testTranscribeGermanAudio() async throws {
         let fixture = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent() // Tests/
             .appendingPathComponent("Fixtures")
             .appendingPathComponent("two_speakers_de.wav")
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: fixture.path),
-            "Test fixture not found at \(fixture.path)"
+            "Test fixture not found at \(fixture.path)",
         )
 
         let engine = WhisperKitEngine()
@@ -57,11 +56,11 @@ final class WhisperKitEngineTests: XCTestCase {
         let timestampRegex = try NSRegularExpression(pattern: #"\[\d{2}:\d{2}\]"#)
         let hasTimestamp = timestampRegex.firstMatch(
             in: transcript,
-            range: NSRange(transcript.startIndex..., in: transcript)
+            range: NSRange(transcript.startIndex..., in: transcript),
         ) != nil
         XCTAssertTrue(
             hasTimestamp,
-            "Transcript should contain timestamps in [MM:SS] format, got: \(transcript)"
+            "Transcript should contain timestamps in [MM:SS] format, got: \(transcript)",
         )
 
         // Should contain some German words from the conversation
@@ -70,7 +69,7 @@ final class WhisperKitEngineTests: XCTestCase {
         let foundGerman = germanWords.contains { lowered.contains($0) }
         XCTAssertTrue(
             foundGerman,
-            "Transcript should contain German words, got: \(transcript)"
+            "Transcript should contain German words, got: \(transcript)",
         )
     }
 }

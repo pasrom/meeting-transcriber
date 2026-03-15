@@ -1,6 +1,6 @@
-import XCTest
-
+// swiftlint:disable single_test_class
 @testable import MeetingTranscriber
+import XCTest
 
 // MARK: - MuteDetector Tests
 

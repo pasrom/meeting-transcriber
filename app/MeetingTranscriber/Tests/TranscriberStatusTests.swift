@@ -1,10 +1,7 @@
-import Foundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class TranscriberStatusTests: XCTestCase {
-
     // MARK: - State Labels
 
     func testIdleLabel() {

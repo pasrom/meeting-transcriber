@@ -7,7 +7,6 @@ import Foundation
 /// Same API as the previous Keychain-based implementation but survives
 /// app re-signing and bundle recreation.
 enum KeychainHelper {
-
     private static let secretsDir = AppPaths.dataDir.appendingPathComponent(".secrets")
 
     private static func path(for key: String) -> URL {
@@ -21,12 +20,14 @@ enum KeychainHelper {
             try FileManager.default.createDirectory(at: secretsDir, withIntermediateDirectories: true)
             // Set directory permissions to 700
             try FileManager.default.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: secretsDir.path)
+                [.posixPermissions: 0o700], ofItemAtPath: secretsDir.path,
+            )
             let url = path(for: key)
             try data.write(to: url, options: .atomic)
             // Set file permissions to 600
             try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path)
+                [.posixPermissions: 0o600], ofItemAtPath: url.path,
+            )
         } catch {
             NSLog("KeychainHelper: failed to save \(key): \(error)")
         }

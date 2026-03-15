@@ -12,7 +12,7 @@ enum Permissions {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         return windowList.contains { info in
             guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
-            return info[kCGWindowName as String] as? String != nil
+            return info[kCGWindowName as String] is String
         }
     }
 
@@ -39,7 +39,7 @@ enum Permissions {
         let start = startURL ?? URL(fileURLWithPath: Bundle.main.executablePath ?? "")
         var dir = start.deletingLastPathComponent()
 
-        for _ in 0..<10 {
+        for _ in 0 ..< 10 {
             let marker = dir.appendingPathComponent("VERSION")
             if FileManager.default.fileExists(atPath: marker.path) {
                 return dir.path

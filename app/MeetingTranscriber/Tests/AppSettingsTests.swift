@@ -1,10 +1,9 @@
 import Foundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class AppSettingsTests: XCTestCase {
-
+    // swiftlint:disable:next implicitly_unwrapped_optional
     private var settings: AppSettings!
 
     override func setUp() {
@@ -21,6 +20,11 @@ final class AppSettingsTests: XCTestCase {
             UserDefaults.standard.removeObject(forKey: key)
         }
         settings = AppSettings()
+    }
+
+    override func tearDown() {
+        settings = nil
+        super.tearDown()
     }
 
     // MARK: - Defaults
@@ -148,7 +152,7 @@ final class AppSettingsTests: XCTestCase {
         settings.protocolProvider = .openAICompatible
         XCTAssertEqual(
             UserDefaults.standard.string(forKey: "protocolProvider"),
-            "openAICompatible"
+            "openAICompatible",
         )
         // Verify a fresh instance reads it back
         let fresh = AppSettings()
@@ -179,7 +183,7 @@ final class AppSettingsTests: XCTestCase {
         settings.openAIEndpoint = "http://localhost:8080/v1/chat/completions"
         XCTAssertEqual(
             UserDefaults.standard.string(forKey: "openAIEndpoint"),
-            "http://localhost:8080/v1/chat/completions"
+            "http://localhost:8080/v1/chat/completions",
         )
     }
 
@@ -200,12 +204,12 @@ final class AppSettingsTests: XCTestCase {
 
     func testCheckForUpdatesPersistence() {
         settings.checkForUpdates = false
-        XCTAssertEqual(UserDefaults.standard.bool(forKey: "checkForUpdates"), false)
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: "checkForUpdates"))
     }
 
     func testIncludePreReleasesPersistence() {
         settings.includePreReleases = true
-        XCTAssertEqual(UserDefaults.standard.bool(forKey: "includePreReleases"), true)
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "includePreReleases"))
     }
 
     // MARK: - Keychain

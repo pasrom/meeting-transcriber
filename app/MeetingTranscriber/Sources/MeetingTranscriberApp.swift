@@ -14,7 +14,8 @@ struct MeetingTranscriberApp: App {
     @State private var pipelineQueue = PipelineQueue()
     @State private var iconAnimationFrame = 0
     @State private var updateChecker = UpdateChecker()
-    @Environment(\.openWindow) private var openWindow
+    @Environment(\.openWindow)
+    private var openWindow
     private let notifications = NotificationManager.shared
     private let whisperKit = WhisperKitEngine()
     private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
@@ -34,11 +35,6 @@ struct MeetingTranscriberApp: App {
                 NotificationCenter.default.post(name: .autoWatchStart, object: nil)
             }
         }
-    }
-
-    /// Whether the app should auto-start watching.
-    private var shouldAutoWatch: Bool {
-        CommandLine.arguments.contains("--auto-watch") || settings.autoWatch
     }
 
     var body: some Scene {
@@ -65,7 +61,7 @@ struct MeetingTranscriberApp: App {
                 },
                 onProcessFiles: processAudioFiles,
                 onDismissJob: { id in pipelineQueue.removeJob(id: id) },
-                onQuit: quit
+                onQuit: quit,
             )
         } label: {
             Label {
@@ -73,7 +69,7 @@ struct MeetingTranscriberApp: App {
             } icon: {
                 Image(nsImage: MenuBarIcon.image(
                     badge: currentBadge,
-                    animationFrame: currentBadge.isAnimated ? iconAnimationFrame : 0
+                    animationFrame: currentBadge.isAnimated ? iconAnimationFrame : 0,
                 ))
             }
             .onReceive(iconTimer) { _ in
@@ -115,7 +111,7 @@ struct MeetingTranscriberApp: App {
             SettingsView(
                 settings: settings,
                 whisperKitEngine: whisperKit,
-                updateChecker: updateChecker
+                updateChecker: updateChecker,
             )
         }
         .windowResizability(.contentSize)
@@ -126,7 +122,7 @@ struct MeetingTranscriberApp: App {
                     startManualRecording(pid: pid, appName: appName, title: title)
                     closeWindow(id: "record-app")
                 },
-                onCancel: { closeWindow(id: "record-app") }
+                onCancel: { closeWindow(id: "record-app") },
             )
         }
         .windowResizability(.contentSize)
@@ -139,19 +135,18 @@ struct MeetingTranscriberApp: App {
     private var currentStatus: TranscriberStatus? {
         guard let loop = watchLoop, loop.isActive else { return nil }
 
-        let meeting: MeetingInfo?
-        if let manual = loop.manualRecordingInfo {
-            meeting = MeetingInfo(
+        let meeting: MeetingInfo? = if let manual = loop.manualRecordingInfo {
+            MeetingInfo(
                 app: manual.appName,
                 title: manual.title,
-                pid: Int(manual.pid)
+                pid: Int(manual.pid),
             )
         } else {
-            meeting = loop.currentMeeting.map {
+            loop.currentMeeting.map { meeting in
                 MeetingInfo(
-                    app: $0.pattern.appName,
-                    title: $0.windowTitle,
-                    pid: Int($0.windowPID)
+                    app: meeting.pattern.appName,
+                    title: meeting.windowTitle,
+                    pid: Int(meeting.windowPID),
                 )
             }
         }
@@ -165,7 +160,7 @@ struct MeetingTranscriberApp: App {
             protocolPath: nil,
             error: loop.lastError,
             audioPath: nil,
-            pid: Int(ProcessInfo.processInfo.processIdentifier)
+            pid: Int(ProcessInfo.processInfo.processIdentifier),
         )
     }
 
@@ -192,11 +187,11 @@ struct MeetingTranscriberApp: App {
             case .error: return .error
             case .transcribing, .recordingDone: return .transcribing
             case .generatingProtocol: return .processing
-            default: return .none
+            default: return .inactive
             }
         }
         if updateChecker.availableUpdate != nil { return .updateAvailable }
-        return .none
+        return .inactive
     }
 
     // MARK: - Start / Stop
@@ -218,7 +213,7 @@ struct MeetingTranscriberApp: App {
                 pipelineQueue: pipelineQueue,
                 pollInterval: settings.pollInterval,
                 noMic: settings.noMic,
-                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
+                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
             )
             watchLoop = loop
 
@@ -226,7 +221,7 @@ struct MeetingTranscriberApp: App {
                 try loop.startManualRecording(pid: pid, appName: appName, title: title)
                 notifications.notify(
                     title: "Manual Recording",
-                    body: "Recording: \(title)"
+                    body: "Recording: \(title)",
                 )
             } catch {
                 notifications.notify(title: "Error", body: error.localizedDescription)
@@ -241,9 +236,10 @@ struct MeetingTranscriberApp: App {
             loop.stop()
             watchLoop = nil
         } else {
+            // swiftlint:disable:next closure_body_length
             Task {
-                let _ = await Permissions.ensureMicrophoneAccess()
-                let _ = Permissions.ensureAccessibilityAccess()
+                _ = await Permissions.ensureMicrophoneAccess()
+                _ = Permissions.ensureAccessibilityAccess()
 
                 var patterns: [AppMeetingPattern] = []
                 if settings.watchTeams { patterns.append(.teams) }
@@ -265,7 +261,7 @@ struct MeetingTranscriberApp: App {
                         pollInterval: settings.pollInterval,
                         endGracePeriod: settings.endGrace,
                         noMic: settings.noMic,
-                        micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID
+                        micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     )
 
                     loop.onStateChange = { [weak loop, notifications] _, newState in
@@ -274,13 +270,15 @@ struct MeetingTranscriberApp: App {
                             if let meeting = loop?.currentMeeting {
                                 notifications.notify(
                                     title: "Meeting Detected",
-                                    body: "Recording: \(meeting.windowTitle)"
+                                    body: "Recording: \(meeting.windowTitle)",
                                 )
                             }
+
                         case .error:
                             if let err = loop?.lastError {
                                 notifications.notify(title: "Error", body: err)
                             }
+
                         default:
                             break
                         }
@@ -308,12 +306,14 @@ struct MeetingTranscriberApp: App {
         switch settings.protocolProvider {
         case .claudeCLI:
             ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
+
         case .openAICompatible:
             OpenAIProtocolGenerator(
                 endpoint: URL(string: settings.openAIEndpoint)
+                    // swiftlint:disable:next force_unwrapping
                     ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
                 model: settings.openAIModel,
-                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey
+                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
             )
         }
     }
@@ -326,7 +326,7 @@ struct MeetingTranscriberApp: App {
             outputDir: WatchLoop.defaultOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
-            micLabel: settings.micName
+            micLabel: settings.micName,
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()
@@ -338,10 +338,12 @@ struct MeetingTranscriberApp: App {
             switch newState {
             case .done:
                 notifications.notify(title: "Protocol Ready", body: job.meetingTitle)
+
             case .error:
                 if let err = job.error {
                     notifications.notify(title: "Error", body: err)
                 }
+
             default:
                 break
             }
@@ -356,7 +358,7 @@ struct MeetingTranscriberApp: App {
         panel.allowedContentTypes = [
             .wav, .mp3, .aiff, .mpeg4Audio,
             .mpeg4Movie, .quickTimeMovie,
-        ] + [UTType("public.flac")].compactMap { $0 }
+        ] + [UTType("public.flac")].compactMap(\.self)
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 
@@ -373,7 +375,7 @@ struct MeetingTranscriberApp: App {
                 mixPath: url,
                 appPath: nil,
                 micPath: nil,
-                micDelay: 0
+                micDelay: 0,
             )
             pipelineQueue.enqueue(job)
         }

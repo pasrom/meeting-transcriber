@@ -10,7 +10,7 @@ private final class AutomationTextField: NSTextField {
             // Post the same notification that user typing would trigger
             NotificationCenter.default.post(
                 name: NSControl.textDidChangeNotification,
-                object: self
+                object: self,
             )
         }
     }
@@ -33,7 +33,7 @@ struct AccessibleTextField: NSViewRepresentable {
         return field
     }
 
-    func updateNSView(_ nsView: NSTextField, context: Context) {
+    func updateNSView(_ nsView: NSTextField, context _: Context) {
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -82,7 +82,7 @@ struct SpeakerNamingView: View {
             return (
                 label: label,
                 autoName: isAutoNamed ? autoName : nil,
-                speakingTime: data.speakingTimes[label] ?? 0
+                speakingTime: data.speakingTimes[label] ?? 0,
             )
         }
     }
@@ -93,6 +93,7 @@ struct SpeakerNamingView: View {
     }
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         VStack(spacing: 16) {
             Text("Name Speakers — \"\(data.meetingTitle)\"")
                 .font(.headline)
@@ -113,7 +114,7 @@ struct SpeakerNamingView: View {
                 Text("Wrong count?")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Stepper("\(rerunCount) speakers", value: $rerunCount, in: 1...10)
+                Stepper("\(rerunCount) speakers", value: $rerunCount, in: 1 ... 10)
                     .font(.caption)
                     .accessibilityIdentifier("rerun-stepper")
                 Button("Re-run") {
@@ -161,12 +162,13 @@ struct SpeakerNamingView: View {
         }
     }
 
-    @ViewBuilder
     private func speakerRow(
         index: Int,
-        speaker: (label: String, autoName: String?, speakingTime: Double)
+        speaker: (label: String, autoName: String?, speakingTime: Double),
     ) -> some View {
+        // swiftlint:disable:next closure_body_length
         GroupBox {
+            // swiftlint:disable:next closure_body_length
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Text(speaker.label)
@@ -178,7 +180,7 @@ struct SpeakerNamingView: View {
                             playSpeakerSnippet(label: speaker.label)
                         } label: {
                             Image(systemName: playingLabel == speaker.label
-                                  ? "stop.circle.fill" : "play.circle.fill")
+                                ? "stop.circle.fill" : "play.circle.fill")
                                 .foregroundStyle(.blue)
                         }
                         .buttonStyle(.plain)
@@ -205,7 +207,7 @@ struct SpeakerNamingView: View {
                     AccessibleTextField(
                         text: $names[index],
                         placeholder: "Name",
-                        identifier: "speaker-name-\(speaker.label)"
+                        identifier: "speaker-name-\(speaker.label)",
                     )
 
                     if !unusedParticipants(currentIndex: index).isEmpty {
@@ -250,7 +252,7 @@ struct SpeakerNamingView: View {
                 let endSample = min(samples.count, Int(longest.end) * sampleRate)
                 guard startSample < endSample else { return }
 
-                let snippet = Array(samples[startSample..<endSample])
+                let snippet = Array(samples[startSample ..< endSample])
                 let tmpPath = FileManager.default.temporaryDirectory
                     .appendingPathComponent("speaker_\(label).wav")
                 try AudioMixer.saveWAV(samples: snippet, sampleRate: sampleRate, url: tmpPath)
@@ -283,7 +285,7 @@ struct SpeakerNamingView: View {
         let usedNames = Set(
             names.enumerated()
                 .filter { $0.offset != currentIndex && !$0.element.isEmpty }
-                .map(\.element)
+                .map(\.element),
         )
         return data.participants.filter { !usedNames.contains($0) }
     }

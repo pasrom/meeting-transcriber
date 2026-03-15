@@ -1,10 +1,7 @@
-import Foundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class FormattingHelpersTests: XCTestCase {
-
     // MARK: - formattedTime
 
     func testSecondsOnly() {
