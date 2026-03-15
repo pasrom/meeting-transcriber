@@ -1,14 +1,17 @@
-// swift-tools-version:6.0
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
-    name: "audiotap",
+    name: "AudioTapLib",
     platforms: [.macOS(.v14)],
+    products: [
+        .library(name: "AudioTapLib", targets: ["AudioTapLib"]),
+    ],
     targets: [
-        .executableTarget(
-            name: "audiotap",
+        .target(
+            name: "AudioTapLib",
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
     ]
 )
