@@ -22,5 +22,9 @@ jobs:
           path: app/MeetingTranscriber/.build
           key: spm-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
+      - name: SwiftLint
+        run: |
+          brew install swiftlint
+          swiftlint lint --strict --reporter github-actions-logging
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test
