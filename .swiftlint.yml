@@ -1,0 +1,74 @@
+# SwiftLint configuration for Meeting Transcriber
+
+included:
+  - app/MeetingTranscriber/Sources
+  - app/MeetingTranscriber/Tests
+  - tools/audiotap/Sources
+  - tools/meeting-simulator/Sources
+  - scripts/generate_menu_bar_gifs.swift
+
+excluded:
+  - FluidAudio
+  - .build
+
+opt_in_rules:
+  - sorted_imports
+  - unneeded_parentheses_in_closure_argument
+  - return_value_from_void_function
+  - empty_collection_literal
+  - first_where
+  - contains_over_first_not_nil
+  - toggle_bool
+
+disabled_rules:
+  - trailing_comma
+  - todo
+  - force_try
+
+identifier_name:
+  min_length:
+    warning: 1
+  max_length:
+    warning: 60
+  excluded:
+    - id
+
+type_name:
+  min_length:
+    warning: 3
+  max_length:
+    warning: 50
+
+line_length:
+  warning: 160
+  error: 250
+  ignores_urls: true
+  ignores_comments: true
+  ignores_interpolated_strings: true
+
+file_length:
+  warning: 600
+  error: 1000
+
+type_body_length:
+  warning: 400
+  error: 600
+
+function_body_length:
+  warning: 60
+  error: 100
+
+cyclomatic_complexity:
+  warning: 15
+  error: 25
+
+large_tuple:
+  warning: 4
+  error: 6
+
+force_cast:
+  severity: warning
+
+nesting:
+  type_level: 2
+  function_level: 3
