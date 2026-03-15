@@ -5,7 +5,6 @@ final class FFmpegHelperTests: XCTestCase {
     // MARK: - Detection
 
     func testIsAvailableReflectsPath() {
-        // isAvailable should be consistent with ffmpegPath
         XCTAssertEqual(FFmpegHelper.isAvailable, FFmpegHelper.ffmpegPath != nil)
     }
 
@@ -29,7 +28,7 @@ final class FFmpegHelperTests: XCTestCase {
         XCTAssertEqual(error.errorDescription, "ffmpeg failed: No such file")
     }
 
-    // MARK: - Audio Loading (requires ffmpeg)
+    // MARK: - Audio Loading from Fixtures (requires ffmpeg)
 
     private func fixtureURL(_ name: String) -> URL {
         URL(fileURLWithPath: #filePath)
@@ -41,57 +40,64 @@ final class FFmpegHelperTests: XCTestCase {
     func testLoadAudioFromMKV() async throws {
         try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
 
-        // Create an MKV from the existing WAV fixture using ffmpeg
-        let wavURL = fixtureURL("two_speakers_de.wav")
-        let mkvURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_ffmpeg_\(UUID().uuidString).mkv")
-        defer { try? FileManager.default.removeItem(at: mkvURL) }
-
-        // Convert WAV → MKV via ffmpeg
-        let ffmpegPath = try XCTUnwrap(FFmpegHelper.ffmpegPath)
-        let convertProcess = Process()
-        convertProcess.executableURL = URL(fileURLWithPath: ffmpegPath)
-        convertProcess.arguments = [
-            "-i", wavURL.path,
-            "-c:a", "libvorbis",
-            "-y", "-loglevel", "error",
-            mkvURL.path,
-        ]
-        try convertProcess.run()
-        convertProcess.waitUntilExit()
-        XCTAssertEqual(convertProcess.terminationStatus, 0, "ffmpeg conversion to MKV failed")
-
-        // Load via ffmpeg helper
-        let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: mkvURL)
+        let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.mkv"))
         XCTAssertEqual(sampleRate, 16000)
-        XCTAssertGreaterThan(samples.count, 0, "Should extract audio samples from MKV")
+        // ~15s speech at 16kHz ≈ 240000 samples
+        XCTAssertGreaterThan(samples.count, 200_000)
     }
 
-    func testLoadAudioAsFloat32FallsBackToFFmpeg() async throws {
+    func testLoadAudioFromWebM() async throws {
         try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
 
-        // Create a WebM from the existing WAV fixture
-        let wavURL = fixtureURL("two_speakers_de.wav")
-        let webmURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("test_fallback_\(UUID().uuidString).webm")
-        defer { try? FileManager.default.removeItem(at: webmURL) }
-
-        let ffmpegPath = try XCTUnwrap(FFmpegHelper.ffmpegPath)
-        let convertProcess = Process()
-        convertProcess.executableURL = URL(fileURLWithPath: ffmpegPath)
-        convertProcess.arguments = [
-            "-i", wavURL.path,
-            "-c:a", "libvorbis",
-            "-y", "-loglevel", "error",
-            webmURL.path,
-        ]
-        try convertProcess.run()
-        convertProcess.waitUntilExit()
-        XCTAssertEqual(convertProcess.terminationStatus, 0, "ffmpeg conversion to WebM failed")
-
-        // Load via the main entry point — should fall through AVAudioFile → AVAsset → ffmpeg
-        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: webmURL)
+        let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.webm"))
         XCTAssertEqual(sampleRate, 16000)
-        XCTAssertGreaterThan(samples.count, 0, "Full fallback chain should extract audio from WebM")
+        XCTAssertGreaterThan(samples.count, 200_000)
+    }
+
+    func testLoadAudioFromOGG() async throws {
+        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+
+        let (samples, sampleRate) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.ogg"))
+        XCTAssertEqual(sampleRate, 16000)
+        XCTAssertGreaterThan(samples.count, 200_000)
+    }
+
+    // MARK: - Full Fallback Chain (AVAudioFile → AVAsset → ffmpeg)
+
+    func testLoadAudioAsFloat32FallsBackToFFmpegForMKV() async throws {
+        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+
+        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.mkv"))
+        XCTAssertEqual(sampleRate, 16000)
+        XCTAssertGreaterThan(samples.count, 200_000)
+    }
+
+    func testLoadAudioAsFloat32FallsBackToFFmpegForWebM() async throws {
+        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+
+        let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.webm"))
+        XCTAssertEqual(sampleRate, 16000)
+        XCTAssertGreaterThan(samples.count, 200_000)
+    }
+
+    // MARK: - Audio Quality
+
+    func testFFmpegExtractedAudioHasEnergy() async throws {
+        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+
+        let (samples, _) = try await FFmpegHelper.loadAudioWithFFmpeg(url: fixtureURL("two_speakers_de.mkv"))
+        let rms = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
+        XCTAssertGreaterThan(rms, 0.01, "Extracted speech audio should not be silent")
+    }
+
+    func testMKVAndWAVProduceSimilarDuration() async throws {
+        try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
+
+        let (wavSamples, wavRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.wav"))
+        let (mkvSamples, mkvRate) = try await AudioMixer.loadAudioAsFloat32(url: fixtureURL("two_speakers_de.mkv"))
+
+        let wavDuration = Double(wavSamples.count) / Double(wavRate)
+        let mkvDuration = Double(mkvSamples.count) / Double(mkvRate)
+        XCTAssertEqual(wavDuration, mkvDuration, accuracy: 0.5, "MKV should preserve original duration")
     }
 }
