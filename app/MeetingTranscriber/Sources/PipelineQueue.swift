@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 import os.log
 
@@ -5,6 +6,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 
 @MainActor
 @Observable
+// swiftlint:disable:next type_body_length
 class PipelineQueue {
     private(set) var jobs: [PipelineJob] = []
     private let logDir: URL
@@ -193,7 +195,7 @@ class PipelineQueue {
 
     /// Process the first waiting job through the full pipeline:
     /// resample → transcribe → (diarize) → save transcript → generate protocol → save protocol.
-    func processNext() async {
+    func processNext() async { // swiftlint:disable:this function_body_length cyclomatic_complexity
         guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else {
             isProcessing = false
             return
@@ -291,7 +293,7 @@ class PipelineQueue {
                             if useDualTrack {
                                 // Diarize app and mic tracks separately
                                 let app16k = workDir.appendingPathComponent("app_16k.wav")
-                                let mic16k_ = workDir.appendingPathComponent("mic_16k.wav")
+                                let mic16k = workDir.appendingPathComponent("mic_16k.wav")
 
                                 appDiarization = try await diarizeProcess.run(
                                     audioPath: app16k,
@@ -299,7 +301,7 @@ class PipelineQueue {
                                     meetingTitle: title
                                 )
                                 micDiarization = try await diarizeProcess.run(
-                                    audioPath: mic16k_,
+                                    audioPath: mic16k,
                                     numSpeakers: nil,  // auto-detect local speakers
                                     meetingTitle: title
                                 )

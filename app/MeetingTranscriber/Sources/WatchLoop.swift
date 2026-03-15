@@ -312,10 +312,8 @@ class WatchLoop {
     /// Strip app suffixes from meeting titles for cleaner display.
     static func cleanTitle(_ title: String) -> String {
         let suffixes = [" | Microsoft Teams", " - Zoom", " - Webex"]
-        for suffix in suffixes {
-            if title.hasSuffix(suffix) {
-                return String(title.dropLast(suffix.count))
-            }
+        for suffix in suffixes where title.hasSuffix(suffix) {
+            return String(title.dropLast(suffix.count))
         }
         return title
     }

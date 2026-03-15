@@ -310,10 +310,10 @@ struct ProtocolGenerator {
         // If already an absolute path, use it
         if bin.hasPrefix("/") { return bin }
 
-        for path in searchPaths.map({ "\($0)/\(bin)" }) {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
+        for path in searchPaths.map({ "\($0)/\(bin)" })
+            where FileManager.default.isExecutableFile(atPath: path)
+        { // swiftlint:disable:this opening_brace
+            return path
         }
         // Fallback: hope it's in PATH
         return "/usr/bin/env"

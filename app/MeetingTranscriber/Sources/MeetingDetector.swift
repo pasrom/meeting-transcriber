@@ -121,10 +121,8 @@ class MeetingDetector {
         }
 
         // Reset counters for apps that had no hit this round
-        for appName in consecutiveHits.keys {
-            if !hitsThisRound.contains(appName) {
-                consecutiveHits[appName] = 0
-            }
+        for appName in consecutiveHits.keys where !hitsThisRound.contains(appName) {
+            consecutiveHits[appName] = 0
         }
 
         return nil
@@ -133,10 +131,8 @@ class MeetingDetector {
     /// Check if a previously detected meeting is still active.
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {
         let windows = windowListProvider()
-        for window in windows {
-            if matchWindow(window, pattern: meeting.pattern) != nil {
-                return true
-            }
+        for window in windows where matchWindow(window, pattern: meeting.pattern) != nil {
+            return true
         }
         return false
     }
@@ -174,19 +170,15 @@ class MeetingDetector {
         // Skip idle patterns (pre-compiled)
         let range = NSRange(title.startIndex..., in: title)
         if let idleRegexes = compiledIdlePatterns[pattern.appName] {
-            for regex in idleRegexes {
-                if regex.firstMatch(in: title, range: range) != nil {
-                    return nil
-                }
+            for regex in idleRegexes where regex.firstMatch(in: title, range: range) != nil {
+                return nil
             }
         }
 
         // Match meeting patterns (pre-compiled)
         if let meetingRegexes = compiledMeetingPatterns[pattern.appName] {
-            for regex in meetingRegexes {
-                if regex.firstMatch(in: title, range: range) != nil {
-                    return title
-                }
+            for regex in meetingRegexes where regex.firstMatch(in: title, range: range) != nil {
+                return title
             }
         }
 

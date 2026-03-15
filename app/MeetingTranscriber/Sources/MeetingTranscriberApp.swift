@@ -242,8 +242,8 @@ struct MeetingTranscriberApp: App {
             watchLoop = nil
         } else {
             Task {
-                let _ = await Permissions.ensureMicrophoneAccess()
-                let _ = Permissions.ensureAccessibilityAccess()
+                _ = await Permissions.ensureMicrophoneAccess()
+                _ = Permissions.ensureAccessibilityAccess()
 
                 var patterns: [AppMeetingPattern] = []
                 if settings.watchTeams { patterns.append(.teams) }

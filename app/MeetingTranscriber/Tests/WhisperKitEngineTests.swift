@@ -1,5 +1,5 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class WhisperKitEngineTests: XCTestCase {

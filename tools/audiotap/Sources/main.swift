@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -101,6 +102,7 @@ class MicCaptureHandler {
         installDeviceChangeListener()
     }
 
+    // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
         let inputNode = engine.inputNode
 
@@ -154,8 +156,10 @@ class MicCaptureHandler {
                 stderr)
         }
 
+        // swiftlint:disable closure_parameter_position
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
+            // swiftlint:enable closure_parameter_position
             guard let self = self else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
@@ -327,6 +331,7 @@ class AppAudioCapture {
         installOutputDeviceChangeListener()
     }
 
+    // swiftlint:disable:next function_body_length
     private func startCapture() throws {
         let processObjectID = try translatePID()
         fputs("Process audio object ID: \(processObjectID)\n", stderr)
@@ -552,6 +557,7 @@ class AppAudioCapture {
 
 @main
 struct AudioTap {
+    // swiftlint:disable:next function_body_length cyclomatic_complexity
     static func main() {
         // Disable C stdout buffering
         setbuf(stdout, nil)

@@ -3,6 +3,7 @@ import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
+// swiftlint:disable:next type_body_length
 struct SettingsView: View {
     @Bindable var settings: AppSettings
 
@@ -423,7 +424,7 @@ struct SettingsView: View {
         accessibilityOK = AXIsProcessTrusted()
     }
 
-    private func testConnection() {
+    func testConnection() {
         testingConnection = true
         connectionTestResult = nil
         Task {

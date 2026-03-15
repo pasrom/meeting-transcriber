@@ -1,5 +1,5 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class OpenAIProtocolGeneratorTests: XCTestCase {
 

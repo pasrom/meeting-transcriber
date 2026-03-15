@@ -425,10 +425,8 @@ final class WatchLoopE2ETests: XCTestCase {
         // Auto-complete speaker naming with known names
         queue.speakerNamingHandler = { data in
             var mapping = data.mapping
-            for label in mapping.keys {
-                if mapping[label] == label {
-                    mapping[label] = "TestSpeaker"
-                }
+            for label in mapping.keys where mapping[label] == label {
+                mapping[label] = "TestSpeaker"
             }
             return .confirmed(mapping)
         }

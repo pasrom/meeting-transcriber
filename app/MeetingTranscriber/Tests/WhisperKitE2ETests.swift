@@ -337,10 +337,8 @@ final class WhisperKitE2ETests: XCTestCase {
     private func assertTranscriptContent(_ transcript: String, format: String) {
         let lower = transcript.lowercased()
         var matched = 0
-        for keyword in expectedKeywords {
-            if lower.contains(keyword.lowercased()) {
-                matched += 1
-            }
+        for keyword in expectedKeywords where lower.contains(keyword.lowercased()) {
+            matched += 1
         }
         // At least 3 of 5 keywords should appear (TTS + compression may cause minor variations)
         XCTAssertGreaterThanOrEqual(

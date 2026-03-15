@@ -12,7 +12,7 @@ enum Permissions {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         return windowList.contains { info in
             guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
-            return info[kCGWindowName as String] as? String != nil
+            return info[kCGWindowName as String] is String
         }
     }
 

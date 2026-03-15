@@ -1,9 +1,11 @@
+// swiftlint:disable file_length
 import ViewInspector
 import XCTest
 
 @testable import MeetingTranscriber
 
 @MainActor
+// swiftlint:disable:next type_body_length
 final class MenuBarViewTests: XCTestCase {
 
     // MARK: - Helpers

@@ -212,7 +212,7 @@ class DualSourceRecorder: RecordingProvider {
     }
 
     /// Stop recording and produce a mixed WAV.
-    func stop() throws -> RecordingResult {
+    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length cyclomatic_complexity
         guard isRecording else {
             throw RecorderError.notRecording
         }

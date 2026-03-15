@@ -173,13 +173,11 @@ struct AudioMixer {
 
         // Build gate mask: true = suppress
         var gateMask = [Bool](repeating: false, count: appWindowCount)
-        for i in 0..<appWindowCount {
-            if appRMS[i] > threshold {
-                let lo = max(0, i - marginBefore)
-                let hi = min(appWindowCount - 1, i + marginAfter)
-                for j in lo...hi {
-                    gateMask[j] = true
-                }
+        for i in 0..<appWindowCount where appRMS[i] > threshold {
+            let lo = max(0, i - marginBefore)
+            let hi = min(appWindowCount - 1, i + marginAfter)
+            for j in lo...hi {
+                gateMask[j] = true
             }
         }
 

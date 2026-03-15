@@ -29,16 +29,29 @@ struct GitHubReleaseProvider: UpdateProviding {
     private let repo = "meeting-transcriber"
 
     private struct GitHubRelease: Codable {
-        let tag_name: String
+        let tagName: String
         let name: String?
         let prerelease: Bool
-        let html_url: String
+        let htmlURL: String
         let assets: [GitHubAsset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case name
+            case prerelease
+            case htmlURL = "html_url"
+            case assets
+        }
     }
 
     private struct GitHubAsset: Codable {
         let name: String
-        let browser_download_url: String
+        let browserDownloadURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
     }
 
     func latestRelease() async throws -> ReleaseInfo {
@@ -64,11 +77,11 @@ struct GitHubReleaseProvider: UpdateProviding {
     private func mapRelease(_ release: GitHubRelease) -> ReleaseInfo {
         let dmgAsset = release.assets.first { $0.name.hasSuffix(".dmg") }
         return ReleaseInfo(
-            tagName: release.tag_name,
-            name: release.name ?? release.tag_name,
+            tagName: release.tagName,
+            name: release.name ?? release.tagName,
             prerelease: release.prerelease,
-            htmlURL: URL(string: release.html_url)!,
-            dmgURL: dmgAsset.flatMap { URL(string: $0.browser_download_url) }
+            htmlURL: URL(string: release.htmlURL)!,
+            dmgURL: dmgAsset.flatMap { URL(string: $0.browserDownloadURL) }
         )
     }
 }
