@@ -6,6 +6,7 @@ A native macOS menu bar app that automatically detects, records, transcribes, an
 
 ```
 Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
+File Import → Audio/Video (WAV, MP3, M4A, MP4) → 16kHz mono conversion → WhisperKit → FluidAudio Diarization → Protocol
 ```
 
 ---
@@ -21,6 +22,7 @@ Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → Fluid
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or OpenAI-compatible APIs (Ollama, LM Studio, etc.)
 - **Configurable protocol prompt** — Custom prompt file support (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`)
 - **Manual recording** — Record any app via app picker, not just detected meetings
+- **Multi-format input** — Supports WAV, MP3, M4A, and video files (MP4) with automatic audio extraction
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
 - **Distribution** — Install via Homebrew Cask or build from source
@@ -98,7 +100,7 @@ The app uses an animated waveform icon in the menu bar that reflects the current
 
 Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
 
-You can also batch-process existing audio files via the menu (⌘P).
+You can also batch-process existing audio and video files via the menu (⌘P) — supported formats: WAV, MP3, M4A, MP4.
 
 ---
 
@@ -122,7 +124,7 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 | `claude not found` | Install Claude Code CLI, run `claude --version` — or switch to OpenAI-compatible provider in Settings |
 | No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
 | No app audio | Build audiotap: `./scripts/build_audiotap.sh` (macOS 14.2+ required) |
-| Empty transcription | Ensure audio is 16 kHz mono WAV — WhisperKit requires this format |
+| Empty transcription | Check that the file contains an audio track — the app converts to 16 kHz mono automatically |
 | Models not loading | FluidAudio models download on first run; check internet connectivity |
 | OpenAI-compatible API connection failed | Verify the endpoint URL and that the local model server is running |
 

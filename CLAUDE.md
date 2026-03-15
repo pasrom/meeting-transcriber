@@ -30,7 +30,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     DualSourceRecorder.swift  # App audio + mic recording (captures startTime in start())
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
-    AudioMixer.swift       # Mixes app + mic audio to 16kHz mono WAV
+    AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback) + mixing to 16kHz mono
     MicRecorder.swift      # Microphone recording via AVAudioEngine
     MuteDetector.swift     # Mute state detection via accessibility API
     Permissions.swift      # Permission checks (mic, screen recording)
@@ -76,8 +76,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: App audio + Mic → separate 16kHz WAVs → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio → 16kHz mono WAV → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: App audio + Mic → separate 16kHz audio (WAV/MP3/M4A/MP4) → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio/Video → 16kHz mono (AVAsset fallback for non-WAV) → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -144,6 +144,11 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **View architecture:**
 - `SettingsView` receives `WhisperKitEngine` as a stored property (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:)`.
+
+**Audio loading:**
+- `AudioMixer.loadAudioFileAsFloat32()` tries `AVAudioFile` first, falls back to `AVAsset` for video containers (MP4, MOV) and compressed formats (MP3, M4A).
+- `loadAudioFromAVAsset()` extracts audio tracks via `AVAssetReader`, outputs 16kHz Float32 PCM.
+- File picker supports WAV, MP3, M4A, MP4, MOV, and other AVAsset-compatible formats.
 
 **Recording:**
 - `DualSourceRecorder` captures `recordingStartTime` in `start()`, not in `stop()`.
