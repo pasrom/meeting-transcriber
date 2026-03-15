@@ -6,7 +6,7 @@ A native macOS menu bar app that automatically detects, records, transcribes, an
 
 ```
 Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
-File Import → Audio/Video (WAV, MP3, M4A, MP4) → 16kHz mono conversion → WhisperKit → FluidAudio Diarization → Protocol
+File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono conversion → WhisperKit → FluidAudio Diarization → Protocol
 ```
 
 ---
@@ -22,7 +22,7 @@ File Import → Audio/Video (WAV, MP3, M4A, MP4) → 16kHz mono conversion → W
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or OpenAI-compatible APIs (Ollama, LM Studio, etc.)
 - **Configurable protocol prompt** — Custom prompt file support (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`)
 - **Manual recording** — Record any app via app picker, not just detected meetings
-- **Multi-format input** — Supports WAV, MP3, M4A, and video files (MP4) with automatic audio extraction
+- **Multi-format input** — Supports WAV, MP3, M4A, MP4, and with ffmpeg also MKV, WebM, OGG
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
 - **Distribution** — Install via Homebrew Cask or build from source
@@ -37,6 +37,16 @@ File Import → Audio/Video (WAV, MP3, M4A, MP4) → 16kHz mono conversion → W
   - An OpenAI-compatible API endpoint (e.g. [Ollama](https://ollama.com), LM Studio, llama.cpp) — configure in Settings
 
 No HuggingFace token needed — FluidAudio downloads its models automatically on first run (~50 MB).
+
+### Optional: ffmpeg for extra formats
+
+Install ffmpeg to enable MKV, WebM, and OGG support:
+
+```bash
+brew install ffmpeg
+```
+
+The app detects ffmpeg automatically. Status is shown in Settings → About.
 
 ### Using Ollama as provider
 
@@ -100,7 +110,7 @@ The app uses an animated waveform icon in the menu bar that reflects the current
 
 Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
 
-You can also batch-process existing audio and video files via the menu (⌘P) — supported formats: WAV, MP3, M4A, MP4.
+You can also batch-process existing audio and video files via the menu (⌘P) — supported formats: WAV, MP3, M4A, MP4 (and MKV, WebM, OGG when ffmpeg is installed).
 
 ---
 
