@@ -1,51 +1,60 @@
 import Foundation
+import os.log
+import Security
 
-// MARK: - Test-only utility (no production references)
-
-/// File-based secret storage in the app's data directory.
-/// Stored with POSIX 600 permissions (owner read/write only).
-/// Same API as the previous Keychain-based implementation but survives
-/// app re-signing and bundle recreation.
+/// macOS Keychain-based secret storage using Security.framework.
+/// Same API surface as the previous file-based implementation.
 enum KeychainHelper {
-    private static let secretsDir = AppPaths.dataDir.appendingPathComponent(".secrets")
+    private static let service = AppPaths.logSubsystem
+    private static let logger = Logger(subsystem: AppPaths.logSubsystem, category: "KeychainHelper")
 
-    private static func path(for key: String) -> URL {
-        secretsDir.appendingPathComponent(key)
+    private static func baseQuery(for key: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
     }
 
-    /// Store or update a value.
+    /// Store or update a value in the Keychain.
     static func save(key: String, value: String) {
         guard let data = value.data(using: .utf8) else { return }
-        do {
-            try FileManager.default.createDirectory(at: secretsDir, withIntermediateDirectories: true)
-            // Set directory permissions to 700
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o700], ofItemAtPath: secretsDir.path,
-            )
-            let url = path(for: key)
-            try data.write(to: url, options: .atomic)
-            // Set file permissions to 600
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path,
-            )
-        } catch {
-            NSLog("KeychainHelper: failed to save \(key): \(error)")
+        var query = baseQuery(for: key)
+        query[kSecValueData as String] = data
+
+        let addStatus = SecItemAdd(query as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            let update = [kSecValueData as String: data]
+            let updateStatus = SecItemUpdate(baseQuery(for: key) as CFDictionary, update as CFDictionary)
+            if updateStatus != errSecSuccess {
+                logger.error("Failed to update \(key): \(updateStatus)")
+            }
+        } else if addStatus != errSecSuccess {
+            logger.error("Failed to save \(key): \(addStatus)")
         }
     }
 
-    /// Read a value. Returns `nil` if not found.
+    /// Read a value from the Keychain. Returns `nil` if not found.
     static func read(key: String) -> String? {
-        guard let data = try? Data(contentsOf: path(for: key)) else { return nil }
+        var query = baseQuery(for: key)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    /// Delete a value.
+    /// Delete a value from the Keychain.
     static func delete(key: String) {
-        try? FileManager.default.removeItem(at: path(for: key))
+        SecItemDelete(baseQuery(for: key) as CFDictionary)
     }
 
-    /// Check whether a value exists.
+    /// Check whether a value exists in the Keychain.
     static func exists(key: String) -> Bool {
-        FileManager.default.fileExists(atPath: path(for: key).path)
+        var query = baseQuery(for: key)
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 }
