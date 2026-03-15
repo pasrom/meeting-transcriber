@@ -272,19 +272,30 @@ enum AudioMixer {
 
     /// Load any audio or video file as mono Float32 samples.
     ///
-    /// Tries AVAudioFile first (fast path for audio formats: WAV, MP3, M4A, AIFF, FLAC, CAF),
-    /// then falls back to AVAsset for video containers (MP4, MOV).
+    /// Uses a 3-tier fallback: AVAudioFile → AVAsset → ffmpeg CLI.
+    /// Known ffmpeg-only formats (MKV, WebM, OGG) skip Apple frameworks entirely.
     static func loadAudioAsFloat32(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
+        // Short-circuit: known ffmpeg-only formats skip AVAudioFile + AVAsset
+        if FFmpegHelper.ffmpegOnlyExtensions.contains(url.pathExtension.lowercased()) {
+            return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
+        }
+
         // Fast path: AVAudioFile handles all common audio formats
         do {
             let file = try AVAudioFile(forReading: url)
             let sampleRate = Int(file.processingFormat.sampleRate)
             let samples = try readSamplesFromAudioFile(file)
             return (samples, sampleRate)
-        } catch {
-            // Fallback: AVAsset for video containers (MP4, MOV)
-            logger.info("AVAudioFile failed for \(url.lastPathComponent): \(error.localizedDescription), trying AVAsset fallback")
-            return try await loadAudioFromAVAsset(url: url)
+        } catch let audioFileError {
+            // Fallback 1: AVAsset for video containers (MP4, MOV)
+            logger.info("AVAudioFile failed for \(url.lastPathComponent): \(audioFileError.localizedDescription), trying AVAsset fallback")
+            do {
+                return try await loadAudioFromAVAsset(url: url)
+            } catch {
+                // Fallback 2: ffmpeg for unsupported formats
+                logger.info("AVAsset failed for \(url.lastPathComponent): \(error.localizedDescription), trying ffmpeg fallback")
+                return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
+            }
         }
     }
 
@@ -444,6 +455,8 @@ enum AudioMixerError: LocalizedError {
     case formatCreationFailed
     case noAudioTrack
     case audioExtractionFailed(String)
+    case ffmpegNotAvailable
+    case ffmpegFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -452,6 +465,8 @@ enum AudioMixerError: LocalizedError {
         case .formatCreationFailed: "Failed to create audio format"
         case .noAudioTrack: "File contains no audio track"
         case let .audioExtractionFailed(detail): "Audio extraction failed: \(detail)"
+        case .ffmpegNotAvailable: "ffmpeg not found. Install: brew install ffmpeg"
+        case let .ffmpegFailed(detail): "ffmpeg failed: \(detail)"
         }
     }
 }
