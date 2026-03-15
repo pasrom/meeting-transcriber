@@ -31,4 +31,40 @@ enum AppPaths {
 
     /// Custom protocol prompt file.
     static let customPromptFile = dataDir.appendingPathComponent("protocol_prompt.md")
+
+    /// Legacy IPC directory (`~/.meeting-transcriber/`) used before sandbox migration.
+    private static let legacyIpcDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".meeting-transcriber")
+
+    private static let logger = Logger(subsystem: logSubsystem, category: "AppPaths")
+
+    /// Migrate IPC files from `~/.meeting-transcriber/` to `dataDir/ipc/`.
+    /// Safe to call multiple times — copyItem fails gracefully if destination exists.
+    static func migrateIfNeeded() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: legacyIpcDir.path) else { return }
+
+        let filesToMigrate = [
+            "processed_recordings.json",
+            "pipeline_queue.json",
+            "pipeline_log.jsonl",
+        ]
+
+        try? fm.createDirectory(at: ipcDir, withIntermediateDirectories: true)
+
+        for name in filesToMigrate {
+            let src = legacyIpcDir.appendingPathComponent(name)
+            let dst = ipcDir.appendingPathComponent(name)
+            do {
+                try fm.copyItem(at: src, to: dst)
+                logger.info("Migrated \(name) from legacy IPC directory")
+            } catch CocoaError.fileWriteFileExists {
+                // Already migrated — expected on subsequent launches
+            } catch CocoaError.fileReadNoSuchFile {
+                // Source doesn't exist — skip
+            } catch {
+                logger.error("Failed to migrate \(name): \(error.localizedDescription)")
+            }
+        }
+    }
 }

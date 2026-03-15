@@ -25,6 +25,7 @@ struct MeetingTranscriberApp: App {
     }
 
     init() {
+        AppPaths.migrateIfNeeded()
         notifications.setUp()
         DualSourceRecorder.cleanupTempFiles()
         // Auto-watch: schedule on main run loop after app finishes launching
