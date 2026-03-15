@@ -56,10 +56,11 @@ scripts/
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   generate_test_audio_10speakers.sh # Generate 10-speaker test WAV fixture (requires sox)
+  lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
 Casks/meeting-transcriber.rb # Homebrew Cask formula
 .github/workflows/
-  ci.yml                   # CI: Swift tests
+  ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
 docs/
@@ -98,6 +99,12 @@ Single-source: Audio/Video → 16kHz mono (AVAsset fallback for non-WAV) → Whi
 
 # Swift tests
 cd app/MeetingTranscriber && swift test
+
+# Lint & format check (dry-run, no changes)
+./scripts/lint.sh
+
+# Lint & format auto-fix (SwiftFormat + SwiftLint --fix)
+./scripts/lint.sh --fix
 
 # Build self-contained .app + DMG for distribution
 ./scripts/build_release.sh
