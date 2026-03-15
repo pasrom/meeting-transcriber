@@ -110,7 +110,7 @@ class DualSourceRecorder: RecordingProvider {
     }
 
     /// Stop recording and produce a mixed WAV.
-    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length cyclomatic_complexity
+    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length
         guard isRecording else {
             throw RecorderError.notRecording
         }
@@ -188,11 +188,6 @@ class DualSourceRecorder: RecordingProvider {
             try AudioMixer.saveWAV(samples: appSamples, sampleRate: actualRate, url: appFile)
             appPath = appFile
             logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate) Hz)")
-
-            // Resample to recordRate if needed
-            if actualRate != recordRate {
-                appSamples = AudioMixer.resample(appSamples, from: actualRate, to: recordRate)
-            }
         } else if FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
@@ -216,14 +211,11 @@ class DualSourceRecorder: RecordingProvider {
             micSamples = try AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath)
             micPath = expectedMicPath
             logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
-
-            if micFileRate != recordRate {
-                micSamples = AudioMixer.resample(micSamples, from: micFileRate, to: recordRate)
-                logger.info("Mic resampled: \(micFileRate) → \(self.recordRate) Hz")
-            }
         }
 
         // ── Mix via AudioMixer ──
+        // Use the actual capture rate for mixing — the pipeline resamples to 16kHz later.
+        let mixRate = actualRate > 0 ? actualRate : recordRate
         let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
 
         if let app = appPath, let mic = micPath {
@@ -235,12 +227,12 @@ class DualSourceRecorder: RecordingProvider {
                 micDelay: micDelay,
                 muteTimeline: muteTimeline,
                 recordingStart: recordingStart,
-                sampleRate: recordRate,
+                sampleRate: mixRate,
             )
         } else if !appSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: appSamples, sampleRate: recordRate, url: mixPath)
+            try AudioMixer.saveWAV(samples: appSamples, sampleRate: mixRate, url: mixPath)
         } else if !micSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: micSamples, sampleRate: recordRate, url: mixPath)
+            try AudioMixer.saveWAV(samples: micSamples, sampleRate: mixRate, url: mixPath)
         } else {
             throw RecorderError.noAudioData
         }

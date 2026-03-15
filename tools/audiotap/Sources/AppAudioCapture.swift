@@ -150,36 +150,7 @@ public class AppAudioCapture {
             )
         }
         aggregateID = newAggregateID
-
-        // Query actual sample rate of the aggregate device
-        var actualRate: Float64 = 0
-        var rateAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var rateSize = UInt32(MemoryLayout<Float64>.size)
-        AudioObjectGetPropertyData(aggregateID, &rateAddress, 0, nil, &rateSize, &actualRate)
-        let queriedRate = Int(actualRate)
-        logger.info("Created aggregate device: \(self.aggregateID) (actual rate: \(queriedRate) Hz)")
-
-        // If the aggregate device rate differs from requested, force it
-        if queriedRate != sampleRate && actualRate > 0 {
-            var desiredRate = Float64(sampleRate)
-            let setStatus = AudioObjectSetPropertyData(
-                aggregateID, &rateAddress, 0, nil,
-                UInt32(MemoryLayout<Float64>.size), &desiredRate,
-            )
-            if setStatus == noErr {
-                // Re-query to confirm
-                AudioObjectGetPropertyData(aggregateID, &rateAddress, 0, nil, &rateSize, &actualRate)
-                actualSampleRate = Int(actualRate)
-                logger.info("App audio: forced rate to \(self.sampleRate) Hz (actual: \(self.actualSampleRate) Hz)")
-            } else {
-                actualSampleRate = queriedRate
-                logger.warning("App audio: could not set rate to \(self.sampleRate) Hz, using \(queriedRate) Hz (status: \(setStatus))")
-            }
-        }
+        logger.info("Created aggregate device: \(self.aggregateID)")
 
         // Set up IOProc to read audio data and write to file descriptor
         let fd = outputFileDescriptor
@@ -196,7 +167,7 @@ public class AppAudioCapture {
                 self.appFirstFrameTime = mach_absolute_time()
                 let frames = Int(abl.mBuffers.mDataByteSize) / MemoryLayout<Float>.size
                 logger.info(
-                    "Audio format: \(queriedRate) Hz actual, \(abl.mNumberBuffers) buffers, \(frames) frames/buffer",
+                    "Audio format: \(self.actualSampleRate) Hz, \(abl.mNumberBuffers) buffers, \(frames) frames/buffer",
                 )
             }
 
@@ -232,7 +203,18 @@ public class AppAudioCapture {
         }
 
         isRunning = true
-        logger.info("Audio capture started (CATapDescription, PID \(self.pid))")
+
+        // Query actual sample rate after device start
+        var rateAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        )
+        var rateSize = UInt32(MemoryLayout<Float64>.size)
+        var actualRate: Float64 = 0
+        AudioObjectGetPropertyData(aggregateID, &rateAddress, 0, nil, &rateSize, &actualRate)
+        actualSampleRate = Int(actualRate)
+        logger.info("Audio capture started (PID \(self.pid), rate: \(self.actualSampleRate) Hz)")
     }
 
     private func installOutputDeviceChangeListener() {
