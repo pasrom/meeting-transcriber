@@ -1,11 +1,12 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class PipelineQueueTests: XCTestCase {
-
+    // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
     private var queue: PipelineQueue!
+    // swiftlint:enable implicitly_unwrapped_optional
 
     override func setUp() async throws {
         tmpDir = FileManager.default.temporaryDirectory
@@ -16,6 +17,7 @@ final class PipelineQueueTests: XCTestCase {
 
     override func tearDown() async throws {
         try? FileManager.default.removeItem(at: tmpDir)
+        try await super.tearDown()
     }
 
     private func makeJob(title: String = "Test Meeting") -> PipelineJob {
@@ -25,7 +27,7 @@ final class PipelineQueueTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
     }
 
@@ -129,7 +131,7 @@ final class PipelineQueueTests: XCTestCase {
             meetingTitle: "Restored Meeting",
             appName: "Teams",
             mixPath: mixPath,
-            appPath: nil, micPath: nil, micDelay: 0
+            appPath: nil, micPath: nil, micDelay: 0,
         )
         let data = try JSONEncoder().encode([job])
         let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
@@ -151,7 +153,7 @@ final class PipelineQueueTests: XCTestCase {
             meetingTitle: "Active Meeting",
             appName: "Teams",
             mixPath: mixPath,
-            appPath: nil, micPath: nil, micDelay: 0
+            appPath: nil, micPath: nil, micDelay: 0,
         )
         job.state = .transcribing
         let data = try JSONEncoder().encode([job])
@@ -172,7 +174,7 @@ final class PipelineQueueTests: XCTestCase {
             meetingTitle: "Done Meeting",
             appName: "Teams",
             mixPath: mixPath,
-            appPath: nil, micPath: nil, micDelay: 0
+            appPath: nil, micPath: nil, micDelay: 0,
         )
         job.state = .done
         let data = try JSONEncoder().encode([job])
@@ -189,7 +191,7 @@ final class PipelineQueueTests: XCTestCase {
             meetingTitle: "Ghost Meeting",
             appName: "Teams",
             mixPath: URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString).wav"),
-            appPath: nil, micPath: nil, micDelay: 0
+            appPath: nil, micPath: nil, micDelay: 0,
         )
         let data = try JSONEncoder().encode([job])
         try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
@@ -222,7 +224,7 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Recovered Recording (20260311_100000)")
         XCTAssertEqual(
             freshQueue.jobs[0].mixPath.standardizedFileURL,
-            mixFile.standardizedFileURL
+            mixFile.standardizedFileURL,
         )
     }
 
@@ -238,7 +240,7 @@ final class PipelineQueueTests: XCTestCase {
             meetingTitle: "Already Tracked",
             appName: "Teams",
             mixPath: mixFile,
-            appPath: nil, micPath: nil, micDelay: 0
+            appPath: nil, micPath: nil, micDelay: 0,
         )
         freshQueue.enqueue(existing)
 
@@ -338,17 +340,17 @@ final class PipelineQueueTests: XCTestCase {
 
     private func makeProcessingQueue() -> PipelineQueue {
         PipelineQueue(
-            logDir: tmpDir,
             whisperKit: WhisperKitEngine(),
             diarizationFactory: { MockDiarization() },
             protocolGeneratorFactory: { MockProtocolGen() },
             outputDir: tmpDir,
+            logDir: tmpDir,
             diarizeEnabled: false,
-            micLabel: "Me"
+            micLabel: "Me",
         )
     }
 
-    func testProcessNextPicksFirstWaitingJob() async throws {
+    func testProcessNextPicksFirstWaitingJob() async {
         let pQueue = makeProcessingQueue()
 
         let job = makeJob()
@@ -367,7 +369,7 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(pQueue.jobs.isEmpty)
     }
 
-    func testIsProcessingFlag() async {
+    func testIsProcessingFlag() {
         let pQueue = makeProcessingQueue()
         XCTAssertFalse(pQueue.isProcessing)
     }

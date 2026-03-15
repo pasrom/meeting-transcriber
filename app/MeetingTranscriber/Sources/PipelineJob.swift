@@ -4,6 +4,7 @@ enum JobState: String, Codable, Sendable {
     case waiting
     case transcribing
     case diarizing
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case generatingProtocol
     case done
     case error
@@ -42,7 +43,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
         appPath: URL?,
         micPath: URL?,
         micDelay: TimeInterval,
-        participants: [String] = []
+        participants: [String] = [],
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle

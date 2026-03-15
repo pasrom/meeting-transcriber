@@ -2,7 +2,7 @@ import AppKit
 
 /// Badge overlay kind for the menu bar icon.
 enum BadgeKind: CaseIterable {
-    case none
+    case inactive
     case recording
     case transcribing
     case diarizing
@@ -16,6 +16,7 @@ enum BadgeKind: CaseIterable {
     var isAnimated: Bool {
         switch self {
         case .recording, .transcribing, .diarizing, .processing: true
+
         default: false
         }
     }
@@ -32,7 +33,6 @@ enum BadgeKind: CaseIterable {
 ///
 /// Rendered as template image — macOS handles light/dark mode automatically.
 enum MenuBarIcon {
-
     /// Number of distinct animation frames.
     static let frameCount = 6
 
@@ -46,7 +46,7 @@ enum MenuBarIcon {
     private static let lineHeight: CGFloat = 1.4
     private static let lineSpacing: CGFloat = 2.8
     private static let lineWidths: [CGFloat] = [0.70, 0.55, 0.65, 0.50, 0.40]
-    private static let lineLeftInset: CGFloat = 0.12  // multiplied by rect width
+    private static let lineLeftInset: CGFloat = 0.12 // multiplied by rect width
 
     private static func barsLayout(in rect: NSRect) -> (left: CGFloat, centerY: CGFloat) {
         let barsWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * (barSpacing - barWidth)
@@ -71,13 +71,17 @@ enum MenuBarIcon {
             switch badge {
             case .transcribing:
                 drawTranscribingAnimation(in: rect, frame: frame)
+
             case .diarizing:
                 drawDiarizingAnimation(in: rect, frame: frame)
+
             case .processing:
                 drawProtocolAnimation(in: rect, frame: frame)
+
             case .updateAvailable:
                 drawRecordingAnimation(in: rect, frame: 0)
                 drawUpdateArrow(in: rect)
+
             default:
                 drawRecordingAnimation(in: rect, frame: frame)
             }
@@ -103,14 +107,14 @@ enum MenuBarIcon {
         let heights = recordingFrames[frame % recordingFrames.count]
         let layout = barsLayout(in: rect)
 
-        for i in 0..<barCount {
+        for i in 0 ..< barCount {
             let x = layout.left + CGFloat(i) * barSpacing
             let barH = rect.height * heights[i]
             let barRect = NSRect(
                 x: x,
                 y: layout.centerY - barH / 2,
                 width: barWidth,
-                height: barH
+                height: barH,
             )
             NSBezierPath(roundedRect: barRect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
         }
@@ -126,7 +130,7 @@ enum MenuBarIcon {
         let bars = barsLayout(in: rect)
         let text = textLayout(in: rect)
 
-        for i in 0..<barCount {
+        for i in 0 ..< barCount {
             // Source: vertical bar
             let srcX = bars.left + CGFloat(i) * barSpacing
             let srcH = h * defaultBarHeights[i]
@@ -144,8 +148,11 @@ enum MenuBarIcon {
             let rh = srcH + (lineHeight - srcH) * t
             let radius = min(rw, rh) / 2
 
-            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: rw, height: rh),
-                         xRadius: radius, yRadius: radius).fill()
+            NSBezierPath(
+                roundedRect: NSRect(x: x, y: y, width: rw, height: rh),
+                xRadius: radius,
+                yRadius: radius,
+            ).fill()
         }
     }
 
@@ -161,15 +168,18 @@ enum MenuBarIcon {
         let maxShift: CGFloat = 2.5
         let verticalSep: CGFloat = 1.5
 
-        for i in 0..<barCount {
-            let isGroupA = (i % 2 == 0)
+        for i in 0 ..< barCount {
+            let isGroupA = i.isMultiple(of: 2)
             let barH = h * defaultBarHeights[i]
 
             let x = layout.left + CGFloat(i) * barSpacing + (isGroupA ? -maxShift : maxShift) * t
             let y = layout.centerY - barH / 2 + (isGroupA ? verticalSep : -verticalSep) * t
 
-            NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: barH),
-                         xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
+            NSBezierPath(
+                roundedRect: NSRect(x: x, y: y, width: barWidth, height: barH),
+                xRadius: barWidth / 2,
+                yRadius: barWidth / 2,
+            ).fill()
         }
     }
 
@@ -184,9 +194,9 @@ enum MenuBarIcon {
         // Arrow pointing up: triangle + stem
         let arrow = NSBezierPath()
         // Triangle head
-        arrow.move(to: NSPoint(x: cx, y: cy + size / 2))          // top
-        arrow.line(to: NSPoint(x: cx - size / 3, y: cy + 0.5))    // bottom-left
-        arrow.line(to: NSPoint(x: cx + size / 3, y: cy + 0.5))    // bottom-right
+        arrow.move(to: NSPoint(x: cx, y: cy + size / 2)) // top
+        arrow.line(to: NSPoint(x: cx - size / 3, y: cy + 0.5)) // bottom-left
+        arrow.line(to: NSPoint(x: cx + size / 3, y: cy + 0.5)) // bottom-right
         arrow.close()
         arrow.fill()
 
@@ -202,11 +212,14 @@ enum MenuBarIcon {
         let text = textLayout(in: rect)
         let visibleLines = (frame % frameCount) + 1
 
-        for i in 0..<min(visibleLines, barCount) {
+        for i in 0 ..< min(visibleLines, barCount) {
             let lineW = rect.width * lineWidths[i]
             let lineY = text.top - CGFloat(i) * lineSpacing - lineHeight
-            NSBezierPath(roundedRect: NSRect(x: text.left, y: lineY, width: lineW, height: lineHeight),
-                         xRadius: lineHeight / 2, yRadius: lineHeight / 2).fill()
+            NSBezierPath(
+                roundedRect: NSRect(x: text.left, y: lineY, width: lineW, height: lineHeight),
+                xRadius: lineHeight / 2,
+                yRadius: lineHeight / 2,
+            ).fill()
         }
     }
 }

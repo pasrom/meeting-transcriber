@@ -5,8 +5,7 @@ import os.log
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMixer")
 
 /// Audio mixing, echo suppression, mute masking, and resampling utilities.
-struct AudioMixer {
-
+enum AudioMixer {
     // MARK: - Mix
 
     /// Mix app and mic audio tracks into a single mono WAV.
@@ -20,7 +19,7 @@ struct AudioMixer {
         micDelay: TimeInterval = 0,
         muteTimeline: [MuteTransition] = [],
         recordingStart: TimeInterval = 0,
-        sampleRate: Int = 48000
+        sampleRate: Int = 48000,
     ) throws {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
@@ -32,7 +31,7 @@ struct AudioMixer {
                 timeline: muteTimeline,
                 sampleRate: sampleRate,
                 micDelay: micDelay,
-                recordingStart: recordingStart
+                recordingStart: recordingStart,
             )
         }
 
@@ -42,7 +41,7 @@ struct AudioMixer {
                 appSamples: appSamples,
                 micSamples: &micSamples,
                 sampleRate: sampleRate,
-                micDelay: micDelay
+                micDelay: micDelay,
             )
         }
 
@@ -77,15 +76,19 @@ struct AudioMixer {
         var result = [Float](repeating: 0, count: max(a.count, b.count))
 
         // Average overlapping region
-        for i in 0..<minLen {
+        for i in 0 ..< minLen {
             result[i] = (a[i] + b[i]) / 2
         }
 
         // Append tail of longer track
         if a.count > minLen {
-            for i in minLen..<a.count { result[i] = a[i] }
+            for i in minLen ..< a.count {
+                result[i] = a[i]
+            }
         } else if b.count > minLen {
-            for i in minLen..<b.count { result[i] = b[i] }
+            for i in minLen ..< b.count {
+                result[i] = b[i]
+            }
         }
 
         return result
@@ -99,7 +102,7 @@ struct AudioMixer {
         timeline: [MuteTransition],
         sampleRate: Int,
         micDelay: TimeInterval = 0,
-        recordingStart: TimeInterval = 0
+        recordingStart: TimeInterval = 0,
     ) {
         guard !timeline.isEmpty, !samples.isEmpty else { return }
 
@@ -127,7 +130,7 @@ struct AudioMixer {
             let lower = max(0, range.start)
             let upper = min(samples.count, range.end)
             guard lower < upper else { continue }
-            for i in lower..<upper {
+            for i in lower ..< upper {
                 samples[i] = 0
             }
         }
@@ -148,24 +151,24 @@ struct AudioMixer {
         micSamples: inout [Float],
         sampleRate: Int,
         micDelay: TimeInterval = 0,
-        threshold: Float = 0.01
+        threshold: Float = 0.01,
     ) {
-        let windowSize = sampleRate / 50  // 20ms windows
+        let windowSize = sampleRate / 50 // 20ms windows
         guard windowSize > 0 else { return }
 
-        let marginBefore = 2   // 40ms
-        let marginAfter = 10   // 200ms
+        let marginBefore = 2 // 40ms
+        let marginAfter = 10 // 200ms
 
         // Compute RMS energy per window for app audio
         let appWindowCount = appSamples.count / windowSize
         guard appWindowCount > 0 else { return }
 
         var appRMS = [Float](repeating: 0, count: appWindowCount)
-        for i in 0..<appWindowCount {
+        for i in 0 ..< appWindowCount {
             let start = i * windowSize
             let end = min(start + windowSize, appSamples.count)
             var sumSq: Float = 0
-            for j in start..<end {
+            for j in start ..< end {
                 sumSq += appSamples[j] * appSamples[j]
             }
             appRMS[i] = sqrt(sumSq / Float(end - start))
@@ -173,13 +176,11 @@ struct AudioMixer {
 
         // Build gate mask: true = suppress
         var gateMask = [Bool](repeating: false, count: appWindowCount)
-        for i in 0..<appWindowCount {
-            if appRMS[i] > threshold {
-                let lo = max(0, i - marginBefore)
-                let hi = min(appWindowCount - 1, i + marginAfter)
-                for j in lo...hi {
-                    gateMask[j] = true
-                }
+        for i in 0 ..< appWindowCount where appRMS[i] > threshold {
+            let lo = max(0, i - marginBefore)
+            let hi = min(appWindowCount - 1, i + marginAfter)
+            for j in lo ... hi {
+                gateMask[j] = true
             }
         }
 
@@ -189,13 +190,13 @@ struct AudioMixer {
 
         // Apply gate mask to mic samples
         let micWindowCount = micSamples.count / windowSize
-        for i in 0..<micWindowCount {
+        for i in 0 ..< micWindowCount {
             let appIdx = i + delayWindows
             if appIdx >= 0 && appIdx < appWindowCount && gateMask[appIdx] {
                 let start = i * windowSize
                 let end = min(start + windowSize, micSamples.count)
-                for j in start..<end {
-                    micSamples[j] = 0  // full suppression
+                for j in start ..< end {
+                    micSamples[j] = 0 // full suppression
                 }
             }
         }
@@ -208,9 +209,9 @@ struct AudioMixer {
         guard sourceRate != targetRate, !samples.isEmpty else { return samples }
 
         guard let srcFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: Double(sourceRate), channels: 1, interleaved: false
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(sourceRate), channels: 1, interleaved: false,
         ), let dstFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: Double(targetRate), channels: 1, interleaved: false
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(targetRate), channels: 1, interleaved: false,
         ), let converter = AVAudioConverter(from: srcFormat, to: dstFormat) else {
             logger.warning("AVAudioConverter init failed, falling back to linear interpolation")
             return resampleLinear(samples, from: sourceRate, to: targetRate)
@@ -222,6 +223,7 @@ struct AudioMixer {
         }
         srcBuffer.frameLength = frameCount
         samples.withUnsafeBufferPointer { ptr in
+            // swiftlint:disable:next force_unwrapping
             srcBuffer.floatChannelData![0].initialize(from: ptr.baseAddress!, count: samples.count)
         }
 
@@ -247,6 +249,7 @@ struct AudioMixer {
             return resampleLinear(samples, from: sourceRate, to: targetRate)
         }
 
+        // swiftlint:disable:next force_unwrapping
         return Array(UnsafeBufferPointer(start: dstBuffer.floatChannelData![0], count: Int(dstBuffer.frameLength)))
     }
 
@@ -255,7 +258,7 @@ struct AudioMixer {
         let ratio = Double(targetRate) / Double(sourceRate)
         let outputCount = Int(Double(samples.count) * ratio)
         var output = [Float](repeating: 0, count: outputCount)
-        for i in 0..<outputCount {
+        for i in 0 ..< outputCount {
             let srcIdx = Double(i) / ratio
             let lo = Int(srcIdx)
             let hi = min(lo + 1, samples.count - 1)
@@ -307,7 +310,7 @@ struct AudioMixer {
 
         guard reader.startReading() else {
             throw AudioMixerError.audioExtractionFailed(
-                reader.error?.localizedDescription ?? "Unknown error"
+                reader.error?.localizedDescription ?? "Unknown error",
             )
         }
 
@@ -325,14 +328,19 @@ struct AudioMixer {
             let offset = samples.count
             samples.append(contentsOf: repeatElement(Float(0), count: floatCount))
             _ = samples.withUnsafeMutableBufferPointer { buf in
-                CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length,
-                                           destination: buf.baseAddress! + offset)
+                CMBlockBufferCopyDataBytes(
+                    blockBuffer,
+                    atOffset: 0,
+                    dataLength: length,
+                    // swiftlint:disable:next force_unwrapping
+                    destination: buf.baseAddress! + offset,
+                )
             }
         }
 
         if reader.status == .failed {
             throw AudioMixerError.audioExtractionFailed(
-                reader.error?.localizedDescription ?? "Unknown error"
+                reader.error?.localizedDescription ?? "Unknown error",
             )
         }
 
@@ -380,14 +388,14 @@ struct AudioMixer {
 
         // Stereo → mono (average channels)
         var mono = [Float](repeating: 0, count: sampleCount)
-        for ch in 0..<channelCount {
+        for ch in 0 ..< channelCount {
             let channelPtr = floatData[ch]
-            for i in 0..<sampleCount {
+            for i in 0 ..< sampleCount {
                 mono[i] += channelPtr[i]
             }
         }
         let scale = 1.0 / Float(channelCount)
-        for i in 0..<sampleCount {
+        for i in 0 ..< sampleCount {
             mono[i] *= scale
         }
         return mono
@@ -399,7 +407,7 @@ struct AudioMixer {
             commonFormat: .pcmFormatFloat32,
             sampleRate: Double(sampleRate),
             channels: 1,
-            interleaved: false
+            interleaved: false,
         ) else {
             throw AudioMixerError.formatCreationFailed
         }
@@ -412,7 +420,7 @@ struct AudioMixer {
                 AVNumberOfChannelsKey: 1,
                 AVLinearPCMBitDepthKey: 16,
                 AVLinearPCMIsFloatKey: false,
-            ]
+            ],
         )
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else {
@@ -420,9 +428,10 @@ struct AudioMixer {
         }
         buffer.frameLength = AVAudioFrameCount(samples.count)
 
+        // swiftlint:disable:next force_unwrapping
         let dst = buffer.floatChannelData![0]
         samples.withUnsafeBufferPointer { src in
-            dst.initialize(from: src.baseAddress!, count: samples.count)
+            dst.initialize(from: src.baseAddress!, count: samples.count) // swiftlint:disable:this force_unwrapping
         }
 
         try file.write(from: buffer)
@@ -438,11 +447,11 @@ enum AudioMixerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .bufferCreationFailed: return "Failed to create audio buffer"
-        case .noFloatData: return "Audio buffer has no float data"
-        case .formatCreationFailed: return "Failed to create audio format"
-        case .noAudioTrack: return "File contains no audio track"
-        case .audioExtractionFailed(let detail): return "Audio extraction failed: \(detail)"
+        case .bufferCreationFailed: "Failed to create audio buffer"
+        case .noFloatData: "Audio buffer has no float data"
+        case .formatCreationFailed: "Failed to create audio format"
+        case .noAudioTrack: "File contains no audio track"
+        case let .audioExtractionFailed(detail): "Audio extraction failed: \(detail)"
         }
     }
 }

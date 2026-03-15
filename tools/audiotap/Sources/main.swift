@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -33,17 +34,20 @@ func getDefaultOutputDeviceUID() -> String? {
     var address = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
+        mElement: kAudioObjectPropertyElementMain,
+    )
     var deviceID = AudioObjectID(kAudioObjectUnknown)
     var size = UInt32(MemoryLayout<AudioObjectID>.size)
     let status = AudioObjectGetPropertyData(
-        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID,
+    )
     guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
 
     var uidAddress = AudioObjectPropertyAddress(
         mSelector: kAudioDevicePropertyDeviceUID,
         mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
+        mElement: kAudioObjectPropertyElementMain,
+    )
     var uid: Unmanaged<CFString>?
     var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
     let uidStatus = AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid)
@@ -74,7 +78,8 @@ class MicCaptureHandler {
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
+        mElement: kAudioObjectPropertyElementMain,
+    )
 
     init(outputPath: String) {
         self.outputPath = outputPath
@@ -84,7 +89,8 @@ class MicCaptureHandler {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
+            mElement: kAudioObjectPropertyElementMain,
+        )
         var deviceID: AudioDeviceID = kAudioObjectUnknown
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
@@ -92,7 +98,8 @@ class MicCaptureHandler {
         AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject),
             &address, qualifierSize, &cfUID,
-            &size, &deviceID)
+            &size, &deviceID,
+        )
         return deviceID
     }
 
@@ -101,18 +108,20 @@ class MicCaptureHandler {
         installDeviceChangeListener()
     }
 
+    // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
         let inputNode = engine.inputNode
 
         if let uid = deviceUID {
             var deviceID = Self.deviceIDForUID(uid)
             if deviceID != kAudioObjectUnknown {
-                let audioUnit = inputNode.audioUnit!
+                let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
                 AudioUnitSetProperty(
                     audioUnit,
                     kAudioOutputUnitProperty_CurrentDevice,
                     kAudioUnitScope_Global, 0,
-                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
+                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
+                )
                 fputs("Mic device set: \(uid) (ID \(deviceID))\n", stderr)
             } else {
                 fputs("WARNING: Unknown mic device UID '\(uid)', using default\n", stderr)
@@ -121,10 +130,12 @@ class MicCaptureHandler {
 
         let hwFormat = inputNode.outputFormat(forBus: 0)
         fputs(
-            "Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch\n", stderr)
+            "Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch\n", stderr,
+        )
 
         let tapFormat = AVAudioFormat(
-            standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1)!
+            standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
+        )! // swiftlint:disable:this force_unwrapping
         fputs("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch\n", stderr)
 
         // Create WAV file on first start; keep its sample rate for the entire recording
@@ -147,16 +158,20 @@ class MicCaptureHandler {
         converter = nil
         if tapFormat.sampleRate != fileSampleRate {
             let outputFormat = AVAudioFormat(
-                standardFormatWithSampleRate: fileSampleRate, channels: 1)!
+                standardFormatWithSampleRate: fileSampleRate, channels: 1,
+            )! // swiftlint:disable:this force_unwrapping
             converter = AVAudioConverter(from: tapFormat, to: outputFormat)
             fputs(
                 "Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(fileSampleRate)) Hz\n",
-                stderr)
+                stderr,
+            )
         }
 
+        // swiftlint:disable closure_parameter_position closure_body_length
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
-            guard let self = self else { return }
+            // swiftlint:enable closure_parameter_position closure_body_length
+            guard let self else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
             }
@@ -165,10 +180,11 @@ class MicCaptureHandler {
                     // Resample to match the WAV file's sample rate
                     let ratio = self.fileSampleRate / tapFormat.sampleRate
                     let outputFrames = AVAudioFrameCount(
-                        Double(buffer.frameLength) * ratio)
+                        Double(buffer.frameLength) * ratio,
+                    )
                     guard let outputBuffer = AVAudioPCMBuffer(
                         pcmFormat: converter.outputFormat,
-                        frameCapacity: outputFrames
+                        frameCapacity: outputFrames,
                     ) else { return }
                     var error: NSError?
                     var consumed = false
@@ -211,7 +227,8 @@ class MicCaptureHandler {
             AudioObjectID(kAudioObjectSystemObject),
             &defaultInputAddress,
             DispatchQueue.main,
-            listener)
+            listener,
+        )
         if status == noErr {
             deviceChangeListener = listener
             listenerInstalled = true
@@ -249,7 +266,8 @@ class MicCaptureHandler {
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultInputAddress,
                 DispatchQueue.main,
-                listener)
+                listener,
+            )
             deviceChangeListener = nil
             listenerInstalled = false
         }
@@ -279,13 +297,15 @@ class AppAudioCapture {
     /// Stored listener block so we can pass the same instance to remove.
     private var outputDeviceChangeListener: AudioObjectPropertyListenerBlock?
     private let writeQueue = DispatchQueue(
-        label: "audiotap.writer", qos: .userInteractive)
+        label: "audiotap.writer", qos: .userInteractive,
+    )
 
     /// CoreAudio property address for default output device changes.
     private var defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain)
+        mElement: kAudioObjectPropertyElementMain,
+    )
 
     /// mach_absolute_time() of first audio callback
     var appFirstFrameTime: UInt64 = 0
@@ -304,20 +324,23 @@ class AppAudioCapture {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
             mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
+            mElement: kAudioObjectPropertyElementMain,
+        )
         var objectID = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         var mutablePid = pid
         let status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject), &address,
-            UInt32(MemoryLayout<pid_t>.size), &mutablePid, &size, &objectID)
+            UInt32(MemoryLayout<pid_t>.size), &mutablePid, &size, &objectID,
+        )
         guard status == noErr, objectID != kAudioObjectUnknown else {
             throw NSError(
                 domain: "audiotap", code: Int(status),
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to translate PID \(pid) to audio object (status: \(status))"
-                ])
+                        "Failed to translate PID \(pid) to audio object (status: \(status))",
+                ],
+            )
         }
         return objectID
     }
@@ -327,6 +350,7 @@ class AppAudioCapture {
         installOutputDeviceChangeListener()
     }
 
+    // swiftlint:disable:next function_body_length
     private func startCapture() throws {
         let processObjectID = try translatePID()
         fputs("Process audio object ID: \(processObjectID)\n", stderr)
@@ -335,7 +359,8 @@ class AppAudioCapture {
         guard let systemOutputUID = getDefaultOutputDeviceUID() else {
             throw NSError(
                 domain: "audiotap", code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Cannot get default output device UID"])
+                userInfo: [NSLocalizedDescriptionKey: "Cannot get default output device UID"],
+            )
         }
         fputs("System output device: \(systemOutputUID)\n", stderr)
 
@@ -353,8 +378,9 @@ class AppAudioCapture {
                 domain: "audiotap", code: Int(tapStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to create process tap (status: \(tapStatus))"
-                ])
+                        "Failed to create process tap (status: \(tapStatus))",
+                ],
+            )
         }
         tapID = newTapID
         fputs("Created process tap: \(tapID)\n", stderr)
@@ -367,27 +393,29 @@ class AppAudioCapture {
             kAudioAggregateDeviceIsPrivateKey as String: true,
             kAudioAggregateDeviceTapAutoStartKey as String: true,
             kAudioAggregateDeviceSubDeviceListKey as String: [
-                [kAudioSubDeviceUIDKey as String: systemOutputUID]
+                [kAudioSubDeviceUIDKey as String: systemOutputUID],
             ],
             kAudioAggregateDeviceTapListKey as String: [
                 [
                     kAudioSubTapUIDKey as String: tap.uuid.uuidString,
                     kAudioSubTapDriftCompensationKey as String: true,
-                ]
+                ],
             ],
         ]
 
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
         let aggStatus = AudioHardwareCreateAggregateDevice(
-            desc as CFDictionary, &newAggregateID)
+            desc as CFDictionary, &newAggregateID,
+        )
         guard aggStatus == noErr else {
             AudioHardwareDestroyProcessTap(tapID)
             throw NSError(
                 domain: "audiotap", code: Int(aggStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to create aggregate device (status: \(aggStatus))"
-                ])
+                        "Failed to create aggregate device (status: \(aggStatus))",
+                ],
+            )
         }
         aggregateID = newAggregateID
 
@@ -396,7 +424,8 @@ class AppAudioCapture {
         var rateAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyNominalSampleRate,
             mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
+            mElement: kAudioObjectPropertyElementMain,
+        )
         var rateSize = UInt32(MemoryLayout<Float64>.size)
         AudioObjectGetPropertyData(aggregateID, &rateAddress, 0, nil, &rateSize, &actualRate)
         let actualSampleRate = Int(actualRate)
@@ -407,7 +436,8 @@ class AppAudioCapture {
             var desiredRate = Float64(sampleRate)
             let setStatus = AudioObjectSetPropertyData(
                 aggregateID, &rateAddress, 0, nil,
-                UInt32(MemoryLayout<Float64>.size), &desiredRate)
+                UInt32(MemoryLayout<Float64>.size), &desiredRate,
+            )
             if setStatus == noErr {
                 // Re-query to confirm
                 AudioObjectGetPropertyData(aggregateID, &rateAddress, 0, nil, &rateSize, &actualRate)
@@ -422,9 +452,9 @@ class AppAudioCapture {
         // Set up IOProc to read audio data and write to stdout
         var newProcID: AudioDeviceIOProcID?
         let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
-            &newProcID, aggregateID, writeQueue
+            &newProcID, aggregateID, writeQueue,
         ) { [weak self] _, inInputData, _, _, _ in
-            guard let self = self, self.isRunning else { return }
+            guard let self, self.isRunning else { return }
             let abl = inInputData.pointee
 
             // Log format on first callback
@@ -434,7 +464,8 @@ class AppAudioCapture {
                 let frames = Int(abl.mBuffers.mDataByteSize) / MemoryLayout<Float>.size
                 fputs(
                     "Audio format: \(actualSampleRate) Hz actual, \(abl.mNumberBuffers) buffers, \(frames) frames/buffer\n",
-                    stderr)
+                    stderr,
+                )
             }
 
             // CATapDescription delivers interleaved float32 — write directly
@@ -449,8 +480,9 @@ class AppAudioCapture {
                 domain: "audiotap", code: Int(ioProcStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to create IOProc (status: \(ioProcStatus))"
-                ])
+                        "Failed to create IOProc (status: \(ioProcStatus))",
+                ],
+            )
         }
         procID = validProcID
 
@@ -462,8 +494,9 @@ class AppAudioCapture {
                 domain: "audiotap", code: Int(startStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:
-                        "Failed to start audio device (status: \(startStatus))"
-                ])
+                        "Failed to start audio device (status: \(startStatus))",
+                ],
+            )
         }
 
         isRunning = true
@@ -479,7 +512,8 @@ class AppAudioCapture {
             AudioObjectID(kAudioObjectSystemObject),
             &defaultOutputAddress,
             DispatchQueue.main,
-            listener)
+            listener,
+        )
         if status == noErr {
             outputDeviceChangeListener = listener
             outputListenerInstalled = true
@@ -517,7 +551,7 @@ class AppAudioCapture {
     private func stopCapture() {
         isRunning = false
 
-        if let procID = procID {
+        if let procID {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
             self.procID = nil
@@ -540,7 +574,8 @@ class AppAudioCapture {
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultOutputAddress,
                 DispatchQueue.main,
-                listener)
+                listener,
+            )
             outputDeviceChangeListener = nil
             outputListenerInstalled = false
         }
@@ -550,8 +585,11 @@ class AppAudioCapture {
 
 // MARK: - Main Entry Point
 
+// swiftlint:disable convenience_type
 @main
 struct AudioTap {
+    // swiftlint:enable convenience_type
+    // swiftlint:disable:next function_body_length cyclomatic_complexity
     static func main() {
         // Disable C stdout buffering
         setbuf(stdout, nil)
@@ -582,7 +620,8 @@ struct AudioTap {
                   macOS 14.2+ (for CATapDescription)
                   No Screen Recording permission needed for audio capture
 
-                """, stderr)
+                """, stderr,
+            )
             exit(1)
         }
 
@@ -626,10 +665,10 @@ struct AudioTap {
         fputs("Target PID: \(pid)\n", stderr)
         fputs("Sample Rate: \(sampleRate) Hz\n", stderr)
         fputs("Channels: \(channels)\n", stderr)
-        if let micPath = micPath {
+        if let micPath {
             fputs("Mic output: \(micPath)\n", stderr)
         }
-        if let micDeviceUID = micDeviceUID {
+        if let micDeviceUID {
             fputs("Mic device UID: \(micDeviceUID)\n", stderr)
         }
         fputs("\n", stderr)
@@ -644,7 +683,7 @@ struct AudioTap {
 
         // Create mic handler if requested
         var micHandler: MicCaptureHandler?
-        if let micPath = micPath {
+        if let micPath {
             micHandler = MicCaptureHandler(outputPath: micPath)
         }
 

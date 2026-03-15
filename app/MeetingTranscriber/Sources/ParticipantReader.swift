@@ -6,10 +6,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Partici
 
 /// Reads participant names from Teams meeting roster via Accessibility API
 /// and writes them to a JSON file for use during diarization.
-struct ParticipantReader {
-    private static let ipcDir = AppPaths.ipcDir
-    private static let participantsFile = ipcDir.appendingPathComponent("participants.json")
-
+enum ParticipantReader {
     /// Known non-name strings in the Teams UI that should be filtered out.
     private static let skipPatterns: Set<String> = [
         "mute", "unmute", "muted", "unmuted", "camera", "share", "chat",
@@ -28,7 +25,7 @@ struct ParticipantReader {
     /// 3. Parse window title for "Name1, Name2 | Microsoft Teams" pattern
     ///
     /// Returns nil if roster not found.
-    static func readParticipants(pid: pid_t) -> [String]? {
+    static func readParticipants(pid: pid_t) -> [String]? { // swiftlint:disable:this discouraged_optional_collection
         let appElement = AXUIElementCreateApplication(pid)
 
         // Strategy 1: Known panel identifiers
@@ -89,29 +86,6 @@ struct ParticipantReader {
         return nil
     }
 
-    // MARK: - Write
-
-    /// Write detected participant names to participants.json for diarization.
-    static func writeParticipants(_ names: [String], meetingTitle: String = "") {
-        let data: [String: Any] = [
-            "version": 1,
-            "meeting_title": meetingTitle,
-            "participants": names,
-        ]
-
-        try? FileManager.default.createDirectory(at: ipcDir, withIntermediateDirectories: true)
-
-        guard let json = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted]) else { return }
-
-        do {
-            try json.write(to: participantsFile, options: .atomic)
-        } catch {
-            logger.error("Failed to write participants: \(error.localizedDescription)")
-            return
-        }
-        logger.info("Wrote \(names.count) participants to \(participantsFile.path)")
-    }
-
     // MARK: - Filtering
 
     /// Filter text strings to likely participant names.
@@ -140,7 +114,7 @@ struct ParticipantReader {
                 || lower.contains(".io") || lower.contains(".org") || lower.contains(".net") { continue }
 
             // Skip strings with path separators (UI navigation, file paths)
-            if text.contains("/") && text.filter({ $0 == "/" }).count >= 2 { continue }
+            if text.contains("/") && text.count(where: { $0 == "/" }) >= 2 { continue }
 
             // Skip timestamps like "10:30"
             if text.contains(":") && text.contains(where: \.isNumber) { continue }

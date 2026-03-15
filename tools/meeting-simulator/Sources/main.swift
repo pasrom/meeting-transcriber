@@ -15,9 +15,9 @@ let windowTitle = CommandLine.arguments.count > 2
 func findFixture() -> String {
     // Walk up from executable to find project root
     let dir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()  // Sources/
-        .deletingLastPathComponent()  // meeting-simulator/
-        .deletingLastPathComponent()  // tools/
+        .deletingLastPathComponent() // Sources/
+        .deletingLastPathComponent() // meeting-simulator/
+        .deletingLastPathComponent() // tools/
     let fixture = dir.appendingPathComponent("tests/fixtures/two_speakers_de.wav")
     if FileManager.default.fileExists(atPath: fixture.path) {
         return fixture.path
@@ -41,7 +41,7 @@ let window = NSWindow(
     contentRect: NSRect(x: 200, y: 200, width: 800, height: 600),
     styleMask: [.titled, .closable, .resizable],
     backing: .buffered,
-    defer: false
+    defer: false,
 )
 window.title = windowTitle
 window.isReleasedWhenClosed = false
@@ -105,19 +105,20 @@ guard FileManager.default.fileExists(atPath: fixturePath) else {
 
 // --- App delegate to handle window close + audio end ---
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAudioPlayerDelegate {
-    func windowWillClose(_ notification: Notification) {
+    func windowWillClose(_: Notification) {
         print("Window closed — exiting.")
         NSApplication.shared.terminate(nil)
     }
 
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    func audioPlayerDidFinishPlaying(_: AVAudioPlayer, successfully _: Bool) {
         print("Audio finished — closing in 2s.")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             NSApplication.shared.terminate(nil)
         }
     }
 
-    @objc func leaveClicked() {
+    @objc
+    func leaveClicked() {
         print("Leave clicked — closing.")
         NSApplication.shared.terminate(nil)
     }

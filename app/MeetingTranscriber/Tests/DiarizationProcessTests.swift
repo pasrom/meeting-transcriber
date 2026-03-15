@@ -1,9 +1,7 @@
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class DiarizationProcessTests: XCTestCase {
-
     // MARK: - Speaker Assignment
 
     func testAssignSpeakers() {
@@ -20,16 +18,16 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["Alice": 6, "Bob": 9],
             autoNames: [:],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakers(
-            transcript: transcript, diarization: diarization
+            transcript: transcript, diarization: diarization,
         )
 
-        XCTAssertEqual(result[0].speaker, "Alice")  // 0-5 overlaps Alice (0-6)
-        XCTAssertEqual(result[1].speaker, "Bob")     // 5-10: 1s Alice, 4s Bob -> Bob
-        XCTAssertEqual(result[2].speaker, "Bob")     // 10-15 fully Bob
+        XCTAssertEqual(result[0].speaker, "Alice") // 0-5 overlaps Alice (0-6)
+        XCTAssertEqual(result[1].speaker, "Bob") // 5-10: 1s Alice, 4s Bob -> Bob
+        XCTAssertEqual(result[2].speaker, "Bob") // 10-15 fully Bob
     }
 
     func testAssignSpeakersNoOverlap() {
@@ -43,11 +41,11 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["Alice": 5],
             autoNames: [:],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakers(
-            transcript: transcript, diarization: diarization
+            transcript: transcript, diarization: diarization,
         )
 
         // Nearest fallback: Alice is the only (and nearest) speaker
@@ -67,11 +65,11 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["SPEAKER_0": 6, "SPEAKER_1": 4],
             autoNames: ["SPEAKER_0": "Roman", "SPEAKER_1": "Anna"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakers(
-            transcript: transcript, diarization: diarization
+            transcript: transcript, diarization: diarization,
         )
 
         XCTAssertEqual(result[0].speaker, "Roman")
@@ -81,7 +79,7 @@ final class DiarizationProcessTests: XCTestCase {
     func testAssignSpeakersEmpty() {
         let result = DiarizationProcess.assignSpeakers(
             transcript: [],
-            diarization: DiarizationResult(segments: [], speakingTimes: [:], autoNames: [:], embeddings: nil)
+            diarization: DiarizationResult(segments: [], speakingTimes: [:], autoNames: [:], embeddings: nil),
         )
         XCTAssertTrue(result.isEmpty)
     }
@@ -101,11 +99,11 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
             autoNames: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakers(
-            transcript: transcript, diarization: diarization
+            transcript: transcript, diarization: diarization,
         )
 
         // Gap to SPEAKER_1 is 15-14=1s, gap to SPEAKER_0 is 12-5=7s → nearest is Bob
@@ -121,11 +119,11 @@ final class DiarizationProcessTests: XCTestCase {
             segments: [],
             speakingTimes: [:],
             autoNames: [:],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakers(
-            transcript: transcript, diarization: diarization
+            transcript: transcript, diarization: diarization,
         )
 
         // No diarization segments at all → UNKNOWN
@@ -142,7 +140,7 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
             autoNames: [:],
-            embeddings: ["SPEAKER_0": [1, 0], "SPEAKER_1": [0, 1]]
+            embeddings: ["SPEAKER_0": [1, 0], "SPEAKER_1": [0, 1]],
         )
 
         let micDiarization = DiarizationResult(
@@ -151,17 +149,17 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["SPEAKER_0": 8],
             autoNames: [:],
-            embeddings: ["SPEAKER_0": [0.5, 0.5]]
+            embeddings: ["SPEAKER_0": [0.5, 0.5]],
         )
 
         let merged = DiarizationProcess.mergeDualTrackDiarization(
             appDiarization: appDiarization,
-            micDiarization: micDiarization
+            micDiarization: micDiarization,
         )
 
         // App speakers prefixed with R_, mic with M_
         XCTAssertEqual(merged.segments.count, 3)
-        let speakers = Set(merged.segments.map { $0.speaker })
+        let speakers = Set(merged.segments.map(\.speaker))
         XCTAssertTrue(speakers.contains("R_SPEAKER_0"))
         XCTAssertTrue(speakers.contains("R_SPEAKER_1"))
         XCTAssertTrue(speakers.contains("M_SPEAKER_0"))
@@ -187,19 +185,19 @@ final class DiarizationProcessTests: XCTestCase {
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
             speakingTimes: ["SPEAKER_0": 5],
             autoNames: [:],
-            embeddings: ["SPEAKER_0": [1, 0]]
+            embeddings: ["SPEAKER_0": [1, 0]],
         )
 
         let micDiarization = DiarizationResult(
             segments: [],
             speakingTimes: [:],
             autoNames: [:],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let merged = DiarizationProcess.mergeDualTrackDiarization(
             appDiarization: appDiarization,
-            micDiarization: micDiarization
+            micDiarization: micDiarization,
         )
 
         XCTAssertEqual(merged.segments.count, 1)
@@ -222,7 +220,7 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["R_SPEAKER_0": 6, "R_SPEAKER_1": 7],
             autoNames: ["R_SPEAKER_0": "Anna", "R_SPEAKER_1": "Max"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let micDiarization = DiarizationResult(
@@ -231,21 +229,21 @@ final class DiarizationProcessTests: XCTestCase {
             ],
             speakingTimes: ["M_SPEAKER_0": 7],
             autoNames: ["M_SPEAKER_0": "Roman"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakersDualTrack(
             appSegments: appSegments,
             micSegments: micSegments,
             appDiarization: appDiarization,
-            micDiarization: micDiarization
+            micDiarization: micDiarization,
         )
 
         // Sorted by start time
         XCTAssertEqual(result.count, 3)
-        XCTAssertEqual(result[0].speaker, "Anna")    // app 0-5 overlaps R_SPEAKER_0
-        XCTAssertEqual(result[1].speaker, "Roman")   // mic 5-10 overlaps M_SPEAKER_0
-        XCTAssertEqual(result[2].speaker, "Max")     // app 10-15 overlaps R_SPEAKER_1
+        XCTAssertEqual(result[0].speaker, "Anna") // app 0-5 overlaps R_SPEAKER_0
+        XCTAssertEqual(result[1].speaker, "Roman") // mic 5-10 overlaps M_SPEAKER_0
+        XCTAssertEqual(result[2].speaker, "Max") // app 10-15 overlaps R_SPEAKER_1
     }
 
     func testMergeDualTrackDiarization_prefixesAutoNames() {
@@ -253,17 +251,17 @@ final class DiarizationProcessTests: XCTestCase {
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
             speakingTimes: ["SPEAKER_0": 5],
             autoNames: ["SPEAKER_0": "Anna"],
-            embeddings: nil
+            embeddings: nil,
         )
         let micDiar = DiarizationResult(
             segments: [.init(start: 0, end: 3, speaker: "SPEAKER_0")],
             speakingTimes: ["SPEAKER_0": 3],
             autoNames: ["SPEAKER_0": "Roman"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let merged = DiarizationProcess.mergeDualTrackDiarization(
-            appDiarization: appDiar, micDiarization: micDiar
+            appDiarization: appDiar, micDiarization: micDiar,
         )
 
         XCTAssertEqual(merged.autoNames["R_SPEAKER_0"], "Anna")
@@ -273,14 +271,14 @@ final class DiarizationProcessTests: XCTestCase {
     func testMergeDualTrackDiarization_nilEmbeddingsBothSides() {
         let appDiar = DiarizationResult(
             segments: [.init(start: 0, end: 5, speaker: "S0")],
-            speakingTimes: ["S0": 5], autoNames: [:], embeddings: nil
+            speakingTimes: ["S0": 5], autoNames: [:], embeddings: nil,
         )
         let micDiar = DiarizationResult(
-            segments: [], speakingTimes: [:], autoNames: [:], embeddings: nil
+            segments: [], speakingTimes: [:], autoNames: [:], embeddings: nil,
         )
 
         let merged = DiarizationProcess.mergeDualTrackDiarization(
-            appDiarization: appDiar, micDiarization: micDiar
+            appDiarization: appDiar, micDiarization: micDiar,
         )
 
         XCTAssertNil(merged.embeddings)
@@ -300,25 +298,24 @@ final class DiarizationProcessTests: XCTestCase {
             segments: [.init(start: 0, end: 5, speaker: "R_SPEAKER_0")],
             speakingTimes: ["R_SPEAKER_0": 5],
             autoNames: ["R_SPEAKER_0": "Anna"],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let micDiarization = DiarizationResult(
             segments: [],
             speakingTimes: [:],
             autoNames: [:],
-            embeddings: nil
+            embeddings: nil,
         )
 
         let result = DiarizationProcess.assignSpeakersDualTrack(
             appSegments: appSegments,
             micSegments: [],
             appDiarization: appDiarization,
-            micDiarization: micDiarization
+            micDiarization: micDiarization,
         )
 
         // Nearest fallback: Anna
         XCTAssertEqual(result[0].speaker, "Anna")
     }
-
 }

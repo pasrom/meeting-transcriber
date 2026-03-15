@@ -18,70 +18,69 @@ struct ClaudeCLIProtocolGenerator: ProtocolGenerating {
 }
 
 /// Generates meeting protocols by calling the Claude CLI as a subprocess.
-struct ProtocolGenerator {
-
+enum ProtocolGenerator {
     static let timeoutSeconds: TimeInterval = 600
 
     static let protocolPrompt = """
-        You are a professional meeting minute taker.
-        Create a structured meeting protocol in German from the following transcript.
+    You are a professional meeting minute taker.
+    Create a structured meeting protocol in German from the following transcript.
 
-        Return ONLY the finished Markdown document - no explanations, no introduction,
-        no comments before or after.
+    Return ONLY the finished Markdown document - no explanations, no introduction,
+    no comments before or after.
 
-        Use exactly this structure:
+    Use exactly this structure:
 
-        # Meeting Protocol - [Meeting Title]
-        **Date:** [Date from context or today]
+    # Meeting Protocol - [Meeting Title]
+    **Date:** [Date from context or today]
 
-        ---
+    ---
 
-        ## Summary
-        [3-5 sentence summary of the meeting]
+    ## Summary
+    [3-5 sentence summary of the meeting]
 
-        ## Participants
-        - [Name 1]
-        - [Name 2]
+    ## Participants
+    - [Name 1]
+    - [Name 2]
 
-        ## Topics Discussed
+    ## Topics Discussed
 
-        ### [Topic 1]
-        [What was discussed]
+    ### [Topic 1]
+    [What was discussed]
 
-        ### [Topic 2]
-        [What was discussed]
+    ### [Topic 2]
+    [What was discussed]
 
-        ## Decisions
-        - [Decision 1]
-        - [Decision 2]
+    ## Decisions
+    - [Decision 1]
+    - [Decision 2]
 
-        ## Tasks
-        | Task | Responsible | Deadline | Priority |
-        |------|-------------|----------|----------|
-        | [Description] | [Name] | [Date or open] | 🔴 high / 🟡 medium / 🟢 low |
+    ## Tasks
+    | Task | Responsible | Deadline | Priority |
+    |------|-------------|----------|----------|
+    | [Description] | [Name] | [Date or open] | 🔴 high / 🟡 medium / 🟢 low |
 
-        ## Open Questions
-        - [Question 1]
-        - [Question 2]
+    ## Open Questions
+    - [Question 1]
+    - [Question 2]
 
-        Do NOT include the full transcript in the output – it will be appended automatically.
+    Do NOT include the full transcript in the output – it will be appended automatically.
 
-        ---
-        Transcript:
-        """
+    ---
+    Transcript:
+    """
 
     static let diarizationNote = """
-        \nNote: The transcript contains speaker labels in brackets. \
-        Possible label formats:
-        - [SPEAKER_00], [SPEAKER_01] — auto-detected speakers (use Speaker 1, Speaker 2)
-        - [Me], [Roman] etc. — the local microphone user
-        - [Remote] — remote participant(s) without diarization
-        - [Name] — a recognized or named speaker
-        Use these labels to identify participants. \
-        In the Participants section, list them by name where possible. \
-        In the Topics Discussed section, attribute key statements to speakers.
+    \nNote: The transcript contains speaker labels in brackets. \
+    Possible label formats:
+    - [SPEAKER_00], [SPEAKER_01] — auto-detected speakers (use Speaker 1, Speaker 2)
+    - [Me], [Roman] etc. — the local microphone user
+    - [Remote] — remote participant(s) without diarization
+    - [Name] — a recognized or named speaker
+    Use these labels to identify participants. \
+    In the Participants section, list them by name where possible. \
+    In the Topics Discussed section, attribute key statements to speakers.
 
-        """
+    """
 
     /// Load the protocol prompt, preferring a custom file over the built-in default.
     ///
@@ -107,9 +106,9 @@ struct ProtocolGenerator {
     /// - Returns: The generated protocol as Markdown
     static func generate(
         transcript: String,
-        title: String = "Meeting",
+        title _: String = "Meeting",
         diarized: Bool = false,
-        claudeBin: String = "claude"
+        claudeBin: String = "claude",
     ) async throws -> String {
         var prompt = loadPrompt()
         if diarized {
@@ -188,7 +187,9 @@ struct ProtocolGenerator {
         }.value
 
         // Await process exit via the stream installed before launch
-        for await _ in exitStream { break }
+        for await _ in exitStream {
+            break
+        }
 
         if process.terminationStatus != 0 {
             let stderrData = await stderrRead
@@ -228,8 +229,8 @@ struct ProtocolGenerator {
 
             // Process complete lines
             while let newlineRange = buffer.range(of: Data([0x0A])) {
-                let lineData = buffer[buffer.startIndex..<newlineRange.lowerBound]
-                buffer.removeSubrange(buffer.startIndex...newlineRange.lowerBound)
+                let lineData = buffer[buffer.startIndex ..< newlineRange.lowerBound]
+                buffer.removeSubrange(buffer.startIndex ... newlineRange.lowerBound)
 
                 guard let line = String(data: lineData, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -310,10 +311,9 @@ struct ProtocolGenerator {
         // If already an absolute path, use it
         if bin.hasPrefix("/") { return bin }
 
-        for path in searchPaths.map({ "\($0)/\(bin)" }) {
-            if FileManager.default.isExecutableFile(atPath: path) {
-                return path
-            }
+        for path in searchPaths.map({ "\($0)/\(bin)" })
+            where FileManager.default.isExecutableFile(atPath: path) {
+            return path
         }
         // Fallback: hope it's in PATH
         return "/usr/bin/env"
@@ -363,12 +363,12 @@ enum ProtocolError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .cliNotFound(let bin): "'\(bin)' CLI not found. Install: npm install -g @anthropic-ai/claude-code"
-        case .cliFailed(let code, let stderr): "Claude CLI exited with code \(code)\(stderr.isEmpty ? "" : ": \(stderr)")"
+        case let .cliNotFound(bin): "'\(bin)' CLI not found. Install: npm install -g @anthropic-ai/claude-code"
+        case let .cliFailed(code, stderr): "Claude CLI exited with code \(code)\(stderr.isEmpty ? "" : ": \(stderr)")"
         case .emptyProtocol: "Protocol is empty. Tip: Test manually: echo Hello | claude --print"
         case .timeout: "Claude CLI took too long (>10 min)"
-        case .httpError(let code, let body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
-        case .connectionFailed(let reason): "Connection failed: \(reason)"
+        case let .httpError(code, body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
+        case let .connectionFailed(reason): "Connection failed: \(reason)"
         }
     }
 }

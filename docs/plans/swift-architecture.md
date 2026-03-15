@@ -193,8 +193,7 @@ Audio Capture Detail:
 **Transcription APIs:**
 - `transcribe(audioPath:)` — returns formatted `[MM:SS] text` string
 - `transcribeSegments(audioPath:)` — returns `[TimestampedSegment]` with start/end times. Filters hallucinations by skipping consecutive identical segments. Strips Whisper special tokens via regex
-- `transcribeDualSource(appAudio:micAudio:micDelay:micLabel:)` — transcribes app and mic tracks separately, labels speakers ("Remote" / micLabel), merges by timestamp
-- `transcribeDualSourceSegments(appAudio:micAudio:micDelay:micLabel:)` — returns `[TimestampedSegment]` instead of formatted string. Transcribes both tracks separately, shifts mic by delay, labels speakers ("Remote" / micLabel), merges sorted by start time. Used by PipelineQueue for hybrid diarization (needs structured segments for speaker assignment)
+- `transcribeDualSourceSegments(appAudio:micAudio:micDelay:micLabel:)` — returns `[TimestampedSegment]`. Transcribes both tracks separately, shifts mic by delay, labels speakers ("Remote" / micLabel), merges sorted by start time. Used by PipelineQueue for hybrid diarization (needs structured segments for speaker assignment)
 
 **Input requirement:** 16kHz mono WAV. The caller (PipelineQueue) handles resampling.
 
@@ -422,7 +421,7 @@ PipelineJob { mixPath, appPath?, micPath?, micDelay }
 [Resample] 48kHz WAVs → 16kHz WAVs (temp directory, via AudioMixer.resampleFile)
     ↓
 [Transcribe]
-  Dual-source: WhisperKit.transcribeDualSource(app_16k, mic_16k) → "[MM:SS] Speaker: text"
+  Dual-source: WhisperKit.transcribeDualSourceSegments(app_16k, mic_16k) → [TimestampedSegment]
   Single-source: WhisperKit.transcribeSegments(mix_16k) → [TimestampedSegment] (cached)
     ↓
 [Diarize] (optional)

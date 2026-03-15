@@ -43,7 +43,7 @@ let recordingFrames: [[CGFloat]] = [
 
 func drawIdle(in rect: NSRect) {
     let layout = barsLayout(in: rect)
-    for i in 0..<barCount {
+    for i in 0 ..< barCount {
         let x = layout.left + CGFloat(i) * barSpacing
         let barH = rect.height * defaultBarHeights[i]
         let barRect = NSRect(x: x, y: layout.centerY - barH / 2, width: barWidth, height: barH)
@@ -54,7 +54,7 @@ func drawIdle(in rect: NSRect) {
 func drawRecording(in rect: NSRect, frame: Int) {
     let heights = recordingFrames[frame % recordingFrames.count]
     let layout = barsLayout(in: rect)
-    for i in 0..<barCount {
+    for i in 0 ..< barCount {
         let x = layout.left + CGFloat(i) * barSpacing
         let barH = rect.height * heights[i]
         let barRect = NSRect(x: x, y: layout.centerY - barH / 2, width: barWidth, height: barH)
@@ -70,7 +70,7 @@ func drawTranscribing(in rect: NSRect, frame: Int) {
     let bars = barsLayout(in: rect)
     let text = textLayout(in: rect)
 
-    for i in 0..<barCount {
+    for i in 0 ..< barCount {
         let srcX = bars.left + CGFloat(i) * barSpacing
         let srcH = h * defaultBarHeights[i]
         let srcY = bars.centerY - srcH / 2
@@ -85,8 +85,11 @@ func drawTranscribing(in rect: NSRect, frame: Int) {
         let rh = srcH + (lineHeight - srcH) * t
         let radius = min(rw, rh) / 2
 
-        NSBezierPath(roundedRect: NSRect(x: x, y: y, width: rw, height: rh),
-                     xRadius: radius, yRadius: radius).fill()
+        NSBezierPath(
+            roundedRect: NSRect(x: x, y: y, width: rw, height: rh),
+            xRadius: radius,
+            yRadius: radius,
+        ).fill()
     }
 }
 
@@ -100,14 +103,17 @@ func drawDiarizing(in rect: NSRect, frame: Int) {
     let maxShift: CGFloat = 2.5
     let verticalSep: CGFloat = 1.5
 
-    for i in 0..<barCount {
-        let isGroupA = (i % 2 == 0)
+    for i in 0 ..< barCount {
+        let isGroupA = i.isMultiple(of: 2)
         let barH = h * defaultBarHeights[i]
         let x = layout.left + CGFloat(i) * barSpacing + (isGroupA ? -maxShift : maxShift) * t
         let y = layout.centerY - barH / 2 + (isGroupA ? verticalSep : -verticalSep) * t
 
-        NSBezierPath(roundedRect: NSRect(x: x, y: y, width: barWidth, height: barH),
-                     xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
+        NSBezierPath(
+            roundedRect: NSRect(x: x, y: y, width: barWidth, height: barH),
+            xRadius: barWidth / 2,
+            yRadius: barWidth / 2,
+        ).fill()
     }
 }
 
@@ -115,11 +121,14 @@ func drawProtocol(in rect: NSRect, frame: Int) {
     let text = textLayout(in: rect)
     let visibleLines = (frame % frameCount) + 1
 
-    for i in 0..<min(visibleLines, barCount) {
+    for i in 0 ..< min(visibleLines, barCount) {
         let lineW = rect.width * lineWidths[i]
         let lineY = text.top - CGFloat(i) * lineSpacingVal - lineHeight
-        NSBezierPath(roundedRect: NSRect(x: text.left, y: lineY, width: lineW, height: lineHeight),
-                     xRadius: lineHeight / 2, yRadius: lineHeight / 2).fill()
+        NSBezierPath(
+            roundedRect: NSRect(x: text.left, y: lineY, width: lineW, height: lineHeight),
+            xRadius: lineHeight / 2,
+            yRadius: lineHeight / 2,
+        ).fill()
     }
 }
 
@@ -129,7 +138,7 @@ let nativeSize: CGFloat = 18
 let pixelSize = 100
 let scaleFactor = CGFloat(pixelSize) / nativeSize
 
-func renderFrame(draw: @escaping (NSRect) -> Void) -> CGImage {
+func renderFrame(draw: (NSRect) -> Void) -> CGImage {
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
         pixelsWide: pixelSize,
@@ -140,8 +149,8 @@ func renderFrame(draw: @escaping (NSRect) -> Void) -> CGImage {
         isPlanar: false,
         colorSpaceName: .deviceRGB,
         bytesPerRow: 0,
-        bitsPerPixel: 0
-    )!
+        bitsPerPixel: 0,
+    )! // swiftlint:disable:this force_unwrapping
 
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
@@ -152,6 +161,7 @@ func renderFrame(draw: @escaping (NSRect) -> Void) -> CGImage {
     fullRect.fill()
 
     // Scale coordinate system: draw at native 18pt, output at 100px
+    // swiftlint:disable:next legacy_objc_type
     let transform = NSAffineTransform()
     transform.scale(by: scaleFactor)
     transform.concat()
@@ -161,27 +171,28 @@ func renderFrame(draw: @escaping (NSRect) -> Void) -> CGImage {
     draw(nativeRect)
 
     NSGraphicsContext.restoreGraphicsState()
-    return rep.cgImage!
+    return rep.cgImage! // swiftlint:disable:this force_unwrapping
 }
 
 func writeGIF(name: String, frames: [CGImage], delay: Double = 0.4) {
     let scriptDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent()
     let docsDir = scriptDir.deletingLastPathComponent().appendingPathComponent("docs")
-    try! FileManager.default.createDirectory(at: docsDir, withIntermediateDirectories: true)
+    try! FileManager.default.createDirectory(at: docsDir, withIntermediateDirectories: true) // swiftlint:disable:this force_try
     let url = docsDir.appendingPathComponent(name) as CFURL
 
     let properties: CFDictionary = [
         kCGImagePropertyGIFDictionary: [
-            kCGImagePropertyGIFLoopCount: 0
-        ]
+            kCGImagePropertyGIFLoopCount: 0,
+        ],
     ] as CFDictionary
 
     let frameProperties: CFDictionary = [
         kCGImagePropertyGIFDictionary: [
-            kCGImagePropertyGIFDelayTime: delay
-        ]
+            kCGImagePropertyGIFDelayTime: delay,
+        ],
     ] as CFDictionary
 
+    // swiftlint:disable:next force_unwrapping
     let dest = CGImageDestinationCreateWithURL(url, UTType.gif.identifier as CFString, frames.count, nil)!
     CGImageDestinationSetProperties(dest, properties)
 
@@ -202,19 +213,19 @@ let idleFrame = renderFrame { drawIdle(in: $0) }
 writeGIF(name: "menu-bar-idle.gif", frames: [idleFrame, idleFrame], delay: 1.0)
 
 // Recording
-let recFrames = (0..<frameCount).map { i in renderFrame { drawRecording(in: $0, frame: i) } }
+let recFrames = (0 ..< frameCount).map { i in renderFrame { drawRecording(in: $0, frame: i) } }
 writeGIF(name: "menu-bar-recording.gif", frames: recFrames)
 
 // Transcribing
-let transFrames = (0..<frameCount).map { i in renderFrame { drawTranscribing(in: $0, frame: i) } }
+let transFrames = (0 ..< frameCount).map { i in renderFrame { drawTranscribing(in: $0, frame: i) } }
 writeGIF(name: "menu-bar-transcribing.gif", frames: transFrames)
 
 // Diarizing
-let diarFrames = (0..<frameCount).map { i in renderFrame { drawDiarizing(in: $0, frame: i) } }
+let diarFrames = (0 ..< frameCount).map { i in renderFrame { drawDiarizing(in: $0, frame: i) } }
 writeGIF(name: "menu-bar-diarizing.gif", frames: diarFrames)
 
 // Protocol
-let protoFrames = (0..<frameCount).map { i in renderFrame { drawProtocol(in: $0, frame: i) } }
+let protoFrames = (0 ..< frameCount).map { i in renderFrame { drawProtocol(in: $0, frame: i) } }
 writeGIF(name: "menu-bar-protocol.gif", frames: protoFrames)
 
 print("Done!")

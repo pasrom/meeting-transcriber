@@ -1,5 +1,3 @@
-import Foundation
-
 /// Matches the JSON status file written by the Python status emitter.
 struct TranscriberStatus: Codable {
     let version: Int

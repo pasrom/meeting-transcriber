@@ -11,7 +11,7 @@ struct DiarizationResult {
     let segments: [Segment]
     let speakingTimes: [String: TimeInterval]
     let autoNames: [String: String]
-    var embeddings: [String: [Float]]?
+    var embeddings: [String: [Float]]? // swiftlint:disable:this discouraged_optional_collection
 }
 
 /// Abstraction for diarization, enabling mock injection in tests.
@@ -27,8 +27,9 @@ enum DiarizationProcess {
     /// When no overlap exists, falls back to the nearest diarization segment by gap distance.
     static func assignSpeakers(
         transcript: [TimestampedSegment],
-        diarization: DiarizationResult
+        diarization: DiarizationResult,
     ) -> [TimestampedSegment] {
+        // swiftlint:disable:next closure_body_length
         transcript.map { seg in
             var best = seg
             var bestOverlap: TimeInterval = 0
@@ -48,13 +49,12 @@ enum DiarizationProcess {
             if bestOverlap == 0 {
                 var nearestGap: TimeInterval = .infinity
                 for dSeg in diarization.segments {
-                    let gap: TimeInterval
-                    if seg.end <= dSeg.start {
-                        gap = dSeg.start - seg.end
+                    let gap: TimeInterval = if seg.end <= dSeg.start {
+                        dSeg.start - seg.end
                     } else if seg.start >= dSeg.end {
-                        gap = seg.start - dSeg.end
+                        seg.start - dSeg.end
                     } else {
-                        gap = 0
+                        0
                     }
                     if gap < nearestGap {
                         nearestGap = gap
@@ -76,7 +76,7 @@ enum DiarizationProcess {
     /// prefixing speaker IDs with `R_` (remote/app) and `M_` (mic/local).
     static func mergeDualTrackDiarization(
         appDiarization: DiarizationResult,
-        micDiarization: DiarizationResult
+        micDiarization: DiarizationResult,
     ) -> DiarizationResult {
         // Prefix app segments with R_
         let appSegments = appDiarization.segments.map { seg in
@@ -101,7 +101,7 @@ enum DiarizationProcess {
         }
 
         // Merge embeddings with prefixed keys
-        var embeddings: [String: [Float]]?
+        var embeddings: [String: [Float]]? // swiftlint:disable:this discouraged_optional_collection
         if appDiarization.embeddings != nil || micDiarization.embeddings != nil {
             embeddings = [:]
             for (key, value) in appDiarization.embeddings ?? [:] {
@@ -125,7 +125,7 @@ enum DiarizationProcess {
             segments: allSegments,
             speakingTimes: speakingTimes,
             autoNames: autoNames,
-            embeddings: embeddings
+            embeddings: embeddings,
         )
     }
 
@@ -135,7 +135,7 @@ enum DiarizationProcess {
         appSegments: [TimestampedSegment],
         micSegments: [TimestampedSegment],
         appDiarization: DiarizationResult,
-        micDiarization: DiarizationResult
+        micDiarization: DiarizationResult,
     ) -> [TimestampedSegment] {
         let labeledApp = assignSpeakers(transcript: appSegments, diarization: appDiarization)
         let labeledMic = assignSpeakers(transcript: micSegments, diarization: micDiarization)

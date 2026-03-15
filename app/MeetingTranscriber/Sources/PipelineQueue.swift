@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 import os.log
 
@@ -5,6 +6,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 
 @MainActor
 @Observable
+// swiftlint:disable:next attributes type_body_length
 class PipelineQueue {
     private(set) var jobs: [PipelineJob] = []
     private let logDir: URL
@@ -34,19 +36,19 @@ class PipelineQueue {
     struct SpeakerNamingData {
         let jobID: UUID
         let meetingTitle: String
-        let mapping: [String: String]       // label → auto-matched name or label
+        let mapping: [String: String] // label → auto-matched name or label
         let speakingTimes: [String: TimeInterval]
         let embeddings: [String: [Float]]
-        let audioPath: URL?                 // 16kHz mix for playback
-        let segments: [DiarizationResult.Segment]  // for extracting speaker snippets
-        let participants: [String]          // Teams participant names as suggestions
+        let audioPath: URL? // 16kHz mix for playback
+        let segments: [DiarizationResult.Segment] // for extracting speaker snippets
+        let participants: [String] // Teams participant names as suggestions
     }
 
     /// Result from the speaker naming popup.
     enum SpeakerNamingResult {
-        case confirmed([String: String])   // user confirmed with mapping
-        case rerun(Int)                     // re-run diarization with N speakers
-        case skipped                        // user skipped
+        case confirmed([String: String]) // user confirmed with mapping
+        case rerun(Int) // re-run diarization with N speakers
+        case skipped // user skipped
     }
 
     /// Set when the pipeline is waiting for the user to name speakers.
@@ -87,16 +89,16 @@ class PipelineQueue {
 
     /// Full init with all processing dependencies.
     init(
-        logDir: URL? = nil,
         whisperKit: WhisperKitEngine,
         diarizationFactory: @escaping () -> DiarizationProvider,
         protocolGeneratorFactory: @escaping () -> ProtocolGenerating,
         outputDir: URL,
+        logDir: URL? = nil,
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
-        completedJobLifetime: TimeInterval = 60
+        completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.whisperKit = whisperKit
@@ -120,10 +122,6 @@ class PipelineQueue {
 
     var completedJobs: [PipelineJob] {
         jobs.filter { $0.state == .done }
-    }
-
-    var errorJobs: [PipelineJob] {
-        jobs.filter { $0.state == .error }
     }
 
     func enqueue(_ job: PipelineJob) {
@@ -151,11 +149,13 @@ class PipelineQueue {
         case .waiting:
             jobs.remove(at: index)
             writeSnapshot()
+
         case .transcribing, .diarizing, .generatingProtocol:
             cancelledJobIDs.insert(id)
             processTask?.cancel()
             jobs.remove(at: index)
             writeSnapshot()
+
         case .done, .error:
             break
         }
@@ -193,7 +193,7 @@ class PipelineQueue {
 
     /// Process the first waiting job through the full pipeline:
     /// resample → transcribe → (diarize) → save transcript → generate protocol → save protocol.
-    func processNext() async {
+    func processNext() async { // swiftlint:disable:this function_body_length cyclomatic_complexity
         guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else {
             isProcessing = false
             return
@@ -223,7 +223,7 @@ class PipelineQueue {
 
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)
-            var cachedSegments: [TimestampedSegment]?
+            var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
             let isDualSource = appPath != nil && micPath != nil
             if let appAudioPath = appPath, let micAudioPath = micPath {
                 // Dual-source: resample both tracks to 16kHz concurrently
@@ -239,7 +239,7 @@ class PipelineQueue {
                     appAudio: app16k,
                     micAudio: mic16k,
                     micDelay: micDelay,
-                    micLabel: micLabel
+                    micLabel: micLabel,
                 )
                 cachedSegments = segments
                 transcript = segments.map(\.formattedLine).joined(separator: "\n")
@@ -291,29 +291,31 @@ class PipelineQueue {
                             if useDualTrack {
                                 // Diarize app and mic tracks separately
                                 let app16k = workDir.appendingPathComponent("app_16k.wav")
-                                let mic16k_ = workDir.appendingPathComponent("mic_16k.wav")
+                                let mic16k = workDir.appendingPathComponent("mic_16k.wav")
 
                                 appDiarization = try await diarizeProcess.run(
                                     audioPath: app16k,
                                     numSpeakers: speakerCount,
-                                    meetingTitle: title
+                                    meetingTitle: title,
                                 )
                                 micDiarization = try await diarizeProcess.run(
-                                    audioPath: mic16k_,
-                                    numSpeakers: nil,  // auto-detect local speakers
-                                    meetingTitle: title
+                                    audioPath: mic16k,
+                                    numSpeakers: nil, // auto-detect local speakers
+                                    meetingTitle: title,
                                 )
 
                                 // Merge for speaker naming (prefixed IDs: R_, M_)
+                                // swiftlint:disable force_unwrapping
                                 diarization = DiarizationProcess.mergeDualTrackDiarization(
                                     appDiarization: appDiarization!,
-                                    micDiarization: micDiarization!
+                                    micDiarization: micDiarization!,
+                                    // swiftlint:enable force_unwrapping
                                 )
                             } else {
                                 diarization = try await diarizeProcess.run(
                                     audioPath: mix16k,
                                     numSpeakers: speakerCount,
-                                    meetingTitle: title
+                                    meetingTitle: title,
                                 )
                             }
 
@@ -331,7 +333,7 @@ class PipelineQueue {
                                 autoNames = SpeakerMatcher.preMatchParticipants(
                                     mapping: autoNames,
                                     speakingTimes: currentDiarization.speakingTimes,
-                                    participants: participants
+                                    participants: participants,
                                 )
                             }
 
@@ -343,7 +345,7 @@ class PipelineQueue {
                                 embeddings: embeddings,
                                 audioPath: mix16k,
                                 segments: currentDiarization.segments,
-                                participants: participants
+                                participants: participants,
                             )
 
                             let namingResult: SpeakerNamingResult
@@ -360,21 +362,21 @@ class PipelineQueue {
                                     self.pendingSpeakerNaming = namingData
                                     NotificationCenter.default.post(
                                         name: .showSpeakerNaming,
-                                        object: nil
+                                        object: nil,
                                     )
                                 }
                                 timeoutTask.cancel()
                             }
 
                             switch namingResult {
-                            case .confirmed(let userMapping):
+                            case let .confirmed(userMapping):
                                 for (label, name) in userMapping where !name.isEmpty {
                                     autoNames[label] = name
                                 }
                                 matcher.updateDB(mapping: autoNames, embeddings: embeddings)
                                 break diarizationLoop
 
-                            case .rerun(let count):
+                            case let .rerun(count):
                                 speakerCount = count
                                 updateJobState(id: jobID, to: .diarizing)
                                 logger.info("Re-running diarization with \(count) speakers")
@@ -394,14 +396,14 @@ class PipelineQueue {
                                 speakingTimes: appDiar.speakingTimes,
                                 autoNames: autoNames.filter { $0.key.hasPrefix("R_") }
                                     .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
-                                embeddings: appDiar.embeddings
+                                embeddings: appDiar.embeddings,
                             )
                             let namedMicDiar = DiarizationResult(
                                 segments: micDiar.segments,
                                 speakingTimes: micDiar.speakingTimes,
                                 autoNames: autoNames.filter { $0.key.hasPrefix("M_") }
                                     .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
-                                embeddings: micDiar.embeddings
+                                embeddings: micDiar.embeddings,
                             )
 
                             let appSegs = cached.filter { $0.speaker == "Remote" }
@@ -410,7 +412,7 @@ class PipelineQueue {
                                 appSegments: appSegs,
                                 micSegments: micSegs,
                                 appDiarization: namedAppDiar,
-                                micDiarization: namedMicDiar
+                                micDiarization: namedMicDiar,
                             )
                             finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
                         } else if let currentDiarization = diarization {
@@ -419,19 +421,18 @@ class PipelineQueue {
                                 segments: currentDiarization.segments,
                                 speakingTimes: currentDiarization.speakingTimes,
                                 autoNames: autoNames,
-                                embeddings: currentDiarization.embeddings
+                                embeddings: currentDiarization.embeddings,
                             )
-                            let segments: [TimestampedSegment]
-                            if let cached = cachedSegments {
-                                segments = cached
+                            let segments: [TimestampedSegment] = if let cached = cachedSegments {
+                                cached
                             } else {
-                                segments = try await whisperKit.transcribeSegments(
-                                    audioPath: mix16k
+                                try await whisperKit.transcribeSegments(
+                                    audioPath: mix16k,
                                 )
                             }
                             let labeled = DiarizationProcess.assignSpeakers(
                                 transcript: segments,
-                                diarization: namedDiarization
+                                diarization: namedDiarization,
                             )
                             finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
                         }
@@ -458,7 +459,7 @@ class PipelineQueue {
             let protocolMD = try await protocolGenerator.generate(
                 transcript: finalTranscript,
                 title: title,
-                diarized: diarized
+                diarized: diarized,
             )
 
             let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + finalTranscript
@@ -470,7 +471,6 @@ class PipelineQueue {
                 jobs[idx].protocolPath = mdPath
             }
             updateJobState(id: jobID, to: .done)
-
         } catch is CancellationError {
             logger.info("Job \(jobID) cancelled")
             // Job already removed by cancelJob()
@@ -507,6 +507,7 @@ class PipelineQueue {
                 switch loaded[i].state {
                 case .transcribing, .diarizing, .generatingProtocol:
                     loaded[i].state = .waiting
+
                 default:
                     break
                 }
@@ -540,7 +541,7 @@ class PipelineQueue {
         guard !FileManager.default.fileExists(atPath: processedRecordingsPath.path) else { return }
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
-            at: recordingsDir, includingPropertiesForKeys: nil
+            at: recordingsDir, includingPropertiesForKeys: nil,
         ) else { return }
 
         var paths = Set<String>()
@@ -563,7 +564,7 @@ class PipelineQueue {
     /// Skips files that were already successfully processed (tracked in processed_recordings.json).
     func recoverOrphanedRecordings(
         recordingsDir: URL = AppPaths.recordingsDir,
-        maxAge: TimeInterval = 86400
+        maxAge: TimeInterval = 86400,
     ) {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
@@ -574,10 +575,10 @@ class PipelineQueue {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: recordingsDir,
-            includingPropertiesForKeys: [.fileSizeKey, .creationDateKey]
+            includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
         ) else { return }
 
-        let trackedPaths = Set(jobs.map { $0.mixPath.standardizedFileURL.path })
+        let trackedPaths = Set(jobs.map(\.mixPath.standardizedFileURL.path))
         let processedPaths = loadProcessedPaths()
         let now = Date()
         var recovered = 0
@@ -620,7 +621,7 @@ class PipelineQueue {
                 mixPath: file,
                 appPath: appPath,
                 micPath: micPath,
-                micDelay: 0
+                micDelay: 0,
             )
             jobs.append(job)
             appendLog(jobID: job.id, event: "recovered", from: nil, to: .waiting)
@@ -698,10 +699,12 @@ class PipelineQueue {
             ensureLogDir()
             let data = try JSONEncoder().encode(entry)
             let logPath = logDir.appendingPathComponent("pipeline_log.jsonl")
+            // swiftlint:disable:next force_unwrapping
             let line = String(data: data, encoding: .utf8)! + "\n"
             if FileManager.default.fileExists(atPath: logPath.path) {
                 let handle = try FileHandle(forWritingTo: logPath)
                 handle.seekToEndOfFile()
+                // swiftlint:disable:next force_unwrapping
                 handle.write(line.data(using: .utf8)!)
                 handle.closeFile()
             } else {

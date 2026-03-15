@@ -1,8 +1,7 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class OpenAIProtocolGeneratorTests: XCTestCase {
-
     // MARK: - SSE Line Parsing
 
     func testParseSSELineExtractsContent() {
@@ -70,27 +69,27 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
 
     // MARK: - Initializer
 
-    func testDefaultTimeout() {
-        let gen = OpenAIProtocolGenerator(
-            endpoint: URL(string: "http://localhost:11434/v1/chat/completions")!,
-            model: "test"
+    func testDefaultTimeout() throws {
+        let gen = try OpenAIProtocolGenerator(
+            endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
+            model: "test",
         )
         XCTAssertEqual(gen.timeoutSeconds, 600)
     }
 
-    func testCustomTimeout() {
-        let gen = OpenAIProtocolGenerator(
-            endpoint: URL(string: "http://localhost:11434/v1/chat/completions")!,
+    func testCustomTimeout() throws {
+        let gen = try OpenAIProtocolGenerator(
+            endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
             model: "test",
-            timeoutSeconds: 120
+            timeoutSeconds: 120,
         )
         XCTAssertEqual(gen.timeoutSeconds, 120)
     }
 
-    func testAPIKeyOptional() {
-        let gen = OpenAIProtocolGenerator(
-            endpoint: URL(string: "http://localhost:11434/v1/chat/completions")!,
-            model: "test"
+    func testAPIKeyOptional() throws {
+        let gen = try OpenAIProtocolGenerator(
+            endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
+            model: "test",
         )
         XCTAssertNil(gen.apiKey)
     }

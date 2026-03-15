@@ -135,11 +135,10 @@ WhisperKit requires 16kHz mono input. Both app and mic tracks are resampled befo
 
 ### Modes
 
-1. **Single source:** `transcribe(audioPath:)` → `[MM:SS] text` lines
-2. **Dual source:** `transcribeDualSource(appAudio:micAudio:)` → merged `[MM:SS] Speaker: text`
+1. **Single source:** `transcribeSegments(audioPath:)` → `[TimestampedSegment]` with start/end/text
+2. **Dual source:** `transcribeDualSourceSegments(appAudio:micAudio:)` → `[TimestampedSegment]` merged by timestamp
    - App segments labeled "Remote"
    - Mic segments labeled with user's mic name (default "Me")
-3. **Segments:** `transcribeSegments(audioPath:)` → `[TimestampedSegment]` with start/end/text
 
 ### Post-processing
 

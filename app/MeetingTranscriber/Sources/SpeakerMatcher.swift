@@ -76,8 +76,8 @@ class SpeakerMatcher {
 
         for (label, embedding) in sorted {
             var bestName: String?
-            var bestDistance: Float = Float.greatestFiniteMagnitude
-            var secondBestDistance: Float = Float.greatestFiniteMagnitude
+            var bestDistance = Float.greatestFiniteMagnitude
+            var secondBestDistance = Float.greatestFiniteMagnitude
 
             for speaker in stored where !usedNames.contains(speaker.name) {
                 // Min distance across all stored embeddings for this speaker
@@ -163,7 +163,7 @@ class SpeakerMatcher {
         mapping: [String: String],
         speakingTimes: [String: TimeInterval],
         participants: [String],
-        excludeLabels: Set<String> = []
+        excludeLabels: Set<String> = [],
     ) -> [String: String] {
         // Find unmatched labels: name equals raw label (not yet named) and not excluded
         let unmatchedLabels = mapping.keys.filter { label in
@@ -199,7 +199,7 @@ class SpeakerMatcher {
         var dot: Float = 0
         var normA: Float = 0
         var normB: Float = 0
-        for i in 0..<a.count {
+        for i in 0 ..< a.count {
             dot += a[i] * b[i]
             normA += a[i] * a[i]
             normB += b[i] * b[i]

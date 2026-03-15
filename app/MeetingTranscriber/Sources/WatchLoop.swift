@@ -33,7 +33,9 @@ class WatchLoop {
     private var activeRecorder: RecordingProvider?
     private var manualRecordingTask: Task<Void, Never>?
 
-    var isManualRecording: Bool { manualRecordingInfo != nil }
+    var isManualRecording: Bool {
+        manualRecordingInfo != nil
+    }
 
     // Dependencies
     let detector: MeetingDetector
@@ -60,7 +62,7 @@ class WatchLoop {
         endGracePeriod: TimeInterval = 15.0,
         maxDuration: TimeInterval = 14400,
         noMic: Bool = false,
-        micDeviceUID: String? = nil
+        micDeviceUID: String? = nil,
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -76,7 +78,9 @@ class WatchLoop {
         AppPaths.protocolsDir
     }
 
-    var isActive: Bool { state != .idle }
+    var isActive: Bool {
+        state != .idle
+    }
 
     // MARK: - Start / Stop
 
@@ -222,7 +226,7 @@ class WatchLoop {
         try recorder.start(
             appPID: meeting.windowPID,
             noMic: noMic,
-            micDeviceUID: micDeviceUID
+            micDeviceUID: micDeviceUID,
         )
 
         // Read participants (Teams)
@@ -245,7 +249,7 @@ class WatchLoop {
             title: title,
             appName: meeting.pattern.appName,
             recording: recording,
-            participants: participants
+            participants: participants,
         )
     }
 
@@ -286,7 +290,7 @@ class WatchLoop {
         title: String,
         appName: String,
         recording: RecordingResult,
-        participants: [String] = []
+        participants: [String] = [],
     ) {
         let job = PipelineJob(
             meetingTitle: title,
@@ -295,7 +299,7 @@ class WatchLoop {
             appPath: recording.appPath,
             micPath: recording.micPath,
             micDelay: recording.micDelay,
-            participants: participants
+            participants: participants,
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")
@@ -312,10 +316,8 @@ class WatchLoop {
     /// Strip app suffixes from meeting titles for cleaner display.
     static func cleanTitle(_ title: String) -> String {
         let suffixes = [" | Microsoft Teams", " - Zoom", " - Webex"]
-        for suffix in suffixes {
-            if title.hasSuffix(suffix) {
-                return String(title.dropLast(suffix.count))
-            }
+        for suffix in suffixes where title.hasSuffix(suffix) {
+            return String(title.dropLast(suffix.count))
         }
         return title
     }

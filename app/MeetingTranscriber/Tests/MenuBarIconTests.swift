@@ -1,16 +1,14 @@
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
 final class MenuBarIconTests: XCTestCase {
-
     func testImageWithNoBadgeIsTemplate() {
-        let image = MenuBarIcon.image(badge: .none)
+        let image = MenuBarIcon.image(badge: .inactive)
         XCTAssertTrue(image.isTemplate)
     }
 
     func testImageSizeIs18x18() {
-        let image = MenuBarIcon.image(badge: .none)
+        let image = MenuBarIcon.image(badge: .inactive)
         XCTAssertEqual(image.size.width, 18, accuracy: 0.01)
         XCTAssertEqual(image.size.height, 18, accuracy: 0.01)
     }
@@ -29,14 +27,14 @@ final class MenuBarIconTests: XCTestCase {
         XCTAssertTrue(BadgeKind.transcribing.isAnimated)
         XCTAssertTrue(BadgeKind.diarizing.isAnimated)
         XCTAssertTrue(BadgeKind.processing.isAnimated)
-        XCTAssertFalse(BadgeKind.none.isAnimated)
+        XCTAssertFalse(BadgeKind.inactive.isAnimated)
         XCTAssertFalse(BadgeKind.done.isAnimated)
     }
 
     func testAllAnimationFramesProduceValidImages() {
         let animatedBadges: [BadgeKind] = [.recording, .transcribing, .diarizing, .processing]
         for badge in animatedBadges {
-            for frame in 0..<MenuBarIcon.frameCount {
+            for frame in 0 ..< MenuBarIcon.frameCount {
                 let image = MenuBarIcon.image(badge: badge, animationFrame: frame)
                 XCTAssertTrue(image.isTemplate, "\(badge) frame \(frame)")
                 XCTAssertEqual(image.size.width, 18, accuracy: 0.01)

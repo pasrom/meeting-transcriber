@@ -1,0 +1,22 @@
+# SwiftFormat configuration for Meeting Transcriber
+
+--swiftversion 6.2
+--indent 4
+--indentcase false
+--trimwhitespace always
+--voidtype void
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--maxwidth 160
+--commas always
+
+# Disable rules that conflict with project style or are too opinionated
+--disable andOperator
+--disable docComments
+--disable enumNamespaces
+--disable redundantSelf
+--disable wrapMultilineStatementBraces
+
+# File scope
+--exclude FluidAudio,.build,app/MeetingTranscriber/.build,tools/audiotap/.build,tools/meeting-simulator/.build

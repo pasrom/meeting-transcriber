@@ -1,14 +1,16 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class SpeakerMatcherTests: XCTestCase {
-    var tmpDir: URL!
-    var dbPath: URL!
+    // swiftlint:disable implicitly_unwrapped_optional
+    private var tmpDir: URL!
+    private var dbPath: URL!
+    // swiftlint:enable implicitly_unwrapped_optional
 
     override func setUp() {
         tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("SpeakerMatcherTests-\(UUID().uuidString)")
-        try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true) // swiftlint:disable:this force_try
         dbPath = tmpDir.appendingPathComponent("speakers.json")
     }
 
@@ -113,7 +115,7 @@ final class SpeakerMatcherTests: XCTestCase {
 
         matcher.updateDB(
             mapping: ["SPEAKER_0": "Roman", "SPEAKER_1": "Anna"],
-            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]]
+            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]],
         )
 
         let loaded = matcher.loadDB()
@@ -127,7 +129,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let matcher = SpeakerMatcher(dbPath: dbPath)
         matcher.updateDB(
             mapping: ["SPEAKER_0": "Roman", "SPEAKER_1": "SPEAKER_1"],
-            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]]
+            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]],
         )
         let loaded = matcher.loadDB()
         XCTAssertEqual(loaded.count, 1)
@@ -136,12 +138,12 @@ final class SpeakerMatcherTests: XCTestCase {
 
     // MARK: - Migration
 
-    func testMigrateOldFormatResetsDB() {
+    func testMigrateOldFormatResetsDB() throws {
         // Write old dict format (pyannote-style)
-        let oldData = try! JSONSerialization.data(withJSONObject: [
+        let oldData = try JSONSerialization.data(withJSONObject: [
             "Roman": [[1.0, 0.0, 0.0]],
         ])
-        try! oldData.write(to: dbPath)
+        try oldData.write(to: dbPath)
 
         SpeakerMatcher.migrateIfNeeded(dbPath: dbPath)
 
@@ -179,7 +181,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let result = SpeakerMatcher.preMatchParticipants(
             mapping: mapping,
             speakingTimes: speakingTimes,
-            participants: participants
+            participants: participants,
         )
 
         // SPEAKER_1 spoke more → gets first participant (Alice)
@@ -202,7 +204,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let result = SpeakerMatcher.preMatchParticipants(
             mapping: mapping,
             speakingTimes: speakingTimes,
-            participants: participants
+            participants: participants,
         )
 
         XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
@@ -212,7 +214,7 @@ final class SpeakerMatcherTests: XCTestCase {
     func testPreMatchParticipants_excludeLabels() {
         // Mic speaker excluded, remaining match → assigns
         let mapping: [String: String] = [
-            "SPEAKER_0": "Roman",   // already matched (mic speaker)
+            "SPEAKER_0": "Roman", // already matched (mic speaker)
             "SPEAKER_1": "SPEAKER_1",
             "SPEAKER_2": "SPEAKER_2",
         ]
@@ -227,7 +229,7 @@ final class SpeakerMatcherTests: XCTestCase {
             mapping: mapping,
             speakingTimes: speakingTimes,
             participants: participants,
-            excludeLabels: ["SPEAKER_0"]
+            excludeLabels: ["SPEAKER_0"],
         )
 
         // Roman is already used, so unused = [Alice, Bob]
@@ -252,7 +254,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let result = SpeakerMatcher.preMatchParticipants(
             mapping: mapping,
             speakingTimes: speakingTimes,
-            participants: participants
+            participants: participants,
         )
 
         XCTAssertEqual(result["SPEAKER_0"], "Roman")
@@ -261,12 +263,12 @@ final class SpeakerMatcherTests: XCTestCase {
 
     // MARK: - Multi-Embedding
 
-    func testMigrationSingleToArray() {
+    func testMigrationSingleToArray() throws {
         // Old format: single "embedding" key
         let oldJSON = """
         [{"name":"Roman","embedding":[1,0,0]},{"name":"Anna","embedding":[0,1,0]}]
         """
-        try! oldJSON.data(using: .utf8)!.write(to: dbPath)
+        try oldJSON.data(using: .utf8)?.write(to: dbPath)
 
         let matcher = SpeakerMatcher(dbPath: dbPath)
         let loaded = matcher.loadDB()
@@ -282,9 +284,9 @@ final class SpeakerMatcherTests: XCTestCase {
         // Speaker has 3 stored embeddings, match against the closest one
         let matcher = SpeakerMatcher(dbPath: dbPath)
         let stored = [StoredSpeaker(name: "Roman", embeddings: [
-            [1, 0, 0],       // embedding from meeting 1
-            [0.9, 0.3, 0],   // embedding from meeting 2
-            [0.8, 0.5, 0],   // embedding from meeting 3
+            [1, 0, 0], // embedding from meeting 1
+            [0.9, 0.3, 0], // embedding from meeting 2
+            [0.8, 0.5, 0], // embedding from meeting 3
         ])]
         matcher.saveDB(stored)
 
@@ -310,7 +312,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let newEmb: [Float] = [0.5, 0.5, 0]
         matcher.updateDB(
             mapping: ["SPEAKER_0": "Roman"],
-            embeddings: ["SPEAKER_0": newEmb]
+            embeddings: ["SPEAKER_0": newEmb],
         )
 
         let loaded = matcher.loadDB()
@@ -387,7 +389,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let json = """
         [{"name":"Ghost"}]
         """
-        let data = json.data(using: .utf8)!
+        let data = try XCTUnwrap(json.data(using: .utf8))
         let speakers = try JSONDecoder().decode([StoredSpeaker].self, from: data)
         XCTAssertEqual(speakers[0].name, "Ghost")
         XCTAssertTrue(speakers[0].embeddings.isEmpty)
@@ -407,7 +409,7 @@ final class SpeakerMatcherTests: XCTestCase {
         let result = SpeakerMatcher.preMatchParticipants(
             mapping: mapping,
             speakingTimes: speakingTimes,
-            participants: []
+            participants: [],
         )
 
         XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")

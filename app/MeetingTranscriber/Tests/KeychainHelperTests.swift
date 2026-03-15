@@ -1,10 +1,9 @@
 import Foundation
+@testable import MeetingTranscriber
 import XCTest
 
-@testable import MeetingTranscriber
-
+// swiftlint:disable:next balanced_xctest_lifecycle
 final class KeychainHelperTests: XCTestCase {
-
     private let testKey = "KEYCHAIN_TEST_\(UUID().uuidString)"
 
     override func tearDown() {

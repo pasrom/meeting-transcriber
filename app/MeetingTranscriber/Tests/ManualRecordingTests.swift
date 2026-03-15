@@ -1,13 +1,11 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class ManualRecordingTests: XCTestCase {
-
     private func makeLoop(
         recorder: MockRecorder? = nil,
-        pipelineQueue: PipelineQueue? = nil
+        pipelineQueue: PipelineQueue? = nil,
     ) -> (WatchLoop, MockRecorder) {
         let mock = recorder ?? MockRecorder()
         mock.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
@@ -16,7 +14,7 @@ final class ManualRecordingTests: XCTestCase {
             recorderFactory: { mock },
             pipelineQueue: pipelineQueue,
             pollInterval: 0.05,
-            maxDuration: 10
+            maxDuration: 10,
         )
         return (loop, mock)
     }

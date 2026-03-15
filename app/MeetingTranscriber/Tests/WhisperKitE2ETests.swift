@@ -1,11 +1,9 @@
 import AVFoundation
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class WhisperKitE2ETests: XCTestCase {
-
     // MARK: - stripWhisperTokens (no model needed, always run)
 
     func testStripWhisperTokensStartOfTranscript() {
@@ -95,11 +93,11 @@ final class WhisperKitE2ETests: XCTestCase {
                 .trimmingCharacters(in: .whitespaces)
             XCTAssertFalse(
                 cleaned.contains("<|"),
-                "Cleaned text should not contain '<|': \(cleaned)"
+                "Cleaned text should not contain '<|': \(cleaned)",
             )
             XCTAssertFalse(
                 cleaned.contains("|>"),
-                "Cleaned text should not contain '|>': \(cleaned)"
+                "Cleaned text should not contain '|>': \(cleaned)",
             )
         }
     }
@@ -110,12 +108,12 @@ final class WhisperKitE2ETests: XCTestCase {
         // Generate a simple sine wave at 48kHz
         let sourceRate = 48000
         let targetRate = 16000
-        let duration = 1.0  // 1 second
+        let duration = 1.0 // 1 second
         let sampleCount = Int(duration * Double(sourceRate))
 
         var samples = [Float](repeating: 0, count: sampleCount)
-        let frequency: Float = 440.0  // A4
-        for i in 0..<sampleCount {
+        let frequency: Float = 440.0 // A4
+        for i in 0 ..< sampleCount {
             samples[i] = sin(2 * .pi * frequency * Float(i) / Float(sourceRate))
         }
 
@@ -123,19 +121,22 @@ final class WhisperKitE2ETests: XCTestCase {
 
         // Output should have approximately targetRate samples for 1 second
         let expectedCount = Int(duration * Double(targetRate))
-        XCTAssertEqual(resampled.count, expectedCount,
-                       "Resampled should have \(expectedCount) samples, got \(resampled.count)")
+        XCTAssertEqual(
+            resampled.count,
+            expectedCount,
+            "Resampled should have \(expectedCount) samples, got \(resampled.count)",
+        )
         XCTAssertFalse(resampled.isEmpty)
     }
 
     func testResamplePreservesSignalEnergy() {
         let sourceRate = 48000
         let targetRate = 16000
-        let sampleCount = sourceRate  // 1 second
+        let sampleCount = sourceRate // 1 second
 
         // Generate a 440Hz sine wave
         var samples = [Float](repeating: 0, count: sampleCount)
-        for i in 0..<sampleCount {
+        for i in 0 ..< sampleCount {
             samples[i] = sin(2 * .pi * 440 * Float(i) / Float(sourceRate))
         }
 
@@ -146,8 +147,12 @@ final class WhisperKitE2ETests: XCTestCase {
         let targetRMS = sqrt(resampled.map { $0 * $0 }.reduce(0, +) / Float(resampled.count))
 
         // RMS should be similar (within 10%)
-        XCTAssertEqual(Double(targetRMS), Double(sourceRMS), accuracy: Double(sourceRMS) * 0.1,
-                       "Resampled signal RMS should be close to original")
+        XCTAssertEqual(
+            Double(targetRMS),
+            Double(sourceRMS),
+            accuracy: Double(sourceRMS) * 0.1,
+            "Resampled signal RMS should be close to original",
+        )
     }
 
     // MARK: - Integration: transcribeSegments with real audio (slow, needs model)
@@ -160,7 +165,7 @@ final class WhisperKitE2ETests: XCTestCase {
         let fixture = fixtureURL()
         try XCTSkipUnless(
             FileManager.default.fileExists(atPath: fixture.path),
-            "Test fixture not found at \(fixture.path)"
+            "Test fixture not found at \(fixture.path)",
         )
 
         let engine = WhisperKitEngine()
@@ -178,11 +183,11 @@ final class WhisperKitE2ETests: XCTestCase {
         for segment in segments {
             XCTAssertFalse(
                 segment.text.contains("<|"),
-                "Segment text should not contain '<|': \(segment.text)"
+                "Segment text should not contain '<|': \(segment.text)",
             )
             XCTAssertFalse(
                 segment.text.contains("|>"),
-                "Segment text should not contain '|>': \(segment.text)"
+                "Segment text should not contain '|>': \(segment.text)",
             )
         }
 
@@ -206,7 +211,7 @@ final class WhisperKitE2ETests: XCTestCase {
         let fixture = fixtureURL()
         try XCTSkipUnless(
             FileManager.default.fileExists(atPath: fixture.path),
-            "Test fixture not found at \(fixture.path)"
+            "Test fixture not found at \(fixture.path)",
         )
 
         let engine = WhisperKitEngine()
@@ -219,10 +224,10 @@ final class WhisperKitE2ETests: XCTestCase {
         let segments = try await engine.transcribeSegments(audioPath: fixture)
 
         // Verify no consecutive segments have identical text (hallucination filter)
-        for i in 1..<segments.count {
+        for i in 1 ..< segments.count {
             XCTAssertNotEqual(
                 segments[i].text, segments[i - 1].text,
-                "Consecutive segments should not have identical text (hallucination)"
+                "Consecutive segments should not have identical text (hallucination)",
             )
         }
     }
@@ -235,7 +240,7 @@ final class WhisperKitE2ETests: XCTestCase {
         let fixture = fixtureURL()
         try XCTSkipUnless(
             FileManager.default.fileExists(atPath: fixture.path),
-            "Test fixture not found at \(fixture.path)"
+            "Test fixture not found at \(fixture.path)",
         )
 
         // Load fixture, resample 48kHz->16kHz, save as temp file, then transcribe
@@ -288,7 +293,7 @@ final class WhisperKitE2ETests: XCTestCase {
         for line in lines where !line.isEmpty {
             XCTAssertTrue(
                 line.hasPrefix("["),
-                "Each line should start with timestamp bracket: \(line)"
+                "Each line should start with timestamp bracket: \(line)",
             )
         }
     }
@@ -301,7 +306,7 @@ final class WhisperKitE2ETests: XCTestCase {
         let fixture = fixtureURL(filename)
         try XCTSkipUnless(
             FileManager.default.fileExists(atPath: fixture.path),
-            "Fixture \(filename) not found"
+            "Fixture \(filename) not found",
         )
 
         let tmpDir = FileManager.default.temporaryDirectory
@@ -337,15 +342,13 @@ final class WhisperKitE2ETests: XCTestCase {
     private func assertTranscriptContent(_ transcript: String, format: String) {
         let lower = transcript.lowercased()
         var matched = 0
-        for keyword in expectedKeywords {
-            if lower.contains(keyword.lowercased()) {
-                matched += 1
-            }
+        for keyword in expectedKeywords where lower.contains(keyword.lowercased()) {
+            matched += 1
         }
         // At least 3 of 5 keywords should appear (TTS + compression may cause minor variations)
         XCTAssertGreaterThanOrEqual(
             matched, 3,
-            "\(format): expected at least 3 of \(expectedKeywords) in transcript, found \(matched). Transcript:\n\(transcript)"
+            "\(format): expected at least 3 of \(expectedKeywords) in transcript, found \(matched). Transcript:\n\(transcript)",
         )
     }
 
@@ -375,7 +378,7 @@ final class WhisperKitE2ETests: XCTestCase {
 
     private func fixtureURL(_ name: String = "two_speakers_de.wav") -> URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // Tests/
+            .deletingLastPathComponent() // Tests/
             .appendingPathComponent("Fixtures")
             .appendingPathComponent(name)
     }

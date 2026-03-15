@@ -11,7 +11,8 @@ struct RunningApp: Identifiable, Hashable {
 
 /// Provides the list of running apps. Protocol for testability.
 protocol RunningAppsProvider {
-    @MainActor func runningApps() -> [RunningApp]
+    @MainActor
+    func runningApps() -> [RunningApp]
 }
 
 /// Production provider that reads from NSWorkspace.
@@ -26,7 +27,7 @@ struct SystemRunningAppsProvider: RunningAppsProvider {
                     id: app.processIdentifier,
                     name: name,
                     bundleIdentifier: app.bundleIdentifier,
-                    icon: app.icon
+                    icon: app.icon,
                 )
             }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -47,7 +48,7 @@ struct AppPickerView: View {
     init(
         appsProvider: RunningAppsProvider = SystemRunningAppsProvider(),
         onStartRecording: @escaping (pid_t, String, String) -> Void,
-        onCancel: @escaping () -> Void
+        onCancel: @escaping () -> Void,
     ) {
         self.appsProvider = appsProvider
         self.onStartRecording = onStartRecording
@@ -55,6 +56,7 @@ struct AppPickerView: View {
     }
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         VStack(spacing: 0) {
             // Header
             HStack {

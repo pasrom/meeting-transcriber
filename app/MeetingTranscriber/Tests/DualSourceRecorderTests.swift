@@ -1,10 +1,8 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 @MainActor
 final class DualSourceRecorderTests: XCTestCase {
-
     // MARK: - Initial State
 
     func testInitialState() {
@@ -85,7 +83,7 @@ final class DualSourceRecorderTests: XCTestCase {
             micPath: URL(fileURLWithPath: "/tmp/mic.wav"),
             micDelay: 0.15,
             muteTimeline: [MuteTransition(timestamp: 10.0, isMuted: true)],
-            recordingStart: 1000.0
+            recordingStart: 1000.0,
         )
 
         XCTAssertEqual(result.mixPath.lastPathComponent, "mix.wav")
@@ -104,7 +102,7 @@ final class DualSourceRecorderTests: XCTestCase {
             micPath: nil,
             micDelay: 0,
             muteTimeline: [],
-            recordingStart: 0
+            recordingStart: 0,
         )
 
         XCTAssertNil(result.appPath)

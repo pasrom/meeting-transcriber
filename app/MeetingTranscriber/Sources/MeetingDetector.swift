@@ -18,7 +18,7 @@ struct DetectedMeeting {
         windowTitle: String,
         ownerName: String,
         windowPID: pid_t,
-        detectedAt: Date = Date()
+        detectedAt: Date = Date(),
     ) {
         self.pattern = pattern
         self.windowTitle = windowTitle
@@ -38,7 +38,7 @@ class MeetingDetector {
     private let confirmationCount: Int
     private var consecutiveHits: [String: Int] = [:]
     private var cooldownUntil: [String: Date] = [:]
-    private let cooldownDuration: TimeInterval = 5  // brief cooldown to avoid re-detecting the same meeting
+    private let cooldownDuration: TimeInterval = 5 // brief cooldown to avoid re-detecting the same meeting
 
     /// Pre-compiled regex for each pattern to avoid re-compilation on every poll.
     private let compiledMeetingPatterns: [String: [NSRegularExpression]]
@@ -60,10 +60,11 @@ class MeetingDetector {
         var idle: [String: [NSRegularExpression]] = [:]
         for p in patterns {
             meeting[p.appName] = p.meetingPatterns.map { pattern in
-                // These are compile-time constant patterns; a crash here indicates a bug in the pattern definition
+                // swiftlint:disable:next force_try
                 try! NSRegularExpression(pattern: pattern)
             }
             idle[p.appName] = p.idlePatterns.map { pattern in
+                // swiftlint:disable:next force_try
                 try! NSRegularExpression(pattern: pattern)
             }
         }
@@ -115,16 +116,14 @@ class MeetingDetector {
                     pattern: pattern,
                     windowTitle: match.title,
                     ownerName: match.window["kCGWindowOwnerName"] as? String ?? "",
-                    windowPID: pid
+                    windowPID: pid,
                 )
             }
         }
 
         // Reset counters for apps that had no hit this round
-        for appName in consecutiveHits.keys {
-            if !hitsThisRound.contains(appName) {
-                consecutiveHits[appName] = 0
-            }
+        for appName in consecutiveHits.keys where !hitsThisRound.contains(appName) {
+            consecutiveHits[appName] = 0
         }
 
         return nil
@@ -133,10 +132,8 @@ class MeetingDetector {
     /// Check if a previously detected meeting is still active.
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {
         let windows = windowListProvider()
-        for window in windows {
-            if matchWindow(window, pattern: meeting.pattern) != nil {
-                return true
-            }
+        for window in windows where matchWindow(window, pattern: meeting.pattern) != nil {
+            return true
         }
         return false
     }
@@ -174,19 +171,15 @@ class MeetingDetector {
         // Skip idle patterns (pre-compiled)
         let range = NSRange(title.startIndex..., in: title)
         if let idleRegexes = compiledIdlePatterns[pattern.appName] {
-            for regex in idleRegexes {
-                if regex.firstMatch(in: title, range: range) != nil {
-                    return nil
-                }
+            for regex in idleRegexes where regex.firstMatch(in: title, range: range) != nil {
+                return nil
             }
         }
 
         // Match meeting patterns (pre-compiled)
         if let meetingRegexes = compiledMeetingPatterns[pattern.appName] {
-            for regex in meetingRegexes {
-                if regex.firstMatch(in: title, range: range) != nil {
-                    return title
-                }
+            for regex in meetingRegexes where regex.firstMatch(in: title, range: range) != nil {
+                return title
             }
         }
 
@@ -244,7 +237,7 @@ class MeetingDetector {
     /// Default window list provider using CGWindowListCopyWindowInfo.
     static func systemWindowList() -> [[String: Any]] {
         guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionAll, .excludeDesktopElements], kCGNullWindowID
+            [.optionAll, .excludeDesktopElements], kCGNullWindowID,
         ) as? [[String: Any]] else {
             return []
         }

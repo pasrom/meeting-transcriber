@@ -3,8 +3,8 @@ import SwiftUI
 private let defaults = UserDefaults.standard
 
 enum ProtocolProvider: String, CaseIterable {
-    case claudeCLI = "claudeCLI"
-    case openAICompatible = "openAICompatible"
+    case claudeCLI
+    case openAICompatible
 
     var label: String {
         switch self {
@@ -69,8 +69,7 @@ final class AppSettings {
     // MARK: - Transcription
 
     var whisperKitModel: String = defaults.object(forKey: "whisperKitModel") as? String
-        ?? "openai_whisper-large-v3-v20240930_turbo"
-    {
+        ?? "openai_whisper-large-v3-v20240930_turbo" {
         didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
     }
 
@@ -113,8 +112,7 @@ final class AppSettings {
     }
 
     var openAIEndpoint: String = defaults.object(forKey: "openAIEndpoint") as? String
-        ?? "http://localhost:11434/v1/chat/completions"
-    {
+        ?? "http://localhost:11434/v1/chat/completions" {
         didSet { defaults.set(openAIEndpoint, forKey: "openAIEndpoint") }
     }
 

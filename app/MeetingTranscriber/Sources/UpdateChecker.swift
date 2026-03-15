@@ -29,16 +29,29 @@ struct GitHubReleaseProvider: UpdateProviding {
     private let repo = "meeting-transcriber"
 
     private struct GitHubRelease: Codable {
-        let tag_name: String
+        let tagName: String
         let name: String?
         let prerelease: Bool
-        let html_url: String
+        let htmlURL: String
         let assets: [GitHubAsset]
+
+        enum CodingKeys: String, CodingKey {
+            case tagName = "tag_name"
+            case name
+            case prerelease
+            case htmlURL = "html_url"
+            case assets
+        }
     }
 
     private struct GitHubAsset: Codable {
         let name: String
-        let browser_download_url: String
+        let browserDownloadURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
     }
 
     func latestRelease() async throws -> ReleaseInfo {
@@ -52,11 +65,13 @@ struct GitHubReleaseProvider: UpdateProviding {
     }
 
     private func fetchJSON<T: Decodable>(path: String) async throws -> T {
+        // swiftlint:disable:next force_unwrapping
         let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/\(path)")!
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw UpdateCheckerError.networkError(
-                "HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+                "HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)",
+            )
         }
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -64,11 +79,12 @@ struct GitHubReleaseProvider: UpdateProviding {
     private func mapRelease(_ release: GitHubRelease) -> ReleaseInfo {
         let dmgAsset = release.assets.first { $0.name.hasSuffix(".dmg") }
         return ReleaseInfo(
-            tagName: release.tag_name,
-            name: release.name ?? release.tag_name,
+            tagName: release.tagName,
+            name: release.name ?? release.tagName,
             prerelease: release.prerelease,
-            htmlURL: URL(string: release.html_url)!,
-            dmgURL: dmgAsset.flatMap { URL(string: $0.browser_download_url) }
+            // swiftlint:disable:next force_unwrapping
+            htmlURL: URL(string: release.htmlURL)!,
+            dmgURL: dmgAsset.flatMap { URL(string: $0.browserDownloadURL) },
         )
     }
 }
@@ -80,7 +96,7 @@ enum UpdateCheckerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .networkError(let detail): "Network error: \(detail)"
+        case let .networkError(detail): "Network error: \(detail)"
         }
     }
 }
@@ -155,7 +171,7 @@ final class UpdateChecker {
                 if settings.checkForUpdates {
                     checkNow(includePreReleases: settings.includePreReleases)
                 }
-                try? await Task.sleep(for: .seconds(86400))  // 24 hours
+                try? await Task.sleep(for: .seconds(86400)) // 24 hours
             }
         }
     }
@@ -167,7 +183,7 @@ final class UpdateChecker {
         if s.hasPrefix("v") { s = String(s.dropFirst()) }
         // Strip pre-release suffix (e.g. "1.2.3-beta" → "1.2.3")
         if let dash = s.firstIndex(of: "-") {
-            s = String(s[s.startIndex..<dash])
+            s = String(s[s.startIndex ..< dash])
         }
         let parts = s.split(separator: ".").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
@@ -175,7 +191,7 @@ final class UpdateChecker {
     }
 
     nonisolated static func isNewer(
-        _ remote: (Int, Int, Int), than local: (Int, Int, Int)
+        _ remote: (Int, Int, Int), than local: (Int, Int, Int),
     ) -> Bool {
         if remote.0 != local.0 { return remote.0 > local.0 }
         if remote.1 != local.1 { return remote.1 > local.1 }

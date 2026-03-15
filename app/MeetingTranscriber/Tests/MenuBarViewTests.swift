@@ -1,11 +1,12 @@
+@testable import MeetingTranscriber
+
+// swiftlint:disable file_length
 import ViewInspector
 import XCTest
 
-@testable import MeetingTranscriber
-
 @MainActor
+// swiftlint:disable:next attributes type_body_length
 final class MenuBarViewTests: XCTestCase {
-
     // MARK: - Helpers
 
     private func makeStatus(
@@ -13,7 +14,7 @@ final class MenuBarViewTests: XCTestCase {
         detail: String = "",
         meeting: MeetingInfo? = nil,
         protocolPath: String? = nil,
-        error: String? = nil
+        error: String? = nil,
     ) -> TranscriberStatus {
         TranscriberStatus(
             version: 1,
@@ -24,7 +25,7 @@ final class MenuBarViewTests: XCTestCase {
             protocolPath: protocolPath,
             error: error,
             audioPath: nil,
-            pid: nil
+            pid: nil,
         )
     }
 
@@ -33,7 +34,7 @@ final class MenuBarViewTests: XCTestCase {
         isWatching: Bool = false,
         updateChecker: UpdateChecker? = nil,
         onNameSpeakers: (() -> Void)? = nil,
-        onStopManualRecording: (() -> Void)? = nil
+        onStopManualRecording: (() -> Void)? = nil,
     ) -> MenuBarView {
         MenuBarView(
             status: status,
@@ -50,7 +51,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: onNameSpeakers,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
     }
 
@@ -100,10 +101,8 @@ final class MenuBarViewTests: XCTestCase {
     // MARK: - Name Speakers button
 
     func testNameSpeakersButtonShownWhenWaiting() throws {
-        let sut = makeView(
-            status: makeStatus(state: .waitingForSpeakerNames),
-            onNameSpeakers: {}
-        )
+        // swiftlint:disable:next trailing_closure
+        let sut = makeView(status: makeStatus(state: .waitingForSpeakerNames), onNameSpeakers: {})
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Name Speakers..."))
     }
@@ -181,7 +180,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Start Watching").tap()
@@ -205,7 +204,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: { called = true }
+            onQuit: { called = true },
         )
         let body = try sut.inspect()
         try body.find(button: "Quit").tap()
@@ -229,7 +228,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Settings...").tap()
@@ -253,7 +252,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Open Protocols Folder").tap()
@@ -277,7 +276,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Open Last Protocol").tap()
@@ -301,7 +300,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: { called = true },
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Name Speakers...").tap()
@@ -341,7 +340,7 @@ final class MenuBarViewTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .transcribing)
@@ -361,7 +360,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Processing"))
@@ -377,7 +376,7 @@ final class MenuBarViewTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
@@ -397,7 +396,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
@@ -420,7 +419,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: { called = true },
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Process Audio/Video Files...").tap()
@@ -435,7 +434,7 @@ final class MenuBarViewTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .done)
@@ -456,7 +455,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { dismissedID = $0 },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Dismiss").tap()
@@ -471,7 +470,7 @@ final class MenuBarViewTests: XCTestCase {
             mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
             appPath: nil,
             micPath: nil,
-            micDelay: 0
+            micDelay: 0,
         )
         queue.enqueue(job)
         queue.updateJobState(id: job.id, to: .error, error: "Failed")
@@ -491,7 +490,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
@@ -529,7 +528,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Record App...").tap()
@@ -539,10 +538,8 @@ final class MenuBarViewTests: XCTestCase {
     // MARK: - Stop Recording button (manual)
 
     func testStopRecordingButtonVisibleDuringManualRecording() throws {
-        let sut = makeView(
-            status: makeStatus(state: .recording),
-            onStopManualRecording: {}
-        )
+        // swiftlint:disable:next trailing_closure
+        let sut = makeView(status: makeStatus(state: .recording), onStopManualRecording: {})
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Stop Recording"))
     }
@@ -570,7 +567,7 @@ final class MenuBarViewTests: XCTestCase {
             onNameSpeakers: nil,
             onProcessFiles: {},
             onDismissJob: { _ in },
-            onQuit: {}
+            onQuit: {},
         )
         let body = try sut.inspect()
         try body.find(button: "Stop Recording").tap()
@@ -581,12 +578,12 @@ final class MenuBarViewTests: XCTestCase {
 
     func testUpdateIndicatorShownWhenUpdateAvailable() throws {
         let checker = UpdateChecker(provider: MockUpdateProvider())
-        checker.availableUpdate = ReleaseInfo(
+        checker.availableUpdate = try ReleaseInfo(
             tagName: "v1.0.0",
             name: "Release v1.0.0",
             prerelease: false,
-            htmlURL: URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")!,
-            dmgURL: URL(string: "https://example.com/app.dmg")
+            htmlURL: XCTUnwrap(URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")),
+            dmgURL: URL(string: "https://example.com/app.dmg"),
         )
 
         let sut = makeView(status: makeStatus(), updateChecker: checker)

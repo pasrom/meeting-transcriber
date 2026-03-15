@@ -1,3 +1,5 @@
+// MicRecorder is currently unused (DualSourceRecorder uses audiotap subprocess).
+// Kept for potential future standalone mic recording feature.
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -19,7 +21,7 @@ class MicRecorder {
     ///   - outputPath: Where to write the WAV file
     ///   - deviceUID: CoreAudio device UID (nil = system default)
     ///   - sampleRate: Target sample rate (default 48000)
-    func start(outputPath: URL, deviceUID: String? = nil, sampleRate: Double = 48000) throws {
+    func start(outputPath: URL, deviceUID: String? = nil, sampleRate: Double = 48000) throws { // swiftlint:disable:this unused_declaration
         let engine = AVAudioEngine()
 
         // Select input device if specified
@@ -36,7 +38,7 @@ class MicRecorder {
             commonFormat: .pcmFormatFloat32,
             sampleRate: sampleRate,
             channels: 1,
-            interleaved: false
+            interleaved: false,
         ) else {
             throw MicRecorderError.formatCreationFailed
         }
@@ -46,7 +48,7 @@ class MicRecorder {
             forWriting: outputPath,
             settings: outputFormat.settings,
             commonFormat: .pcmFormatFloat32,
-            interleaved: false
+            interleaved: false,
         )
         self.outputFile = file
 
@@ -55,7 +57,7 @@ class MicRecorder {
         // the hardware format
         let tapFormat = AVAudioFormat(
             standardFormatWithSampleRate: sampleRate,
-            channels: 1
+            channels: 1,
         )
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
@@ -74,7 +76,7 @@ class MicRecorder {
     }
 
     /// Stop recording and return the output file URL.
-    func stop() {
+    func stop() { // swiftlint:disable:this unused_declaration
         guard isRecording else { return }
         isRecording = false
 
@@ -86,17 +88,17 @@ class MicRecorder {
     }
 
     /// List available audio input devices.
-    static func listDevices() -> [(uid: String, name: String, channels: UInt32)] {
+    static func listDevices() -> [(uid: String, name: String, channels: UInt32)] { // swiftlint:disable:this unused_declaration
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
+            mElement: kAudioObjectPropertyElementMain,
         )
 
         var dataSize: UInt32 = 0
         var status = AudioObjectGetPropertyDataSize(
             AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress, 0, nil, &dataSize
+            &propertyAddress, 0, nil, &dataSize,
         )
         guard status == noErr else { return [] }
 
@@ -104,7 +106,7 @@ class MicRecorder {
         var deviceIDs = [AudioDeviceID](repeating: 0, count: deviceCount)
         status = AudioObjectGetPropertyData(
             AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress, 0, nil, &dataSize, &deviceIDs
+            &propertyAddress, 0, nil, &dataSize, &deviceIDs,
         )
         guard status == noErr else { return [] }
 
@@ -114,7 +116,7 @@ class MicRecorder {
             var inputAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyStreamConfiguration,
                 mScope: kAudioDevicePropertyScopeInput,
-                mElement: kAudioObjectPropertyElementMain
+                mElement: kAudioObjectPropertyElementMain,
             )
             var bufListSize: UInt32 = 0
             guard AudioObjectGetPropertyDataSize(deviceID, &inputAddress, 0, nil, &bufListSize) == noErr,
@@ -124,7 +126,7 @@ class MicRecorder {
             // (which may contain multiple AudioBuffer entries for multi-stream devices)
             let bufListRaw = UnsafeMutableRawPointer.allocate(
                 byteCount: Int(bufListSize),
-                alignment: MemoryLayout<AudioBufferList>.alignment
+                alignment: MemoryLayout<AudioBufferList>.alignment,
             )
             defer { bufListRaw.deallocate() }
             let bufListPtr = bufListRaw.bindMemory(to: AudioBufferList.self, capacity: 1)
@@ -142,7 +144,7 @@ class MicRecorder {
             var uidAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioDevicePropertyDeviceUID,
                 mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
+                mElement: kAudioObjectPropertyElementMain,
             )
             var uid: CFString = "" as CFString
             var uidSize = UInt32(MemoryLayout<CFString>.size)
@@ -152,7 +154,7 @@ class MicRecorder {
             var nameAddress = AudioObjectPropertyAddress(
                 mSelector: kAudioObjectPropertyName,
                 mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
+                mElement: kAudioObjectPropertyElementMain,
             )
             var name: CFString = "" as CFString
             var nameSize = UInt32(MemoryLayout<CFString>.size)
@@ -175,7 +177,7 @@ class MicRecorder {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDeviceForUID,
             mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
+            mElement: kAudioObjectPropertyElementMain,
         )
 
         let status = withUnsafeMutablePointer(to: &cfUID) { uidPtr in
@@ -184,13 +186,13 @@ class MicRecorder {
                     mInputData: uidPtr,
                     mInputDataSize: UInt32(MemoryLayout<CFString>.size),
                     mOutputData: devPtr,
-                    mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size)
+                    mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size),
                 )
                 var translationSize = UInt32(MemoryLayout<AudioValueTranslation>.size)
                 return AudioObjectGetPropertyData(
                     AudioObjectID(kAudioObjectSystemObject),
                     &address, 0, nil,
-                    &translationSize, &translation
+                    &translationSize, &translation,
                 )
             }
         }
@@ -200,6 +202,7 @@ class MicRecorder {
         }
 
         // Set the device on the audio unit
+        // swiftlint:disable:next force_unwrapping
         let audioUnit = inputNode.audioUnit!
         var mutableDeviceID = deviceID
         let setStatus = AudioUnitSetProperty(
@@ -208,7 +211,7 @@ class MicRecorder {
             kAudioUnitScope_Global,
             0,
             &mutableDeviceID,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
+            UInt32(MemoryLayout<AudioDeviceID>.size),
         )
         guard setStatus == noErr else {
             throw MicRecorderError.deviceSetFailed(uid, setStatus)
@@ -224,9 +227,9 @@ enum MicRecorderError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .formatCreationFailed: return "Failed to create audio format"
-        case .deviceNotFound(let uid): return "Audio device not found: \(uid)"
-        case .deviceSetFailed(let uid, let status): return "Failed to set device \(uid): OSStatus \(status)"
+        case .formatCreationFailed: "Failed to create audio format"
+        case let .deviceNotFound(uid): "Audio device not found: \(uid)"
+        case let .deviceSetFailed(uid, status): "Failed to set device \(uid): OSStatus \(status)"
         }
     }
 }

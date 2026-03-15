@@ -168,7 +168,7 @@ struct MenuBarView: View {
             } label: {
                 Label(
                     "Update Available: \(update.tagName)",
-                    systemImage: "arrow.down.circle.fill"
+                    systemImage: "arrow.down.circle.fill",
                 )
             }
         }

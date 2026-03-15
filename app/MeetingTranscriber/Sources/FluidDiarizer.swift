@@ -9,14 +9,16 @@ class FluidDiarizer: DiarizationProvider {
     private var manager: OfflineDiarizerManager?
     private var currentNumSpeakers: Int?
 
-    var isAvailable: Bool { true }
+    var isAvailable: Bool {
+        true
+    }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
     private static func normalizeSpeakerId(_ id: String) -> String {
         id.replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
     }
 
-    func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> MeetingTranscriber.DiarizationResult {
+    func run(audioPath: URL, numSpeakers: Int?, meetingTitle _: String) async throws -> MeetingTranscriber.DiarizationResult {
         // Recreate manager if numSpeakers changed
         if manager == nil || numSpeakers != currentNumSpeakers {
             var config = OfflineDiarizerConfig()
@@ -31,13 +33,14 @@ class FluidDiarizer: DiarizationProvider {
         }
 
         logger.info("Starting diarization: \(audioPath.lastPathComponent)")
+        // swiftlint:disable:next force_unwrapping
         let fluidResult = try await manager!.process(audioPath)
 
         let segments = fluidResult.segments.map { seg in
             MeetingTranscriber.DiarizationResult.Segment(
                 start: TimeInterval(seg.startTimeSeconds),
                 end: TimeInterval(seg.endTimeSeconds),
-                speaker: Self.normalizeSpeakerId(seg.speakerId)
+                speaker: Self.normalizeSpeakerId(seg.speakerId),
             )
         }
 
@@ -46,11 +49,11 @@ class FluidDiarizer: DiarizationProvider {
             speakingTimes[seg.speaker, default: 0] += seg.end - seg.start
         }
 
-        var embeddings: [String: [Float]]?
+        var embeddings: [String: [Float]]? // swiftlint:disable:this discouraged_optional_collection
         if let db = fluidResult.speakerDatabase {
             embeddings = [:]
             for (id, emb) in db {
-                embeddings![Self.normalizeSpeakerId(id)] = emb
+                embeddings?[Self.normalizeSpeakerId(id)] = emb
             }
         }
 
@@ -60,7 +63,7 @@ class FluidDiarizer: DiarizationProvider {
             segments: segments,
             speakingTimes: speakingTimes,
             autoNames: [:],
-            embeddings: embeddings
+            embeddings: embeddings,
         )
     }
 }

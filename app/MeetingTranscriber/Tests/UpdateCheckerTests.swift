@@ -1,6 +1,5 @@
-import XCTest
-
 @testable import MeetingTranscriber
+import XCTest
 
 // MARK: - Mock Provider
 
@@ -28,7 +27,6 @@ final class MockUpdateProvider: UpdateProviding, @unchecked Sendable {
 
 @MainActor
 final class UpdateCheckerTests: XCTestCase {
-
     // MARK: - Version Parsing
 
     func testParseVersionValid() {
@@ -176,7 +174,7 @@ final class UpdateCheckerTests: XCTestCase {
 
         let checker = UpdateChecker(provider: provider)
         checker.checkNow()
-        checker.checkNow()  // Should be ignored
+        checker.checkNow() // Should be ignored
 
         await yieldUntil { !checker.isChecking }
 
@@ -221,7 +219,7 @@ final class UpdateCheckerTests: XCTestCase {
     func testDMGURLExtracted() {
         let info = makeRelease(
             tag: "v1.0.0",
-            dmgURL: URL(string: "https://example.com/app.dmg")
+            dmgURL: URL(string: "https://example.com/app.dmg"),
         )
         XCTAssertEqual(info.dmgURL?.absoluteString, "https://example.com/app.dmg")
     }
@@ -237,18 +235,19 @@ final class UpdateCheckerTests: XCTestCase {
     private func makeRelease(
         tag: String,
         prerelease: Bool = false,
-        dmgURL: URL? = URL(string: "https://example.com/MeetingTranscriber.dmg")
+        dmgURL: URL? = URL(string: "https://example.com/MeetingTranscriber.dmg"),
     ) -> ReleaseInfo {
         ReleaseInfo(
             tagName: tag,
             name: "Release \(tag)",
             prerelease: prerelease,
+            // swiftlint:disable:next force_unwrapping
             htmlURL: URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/\(tag)")!,
-            dmgURL: dmgURL
+            dmgURL: dmgURL,
         )
     }
 
-    private func yieldUntil(_ condition: @escaping () -> Bool, timeout: Double = 2.0) async {
+    private func yieldUntil(_ condition: () -> Bool, timeout: Double = 2.0) async {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition(), Date() < deadline {
             await Task.yield()
