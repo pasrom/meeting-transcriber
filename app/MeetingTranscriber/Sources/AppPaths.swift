@@ -6,13 +6,19 @@ enum AppPaths {
     /// Logger subsystem for all os.log loggers.
     static let logSubsystem = "com.meetingtranscriber"
 
-    private static let home = FileManager.default.homeDirectoryForCurrentUser
-
-    /// IPC directory: `~/.meeting-transcriber/`
-    static let ipcDir = home.appendingPathComponent(".meeting-transcriber")
-
     /// App data directory: `~/Library/Application Support/MeetingTranscriber/`
-    static let dataDir = home.appendingPathComponent("Library/Application Support/MeetingTranscriber")
+    /// In sandbox, this automatically resolves to the container path.
+    static let dataDir: URL = {
+        guard let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        else {
+            fatalError("Application Support directory unavailable")
+        }
+        return appSupport.appendingPathComponent("MeetingTranscriber")
+    }()
+
+    /// IPC directory: under `dataDir` for sandbox compatibility.
+    static let ipcDir = dataDir.appendingPathComponent("ipc")
 
     /// Recordings directory.
     static let recordingsDir = dataDir.appendingPathComponent("recordings")
