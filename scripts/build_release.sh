@@ -53,37 +53,20 @@ echo "======================================="
 rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS_DIR" "$RESOURCES"
 
-# ── Step 1: Build audiotap binary ────────────────────────────────────────────
+# ── Step 1: Build Swift menu bar app ─────────────────────────────────────────
 
 echo ""
-echo "Step 1: Building audiotap binary..."
-
-AUDIOTAP_DIR="$PROJECT_ROOT/tools/audiotap"
-(cd "$AUDIOTAP_DIR" && swift build -c release --disable-sandbox)
-
-AUDIOTAP_BIN="$AUDIOTAP_DIR/.build/release/audiotap"
-if [ -f "$AUDIOTAP_BIN" ]; then
-    cp "$AUDIOTAP_BIN" "$RESOURCES/audiotap"
-    echo "  audiotap binary: $RESOURCES/audiotap"
-else
-    echo "  WARNING: audiotap binary not found after build."
-    echo "  App audio capture will not work."
-fi
-
-# ── Step 2: Build Swift menu bar app ─────────────────────────────────────────
-
-echo ""
-echo "Step 2: Building Swift menu bar app..."
+echo "Step 1: Building Swift menu bar app..."
 
 SPM_DIR="$PROJECT_ROOT/app/MeetingTranscriber"
 (cd "$SPM_DIR" && swift build -c release --disable-sandbox)
 
 cp "$SPM_DIR/.build/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
 
-# ── Step 3: Assemble app bundle ──────────────────────────────────────────────
+# ── Step 2: Assemble app bundle ──────────────────────────────────────────────
 
 echo ""
-echo "Step 3: Assembling app bundle..."
+echo "Step 2: Assembling app bundle..."
 
 # Info.plist with version
 cp "$SPM_DIR/Sources/Info.plist" "$CONTENTS/Info.plist"
@@ -115,10 +98,10 @@ GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 /usr/libexec/PlistBuddy -c "Add :GitCommitHash string $GIT_HASH" "$CONTENTS/Info.plist" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Set :GitCommitHash $GIT_HASH" "$CONTENTS/Info.plist"
 
-# ── Step 4: Code signing ─────────────────────────────────────────────────────
+# ── Step 3: Code signing ─────────────────────────────────────────────────────
 
 echo ""
-echo "Step 4: Code signing..."
+echo "Step 3: Code signing..."
 
 if [ "$NOTARIZE" = true ]; then
     if [ -z "${DEVELOPER_ID:-}" ]; then
@@ -150,12 +133,6 @@ ENTITLEMENTS_EOF
             codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$lib"
         done
 
-    # Sign audiotap binary
-    if [ -f "$RESOURCES/audiotap" ]; then
-        codesign --force --sign "$DEVELOPER_ID" \
-            --options runtime --timestamp "$RESOURCES/audiotap"
-    fi
-
     # Sign the main app binary with entitlements
     codesign --force --sign "$DEVELOPER_ID" \
         --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
@@ -180,7 +157,7 @@ DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
 if [ -z "${HOMEBREW_TEMP:-}" ]; then
     echo ""
-    echo "Step 5: Creating DMG..."
+    echo "Step 4: Creating DMG..."
 
     rm -f "$DMG_PATH"
 
@@ -198,11 +175,11 @@ if [ -z "${HOMEBREW_TEMP:-}" ]; then
     mv "$DMG_STAGING/MeetingTranscriber.app" "$APP_BUNDLE"
     rm -rf "$DMG_STAGING"
 
-    # ── Step 6: Notarize (optional) ──────────────────────────────────────────
+    # ── Step 5: Notarize (optional) ──────────────────────────────────────────
 
     if [ "$NOTARIZE" = true ]; then
         echo ""
-        echo "Step 6: Notarizing DMG..."
+        echo "Step 5: Notarizing DMG..."
 
         if [ -z "${APPLE_ID:-}" ] || [ -z "${TEAM_ID:-}" ] || [ -z "${APP_PASSWORD:-}" ]; then
             echo "  ERROR: APPLE_ID, TEAM_ID, and APP_PASSWORD must be set for notarization."
@@ -219,7 +196,7 @@ if [ -z "${HOMEBREW_TEMP:-}" ]; then
     fi
 else
     echo ""
-    echo "Step 5: Skipping DMG (Homebrew mode)"
+    echo "Step 4: Skipping DMG (Homebrew mode)"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

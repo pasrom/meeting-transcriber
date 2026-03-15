@@ -28,7 +28,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     ProtocolGenerator.swift   # Protocol generation via Claude CLI + configurable prompt file
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
-    DualSourceRecorder.swift  # App audio + mic recording (captures startTime in start())
+    DualSourceRecorder.swift  # App audio (AudioTapLib) + mic recording (captures startTime in start())
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
     FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
     AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback, MKV/WebM/OGG via ffmpeg) + mixing to 16kHz mono
@@ -42,14 +42,18 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     Info.plist             # Bundle metadata
   Tests/                   # Swift tests (XCTest + ViewInspector)
     Fixtures/              # Test audio files (two_speakers_de.wav, etc.)
-tools/audiotap/            # CATapDescription-based app audio capture (Swift CLI)
-  Package.swift            # SPM manifest (macOS 14+)
-  Sources/main.swift       # PID → CATapDescription → stdout (interleaved float32)
+tools/audiotap/            # AudioTapLib — CATapDescription-based app audio capture (SPM library)
+  Package.swift            # SPM manifest (macOS 14+, library target)
+  Sources/
+    AppAudioCapture.swift  # CATapDescription + IOProc → FileHandle
+    MicCaptureHandler.swift # AVAudioEngine → WAV
+    AudioCaptureSession.swift # Orchestrator (start/stop, computes micDelay)
+    AudioCaptureResult.swift  # Result struct
+    Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
 scripts/
-  build_audiotap.sh        # Build audiotap Swift binary
   build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG
   notarize_status.sh       # Check Apple notarization status
@@ -78,17 +82,14 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: App audio + Mic → separate 16kHz audio (WAV/MP3/M4A/MP4) → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
 Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
 
 ```bash
-# Build audiotap Swift binary (app audio capture):
-./scripts/build_audiotap.sh
-
-# Run menu bar app (builds automatically):
+# Run menu bar app (builds automatically, including AudioTapLib):
 ./scripts/run_app.sh
 ```
 
@@ -161,6 +162,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - ffmpeg is optional — install via `brew install ffmpeg`. Status shown in Settings → About.
 
 **Recording:**
+- `DualSourceRecorder` uses `AudioTapLib.AudioCaptureSession` directly (no subprocess). App imports the library via SPM local package dependency.
 - `DualSourceRecorder` captures `recordingStartTime` in `start()`, not in `stop()`.
 - Grace period minimum is 1 second (enforced in `AppSettings.endGrace` setter).
 
@@ -186,7 +188,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 ## Critical Notes
 
-- audiotap Swift binary must be built: `./scripts/build_audiotap.sh` (uses CATapDescription, macOS 14.2+)
+- AudioTapLib (CATapDescription) requires macOS 14.2+ — compiled as SPM library, no separate binary needed
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
-- Audio capture (audiotap) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
+- Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)

@@ -11,7 +11,6 @@
 ```bash
 git clone https://github.com/pasrom/meeting-transcriber
 cd meeting-transcriber
-./scripts/build_audiotap.sh
 ./scripts/run_app.sh
 ```
 

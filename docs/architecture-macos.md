@@ -12,7 +12,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
 
 ```
 Meeting Window Detected (CGWindowListCopyWindowInfo)
-  → DualSourceRecorder (audiotap + mic)
+  → DualSourceRecorder (AudioTapLib + mic)
     → AudioMixer (resample 48kHz → 16kHz)
       → WhisperKit (CoreML/ANE transcription)
         → [FluidDiarizer (CoreML/ANE speaker diarization)]
@@ -41,7 +41,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `WatchLoop.swift` | Main orchestrator: detect → record → enqueue PipelineJob |
 | `MeetingDetector.swift` | Window polling, pattern matching, confirmation counting, cooldown |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex |
-| `DualSourceRecorder.swift` | Orchestrates audiotap + mic, mixes tracks |
+| `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
 | `WhisperKitEngine.swift` | Native WhisperKit transcription (single/dual-source/segments) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
@@ -57,7 +57,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, mute masking, WAV I/O |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
 | `MuteDetector.swift` | Teams mute state via Accessibility API |
-| `tools/audiotap/Sources/main.swift` | CATapDescription-based app audio capture (standalone binary) |
+| `tools/audiotap/Sources/` | AudioTapLib — CATapDescription-based app audio capture (SPM library) |
 
 ### Support
 
@@ -92,11 +92,11 @@ PipelineQueue: waiting → transcribing → [diarizing] → generatingProtocol �
 ### Capture
 
 ```
-audiotap binary (CATapDescription)
+AudioTapLib (CATapDescription)
 ├─ Input: App PID → CoreAudio process tap → aggregate device
-├─ Output: Interleaved float32 stereo → stdout (raw PCM)
-├─ Mic: AVAudioEngine → mono WAV file (--mic flag)
-└─ Metadata: MIC_DELAY, ACTUAL_RATE → stderr
+├─ Output: Interleaved float32 stereo → FileHandle (raw PCM)
+├─ Mic: AVAudioEngine → mono WAV file (MicCaptureHandler)
+└─ Metadata: micDelay, actualSampleRate via AudioCaptureResult
 ```
 
 **Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
@@ -240,8 +240,7 @@ AppSettings (UserDefaults)
 | IPC | `~/.meeting-transcriber/` |
 | Speaker DB | `~/Library/Application Support/MeetingTranscriber/speakers.json` |
 | Pipeline logs | `~/.meeting-transcriber/pipeline_queue.json`, `pipeline_log.jsonl` |
-| Bundle audiotap | `MeetingTranscriber.app/Contents/Resources/audiotap` |
-| Dev audiotap | `tools/audiotap/.build/release/audiotap` |
+| AudioTapLib | Linked as SPM library (no separate binary) |
 
 ---
 
@@ -273,7 +272,7 @@ AppSettings (UserDefaults)
 
 1. **@Observable over @StateObject** — Fine-grained reactivity, macOS 14+
 2. **PipelineQueue decoupling** — Recording and post-processing run independently; WatchLoop enqueues jobs and resumes watching
-3. **audiotap as separate binary** — Process isolation for real-time audio callback
+3. **AudioTapLib as SPM library** — Direct in-process audio capture via CATapDescription (App Store compatible)
 4. **Dual-source recording** — Enables speaker separation without diarization (app=Remote, mic=Me)
 5. **Graceful degradation** — Diarization optional, mute detection optional, continues on partial failure
 6. **Pre-loaded model** — WhisperKit loaded at app launch, prevents delay on first meeting

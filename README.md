@@ -73,7 +73,6 @@ brew install --cask meeting-transcriber
 ```bash
 git clone https://github.com/pasrom/meeting-transcriber
 cd meeting-transcriber
-./scripts/build_audiotap.sh
 ./scripts/run_app.sh
 ```
 
@@ -133,7 +132,7 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 |---------|----------|
 | `claude not found` | Install Claude Code CLI, run `claude --version` — or switch to OpenAI-compatible provider in Settings |
 | No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
-| No app audio | Build audiotap: `./scripts/build_audiotap.sh` (macOS 14.2+ required) |
+| No app audio | Requires macOS 14.2+ for CATapDescription audio capture |
 | Empty transcription | Check that the file contains an audio track — the app converts to 16 kHz mono automatically |
 | Models not loading | FluidAudio models download on first run; check internet connectivity |
 | OpenAI-compatible API connection failed | Verify the endpoint URL and that the local model server is running |
