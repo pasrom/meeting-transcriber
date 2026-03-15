@@ -355,10 +355,14 @@ struct MeetingTranscriberApp: App {
     private func processAudioFiles() {
         let panel = NSOpenPanel()
         panel.title = "Select Audio or Video Files"
-        panel.allowedContentTypes = [
+        var types: [UTType] = [
             .wav, .mp3, .aiff, .mpeg4Audio,
             .mpeg4Movie, .quickTimeMovie,
         ] + [UTType("public.flac")].compactMap(\.self)
+        if FFmpegHelper.isAvailable {
+            types += FFmpegHelper.ffmpegOnlyTypes
+        }
+        panel.allowedContentTypes = types
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 

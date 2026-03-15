@@ -404,6 +404,14 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+                LabeledContent("ffmpeg") {
+                    Label(
+                        FFmpegHelper.isAvailable ? "Available" : "Not installed",
+                        systemImage: FFmpegHelper.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill",
+                    )
+                    .foregroundStyle(FFmpegHelper.isAvailable ? .green : .secondary)
+                    .font(.caption)
+                }
             }
         }
         .formStyle(.grouped)
