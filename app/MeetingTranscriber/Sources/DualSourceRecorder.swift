@@ -1,5 +1,5 @@
+import AudioTapLib
 import AVFoundation
-import Darwin
 import Foundation
 import os.log
 
@@ -22,15 +22,19 @@ protocol RecordingProvider {
     func stop() throws -> RecordingResult
 }
 
-/// Orchestrates audiotap (app audio) + mic recording, then mixes.
+/// Orchestrates app audio capture (via AudioTapLib) + mic recording, then mixes.
 @MainActor
 @Observable
 class DualSourceRecorder: RecordingProvider {
-    private var audiotapProcess: Process?
+    @available(macOS 14.2, *)
+    private var captureSession: AudioCaptureSession? {
+        get { _captureSession as? AudioCaptureSession }
+        set { _captureSession = newValue }
+    }
+
+    // Type-erased storage to avoid @available on stored properties
+    private var _captureSession: AnyObject?
     private var muteDetector: MuteDetector?
-    private var appAudioFileHandle: FileHandle?
-    private var appAudioTempURL: URL?
-    private var readerTask: Task<Void, Never>?
     private(set) var isRecording = false
     private(set) var recordingStartTime: TimeInterval = 0
     private var startTimestamp: String?
@@ -38,84 +42,9 @@ class DualSourceRecorder: RecordingProvider {
     private let recordRate = 48000
     private let appChannels = 2
 
-    /// Find the audiotap binary.
-    static func findAudiotap() -> URL? {
-        // 1. Bundle resources
-        if let res = Bundle.main.resourcePath {
-            let bundled = URL(fileURLWithPath: res).appendingPathComponent("audiotap")
-            if FileManager.default.isExecutableFile(atPath: bundled.path) {
-                return bundled
-            }
-        }
-
-        // 2. AUDIOTAP_BINARY env var
-        if let env = ProcessInfo.processInfo.environment["AUDIOTAP_BINARY"] {
-            let url = URL(fileURLWithPath: env)
-            if FileManager.default.isExecutableFile(atPath: url.path) {
-                return url
-            }
-        }
-
-        // 3. Project-local build
-        if let root = Permissions.findProjectRoot(from: nil) {
-            let local = URL(fileURLWithPath: root)
-                .appendingPathComponent("tools/audiotap/.build/release/audiotap")
-            if FileManager.default.isExecutableFile(atPath: local.path) {
-                return local
-            }
-        }
-
-        return nil
-    }
-
     /// Recordings directory.
     static var recordingsDir: URL {
         AppPaths.recordingsDir
-    }
-
-    /// Path to the PID file for orphan detection.
-    static var pidFilePath: URL {
-        AppPaths.ipcDir.appendingPathComponent("audiotap.pid")
-    }
-
-    /// Kill an orphaned audiotap process from a previous crash.
-    /// Reads the PID file, verifies via `proc_pidpath` that it's actually audiotap,
-    /// sends SIGTERM, waits briefly, then SIGKILL if still alive.
-    static func killOrphanedAudiotap() {
-        let pidFile = pidFilePath
-        guard FileManager.default.fileExists(atPath: pidFile.path) else { return }
-        defer { try? FileManager.default.removeItem(at: pidFile) }
-
-        guard let content = try? String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
-              let pid = pid_t(content), pid > 0 else {
-            return
-        }
-
-        // Verify this PID is actually an audiotap process
-        var pathBuf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        let len = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
-        guard len > 0 else { return } // process doesn't exist
-
-        let procPath = String(cString: pathBuf)
-        guard procPath.hasSuffix("/audiotap") || procPath.hasSuffix("/audiotap.debug") else {
-            logger.info("PID \(pid) is not audiotap (\(procPath)), skipping kill")
-            return
-        }
-
-        logger.info("Killing orphaned audiotap PID \(pid)")
-        kill(pid, SIGTERM)
-
-        // Wait up to 500ms for graceful exit
-        var waited = 0
-        while waited < 5 {
-            Thread.sleep(forTimeInterval: 0.1)
-            waited += 1
-            if kill(pid, 0) != 0 { return } // process gone
-        }
-
-        // Force kill if still alive
-        kill(pid, SIGKILL)
-        logger.info("Force-killed orphaned audiotap PID \(pid)")
     }
 
     /// Remove leftover `*_app_raw.tmp` files from a previous crash.
@@ -139,6 +68,9 @@ class DualSourceRecorder: RecordingProvider {
         micDeviceUID: String? = nil,
     ) throws {
         guard !isRecording else { return }
+        guard #available(macOS 14.2, *) else {
+            throw RecorderError.unsupportedOS
+        }
 
         let recDir = Self.recordingsDir
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
@@ -146,61 +78,25 @@ class DualSourceRecorder: RecordingProvider {
         let ts = Self.timestamp()
         startTimestamp = ts
 
-        // ── audiotap subprocess ──
-        guard let audiotapBin = Self.findAudiotap() else {
-            throw RecorderError.audiotapNotFound
-        }
+        // ── AudioTapLib capture session ──
+        let appTempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
+        let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)_mic.wav")
 
-        var args = [String(appPID), String(recordRate), String(appChannels)]
+        let session = AudioCaptureSession(
+            pid: appPID,
+            appOutputURL: appTempURL,
+            sampleRate: recordRate,
+            channels: appChannels,
+            micOutputURL: micURL,
+            micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
+        )
+        try session.start()
+        captureSession = session
 
-        if !noMic {
-            let micPath = recDir.appendingPathComponent("\(ts)_mic.wav")
-            args += ["--mic", micPath.path]
-            if let uid = micDeviceUID, !uid.isEmpty {
-                args += ["--mic-device", uid]
-            }
-        }
-
-        let proc = Process()
-        proc.executableURL = audiotapBin
-        proc.arguments = args
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        proc.standardOutput = stdoutPipe
-        proc.standardError = stderrPipe
-
-        // Stream app audio to temp file instead of accumulating in RAM
-        let tempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
-        appAudioTempURL = tempURL
-        appAudioFileHandle = try FileHandle(forWritingTo: tempURL)
-
-        try proc.run()
-        audiotapProcess = proc
         isRecording = true
         recordingStartTime = ProcessInfo.processInfo.systemUptime
 
-        // Write PID file for orphan detection on crash recovery
-        let pidFile = Self.pidFilePath
-        try? FileManager.default.createDirectory(
-            at: pidFile.deletingLastPathComponent(), withIntermediateDirectories: true,
-        )
-        try? String(proc.processIdentifier).write(to: pidFile, atomically: true, encoding: .utf8)
-
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
-
-        // Stream stdout to temp file in background
-        // swiftlint:disable:next force_unwrapping
-        let writeHandle = appAudioFileHandle!
-        readerTask = Task.detached {
-            let handle = stdoutPipe.fileHandleForReading
-            while !Task.isCancelled {
-                let data = handle.availableData
-                if data.isEmpty { break }
-                writeHandle.write(data)
-            }
-        }
 
         // ── Mute detection ──
         let detector = MuteDetector(teamsPID: appPID)
@@ -218,6 +114,9 @@ class DualSourceRecorder: RecordingProvider {
         guard isRecording else {
             throw RecorderError.notRecording
         }
+        guard #available(macOS 14.2, *) else {
+            throw RecorderError.unsupportedOS
+        }
 
         let recordingStart = recordingStartTime
         isRecording = false
@@ -227,43 +126,22 @@ class DualSourceRecorder: RecordingProvider {
         muteDetector?.stop()
         muteDetector = nil
 
-        // Terminate audiotap
-        if let proc = audiotapProcess, proc.isRunning {
-            proc.terminate()
-            // Wait up to 3 seconds
-            let deadline = Date().addingTimeInterval(3)
-            while proc.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            if proc.isRunning {
-                kill(proc.processIdentifier, SIGKILL)
-                proc.waitUntilExit()
-            }
+        // Stop capture session and get result
+        guard let session = captureSession else {
+            throw RecorderError.noAudioData
         }
+        let captureResult = session.stop()
+        captureSession = nil
 
-        readerTask?.cancel()
-        readerTask = nil
+        let micDelay = captureResult.micDelay
+        let actualRate = captureResult.actualSampleRate
 
-        // Parse stderr
-        var micDelay: TimeInterval = 0
-        var actualRate = recordRate
-        if let proc = audiotapProcess,
-           let stderrPipe = proc.standardError as? Pipe {
-            let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-            if let stderr = String(data: stderrData, encoding: .utf8) {
-                for line in stderr.split(separator: "\n") {
-                    if line.hasPrefix("MIC_DELAY="), let val = Double(line.dropFirst(10)) {
-                        micDelay = val
-                        logger.info("Mic delay: \(micDelay)s")
-                    } else if line.hasPrefix("ACTUAL_RATE="), let val = Int(line.dropFirst(12)) {
-                        actualRate = val
-                        logger.info("Actual app rate: \(actualRate) Hz")
-                    }
-                }
-            }
+        if micDelay != 0 {
+            logger.info("Mic delay: \(micDelay)s")
         }
-        audiotapProcess = nil
-        try? FileManager.default.removeItem(at: Self.pidFilePath)
+        if actualRate != recordRate {
+            logger.info("Actual app rate: \(actualRate) Hz")
+        }
 
         let recDir = Self.recordingsDir
         let ts = startTimestamp ?? Self.timestamp()
@@ -273,13 +151,9 @@ class DualSourceRecorder: RecordingProvider {
         var appPath: URL?
         var appSamples: [Float] = []
 
-        // Close file handle and read back
-        appAudioFileHandle?.closeFile()
-        appAudioFileHandle = nil
-        let tempURL = appAudioTempURL
-        appAudioTempURL = nil
+        let tempURL = captureResult.appAudioFileURL
 
-        if let tempURL, FileManager.default.fileExists(atPath: tempURL.path),
+        if FileManager.default.fileExists(atPath: tempURL.path),
            (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0 > 0 {
             let raw = try Data(contentsOf: tempURL)
             try? FileManager.default.removeItem(at: tempURL)
@@ -319,22 +193,23 @@ class DualSourceRecorder: RecordingProvider {
             if actualRate != recordRate {
                 appSamples = AudioMixer.resample(appSamples, from: actualRate, to: recordRate)
             }
-        } else if let tempURL, FileManager.default.fileExists(atPath: tempURL.path) {
+        } else if FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
             logger.warning("App audio capture produced 0 bytes — temp file cleaned up")
         }
 
         if appPath == nil {
-            logger.warning("No app audio captured — audiotap may have failed to create the tap")
+            logger.warning("No app audio captured — capture may have failed to create the tap")
         }
 
-        // ── Load mic audio (written by audiotap) ──
+        // ── Load mic audio ──
         var micPath: URL?
         var micSamples: [Float] = []
-        let expectedMicPath = recDir.appendingPathComponent("\(ts)_mic.wav")
+        let expectedMicPath = captureResult.micAudioFileURL
 
-        if FileManager.default.fileExists(atPath: expectedMicPath.path),
+        if let expectedMicPath,
+           FileManager.default.fileExists(atPath: expectedMicPath.path),
            (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
             let micAudioFile = try AVAudioFile(forReading: expectedMicPath)
             let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
@@ -394,15 +269,15 @@ class DualSourceRecorder: RecordingProvider {
 }
 
 enum RecorderError: LocalizedError {
-    case audiotapNotFound
     case notRecording
     case noAudioData
+    case unsupportedOS
 
     var errorDescription: String? {
         switch self {
-        case .audiotapNotFound: "audiotap binary not found. Build: cd tools/audiotap && swift build -c release"
         case .notRecording: "Not currently recording"
         case .noAudioData: "No audio data recorded"
+        case .unsupportedOS: "macOS 14.2+ required for audio capture"
         }
     }
 }

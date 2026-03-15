@@ -10,21 +10,6 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertFalse(recorder.isRecording)
     }
 
-    // MARK: - PID File Path
-
-    func testPidFilePath() {
-        let path = DualSourceRecorder.pidFilePath
-        XCTAssertTrue(path.path.contains(".meeting-transcriber"))
-        XCTAssertEqual(path.lastPathComponent, "audiotap.pid")
-    }
-
-    // MARK: - Kill Orphaned Audiotap
-
-    func testKillOrphanedNoPidFileIsNoOp() {
-        // Should not crash when no PID file exists
-        DualSourceRecorder.killOrphanedAudiotap()
-    }
-
     // MARK: - Cleanup Temp Files
 
     func testCleanupRemovesTmpButNotWav() throws {
@@ -48,14 +33,6 @@ final class DualSourceRecorderTests: XCTestCase {
         let nowhere = URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString)")
         DualSourceRecorder.cleanupTempFiles(recordingsDir: nowhere)
         // Should not crash
-    }
-
-    // MARK: - Audiotap Discovery
-
-    func testFindAudiotapReturnsNilWhenMissing() {
-        // In test environment without a bundle, at least doesn't crash
-        // May return nil or a valid path depending on the dev environment
-        _ = DualSourceRecorder.findAudiotap()
     }
 
     // MARK: - Recordings Directory

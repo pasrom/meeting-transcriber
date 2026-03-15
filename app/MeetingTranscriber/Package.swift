@@ -9,6 +9,7 @@ let package = Package(
         .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.0"),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.2"),
+        .package(path: "../../tools/audiotap"),
     ],
     targets: [
         .executableTarget(
@@ -16,6 +17,7 @@ let package = Package(
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
+                .product(name: "AudioTapLib", package: "audiotap"),
             ],
             path: "Sources",
             exclude: ["Info.plist"]

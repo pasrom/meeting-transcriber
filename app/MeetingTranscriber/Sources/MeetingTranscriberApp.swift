@@ -26,7 +26,6 @@ struct MeetingTranscriberApp: App {
 
     init() {
         notifications.setUp()
-        DualSourceRecorder.killOrphanedAudiotap()
         DualSourceRecorder.cleanupTempFiles()
         // Auto-watch: schedule on main run loop after app finishes launching
         if CommandLine.arguments.contains("--auto-watch")

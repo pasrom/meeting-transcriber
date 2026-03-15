@@ -1,4 +1,4 @@
-// MicRecorder is currently unused (DualSourceRecorder uses audiotap subprocess).
+// MicRecorder is currently unused (DualSourceRecorder uses AudioTapLib directly).
 // Kept for potential future standalone mic recording feature.
 import AVFoundation
 import CoreAudio
