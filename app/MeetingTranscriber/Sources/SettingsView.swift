@@ -305,15 +305,13 @@ struct SettingsView: View {
             }
 
             Section("Permissions") {
-                #if !APPSTORE
-                    PermissionRow(
-                        label: "Screen Recording",
-                        detail: "Required for meeting detection (window titles)",
-                        granted: screenRecordingOK,
-                        help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
-                        settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-                    )
-                #endif
+                PermissionRow(
+                    label: "Screen Recording",
+                    detail: Self.screenRecordingDetail,
+                    granted: screenRecordingOK,
+                    help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
+                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                )
                 PermissionRow(
                     label: "Microphone",
                     detail: micPermission == .authorized ? "Granted"
@@ -430,6 +428,12 @@ struct SettingsView: View {
         }
     }
 
+    #if APPSTORE
+        private static let screenRecordingDetail = "Required for app audio capture"
+    #else
+        private static let screenRecordingDetail = "Required for meeting detection and app audio capture"
+    #endif
+
     private static let versionString: String = {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
@@ -448,9 +452,7 @@ struct SettingsView: View {
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
-        #if !APPSTORE
-            screenRecordingOK = Permissions.checkScreenRecording()
-        #endif
+        screenRecordingOK = Permissions.checkScreenRecording()
         accessibilityOK = AXIsProcessTrusted()
     }
 
