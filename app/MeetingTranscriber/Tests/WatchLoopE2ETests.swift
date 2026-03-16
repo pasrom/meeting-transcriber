@@ -309,7 +309,6 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testCooldownPreventsRedetectionAfterHandling() {
         let detector = MeetingDetector(patterns: AppMeetingPattern.all, confirmationCount: 1)
-        detector.meetingVerifier = { _ in true }
 
         let teamsWindow: [String: Any] = [
             "kCGWindowOwnerName": "Microsoft Teams" as CFString,

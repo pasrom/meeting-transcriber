@@ -23,7 +23,9 @@ private func makeAssertionDict(
 }
 
 private func makeDetector(confirmationCount: Int = 1) -> PowerAssertionDetector {
-    PowerAssertionDetector(confirmationCount: confirmationCount)
+    let detector = PowerAssertionDetector(confirmationCount: confirmationCount)
+    detector.windowListProvider = { [] } // no real windows in unit tests
+    return detector
 }
 
 // MARK: - Detection Tests
@@ -41,7 +43,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 1438,
                 processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress"
+                assertName: "Microsoft Teams Call in progress",
             )
         }
         let result = detector.checkOnce()
@@ -58,7 +60,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 1234,
                 processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress"
+                assertName: "Microsoft Teams Call in progress",
             )
         }
         XCTAssertNotNil(detector.checkOnce())
@@ -70,7 +72,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 5678,
                 processName: "Microsoft Teams (work or school)",
-                assertName: "Microsoft Teams Call in progress"
+                assertName: "Microsoft Teams Call in progress",
             )
         }
         let result = detector.checkOnce()
@@ -85,7 +87,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 4211,
                 processName: "Microsoft Teams WebView",
-                assertName: "Video Wake Lock"
+                assertName: "Video Wake Lock",
             )
         }
         XCTAssertNil(detector.checkOnce())
@@ -97,7 +99,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 2345,
                 processName: "zoom.us",
-                assertName: "Zoom Video Communication"
+                assertName: "Zoom Video Communication",
             )
         }
         let result = detector.checkOnce()
@@ -111,7 +113,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 3456,
                 processName: "Webex",
-                assertName: "Webex Meeting Active"
+                assertName: "Webex Meeting Active",
             )
         }
         let result = detector.checkOnce()
@@ -125,7 +127,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 3457,
                 processName: "Cisco Webex Meetings",
-                assertName: "Webex active call"
+                assertName: "Webex active call",
             )
         }
         let result = detector.checkOnce()
@@ -141,7 +143,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 9999,
                 processName: "Safari",
-                assertName: "Playing video"
+                assertName: "Playing video",
             )
         }
         XCTAssertNil(detector.checkOnce())
@@ -153,7 +155,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 8888,
                 processName: "Spotify",
-                assertName: "Spotify is playing"
+                assertName: "Spotify is playing",
             )
         }
         XCTAssertNil(detector.checkOnce())
@@ -165,7 +167,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 7777,
                 processName: "SomeRandomApp",
-                assertName: "call in progress"
+                assertName: "call in progress",
             )
         }
         XCTAssertNil(detector.checkOnce())
@@ -177,7 +179,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 1234,
                 processName: "MSTeams",
-                assertName: "Downloading update"
+                assertName: "Downloading update",
             )
         }
         XCTAssertNil(detector.checkOnce())
@@ -190,7 +192,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
         detector.assertionProvider = { assertions }
 
@@ -204,7 +206,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
 
         detector.assertionProvider = { assertions }
@@ -228,7 +230,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
         detector.assertionProvider = { assertions }
 
@@ -245,7 +247,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 1234,
                 processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress"
+                assertName: "Microsoft Teams Call in progress",
             )
         }
         XCTAssertNotNil(detector.checkOnce())
@@ -256,7 +258,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 2345,
                 processName: "zoom.us",
-                assertName: "Zoom Video Communication"
+                assertName: "Zoom Video Communication",
             )
         }
         let result = detector.checkOnce()
@@ -266,28 +268,28 @@ final class PowerAssertionDetectorTests: XCTestCase {
 
     // MARK: - isMeetingActive
 
-    func testIsMeetingActiveTrue() {
+    func testIsMeetingActiveTrue() throws {
         let detector = makeDetector()
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
         detector.assertionProvider = { assertions }
-        let meeting = detector.checkOnce()!
+        let meeting = try XCTUnwrap(detector.checkOnce())
 
         XCTAssertTrue(detector.isMeetingActive(meeting))
     }
 
-    func testIsMeetingActiveFalse() {
+    func testIsMeetingActiveFalse() throws {
         let detector = makeDetector()
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
         detector.assertionProvider = { assertions }
-        let meeting = detector.checkOnce()!
+        let meeting = try XCTUnwrap(detector.checkOnce())
 
         detector.assertionProvider = { [:] }
         XCTAssertFalse(detector.isMeetingActive(meeting))
@@ -301,10 +303,86 @@ final class PowerAssertionDetectorTests: XCTestCase {
             makeAssertionDict(
                 pid: 1234,
                 processName: "MSTeams",
-                assertName: "MICROSOFT TEAMS CALL IN PROGRESS"
+                assertName: "MICROSOFT TEAMS CALL IN PROGRESS",
             )
         }
         XCTAssertNotNil(detector.checkOnce())
+    }
+
+    // MARK: - Reset Without App Name
+
+    // MARK: - Window Title Lookup
+
+    func testWindowTitleUsedWhenFound() {
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 1438,
+                processName: "MSTeams",
+                assertName: "Microsoft Teams Call in progress",
+            )
+        }
+        detector.windowListProvider = {
+            [[
+                "kCGWindowOwnerName": "Microsoft Teams",
+                "kCGWindowName": "Sprint Review | Microsoft Teams",
+                "kCGWindowOwnerPID": Int32(1438),
+            ]]
+        }
+        let result = detector.checkOnce()
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.windowTitle, "Sprint Review | Microsoft Teams")
+    }
+
+    func testAssertionNameUsedWhenNoWindowFound() {
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 1438,
+                processName: "MSTeams",
+                assertName: "Microsoft Teams Call in progress",
+            )
+        }
+        // No matching windows
+        detector.windowListProvider = { [] }
+        let result = detector.checkOnce()
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call in progress")
+    }
+
+    func testWindowTitleSkipsEmptyAndAppNameOnly() {
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 1438,
+                processName: "MSTeams",
+                assertName: "Microsoft Teams Call in progress",
+            )
+        }
+        detector.windowListProvider = {
+            [
+                // Empty title — should be skipped
+                [
+                    "kCGWindowOwnerName": "Microsoft Teams",
+                    "kCGWindowName": "",
+                    "kCGWindowOwnerPID": Int32(1438),
+                ],
+                // Title equals app name — should be skipped
+                [
+                    "kCGWindowOwnerName": "Microsoft Teams",
+                    "kCGWindowName": "Microsoft Teams",
+                    "kCGWindowOwnerPID": Int32(1438),
+                ],
+                // Real meeting title
+                [
+                    "kCGWindowOwnerName": "Microsoft Teams",
+                    "kCGWindowName": "Daily Standup | Microsoft Teams",
+                    "kCGWindowOwnerPID": Int32(1438),
+                ],
+            ]
+        }
+        let result = detector.checkOnce()
+        XCTAssertEqual(result?.windowTitle, "Daily Standup | Microsoft Teams")
     }
 
     // MARK: - Reset Without App Name
@@ -314,7 +392,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let assertions = makeAssertionDict(
             pid: 1234,
             processName: "Microsoft Teams",
-            assertName: "Microsoft Teams Call in progress"
+            assertName: "Microsoft Teams Call in progress",
         )
         detector.assertionProvider = { assertions }
 
