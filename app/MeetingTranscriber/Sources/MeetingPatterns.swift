@@ -99,4 +99,9 @@ extension AppMeetingPattern {
         }
         return dict
     }()
+
+    /// Lookup pattern by app name (case-insensitive).
+    static func forAppName(_ name: String) -> AppMeetingPattern? {
+        byName[name.lowercased()]
+    }
 }
