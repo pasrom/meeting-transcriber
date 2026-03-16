@@ -121,14 +121,16 @@ final class AppSettingsTests: XCTestCase {
 
     // MARK: - Claude CLI
 
-    func testClaudeBinDefault() {
-        XCTAssertEqual(settings.claudeBin, "claude")
-    }
+    #if !APPSTORE
+        func testClaudeBinDefault() {
+            XCTAssertEqual(settings.claudeBin, "claude")
+        }
 
-    func testClaudeBinSavedToDefaults() {
-        settings.claudeBin = "claude-work"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "claudeBin"), "claude-work")
-    }
+        func testClaudeBinSavedToDefaults() {
+            settings.claudeBin = "claude-work"
+            XCTAssertEqual(UserDefaults.standard.string(forKey: "claudeBin"), "claude-work")
+        }
+    #endif
 
     // MARK: - WhisperKit Model
 
@@ -145,7 +147,11 @@ final class AppSettingsTests: XCTestCase {
     // MARK: - Protocol Provider
 
     func testProtocolProviderDefault() {
-        XCTAssertEqual(settings.protocolProvider, .claudeCLI)
+        #if APPSTORE
+            XCTAssertEqual(settings.protocolProvider, .openAICompatible)
+        #else
+            XCTAssertEqual(settings.protocolProvider, .claudeCLI)
+        #endif
     }
 
     func testProtocolProviderPersistence() {

@@ -4,48 +4,50 @@ import XCTest
 final class ProtocolGeneratorTests: XCTestCase {
     // MARK: - Stream JSON Parsing
 
-    func testParseContentBlockDelta() {
-        let line = """
-        {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello world"}}
-        """
-        XCTAssertEqual(ProtocolGenerator.parseStreamJSONLine(line), "Hello world")
-    }
+    #if !APPSTORE
+        func testParseContentBlockDelta() {
+            let line = """
+            {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello world"}}
+            """
+            XCTAssertEqual(ClaudeCLIProtocolGenerator.parseStreamJSONLine(line), "Hello world")
+        }
 
-    func testParseAssistantMessage() {
-        let line = """
-        {"type":"assistant","message":{"content":[{"type":"text","text":"Full protocol text"}]}}
-        """
-        XCTAssertEqual(ProtocolGenerator.parseStreamJSONLine(line), "Full protocol text")
-    }
+        func testParseAssistantMessage() {
+            let line = """
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Full protocol text"}]}}
+            """
+            XCTAssertEqual(ClaudeCLIProtocolGenerator.parseStreamJSONLine(line), "Full protocol text")
+        }
 
-    func testParseIrrelevantType() {
-        let line = """
-        {"type":"message_start","message":{"id":"msg_123"}}
-        """
-        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
-    }
+        func testParseIrrelevantType() {
+            let line = """
+            {"type":"message_start","message":{"id":"msg_123"}}
+            """
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine(line))
+        }
 
-    func testParseInvalidJSON() {
-        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine("not json"))
-    }
+        func testParseInvalidJSON() {
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine("not json"))
+        }
 
-    func testParseEmptyLine() {
-        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(""))
-    }
+        func testParseEmptyLine() {
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine(""))
+        }
 
-    func testParseContentBlockDeltaNonTextType() {
-        let line = """
-        {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}
-        """
-        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
-    }
+        func testParseContentBlockDeltaNonTextType() {
+            let line = """
+            {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}
+            """
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine(line))
+        }
 
-    func testParseAssistantMessageNoTextBlock() {
-        let line = """
-        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"123"}]}}
-        """
-        XCTAssertNil(ProtocolGenerator.parseStreamJSONLine(line))
-    }
+        func testParseAssistantMessageNoTextBlock() {
+            let line = """
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"123"}]}}
+            """
+            XCTAssertNil(ClaudeCLIProtocolGenerator.parseStreamJSONLine(line))
+        }
+    #endif
 
     // MARK: - Prompt Construction
 
@@ -148,43 +150,45 @@ final class ProtocolGeneratorTests: XCTestCase {
 
     // MARK: - Available Binaries
 
-    func testAvailableClaudeBinariesContainsClaude() {
-        let binaries = ProtocolGenerator.availableClaudeBinaries()
-        XCTAssertTrue(binaries.contains("claude"), "Available binaries should always contain 'claude'")
-    }
+    #if !APPSTORE
+        func testAvailableClaudeBinariesContainsClaude() {
+            let binaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
+            XCTAssertTrue(binaries.contains("claude"), "Available binaries should always contain 'claude'")
+        }
 
-    func testAvailableClaudeBinariesAreSorted() {
-        let binaries = ProtocolGenerator.availableClaudeBinaries()
-        XCTAssertEqual(binaries, binaries.sorted(), "Available binaries should be sorted")
-    }
+        func testAvailableClaudeBinariesAreSorted() {
+            let binaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
+            XCTAssertEqual(binaries, binaries.sorted(), "Available binaries should be sorted")
+        }
 
-    // MARK: - Environment Stripping
+        // MARK: - Environment Stripping
 
-    func testGenerateStripsClaudeCodeFromEnvironment() {
-        // Verify that ProtocolGenerator.generate() removes CLAUDECODE from the
-        // process environment. We cannot call generate() directly (it launches
-        // the real claude CLI), so we replicate the env-setup logic and verify
-        // that CLAUDECODE is removed.
+        func testGenerateStripsClaudeCodeFromEnvironment() {
+            // Verify that ClaudeCLIProtocolGenerator.generate() removes CLAUDECODE from the
+            // process environment. We cannot call generate() directly (it launches
+            // the real claude CLI), so we replicate the env-setup logic and verify
+            // that CLAUDECODE is removed.
 
-        // Set CLAUDECODE in current process env so it would be inherited
-        setenv("CLAUDECODE", "1", 1)
-        defer { unsetenv("CLAUDECODE") }
+            // Set CLAUDECODE in current process env so it would be inherited
+            setenv("CLAUDECODE", "1", 1)
+            defer { unsetenv("CLAUDECODE") }
 
-        // Replicate the exact env setup from ProtocolGenerator.generate()
-        var env = ProcessInfo.processInfo.environment
-        env.removeValue(forKey: "CLAUDECODE")
+            // Replicate the exact env setup from ClaudeCLIProtocolGenerator.generate()
+            var env = ProcessInfo.processInfo.environment
+            env.removeValue(forKey: "CLAUDECODE")
 
-        XCTAssertNil(
-            env["CLAUDECODE"],
-            "CLAUDECODE should be removed from the process environment",
-        )
+            XCTAssertNil(
+                env["CLAUDECODE"],
+                "CLAUDECODE should be removed from the process environment",
+            )
 
-        // Also verify that the original environment DID have it
-        XCTAssertNotNil(
-            ProcessInfo.processInfo.environment["CLAUDECODE"],
-            "CLAUDECODE should exist in the current process environment",
-        )
-    }
+            // Also verify that the original environment DID have it
+            XCTAssertNotNil(
+                ProcessInfo.processInfo.environment["CLAUDECODE"],
+                "CLAUDECODE should exist in the current process environment",
+            )
+        }
+    #endif
 
     // MARK: - Custom Prompt Loading
 
@@ -245,18 +249,20 @@ final class ProtocolGeneratorTests: XCTestCase {
         }
     }
 
-    func testGenerateEnvStripDoesNotRemoveOtherVars() {
-        // Verify that removing CLAUDECODE doesn't affect other env vars
-        let testKey = "MEETING_TRANSCRIBER_TEST_VAR_\(UUID().uuidString)"
-        setenv(testKey, "test_value", 1)
-        defer { unsetenv(testKey) }
+    #if !APPSTORE
+        func testGenerateEnvStripDoesNotRemoveOtherVars() {
+            // Verify that removing CLAUDECODE doesn't affect other env vars
+            let testKey = "MEETING_TRANSCRIBER_TEST_VAR_\(UUID().uuidString)"
+            setenv(testKey, "test_value", 1)
+            defer { unsetenv(testKey) }
 
-        var env = ProcessInfo.processInfo.environment
-        env.removeValue(forKey: "CLAUDECODE")
+            var env = ProcessInfo.processInfo.environment
+            env.removeValue(forKey: "CLAUDECODE")
 
-        XCTAssertEqual(
-            env[testKey], "test_value",
-            "Other env vars should be preserved when stripping CLAUDECODE",
-        )
-    }
+            XCTAssertEqual(
+                env[testKey], "test_value",
+                "Other env vars should be preserved when stripping CLAUDECODE",
+            )
+        }
+    #endif
 }

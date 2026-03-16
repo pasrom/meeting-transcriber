@@ -97,13 +97,15 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Provider"))
     }
 
-    func testClaudeCLIProviderShowsBinaryPicker() throws {
-        let settings = AppSettings()
-        settings.protocolProvider = .claudeCLI
-        let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
-        let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Claude CLI"))
-    }
+    #if !APPSTORE
+        func testClaudeCLIProviderShowsBinaryPicker() throws {
+            let settings = AppSettings()
+            settings.protocolProvider = .claudeCLI
+            let sut = SettingsView(settings: settings, whisperKitEngine: WhisperKitEngine())
+            let body = try sut.inspect()
+            XCTAssertNoThrow(try body.find(text: "Claude CLI"))
+        }
+    #endif
 
     func testOpenAIProviderShowsEndpointField() throws {
         let settings = AppSettings()
