@@ -46,13 +46,22 @@ jobs:
   test:
     runs-on: macos-26
     timeout-minutes: 30
+    strategy:
+      matrix:
+        variant: [homebrew, appstore]
+        include:
+          - variant: homebrew
+            swift-flags: ""
+          - variant: appstore
+            swift-flags: "-Xswiftc -DAPPSTORE"
+    name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
       - name: Cache SPM dependencies
         uses: actions/cache@v5
         with:
           path: app/MeetingTranscriber/.build
-          key: spm-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
       - name: Swift tests
-        run: cd app/MeetingTranscriber && swift test
+        run: cd app/MeetingTranscriber && swift test ${{ matrix.swift-flags }}
