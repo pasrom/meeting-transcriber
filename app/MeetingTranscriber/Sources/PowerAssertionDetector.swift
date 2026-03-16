@@ -24,17 +24,17 @@ class PowerAssertionDetector: MeetingDetecting {
         AssertionPattern(
             appName: "Microsoft Teams",
             processNames: ["MSTeams", "Microsoft Teams", "Microsoft Teams WebView", "Microsoft Teams (work or school)"],
-            keywords: ["call in progress"]
+            keywords: ["call in progress"],
         ),
         AssertionPattern(
             appName: "Zoom",
             processNames: ["zoom.us", "CptHost"],
-            keywords: ["zoom"]
+            keywords: ["zoom"],
         ),
         AssertionPattern(
             appName: "Webex",
             processNames: ["Webex", "Cisco Webex Meetings", "Meeting Center"],
-            keywords: ["webex"]
+            keywords: ["webex"],
         ),
     ]
 
@@ -99,7 +99,7 @@ class PowerAssertionDetector: MeetingDetecting {
                 let meetingPattern = AppMeetingPattern.forAppName(appName) ?? AppMeetingPattern(
                     appName: appName,
                     ownerNames: [match.processName],
-                    meetingPatterns: []
+                    meetingPatterns: [],
                 )
                 lastDetectedAppName = appName
                 let title = lookupWindowTitle(appName: appName) ?? match.assertName
@@ -107,7 +107,7 @@ class PowerAssertionDetector: MeetingDetecting {
                     pattern: meetingPattern,
                     windowTitle: title,
                     ownerName: match.processName,
-                    windowPID: match.pid
+                    windowPID: match.pid,
                 )
             }
         }
@@ -169,7 +169,7 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Default window list provider using CGWindowListCopyWindowInfo.
     static func systemWindowList() -> [[String: Any]] {
         guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionAll, .excludeDesktopElements], kCGNullWindowID
+            [.optionAll, .excludeDesktopElements], kCGNullWindowID,
         ) as? [[String: Any]] else {
             return []
         }
