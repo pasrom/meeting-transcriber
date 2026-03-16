@@ -1,4 +1,3 @@
-import CoreGraphics
 import Foundation
 import IOKit.pwr_mgt
 import os.log
@@ -50,10 +49,7 @@ class PowerAssertionDetector: MeetingDetecting {
 
     /// Closure that provides the window list for title lookup. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock data.
-    var windowListProvider: () -> [[String: Any]] = PowerAssertionDetector.systemWindowList
-
-    /// Last detected meeting, kept for isMeetingActive checks.
-    private var lastDetectedAppName: String?
+    var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
 
     init(
         patterns: [AssertionPattern] = PowerAssertionDetector.defaultPatterns,
@@ -101,7 +97,6 @@ class PowerAssertionDetector: MeetingDetecting {
                     ownerNames: [match.processName],
                     meetingPatterns: [],
                 )
-                lastDetectedAppName = appName
                 let title = lookupWindowTitle(appName: appName) ?? match.assertName
                 return DetectedMeeting(
                     pattern: meetingPattern,
@@ -164,16 +159,6 @@ class PowerAssertionDetector: MeetingDetecting {
             return title
         }
         return nil
-    }
-
-    /// Default window list provider using CGWindowListCopyWindowInfo.
-    static func systemWindowList() -> [[String: Any]] {
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionAll, .excludeDesktopElements], kCGNullWindowID,
-        ) as? [[String: Any]] else {
-            return []
-        }
-        return windowList
     }
 
     // MARK: - Private

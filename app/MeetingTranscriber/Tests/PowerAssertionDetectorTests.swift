@@ -309,8 +309,6 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.checkOnce())
     }
 
-    // MARK: - Reset Without App Name
-
     // MARK: - Window Title Lookup
 
     func testWindowTitleUsedWhenFound() {
