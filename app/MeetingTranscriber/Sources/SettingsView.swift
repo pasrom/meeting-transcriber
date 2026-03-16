@@ -437,7 +437,12 @@ struct SettingsView: View {
     private static let versionString: String = {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
-        return "\(version) (\(commit))"
+        #if APPSTORE
+            let variant = "App Store"
+        #else
+            let variant = "Homebrew"
+        #endif
+        return "\(version) (\(commit)) · \(variant)"
     }()
 
     private static let buildDate: String = {
