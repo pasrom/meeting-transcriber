@@ -239,17 +239,21 @@ struct MeetingTranscriberApp: App {
             // swiftlint:disable:next closure_body_length
             Task {
                 _ = await Permissions.ensureMicrophoneAccess()
-                _ = Permissions.ensureAccessibilityAccess()
+                #if !APPSTORE
+                    _ = Permissions.ensureAccessibilityAccess()
+                #endif
 
-                var patterns: [AppMeetingPattern] = []
-                if settings.watchTeams { patterns.append(.teams) }
-                if settings.watchZoom { patterns.append(.zoom) }
-                if settings.watchWebex { patterns.append(.webex) }
-                if patterns.isEmpty { patterns = AppMeetingPattern.all }
-                // Always include simulator for debug/testing
-                if !patterns.contains(where: { $0.appName == "MeetingSimulator" }) {
-                    patterns.append(.simulator)
-                }
+                #if !APPSTORE
+                    var patterns: [AppMeetingPattern] = []
+                    if settings.watchTeams { patterns.append(.teams) }
+                    if settings.watchZoom { patterns.append(.zoom) }
+                    if settings.watchWebex { patterns.append(.webex) }
+                    if patterns.isEmpty { patterns = AppMeetingPattern.all }
+                    // Always include simulator for debug/testing
+                    if !patterns.contains(where: { $0.appName == "MeetingSimulator" }) {
+                        patterns.append(.simulator)
+                    }
+                #endif
 
                 await MainActor.run {
                     whisperKit.language = settings.whisperLanguageOrNil
