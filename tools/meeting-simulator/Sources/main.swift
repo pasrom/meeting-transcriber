@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import Foundation
+import IOKit.pwr_mgt
 
 // --- Configuration ---
 let fixturePath = CommandLine.arguments.count > 1
@@ -91,6 +92,20 @@ window.contentView = contentView
 window.makeKeyAndOrderFront(nil)
 app.activate(ignoringOtherApps: true)
 
+// --- Create power assertion (triggers PowerAssertionDetector) ---
+var assertionID: IOPMAssertionID = 0
+let assertionResult = IOPMAssertionCreateWithName(
+    "PreventUserIdleDisplaySleep" as CFString,
+    IOPMAssertionLevel(kIOPMAssertionLevelOn),
+    "Simulator Meeting Call in progress" as CFString,
+    &assertionID,
+)
+if assertionResult == kIOReturnSuccess {
+    print("Power assertion created (ID: \(assertionID))")
+} else {
+    print("WARNING: Could not create power assertion (status: \(assertionResult))")
+}
+
 print("Window: \"\(windowTitle)\"")
 print("PID: \(ProcessInfo.processInfo.processIdentifier)")
 print("Audio: \(fixturePath)")
@@ -105,6 +120,10 @@ guard FileManager.default.fileExists(atPath: fixturePath) else {
 
 // --- App delegate to handle window close + audio end ---
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAudioPlayerDelegate {
+    func applicationWillTerminate(_: Notification) {
+        IOPMAssertionRelease(assertionID)
+    }
+
     func windowWillClose(_: Notification) {
         print("Window closed — exiting.")
         NSApplication.shared.terminate(nil)

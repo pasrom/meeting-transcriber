@@ -35,6 +35,11 @@ class PowerAssertionDetector: MeetingDetecting {
             processNames: ["Webex", "Cisco Webex Meetings", "Meeting Center"],
             keywords: ["webex"],
         ),
+        AssertionPattern(
+            appName: AppMeetingPattern.simulator.appName,
+            processNames: ["meeting-simulator"],
+            keywords: ["simulator meeting"],
+        ),
     ]
 
     private let patterns: [AssertionPattern]
