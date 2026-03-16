@@ -19,14 +19,11 @@ private func makeWindow(
     ]
 }
 
-/// Create a MeetingDetector with AX meeting verification bypassed (for unit tests).
 private func makeDetector(
     patterns: [AppMeetingPattern],
     confirmationCount: Int = 1,
 ) -> MeetingDetector {
-    let detector = MeetingDetector(patterns: patterns, confirmationCount: confirmationCount)
-    detector.meetingVerifier = { _ in true }
-    return detector
+    MeetingDetector(patterns: patterns, confirmationCount: confirmationCount)
 }
 
 // MARK: - Pattern Tests

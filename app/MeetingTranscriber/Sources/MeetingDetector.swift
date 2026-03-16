@@ -1,8 +1,8 @@
-import ApplicationServices
 import CoreGraphics
 import Foundation
 import os.log
 
+// swiftlint:disable:next unused_declaration
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MeetingDetector")
 
 /// Polls window list to detect active meeting windows.
@@ -24,10 +24,6 @@ class MeetingDetector: MeetingDetecting {
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
-
-    /// Closure to verify a Teams window is a real meeting (not a pop-out chat).
-    /// Searches the AXWebArea DOM for the hangup button. Override in tests.
-    var meetingVerifier: ((_ pid: pid_t) -> Bool) = MeetingDetector.verifyTeamsMeeting
 
     init(patterns: [AppMeetingPattern], confirmationCount: Int = 2) {
         self.patterns = patterns
@@ -82,12 +78,6 @@ class MeetingDetector: MeetingDetecting {
             if hits >= confirmationCount, let match = firstMatch[appName],
                let pattern = patterns.first(where: { $0.appName == appName }) {
                 let pid = match.window["kCGWindowOwnerPID"] as? Int32 ?? 0
-
-                // Verify Teams windows are actual meetings (not pop-out chats)
-                if appName == "Microsoft Teams" && !meetingVerifier(pid) {
-                    consecutiveHits[appName] = 0
-                    continue
-                }
 
                 return DetectedMeeting(
                     pattern: pattern,
@@ -160,54 +150,6 @@ class MeetingDetector: MeetingDetecting {
             }
         }
 
-        return nil
-    }
-
-    // MARK: - Meeting Verification
-
-    /// DOM identifiers that indicate an active Teams call/meeting.
-    /// These are stable Electron DOM IDs used by Teams' web content.
-    private static let meetingDOMIdentifiers: Set<String> = [
-        "hangup-button",
-        "microphone-button",
-        "video-button",
-    ]
-
-    /// Verify that a Teams window is an active meeting by searching the AXWebArea
-    /// DOM for call-control buttons (hangup, microphone, video).
-    ///
-    /// Teams is an Electron app — standard AXButton roles on window chrome don't
-    /// expose meeting controls. The web content inside AXWebArea does expose them
-    /// via `AXDOMIdentifier`.
-    static func verifyTeamsMeeting(pid: pid_t) -> Bool {
-        guard AXIsProcessTrusted() else { return true } // can't verify, assume meeting
-        let app = AXUIElementCreateApplication(pid)
-        let found = findMeetingControl(app) != nil
-        if !found {
-            logger.info("Teams AX verification: no call controls found for PID \(pid) — skipping as chat")
-        }
-        return found
-    }
-
-    /// Search AX tree for an element with a meeting-related AXDOMIdentifier.
-    private static func findMeetingControl(_ element: AXUIElement, depth: Int = 0) -> AXUIElement? {
-        if depth > 30 { return nil }
-
-        // Check AXDOMIdentifier (set on Electron/WebView elements)
-        if let domId = AXHelper.getAttribute(element, attribute: "AXDOMIdentifier") as? String {
-            if meetingDOMIdentifiers.contains(domId) {
-                return element
-            }
-        }
-
-        guard let children = AXHelper.getAttribute(element, attribute: kAXChildrenAttribute) as? [AXUIElement] else {
-            return nil
-        }
-        for child in children {
-            if let found = findMeetingControl(child, depth: depth + 1) {
-                return found
-            }
-        }
         return nil
     }
 
