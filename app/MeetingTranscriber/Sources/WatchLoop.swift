@@ -38,7 +38,7 @@ class WatchLoop {
     }
 
     // Dependencies
-    let detector: MeetingDetector
+    let detector: MeetingDetecting
     let recorderFactory: @MainActor () -> RecordingProvider
     var pipelineQueue: PipelineQueue?
 
@@ -55,7 +55,7 @@ class WatchLoop {
     var onStateChange: ((State, State) -> Void)?
 
     init(
-        detector: MeetingDetector = MeetingDetector(patterns: AppMeetingPattern.all),
+        detector: MeetingDetecting = MeetingDetector(patterns: AppMeetingPattern.all),
         recorderFactory: @MainActor @escaping () -> RecordingProvider = { DualSourceRecorder() },
         pipelineQueue: PipelineQueue? = nil,
         pollInterval: TimeInterval = 3.0,

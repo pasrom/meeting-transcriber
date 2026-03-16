@@ -5,35 +5,12 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MeetingDetector")
 
-/// Represents a detected active meeting.
-struct DetectedMeeting {
-    let pattern: AppMeetingPattern
-    let windowTitle: String
-    let ownerName: String
-    let windowPID: pid_t
-    let detectedAt: Date
-
-    init(
-        pattern: AppMeetingPattern,
-        windowTitle: String,
-        ownerName: String,
-        windowPID: pid_t,
-        detectedAt: Date = Date(),
-    ) {
-        self.pattern = pattern
-        self.windowTitle = windowTitle
-        self.ownerName = ownerName
-        self.windowPID = windowPID
-        self.detectedAt = detectedAt
-    }
-}
-
 /// Polls window list to detect active meeting windows.
 ///
 /// Uses CGWindowListCopyWindowInfo to read on-screen windows.
 /// Requires Screen Recording permission.
 @Observable
-class MeetingDetector {
+class MeetingDetector: MeetingDetecting {
     private let patterns: [AppMeetingPattern]
     private let confirmationCount: Int
     private var consecutiveHits: [String: Int] = [:]
