@@ -25,7 +25,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     PipelineJob.swift      # Pipeline job model
-    ProtocolGenerator.swift   # Protocol generation via Claude CLI + configurable prompt file
+    ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
+    ClaudeCLIProtocolGenerator.swift # Claude CLI subprocess protocol generation (#if !APPSTORE)
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     DualSourceRecorder.swift  # App audio (AudioTapLib) + mic recording (captures startTime in start())
@@ -40,6 +41,9 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     UpdateChecker.swift    # GitHub release update checker
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
+  Entitlements/
+    Homebrew.entitlements  # Mic only (Homebrew/direct distribution)
+    AppStore.entitlements  # Sandbox + mic + network + file picker (App Store)
   Tests/                   # Swift tests (XCTest + ViewInspector)
     Fixtures/              # Test audio files (two_speakers_de.wav, etc.)
 tools/audiotap/            # AudioTapLib — CATapDescription-based app audio capture (SPM library)
@@ -55,7 +59,7 @@ tools/meeting-simulator/   # Meeting simulator tool for testing
   Sources/main.swift
 scripts/
   build_whisperkit.sh      # Build WhisperKit CLI tool
-  build_release.sh         # Build self-contained .app bundle + DMG
+  build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
@@ -108,8 +112,11 @@ cd app/MeetingTranscriber && swift test
 # Lint & format auto-fix (SwiftFormat + SwiftLint --fix)
 ./scripts/lint.sh --fix
 
-# Build self-contained .app + DMG for distribution
+# Build self-contained .app + DMG for distribution (Homebrew)
 ./scripts/build_release.sh
+
+# Build App Store variant (sandbox, no Claude CLI)
+./scripts/build_release.sh --appstore --no-notarize
 ```
 
 ## Distribution
@@ -194,3 +201,20 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
 - Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)
+
+## Build Variants
+
+Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPSTORE`):
+
+| | Homebrew | App Store |
+|---|---|---|
+| **Claude CLI** | Yes (Process subprocess) | No (sandbox forbids Process) |
+| **OpenAI API** | Yes | Yes (only option) |
+| **Entitlements** | Mic only | Sandbox + mic + network + file picker |
+| **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
+| **Tests** | 497 | 483 (14 CLI tests excluded) |
+
+- CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
+- `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
+- `ProtocolError` has `#if !APPSTORE` around CLI error cases (enum cases cannot be added via extension)
+- FFmpegHelper also uses `Process()` but falls back gracefully to `nil` — no `#if` needed
