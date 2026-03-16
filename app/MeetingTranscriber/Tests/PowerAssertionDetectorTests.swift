@@ -35,12 +35,12 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
-    func testDetectsTeamsCall() {
+    func testDetectsMSTeamsCall() {
         let detector = makeDetector()
         detector.assertionProvider = {
             makeAssertionDict(
-                pid: 1234,
-                processName: "Microsoft Teams",
+                pid: 1438,
+                processName: "MSTeams",
                 assertName: "Microsoft Teams Call in progress"
             )
         }
@@ -48,8 +48,20 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.pattern.appName, "Microsoft Teams")
         XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call in progress")
-        XCTAssertEqual(result?.ownerName, "Microsoft Teams")
-        XCTAssertEqual(result?.windowPID, 1234)
+        XCTAssertEqual(result?.ownerName, "MSTeams")
+        XCTAssertEqual(result?.windowPID, 1438)
+    }
+
+    func testDetectsTeamsLegacyProcessName() {
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 1234,
+                processName: "MSTeams",
+                assertName: "Microsoft Teams Call in progress"
+            )
+        }
+        XCTAssertNotNil(detector.checkOnce())
     }
 
     func testDetectsTeamsWorkOrSchool() {
@@ -64,6 +76,19 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let result = detector.checkOnce()
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.pattern.appName, "Microsoft Teams")
+    }
+
+    func testIgnoresTeamsVideoWakeLock() {
+        // "Video Wake Lock" persists even without a call — must NOT trigger detection
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 4211,
+                processName: "Microsoft Teams WebView",
+                assertName: "Video Wake Lock"
+            )
+        }
+        XCTAssertNil(detector.checkOnce())
     }
 
     func testDetectsZoomCall() {
@@ -151,7 +176,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         detector.assertionProvider = {
             makeAssertionDict(
                 pid: 1234,
-                processName: "Microsoft Teams",
+                processName: "MSTeams",
                 assertName: "Downloading update"
             )
         }
@@ -219,7 +244,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         detector.assertionProvider = {
             makeAssertionDict(
                 pid: 1234,
-                processName: "Microsoft Teams",
+                processName: "MSTeams",
                 assertName: "Microsoft Teams Call in progress"
             )
         }
@@ -275,7 +300,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         detector.assertionProvider = {
             makeAssertionDict(
                 pid: 1234,
-                processName: "Microsoft Teams",
+                processName: "MSTeams",
                 assertName: "MICROSOFT TEAMS CALL IN PROGRESS"
             )
         }

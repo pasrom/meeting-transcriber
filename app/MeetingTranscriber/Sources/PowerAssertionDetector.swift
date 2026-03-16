@@ -22,17 +22,17 @@ class PowerAssertionDetector: MeetingDetecting {
     static let defaultPatterns: [AssertionPattern] = [
         AssertionPattern(
             appName: "Microsoft Teams",
-            processNames: ["Microsoft Teams", "Microsoft Teams (work or school)"],
+            processNames: ["MSTeams", "Microsoft Teams", "Microsoft Teams WebView", "Microsoft Teams (work or school)"],
             keywords: ["call in progress"]
         ),
         AssertionPattern(
             appName: "Zoom",
-            processNames: ["zoom.us"],
+            processNames: ["zoom.us", "CptHost"],
             keywords: ["zoom"]
         ),
         AssertionPattern(
             appName: "Webex",
-            processNames: ["Webex", "Cisco Webex Meetings"],
+            processNames: ["Webex", "Cisco Webex Meetings", "Meeting Center"],
             keywords: ["webex"]
         ),
     ]
@@ -148,21 +148,36 @@ class PowerAssertionDetector: MeetingDetecting {
     }
 
     /// Default assertion provider using IOPMCopyAssertionsByProcess.
+    ///
+    /// The API returns a CFDictionary keyed by PID (CFNumber), not String.
+    /// We extract keys/values manually via CFDictionaryGetKeysAndValues.
     static func systemAssertions() -> [Int32: [[String: Any]]] {
         var assertionsByProcess: Unmanaged<CFDictionary>?
         let status = IOPMCopyAssertionsByProcess(&assertionsByProcess)
-        guard status == kIOReturnSuccess,
-              let dict = assertionsByProcess?.takeRetainedValue() as? [String: [[String: Any]]] else {
+        guard status == kIOReturnSuccess, let raw = assertionsByProcess else {
             return [:]
         }
 
-        // Convert to PID-keyed dict by looking up PID in each assertion
+        let cfDict = raw.takeRetainedValue()
+        let count = CFDictionaryGetCount(cfDict)
+        guard count > 0 else { return [:] }
+
+        let keys = UnsafeMutablePointer<UnsafeRawPointer?>.allocate(capacity: count)
+        let values = UnsafeMutablePointer<UnsafeRawPointer?>.allocate(capacity: count)
+        defer {
+            keys.deallocate()
+            values.deallocate()
+        }
+        CFDictionaryGetKeysAndValues(cfDict, keys, values)
+
         var result: [Int32: [[String: Any]]] = [:]
-        for (_, assertions) in dict {
-            for assertion in assertions {
-                if let pid = assertion["AssertPID"] as? Int32 {
-                    result[pid, default: []].append(assertion)
-                }
+        for i in 0 ..< count {
+            guard let valPtr = values[i] else { continue }
+            let keyObj = Unmanaged<AnyObject>.fromOpaque(keys[i]!).takeUnretainedValue()
+            let pid = (keyObj as? NSNumber)?.int32Value ?? 0
+            let valObj = Unmanaged<AnyObject>.fromOpaque(valPtr).takeUnretainedValue()
+            if let assertions = valObj as? [[String: Any]] {
+                result[pid] = assertions
             }
         }
         return result
