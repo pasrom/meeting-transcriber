@@ -239,31 +239,13 @@ struct MeetingTranscriberApp: App {
             // swiftlint:disable:next closure_body_length
             Task {
                 _ = await Permissions.ensureMicrophoneAccess()
-                #if !APPSTORE
-                    _ = Permissions.ensureAccessibilityAccess()
-                #endif
 
-                #if !APPSTORE
-                    var patterns: [AppMeetingPattern] = []
-                    if settings.watchTeams { patterns.append(.teams) }
-                    if settings.watchZoom { patterns.append(.zoom) }
-                    if settings.watchWebex { patterns.append(.webex) }
-                    if patterns.isEmpty { patterns = AppMeetingPattern.all }
-                    // Always include simulator for debug/testing
-                    if !patterns.contains(where: { $0.appName == "MeetingSimulator" }) {
-                        patterns.append(.simulator)
-                    }
-                #endif
-
+                // swiftlint:disable:next closure_body_length
                 await MainActor.run {
                     whisperKit.language = settings.whisperLanguageOrNil
                     pipelineQueue = makePipelineQueue()
 
-                    #if APPSTORE
-                        let detector: MeetingDetecting = PowerAssertionDetector()
-                    #else
-                        let detector: MeetingDetecting = MeetingDetector(patterns: patterns)
-                    #endif
+                    let detector: MeetingDetecting = PowerAssertionDetector()
 
                     let loop = WatchLoop(
                         detector: detector,

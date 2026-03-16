@@ -79,11 +79,7 @@ class WatchLoop {
     }
 
     nonisolated static func defaultDetector() -> MeetingDetecting {
-        #if APPSTORE
-            PowerAssertionDetector()
-        #else
-            MeetingDetector(patterns: AppMeetingPattern.all)
-        #endif
+        PowerAssertionDetector()
     }
 
     var isActive: Bool {
