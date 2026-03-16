@@ -8,7 +8,9 @@ struct SettingsView: View {
     @Bindable var settings: AppSettings
 
     @State private var audioDevices: [(id: String, name: String)] = []
-    @State private var claudeBinaries: [String] = ["claude"]
+    #if !APPSTORE
+        @State private var claudeBinaries: [String] = ["claude"]
+    #endif
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
@@ -181,15 +183,17 @@ struct SettingsView: View {
                 }
 
                 switch settings.protocolProvider {
-                case .claudeCLI:
-                    Picker("Claude CLI", selection: $settings.claudeBin) {
-                        ForEach(claudeBinaries, id: \.self) { bin in
-                            Text(bin).tag(bin)
+                #if !APPSTORE
+                    case .claudeCLI:
+                        Picker("Claude CLI", selection: $settings.claudeBin) {
+                            ForEach(claudeBinaries, id: \.self) { bin in
+                                Text(bin).tag(bin)
+                            }
                         }
-                    }
-                    Text("Binary used for protocol generation")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        Text("Binary used for protocol generation")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                #endif
 
                 case .openAICompatible:
                     VStack(alignment: .leading, spacing: 4) {
@@ -417,7 +421,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520)
         .onAppear {
-            claudeBinaries = ProtocolGenerator.availableClaudeBinaries()
+            #if !APPSTORE
+                claudeBinaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
+            #endif
             refreshPermissions()
         }
     }

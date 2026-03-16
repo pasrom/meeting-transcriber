@@ -304,8 +304,10 @@ struct MeetingTranscriberApp: App {
 
     private func makeProtocolGenerator() -> ProtocolGenerating {
         switch settings.protocolProvider {
-        case .claudeCLI:
-            ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
+        #if !APPSTORE
+            case .claudeCLI:
+                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
+        #endif
 
         case .openAICompatible:
             OpenAIProtocolGenerator(
