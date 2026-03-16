@@ -3,12 +3,17 @@ import SwiftUI
 private let defaults = UserDefaults.standard
 
 enum ProtocolProvider: String, CaseIterable {
-    case claudeCLI
+    #if !APPSTORE
+        case claudeCLI
+    #endif
     case openAICompatible
 
     var label: String {
         switch self {
-        case .claudeCLI: "Claude CLI"
+        #if !APPSTORE
+            case .claudeCLI: "Claude CLI"
+        #endif
+
         case .openAICompatible: "OpenAI-Compatible API"
         }
     }
@@ -102,14 +107,20 @@ final class AppSettings {
            let provider = ProtocolProvider(rawValue: raw) {
             return provider
         }
-        return .claudeCLI
+        #if APPSTORE
+            return .openAICompatible
+        #else
+            return .claudeCLI
+        #endif
     }() {
         didSet { defaults.set(protocolProvider.rawValue, forKey: "protocolProvider") }
     }
 
-    var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
-        didSet { defaults.set(claudeBin, forKey: "claudeBin") }
-    }
+    #if !APPSTORE
+        var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
+            didSet { defaults.set(claudeBin, forKey: "claudeBin") }
+        }
+    #endif
 
     var openAIEndpoint: String = defaults.object(forKey: "openAIEndpoint") as? String
         ?? "http://localhost:11434/v1/chat/completions" {
