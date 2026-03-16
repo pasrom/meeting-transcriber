@@ -2,7 +2,7 @@
 # Build a self-contained MeetingTranscriber.app bundle.
 #
 # Usage:
-#   ./scripts/build_release.sh [--no-notarize]
+#   ./scripts/build_release.sh [--no-notarize] [--appstore]
 #
 # Output:
 #   .build/release/MeetingTranscriber.dmg
@@ -30,10 +30,12 @@ MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
 
 NOTARIZE=true
+APPSTORE=false
 OVERRIDE_VERSION=""
 for arg in "$@"; do
     case "$arg" in
         --no-notarize) NOTARIZE=false ;;
+        --appstore) APPSTORE=true ;;
         --version=*) OVERRIDE_VERSION="${arg#--version=}" ;;
     esac
 done
@@ -46,6 +48,7 @@ else
 fi
 echo "Building MeetingTranscriber v${VERSION}"
 echo "  Notarize:    $NOTARIZE"
+echo "  App Store:   $APPSTORE"
 echo "======================================="
 
 # ── Step 0: Clean previous build ─────────────────────────────────────────────
@@ -59,7 +62,11 @@ echo ""
 echo "Step 1: Building Swift menu bar app..."
 
 SPM_DIR="$PROJECT_ROOT/app/MeetingTranscriber"
-(cd "$SPM_DIR" && swift build -c release --disable-sandbox)
+SWIFT_BUILD_FLAGS=(-c release --disable-sandbox)
+if [ "$APPSTORE" = true ]; then
+    SWIFT_BUILD_FLAGS+=(-Xswiftc -DAPPSTORE)
+fi
+(cd "$SPM_DIR" && swift build "${SWIFT_BUILD_FLAGS[@]}")
 
 cp "$SPM_DIR/.build/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
 
@@ -109,18 +116,11 @@ if [ "$NOTARIZE" = true ]; then
         exit 1
     fi
 
-    # Create entitlements file
-    ENTITLEMENTS="$BUILD_DIR/entitlements.plist"
-    cat > "$ENTITLEMENTS" << 'ENTITLEMENTS_EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
-</dict>
-</plist>
-ENTITLEMENTS_EOF
+    if [ "$APPSTORE" = true ]; then
+        ENTITLEMENTS="$SPM_DIR/Entitlements/AppStore.entitlements"
+    else
+        ENTITLEMENTS="$SPM_DIR/Entitlements/Homebrew.entitlements"
+    fi
 
     # Sign all dylibs/shared objects (one at a time to avoid xargs arg length limits)
     echo "  Signing embedded libraries..."
