@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import IOKit.pwr_mgt
 import os.log
@@ -46,6 +47,10 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Closure that provides assertion data. Defaults to IOPMCopyAssertionsByProcess.
     /// Override in tests to inject mock data.
     var assertionProvider: () -> [Int32: [[String: Any]]] = PowerAssertionDetector.systemAssertions
+
+    /// Closure that provides the window list for title lookup. Defaults to CGWindowListCopyWindowInfo.
+    /// Override in tests to inject mock data.
+    var windowListProvider: () -> [[String: Any]] = PowerAssertionDetector.systemWindowList
 
     /// Last detected meeting, kept for isMeetingActive checks.
     private var lastDetectedAppName: String?
@@ -97,9 +102,10 @@ class PowerAssertionDetector: MeetingDetecting {
                     meetingPatterns: []
                 )
                 lastDetectedAppName = appName
+                let title = lookupWindowTitle(appName: appName) ?? match.assertName
                 return DetectedMeeting(
                     pattern: meetingPattern,
-                    windowTitle: match.assertName,
+                    windowTitle: title,
                     ownerName: match.processName,
                     windowPID: match.pid
                 )
@@ -139,6 +145,37 @@ class PowerAssertionDetector: MeetingDetecting {
         }
     }
 
+    // MARK: - Window Title Lookup
+
+    /// Look up the actual window title for a detected meeting app via CGWindowListCopyWindowInfo.
+    /// Returns the first non-empty, non-idle window title matching the app's owner names.
+    private func lookupWindowTitle(appName: String) -> String? {
+        guard let meetingPattern = AppMeetingPattern.forAppName(appName) else { return nil }
+        let windows = windowListProvider()
+
+        for window in windows {
+            guard let owner = window["kCGWindowOwnerName"] as? String,
+                  meetingPattern.ownerNames.contains(owner),
+                  let title = window["kCGWindowName"] as? String,
+                  !title.isEmpty,
+                  title != appName else {
+                continue
+            }
+            return title
+        }
+        return nil
+    }
+
+    /// Default window list provider using CGWindowListCopyWindowInfo.
+    static func systemWindowList() -> [[String: Any]] {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionAll, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+        return windowList
+    }
+
     // MARK: - Private
 
     private func matchAssertion(processName: String, assertName: String, pattern: AssertionPattern) -> Bool {
@@ -173,8 +210,9 @@ class PowerAssertionDetector: MeetingDetecting {
         var result: [Int32: [[String: Any]]] = [:]
         for i in 0 ..< count {
             guard let valPtr = values[i] else { continue }
-            let keyObj = Unmanaged<AnyObject>.fromOpaque(keys[i]!).takeUnretainedValue()
-            let pid = (keyObj as? NSNumber)?.int32Value ?? 0
+            guard let keyPtr = keys[i] else { continue }
+            let keyObj = Unmanaged<AnyObject>.fromOpaque(keyPtr).takeUnretainedValue()
+            let pid = keyObj as? Int32 ?? 0
             let valObj = Unmanaged<AnyObject>.fromOpaque(valPtr).takeUnretainedValue()
             if let assertions = valObj as? [[String: Any]] {
                 result[pid] = assertions
