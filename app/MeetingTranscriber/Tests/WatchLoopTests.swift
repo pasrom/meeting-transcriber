@@ -4,8 +4,10 @@ import XCTest
 @MainActor
 final class WatchLoopTests: XCTestCase {
     private func makeLoop(pipelineQueue: PipelineQueue? = nil) -> WatchLoop {
-        WatchLoop(
-            detector: MeetingDetector(patterns: AppMeetingPattern.all),
+        let detector = PowerAssertionDetector()
+        detector.assertionProvider = { [:] }
+        return WatchLoop(
+            detector: detector,
             pipelineQueue: pipelineQueue,
         )
     }
@@ -126,13 +128,9 @@ final class WatchLoopTests: XCTestCase {
     // MARK: - Meeting End Detection
 
     func testWaitForMeetingEndGracePeriod() async throws {
-        let detector = MeetingDetector(patterns: AppMeetingPattern.all)
-        // Mock: meeting disappears immediately
-        var callCount = 0
-        detector.windowListProvider = {
-            callCount += 1
-            return [] // no windows = meeting gone
-        }
+        let detector = PowerAssertionDetector()
+        // Mock: meeting gone (no assertions)
+        detector.assertionProvider = { [:] }
 
         let loop = WatchLoop(
             detector: detector,
@@ -180,18 +178,10 @@ final class WatchLoopTests: XCTestCase {
     // MARK: - Meeting End Detection (Max Duration)
 
     func testWaitForMeetingEndMaxDuration() async throws {
-        let detector = MeetingDetector(patterns: AppMeetingPattern.all)
-        // Mock: meeting stays active forever
-        detector.windowListProvider = {
-            [[
-                "kCGWindowOwnerName": "Microsoft Teams" as CFString,
-                "kCGWindowName": "Test | Microsoft Teams" as CFString,
-                "kCGWindowOwnerPID": 1234 as CFNumber,
-                "kCGWindowNumber": 1 as CFNumber,
-                "kCGWindowBounds": [
-                    "X": 0, "Y": 0, "Width": 800, "Height": 600,
-                ] as CFDictionary,
-            ] as [String: Any]]
+        let detector = PowerAssertionDetector()
+        // Mock: meeting stays active forever (assertion always present)
+        detector.assertionProvider = {
+            [1234: [["Process Name": "MSTeams", "AssertName": "Microsoft Teams Call in progress"]]]
         }
 
         let loop = WatchLoop(

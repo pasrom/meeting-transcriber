@@ -91,9 +91,9 @@ final class WatchLoopE2ETests: XCTestCase {
         recorder: MockRecorder,
         pipelineQueue: PipelineQueue,
     ) -> WatchLoop {
-        let detector = MeetingDetector(patterns: AppMeetingPattern.all)
-        // Meeting ends immediately (no windows)
-        detector.windowListProvider = { [] }
+        let detector = PowerAssertionDetector()
+        // Meeting ends immediately (no assertions)
+        detector.assertionProvider = { [:] }
 
         return WatchLoop(
             detector: detector,
@@ -308,19 +308,16 @@ final class WatchLoopE2ETests: XCTestCase {
     // MARK: - 5. Cooldown Prevents Re-detection After Handling
 
     func testCooldownPreventsRedetectionAfterHandling() {
-        let detector = MeetingDetector(patterns: AppMeetingPattern.all, confirmationCount: 1)
+        let detector = PowerAssertionDetector(confirmationCount: 1)
+        detector.windowListProvider = { [] }
 
-        let teamsWindow: [String: Any] = [
-            "kCGWindowOwnerName": "Microsoft Teams" as CFString,
-            "kCGWindowName": "Standup | Microsoft Teams" as CFString,
-            "kCGWindowOwnerPID": 1234 as CFNumber,
-            "kCGWindowNumber": 1 as CFNumber,
-            "kCGWindowBounds": [
-                "X": 0, "Y": 0, "Width": 800, "Height": 600,
-            ] as CFDictionary,
+        let teamsAssertions: [Int32: [[String: Any]]] = [
+            1234: [[
+                "Process Name": "MSTeams",
+                "AssertName": "Microsoft Teams Call in progress",
+            ]],
         ]
-
-        detector.windowListProvider = { [teamsWindow] }
+        detector.assertionProvider = { teamsAssertions }
 
         // First detection succeeds
         let firstDetection = detector.checkOnce()
