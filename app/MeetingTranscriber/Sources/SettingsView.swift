@@ -305,13 +305,15 @@ struct SettingsView: View {
             }
 
             Section("Permissions") {
-                PermissionRow(
-                    label: "Screen Recording",
-                    detail: "Required for meeting detection (window titles)",
-                    granted: screenRecordingOK,
-                    help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
-                    settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-                )
+                #if !APPSTORE
+                    PermissionRow(
+                        label: "Screen Recording",
+                        detail: "Required for meeting detection (window titles)",
+                        granted: screenRecordingOK,
+                        help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
+                        settingsURL: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+                    )
+                #endif
                 PermissionRow(
                     label: "Microphone",
                     detail: micPermission == .authorized ? "Granted"
@@ -446,7 +448,9 @@ struct SettingsView: View {
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
-        screenRecordingOK = Permissions.checkScreenRecording()
+        #if !APPSTORE
+            screenRecordingOK = Permissions.checkScreenRecording()
+        #endif
         accessibilityOK = AXIsProcessTrusted()
     }
 

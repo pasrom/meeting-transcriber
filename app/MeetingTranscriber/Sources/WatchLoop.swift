@@ -55,7 +55,7 @@ class WatchLoop {
     var onStateChange: ((State, State) -> Void)?
 
     init(
-        detector: MeetingDetecting = MeetingDetector(patterns: AppMeetingPattern.all),
+        detector: MeetingDetecting = WatchLoop.defaultDetector(),
         recorderFactory: @MainActor @escaping () -> RecordingProvider = { DualSourceRecorder() },
         pipelineQueue: PipelineQueue? = nil,
         pollInterval: TimeInterval = 3.0,
@@ -76,6 +76,14 @@ class WatchLoop {
 
     nonisolated static var defaultOutputDir: URL {
         AppPaths.protocolsDir
+    }
+
+    nonisolated static func defaultDetector() -> MeetingDetecting {
+        #if APPSTORE
+            PowerAssertionDetector()
+        #else
+            MeetingDetector(patterns: AppMeetingPattern.all)
+        #endif
     }
 
     var isActive: Bool {

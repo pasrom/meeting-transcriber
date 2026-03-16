@@ -255,8 +255,14 @@ struct MeetingTranscriberApp: App {
                     whisperKit.language = settings.whisperLanguageOrNil
                     pipelineQueue = makePipelineQueue()
 
+                    #if APPSTORE
+                        let detector: MeetingDetecting = PowerAssertionDetector()
+                    #else
+                        let detector: MeetingDetecting = MeetingDetector(patterns: patterns)
+                    #endif
+
                     let loop = WatchLoop(
-                        detector: MeetingDetector(patterns: patterns),
+                        detector: detector,
                         pipelineQueue: pipelineQueue,
                         pollInterval: settings.pollInterval,
                         endGracePeriod: settings.endGrace,

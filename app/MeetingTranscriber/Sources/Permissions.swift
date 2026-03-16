@@ -4,17 +4,19 @@ import CoreGraphics
 import Foundation
 
 enum Permissions {
-    /// Check if Screen Recording permission is granted.
-    static func checkScreenRecording() -> Bool {
-        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
-            return false
+    #if !APPSTORE
+        /// Check if Screen Recording permission is granted.
+        static func checkScreenRecording() -> Bool {
+            guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else {
+                return false
+            }
+            let ownPID = ProcessInfo.processInfo.processIdentifier
+            return windowList.contains { info in
+                guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
+                return info[kCGWindowName as String] is String
+            }
         }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        return windowList.contains { info in
-            guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID else { return false }
-            return info[kCGWindowName as String] is String
-        }
-    }
+    #endif
 
     static func ensureMicrophoneAccess() async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
