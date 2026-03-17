@@ -19,6 +19,17 @@ jobs:
   build:
     runs-on: macos-26  # Apple Silicon runner (Swift 6.0+)
     timeout-minutes: 30
+    strategy:
+      matrix:
+        variant: [homebrew, appstore]
+        include:
+          - variant: homebrew
+            build-flags: ""
+            artifact-suffix: ""
+          - variant: appstore
+            build-flags: "--appstore --no-notarize"
+            artifact-suffix: "-AppStore"
+    name: build (${{ matrix.variant }})
     permissions:
       contents: write  # For creating GitHub releases
 
@@ -29,8 +40,8 @@ jobs:
         uses: actions/cache@v5
         with:
           path: app/MeetingTranscriber/.build
-          key: spm-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-
+          key: spm-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
 
       - name: Install Developer ID certificate
         env:
@@ -56,7 +67,7 @@ jobs:
           # Add to search list
           security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-      - name: Build self-contained .app and DMG
+      - name: Build .app and DMG
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -67,10 +78,10 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BUILD_VERSION="--version=${GITHUB_REF_NAME#v}"
           fi
-          if [ -n "$DEVELOPER_ID" ]; then
+          if [ "${{ matrix.variant }}" = "homebrew" ] && [ -n "${DEVELOPER_ID:-}" ]; then
             ./scripts/build_release.sh ${BUILD_VERSION:-}
           else
-            ./scripts/build_release.sh --no-notarize ${BUILD_VERSION:-}
+            ./scripts/build_release.sh ${{ matrix.build-flags }} --no-notarize ${BUILD_VERSION:-}
           fi
 
       - name: Get version
@@ -84,6 +95,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Compute DMG SHA256
+        if: matrix.variant == 'homebrew'
         id: sha
         run: |
           DMG=".build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg"
@@ -94,12 +106,12 @@ jobs:
       - name: Upload DMG as artifact
         uses: actions/upload-artifact@v7
         with:
-          name: MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
+          name: MeetingTranscriber${{ matrix.artifact-suffix }}-${{ steps.version.outputs.version }}.dmg
           path: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
           retention-days: 3
 
       - name: Find previous stable release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
         id: prev
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -108,7 +120,7 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
         uses: ncipollo/release-action@v1
         with:
           artifacts: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
@@ -136,7 +148,7 @@ jobs:
             ```
 
       - name: Update Homebrew tap with new version and SHA256
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.TAP_REPO_TOKEN }}
