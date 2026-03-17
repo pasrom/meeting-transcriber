@@ -110,16 +110,17 @@ GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo ""
 echo "Step 3: Code signing..."
 
+# Select entitlements based on build variant
+if [ "$APPSTORE" = true ]; then
+    ENTITLEMENTS="$SPM_DIR/Entitlements/AppStore.entitlements"
+else
+    ENTITLEMENTS="$SPM_DIR/Entitlements/Homebrew.entitlements"
+fi
+
 if [ "$NOTARIZE" = true ]; then
     if [ -z "${DEVELOPER_ID:-}" ]; then
         echo "  ERROR: DEVELOPER_ID not set. Set it to your 'Developer ID Application: ...' identity."
         exit 1
-    fi
-
-    if [ "$APPSTORE" = true ]; then
-        ENTITLEMENTS="$SPM_DIR/Entitlements/AppStore.entitlements"
-    else
-        ENTITLEMENTS="$SPM_DIR/Entitlements/Homebrew.entitlements"
     fi
 
     # Sign all dylibs/shared objects (one at a time to avoid xargs arg length limits)
@@ -138,10 +139,10 @@ else
     # Use local development certificate if available
     SIGN_HASH=$(security find-identity -v -p codesigning 2>/dev/null | head -1 | awk '{print $2}')
     if [ -n "$SIGN_HASH" ] && [ "$SIGN_HASH" != "0" ]; then
-        codesign --deep --force --sign "$SIGN_HASH" "$APP_BUNDLE"
+        codesign --deep --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
         echo "  Signed with certificate: $SIGN_HASH"
     else
-        codesign --deep --force --sign - "$APP_BUNDLE"
+        codesign --deep --force --sign - --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
         echo "  Ad-hoc signed (install via right-click → Open)"
     fi
 fi
