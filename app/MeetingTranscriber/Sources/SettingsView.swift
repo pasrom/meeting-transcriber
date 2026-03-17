@@ -263,6 +263,28 @@ struct SettingsView: View {
                     }
                 }
 
+                HStack {
+                    Text("Output Folder")
+                    Spacer()
+                    Text(outputDirDisplay)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                HStack {
+                    Button("Choose\u{2026}") {
+                        chooseOutputFolder()
+                    }
+
+                    Button("Reset") {
+                        settings.clearCustomOutputDir()
+                    }
+                    .disabled(settings.customOutputDirBookmark == nil)
+
+                    Spacer()
+                }
+
                 // swiftlint:disable:next closure_body_length
                 HStack {
                     Button("Edit Prompt") {
@@ -535,6 +557,27 @@ struct SettingsView: View {
         } else {
             try? FileManager.default.copyItem(at: source, to: dest)
         }
+    }
+
+    private var outputDirDisplay: String {
+        let url = settings.effectiveOutputDir
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = url.path
+        if path.hasPrefix(home) {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+
+    private func chooseOutputFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose a folder for protocol output"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        settings.setCustomOutputDir(url)
     }
 
     private func refreshAudioDevices() {

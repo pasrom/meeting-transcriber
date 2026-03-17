@@ -23,8 +23,19 @@ enum AppPaths {
     /// Recordings directory.
     static let recordingsDir = dataDir.appendingPathComponent("recordings")
 
-    /// Protocols output directory.
+    /// Protocols output directory (legacy, inside Application Support).
     static let protocolsDir = dataDir.appendingPathComponent("protocols")
+
+    /// Default protocols output in Downloads: `~/Downloads/MeetingTranscriber/`
+    /// In sandbox, `FileManager.urls(for: .downloadsDirectory)` resolves to the container-granted path.
+    static let downloadsProtocolsDir: URL = {
+        guard let downloads = FileManager.default
+            .urls(for: .downloadsDirectory, in: .userDomainMask).first
+        else {
+            return protocolsDir
+        }
+        return downloads.appendingPathComponent("MeetingTranscriber")
+    }()
 
     /// Speaker voice profiles DB.
     static let speakersDB = dataDir.appendingPathComponent("speakers.json")

@@ -142,6 +142,57 @@ final class AppSettings {
         }
     }
 
+    // MARK: - Output Directory
+
+    /// Security-scoped bookmark for a user-chosen output directory.
+    var customOutputDirBookmark: Data? {
+        get { defaults.data(forKey: "customOutputDirBookmark") }
+        set { defaults.set(newValue, forKey: "customOutputDirBookmark") }
+    }
+
+    /// Resolved URL from the security-scoped bookmark. Calls `startAccessingSecurityScopedResource()`.
+    var customOutputDir: URL? {
+        guard let data = customOutputDirBookmark else { return nil }
+        var isStale = false
+        guard let url = try? URL(
+            resolvingBookmarkData: data,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale,
+        ) else { return nil }
+        if isStale {
+            // Re-create bookmark from resolved URL
+            if let newData = try? url.bookmarkData(
+                options: .withSecurityScope,
+                includingResourceValuesForKeys: nil,
+                relativeTo: nil,
+            ) {
+                customOutputDirBookmark = newData
+            }
+        }
+        return url
+    }
+
+    /// Store a user-selected directory as a security-scoped bookmark.
+    func setCustomOutputDir(_ url: URL) {
+        guard let data = try? url.bookmarkData(
+            options: .withSecurityScope,
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil,
+        ) else { return }
+        customOutputDirBookmark = data
+    }
+
+    /// Clear the custom output directory, reverting to the default.
+    func clearCustomOutputDir() {
+        customOutputDirBookmark = nil
+    }
+
+    /// The effective output directory: custom choice or ~/Downloads/MeetingTranscriber/.
+    var effectiveOutputDir: URL {
+        customOutputDir ?? AppPaths.downloadsProtocolsDir
+    }
+
     // MARK: - Updates
 
     var checkForUpdates: Bool = defaults.object(forKey: "checkForUpdates") as? Bool ?? true {

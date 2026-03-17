@@ -75,7 +75,7 @@ class WatchLoop {
     }
 
     nonisolated static var defaultOutputDir: URL {
-        AppPaths.protocolsDir
+        AppPaths.downloadsProtocolsDir
     }
 
     nonisolated static func defaultDetector() -> MeetingDetecting {

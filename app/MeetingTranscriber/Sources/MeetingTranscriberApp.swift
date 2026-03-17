@@ -317,7 +317,7 @@ struct MeetingTranscriberApp: App {
             whisperKit: whisperKit,
             diarizationFactory: { FluidDiarizer() },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            outputDir: WatchLoop.defaultOutputDir,
+            outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
@@ -404,7 +404,9 @@ struct MeetingTranscriberApp: App {
     }
 
     private func openProtocolsFolder() {
-        let protocols = WatchLoop.defaultOutputDir
+        let protocols = settings.effectiveOutputDir
+        let accessing = protocols.startAccessingSecurityScopedResource()
+        defer { if accessing { protocols.stopAccessingSecurityScopedResource() } }
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
         NSWorkspace.shared.open(protocols)
     }

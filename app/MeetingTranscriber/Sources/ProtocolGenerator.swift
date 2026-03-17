@@ -91,6 +91,8 @@ enum ProtocolGenerator {
     ///
     /// - Returns: URL of the saved file
     static func saveTranscript(_ text: String, title: String, dir: URL) throws -> URL {
+        let accessing = dir.startAccessingSecurityScopedResource()
+        defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(filename(title: title, ext: "txt"))
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -102,6 +104,8 @@ enum ProtocolGenerator {
     ///
     /// - Returns: URL of the saved file
     static func saveProtocol(_ markdown: String, title: String, dir: URL) throws -> URL {
+        let accessing = dir.startAccessingSecurityScopedResource()
+        defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(filename(title: title, ext: "md"))
         try markdown.write(to: url, atomically: true, encoding: .utf8)

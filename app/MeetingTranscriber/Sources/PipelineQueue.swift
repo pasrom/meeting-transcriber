@@ -448,7 +448,8 @@ class PipelineQueue {
             }
 
             // Save transcript
-            let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: outputDir)
+            let protocolsDir = outputDir.appendingPathComponent("protocols")
+            let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: protocolsDir)
             logger.info("Transcript saved: \(txtPath.lastPathComponent)")
 
             // --- Protocol Generation ---
@@ -463,8 +464,15 @@ class PipelineQueue {
             )
 
             let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + finalTranscript
-            let mdPath = try ProtocolGenerator.saveProtocol(fullMD, title: title, dir: outputDir)
+            let mdPath = try ProtocolGenerator.saveProtocol(fullMD, title: title, dir: protocolsDir)
             logger.info("Protocol saved: \(mdPath.lastPathComponent)")
+
+            // Move audio files to recordings subdirectory
+            let recordingsDir = outputDir.appendingPathComponent("recordings")
+            Self.copyAudioToOutput(
+                mixPath: mixPath, appPath: appPath, micPath: micPath,
+                title: title, outputDir: recordingsDir,
+            )
 
             // Update job with protocol path and mark done
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
@@ -530,6 +538,37 @@ class PipelineQueue {
             triggerProcessing()
         } catch {
             logger.error("Failed to load pipeline snapshot: \(error)")
+        }
+    }
+
+    // MARK: - Audio File Copy
+
+    /// Copy recording audio files to the protocol output directory.
+    private static func copyAudioToOutput(
+        mixPath: URL, appPath: URL?, micPath: URL?,
+        title: String, outputDir: URL,
+    ) {
+        let accessing = outputDir.startAccessingSecurityScopedResource()
+        defer { if accessing { outputDir.stopAccessingSecurityScopedResource() } }
+
+        let fm = FileManager.default
+        try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let slug = ProtocolGenerator.filename(title: title, ext: "").dropLast() // remove trailing "."
+        let audioPaths: [(URL, String)] = [
+            (mixPath, "\(slug)_mix.wav"),
+            appPath.map { ($0, "\(slug)_app.wav") },
+            micPath.map { ($0, "\(slug)_mic.wav") },
+        ].compactMap(\.self)
+
+        for (src, name) in audioPaths {
+            let dst = outputDir.appendingPathComponent(name)
+            do {
+                if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
+                try fm.moveItem(at: src, to: dst)
+                logger.info("Audio moved: \(name)")
+            } catch {
+                logger.warning("Failed to move audio \(name): \(error.localizedDescription)")
+            }
         }
     }
 

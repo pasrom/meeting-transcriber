@@ -122,7 +122,7 @@ final class WatchLoopTests: XCTestCase {
 
     func testDefaultOutputDir() {
         let dir = WatchLoop.defaultOutputDir
-        XCTAssertTrue(dir.path.contains("Library/Application Support/MeetingTranscriber/protocols"))
+        XCTAssertTrue(dir.path.contains("Downloads/MeetingTranscriber"))
     }
 
     // MARK: - Meeting End Detection
