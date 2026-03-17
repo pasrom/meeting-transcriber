@@ -365,7 +365,7 @@ final class MenuBarViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Processing"))
         XCTAssertNoThrow(try body.find(text: "Standup"))
-        XCTAssertNoThrow(try body.find(text: "Transcribing..."))
+        XCTAssertNoThrow(try body.find(text: "Transcribing... 0s"))
     }
 
     func testDismissButtonShownForCompletedJob() throws {

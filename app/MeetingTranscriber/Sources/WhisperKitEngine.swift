@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import WhisperKit
 
@@ -38,6 +39,8 @@ final class WhisperKitEngine {
     var language: String?
     private(set) var modelState: ModelState = .unloaded
     private(set) var downloadProgress: Double = 0
+    /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
+    private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
     private var loadingTask: Task<Void, Never>?
 
@@ -107,6 +110,11 @@ final class WhisperKitEngine {
             throw TranscriptionError.modelNotLoaded
         }
 
+        transcriptionProgress = 0
+
+        // Estimate total 30s windows from audio duration
+        let totalWindows = max(1, Self.estimateWindowCount(audioPath: audioPath))
+
         let options = DecodingOptions(
             language: language,
             wordTimestamps: false,
@@ -115,7 +123,16 @@ final class WhisperKitEngine {
         let results = await pipe.transcribe(
             audioPaths: [audioPath.path],
             decodeOptions: options,
-        )
+        ) { [weak self] progress in
+            Task { @MainActor in
+                guard let self else { return }
+                self.transcriptionProgress = min(
+                    Double(progress.windowId + 1) / Double(totalWindows),
+                    1.0,
+                )
+            }
+            return nil // continue transcription
+        }
 
         guard let firstResult = results.first, let transcriptionResults = firstResult else {
             return []
@@ -134,26 +151,31 @@ final class WhisperKitEngine {
                 text: text,
             ))
         }
+        transcriptionProgress = 1.0
         return segments
     }
 
-    /// Transcribe app and mic audio separately, label and merge by timestamp.
+    /// Estimate number of 30-second windows WhisperKit will process for the given audio file.
+    private static func estimateWindowCount(audioPath: URL) -> Int {
+        guard let audioFile = try? AVAudioFile(forReading: audioPath) else { return 1 }
+        let duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
+        return Int(ceil(duration / 30.0))
+    }
+
+    /// Label and merge pre-transcribed app/mic segments by timestamp.
     ///
-    /// Labels mic segments with `micLabel` and app segments as "Remote".
-    /// Returns structured segments for downstream processing (e.g. diarization).
-    func transcribeDualSourceSegments(
-        appAudio: URL,
-        micAudio: URL,
+    /// Used by PipelineQueue when transcription is done track-by-track for progress tracking.
+    func mergeDualSourceSegments(
+        appSegments: [TimestampedSegment],
+        micSegments: [TimestampedSegment],
         micDelay: TimeInterval = 0,
         micLabel: String = "Me",
-    ) async throws -> [TimestampedSegment] {
-        // Transcribe both tracks
-        var appSegments = try await transcribeSegments(audioPath: appAudio)
-        var micSegments = try await transcribeSegments(audioPath: micAudio)
+    ) -> [TimestampedSegment] {
+        var app = appSegments
+        var mic = micSegments
 
-        // Shift mic timestamps by delay
         if micDelay != 0 {
-            micSegments = micSegments.map { seg in
+            mic = mic.map { seg in
                 TimestampedSegment(
                     start: seg.start + micDelay,
                     end: seg.end + micDelay,
@@ -163,16 +185,14 @@ final class WhisperKitEngine {
             }
         }
 
-        // Label speakers
-        for i in appSegments.indices {
-            appSegments[i].speaker = "Remote"
+        for i in app.indices {
+            app[i].speaker = "Remote"
         }
-        for i in micSegments.indices {
-            micSegments[i].speaker = micLabel
+        for i in mic.indices {
+            mic[i].speaker = micLabel
         }
 
-        // Merge by start timestamp
-        return Self.mergeSegments(appSegments, micSegments)
+        return Self.mergeSegments(app, mic)
     }
 
     /// Merge two segment arrays sorted by start timestamp.

@@ -112,33 +112,7 @@ struct MenuBarView: View {
                 .foregroundStyle(.secondary)
 
             ForEach(pipelineQueue.jobs) { job in
-                HStack {
-                    Circle()
-                        .fill(jobColor(job.state))
-                        .frame(width: 8, height: 8)
-                    VStack(alignment: .leading) {
-                        Text(job.meetingTitle)
-                            .font(.caption)
-                        Text(job.state.label)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if job.state == .done, let path = job.protocolPath {
-                        Button("Open") { onOpenProtocol(path) }
-                            .font(.caption2)
-                    }
-                    if job.state == .waiting || job.state == .transcribing
-                        || job.state == .diarizing || job.state == .generatingProtocol {
-                        Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
-                            .font(.caption2)
-                    }
-                    if job.state == .done || job.state == .error {
-                        Button("Dismiss") { onDismissJob(job.id) }
-                            .font(.caption2)
-                    }
-                }
-                .padding(.horizontal, 4)
+                jobRow(job)
             }
         }
 
@@ -193,6 +167,50 @@ struct MenuBarView: View {
     }
 
     // MARK: - Helpers
+
+    private func jobRow(_ job: PipelineJob) -> some View {
+        HStack {
+            Circle()
+                .fill(jobColor(job.state))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading) {
+                Text(job.meetingTitle)
+                    .font(.caption)
+                if [.transcribing, .diarizing, .generatingProtocol].contains(job.state) {
+                    Text("\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(job.state.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            if job.state == .done, let path = job.protocolPath {
+                Button("Open") { onOpenProtocol(path) }
+                    .font(.caption2)
+            }
+            if job.state == .waiting || job.state == .transcribing
+                || job.state == .diarizing || job.state == .generatingProtocol {
+                Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
+                    .font(.caption2)
+            }
+            if job.state == .done || job.state == .error {
+                Button("Dismiss") { onDismissJob(job.id) }
+                    .font(.caption2)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func formattedElapsed(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        if total < 60 {
+            return "\(total)s"
+        }
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    }
 
     private func jobColor(_ state: JobState) -> Color {
         switch state {

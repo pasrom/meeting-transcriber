@@ -23,7 +23,10 @@ class PipelineQueue {
 
     let completedJobLifetime: TimeInterval
 
+    /// Elapsed seconds since the current pipeline stage started.
+    private(set) var activeJobElapsed: TimeInterval = 0
     private(set) var isProcessing = false
+    private var elapsedTimer: Task<Void, Never>?
     private var processTask: Task<Void, Never>?
     private var cancelledJobIDs = Set<UUID>()
 
@@ -179,6 +182,27 @@ class PipelineQueue {
         }
     }
 
+    /// Reset the elapsed timer for a new pipeline stage.
+    private func startElapsedTimer() {
+        elapsedTimer?.cancel()
+        activeJobElapsed = 0
+        elapsedTimer = Task { [weak self] in
+            let start = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                let elapsed = ContinuousClock.now - start
+                self?.activeJobElapsed = Double(elapsed.components.seconds)
+                    + Double(elapsed.components.attoseconds) / 1e18
+            }
+        }
+    }
+
+    /// Stop the elapsed timer.
+    private func stopElapsedTimer() {
+        elapsedTimer?.cancel()
+        elapsedTimer = nil
+    }
+
     // MARK: - Processing
 
     /// Kick off processing if not already running and there are waiting jobs.
@@ -214,6 +238,7 @@ class PipelineQueue {
         do {
             // --- Transcription ---
             updateJobState(id: jobID, to: .transcribing)
+            startElapsedTimer()
 
             // Create a temp directory for intermediate 16kHz files
             let workDir = FileManager.default.temporaryDirectory
@@ -234,10 +259,14 @@ class PipelineQueue {
                 try await appResample
                 try await micResample
 
-                // Use segment-returning method to cache for hybrid diarization
-                let segments = try await whisperKit.transcribeDualSourceSegments(
-                    appAudio: app16k,
-                    micAudio: mic16k,
+                // Transcribe each track separately
+                let appSegments = try await whisperKit.transcribeSegments(audioPath: app16k)
+                let micSegments = try await whisperKit.transcribeSegments(audioPath: mic16k)
+
+                // Merge dual-source segments
+                let segments = whisperKit.mergeDualSourceSegments(
+                    appSegments: appSegments,
+                    micSegments: micSegments,
                     micDelay: micDelay,
                     micLabel: micLabel,
                 )
@@ -254,6 +283,8 @@ class PipelineQueue {
                 transcript = segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
             }
 
+            stopElapsedTimer()
+
             guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 updateJobState(id: jobID, to: .error, error: "Empty transcript")
                 isProcessing = false
@@ -267,6 +298,7 @@ class PipelineQueue {
                 let diarizeProcess = diarizationFactory()
                 if diarizeProcess.isAvailable {
                     updateJobState(id: jobID, to: .diarizing)
+                    startElapsedTimer()
 
                     // Use mix audio for diarization (already resampled in single-source path)
                     let mix16k = workDir.appendingPathComponent("mix_16k.wav")
@@ -348,6 +380,7 @@ class PipelineQueue {
                                 participants: participants,
                             )
 
+                            stopElapsedTimer()
                             let namingResult: SpeakerNamingResult
                             if let handler = speakerNamingHandler {
                                 namingResult = await handler(namingData)
@@ -379,6 +412,7 @@ class PipelineQueue {
                             case let .rerun(count):
                                 speakerCount = count
                                 updateJobState(id: jobID, to: .diarizing)
+                                startElapsedTimer()
                                 logger.info("Re-running diarization with \(count) speakers")
                                 continue diarizationLoop
 
@@ -454,6 +488,7 @@ class PipelineQueue {
 
             // --- Protocol Generation ---
             updateJobState(id: jobID, to: .generatingProtocol)
+            startElapsedTimer()
 
             let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
             let protocolGenerator = protocolGeneratorFactory()
@@ -478,11 +513,14 @@ class PipelineQueue {
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].protocolPath = mdPath
             }
+            stopElapsedTimer()
             updateJobState(id: jobID, to: .done)
         } catch is CancellationError {
+            stopElapsedTimer()
             logger.info("Job \(jobID) cancelled")
             // Job already removed by cancelJob()
         } catch {
+            stopElapsedTimer()
             if cancelledJobIDs.remove(jobID) != nil {
                 logger.info("Job \(jobID) cancelled")
             } else {
