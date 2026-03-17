@@ -148,7 +148,11 @@ fi
 
 # ── Step 5: Create DMG ───────────────────────────────────────────────────────
 
-DMG_NAME="MeetingTranscriber-${VERSION}.dmg"
+if [ "$APPSTORE" = true ]; then
+    DMG_NAME="MeetingTranscriber-AppStore-${VERSION}.dmg"
+else
+    DMG_NAME="MeetingTranscriber-${VERSION}.dmg"
+fi
 DMG_PATH="$BUILD_DIR/$DMG_NAME"
 
 if [ -z "${HOMEBREW_TEMP:-}" ]; then

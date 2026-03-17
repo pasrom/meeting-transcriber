@@ -25,10 +25,10 @@ jobs:
         include:
           - variant: homebrew
             build-flags: ""
-            artifact-suffix: ""
+            dmg-prefix: "MeetingTranscriber"
           - variant: appstore
             build-flags: "--appstore --no-notarize"
-            artifact-suffix: "-AppStore"
+            dmg-prefix: "MeetingTranscriber-AppStore"
     name: build (${{ matrix.variant }})
     permissions:
       contents: write  # For creating GitHub releases
@@ -98,7 +98,7 @@ jobs:
         if: matrix.variant == 'homebrew'
         id: sha
         run: |
-          DMG=".build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg"
+          DMG=".build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg"
           SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "DMG SHA256: $SHA"
@@ -106,8 +106,8 @@ jobs:
       - name: Upload DMG as artifact
         uses: actions/upload-artifact@v7
         with:
-          name: MeetingTranscriber${{ matrix.artifact-suffix }}-${{ steps.version.outputs.version }}.dmg
-          path: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
+          name: ${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
+          path: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           retention-days: 3
 
       - name: Find previous stable release
@@ -123,7 +123,7 @@ jobs:
         if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
         uses: ncipollo/release-action@v1
         with:
-          artifacts: .build/release/MeetingTranscriber-${{ steps.version.outputs.version }}.dmg
+          artifacts: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           generateReleaseNotes: true
           generateReleaseNotesPreviousTag: ${{ steps.prev.outputs.tag }}
           prerelease: ${{ contains(github.ref_name, '-') }}
