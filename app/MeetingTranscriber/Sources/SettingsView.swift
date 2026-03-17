@@ -324,7 +324,7 @@ struct SettingsView: View {
                 )
                 PermissionRow(
                     label: "Accessibility",
-                    detail: "Optional — enables mute detection",
+                    detail: "Optional — enables mute detection and meeting naming",
                     granted: accessibilityOK,
                     optional: true,
                     help: "System Settings → Privacy & Security → Accessibility → enable Meeting Transcriber",
