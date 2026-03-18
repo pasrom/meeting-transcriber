@@ -10,30 +10,16 @@ enum AudioMixer {
 
     /// Mix app and mic audio tracks into a single mono WAV.
     ///
-    /// Applies mute masking, echo suppression, delay alignment,
-    /// then averages the two tracks.
+    /// Applies echo suppression, delay alignment, then averages the two tracks.
     static func mix(
         appAudioPath: URL,
         micAudioPath: URL,
         outputPath: URL,
         micDelay: TimeInterval = 0,
-        muteTimeline: [MuteTransition] = [],
-        recordingStart: TimeInterval = 0,
         sampleRate: Int = 48000,
     ) throws {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
-
-        // Apply mute mask to mic (zero samples during muted periods)
-        if !muteTimeline.isEmpty {
-            applyMuteMask(
-                samples: &micSamples,
-                timeline: muteTimeline,
-                sampleRate: sampleRate,
-                micDelay: micDelay,
-                recordingStart: recordingStart,
-            )
-        }
 
         // Apply echo suppression
         if !appSamples.isEmpty && !micSamples.isEmpty {
@@ -92,51 +78,6 @@ enum AudioMixer {
         }
 
         return result
-    }
-
-    // MARK: - Mute Masking
-
-    /// Zero out mic samples during muted periods.
-    static func applyMuteMask(
-        samples: inout [Float],
-        timeline: [MuteTransition],
-        sampleRate: Int,
-        micDelay: TimeInterval = 0,
-        recordingStart: TimeInterval = 0,
-    ) {
-        guard !timeline.isEmpty, !samples.isEmpty else { return }
-
-        var mutedRanges: [(start: Int, end: Int)] = []
-        var muteStart: TimeInterval?
-
-        for transition in timeline {
-            let relativeTime = transition.timestamp - recordingStart - micDelay
-            let sampleIndex = Int(relativeTime * Double(sampleRate))
-
-            if transition.isMuted {
-                muteStart = Double(max(0, sampleIndex))
-            } else if let start = muteStart {
-                mutedRanges.append((start: Int(start), end: max(Int(start), sampleIndex)))
-                muteStart = nil
-            }
-        }
-
-        // If still muted at end, mute until end of recording
-        if let start = muteStart {
-            mutedRanges.append((start: Int(start), end: samples.count))
-        }
-
-        for range in mutedRanges {
-            let lower = max(0, range.start)
-            let upper = min(samples.count, range.end)
-            guard lower < upper else { continue }
-            for i in lower ..< upper {
-                samples[i] = 0
-            }
-        }
-
-        let maskedSamples = mutedRanges.reduce(0) { $0 + max(0, $1.end - $1.start) }
-        logger.debug("Mute mask: zeroed \(maskedSamples) samples in \(mutedRanges.count) ranges")
     }
 
     // MARK: - Echo Suppression

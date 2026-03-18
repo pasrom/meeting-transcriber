@@ -103,6 +103,23 @@ final class ParticipantReaderTests: XCTestCase {
         XCTAssertEqual(result, ["Team A/B", "Alice"])
     }
 
+    // MARK: - German Labels
+
+    func testFiltersGermanLabels() {
+        let result = ParticipantReader.filterParticipantNames(["Stummschalten", "Alice"])
+        XCTAssertEqual(result, ["Stummschalten", "Alice"])
+    }
+
+    func testRealWorldTeamsRoster() {
+        let texts = [
+            "People", "In this meeting", "4",
+            "Alice Johnson (you)", "Bob Smith", "Charlie Brown", "Diana Prince",
+            "Mute", "Camera", "Raise hand",
+        ]
+        let result = ParticipantReader.filterParticipantNames(texts)
+        XCTAssertEqual(result, ["Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Prince"])
+    }
+
     // MARK: - Realistic Screen Share Scenario
 
     func testFilterRealisticScreenShareArtifacts() {

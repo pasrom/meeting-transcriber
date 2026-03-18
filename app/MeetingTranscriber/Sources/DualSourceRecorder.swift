@@ -11,7 +11,6 @@ struct RecordingResult {
     let appPath: URL?
     let micPath: URL?
     let micDelay: TimeInterval
-    let muteTimeline: [MuteTransition]
     let recordingStart: TimeInterval // ProcessInfo.systemUptime
 }
 
@@ -34,7 +33,6 @@ class DualSourceRecorder: RecordingProvider {
 
     // Type-erased storage to avoid @available on stored properties
     private var _captureSession: AnyObject?
-    private var muteDetector: MuteDetector?
     private(set) var isRecording = false
     private(set) var recordingStartTime: TimeInterval = 0
     private var startTimestamp: String?
@@ -97,16 +95,6 @@ class DualSourceRecorder: RecordingProvider {
         recordingStartTime = ProcessInfo.processInfo.systemUptime
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
-
-        // ── Mute detection ──
-        let detector = MuteDetector(teamsPID: appPID)
-        detector.start()
-        if detector.isActive {
-            muteDetector = detector
-            logger.info("Mute detection active")
-        } else {
-            detector.stop()
-        }
     }
 
     /// Stop recording and produce a mixed WAV.
@@ -120,11 +108,6 @@ class DualSourceRecorder: RecordingProvider {
 
         let recordingStart = recordingStartTime
         isRecording = false
-
-        // Stop mute detector
-        let muteTimeline = muteDetector?.timeline ?? []
-        muteDetector?.stop()
-        muteDetector = nil
 
         // Stop capture session and get result
         guard let session = captureSession else {
@@ -225,8 +208,6 @@ class DualSourceRecorder: RecordingProvider {
                 micAudioPath: mic,
                 outputPath: mixPath,
                 micDelay: micDelay,
-                muteTimeline: muteTimeline,
-                recordingStart: recordingStart,
                 sampleRate: mixRate,
             )
         } else if !appSamples.isEmpty {
@@ -244,7 +225,6 @@ class DualSourceRecorder: RecordingProvider {
             appPath: appPath,
             micPath: micPath,
             micDelay: micDelay,
-            muteTimeline: muteTimeline,
             recordingStart: recordingStart,
         )
     }
