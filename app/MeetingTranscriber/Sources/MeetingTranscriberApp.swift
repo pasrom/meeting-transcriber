@@ -69,11 +69,12 @@ struct MeetingTranscriberApp: App {
             } icon: {
                 Image(nsImage: MenuBarIcon.image(
                     badge: currentBadge,
-                    animationFrame: currentBadge.isAnimated ? iconAnimationFrame : 0,
+                    animationFrame: iconAnimationFrame,
                 ))
             }
             .onReceive(iconTimer) { _ in
-                guard currentBadge.isAnimated else { return }
+                // Always tick so currentBadge is re-read every 0.4s.
+                // Non-animated badges ignore animationFrame (cached frame 0).
                 iconAnimationFrame = (iconAnimationFrame + 1) % MenuBarIcon.frameCount
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
