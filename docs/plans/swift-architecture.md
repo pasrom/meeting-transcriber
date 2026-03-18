@@ -104,7 +104,7 @@ Audio Capture Detail:
 **Processing pipeline in `processNext()`:**
 1. Create temp working directory
 2. Resample audio to 16kHz via `AudioMixer.resampleFile()` (dual-source: app + mic separately; single-source: mix only)
-3. Transcribe via `WhisperKitEngine.transcribeDualSourceSegments()` (dual-source, returns `[TimestampedSegment]`) or `transcribeSegments()` (single-source). Segments are cached for reuse in diarization
+3. Transcribe via two `WhisperKitEngine.transcribeSegments()` calls (dual-source: app + mic separately) then `mergeDualSourceSegments()`, or one `transcribeSegments()` call (single-source). Segments are cached for reuse in diarization
 4. If diarization enabled: run `FluidDiarizer` on mix_16k. In hybrid mode (dual-source + non-empty micLabel): identify mic speaker via `DiarizationProcess.identifyMicSpeaker()`, pre-fill mic speaker name, call `SpeakerMatcher.preMatchParticipants()` if participants available, prompt for unmatched names, then assign speakers via `DiarizationProcess.assignSpeakersHybrid()` (mic segments locked, app segments get diarization names). In single-source mode: standard `DiarizationProcess.assignSpeakers()` with nearest-segment fallback
 5. Save transcript via `ProtocolGenerator.saveTranscript()`
 6. Generate protocol via `ProtocolGenerating.generate()`
@@ -193,7 +193,7 @@ Audio Capture Detail:
 **Transcription APIs:**
 - `transcribe(audioPath:)` — returns formatted `[MM:SS] text` string
 - `transcribeSegments(audioPath:)` — returns `[TimestampedSegment]` with start/end times. Filters hallucinations by skipping consecutive identical segments. Strips Whisper special tokens via regex
-- `transcribeDualSourceSegments(appAudio:micAudio:micDelay:micLabel:)` — returns `[TimestampedSegment]`. Transcribes both tracks separately, shifts mic by delay, labels speakers ("Remote" / micLabel), merges sorted by start time. Used by PipelineQueue for hybrid diarization (needs structured segments for speaker assignment)
+- `mergeDualSourceSegments(appSegments:micSegments:micDelay:micLabel:)` — takes pre-transcribed segments, shifts mic by delay, labels speakers ("Remote" / micLabel), merges sorted by start time. Used by PipelineQueue after transcribing both tracks separately
 
 **Input requirement:** 16kHz mono WAV. The caller (PipelineQueue) handles resampling.
 
@@ -421,7 +421,7 @@ PipelineJob { mixPath, appPath?, micPath?, micDelay }
 [Resample] 48kHz WAVs → 16kHz WAVs (temp directory, via AudioMixer.resampleFile)
     ↓
 [Transcribe]
-  Dual-source: WhisperKit.transcribeDualSourceSegments(app_16k, mic_16k) → [TimestampedSegment]
+  Dual-source: WhisperKit.transcribeSegments(app_16k) + transcribeSegments(mic_16k) → mergeDualSourceSegments() → [TimestampedSegment]
   Single-source: WhisperKit.transcribeSegments(mix_16k) → [TimestampedSegment] (cached)
     ↓
 [Diarize] (optional)
