@@ -11,7 +11,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Label PR from conventional commit title
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const title = context.payload.pull_request.title;
