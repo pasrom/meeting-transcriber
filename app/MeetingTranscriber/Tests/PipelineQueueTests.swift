@@ -328,6 +328,30 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.count, 0)
     }
 
+    func testErrorJobIsMarkedProcessedSoRecoverySkipsIt() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260318_214744_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        // Enqueue and fail the job (simulates "Empty transcript" scenario)
+        let job = PipelineJob(
+            meetingTitle: "Brave Browser",
+            appName: "Brave Browser",
+            mixPath: mixFile,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .error, error: "Empty transcript")
+
+        // A fresh queue (simulates pressing Start Watching) must not recover the failed recording
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertTrue(freshQueue.jobs.isEmpty, "Failed recording should not be re-queued")
+    }
+
     func testMarkProcessedPersists() throws {
         let mixPath = tmpDir.appendingPathComponent("test_mix.wav")
 
