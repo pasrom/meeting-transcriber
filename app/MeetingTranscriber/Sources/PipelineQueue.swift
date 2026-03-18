@@ -173,8 +173,10 @@ class PipelineQueue {
         writeSnapshot()
         onJobStateChange?(jobs[index], oldState, newState)
 
-        if newState == .done {
+        if newState == .done || newState == .error {
             markProcessed(mixPath: jobs[index].mixPath)
+        }
+        if newState == .done {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
                 self?.removeJob(id: id)
