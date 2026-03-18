@@ -69,11 +69,12 @@ struct MeetingTranscriberApp: App {
             } icon: {
                 Image(nsImage: MenuBarIcon.image(
                     badge: currentBadge,
-                    animationFrame: currentBadge.isAnimated ? iconAnimationFrame : 0,
+                    animationFrame: iconAnimationFrame,
                 ))
             }
             .onReceive(iconTimer) { _ in
-                guard currentBadge.isAnimated else { return }
+                // Always tick so currentBadge is re-read every 0.4s.
+                // Non-animated badges ignore animationFrame (cached frame 0).
                 iconAnimationFrame = (iconAnimationFrame + 1) % MenuBarIcon.frameCount
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
@@ -172,22 +173,24 @@ struct MeetingTranscriberApp: App {
     }
 
     private var currentBadge: BadgeKind {
+        // Manual / auto recording via WatchLoop
         if let loop = watchLoop, loop.isActive {
             if loop.state == .recording { return .recording }
-            if let activeJob = pipelineQueue.activeJobs.first {
-                switch activeJob.state {
-                case .transcribing: return .transcribing
-                case .diarizing: return .diarizing
-                default: return .processing
-                }
-            }
             switch loop.transcriberState {
             case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
             case .protocolReady: return .done
             case .error: return .error
             case .transcribing, .recordingDone: return .transcribing
             case .generatingProtocol: return .processing
-            default: return .inactive
+            default: break
+            }
+        }
+        // Pipeline queue (file processing or post-recording pipeline)
+        if let activeJob = pipelineQueue.activeJobs.first {
+            switch activeJob.state {
+            case .transcribing: return .transcribing
+            case .diarizing: return .diarizing
+            default: return .processing
             }
         }
         if updateChecker.availableUpdate != nil { return .updateAvailable }
