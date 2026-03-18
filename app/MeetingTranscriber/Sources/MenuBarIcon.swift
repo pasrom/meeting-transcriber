@@ -58,15 +58,32 @@ enum MenuBarIcon {
         return (top: rect.height / 2 + linesHeight / 2, left: rect.width * lineLeftInset)
     }
 
+    // MARK: - Cache
+
+    /// Pre-rendered frames keyed by BadgeKind. Populated lazily on first access.
+    private static var cache: [BadgeKind: [NSImage]] = {
+        var result: [BadgeKind: [NSImage]] = [:]
+        for badge in BadgeKind.allCases {
+            let count = badge.isAnimated ? frameCount : 1
+            result[badge] = (0 ..< count).map { frame in renderImage(badge: badge, frame: frame) }
+        }
+        return result
+    }()
+
     // MARK: - Public
 
-    /// Returns an 18x18pt template `NSImage` with the waveform icon and an optional badge.
+    /// Returns a pre-rendered 18x18pt template `NSImage` for the given badge and animation frame.
     static func image(badge: BadgeKind, animationFrame: Int = 0) -> NSImage {
+        guard let frames = cache[badge] else { return renderImage(badge: badge, frame: animationFrame) }
+        return frames[animationFrame % frames.count]
+    }
+
+    // MARK: - Rendering
+
+    private static func renderImage(badge: BadgeKind, frame: Int) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: false) { rect in
             NSColor.black.setFill()
-
-            let frame = badge.isAnimated ? animationFrame % Self.frameCount : 0
 
             switch badge {
             case .transcribing:
