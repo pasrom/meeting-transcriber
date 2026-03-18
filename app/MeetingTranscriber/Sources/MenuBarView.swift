@@ -176,15 +176,7 @@ struct MenuBarView: View {
             VStack(alignment: .leading) {
                 Text(job.meetingTitle)
                     .font(.caption)
-                if [.transcribing, .diarizing, .generatingProtocol].contains(job.state) {
-                    Text("\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text(job.state.label)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+                jobStateLabel(job)
             }
             Spacer()
             if job.state == .done, let path = job.protocolPath {
@@ -202,6 +194,22 @@ struct MenuBarView: View {
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    private func jobStateLabel(_ job: PipelineJob) -> some View {
+        Group {
+            if [.transcribing, .diarizing, .generatingProtocol].contains(job.state) {
+                Text("\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))")
+                    .foregroundStyle(.secondary)
+            } else if job.state == .error, let msg = job.error {
+                Text(msg)
+                    .foregroundStyle(.red)
+            } else {
+                Text(job.state.label)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption2)
     }
 
     private func formattedElapsed(_ seconds: TimeInterval) -> String {

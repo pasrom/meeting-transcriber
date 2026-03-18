@@ -494,7 +494,7 @@ final class MenuBarViewTests: XCTestCase {
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
-        XCTAssertNoThrow(try body.find(text: "Error"))
+        XCTAssertNoThrow(try body.find(text: "Failed"))
     }
 
     // MARK: - Record App button
