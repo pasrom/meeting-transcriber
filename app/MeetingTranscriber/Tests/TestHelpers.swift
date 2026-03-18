@@ -26,7 +26,6 @@ class MockRecorder: RecordingProvider {
             appPath: appPath,
             micPath: micPath,
             micDelay: 0,
-            muteTimeline: [],
             recordingStart: ProcessInfo.processInfo.systemUptime,
         )
     }

@@ -59,7 +59,6 @@ final class DualSourceRecorderTests: XCTestCase {
             appPath: URL(fileURLWithPath: "/tmp/app.wav"),
             micPath: URL(fileURLWithPath: "/tmp/mic.wav"),
             micDelay: 0.15,
-            muteTimeline: [MuteTransition(timestamp: 10.0, isMuted: true)],
             recordingStart: 1000.0,
         )
 
@@ -67,8 +66,6 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertEqual(result.appPath?.lastPathComponent, "app.wav")
         XCTAssertEqual(result.micPath?.lastPathComponent, "mic.wav")
         XCTAssertEqual(result.micDelay, 0.15)
-        XCTAssertEqual(result.muteTimeline.count, 1)
-        XCTAssertTrue(result.muteTimeline[0].isMuted)
         XCTAssertEqual(result.recordingStart, 1000.0)
     }
 
@@ -78,12 +75,10 @@ final class DualSourceRecorderTests: XCTestCase {
             appPath: nil,
             micPath: nil,
             micDelay: 0,
-            muteTimeline: [],
             recordingStart: 0,
         )
 
         XCTAssertNil(result.appPath)
         XCTAssertNil(result.micPath)
-        XCTAssertTrue(result.muteTimeline.isEmpty)
     }
 }
