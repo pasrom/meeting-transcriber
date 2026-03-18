@@ -21,7 +21,7 @@ struct MeetingTranscriberApp: App {
     private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     private var isWatching: Bool {
-        watchLoop?.isActive == true
+        watchLoop?.isActive == true && watchLoop?.isManualRecording == false
     }
 
     init() {
