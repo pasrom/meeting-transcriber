@@ -76,6 +76,27 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.activeJobs[0].meetingTitle, "Active")
     }
 
+    func testActiveJobsIncludesDiarizingAndGeneratingProtocol() {
+        var j1 = makeJob(title: "Diarizing")
+        j1.state = .diarizing
+        var j2 = makeJob(title: "Protocol")
+        j2.state = .generatingProtocol
+        queue.enqueue(j1)
+        queue.enqueue(j2)
+        XCTAssertEqual(queue.activeJobs.count, 2)
+    }
+
+    func testActiveJobsExcludesTerminalStates() {
+        var done = makeJob(title: "Done")
+        done.state = .done
+        var err = makeJob(title: "Error")
+        err.state = .error
+        queue.enqueue(done)
+        queue.enqueue(err)
+        queue.enqueue(makeJob(title: "Waiting"))
+        XCTAssertTrue(queue.activeJobs.isEmpty)
+    }
+
     func testPendingJobs() {
         queue.enqueue(makeJob(title: "Waiting 1"))
         queue.enqueue(makeJob(title: "Waiting 2"))
