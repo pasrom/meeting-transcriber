@@ -9,6 +9,7 @@
     struct ClaudeCLIProtocolGenerator: ProtocolGenerating {
         let claudeBin: String
         var language: String = "English"
+        var customVocabulary: [String] = []
 
         static let timeoutSeconds: TimeInterval = 600
 
@@ -27,6 +28,7 @@
             if diarized {
                 prompt += ProtocolGenerator.diarizationNote
             }
+            prompt += ProtocolGenerator.vocabularyNote(terms: customVocabulary)
             prompt += transcript
 
             let process = Process()

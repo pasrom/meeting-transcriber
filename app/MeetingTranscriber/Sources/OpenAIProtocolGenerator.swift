@@ -10,13 +10,22 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     let apiKey: String?
     let timeoutSeconds: TimeInterval
     let language: String
+    let customVocabulary: [String]
 
-    init(endpoint: URL, model: String, apiKey: String? = nil, timeoutSeconds: TimeInterval = 600, language: String = "English") {
+    init(
+        endpoint: URL,
+        model: String,
+        apiKey: String? = nil,
+        timeoutSeconds: TimeInterval = 600,
+        language: String = "English",
+        customVocabulary: [String] = []
+    ) {
         self.endpoint = endpoint
         self.model = model
         self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
         self.language = language
+        self.customVocabulary = customVocabulary
     }
 
     func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
@@ -24,6 +33,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         if diarized {
             systemPrompt += ProtocolGenerator.diarizationNote
         }
+        systemPrompt += ProtocolGenerator.vocabularyNote(terms: customVocabulary)
 
         let messages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],

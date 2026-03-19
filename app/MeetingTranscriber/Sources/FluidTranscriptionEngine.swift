@@ -56,9 +56,12 @@ final class FluidTranscriptionEngine {
     private(set) var modelState: ModelState = .unloaded
     private(set) var downloadProgress: Double = 0
     private(set) var transcriptionProgress: Double = 0
-    
+
     private var manager: AsrManager?
     private var loadingTask: Task<Void, Never>?
+    private var ctcModels: CtcModels?
+    /// The vocabulary terms currently configured on the manager (empty = disabled).
+    private var activeVocabularyTerms: [String] = []
 
     func loadModel() async {
         if let existing = loadingTask {
@@ -105,6 +108,37 @@ final class FluidTranscriptionEngine {
         guard manager != nil else {
             throw TranscriptionError.modelNotLoaded
         }
+    }
+
+    /// Configure vocabulary boosting on the ASR manager.
+    /// Downloads CTC models on first use. Skips reconfiguration if terms haven't changed.
+    func configureVocabulary(_ terms: [String]) async throws {
+        guard let manager else { return }
+
+        // Skip if terms haven't changed
+        if terms == activeVocabularyTerms { return }
+
+        if terms.isEmpty {
+            manager.disableVocabularyBoosting()
+            activeVocabularyTerms = []
+            NSLog("FluidTranscription: vocabulary boosting disabled")
+            return
+        }
+
+        // Download CTC models on first use
+        if ctcModels == nil {
+            NSLog("FluidTranscription: downloading CTC models for vocabulary boosting...")
+            ctcModels = try await CtcModels.downloadAndLoad()
+        }
+
+        let vocabularyTerms = terms.map { CustomVocabularyTerm(text: $0) }
+        let context = CustomVocabularyContext(terms: vocabularyTerms)
+        try await manager.configureVocabularyBoosting(
+            vocabulary: context,
+            ctcModels: ctcModels!
+        )
+        activeVocabularyTerms = terms
+        NSLog("FluidTranscription: vocabulary boosting configured with \(terms.count) terms")
     }
 
     func transcribe(audioPath: URL) async throws -> String {

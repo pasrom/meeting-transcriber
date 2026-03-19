@@ -298,7 +298,11 @@ struct MeetingTranscriberApp: App {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:
-                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin, language: settings.transcriptionLanguageName)
+                ClaudeCLIProtocolGenerator(
+                    claudeBin: settings.claudeBin,
+                    language: settings.transcriptionLanguageName,
+                    customVocabulary: settings.customVocabulary
+                )
         #endif
 
         case .openAICompatible:
@@ -309,6 +313,7 @@ struct MeetingTranscriberApp: App {
                 model: settings.openAIModel,
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
                 language: settings.transcriptionLanguageName,
+                customVocabulary: settings.customVocabulary,
             )
         }
     }
@@ -322,6 +327,7 @@ struct MeetingTranscriberApp: App {
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
+            customVocabulary: settings.customVocabulary,
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()

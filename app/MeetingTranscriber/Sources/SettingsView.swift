@@ -19,6 +19,8 @@ struct SettingsView: View {
     @State private var availableModels: [String] = []
     @State private var showResetPromptConfirmation = false
     @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
+    @State private var vocabularyInput = ""
+    @State private var vocabularyValidationMessage = ""
     var transcriptionEngine: FluidTranscriptionEngine
     var updateChecker: UpdateChecker?
 
@@ -149,6 +151,35 @@ struct SettingsView: View {
                         Stepper("", value: $settings.numSpeakers, in: 0 ... 10)
                             .labelsHidden()
                     }
+                }
+            }
+
+            Section("Custom Vocabulary") {
+                HStack {
+                    TextField("Add term\u{2026}", text: $vocabularyInput)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { addVocabularyTerm() }
+                    Button("Add") { addVocabularyTerm() }
+                        .disabled(vocabularyInput.trimmingCharacters(in: .whitespaces).count < 4)
+                }
+
+                if !vocabularyValidationMessage.isEmpty {
+                    Text(vocabularyValidationMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                if settings.customVocabulary.isEmpty {
+                    Text("Add domain-specific terms to improve transcription accuracy (min 4 characters).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VocabularyTagFlow(terms: settings.customVocabulary) { term in
+                        settings.customVocabulary.removeAll { $0 == term }
+                    }
+                    Text("\(settings.customVocabulary.count) of 50 recommended terms")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -558,6 +589,27 @@ struct SettingsView: View {
         settings.setCustomOutputDir(url)
     }
 
+    private func addVocabularyTerm() {
+        let term = vocabularyInput.trimmingCharacters(in: .whitespaces)
+        vocabularyValidationMessage = ""
+
+        guard term.count >= 4 else {
+            vocabularyValidationMessage = "Term must be at least 4 characters."
+            return
+        }
+
+        let isDuplicate = settings.customVocabulary.contains {
+            $0.caseInsensitiveCompare(term) == .orderedSame
+        }
+        guard !isDuplicate else {
+            vocabularyValidationMessage = "'\(term)' is already in the vocabulary."
+            return
+        }
+
+        settings.customVocabulary.append(term)
+        vocabularyInput = ""
+    }
+
     private func refreshAudioDevices() {
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.microphone, .external],
@@ -565,5 +617,79 @@ struct SettingsView: View {
             position: .unspecified,
         )
         audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+}
+
+/// Displays vocabulary terms as tag chips in a wrapping flow layout.
+struct VocabularyTagFlow: View {
+    let terms: [String]
+    let onRemove: (String) -> Void
+
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(terms, id: \.self) { term in
+                HStack(spacing: 4) {
+                    Text(term)
+                        .font(.callout)
+                    Button {
+                        onRemove(term)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(.quaternary))
+            }
+        }
+    }
+}
+
+/// Simple wrapping flow layout for tag chips.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var height: CGFloat = 0
+        for (index, row) in rows.enumerated() {
+            let rowHeight = row.map { subviews[$0].sizeThatFits(.unspecified).height }.max() ?? 0
+            height += rowHeight
+            if index < rows.count - 1 { height += spacing }
+        }
+        return CGSize(width: proposal.width ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        let rows = computeRows(proposal: proposal, subviews: subviews)
+        var y = bounds.minY
+        for row in rows {
+            let rowHeight = row.map { subviews[$0].sizeThatFits(.unspecified).height }.max() ?? 0
+            var x = bounds.minX
+            for index in row {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += rowHeight + spacing
+        }
+    }
+
+    private func computeRows(proposal: ProposedViewSize, subviews: Subviews) -> [[Int]] {
+        let maxWidth = proposal.width ?? .infinity
+        var rows: [[Int]] = [[]]
+        var currentWidth: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentWidth + size.width > maxWidth, !rows[rows.count - 1].isEmpty {
+                rows.append([])
+                currentWidth = 0
+            }
+            rows[rows.count - 1].append(index)
+            currentWidth += size.width + spacing
+        }
+        return rows
     }
 }

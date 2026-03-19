@@ -19,6 +19,7 @@ class PipelineQueue {
     let diarizeEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
+    let customVocabulary: [String]
     let speakerMatcherFactory: () -> SpeakerMatcher
 
     let completedJobLifetime: TimeInterval
@@ -86,6 +87,7 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
+        self.customVocabulary = []
         self.speakerMatcherFactory = { SpeakerMatcher() }
         self.completedJobLifetime = completedJobLifetime
     }
@@ -100,6 +102,7 @@ class PipelineQueue {
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
+        customVocabulary: [String] = [],
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
         completedJobLifetime: TimeInterval = 60,
     ) {
@@ -110,6 +113,7 @@ class PipelineQueue {
         self.outputDir = outputDir
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
+        self.customVocabulary = customVocabulary
         self.micLabel = micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
         self.completedJobLifetime = completedJobLifetime
@@ -247,6 +251,11 @@ class PipelineQueue {
                 .appendingPathComponent("pipeline_\(jobID.uuidString)")
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
+
+            // Configure custom vocabulary boosting before transcription
+            if !customVocabulary.isEmpty {
+                try await transcriptionEngine.configureVocabulary(customVocabulary)
+            }
 
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)

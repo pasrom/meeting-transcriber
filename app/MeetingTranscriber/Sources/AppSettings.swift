@@ -100,6 +100,12 @@ final class AppSettings {
         }
     }
 
+    /// Custom vocabulary terms for FluidAudio acoustic-level vocabulary boosting.
+    /// Terms are passed to the CTC keyword spotter to correct ASR output.
+    var customVocabulary: [String] = defaults.array(forKey: "customVocabulary") as? [String] ?? [] {
+        didSet { defaults.set(customVocabulary, forKey: "customVocabulary") }
+    }
+
     // MARK: - Protocol Generation
 
     var protocolProvider: ProtocolProvider = {

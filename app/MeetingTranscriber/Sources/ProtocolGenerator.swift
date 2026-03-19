@@ -71,6 +71,17 @@ enum ProtocolGenerator {
 
     """
 
+    /// Build a vocabulary note for the protocol prompt, informing the LLM of domain-specific terms.
+    static func vocabularyNote(terms: [String]) -> String {
+        guard !terms.isEmpty else { return "" }
+        let list = terms.joined(separator: ", ")
+        return """
+        \nNote: The following domain-specific terms may appear in the transcript. \
+        Use the exact spelling provided: \(list).
+
+        """
+    }
+
     /// Convenience accessor using the default language (English).
     static var protocolPrompt: String {
         protocolPrompt(language: "English")
