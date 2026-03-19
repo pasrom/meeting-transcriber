@@ -171,7 +171,7 @@ struct MenuBarView: View {
     private func jobRow(_ job: PipelineJob) -> some View {
         HStack {
             Circle()
-                .fill(jobColor(job.state))
+                .fill(jobColor(job))
                 .frame(width: 8, height: 8)
             VStack(alignment: .leading) {
                 Text(job.meetingTitle)
@@ -204,6 +204,9 @@ struct MenuBarView: View {
             } else if job.state == .error, let msg = job.error {
                 Text(msg)
                     .foregroundStyle(.red)
+            } else if job.state == .done, !job.warnings.isEmpty {
+                Text(job.warnings.joined(separator: "; "))
+                    .foregroundStyle(.orange)
             } else {
                 Text(job.state.label)
                     .foregroundStyle(.secondary)
@@ -220,13 +223,13 @@ struct MenuBarView: View {
         return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 
-    private func jobColor(_ state: JobState) -> Color {
-        switch state {
+    private func jobColor(_ job: PipelineJob) -> Color {
+        switch job.state {
         case .waiting: .gray
         case .transcribing: .blue
         case .diarizing: .purple
         case .generatingProtocol: .orange
-        case .done: .green
+        case .done: job.warnings.isEmpty ? .green : .yellow
         case .error: .red
         }
     }
