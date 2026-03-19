@@ -97,7 +97,7 @@ class DualSourceRecorder: RecordingProvider {
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
     }
 
-    /// Stop recording and produce a mixed WAV.
+    /// Stop recording and produce a mixed M4A (AAC, 16kHz mono).
     func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length
         guard isRecording else {
             throw RecorderError.notRecording
@@ -166,11 +166,12 @@ class DualSourceRecorder: RecordingProvider {
                 appSamples = floats
             }
 
-            // Save app track
-            let appFile = recDir.appendingPathComponent("\(ts)_app.wav")
-            try AudioMixer.saveWAV(samples: appSamples, sampleRate: actualRate, url: appFile)
+            // Save app track as M4A at 16kHz
+            let appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: 16000)
+            let appFile = recDir.appendingPathComponent("\(ts)_app.m4a")
+            try AudioMixer.saveM4A(samples: appSamples16k, sampleRate: 16000, url: appFile)
             appPath = appFile
-            logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate) Hz)")
+            logger.info("App audio saved: \(appFile.lastPathComponent) (16000 Hz, AAC)")
         } else if FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
@@ -184,36 +185,46 @@ class DualSourceRecorder: RecordingProvider {
         // ── Load mic audio ──
         var micPath: URL?
         var micSamples: [Float] = []
+        var micRate = recordRate
         let expectedMicPath = captureResult.micAudioFileURL
 
         if let expectedMicPath,
            FileManager.default.fileExists(atPath: expectedMicPath.path),
            (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
             let micAudioFile = try AVAudioFile(forReading: expectedMicPath)
-            let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
+            micRate = Int(micAudioFile.processingFormat.sampleRate)
             micSamples = try AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath)
-            micPath = expectedMicPath
-            logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
+
+            // Save mic track as M4A at 16kHz and remove original WAV
+            let micSamples16k = AudioMixer.resample(micSamples, from: micRate, to: 16000)
+            let micM4APath = recDir.appendingPathComponent("\(ts)_mic.m4a")
+            try AudioMixer.saveM4A(samples: micSamples16k, sampleRate: 16000, url: micM4APath)
+            try? FileManager.default.removeItem(at: expectedMicPath)
+            micPath = micM4APath
+            logger.info("Mic audio saved: \(micM4APath.lastPathComponent) (16000 Hz, AAC)")
         }
 
         // ── Mix via AudioMixer ──
-        // Use the actual capture rate for mixing — the pipeline resamples to 16kHz later.
-        let mixRate = actualRate > 0 ? actualRate : recordRate
-        let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
+        // App and mic tracks are already resampled to 16kHz M4A above
+        let mixPath = recDir.appendingPathComponent("\(ts)_mix.m4a")
 
         if let app = appPath, let mic = micPath {
             // Delegate mute masking, echo suppression, delay alignment, and mixing
+            // Source files are 16kHz M4A; mix() outputs M4A at targetRate (16kHz)
             try AudioMixer.mix(
                 appAudioPath: app,
                 micAudioPath: mic,
                 outputPath: mixPath,
                 micDelay: micDelay,
-                sampleRate: mixRate,
+                sampleRate: 16000,
+                targetRate: 16000,
             )
         } else if !appSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: appSamples, sampleRate: mixRate, url: mixPath)
+            let resampled = AudioMixer.resample(appSamples, from: actualRate, to: 16000)
+            try AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
         } else if !micSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: micSamples, sampleRate: mixRate, url: mixPath)
+            let resampled = AudioMixer.resample(micSamples, from: micRate, to: 16000)
+            try AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
         } else {
             throw RecorderError.noAudioData
         }

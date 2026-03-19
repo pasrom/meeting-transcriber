@@ -8,15 +8,17 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMi
 enum AudioMixer {
     // MARK: - Mix
 
-    /// Mix app and mic audio tracks into a single mono WAV.
+    /// Mix app and mic audio tracks into a single mono M4A.
     ///
     /// Applies echo suppression, delay alignment, then averages the two tracks.
+    /// Resamples to `targetRate` (default 16kHz) before saving as AAC.
     static func mix(
         appAudioPath: URL,
         micAudioPath: URL,
         outputPath: URL,
         micDelay: TimeInterval = 0,
         sampleRate: Int = 48000,
+        targetRate: Int = 16000,
     ) throws {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
@@ -47,9 +49,14 @@ enum AudioMixer {
         }
 
         // Average the two tracks
-        let mixed = mixTracks(appSamples, micSamples)
+        var mixed = mixTracks(appSamples, micSamples)
 
-        try saveWAV(samples: mixed, sampleRate: sampleRate, url: outputPath)
+        // Resample to target rate before saving
+        if sampleRate != targetRate {
+            mixed = resample(mixed, from: sampleRate, to: targetRate)
+        }
+
+        try saveM4A(samples: mixed, sampleRate: targetRate, url: outputPath)
         logger.info("Mixed audio saved: \(outputPath.lastPathComponent)")
     }
 
@@ -387,6 +394,55 @@ enum AudioMixer {
         }
 
         try file.write(from: buffer)
+    }
+
+    /// Save Float32 mono samples to an AAC M4A file.
+    static func saveM4A(samples: [Float], sampleRate: Int, url: URL, bitRate: Int = 64000) throws {
+        guard let processingFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(sampleRate),
+            channels: 1,
+            interleaved: false,
+        ) else {
+            throw AudioMixerError.formatCreationFailed
+        }
+
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: bitRate,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false,
+        )
+
+        // Write in chunks to avoid memory issues with large recordings
+        let chunkSize = 16384
+        var offset = 0
+        while offset < samples.count {
+            let remaining = samples.count - offset
+            let count = min(chunkSize, remaining)
+
+            guard let buffer = AVAudioPCMBuffer(
+                pcmFormat: processingFormat,
+                frameCapacity: AVAudioFrameCount(count),
+            ) else {
+                throw AudioMixerError.bufferCreationFailed
+            }
+            buffer.frameLength = AVAudioFrameCount(count)
+
+            // swiftlint:disable:next force_unwrapping
+            let dst = buffer.floatChannelData![0]
+            samples.withUnsafeBufferPointer { src in
+                dst.initialize(from: src.baseAddress! + offset, count: count) // swiftlint:disable:this force_unwrapping
+            }
+
+            try file.write(from: buffer)
+            offset += count
+        }
     }
 }
 

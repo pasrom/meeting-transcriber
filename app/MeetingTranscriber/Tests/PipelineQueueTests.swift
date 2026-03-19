@@ -275,7 +275,7 @@ final class PipelineQueueTests: XCTestCase {
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
 
         let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
-        try Data(repeating: 0x00, count: 44).write(to: mixFile)
+        try Data(repeating: 0x00, count: 100).write(to: mixFile)
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
@@ -372,6 +372,37 @@ final class PipelineQueueTests: XCTestCase {
         let data = try Data(contentsOf: processedPath)
         let paths = try JSONDecoder().decode([String].self, from: data)
         XCTAssertTrue(paths.contains(mixPath.standardizedFileURL.path))
+    }
+
+    func testRecoverFindsM4AFiles() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.m4a")
+        try Data(repeating: 0xFF, count: 200).write(to: mixFile)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Recovered Recording (20260311_100000)")
+    }
+
+    func testRecoverFindsM4ACompanionTracks() throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+
+        let prefix = "20260311_100000"
+        try Data(repeating: 0xFF, count: 200).write(to: recDir.appendingPathComponent("\(prefix)_mix.m4a"))
+        try Data(repeating: 0xFF, count: 200).write(to: recDir.appendingPathComponent("\(prefix)_app.m4a"))
+        try Data(repeating: 0xFF, count: 200).write(to: recDir.appendingPathComponent("\(prefix)_mic.m4a"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertNotNil(freshQueue.jobs[0].appPath)
+        XCTAssertNotNil(freshQueue.jobs[0].micPath)
     }
 
     func testRecoverEmptyDirIsNoOp() {

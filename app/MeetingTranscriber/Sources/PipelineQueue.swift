@@ -603,9 +603,9 @@ class PipelineQueue {
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let slug = ProtocolGenerator.filename(title: title, ext: "").dropLast() // remove trailing "."
         let audioPaths: [(URL, String)] = [
-            (mixPath, "\(slug)_mix.wav"),
-            appPath.map { ($0, "\(slug)_app.wav") },
-            micPath.map { ($0, "\(slug)_mic.wav") },
+            (mixPath, "\(slug)_mix.\(mixPath.pathExtension)"),
+            appPath.map { ($0, "\(slug)_app.\($0.pathExtension)") },
+            micPath.map { ($0, "\(slug)_mic.\($0.pathExtension)") },
         ].compactMap(\.self)
 
         for (src, name) in audioPaths {
@@ -632,7 +632,8 @@ class PipelineQueue {
         ) else { return }
 
         var paths = Set<String>()
-        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav") {
+        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav")
+            || file.lastPathComponent.hasSuffix("_mix.m4a") {
             paths.insert(file.standardizedFileURL.path)
         }
         guard !paths.isEmpty else { return }
@@ -646,7 +647,7 @@ class PipelineQueue {
         }
     }
 
-    /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
+    /// Scan `recordingsDir` for `*_mix.m4a` / `*_mix.wav` files not tracked by any loaded job.
     /// Creates recovery jobs for untracked recordings younger than `maxAge`.
     /// Skips files that were already successfully processed (tracked in processed_recordings.json).
     func recoverOrphanedRecordings(
@@ -670,7 +671,8 @@ class PipelineQueue {
         let now = Date()
         var recovered = 0
 
-        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav") {
+        for file in entries where file.lastPathComponent.hasSuffix("_mix.m4a")
+            || file.lastPathComponent.hasSuffix("_mix.wav") {
             let stdPath = file.standardizedFileURL.path
 
             // Skip already tracked by active jobs
@@ -686,19 +688,20 @@ class PipelineQueue {
                 continue
             }
 
-            // Skip empty WAVs (header only = 44 bytes)
+            // Skip empty audio files (WAV header = 44 bytes, M4A headers vary)
             if let attrs = try? fm.attributesOfItem(atPath: file.path),
-               let size = attrs[.size] as? Int, size <= 44 {
+               let size = attrs[.size] as? Int, size <= 100 {
                 continue
             }
 
-            // Derive timestamp prefix (e.g. "20260311_143000" from "20260311_143000_mix.wav")
+            // Derive timestamp prefix (e.g. "20260311_143000" from "20260311_143000_mix.m4a")
             let name = file.deletingPathExtension().lastPathComponent
             let prefix = String(name.dropLast("_mix".count))
+            let ext = file.pathExtension
 
-            // Look for companion tracks
-            let appFile = recordingsDir.appendingPathComponent("\(prefix)_app.wav")
-            let micFile = recordingsDir.appendingPathComponent("\(prefix)_mic.wav")
+            // Look for companion tracks (match extension of mix file)
+            let appFile = recordingsDir.appendingPathComponent("\(prefix)_app.\(ext)")
+            let micFile = recordingsDir.appendingPathComponent("\(prefix)_mic.\(ext)")
             let appPath = fm.fileExists(atPath: appFile.path) ? appFile : nil
             let micPath = fm.fileExists(atPath: micFile.path) ? micFile : nil
 
