@@ -113,12 +113,19 @@ enum ProtocolGenerator {
         return url
     }
 
+    private static let filenameFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyyMMdd_HHmm"
+        return fmt
+    }()
+
     /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`
     static func filename(title: String, ext: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmm"
-        let date = formatter.string(from: Date())
-        let slug = title.lowercased().replacingOccurrences(of: " ", with: "_")
+        let date = filenameFormatter.string(from: Date())
+        let slug = title
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .filter { !"/:\\\u{0}".contains($0) }
         return "\(date)_\(slug).\(ext)"
     }
 }

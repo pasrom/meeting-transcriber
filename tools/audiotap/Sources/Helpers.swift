@@ -5,11 +5,16 @@ import Foundation
 /// Must match `AudioConstants.targetSampleRate` in the app target.
 public let speechSampleRate: Double = 16000
 
-/// Convert mach_absolute_time() ticks to seconds.
-func machTicksToSeconds(_ ticks: UInt64) -> Double {
+/// Cached mach timebase info (constant per boot session).
+private let machTimebaseInfo: mach_timebase_info_data_t = {
     var info = mach_timebase_info_data_t()
     mach_timebase_info(&info)
-    let nanos = Double(ticks) * Double(info.numer) / Double(info.denom)
+    return info
+}()
+
+/// Convert mach_absolute_time() ticks to seconds.
+func machTicksToSeconds(_ ticks: UInt64) -> Double {
+    let nanos = Double(ticks) * Double(machTimebaseInfo.numer) / Double(machTimebaseInfo.denom)
     return nanos / 1_000_000_000.0
 }
 
