@@ -1,5 +1,4 @@
 import AVFoundation
-import CoreMedia
 import Foundation
 import os.log
 
@@ -9,10 +8,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMi
 enum AudioMixer {
     // MARK: - Mix
 
-    /// Mix app and mic audio tracks into a single mono M4A.
+    /// Mix app and mic audio tracks into a single mono WAV.
     ///
     /// Applies echo suppression, delay alignment, then averages the two tracks.
-    /// Resamples to `targetRate` (default 16kHz) before saving as AAC.
+    /// When `targetRate` differs from `sampleRate`, the mix is resampled before saving.
     static func mix(
         appAudioPath: URL,
         micAudioPath: URL,
@@ -20,7 +19,7 @@ enum AudioMixer {
         micDelay: TimeInterval = 0,
         sampleRate: Int = 48000,
         targetRate: Int = 16000,
-    ) async throws {
+    ) throws {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
 
@@ -52,12 +51,12 @@ enum AudioMixer {
         // Average the two tracks
         var mixed = mixTracks(appSamples, micSamples)
 
-        // Resample to target rate before saving
-        if sampleRate != targetRate {
+        // Resample to target rate if needed
+        if targetRate != sampleRate {
             mixed = resample(mixed, from: sampleRate, to: targetRate)
         }
 
-        try await saveM4A(samples: mixed, sampleRate: targetRate, url: outputPath)
+        try saveWAV(samples: mixed, sampleRate: targetRate, url: outputPath)
         logger.info("Mixed audio saved: \(outputPath.lastPathComponent)")
     }
 
@@ -395,164 +394,6 @@ enum AudioMixer {
         }
 
         try file.write(from: buffer)
-    }
-
-    /// Save Float32 mono samples to an AAC M4A file via AVAssetWriter.
-    static func saveM4A(samples: [Float], sampleRate: Int, url: URL, bitRate: Int = 64000) async throws {
-        guard !samples.isEmpty else {
-            throw AudioMixerError.bufferCreationFailed
-        }
-
-        // Remove existing file (AVAssetWriter requires this)
-        try? FileManager.default.removeItem(at: url)
-
-        let writer = try AVAssetWriter(outputURL: url, fileType: .m4a)
-
-        // Try explicit bitrate first, fall back to encoder default if not supported
-        var outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: sampleRate,
-            AVNumberOfChannelsKey: 1,
-            AVEncoderBitRatePerChannelKey: bitRate,
-        ]
-        var input = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
-        input.expectsMediaDataInRealTime = false
-
-        if !writer.canAdd(input) {
-            // Retry without explicit bitrate — let the encoder choose
-            outputSettings = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: sampleRate,
-                AVNumberOfChannelsKey: 1,
-            ]
-            input = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
-            input.expectsMediaDataInRealTime = false
-        }
-
-        guard writer.canAdd(input) else {
-            throw AudioMixerError.formatCreationFailed
-        }
-        writer.add(input)
-
-        // Source format: Float32 mono
-        guard let sourceFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: Double(sampleRate),
-            channels: 1,
-            interleaved: false,
-        ) else {
-            throw AudioMixerError.formatCreationFailed
-        }
-        // swiftlint:disable:next force_unwrapping
-        let formatDesc = sourceFormat.formatDescription
-
-        writer.startWriting()
-        writer.startSession(atSourceTime: .zero)
-
-        // Write in chunks
-        let chunkSize = 16384
-        var offset = 0
-
-        while offset < samples.count {
-            // Wait for the input to be ready
-            while !input.isReadyForMoreMediaData {
-                try await Task.sleep(for: .milliseconds(10))
-            }
-
-            let count = min(chunkSize, samples.count - offset)
-
-            // Create a CMSampleBuffer from Float32 samples
-            guard let buffer = AVAudioPCMBuffer(
-                pcmFormat: sourceFormat,
-                frameCapacity: AVAudioFrameCount(count),
-            ) else {
-                throw AudioMixerError.bufferCreationFailed
-            }
-            buffer.frameLength = AVAudioFrameCount(count)
-
-            // swiftlint:disable:next force_unwrapping
-            let dst = buffer.floatChannelData![0]
-            samples.withUnsafeBufferPointer { src in
-                // swiftlint:disable:next force_unwrapping
-                dst.initialize(from: src.baseAddress! + offset, count: count)
-            }
-
-            // Convert AVAudioPCMBuffer to CMSampleBuffer
-            let sampleBuffer = try Self.createSampleBuffer(
-                from: buffer,
-                formatDescription: formatDesc,
-                startFrame: Int64(offset),
-                sampleRate: sampleRate,
-            )
-            input.append(sampleBuffer)
-
-            offset += count
-        }
-
-        input.markAsFinished()
-        await writer.finishWriting()
-
-        if writer.status == .failed {
-            throw writer.error ?? AudioMixerError.audioExtractionFailed("AVAssetWriter failed")
-        }
-    }
-
-    /// Create a CMSampleBuffer from an AVAudioPCMBuffer.
-    private static func createSampleBuffer(
-        from pcmBuffer: AVAudioPCMBuffer,
-        formatDescription: CMFormatDescription,
-        startFrame: Int64,
-        sampleRate: Int,
-    ) throws -> CMSampleBuffer {
-        let frameCount = Int(pcmBuffer.frameLength)
-        let dataByteSize = frameCount * MemoryLayout<Float>.size
-
-        var blockBuffer: CMBlockBuffer?
-        // swiftlint:disable:next force_unwrapping
-        let data = UnsafeMutableRawPointer(pcmBuffer.floatChannelData![0])
-
-        var status = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault,
-            memoryBlock: nil,
-            blockLength: dataByteSize,
-            blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil,
-            offsetToData: 0,
-            dataLength: dataByteSize,
-            flags: 0,
-            blockBufferOut: &blockBuffer,
-        )
-        guard status == noErr, let blockBuffer else {
-            throw AudioMixerError.bufferCreationFailed
-        }
-
-        status = CMBlockBufferReplaceDataBytes(
-            with: data,
-            blockBuffer: blockBuffer,
-            offsetIntoDestination: 0,
-            dataLength: dataByteSize,
-        )
-        guard status == noErr else {
-            throw AudioMixerError.bufferCreationFailed
-        }
-
-        var sampleBuffer: CMSampleBuffer?
-        let presentationTime = CMTime(value: startFrame, timescale: CMTimeScale(sampleRate))
-
-        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
-            allocator: kCFAllocatorDefault,
-            dataBuffer: blockBuffer,
-            formatDescription: formatDescription,
-            sampleCount: frameCount,
-            presentationTimeStamp: presentationTime,
-            packetDescriptions: nil,
-            sampleBufferOut: &sampleBuffer,
-        )
-        guard status == noErr, let sampleBuffer else {
-            throw AudioMixerError.bufferCreationFailed
-        }
-
-        return sampleBuffer
     }
 }
 

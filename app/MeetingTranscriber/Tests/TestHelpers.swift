@@ -16,7 +16,7 @@ class MockRecorder: RecordingProvider {
         startCalled = true
     }
 
-    func stop() async throws -> RecordingResult {
+    func stop() throws -> RecordingResult {
         stopCalled = true
         guard let mix = mixPath else {
             throw RecorderError.noAudioData

@@ -154,46 +154,6 @@ final class AudioMixerTests: XCTestCase {
         XCTAssertGreaterThan(size, 44) // WAV header is 44 bytes minimum
     }
 
-    // MARK: - M4A Round-trip
-
-    func testM4ARoundTrip() async throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-        let m4aURL = tmpDir.appendingPathComponent("test_roundtrip_\(UUID().uuidString).m4a")
-        defer { try? FileManager.default.removeItem(at: m4aURL) }
-
-        // Generate a 1-second 440Hz sine wave at 16kHz (AAC needs non-trivial signal)
-        let sampleRate = 16000
-        let duration = 1.0
-        let sampleCount = Int(Double(sampleRate) * duration)
-        var original = [Float](repeating: 0, count: sampleCount)
-        for i in 0 ..< sampleCount {
-            original[i] = sin(2.0 * .pi * 440.0 * Float(i) / Float(sampleRate))
-        }
-
-        try await AudioMixer.saveM4A(samples: original, sampleRate: sampleRate, url: m4aURL)
-        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: m4aURL)
-
-        // AAC is lossy — verify sample count is close and signal is preserved
-        XCTAssertEqual(loaded.count, original.count, accuracy: 2048, "Sample count should be close")
-        // Verify the loaded signal has non-trivial energy (not silence)
-        let energy = loaded.reduce(0) { $0 + $1 * $1 } / Float(loaded.count)
-        XCTAssertGreaterThan(energy, 0.1, "Loaded M4A should contain signal energy")
-    }
-
-    func testSaveM4ACreatesFile() async throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-        let m4aURL = tmpDir.appendingPathComponent("test_create_\(UUID().uuidString).m4a")
-        defer { try? FileManager.default.removeItem(at: m4aURL) }
-
-        let samples = [Float](repeating: 0, count: 16000) // 1 second silence
-        try await AudioMixer.saveM4A(samples: samples, sampleRate: 16000, url: m4aURL)
-
-        XCTAssertTrue(FileManager.default.fileExists(atPath: m4aURL.path))
-        let attrs = try FileManager.default.attributesOfItem(atPath: m4aURL.path)
-        let size = attrs[.size] as? Int ?? 0
-        XCTAssertGreaterThan(size, 0, "M4A file should not be empty")
-    }
-
     // MARK: - Multi-format Loading
 
     func testLoadAudioAsFloat32WAV() async throws {

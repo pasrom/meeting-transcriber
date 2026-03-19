@@ -139,14 +139,14 @@ class WatchLoop {
         logger.info("Manual recording started for \(appName) (PID \(pid)): \(title)")
     }
 
-    func stopManualRecording() async {
+    func stopManualRecording() {
         guard let recorder = activeRecorder, let info = manualRecordingInfo else { return }
 
         manualRecordingTask?.cancel()
         manualRecordingTask = nil
 
         do {
-            let recording = try await recorder.stop()
+            let recording = try recorder.stop()
             enqueueRecording(title: info.title, appName: info.appName, recording: recording)
         } catch {
             logger.error("Failed to stop manual recording: \(error)")
@@ -165,14 +165,14 @@ class WatchLoop {
             // Check if process is still alive
             if kill(pid, 0) != 0 {
                 logger.info("Monitored app (PID \(pid)) exited — stopping manual recording")
-                await stopManualRecording()
+                stopManualRecording()
                 return
             }
 
             // Enforce max duration
             if Date().timeIntervalSince(startTime) > maxDuration {
                 logger.info("Max recording duration reached — stopping manual recording")
-                await stopManualRecording()
+                stopManualRecording()
                 return
             }
 
@@ -246,7 +246,7 @@ class WatchLoop {
         try await waitForMeetingEnd(meeting)
 
         // Stop recording
-        let recording = try await recorder.stop()
+        let recording = try recorder.stop()
 
         // --- Enqueue for background processing ---
         enqueueRecording(
