@@ -442,6 +442,11 @@ class PipelineQueue {
                                 continue diarizationLoop
 
                             case .skipped:
+                                // Use display names as fallback for unmatched speakers
+                                let allLabels = Array(autoNames.keys)
+                                for (label, name) in autoNames where name == label {
+                                    autoNames[label] = speakerDisplayName(label, allLabels: allLabels)
+                                }
                                 addWarning(id: jobID, "Speaker naming skipped")
                                 break diarizationLoop
                             }

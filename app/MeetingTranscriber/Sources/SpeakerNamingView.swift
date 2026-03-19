@@ -64,36 +64,6 @@ func formattedTime(_ seconds: Double) -> String {
     return m > 0 ? "\(m):\(String(format: "%02d", s))" : "\(s)s"
 }
 
-/// Convert internal speaker labels to user-friendly display names.
-/// Dual-track: "Mic" / "Mic 1, Mic 2" and "Remote" / "Remote 1, Remote 2".
-/// Single-source: "Speaker 1", "Speaker 2", etc.
-func speakerDisplayName(_ label: String, allLabels: [String]) -> String {
-    let hasDualTrack = allLabels.contains { $0.hasPrefix("M_") || $0.hasPrefix("R_") }
-
-    if hasDualTrack {
-        if label.hasPrefix("M_") {
-            let micLabels = allLabels.filter { $0.hasPrefix("M_") }.sorted()
-            if micLabels.count <= 1 {
-                return "Mic"
-            }
-            let micIndex = (micLabels.firstIndex(of: label) ?? 0) + 1
-            return "Mic \(micIndex)"
-        } else if label.hasPrefix("R_") {
-            let remoteLabels = allLabels.filter { $0.hasPrefix("R_") }.sorted()
-            if remoteLabels.count <= 1 {
-                return "Remote"
-            }
-            let remoteIndex = (remoteLabels.firstIndex(of: label) ?? 0) + 1
-            return "Remote \(remoteIndex)"
-        }
-    }
-
-    // Single-source: SPEAKER_0 → Speaker 1, SPEAKER_1 → Speaker 2
-    let singleLabels = allLabels.sorted()
-    let index = singleLabels.firstIndex(of: label) ?? 0
-    return "Speaker \(index + 1)"
-}
-
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let data: PipelineQueue.SpeakerNamingData
