@@ -34,6 +34,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
     let enqueuedAt: Date
     var state: JobState
     var error: String?
+    var warnings: [String]
     var protocolPath: URL?
 
     init(
@@ -56,6 +57,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
         self.enqueuedAt = Date()
         self.state = .waiting
         self.error = nil
+        self.warnings = []
         self.protocolPath = nil
     }
 }
