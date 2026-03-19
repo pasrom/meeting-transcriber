@@ -65,8 +65,8 @@ func formattedTime(_ seconds: Double) -> String {
 }
 
 /// Convert internal speaker labels to user-friendly display names.
-/// Mic speakers (M_ prefix) get "Speaker 0", remote speakers get "Speaker 1", "Speaker 2", etc.
-/// Single-source speakers are numbered starting at 1.
+/// Dual-track: "Mic" / "Mic 1, Mic 2" and "Remote" / "Remote 1, Remote 2".
+/// Single-source: "Speaker 1", "Speaker 2", etc.
 func speakerDisplayName(_ label: String, allLabels: [String]) -> String {
     let hasDualTrack = allLabels.contains { $0.hasPrefix("M_") || $0.hasPrefix("R_") }
 
@@ -74,14 +74,17 @@ func speakerDisplayName(_ label: String, allLabels: [String]) -> String {
         if label.hasPrefix("M_") {
             let micLabels = allLabels.filter { $0.hasPrefix("M_") }.sorted()
             if micLabels.count <= 1 {
-                return "Speaker 0 (Mic)"
+                return "Mic"
             }
-            let micIndex = micLabels.firstIndex(of: label) ?? 0
-            return "Speaker 0.\(micIndex + 1) (Mic)"
+            let micIndex = (micLabels.firstIndex(of: label) ?? 0) + 1
+            return "Mic \(micIndex)"
         } else if label.hasPrefix("R_") {
             let remoteLabels = allLabels.filter { $0.hasPrefix("R_") }.sorted()
-            let remoteIndex = remoteLabels.firstIndex(of: label) ?? 0
-            return "Speaker \(remoteIndex + 1)"
+            if remoteLabels.count <= 1 {
+                return "Remote"
+            }
+            let remoteIndex = (remoteLabels.firstIndex(of: label) ?? 0) + 1
+            return "Remote \(remoteIndex)"
         }
     }
 
