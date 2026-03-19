@@ -793,10 +793,10 @@ class PipelineQueue {
             let line = String(data: data, encoding: .utf8)! + "\n"
             if FileManager.default.fileExists(atPath: logPath.path) {
                 let handle = try FileHandle(forWritingTo: logPath)
+                defer { handle.closeFile() }
                 handle.seekToEndOfFile()
                 // swiftlint:disable:next force_unwrapping
                 handle.write(line.data(using: .utf8)!)
-                handle.closeFile()
             } else {
                 try line.write(to: logPath, atomically: true, encoding: .utf8)
             }

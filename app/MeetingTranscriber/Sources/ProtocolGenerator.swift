@@ -126,12 +126,20 @@ enum ProtocolGenerator {
         return url
     }
 
+    private static let filenameFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyyMMdd_HHmm"
+        return fmt
+    }()
+
     /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`
     static func filename(title: String, ext: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd_HHmm"
-        let date = formatter.string(from: Date())
-        let slug = title.lowercased().replacingOccurrences(of: " ", with: "_")
+        let date = filenameFormatter.string(from: Date())
+        // Remove characters invalid in filenames, then convert spaces to underscores
+        let sanitized = title.unicodeScalars.filter { c in
+            c != "/" && c != ":" && c != "\\" && c != "\0"
+        }
+        let slug = String(sanitized).lowercased().replacingOccurrences(of: " ", with: "_")
         return "\(date)_\(slug).\(ext)"
     }
 }
