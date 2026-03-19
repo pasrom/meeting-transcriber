@@ -90,7 +90,10 @@ enum ProtocolGenerator {
         if let custom = try? String(contentsOf: url, encoding: .utf8),
            !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logger.info("Using custom protocol prompt from \(url.path)")
+            // Support {LANGUAGE} placeholder in custom prompts; also replace legacy hardcoded "in German"
             return custom
+                .replacingOccurrences(of: "{LANGUAGE}", with: language)
+                .replacingOccurrences(of: "protocol in German", with: "protocol in \(language)")
         }
         return protocolPrompt(language: language)
     }
