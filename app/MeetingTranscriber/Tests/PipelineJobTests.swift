@@ -13,6 +13,7 @@ final class PipelineJobTests: XCTestCase {
         )
         XCTAssertEqual(job.state, .waiting)
         XCTAssertNil(job.error)
+        XCTAssertTrue(job.warnings.isEmpty)
         XCTAssertNotNil(job.id)
     }
 
@@ -31,6 +32,22 @@ final class PipelineJobTests: XCTestCase {
         XCTAssertEqual(decoded.meetingTitle, "Sprint")
         XCTAssertEqual(decoded.state, .waiting)
         XCTAssertEqual(decoded.micDelay, 0.5)
+        XCTAssertTrue(decoded.warnings.isEmpty)
+    }
+
+    func testWarningsSurviveEncoding() throws {
+        var job = PipelineJob(
+            meetingTitle: "Retro",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.warnings = ["Diarization failed — speakers not identified", "Speaker naming skipped"]
+        let data = try JSONEncoder().encode(job)
+        let decoded = try JSONDecoder().decode(PipelineJob.self, from: data)
+        XCTAssertEqual(decoded.warnings, ["Diarization failed — speakers not identified", "Speaker naming skipped"])
     }
 
     func testJobStateIsCodable() throws {
