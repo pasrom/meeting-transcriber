@@ -123,4 +123,31 @@ final class SpeakerNamingViewTests: XCTestCase {
         let names = speakers.map { $0.autoName ?? "" }
         XCTAssertEqual(names.first, "Maria")
     }
+
+    // MARK: - Speaker Display Name
+
+    func testDisplayName_singleSource() {
+        let labels = ["SPEAKER_0", "SPEAKER_1", "SPEAKER_2"]
+        XCTAssertEqual(speakerDisplayName("SPEAKER_0", allLabels: labels), "Speaker 1")
+        XCTAssertEqual(speakerDisplayName("SPEAKER_1", allLabels: labels), "Speaker 2")
+        XCTAssertEqual(speakerDisplayName("SPEAKER_2", allLabels: labels), "Speaker 3")
+    }
+
+    func testDisplayName_dualTrack() {
+        let labels = ["M_SPEAKER_0", "R_SPEAKER_0", "R_SPEAKER_1"]
+        XCTAssertEqual(speakerDisplayName("M_SPEAKER_0", allLabels: labels), "Speaker 0 (Mic)")
+        XCTAssertEqual(speakerDisplayName("R_SPEAKER_0", allLabels: labels), "Speaker 1")
+        XCTAssertEqual(speakerDisplayName("R_SPEAKER_1", allLabels: labels), "Speaker 2")
+    }
+
+    func testDisplayName_dualTrackMultipleMicSpeakers() {
+        let labels = ["M_SPEAKER_0", "M_SPEAKER_1", "R_SPEAKER_0"]
+        XCTAssertEqual(speakerDisplayName("M_SPEAKER_0", allLabels: labels), "Speaker 0.1 (Mic)")
+        XCTAssertEqual(speakerDisplayName("M_SPEAKER_1", allLabels: labels), "Speaker 0.2 (Mic)")
+        XCTAssertEqual(speakerDisplayName("R_SPEAKER_0", allLabels: labels), "Speaker 1")
+    }
+
+    func testDisplayName_singleSpeaker() {
+        XCTAssertEqual(speakerDisplayName("SPEAKER_0", allLabels: ["SPEAKER_0"]), "Speaker 1")
+    }
 }

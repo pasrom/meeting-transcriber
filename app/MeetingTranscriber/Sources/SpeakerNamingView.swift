@@ -64,6 +64,33 @@ func formattedTime(_ seconds: Double) -> String {
     return m > 0 ? "\(m):\(String(format: "%02d", s))" : "\(s)s"
 }
 
+/// Convert internal speaker labels to user-friendly display names.
+/// Mic speakers (M_ prefix) get "Speaker 0", remote speakers get "Speaker 1", "Speaker 2", etc.
+/// Single-source speakers are numbered starting at 1.
+func speakerDisplayName(_ label: String, allLabels: [String]) -> String {
+    let hasDualTrack = allLabels.contains { $0.hasPrefix("M_") || $0.hasPrefix("R_") }
+
+    if hasDualTrack {
+        if label.hasPrefix("M_") {
+            let micLabels = allLabels.filter { $0.hasPrefix("M_") }.sorted()
+            if micLabels.count <= 1 {
+                return "Speaker 0 (Mic)"
+            }
+            let micIndex = micLabels.firstIndex(of: label) ?? 0
+            return "Speaker 0.\(micIndex + 1) (Mic)"
+        } else if label.hasPrefix("R_") {
+            let remoteLabels = allLabels.filter { $0.hasPrefix("R_") }.sorted()
+            let remoteIndex = remoteLabels.firstIndex(of: label) ?? 0
+            return "Speaker \(remoteIndex + 1)"
+        }
+    }
+
+    // Single-source: SPEAKER_0 → Speaker 1, SPEAKER_1 → Speaker 2
+    let singleLabels = allLabels.sorted()
+    let index = singleLabels.firstIndex(of: label) ?? 0
+    return "Speaker \(index + 1)"
+}
+
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let data: PipelineQueue.SpeakerNamingData
@@ -171,7 +198,7 @@ struct SpeakerNamingView: View {
             // swiftlint:disable:next closure_body_length
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(speaker.label)
+                    Text(speakerDisplayName(speaker.label, allLabels: speakers.map(\.label)))
                         .font(.subheadline)
                         .fontWeight(.medium)
 
