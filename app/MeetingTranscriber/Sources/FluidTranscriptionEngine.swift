@@ -138,55 +138,31 @@ final class FluidTranscriptionEngine {
         
         transcriptionProgress = 1.0
 
-        var segments: [TimestampedSegment] = []
-        var lastText = ""
-        
-        for timing in result.tokenTimings ?? [] {
-            let text = timing.token.trimmingCharacters(in: .whitespaces)
-            
-            // Clean up typical hallucination patterns (same word repeated) or empty
-            if text.isEmpty { continue }
-
-            // Because FluidAudio provides TokenTiming which is per-token (word/subword level),
-            // we should probably reconstruct sentences instead of emitting one segment per token.
-            // FluidAudio's token timings are per-token (word/subword level).
-            // Group them by punctuation and pauses to form sentence segments.
-            print("Token: \(text) [\(timing.startTime) - \(timing.endTime)]")
-        }
-        
-        // FluidAudio ASRResult also has `text` which is the full transcript.
-        // But we need `[TimestampedSegment]`. If token timings are per-token, grouping is required.
-        segments = Self.groupTokensIntoSentences(result.tokenTimings ?? [])
-
-        return segments
+        return Self.groupTokensIntoSentences(result.tokenTimings ?? [])
     }
 
     /// Group granular token timings into logical sentence segments based on punctuation and pauses.
+    /// SentencePiece tokens use `▁` (normalized to leading space) to mark word boundaries.
     static func groupTokensIntoSentences(_ tokens: [TokenTiming]) -> [TimestampedSegment] {
         var segments: [TimestampedSegment] = []
         var currentText = ""
         var segmentStart: TimeInterval = 0
         var lastEnd: TimeInterval = 0
-        
-        let punctuationMarks = [".", "?", "!", "\n"]
 
         for timing in tokens {
+            // Normalize SentencePiece marker in case it wasn't already converted
+            let token = timing.token.replacingOccurrences(of: "\u{2581}", with: " ")
+
+            let hasLongPause = !currentText.isEmpty && (timing.startTime - lastEnd) > 1.0
+            let hasSentenceEnding = token.contains(".") || token.contains("?") || token.contains("!")
+
             if currentText.isEmpty {
                 segmentStart = timing.startTime
             }
-            
-            // Add space if needed
-            let needsSpace = !currentText.isEmpty && !timing.token.hasPrefix(" ") && !punctuationMarks.contains(timing.token)
-            
-            if needsSpace {
-                currentText += " "
-            }
-            // Remove leading spaces for concatenation
-            currentText += timing.token.trimmingCharacters(in: .whitespaces)
-            lastEnd = timing.endTime
 
-            let hasSentenceEnding = punctuationMarks.contains { timing.token.contains($0) }
-            let hasLongPause = (timing.startTime - lastEnd) > 1.0
+            // SentencePiece tokens carry their own spacing — just concatenate
+            currentText += token
+            lastEnd = timing.endTime
 
             if hasSentenceEnding || hasLongPause {
                 let text = currentText.trimmingCharacters(in: .whitespaces)
@@ -196,7 +172,7 @@ final class FluidTranscriptionEngine {
                 currentText = ""
             }
         }
-        
+
         // flush remaining
         let text = currentText.trimmingCharacters(in: .whitespaces)
         if !text.isEmpty {
