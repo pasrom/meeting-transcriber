@@ -57,8 +57,6 @@ final class FluidTranscriptionEngine {
     private(set) var downloadProgress: Double = 0
     private(set) var transcriptionProgress: Double = 0
     
-    // We instantiate AsrManager. FluidAudio handles downloading lazily.
-    // If we want to support multiple models, we'd recreate AsrManager or update ASRConfig.
     private var manager: AsrManager?
     private var loadingTask: Task<Void, Never>?
 
@@ -69,17 +67,31 @@ final class FluidTranscriptionEngine {
         }
 
         let task = Task {
-            modelState = .loading
-            downloadProgress = 1.0
-            
-            // Wait, we need to pass the modelVariant if possible. FluidAudio's ASRConfig uses Parakeet by default.
-            // AsrManager default init uses the latest default models.
-            // There might not be an explicit way to set "parakeet-tdt-0.6b-v2-coreml" simply via ASRConfig if it's the default,
-            // but for now we just use the default `AsrManager()`.
-            let newManager = AsrManager()
-            self.manager = newManager
-            
-            modelState = .loaded
+            modelState = .downloading
+            downloadProgress = 0
+
+            do {
+                let models = try await AsrModels.downloadAndLoad(
+                    version: .v2,
+                    progressHandler: { progress in
+                        Task { @MainActor in
+                            self.downloadProgress = progress.fractionCompleted
+                        }
+                    }
+                )
+
+                modelState = .loading
+                downloadProgress = 1.0
+
+                let newManager = AsrManager()
+                try await newManager.initialize(models: models)
+                self.manager = newManager
+
+                modelState = .loaded
+            } catch {
+                NSLog("FluidTranscription: failed to load model: \(error)")
+                modelState = .unloaded
+            }
             loadingTask = nil
         }
         loadingTask = task
