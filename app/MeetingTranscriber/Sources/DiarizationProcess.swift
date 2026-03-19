@@ -129,6 +129,32 @@ enum DiarizationProcess {
         )
     }
 
+    /// Merge consecutive segments from the same speaker into single blocks.
+    /// Preserves the start timestamp of the first segment and end timestamp of the last.
+    /// Text is joined with spaces.
+    static func mergeConsecutiveSpeakers(
+        _ segments: [TimestampedSegment],
+    ) -> [TimestampedSegment] {
+        guard var current = segments.first else { return [] }
+
+        var merged: [TimestampedSegment] = []
+        for seg in segments.dropFirst() {
+            if seg.speaker == current.speaker {
+                current = TimestampedSegment(
+                    start: current.start,
+                    end: seg.end,
+                    text: "\(current.text) \(seg.text)",
+                    speaker: current.speaker,
+                )
+            } else {
+                merged.append(current)
+                current = seg
+            }
+        }
+        merged.append(current)
+        return merged
+    }
+
     /// Assign speakers using separate diarizations for app and mic tracks.
     /// App segments are matched against appDiarization, mic segments against micDiarization.
     static func assignSpeakersDualTrack(
