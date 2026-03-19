@@ -47,8 +47,10 @@ struct MeetingTranscriberApp: App {
                 onStartStop: toggleWatching,
                 onRecordApp: { bringWindowToFront(id: "record-app") },
                 onStopManualRecording: watchLoop?.isManualRecording == true ? {
-                    watchLoop?.stopManualRecording()
-                    watchLoop = nil
+                    Task {
+                        await watchLoop?.stopManualRecording()
+                        watchLoop = nil
+                    }
                 } : nil,
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocol: { url in NSWorkspace.shared.open(url) },

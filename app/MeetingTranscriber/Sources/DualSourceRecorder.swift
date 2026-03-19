@@ -18,7 +18,7 @@ struct RecordingResult {
 @MainActor
 protocol RecordingProvider {
     func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?) throws
-    func stop() throws -> RecordingResult
+    func stop() async throws -> RecordingResult
 }
 
 /// Orchestrates app audio capture (via AudioTapLib) + mic recording, then mixes.
@@ -98,7 +98,7 @@ class DualSourceRecorder: RecordingProvider {
     }
 
     /// Stop recording and produce a mixed M4A (AAC, 16kHz mono).
-    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length
+    func stop() async throws -> RecordingResult { // swiftlint:disable:this function_body_length
         guard isRecording else {
             throw RecorderError.notRecording
         }
@@ -169,7 +169,7 @@ class DualSourceRecorder: RecordingProvider {
             // Save app track as M4A at 16kHz
             let appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: 16000)
             let appFile = recDir.appendingPathComponent("\(ts)_app.m4a")
-            try AudioMixer.saveM4A(samples: appSamples16k, sampleRate: 16000, url: appFile)
+            try await AudioMixer.saveM4A(samples: appSamples16k, sampleRate: 16000, url: appFile)
             appPath = appFile
             logger.info("App audio saved: \(appFile.lastPathComponent) (16000 Hz, AAC)")
         } else if FileManager.default.fileExists(atPath: tempURL.path) {
@@ -198,7 +198,7 @@ class DualSourceRecorder: RecordingProvider {
             // Save mic track as M4A at 16kHz and remove original WAV
             let micSamples16k = AudioMixer.resample(micSamples, from: micRate, to: 16000)
             let micM4APath = recDir.appendingPathComponent("\(ts)_mic.m4a")
-            try AudioMixer.saveM4A(samples: micSamples16k, sampleRate: 16000, url: micM4APath)
+            try await AudioMixer.saveM4A(samples: micSamples16k, sampleRate: 16000, url: micM4APath)
             try? FileManager.default.removeItem(at: expectedMicPath)
             micPath = micM4APath
             logger.info("Mic audio saved: \(micM4APath.lastPathComponent) (16000 Hz, AAC)")
@@ -211,7 +211,7 @@ class DualSourceRecorder: RecordingProvider {
         if let app = appPath, let mic = micPath {
             // Delegate mute masking, echo suppression, delay alignment, and mixing
             // Source files are 16kHz M4A; mix() outputs M4A at targetRate (16kHz)
-            try AudioMixer.mix(
+            try await AudioMixer.mix(
                 appAudioPath: app,
                 micAudioPath: mic,
                 outputPath: mixPath,
@@ -221,10 +221,10 @@ class DualSourceRecorder: RecordingProvider {
             )
         } else if !appSamples.isEmpty {
             let resampled = AudioMixer.resample(appSamples, from: actualRate, to: 16000)
-            try AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
+            try await AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
         } else if !micSamples.isEmpty {
             let resampled = AudioMixer.resample(micSamples, from: micRate, to: 16000)
-            try AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
+            try await AudioMixer.saveM4A(samples: resampled, sampleRate: 16000, url: mixPath)
         } else {
             throw RecorderError.noAudioData
         }

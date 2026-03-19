@@ -156,7 +156,7 @@ final class AudioMixerTests: XCTestCase {
 
     // MARK: - M4A Round-trip
 
-    func testM4ARoundTrip() throws {
+    func testM4ARoundTrip() async throws {
         let tmpDir = FileManager.default.temporaryDirectory
         let m4aURL = tmpDir.appendingPathComponent("test_roundtrip_\(UUID().uuidString).m4a")
         defer { try? FileManager.default.removeItem(at: m4aURL) }
@@ -170,7 +170,7 @@ final class AudioMixerTests: XCTestCase {
             original[i] = sin(2.0 * .pi * 440.0 * Float(i) / Float(sampleRate))
         }
 
-        try AudioMixer.saveM4A(samples: original, sampleRate: sampleRate, url: m4aURL)
+        try await AudioMixer.saveM4A(samples: original, sampleRate: sampleRate, url: m4aURL)
         let loaded = try AudioMixer.loadAudioFileAsFloat32(url: m4aURL)
 
         // AAC is lossy — verify sample count is close and signal is preserved
@@ -180,13 +180,13 @@ final class AudioMixerTests: XCTestCase {
         XCTAssertGreaterThan(energy, 0.1, "Loaded M4A should contain signal energy")
     }
 
-    func testSaveM4ACreatesFile() throws {
+    func testSaveM4ACreatesFile() async throws {
         let tmpDir = FileManager.default.temporaryDirectory
         let m4aURL = tmpDir.appendingPathComponent("test_create_\(UUID().uuidString).m4a")
         defer { try? FileManager.default.removeItem(at: m4aURL) }
 
         let samples = [Float](repeating: 0, count: 16000) // 1 second silence
-        try AudioMixer.saveM4A(samples: samples, sampleRate: 16000, url: m4aURL)
+        try await AudioMixer.saveM4A(samples: samples, sampleRate: 16000, url: m4aURL)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: m4aURL.path))
         let attrs = try FileManager.default.attributesOfItem(atPath: m4aURL.path)
