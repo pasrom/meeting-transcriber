@@ -77,12 +77,12 @@ final class ProtocolGeneratorTests: XCTestCase {
 
     func testFilenameFormat() {
         let name = ProtocolGenerator.filename(title: "Team Meeting", ext: "md")
-        // Format: yyyyMMdd_HHmm_team_meeting.md
+        // Format: yy.MM.dd_team_meeting.md
         XCTAssertTrue(name.hasSuffix("_team_meeting.md"))
-        // Should start with date pattern (8 digits _ 4 digits)
-        let prefix = String(name.prefix(13))
+        // Should start with date pattern (dd.dd.dd)
+        let prefix = String(name.prefix(8))
         XCTAssertNotNil(
-            prefix.range(of: #"^\d{8}_\d{4}$"#, options: .regularExpression),
+            prefix.range(of: #"^\d{2}\.\d{2}\.\d{2}$"#, options: .regularExpression),
             "Expected date prefix, got: \(prefix)",
         )
     }

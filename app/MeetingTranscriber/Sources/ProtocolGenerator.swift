@@ -139,11 +139,11 @@ enum ProtocolGenerator {
 
     private static let filenameFormatter: DateFormatter = {
         let fmt = DateFormatter()
-        fmt.dateFormat = "yyyyMMdd_HHmm"
+        fmt.dateFormat = "yy.MM.dd"
         return fmt
     }()
 
-    /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`
+    /// Generate a filename: `{yy.MM.dd}_{slug}.{ext}`
     static func filename(title: String, ext: String) -> String {
         let date = filenameFormatter.string(from: Date())
         // Remove characters invalid in filenames, then convert spaces to underscores
