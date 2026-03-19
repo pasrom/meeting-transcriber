@@ -69,14 +69,14 @@ final class WatchLoopE2ETests: XCTestCase {
 
     /// Create a PipelineQueue with mocks for E2E testing.
     private func makeQueue(
-        whisperKit: WhisperKitEngine? = nil,
+        transcriptionEngine: FluidTranscriptionEngine? = nil,
         diarization: MockDiarization = MockDiarization(),
         protocolGen: MockProtocolGen = MockProtocolGen(),
         diarizeEnabled: Bool = false,
         micLabel: String = "Roman",
     ) -> PipelineQueue {
         PipelineQueue(
-            whisperKit: whisperKit ?? WhisperKitEngine(),
+            transcriptionEngine: transcriptionEngine ?? FluidTranscriptionEngine(),
             diarizationFactory: { diarization },
             protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,
@@ -111,7 +111,7 @@ final class WatchLoopE2ETests: XCTestCase {
     func testFullPipelineDetectRecordTranscribeProtocol() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            "Skipping in CI: requires Parakeet model download",
         )
 
         let fixture = fixtureURL()
@@ -125,12 +125,11 @@ final class WatchLoopE2ETests: XCTestCase {
         recorder.mixPath = mixPath
 
         let mockProtocol = MockProtocolGen()
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            transcriptionEngine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
         )
@@ -168,7 +167,7 @@ final class WatchLoopE2ETests: XCTestCase {
     func testDualSourceTranscriptionPath() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            "Skipping in CI: requires Parakeet model download",
         )
 
         let fixture = fixtureURL()
@@ -188,12 +187,11 @@ final class WatchLoopE2ETests: XCTestCase {
         recorder.micPath = micPath
 
         let mockProtocol = MockProtocolGen()
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            transcriptionEngine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
             micLabel: "Roman",
@@ -225,7 +223,7 @@ final class WatchLoopE2ETests: XCTestCase {
     // MARK: - 3. Empty Transcript Transitions to Error
 
     func testEmptyTranscriptTransitionsToError() async throws {
-        // Create a silent (all zeros) 48kHz WAV — WhisperKit should produce empty transcript
+        // Create a silent (all zeros) 48kHz WAV — Transcription engine should produce empty transcript
         let silentSamples = [Float](repeating: 0.0, count: 48000)
         let mixPath = tmpDir.appendingPathComponent("silent.wav")
         try AudioMixer.saveWAV(samples: silentSamples, sampleRate: 48000, url: mixPath)
@@ -233,13 +231,12 @@ final class WatchLoopE2ETests: XCTestCase {
         let recorder = MockRecorder()
         recorder.mixPath = mixPath
 
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
 
         let mockProtocol = MockProtocolGen()
         let queue = makeQueue(
-            whisperKit: engine,
+            transcriptionEngine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
         )
@@ -263,7 +260,7 @@ final class WatchLoopE2ETests: XCTestCase {
     func testDiarizationSkippedWhenNotAvailable() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            "Skipping in CI: requires Parakeet model download",
         )
 
         let fixture = fixtureURL()
@@ -280,12 +277,11 @@ final class WatchLoopE2ETests: XCTestCase {
         mockDiarize.isAvailable = false // Simulate diarization not available
 
         let mockProtocol = MockProtocolGen()
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            transcriptionEngine: engine,
             diarization: mockDiarize,
             protocolGen: mockProtocol,
             diarizeEnabled: true, // Enabled but not available
@@ -331,12 +327,12 @@ final class WatchLoopE2ETests: XCTestCase {
         XCTAssertNil(secondDetection, "Should NOT detect meeting during cooldown")
     }
 
-    // MARK: - 6. Resample Path Produces 16kHz for WhisperKit
-
-    func testResamplePathProduces16kHzForWhisperKit() async throws {
+    // MARK: - 6. Resample Path Produces 16kHz for FluidTranscriptionEngine
+    
+    func testResamplePathProduces16kHzForTranscription() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            "Skipping in CI: requires Parakeet model download",
         )
 
         let fixture = fixtureURL()
@@ -362,15 +358,14 @@ final class WatchLoopE2ETests: XCTestCase {
             "Resampled file should be 16kHz",
         )
 
-        // Verify WhisperKit can transcribe the 16kHz file
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        // Verify transcriber can transcribe the 16kHz file
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
         await engine.loadModel()
         XCTAssertEqual(engine.modelState, .loaded, "Model should be loaded")
 
         let transcript = try await engine.transcribe(audioPath: path16k)
-        XCTAssertFalse(transcript.isEmpty, "WhisperKit should produce non-empty transcript from 16kHz audio")
+        XCTAssertFalse(transcript.isEmpty, "FluidTranscriptionEngine should produce non-empty transcript from 16kHz audio")
 
         // Verify no special tokens
         XCTAssertFalse(transcript.contains("<|"), "Transcript should not contain '<|'")
@@ -382,7 +377,7 @@ final class WatchLoopE2ETests: XCTestCase {
     func testFullPipelineWithRealDiarization() async throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model + FluidAudio diarization",
+            "Skipping in CI: requires Parakeet model + FluidAudio diarization",
         )
 
         let fixture = fixtureURL()
@@ -399,16 +394,15 @@ final class WatchLoopE2ETests: XCTestCase {
         recorder.mixPath = mixPath
 
         let mockProtocol = MockProtocolGen()
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        engine.language = "de"
+        let engine = FluidTranscriptionEngine()
+        engine.modelVariant = "parakeet-tdt-0.6b-v2-coreml"
 
         // Use isolated speaker DB so test doesn't affect real data
         let testDB = tmpDir.appendingPathComponent("speakers_test.json")
 
         // swiftlint:disable trailing_closure
         let queue = PipelineQueue(
-            whisperKit: engine,
+            transcriptionEngine: engine,
             diarizationFactory: { FluidDiarizer() },
             protocolGeneratorFactory: { mockProtocol },
             outputDir: tmpDir,

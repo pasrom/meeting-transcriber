@@ -73,19 +73,14 @@ final class AppSettings {
 
     // MARK: - Transcription
 
-    var whisperKitModel: String = defaults.object(forKey: "whisperKitModel") as? String
-        ?? "openai_whisper-large-v3-v20240930_turbo" {
-        didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
+    var transcriptionModel: String = defaults.object(forKey: "transcriptionModel") as? String
+        ?? "parakeet-tdt-0.6b-v2-coreml" {
+        didSet { defaults.set(transcriptionModel, forKey: "transcriptionModel") }
     }
 
-    /// Whisper transcription language. Empty string = auto-detect (maps to nil on WhisperKitEngine).
-    var whisperLanguage: String = defaults.object(forKey: "whisperLanguage") as? String ?? "de" {
-        didSet { defaults.set(whisperLanguage, forKey: "whisperLanguage") }
-    }
-
-    /// Language as Optional for WhisperKit. Empty string → nil (auto-detect).
-    var whisperLanguageOrNil: String? {
-        whisperLanguage.isEmpty ? nil : whisperLanguage
+    /// Transcription language
+    var transcriptionLanguage: String = defaults.object(forKey: "transcriptionLanguage") as? String ?? "en" {
+        didSet { defaults.set(transcriptionLanguage, forKey: "transcriptionLanguage") }
     }
 
     var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {

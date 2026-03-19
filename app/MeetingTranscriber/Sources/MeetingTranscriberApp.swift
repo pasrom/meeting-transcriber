@@ -17,7 +17,7 @@ struct MeetingTranscriberApp: App {
     @Environment(\.openWindow)
     private var openWindow
     private let notifications = NotificationManager.shared
-    private let whisperKit = WhisperKitEngine()
+    private let transcriptionEngine = FluidTranscriptionEngine()
     private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     private var isWatching: Bool {
@@ -86,9 +86,8 @@ struct MeetingTranscriberApp: App {
                 bringWindowToFront(id: "speaker-naming")
             }
             .task {
-                whisperKit.modelVariant = settings.whisperKitModel
-                whisperKit.language = settings.whisperLanguageOrNil
-                await whisperKit.loadModel()
+                transcriptionEngine.modelVariant = settings.transcriptionModel
+                await transcriptionEngine.loadModel()
             }
             .task {
                 updateChecker.startPeriodicChecks(settings: settings)
@@ -111,7 +110,7 @@ struct MeetingTranscriberApp: App {
         Window("Settings", id: "settings") {
             SettingsView(
                 settings: settings,
-                whisperKitEngine: whisperKit,
+                transcriptionEngine: transcriptionEngine,
                 updateChecker: updateChecker,
             )
         }
@@ -245,7 +244,6 @@ struct MeetingTranscriberApp: App {
 
                 // swiftlint:disable:next closure_body_length
                 await MainActor.run {
-                    whisperKit.language = settings.whisperLanguageOrNil
                     pipelineQueue = makePipelineQueue()
 
                     let detector: MeetingDetecting = PowerAssertionDetector()
@@ -291,8 +289,7 @@ struct MeetingTranscriberApp: App {
     // MARK: - Pipeline
 
     private func ensurePipelineQueue() {
-        guard pipelineQueue.whisperKit == nil else { return }
-        whisperKit.language = settings.whisperLanguageOrNil
+        guard pipelineQueue.transcriptionEngine == nil else { return }
         pipelineQueue = makePipelineQueue()
         configurePipelineCallbacks()
     }
@@ -317,7 +314,7 @@ struct MeetingTranscriberApp: App {
 
     private func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
-            whisperKit: whisperKit,
+            transcriptionEngine: transcriptionEngine,
             diarizationFactory: { FluidDiarizer() },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,

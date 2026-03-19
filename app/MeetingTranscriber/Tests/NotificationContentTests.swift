@@ -74,13 +74,13 @@ final class NotificationContentTests: XCTestCase {
     // MARK: - Error
 
     func testErrorNotification() {
-        let status = makeStatus(state: .error, error: "Whisper crashed")
+        let status = makeStatus(state: .error, error: "Transcription crashed")
 
         let content = NotificationManager.notificationContent(for: .error, status: status)
 
         XCTAssertNotNil(content)
         XCTAssertEqual(content?.title, "Transcriber Error")
-        XCTAssertEqual(content?.body, "Whisper crashed")
+        XCTAssertEqual(content?.body, "Transcription crashed")
     }
 
     func testErrorNoMessage() {

@@ -19,7 +19,7 @@ struct SettingsView: View {
     @State private var availableModels: [String] = []
     @State private var showResetPromptConfirmation = false
     @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
-    var whisperKitEngine: WhisperKitEngine
+    var transcriptionEngine: FluidTranscriptionEngine
     var updateChecker: UpdateChecker?
 
     enum ConnectionTestResult {
@@ -27,13 +27,8 @@ struct SettingsView: View {
         case failure(String)
     }
 
-    private let whisperKitModels: [(variant: String, label: String)] = [
-        ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
-        ("openai_whisper-large-v3-v20240930", "Large V3"),
-        ("openai_whisper-large-v2", "Large V2"),
-        ("openai_whisper-small", "Small"),
-        ("openai_whisper-base", "Base"),
-        ("openai_whisper-tiny", "Tiny"),
+    private let transcriptionModels: [(variant: String, label: String)] = [
+        ("parakeet-tdt-0.6b-v2-coreml", "Parakeet TDT V2 0.6B (English)"),
     ]
 
     private let whisperLanguages: [(code: String, label: String)] = [
@@ -110,24 +105,24 @@ struct SettingsView: View {
 
             // swiftlint:disable:next closure_body_length
             Section("Transcription") {
-                Picker("Model", selection: $settings.whisperKitModel) {
-                    ForEach(whisperKitModels, id: \.variant) { model in
+                Picker("Model", selection: $settings.transcriptionModel) {
+                    ForEach(transcriptionModels, id: \.variant) { model in
                         Text(model.label).tag(model.variant)
                     }
                 }
 
-                Picker("Language", selection: $settings.whisperLanguage) {
+                Picker("Language", selection: $settings.transcriptionLanguage) {
                     ForEach(whisperLanguages, id: \.code) { lang in
                         Text(lang.label).tag(lang.code)
                     }
                 }
 
                 // Model status
-                switch whisperKitEngine.modelState {
+                switch transcriptionEngine.modelState {
                 case .downloading:
-                    ProgressView(value: whisperKitEngine.downloadProgress)
+                    ProgressView(value: transcriptionEngine.downloadProgress)
                         .progressViewStyle(.linear)
-                    Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
+                    Text("Downloading model... \(Int(transcriptionEngine.downloadProgress * 100))%")
                         .font(.caption)
                         .foregroundStyle(.secondary)
 
@@ -144,18 +139,10 @@ struct SettingsView: View {
                         .foregroundStyle(.green)
                         .font(.caption)
 
-                case .unloaded, .unloading:
+                case .unloaded:
                     Button("Load Model") {
-                        whisperKitEngine.modelVariant = settings.whisperKitModel
-                        Task { await whisperKitEngine.loadModel() }
-                    }
-
-                case .prewarming, .prewarmed, .downloaded:
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text("Preparing model...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        transcriptionEngine.modelVariant = settings.transcriptionModel
+                        Task { await transcriptionEngine.loadModel() }
                     }
                 }
 

@@ -11,7 +11,7 @@ final class AppSettingsTests: XCTestCase {
         let keys = [
             "watchTeams", "watchZoom", "watchWebex",
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
-            "diarize", "numSpeakers", "whisperKitModel", "claudeBin",
+            "diarize", "numSpeakers", "transcriptionModel", "claudeBin",
             "protocolProvider", "openAIEndpoint", "openAIModel",
             "checkForUpdates", "includePreReleases",
         ]
@@ -39,7 +39,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(settings.noMic)
         XCTAssertEqual(settings.micName, "Me")
         XCTAssertTrue(settings.diarize)
-        XCTAssertEqual(settings.whisperKitModel, "openai_whisper-large-v3-v20240930_turbo")
+        XCTAssertEqual(settings.transcriptionModel, "parakeet-tdt-0.6b-v2-coreml")
     }
 
     // MARK: - Clamping
@@ -132,11 +132,11 @@ final class AppSettingsTests: XCTestCase {
         }
     #endif
 
-    // MARK: - WhisperKit Model
+    // MARK: - Transcription Model
 
-    func testWhisperKitModelSavedToDefaults() {
-        settings.whisperKitModel = "openai_whisper-small"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "whisperKitModel"), "openai_whisper-small")
+    func testTranscriptionModelSavedToDefaults() {
+        settings.transcriptionModel = "parakeet-tdt-0.6b-v2-coreml"
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "transcriptionModel"), "parakeet-tdt-0.6b-v2-coreml")
     }
 
     func testMicNameSavedToDefaults() {

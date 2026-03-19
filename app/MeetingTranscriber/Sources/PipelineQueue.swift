@@ -12,7 +12,7 @@ class PipelineQueue {
     private let logDir: URL
 
     // Dependencies for processing
-    let whisperKit: WhisperKitEngine?
+    let transcriptionEngine: FluidTranscriptionEngine?
     let diarizationFactory: (() -> DiarizationProvider)?
     let protocolGeneratorFactory: (() -> ProtocolGenerating)?
     let outputDir: URL?
@@ -79,7 +79,7 @@ class PipelineQueue {
     /// Simple init for skeleton tests and basic queue usage.
     init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
         self.logDir = logDir ?? AppPaths.ipcDir
-        self.whisperKit = nil
+        self.transcriptionEngine = nil
         self.diarizationFactory = nil
         self.protocolGeneratorFactory = nil
         self.outputDir = nil
@@ -92,7 +92,7 @@ class PipelineQueue {
 
     /// Full init with all processing dependencies.
     init(
-        whisperKit: WhisperKitEngine,
+        transcriptionEngine: FluidTranscriptionEngine,
         diarizationFactory: @escaping () -> DiarizationProvider,
         protocolGeneratorFactory: @escaping () -> ProtocolGenerating,
         outputDir: URL,
@@ -104,7 +104,7 @@ class PipelineQueue {
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
-        self.whisperKit = whisperKit
+        self.transcriptionEngine = transcriptionEngine
         self.diarizationFactory = diarizationFactory
         self.protocolGeneratorFactory = protocolGeneratorFactory
         self.outputDir = outputDir
@@ -224,7 +224,7 @@ class PipelineQueue {
             isProcessing = false
             return
         }
-        guard let whisperKit, let protocolGeneratorFactory, let outputDir else {
+        guard let transcriptionEngine, let protocolGeneratorFactory, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             isProcessing = false
             return
@@ -262,15 +262,15 @@ class PipelineQueue {
                 try await micResample
 
                 // Transcribe each track separately
-                let appSegments = try await whisperKit.transcribeSegments(audioPath: app16k)
-                let micSegments = try await whisperKit.transcribeSegments(audioPath: mic16k)
+                let appSegments = try await transcriptionEngine.transcribeSegments(audioPath: app16k)
+                let micSegments = try await transcriptionEngine.transcribeSegments(audioPath: mic16k)
 
                 // Merge dual-source segments
-                let segments = whisperKit.mergeDualSourceSegments(
+                let segments = transcriptionEngine.mergeDualSourceSegments(
                     appSegments: appSegments,
                     micSegments: micSegments,
                     micDelay: micDelay,
-                    micLabel: micLabel,
+                    micLabel: micLabel
                 )
                 cachedSegments = segments
                 transcript = segments.map(\.formattedLine).joined(separator: "\n")
@@ -280,7 +280,7 @@ class PipelineQueue {
                 try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
 
                 // Use transcribeSegments to cache results for diarization
-                let segments = try await whisperKit.transcribeSegments(audioPath: mix16k)
+                let segments = try await transcriptionEngine.transcribeSegments(audioPath: mix16k)
                 cachedSegments = segments
                 transcript = segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
             }
@@ -462,8 +462,8 @@ class PipelineQueue {
                             let segments: [TimestampedSegment] = if let cached = cachedSegments {
                                 cached
                             } else {
-                                try await whisperKit.transcribeSegments(
-                                    audioPath: mix16k,
+                                try await transcriptionEngine.transcribeSegments(
+                                    audioPath: mix16k
                                 )
                             }
                             let labeled = DiarizationProcess.assignSpeakers(
