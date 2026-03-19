@@ -284,6 +284,71 @@ final class DiarizationProcessTests: XCTestCase {
         XCTAssertNil(merged.embeddings)
     }
 
+    // MARK: - Merge Consecutive Speakers
+
+    func testMergeConsecutiveSpeakers() {
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello there.", speaker: "Alice"),
+            TimestampedSegment(start: 5, end: 10, text: "How are you?", speaker: "Alice"),
+            TimestampedSegment(start: 10, end: 15, text: "I'm fine.", speaker: "Bob"),
+            TimestampedSegment(start: 15, end: 20, text: "Thanks.", speaker: "Bob"),
+            TimestampedSegment(start: 20, end: 25, text: "Great!", speaker: "Alice"),
+        ]
+
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+
+        XCTAssertEqual(merged.count, 3)
+        XCTAssertEqual(merged[0].speaker, "Alice")
+        XCTAssertEqual(merged[0].text, "Hello there. How are you?")
+        XCTAssertEqual(merged[0].start, 0)
+        XCTAssertEqual(merged[0].end, 10)
+        XCTAssertEqual(merged[1].speaker, "Bob")
+        XCTAssertEqual(merged[1].text, "I'm fine. Thanks.")
+        XCTAssertEqual(merged[1].start, 10)
+        XCTAssertEqual(merged[1].end, 20)
+        XCTAssertEqual(merged[2].speaker, "Alice")
+        XCTAssertEqual(merged[2].text, "Great!")
+        XCTAssertEqual(merged[2].start, 20)
+        XCTAssertEqual(merged[2].end, 25)
+    }
+
+    func testMergeConsecutiveSpeakers_empty() {
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers([])
+        XCTAssertTrue(merged.isEmpty)
+    }
+
+    func testMergeConsecutiveSpeakers_singleSegment() {
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].text, "Hello")
+    }
+
+    func testMergeConsecutiveSpeakers_allSameSpeaker() {
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "One.", speaker: "Alice"),
+            TimestampedSegment(start: 5, end: 10, text: "Two.", speaker: "Alice"),
+            TimestampedSegment(start: 10, end: 15, text: "Three.", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].text, "One. Two. Three.")
+        XCTAssertEqual(merged[0].start, 0)
+        XCTAssertEqual(merged[0].end, 15)
+    }
+
+    func testMergeConsecutiveSpeakers_allDifferent() {
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "A", speaker: "Alice"),
+            TimestampedSegment(start: 5, end: 10, text: "B", speaker: "Bob"),
+            TimestampedSegment(start: 10, end: 15, text: "C", speaker: "Carol"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 3)
+    }
+
     func testDiarizationErrorDescription() {
         let error: DiarizationError = .notAvailable
         XCTAssertEqual(error.errorDescription, "Diarization not available")

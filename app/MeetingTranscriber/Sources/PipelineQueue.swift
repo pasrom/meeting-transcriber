@@ -188,6 +188,12 @@ class PipelineQueue {
         }
     }
 
+    func addWarning(id: UUID, _ message: String) {
+        guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[index].warnings.append(message)
+        writeSnapshot()
+    }
+
     /// Reset the elapsed timer for a new pipeline stage.
     private func startElapsedTimer() {
         elapsedTimer?.cancel()
@@ -436,6 +442,7 @@ class PipelineQueue {
                                 continue diarizationLoop
 
                             case .skipped:
+                                addWarning(id: jobID, "Speaker naming skipped")
                                 break diarizationLoop
                             }
                         }
@@ -467,7 +474,8 @@ class PipelineQueue {
                                 appDiarization: namedAppDiar,
                                 micDiarization: namedMicDiar,
                             )
-                            finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
+                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
+                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
                         } else if let currentDiarization = diarization {
                             // Single-source: standard assignment
                             let namedDiarization = DiarizationResult(
@@ -487,12 +495,14 @@ class PipelineQueue {
                                 transcript: segments,
                                 diarization: namedDiarization,
                             )
-                            finalTranscript = labeled.map(\.formattedLine).joined(separator: "\n")
+                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
+                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
                         }
                         let segCount = diarization?.segments.count ?? 0
                         logger.info("Diarization complete: \(segCount) segments")
                     } catch {
                         logger.warning("Diarization failed, using undiarized transcript: \(error.localizedDescription)")
+                        addWarning(id: jobID, "Diarization failed — speakers not identified")
                         // Continue with original transcript
                     }
                 } else {
@@ -534,6 +544,12 @@ class PipelineQueue {
             }
             stopElapsedTimer()
             updateJobState(id: jobID, to: .done)
+            if let job = jobs.first(where: { $0.id == jobID }), !job.warnings.isEmpty {
+                NotificationManager.shared.notify(
+                    title: "Protocol Ready (with warnings)",
+                    body: job.warnings.joined(separator: "; "),
+                )
+            }
         } catch is CancellationError {
             stopElapsedTimer()
             logger.info("Job \(jobID) cancelled")
