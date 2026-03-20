@@ -12,12 +12,11 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
 
 ```
 Meeting Window Detected (CGWindowListCopyWindowInfo)
-  → DualSourceRecorder (AudioTapLib + mic)
-    → AudioMixer (resample 48kHz → 16kHz)
-      → WhisperKit (CoreML/ANE transcription)
-        → [FluidDiarizer (CoreML/ANE speaker diarization)]
-          → ProtocolGenerator (Claude CLI)
-            → Markdown protocol + transcript
+  → DualSourceRecorder (AudioTapLib + mic, records at 16kHz)
+    → [WhisperKit | Parakeet] (CoreML/ANE transcription)
+      → [FluidDiarizer (CoreML/ANE speaker diarization)]
+        → ProtocolGenerator (Claude CLI / OpenAI-compatible API)
+          → Markdown protocol + transcript
 ```
 
 ---
@@ -43,7 +42,9 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `MeetingDetector.swift` | Window polling, pattern matching, confirmation counting, cooldown |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
-| `WhisperKitEngine.swift` | Native WhisperKit transcription (single/dual-source/segments) |
+| `TranscribingEngine.swift` | `TranscribingEngine` protocol + `mergeDualSourceSegments` default impl |
+| `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
+| `ParakeetEngine.swift` | NVIDIA Parakeet TDT v3 via FluidAudio (25 EU languages, ~50 MB, ~10× faster) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
@@ -106,33 +107,45 @@ AudioTapLib (CATapDescription)
 
 ```
 Raw float32 stereo → mono (channel average)
-  → Save app.wav (at actual hardware rate)
-  → Resample to 48kHz if hardware rate differs
-  → Load mic.wav
+  → Resample to 16kHz
+  → Save app.wav (16kHz mono)
+  → Load mic.wav (already 16kHz from MicCaptureHandler)
   → Apply mute mask (zero mic during muted periods)
   → Echo suppression (RMS-based gate, 20ms windows)
   → Delay alignment (prepend zeros by MIC_DELAY)
   → Mix (average tracks)
-  → Save mix.wav (48kHz mono)
+  → Save mix.wav (16kHz mono)
 ```
 
-### Resampling for WhisperKit
-
-```
-48kHz WAV → AudioMixer.resample(from: 48000, to: 16000) → 16kHz WAV
-```
-
-WhisperKit requires 16kHz mono input. Both app and mic tracks are resampled before transcription.
+All recordings are normalized to 16kHz at capture time — no resampling needed in the pipeline.
 
 ---
 
 ## Transcription
 
+### Engine Selection
+
+`TranscribingEngine` protocol abstracts ASR backends. `AppSettings.transcriptionEngine` selects the active engine.
+
+| | WhisperKit | Parakeet TDT v3 |
+|---|---|---|
+| **Languages** | 99+ | 25 European |
+| **Model size** | ~800 MB–1.5 GB | ~50 MB |
+| **Speed (M4 Pro)** | ~10–20× RTF | ~110× RTF |
+| **Language selection** | Manual or auto-detect | Auto-detect only |
+| **Hallucinations** | Can occur | Minimal |
+
 ### WhisperKit Engine
 
 - **Model:** `openai_whisper-large-v3-v20240930_turbo` (CoreML/ANE)
-- **Pre-loading:** Model downloaded and loaded at app launch
+- **Pre-loading:** Model downloaded and loaded at app launch (when selected)
 - **Lazy fallback:** `ensureModel()` loads on-demand if not ready
+
+### Parakeet Engine
+
+- **Model:** NVIDIA Parakeet TDT v3 via FluidAudio (CoreML/ANE)
+- **Pre-loading:** Model downloaded and loaded at app launch (when selected)
+- **Token grouping:** `groupTokensIntoSegments` groups per-token timings into sentence-level segments (split on `. ! ?` or 20 tokens)
 
 ### Modes
 
@@ -140,8 +153,9 @@ WhisperKit requires 16kHz mono input. Both app and mic tracks are resampled befo
 2. **Dual source:** `transcribeSegments(appAudio:)` + `transcribeSegments(micAudio:)` → `mergeDualSourceSegments(appSegments:micSegments:)` → `[TimestampedSegment]` merged by timestamp
    - App segments labeled "Remote"
    - Mic segments labeled with user's mic name (default "Me")
+   - `mergeDualSourceSegments` is a protocol extension on `TranscribingEngine` — shared by both engines
 
-### Post-processing
+### Post-processing (WhisperKit only)
 
 - **Token stripping:** Regex `<\|[^|]*\|>` removes `<|startoftranscript|>`, `<|en|>`, etc.
 - **Hallucination filtering:** Skip consecutive identical segments
@@ -279,7 +293,7 @@ AppSettings (UserDefaults)
 3. **AudioTapLib as SPM library** — Direct in-process audio capture via CATapDescription (App Store compatible)
 4. **Dual-source recording** — Enables speaker separation without diarization (app=Remote, mic=Me)
 5. **Graceful degradation** — Diarization optional, mute detection optional, continues on partial failure
-6. **Pre-loaded model** — WhisperKit loaded at app launch, prevents delay on first meeting
+6. **Pre-loaded model** — Selected engine (WhisperKit or Parakeet) loaded at app launch, prevents delay on first meeting
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference

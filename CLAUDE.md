@@ -20,7 +20,9 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     NotificationManager.swift # macOS notifications
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
-    WhisperKitEngine.swift # Native WhisperKit transcription (CoreML/ANE)
+    TranscribingEngine.swift # TranscribingEngine protocol + mergeDualSourceSegments default impl
+    WhisperKitEngine.swift # WhisperKit transcription engine (CoreML/ANE, 99+ languages)
+    ParakeetEngine.swift   # NVIDIA Parakeet TDT v3 engine via FluidAudio (CoreML/ANE, 25 EU languages)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
@@ -87,8 +89,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -156,13 +158,19 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 ## Architecture Notes
 
+**Transcription engines:**
+- `TranscribingEngine` protocol abstracts ASR backends. Two implementations: `WhisperKitEngine` (99+ languages, ~1 GB model) and `ParakeetEngine` (25 EU languages, ~50 MB model, ~10× faster).
+- `AppSettings.transcriptionEngine` enum (`.whisperKit` / `.parakeet`) selects the engine. Settings UI shows engine picker; WhisperKit-specific options (model, language) hidden when Parakeet is selected.
+- Parakeet does NOT support explicit language selection — it auto-detects from audio. Only WhisperKit has a language parameter.
+- `AppState.activeTranscriptionEngine` returns the selected engine, used by `PipelineQueue`.
+
 **Concurrency:**
 - `WatchLoop` is `@MainActor`. Tests for this class must also be `@MainActor`.
-- `WhisperKitEngine.loadModel()` deduplicates concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
+- `WhisperKitEngine.loadModel()` and `ParakeetEngine.loadModel()` both deduplicate concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
 - `ProtocolGenerator` uses async process I/O: `terminationHandler` + `withCheckedContinuation` instead of `process.waitUntilExit()`. stdout/stderr are read in detached `Task`s.
 
 **View architecture:**
-- `SettingsView` receives `WhisperKitEngine` as a stored property (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:)`.
+- `SettingsView` receives `WhisperKitEngine` and `ParakeetEngine` as stored properties (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:parakeetEngine:)`.
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).
@@ -213,7 +221,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **OpenAI API** | Yes | Yes (only option) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | 497 | 483 (14 CLI tests excluded) |
+| **Tests** | 597 | ~583 (14 CLI tests excluded) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
