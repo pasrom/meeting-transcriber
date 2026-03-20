@@ -3,6 +3,11 @@ import XCTest
 
 @MainActor
 final class TimestampedSegmentTests: XCTestCase {
+    /// Merge two segment arrays sorted by start timestamp (replaces removed WhisperKitEngine.mergeSegments).
+    private static func mergeSegments(_ a: [TimestampedSegment], _ b: [TimestampedSegment]) -> [TimestampedSegment] {
+        (a + b).sorted { $0.start < $1.start }
+    }
+
     // MARK: - Timestamp Formatting
 
     func testFormattedTimestampShort() {
@@ -56,7 +61,7 @@ final class TimestampedSegmentTests: XCTestCase {
             TimestampedSegment(start: 15, end: 20, text: "Fourth"),
         ]
 
-        let merged = WhisperKitEngine.mergeSegments(a, b)
+        let merged = Self.mergeSegments(a, b)
         XCTAssertEqual(merged.count, 4)
         XCTAssertEqual(merged[0].text, "First")
         XCTAssertEqual(merged[1].text, "Second")
@@ -66,19 +71,19 @@ final class TimestampedSegmentTests: XCTestCase {
 
     func testMergeSegmentsEmptyA() {
         let b = [TimestampedSegment(start: 0, end: 5, text: "Only")]
-        let merged = WhisperKitEngine.mergeSegments([], b)
+        let merged = Self.mergeSegments([], b)
         XCTAssertEqual(merged.count, 1)
         XCTAssertEqual(merged[0].text, "Only")
     }
 
     func testMergeSegmentsEmptyB() {
         let a = [TimestampedSegment(start: 0, end: 5, text: "Only")]
-        let merged = WhisperKitEngine.mergeSegments(a, [])
+        let merged = Self.mergeSegments(a, [])
         XCTAssertEqual(merged.count, 1)
     }
 
     func testMergeSegmentsBothEmpty() {
-        let merged = WhisperKitEngine.mergeSegments([], [])
+        let merged = Self.mergeSegments([], [])
         XCTAssertTrue(merged.isEmpty)
     }
 
@@ -89,7 +94,7 @@ final class TimestampedSegmentTests: XCTestCase {
         var b = [TimestampedSegment(start: 2, end: 7, text: "Mic")]
         b[0].speaker = "Me"
 
-        let merged = WhisperKitEngine.mergeSegments(a, b)
+        let merged = Self.mergeSegments(a, b)
         XCTAssertEqual(merged[0].speaker, "Remote")
         XCTAssertEqual(merged[1].speaker, "Me")
     }
@@ -110,7 +115,7 @@ final class TimestampedSegmentTests: XCTestCase {
             micSegs[i].speaker = "Me"
         }
 
-        let merged = WhisperKitEngine.mergeSegments(appSegs, micSegs)
+        let merged = (appSegs + micSegs).sorted { $0.start < $1.start }
         XCTAssertEqual(merged.map(\.speaker), ["Remote", "Me", "Remote", "Me"])
         XCTAssertEqual(merged.map(\.text), ["A1", "M1", "A2", "M2"])
     }
@@ -123,8 +128,8 @@ final class TimestampedSegmentTests: XCTestCase {
         var seg2 = TimestampedSegment(start: 5, end: 10, text: "Hi there")
         seg2.speaker = "Me"
 
-        let merged = WhisperKitEngine.mergeSegments([seg1], [seg2])
-        let output = merged.map(\.formattedLine).joined(separator: "\n")
+        let merged = ([seg1] + [seg2]).sorted { $0.start < $1.start }
+        let output = merged.map { $0.formattedLine }.joined(separator: "\n")
         XCTAssertEqual(output, "[00:00] Remote: Hello\n[00:05] Me: Hi there")
     }
 
@@ -161,7 +166,7 @@ final class TimestampedSegmentTests: XCTestCase {
             mic[i].speaker = micLabel
         }
 
-        return WhisperKitEngine.mergeSegments(app, mic)
+        return (app + mic).sorted { $0.start < $1.start }
     }
 
     func testDualSourceSegmentsLabelsRemoteAndMic() {

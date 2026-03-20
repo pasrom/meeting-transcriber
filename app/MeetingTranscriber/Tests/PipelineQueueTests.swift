@@ -385,7 +385,7 @@ final class PipelineQueueTests: XCTestCase {
 
     private func makeProcessingQueue() -> PipelineQueue {
         PipelineQueue(
-            whisperKit: WhisperKitEngine(),
+            engine: WhisperKitEngine(),
             diarizationFactory: { MockDiarization() },
             protocolGeneratorFactory: { MockProtocolGen() },
             outputDir: tmpDir,

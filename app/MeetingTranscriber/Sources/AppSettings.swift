@@ -2,6 +2,18 @@ import SwiftUI
 
 private let defaults = UserDefaults.standard
 
+enum TranscriptionEngineSetting: String, CaseIterable {
+    case whisperKit
+    case parakeet
+
+    var label: String {
+        switch self {
+        case .whisperKit: "WhisperKit (Whisper)"
+        case .parakeet: "Parakeet TDT v3 (NVIDIA)"
+        }
+    }
+}
+
 enum ProtocolProvider: String, CaseIterable {
     #if !APPSTORE
         case claudeCLI
@@ -72,6 +84,16 @@ final class AppSettings {
     }
 
     // MARK: - Transcription
+
+    var transcriptionEngine: TranscriptionEngineSetting = {
+        if let raw = defaults.string(forKey: "transcriptionEngine"),
+           let engine = TranscriptionEngineSetting(rawValue: raw) {
+            return engine
+        }
+        return .whisperKit
+    }() {
+        didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
+    }
 
     var whisperKitModel: String = defaults.object(forKey: "whisperKitModel") as? String
         ?? "openai_whisper-large-v3-v20240930_turbo" {

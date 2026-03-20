@@ -25,6 +25,7 @@ final class AppState {
 
     let settings: AppSettings
     let whisperKit: WhisperKitEngine
+    let parakeetEngine: ParakeetEngine
     private let notifier: any AppNotifying
 
     // MARK: - State
@@ -38,14 +39,21 @@ final class AppState {
     init(
         settings: AppSettings = AppSettings(),
         whisperKit: WhisperKitEngine? = nil,
+        parakeetEngine: ParakeetEngine? = nil,
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
     ) {
         self.settings = settings
         self.whisperKit = whisperKit ?? WhisperKitEngine()
+        self.parakeetEngine = parakeetEngine ?? ParakeetEngine()
         self.notifier = notifier
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
+    }
+
+    /// The active transcription engine based on the current settings.
+    var activeTranscriptionEngine: any TranscribingEngine {
+        settings.transcriptionEngine == .parakeet ? parakeetEngine : whisperKit
     }
 
     // MARK: - Derived properties
@@ -218,7 +226,7 @@ final class AppState {
     // MARK: - Pipeline
 
     func ensurePipelineQueue() {
-        guard pipelineQueue.whisperKit == nil else { return }
+        guard pipelineQueue.engine == nil else { return }
         whisperKit.language = settings.whisperLanguageOrNil
         pipelineQueue = makePipelineQueue()
         configurePipelineCallbacks()
@@ -226,7 +234,7 @@ final class AppState {
 
     func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
-            whisperKit: whisperKit,
+            engine: activeTranscriptionEngine,
             diarizationFactory: { FluidDiarizer() },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,

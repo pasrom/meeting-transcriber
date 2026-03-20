@@ -34,7 +34,7 @@ extension TimestampedSegment {
 
 @MainActor
 @Observable
-final class WhisperKitEngine {
+final class WhisperKitEngine: TranscribingEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
     var language: String?
     private(set) var modelState: ModelState = .unloaded
@@ -160,46 +160,6 @@ final class WhisperKitEngine {
         guard let audioFile = try? AVAudioFile(forReading: audioPath) else { return 1 }
         let duration = Double(audioFile.length) / audioFile.fileFormat.sampleRate
         return Int(ceil(duration / 30.0))
-    }
-
-    /// Label and merge pre-transcribed app/mic segments by timestamp.
-    ///
-    /// Used by PipelineQueue when transcription is done track-by-track for progress tracking.
-    func mergeDualSourceSegments(
-        appSegments: [TimestampedSegment],
-        micSegments: [TimestampedSegment],
-        micDelay: TimeInterval = 0,
-        micLabel: String = "Me",
-    ) -> [TimestampedSegment] {
-        var app = appSegments
-        var mic = micSegments
-
-        if micDelay != 0 {
-            mic = mic.map { seg in
-                TimestampedSegment(
-                    start: seg.start + micDelay,
-                    end: seg.end + micDelay,
-                    text: seg.text,
-                    speaker: seg.speaker,
-                )
-            }
-        }
-
-        for i in app.indices {
-            app[i].speaker = "Remote"
-        }
-        for i in mic.indices {
-            mic[i].speaker = micLabel
-        }
-
-        return Self.mergeSegments(app, mic)
-    }
-
-    /// Merge two segment arrays sorted by start timestamp.
-    static func mergeSegments(_ a: [TimestampedSegment], _ b: [TimestampedSegment]) -> [TimestampedSegment] {
-        var result = a + b
-        result.sort { $0.start < $1.start }
-        return result
     }
 
     /// Remove Whisper special tokens like <|startoftranscript|>, <|en|>, <|0.00|>, etc.

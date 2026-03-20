@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import ApplicationServices
 import AVFoundation
 import SwiftUI
@@ -20,6 +21,7 @@ struct SettingsView: View {
     @State private var showResetPromptConfirmation = false
     @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
     var whisperKitEngine: WhisperKitEngine
+    var parakeetEngine: ParakeetEngine
     var updateChecker: UpdateChecker?
 
     enum ConnectionTestResult {
@@ -108,56 +110,29 @@ struct SettingsView: View {
                 }
             }
 
-            // swiftlint:disable:next closure_body_length
             Section("Transcription") {
-                Picker("Model", selection: $settings.whisperKitModel) {
-                    ForEach(whisperKitModels, id: \.variant) { model in
-                        Text(model.label).tag(model.variant)
+                Picker("Engine", selection: $settings.transcriptionEngine) {
+                    ForEach(TranscriptionEngineSetting.allCases, id: \.self) { engine in
+                        Text(engine.label).tag(engine)
                     }
                 }
 
-                Picker("Language", selection: $settings.whisperLanguage) {
-                    ForEach(whisperLanguages, id: \.code) { lang in
-                        Text(lang.label).tag(lang.code)
+                if settings.transcriptionEngine == .whisperKit {
+                    Picker("Model", selection: $settings.whisperKitModel) {
+                        ForEach(whisperKitModels, id: \.variant) { model in
+                            Text(model.label).tag(model.variant)
+                        }
+                    }
+
+                    Picker("Language", selection: $settings.whisperLanguage) {
+                        ForEach(whisperLanguages, id: \.code) { lang in
+                            Text(lang.label).tag(lang.code)
+                        }
                     }
                 }
 
-                // Model status
-                switch whisperKitEngine.modelState {
-                case .downloading:
-                    ProgressView(value: whisperKitEngine.downloadProgress)
-                        .progressViewStyle(.linear)
-                    Text("Downloading model... \(Int(whisperKitEngine.downloadProgress * 100))%")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                case .loading:
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text("Loading model...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                case .loaded:
-                    Label("Model ready", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
-
-                case .unloaded, .unloading:
-                    Button("Load Model") {
-                        whisperKitEngine.modelVariant = settings.whisperKitModel
-                        Task { await whisperKitEngine.loadModel() }
-                    }
-
-                case .prewarming, .prewarmed, .downloaded:
-                    HStack {
-                        ProgressView().controlSize(.small)
-                        Text("Preparing model...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                // Model status for active engine
+                engineStatusView
 
                 Toggle("Speaker Diarization", isOn: $settings.diarize)
 
@@ -447,6 +422,53 @@ struct SettingsView: View {
                 claudeBinaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
             #endif
             refreshPermissions()
+        }
+    }
+
+    /// Active engine for status display.
+    private var activeEngine: any TranscribingEngine {
+        settings.transcriptionEngine == .parakeet ? parakeetEngine : whisperKitEngine
+    }
+
+    @ViewBuilder
+    private var engineStatusView: some View { // swiftlint:disable:this attributes
+        let engine = activeEngine
+        switch engine.modelState {
+        case .downloading:
+            ProgressView(value: engine.downloadProgress)
+                .progressViewStyle(.linear)
+            Text("Downloading model... \(Int(engine.downloadProgress * 100))%")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+        case .loading:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Loading model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .loaded:
+            Label("Model ready", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.caption)
+
+        case .unloaded, .unloading:
+            Button("Load Model") {
+                if settings.transcriptionEngine == .whisperKit {
+                    whisperKitEngine.modelVariant = settings.whisperKitModel
+                }
+                Task { await engine.loadModel() }
+            }
+
+        case .prewarming, .prewarmed, .downloaded:
+            HStack {
+                ProgressView().controlSize(.small)
+                Text("Preparing model...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 

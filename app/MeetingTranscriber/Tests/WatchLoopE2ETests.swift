@@ -69,14 +69,14 @@ final class WatchLoopE2ETests: XCTestCase {
 
     /// Create a PipelineQueue with mocks for E2E testing.
     private func makeQueue(
-        whisperKit: WhisperKitEngine? = nil,
+        engine: (any TranscribingEngine)? = nil,
         diarization: MockDiarization = MockDiarization(),
         protocolGen: MockProtocolGen = MockProtocolGen(),
         diarizeEnabled: Bool = false,
         micLabel: String = "Roman",
     ) -> PipelineQueue {
         PipelineQueue(
-            whisperKit: whisperKit ?? WhisperKitEngine(),
+            engine: engine ?? WhisperKitEngine(),
             diarizationFactory: { diarization },
             protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,
@@ -130,7 +130,7 @@ final class WatchLoopE2ETests: XCTestCase {
         engine.language = "de"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            engine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
         )
@@ -193,7 +193,7 @@ final class WatchLoopE2ETests: XCTestCase {
         engine.language = "de"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            engine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
             micLabel: "Roman",
@@ -239,7 +239,7 @@ final class WatchLoopE2ETests: XCTestCase {
 
         let mockProtocol = MockProtocolGen()
         let queue = makeQueue(
-            whisperKit: engine,
+            engine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
         )
@@ -285,7 +285,7 @@ final class WatchLoopE2ETests: XCTestCase {
         engine.language = "de"
 
         let queue = makeQueue(
-            whisperKit: engine,
+            engine: engine,
             diarization: mockDiarize,
             protocolGen: mockProtocol,
             diarizeEnabled: true, // Enabled but not available
@@ -408,7 +408,7 @@ final class WatchLoopE2ETests: XCTestCase {
 
         // swiftlint:disable trailing_closure
         let queue = PipelineQueue(
-            whisperKit: engine,
+            engine: engine,
             diarizationFactory: { FluidDiarizer() },
             protocolGeneratorFactory: { mockProtocol },
             outputDir: tmpDir,

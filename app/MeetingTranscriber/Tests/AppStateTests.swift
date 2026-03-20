@@ -330,11 +330,11 @@ final class AppStateTests: XCTestCase {
 
     func testEnsurePipelineQueueReplacesBareQueue() {
         let (state, _) = makeState()
-        XCTAssertNil(state.pipelineQueue.whisperKit, "Precondition: fresh queue has no whisperKit")
+        XCTAssertNil(state.pipelineQueue.engine, "Precondition: fresh queue has no engine")
 
         state.ensurePipelineQueue()
 
-        XCTAssertNotNil(state.pipelineQueue.whisperKit)
+        XCTAssertNotNil(state.pipelineQueue.engine)
     }
 
     func testEnsurePipelineQueueIdempotent() {
@@ -349,9 +349,9 @@ final class AppStateTests: XCTestCase {
 
     // MARK: - makePipelineQueue
 
-    func testMakePipelineQueueHasWhisperKit() {
+    func testMakePipelineQueueHasEngine() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().whisperKit)
+        XCTAssertNotNil(state.makePipelineQueue().engine)
     }
 
     func testMakePipelineQueueHasDiarizationFactory() {

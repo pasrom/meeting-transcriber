@@ -53,7 +53,7 @@ struct MeetingTranscriberApp: App {
                 onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
                 onQuit: quit,
             )
-        } label: {
+        } label: { // swiftlint:disable:this closure_body_length
             Label {
                 Text(appState.currentStateLabel)
             } icon: {
@@ -76,9 +76,15 @@ struct MeetingTranscriberApp: App {
                 bringWindowToFront(id: "speaker-naming")
             }
             .task {
-                appState.whisperKit.modelVariant = appState.settings.whisperKitModel
-                appState.whisperKit.language = appState.settings.whisperLanguageOrNil
-                await appState.whisperKit.loadModel()
+                switch appState.settings.transcriptionEngine {
+                case .whisperKit:
+                    appState.whisperKit.modelVariant = appState.settings.whisperKitModel
+                    appState.whisperKit.language = appState.settings.whisperLanguageOrNil
+                    await appState.whisperKit.loadModel()
+
+                case .parakeet:
+                    await appState.parakeetEngine.loadModel()
+                }
             }
             .task {
                 appState.updateChecker.startPeriodicChecks(settings: appState.settings)
@@ -102,6 +108,7 @@ struct MeetingTranscriberApp: App {
             SettingsView(
                 settings: appState.settings,
                 whisperKitEngine: appState.whisperKit,
+                parakeetEngine: appState.parakeetEngine,
                 updateChecker: appState.updateChecker,
             )
         }
