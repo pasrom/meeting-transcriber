@@ -2,6 +2,7 @@ import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import Foundation
+import os
 
 enum Permissions {
     /// Check if Screen Recording permission is granted.
@@ -25,12 +26,16 @@ enum Permissions {
         return false
     }
 
-    private static var hasPromptedAccessibility = false
+    private static let accessibilityPromptLock = OSAllocatedUnfairLock(initialState: false)
     // swiftlint:disable:next unused_declaration
     static func ensureAccessibilityAccess() -> Bool {
         if AXIsProcessTrusted() { return true }
-        guard !hasPromptedAccessibility else { return false }
-        hasPromptedAccessibility = true
+        let alreadyPrompted = accessibilityPromptLock.withLock { prompted -> Bool in
+            if prompted { return true }
+            prompted = true
+            return false
+        }
+        guard !alreadyPrompted else { return false }
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
     }
