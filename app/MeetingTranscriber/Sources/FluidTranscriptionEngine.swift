@@ -73,7 +73,7 @@ final class FluidTranscriptionEngine {
     private var activeVocabularyTerms: [String] = []
 
     /// Derive the FluidAudio model version from the variant string.
-    private var modelVersion: AsrModels.ModelVersion {
+    private var modelVersion: AsrModelVersion {
         modelVariant.contains("-v3-") ? .v3 : .v2
     }
 
