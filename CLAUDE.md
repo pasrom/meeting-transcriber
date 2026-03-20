@@ -7,9 +7,10 @@ VERSION                    # App version (read by build scripts)
 app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
   Package.swift            # SPM manifest (ViewInspector test dep)
   Sources/
-    MeetingTranscriberApp.swift  # @main, menu bar scene
+    MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
+    AppState.swift         # @Observable @MainActor ViewModel (business state, badge logic, pipeline wiring)
     MenuBarView.swift      # Menu bar dropdown UI
-    MenuBarIcon.swift      # Animated waveform menu bar icon (reflects pipeline state)
+    MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
     SettingsView.swift     # Settings window
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
     AppPickerView.swift    # App picker for manual recording
