@@ -65,8 +65,9 @@ struct GitHubReleaseProvider: UpdateProviding {
     }
 
     private func fetchJSON<T: Decodable>(path: String) async throws -> T {
-        // swiftlint:disable:next force_unwrapping
-        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/\(path)")!
+        guard let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/\(path)") else {
+            throw UpdateCheckerError.networkError("Invalid URL for path: \(path)")
+        }
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw UpdateCheckerError.networkError(
@@ -78,12 +79,20 @@ struct GitHubReleaseProvider: UpdateProviding {
 
     private func mapRelease(_ release: GitHubRelease) -> ReleaseInfo {
         let dmgAsset = release.assets.first { $0.name.hasSuffix(".dmg") }
+        guard let htmlURL = URL(string: release.htmlURL) else {
+            return ReleaseInfo(
+                tagName: release.tagName,
+                name: release.name ?? release.tagName,
+                prerelease: release.prerelease,
+                htmlURL: URL(string: "https://github.com/\(owner)/\(repo)/releases")!, // swiftlint:disable:this force_unwrapping
+                dmgURL: nil,
+            )
+        }
         return ReleaseInfo(
             tagName: release.tagName,
             name: release.name ?? release.tagName,
             prerelease: release.prerelease,
-            // swiftlint:disable:next force_unwrapping
-            htmlURL: URL(string: release.htmlURL)!,
+            htmlURL: htmlURL,
             dmgURL: dmgAsset.flatMap { URL(string: $0.browserDownloadURL) },
         )
     }

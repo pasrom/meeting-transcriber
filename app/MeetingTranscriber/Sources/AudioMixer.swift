@@ -6,6 +6,9 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMi
 
 /// Audio mixing, echo suppression, mute masking, and resampling utilities.
 enum AudioMixer {
+    /// Standard target sample rate for transcription and diarization (16kHz mono).
+    static let transcriptionSampleRate = 16000
+
     // MARK: - Mix
 
     /// Mix app and mic audio tracks into a single mono WAV.
@@ -18,7 +21,7 @@ enum AudioMixer {
         outputPath: URL,
         micDelay: TimeInterval = 0,
         sampleRate: Int = 48000,
-        targetRate: Int = 16000,
+        targetRate: Int = transcriptionSampleRate,
     ) throws {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
@@ -262,7 +265,7 @@ enum AudioMixer {
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsNonInterleaved: false,
             AVNumberOfChannelsKey: 1,
-            AVSampleRateKey: 16000,
+            AVSampleRateKey: transcriptionSampleRate,
         ]
         let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
         reader.add(output)
@@ -276,7 +279,7 @@ enum AudioMixer {
         // Pre-allocate based on asset duration to avoid repeated array reallocations
         var samples = [Float]()
         let duration = try await asset.load(.duration)
-        let estimatedSamples = Int(CMTimeGetSeconds(duration) * 16000)
+        let estimatedSamples = Int(CMTimeGetSeconds(duration) * Double(transcriptionSampleRate))
         if estimatedSamples > 0 {
             samples.reserveCapacity(estimatedSamples)
         }
@@ -304,11 +307,11 @@ enum AudioMixer {
         }
 
         logger.info("AVAsset audio extracted: \(samples.count) samples at 16kHz")
-        return (samples, 16000)
+        return (samples, transcriptionSampleRate)
     }
 
     /// Load an audio or video file, resample to a target rate, and save to a new WAV file.
-    static func resampleFile(from source: URL, to destination: URL, targetRate: Int = 16000) async throws {
+    static func resampleFile(from source: URL, to destination: URL, targetRate: Int = transcriptionSampleRate) async throws {
         let (samples, sourceRate) = try await loadAudioAsFloat32(url: source)
         let resampled = resample(samples, from: sourceRate, to: targetRate)
         try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)

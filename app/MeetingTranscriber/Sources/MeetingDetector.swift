@@ -15,7 +15,8 @@ class MeetingDetector: MeetingDetecting {
     private let confirmationCount: Int
     private var consecutiveHits: [String: Int] = [:]
     private var cooldownUntil: [String: Date] = [:]
-    private let cooldownDuration: TimeInterval = 5 // brief cooldown to avoid re-detecting the same meeting
+    /// Brief cooldown after a meeting ends to avoid re-detecting the same meeting.
+    private static let cooldownDuration: TimeInterval = 5
 
     /// Pre-compiled regex for each pattern to avoid re-compilation on every poll.
     private let compiledMeetingPatterns: [String: [NSRegularExpression]]
@@ -117,7 +118,7 @@ class MeetingDetector: MeetingDetecting {
     func reset(appName: String? = nil) {
         consecutiveHits.removeAll()
         if let appName {
-            cooldownUntil[appName] = Date().addingTimeInterval(cooldownDuration)
+            cooldownUntil[appName] = Date().addingTimeInterval(Self.cooldownDuration)
         }
     }
 

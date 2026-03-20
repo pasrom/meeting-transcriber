@@ -11,6 +11,9 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MicReco
 /// Outputs 48kHz mono Float32 samples to a WAV file.
 @Observable
 class MicRecorder {
+    /// Buffer size for AVAudioEngine tap (frames per callback).
+    private static let audioTapBufferSize: AVAudioFrameCount = 4096
+
     private var engine: AVAudioEngine?
     private var outputFile: AVAudioFile?
     private(set) var isRecording = false
@@ -60,7 +63,7 @@ class MicRecorder {
             channels: 1,
         )
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: Self.audioTapBufferSize, format: tapFormat) { [weak self] buffer, _ in
             guard let self, self.isRecording else { return }
             do {
                 try file.write(from: buffer)
