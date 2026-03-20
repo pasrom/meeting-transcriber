@@ -70,11 +70,23 @@ Audio Capture Detail:
 ### 3.1 MeetingTranscriberApp
 
 **File:** `Sources/MeetingTranscriberApp.swift`
-**Responsibility:** Application entry point. Owns the SwiftUI scene graph: a `MenuBarExtra` for the dropdown UI, a `Window` for speaker naming, and a `Window` for settings. Wires together `WatchLoop`, `PipelineQueue`, `WhisperKitEngine`, and `AppSettings`. Handles auto-watch on launch (via `--auto-watch` CLI flag or `autoWatch` UserDefaults key).
+**Responsibility:** Thin UI shell. Owns the SwiftUI scene graph: a `MenuBarExtra` for the dropdown UI, a `Window` for speaker naming, and a `Window` for settings. All business logic is delegated to `AppState`. Handles `NSOpenPanel`, `NSWorkspace`, `NSApp` — AppKit operations that must stay in the UI layer. Handles auto-watch on launch (via `--auto-watch` CLI flag or `autoWatch` UserDefaults key).
 
 **Key types:** `MeetingTranscriberApp` (struct, conforms to `App`)
-**Dependencies:** `WatchLoop`, `PipelineQueue`, `WhisperKitEngine`, `AppSettings`, `NotificationManager`, `MenuBarView`, `SettingsView`, `SpeakerNamingView`
-**Concurrency:** The app struct itself is on `@MainActor` implicitly (SwiftUI `App`). WhisperKit model loading is kicked off in a `.task` modifier on the menu bar label. Watch loop toggling uses `Task { }` for async permission checks before constructing the loop on `MainActor.run`.
+**Dependencies:** `AppState`, `MenuBarView`, `SettingsView`, `SpeakerNamingView`, `NotificationManager`
+**Concurrency:** Implicitly `@MainActor` (SwiftUI `App`). WhisperKit model loading in a `.task` modifier, update checker start in a `.task` modifier.
+
+### 3.1.1 AppState
+
+**File:** `Sources/AppState.swift`
+**Responsibility:** `@Observable @MainActor` ViewModel owning all business state: `watchLoop`, `pipelineQueue`, `updateChecker`, `settings`, `whisperKit`. Provides derived computed properties (`currentBadge`, `isWatching`, `currentStatus`, `currentStateLabel`) and all business logic methods (`toggleWatching`, `startManualRecording`, `enqueueFiles`, `makePipelineQueue`, etc.). Has no AppKit/SwiftUI imports — importable by future CLI targets.
+
+**`BadgeKind.compute(...)`** (extension on `BadgeKind` in `MenuBarIcon.swift`): Pure static function that maps plain value inputs (watchLoopActive, watchLoopState, transcriberState, activeJobState, updateAvailable) to a `BadgeKind`. `AppState.currentBadge` calls it. Tests call it directly without driving WatchLoop into states.
+
+**`AppNotifying` protocol:** Abstracts notification delivery to keep AppKit out of AppState.
+- `NotificationManager` — real implementation (AppKit, menu bar app)
+- `SilentNotifier` — no-op struct (default, CLI targets)
+- `RecordingNotifier` — test stub (records calls for assertions)
 
 ### 3.2 WatchLoop
 
@@ -502,9 +514,9 @@ final class WatchLoopTests: XCTestCase { ... }
 
 ```
 MeetingTranscriberApp
-  └─ .task { whisperKit.loadModel() }         // Model preloading
-  └─ toggleWatching()
-       └─ Task { ... MainActor.run { loop.start() } }
+  └─ .task { appState.whisperKit.loadModel() }  // Model preloading
+  └─ AppState.toggleWatching()
+       └─ Task { @MainActor ... loop.start() }
             └─ WatchLoop.watchTask              // Polling loop
                  └─ polls detector every N seconds
                  └─ handleMeeting() → recorder.start/stop
@@ -561,7 +573,7 @@ await withCheckedContinuation { continuation in
 
 ### Test Count and Framework
 
-341 Swift tests using XCTest + ViewInspector. Run with `cd app/MeetingTranscriber && swift test`.
+Swift tests using XCTest + ViewInspector. Run with `cd app/MeetingTranscriber && swift test`.
 
 ### Mock/Protocol DI Pattern
 
@@ -572,6 +584,7 @@ Three protocols enable mock injection in tests:
 | `RecordingProvider` | `DualSourceRecorder` | `MockRecorder` — returns pre-prepared fixture WAV paths |
 | `DiarizationProvider` | `FluidDiarizer` | `MockDiarization` — returns pre-set segments and embeddings |
 | `ProtocolGenerating` | `DefaultProtocolGenerator` | `MockProtocolGen` — captures transcript/title/diarized for assertions |
+| `AppNotifying` | `NotificationManager` | `RecordingNotifier` — records calls; `SilentNotifier` — no-op |
 
 Defined in `Tests/TestHelpers.swift`.
 
@@ -605,6 +618,8 @@ Defined in `Tests/TestHelpers.swift`.
 | `SettingsViewTests.swift` | Settings UI (ViewInspector) |
 | `SpeakerNamingViewTests.swift` | Speaker naming dialog, accessibility text fields |
 | `AppSettingsTests.swift` | UserDefaults persistence, value clamping |
+| `AppStateTests.swift` | AppState isWatching, currentBadge, currentStatus integration (`@MainActor`) |
+| `BadgeKindComputeTests.swift` | All branches of `BadgeKind.compute(...)` pure function |
 | `NotificationContentTests.swift` | Notification content for state transitions |
 | `NotificationManagerTests.swift` | Setup, permission handling |
 | `TranscriberStatusTests.swift` | Status model codability |

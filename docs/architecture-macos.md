@@ -28,7 +28,8 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 
 | File | Role |
 |------|------|
-| `MeetingTranscriberApp.swift` | `@main` entry point, scene management, WatchLoop lifecycle |
+| `MeetingTranscriberApp.swift` | `@main` UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace |
+| `AppState.swift` | `@Observable @MainActor` ViewModel — business state, badge logic, pipeline wiring |
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `SettingsView.swift` | Settings window (apps, recording, transcription, diarization) |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
@@ -225,10 +226,11 @@ When dual-source recording (app + mic) is available:
 AppSettings (UserDefaults)
   → WatchLoop (@Observable: state, detail, currentMeeting, lastError)
   → PipelineQueue (@Observable: jobs, isProcessing, pendingSpeakerNaming)
-    → MeetingTranscriberApp (computed: currentStatus, currentStateLabel, currentStateIcon)
-      → MenuBarView (receives status + callbacks + pipeline queue)
-      → SettingsView (receives @Bindable settings)
-      → SpeakerNamingView (receives pendingSpeakerNaming data)
+    → AppState (computed: currentBadge via BadgeKind.compute(), currentStatus, currentStateLabel)
+      → MeetingTranscriberApp (reads appState.*, passes to views)
+        → MenuBarView (receives status + callbacks + pipeline queue)
+        → SettingsView (receives @Bindable settings)
+        → SpeakerNamingView (receives pendingSpeakerNaming data)
 ```
 
 ### File Locations
@@ -254,6 +256,8 @@ AppSettings (UserDefaults)
 | ProtocolGenerating | `protocolGenerator` protocol in PipelineQueue |
 | RecordingProvider | `recorderFactory` closure in WatchLoop |
 | ProtocolGenerator | `claudeBin` parameter |
+| AppNotifying | `notifier` parameter in `AppState.init` (`SilentNotifier` default, `RecordingNotifier` in tests) |
+| BadgeKind.compute | Pure static function — call directly with any input combination, no WatchLoop needed |
 
 ---
 
