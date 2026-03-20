@@ -125,7 +125,9 @@ final class AppState {
             Task { @MainActor in
                 _ = await Permissions.ensureMicrophoneAccess()
 
-                whisperKit.language = settings.whisperLanguageOrNil
+                if settings.transcriptionEngine == .whisperKit {
+                    whisperKit.language = settings.whisperLanguageOrNil
+                }
                 pipelineQueue = makePipelineQueue()
 
                 let detector: MeetingDetecting = PowerAssertionDetector()
@@ -227,7 +229,9 @@ final class AppState {
 
     func ensurePipelineQueue() {
         guard pipelineQueue.engine == nil else { return }
-        whisperKit.language = settings.whisperLanguageOrNil
+        if settings.transcriptionEngine == .whisperKit {
+            whisperKit.language = settings.whisperLanguageOrNil
+        }
         pipelineQueue = makePipelineQueue()
         configurePipelineCallbacks()
     }
