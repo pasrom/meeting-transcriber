@@ -1,6 +1,10 @@
 import CoreAudio
 import Foundation
 
+/// Target sample rate for speech recognition (WhisperKit).
+/// Must match `AudioConstants.targetSampleRate` in the app target.
+public let speechSampleRate: Double = 16000
+
 /// Convert mach_absolute_time() ticks to seconds.
 func machTicksToSeconds(_ ticks: UInt64) -> Double {
     var info = mach_timebase_info_data_t()

@@ -85,9 +85,10 @@ public class MicCaptureHandler {
         )! // swiftlint:disable:this force_unwrapping
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
 
-        // Create WAV file on first start; keep its sample rate for the entire recording
+        // Create WAV file on first start; always at 16kHz (WhisperKit target rate).
+        // The AVAudioConverter below handles resampling from any hardware rate.
         if outputFile == nil {
-            fileSampleRate = tapFormat.sampleRate
+            fileSampleRate = speechSampleRate
             let wavSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: fileSampleRate,
