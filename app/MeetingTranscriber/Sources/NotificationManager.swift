@@ -2,7 +2,7 @@ import Foundation
 import UserNotifications
 
 /// Sends macOS notifications for meeting state transitions.
-final class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
+final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, AppNotifying {
     static let shared = NotificationManager()
 
     private(set) var isSetUp = false

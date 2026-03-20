@@ -240,3 +240,39 @@ enum MenuBarIcon {
         }
     }
 }
+
+// MARK: - Badge State Logic (pure function, testable without UI)
+
+extension BadgeKind {
+    /// Computes the current badge from plain value inputs.
+    ///
+    /// This is a pure function with no object dependencies — tests can call it
+    /// directly with any combination of inputs without driving WatchLoop into states.
+    static func compute(
+        watchLoopActive: Bool,
+        watchLoopState: WatchLoop.State,
+        transcriberState: TranscriberState,
+        activeJobState: JobState?,
+        updateAvailable: Bool,
+    ) -> BadgeKind {
+        if watchLoopActive {
+            if watchLoopState == .recording { return .recording }
+            switch transcriberState {
+            case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
+            case .protocolReady: return .done
+            case .error: return .error
+            case .transcribing, .recordingDone: return .transcribing
+            case .generatingProtocol: return .processing
+            default: break
+            }
+        }
+        switch activeJobState {
+        case .transcribing: return .transcribing
+        case .diarizing: return .diarizing
+        case .some: return .processing
+        case .none: break
+        }
+        if updateAvailable { return .updateAvailable }
+        return .inactive
+    }
+}

@@ -9,24 +9,15 @@ extension Notification.Name {
 
 @main
 struct MeetingTranscriberApp: App {
-    @State private var settings = AppSettings()
-    @State private var watchLoop: WatchLoop?
-    @State private var pipelineQueue = PipelineQueue()
+    @State private var appState = AppState(notifier: NotificationManager.shared)
     @State private var iconAnimationFrame = 0
-    @State private var updateChecker = UpdateChecker()
     @Environment(\.openWindow)
     private var openWindow
-    private let notifications = NotificationManager.shared
-    private let whisperKit = WhisperKitEngine()
     private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
-
-    private var isWatching: Bool {
-        watchLoop?.isActive == true && watchLoop?.isManualRecording == false
-    }
 
     init() {
         AppPaths.migrateIfNeeded()
-        notifications.setUp()
+        NotificationManager.shared.setUp()
         DualSourceRecorder.cleanupTempFiles()
         // Auto-watch: schedule on main run loop after app finishes launching
         if CommandLine.arguments.contains("--auto-watch")
@@ -40,15 +31,14 @@ struct MeetingTranscriberApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(
-                status: currentStatus,
-                isWatching: isWatching,
-                pipelineQueue: pipelineQueue,
-                updateChecker: updateChecker,
-                onStartStop: toggleWatching,
+                status: appState.currentStatus,
+                isWatching: appState.isWatching,
+                pipelineQueue: appState.pipelineQueue,
+                updateChecker: appState.updateChecker,
+                onStartStop: appState.toggleWatching,
                 onRecordApp: { bringWindowToFront(id: "record-app") },
-                onStopManualRecording: watchLoop?.isManualRecording == true ? {
-                    watchLoop?.stopManualRecording()
-                    watchLoop = nil
+                onStopManualRecording: appState.watchLoop?.isManualRecording == true ? {
+                    appState.stopManualRecording()
                 } : nil,
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocol: { url in NSWorkspace.shared.open(url) },
@@ -60,15 +50,15 @@ struct MeetingTranscriberApp: App {
                     bringWindowToFront(id: "speaker-naming")
                 },
                 onProcessFiles: processAudioFiles,
-                onDismissJob: { id in pipelineQueue.removeJob(id: id) },
+                onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
                 onQuit: quit,
             )
         } label: {
             Label {
-                Text(currentStateLabel)
+                Text(appState.currentStateLabel)
             } icon: {
                 Image(nsImage: MenuBarIcon.image(
-                    badge: currentBadge,
+                    badge: appState.currentBadge,
                     animationFrame: iconAnimationFrame,
                 ))
             }
@@ -78,27 +68,27 @@ struct MeetingTranscriberApp: App {
                 iconAnimationFrame = (iconAnimationFrame + 1) % MenuBarIcon.frameCount
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
-                if !isWatching {
-                    toggleWatching()
+                if !appState.isWatching {
+                    appState.toggleWatching()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
                 bringWindowToFront(id: "speaker-naming")
             }
             .task {
-                whisperKit.modelVariant = settings.whisperKitModel
-                whisperKit.language = settings.whisperLanguageOrNil
-                await whisperKit.loadModel()
+                appState.whisperKit.modelVariant = appState.settings.whisperKitModel
+                appState.whisperKit.language = appState.settings.whisperLanguageOrNil
+                await appState.whisperKit.loadModel()
             }
             .task {
-                updateChecker.startPeriodicChecks(settings: settings)
+                appState.updateChecker.startPeriodicChecks(settings: appState.settings)
             }
         }
 
         Window("Name Speakers", id: "speaker-naming") {
-            if let data = pipelineQueue.pendingSpeakerNaming {
+            if let data = appState.pipelineQueue.pendingSpeakerNaming {
                 SpeakerNamingView(data: data) { result in
-                    pipelineQueue.completeSpeakerNaming(result: result)
+                    appState.pipelineQueue.completeSpeakerNaming(result: result)
                     closeWindow(id: "speaker-naming")
                 }
             } else {
@@ -110,9 +100,9 @@ struct MeetingTranscriberApp: App {
 
         Window("Settings", id: "settings") {
             SettingsView(
-                settings: settings,
-                whisperKitEngine: whisperKit,
-                updateChecker: updateChecker,
+                settings: appState.settings,
+                whisperKitEngine: appState.whisperKit,
+                updateChecker: appState.updateChecker,
             )
         }
         .windowResizability(.contentSize)
@@ -120,7 +110,7 @@ struct MeetingTranscriberApp: App {
         Window("Record App", id: "record-app") {
             AppPickerView(
                 onStartRecording: { pid, appName, title in
-                    startManualRecording(pid: pid, appName: appName, title: title)
+                    appState.startManualRecording(pid: pid, appName: appName, title: title)
                     closeWindow(id: "record-app")
                 },
                 onCancel: { closeWindow(id: "record-app") },
@@ -129,225 +119,7 @@ struct MeetingTranscriberApp: App {
         .windowResizability(.contentSize)
     }
 
-    // MARK: - Status
-
-    private static let isoFormatter = ISO8601DateFormatter()
-
-    private var currentStatus: TranscriberStatus? {
-        guard let loop = watchLoop, loop.isActive else { return nil }
-
-        let meeting: MeetingInfo? = if let manual = loop.manualRecordingInfo {
-            MeetingInfo(
-                app: manual.appName,
-                title: manual.title,
-                pid: Int(manual.pid),
-            )
-        } else {
-            loop.currentMeeting.map { meeting in
-                MeetingInfo(
-                    app: meeting.pattern.appName,
-                    title: meeting.windowTitle,
-                    pid: Int(meeting.windowPID),
-                )
-            }
-        }
-
-        return TranscriberStatus(
-            version: 1,
-            timestamp: Self.isoFormatter.string(from: Date()),
-            state: loop.transcriberState,
-            detail: loop.detail,
-            meeting: meeting,
-            protocolPath: nil,
-            error: loop.lastError,
-            audioPath: nil,
-            pid: Int(ProcessInfo.processInfo.processIdentifier),
-        )
-    }
-
-    private var currentStateLabel: String {
-        if let loop = watchLoop, loop.isActive {
-            return loop.transcriberState.label
-        }
-        return "Idle"
-    }
-
-    private var currentBadge: BadgeKind {
-        // Manual / auto recording via WatchLoop
-        if let loop = watchLoop, loop.isActive {
-            if loop.state == .recording { return .recording }
-            switch loop.transcriberState {
-            case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
-            case .protocolReady: return .done
-            case .error: return .error
-            case .transcribing, .recordingDone: return .transcribing
-            case .generatingProtocol: return .processing
-            default: break
-            }
-        }
-        // Pipeline queue (file processing or post-recording pipeline)
-        if let activeJob = pipelineQueue.activeJobs.first {
-            switch activeJob.state {
-            case .transcribing: return .transcribing
-            case .diarizing: return .diarizing
-            default: return .processing
-            }
-        }
-        if updateChecker.availableUpdate != nil { return .updateAvailable }
-        return .inactive
-    }
-
-    // MARK: - Start / Stop
-
-    private func startManualRecording(pid: pid_t, appName: String, title: String) {
-        // Stop auto-watch if active
-        if let loop = watchLoop, loop.isActive, !loop.isManualRecording {
-            loop.stop()
-            watchLoop = nil
-        }
-
-        Task {
-            _ = await Permissions.ensureMicrophoneAccess()
-
-            ensurePipelineQueue()
-
-            let loop = WatchLoop(
-                recorderFactory: { DualSourceRecorder() },
-                pipelineQueue: pipelineQueue,
-                pollInterval: settings.pollInterval,
-                noMic: settings.noMic,
-                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-            )
-            watchLoop = loop
-
-            do {
-                try loop.startManualRecording(pid: pid, appName: appName, title: title)
-                notifications.notify(
-                    title: "Manual Recording",
-                    body: "Recording: \(title)",
-                )
-            } catch {
-                notifications.notify(title: "Error", body: error.localizedDescription)
-                watchLoop = nil
-            }
-        }
-    }
-
-    private func toggleWatching() {
-        if let loop = watchLoop, loop.isManualRecording { return }
-        if let loop = watchLoop, loop.isActive {
-            loop.stop()
-            watchLoop = nil
-        } else {
-            // swiftlint:disable:next closure_body_length
-            Task {
-                _ = await Permissions.ensureMicrophoneAccess()
-
-                // swiftlint:disable:next closure_body_length
-                await MainActor.run {
-                    whisperKit.language = settings.whisperLanguageOrNil
-                    pipelineQueue = makePipelineQueue()
-
-                    let detector: MeetingDetecting = PowerAssertionDetector()
-
-                    let loop = WatchLoop(
-                        detector: detector,
-                        pipelineQueue: pipelineQueue,
-                        pollInterval: settings.pollInterval,
-                        endGracePeriod: settings.endGrace,
-                        noMic: settings.noMic,
-                        micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                    )
-
-                    loop.onStateChange = { [weak loop, notifications] _, newState in
-                        switch newState {
-                        case .recording:
-                            if let meeting = loop?.currentMeeting {
-                                notifications.notify(
-                                    title: "Meeting Detected",
-                                    body: "Recording: \(meeting.windowTitle)",
-                                )
-                            }
-
-                        case .error:
-                            if let err = loop?.lastError {
-                                notifications.notify(title: "Error", body: err)
-                            }
-
-                        default:
-                            break
-                        }
-                    }
-
-                    configurePipelineCallbacks()
-
-                    watchLoop = loop
-                    loop.start()
-                }
-            }
-        }
-    }
-
-    // MARK: - Pipeline
-
-    private func ensurePipelineQueue() {
-        guard pipelineQueue.whisperKit == nil else { return }
-        whisperKit.language = settings.whisperLanguageOrNil
-        pipelineQueue = makePipelineQueue()
-        configurePipelineCallbacks()
-    }
-
-    private func makeProtocolGenerator() -> ProtocolGenerating {
-        switch settings.protocolProvider {
-        #if !APPSTORE
-            case .claudeCLI:
-                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
-        #endif
-
-        case .openAICompatible:
-            OpenAIProtocolGenerator(
-                endpoint: URL(string: settings.openAIEndpoint)
-                    // swiftlint:disable:next force_unwrapping
-                    ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
-                model: settings.openAIModel,
-                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
-            )
-        }
-    }
-
-    private func makePipelineQueue() -> PipelineQueue {
-        let queue = PipelineQueue(
-            whisperKit: whisperKit,
-            diarizationFactory: { FluidDiarizer() },
-            protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            outputDir: settings.effectiveOutputDir,
-            diarizeEnabled: settings.diarize,
-            numSpeakers: settings.numSpeakers,
-            micLabel: settings.micName,
-        )
-        queue.loadSnapshot()
-        queue.recoverOrphanedRecordings()
-        return queue
-    }
-
-    private func configurePipelineCallbacks() {
-        pipelineQueue.onJobStateChange = { [notifications] job, _, newState in
-            switch newState {
-            case .done:
-                notifications.notify(title: "Protocol Ready", body: job.meetingTitle)
-
-            case .error:
-                if let err = job.error {
-                    notifications.notify(title: "Error", body: err)
-                }
-
-            default:
-                break
-            }
-        }
-    }
-
-    // MARK: - Actions
+    // MARK: - UI Actions
 
     private func processAudioFiles() {
         let panel = NSOpenPanel()
@@ -364,26 +136,11 @@ struct MeetingTranscriberApp: App {
         panel.canChooseDirectories = false
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-
-        // Ensure queue has processing dependencies
-        ensurePipelineQueue()
-
-        for url in panel.urls {
-            let title = url.deletingPathExtension().lastPathComponent
-            let job = PipelineJob(
-                meetingTitle: title,
-                appName: "File",
-                mixPath: url,
-                appPath: nil,
-                micPath: nil,
-                micDelay: 0,
-            )
-            pipelineQueue.enqueue(job)
-        }
+        appState.enqueueFiles(panel.urls)
     }
 
     private func openLastProtocol() {
-        if let job = pipelineQueue.completedJobs.last,
+        if let job = appState.pipelineQueue.completedJobs.last,
            let path = job.protocolPath {
             NSWorkspace.shared.open(path)
         }
@@ -407,7 +164,7 @@ struct MeetingTranscriberApp: App {
     }
 
     private func openProtocolsFolder() {
-        let protocols = settings.effectiveOutputDir
+        let protocols = appState.settings.effectiveOutputDir
         let accessing = protocols.startAccessingSecurityScopedResource()
         defer { if accessing { protocols.stopAccessingSecurityScopedResource() } }
         try? FileManager.default.createDirectory(at: protocols, withIntermediateDirectories: true)
@@ -415,7 +172,7 @@ struct MeetingTranscriberApp: App {
     }
 
     private func quit() {
-        watchLoop?.stop()
+        appState.watchLoop?.stop()
         NSApplication.shared.terminate(nil)
     }
 }
