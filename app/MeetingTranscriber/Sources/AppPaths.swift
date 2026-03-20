@@ -8,13 +8,16 @@ enum AppPaths {
 
     /// App data directory: `~/Library/Application Support/MeetingTranscriber/`
     /// In sandbox, this automatically resolves to the container path.
+    /// Falls back to `~/.MeetingTranscriber/` if Application Support is unavailable.
     static let dataDir: URL = {
-        guard let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        else {
-            fatalError("Application Support directory unavailable")
+        if let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            return appSupport.appendingPathComponent("MeetingTranscriber")
         }
-        return appSupport.appendingPathComponent("MeetingTranscriber")
+        Logger(subsystem: logSubsystem, category: "AppPaths")
+            .error("Application Support directory unavailable — falling back to home directory")
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".MeetingTranscriber")
     }()
 
     /// IPC directory: under `dataDir` for sandbox compatibility.
