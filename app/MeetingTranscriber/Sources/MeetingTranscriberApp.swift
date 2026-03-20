@@ -294,7 +294,7 @@ struct MeetingTranscriberApp: App {
         configurePipelineCallbacks()
     }
 
-    private func makeProtocolGenerator() -> ProtocolGenerating {
+    private func makeProtocolGenerator() -> ProtocolGenerating? {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:
@@ -315,6 +315,9 @@ struct MeetingTranscriberApp: App {
                 language: settings.transcriptionLanguageName,
                 customVocabulary: settings.customVocabulary,
             )
+
+        case .none:
+            nil
         }
     }
 
@@ -338,7 +341,8 @@ struct MeetingTranscriberApp: App {
         pipelineQueue.onJobStateChange = { [notifications] job, _, newState in
             switch newState {
             case .done:
-                notifications.notify(title: "Protocol Ready", body: job.meetingTitle)
+                let title = job.protocolPath != nil ? "Protocol Ready" : "Transcript Saved"
+                notifications.notify(title: title, body: job.meetingTitle)
 
             case .error:
                 if let err = job.error {
@@ -388,7 +392,7 @@ struct MeetingTranscriberApp: App {
 
     private func openLastProtocol() {
         if let job = pipelineQueue.completedJobs.last,
-           let path = job.protocolPath {
+           let path = job.protocolPath ?? job.transcriptPath {
             NSWorkspace.shared.open(path)
         }
     }

@@ -125,17 +125,24 @@ Several pipeline failures are logged but not surfaced to the user:
 - Show a warning badge on completed jobs that had degraded results
 - Add a "warnings" field to `PipelineJob` to track what was skipped/degraded
 
-### Protocol generation fallback
+### Protocol generation fallback — DONE
+
+**Status:** Implemented
+
+If the configured LLM provider (Claude CLI or OpenAI API) fails, the pipeline now saves the raw transcript and marks the job as done with a warning instead of failing the entire job. A "None (Transcript Only)" provider option is also available for users who don't want LLM summarization.
+
+### Re-process transcript-only jobs with LLM
 
 **Status:** Not started
 **Priority:** Medium
 
-If the configured protocol provider (Claude CLI or OpenAI API) fails, the entire job fails with no recovery. Both providers implement the same `ProtocolGenerating` protocol.
+When a job completes as transcript-only (either because the LLM provider was set to "None" or because protocol generation failed), users cannot re-process it with an LLM later without manually importing the audio again.
 
 **Implementation approach:**
-- Allow configuring a secondary/fallback provider in Settings
-- Wrap `protocolGeneratorFactory()` call in `PipelineQueue.processNext()` with a try/catch that attempts the fallback provider
-- Log which provider succeeded so the user knows
+- Add a "Generate Protocol" button on completed transcript-only jobs in the menu bar UI
+- Re-enter the pipeline at the protocol generation stage (transcript already saved)
+- Use the currently configured LLM provider (may differ from original run)
+- Need to store/locate the saved transcript path to avoid re-transcription
 
 ### Pipeline progress for long meetings
 

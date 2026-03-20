@@ -14,7 +14,7 @@ class PipelineQueue {
     // Dependencies for processing
     let transcriptionEngine: FluidTranscriptionEngine?
     let diarizationFactory: (() -> DiarizationProvider)?
-    let protocolGeneratorFactory: (() -> ProtocolGenerating)?
+    let protocolGeneratorFactory: (() -> ProtocolGenerating?)?
     let outputDir: URL?
     let diarizeEnabled: Bool
     let numSpeakers: Int
@@ -96,7 +96,7 @@ class PipelineQueue {
     init(
         transcriptionEngine: FluidTranscriptionEngine,
         diarizationFactory: @escaping () -> DiarizationProvider,
-        protocolGeneratorFactory: @escaping () -> ProtocolGenerating,
+        protocolGeneratorFactory: @escaping () -> ProtocolGenerating?,
         outputDir: URL,
         logDir: URL? = nil,
         diarizeEnabled: Bool = false,
@@ -241,7 +241,7 @@ class PipelineQueue {
             isProcessing = false
             return
         }
-        guard let transcriptionEngine, let protocolGeneratorFactory, let outputDir else {
+        guard let transcriptionEngine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             isProcessing = false
             return
@@ -285,23 +285,52 @@ class PipelineQueue {
                 }
             }
 
-            // --- Protocol Generation ---
-            updateJobState(id: job.id, to: .generatingProtocol)
-            startElapsedTimer()
-            let mdPath = try await generateAndSaveProtocol(
-                job: job, finalTranscript: finalTranscript,
-                generator: protocolGeneratorFactory(), outputDir: outputDir,
+            // --- Save Transcript & Audio ---
+            let protocolsDir = outputDir.appendingPathComponent("protocols")
+            let txtPath = try ProtocolGenerator.saveTranscript(
+                finalTranscript, title: job.meetingTitle, dir: protocolsDir,
             )
-            stopElapsedTimer()
-
-            // Update job with protocol path and mark done
             if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
-                jobs[idx].protocolPath = mdPath
+                jobs[idx].transcriptPath = txtPath
             }
+            logger.info("Transcript saved: \(txtPath.lastPathComponent)")
+
+            let recordingsDir = outputDir.appendingPathComponent("recordings")
+            Self.copyAudioToOutput(
+                mixPath: job.mixPath, appPath: job.appPath, micPath: job.micPath,
+                title: job.meetingTitle, outputDir: recordingsDir,
+            )
+
+            // --- Protocol Generation (optional) ---
+            if let generator = protocolGeneratorFactory?() {
+                updateJobState(id: job.id, to: .generatingProtocol)
+                startElapsedTimer()
+                do {
+                    let mdPath = try await generateProtocol(
+                        job: job, finalTranscript: finalTranscript,
+                        generator: generator, protocolsDir: protocolsDir,
+                    )
+                    stopElapsedTimer()
+
+                    if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                        jobs[idx].protocolPath = mdPath
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    stopElapsedTimer()
+                    logger.warning("Protocol generation failed, transcript saved: \(error.localizedDescription)")
+                    addWarning(id: job.id, "Protocol generation failed — raw transcript saved")
+                }
+            } else {
+                logger.info("No LLM provider configured — saving transcript only")
+            }
+
             updateJobState(id: job.id, to: .done)
             if let completed = jobs.first(where: { $0.id == job.id }), !completed.warnings.isEmpty {
+                let title = completed.protocolPath != nil ? "Protocol Ready" : "Transcript Saved"
                 NotificationManager.shared.notify(
-                    title: "Protocol Ready (with warnings)",
+                    title: "\(title) (with warnings)",
                     body: completed.warnings.joined(separator: "; "),
                 )
             }
@@ -582,20 +611,14 @@ class PipelineQueue {
         }
     }
 
-    /// Save transcript, generate protocol, save protocol, and copy audio files.
+    /// Generate protocol via LLM and save to markdown file.
     /// Returns the path to the saved protocol markdown file.
-    private func generateAndSaveProtocol(
+    private func generateProtocol(
         job: PipelineJob,
         finalTranscript: String,
         generator: ProtocolGenerating,
-        outputDir: URL,
+        protocolsDir: URL,
     ) async throws -> URL {
-        let protocolsDir = outputDir.appendingPathComponent("protocols")
-        let txtPath = try ProtocolGenerator.saveTranscript(
-            finalTranscript, title: job.meetingTitle, dir: protocolsDir,
-        )
-        logger.info("Transcript saved: \(txtPath.lastPathComponent)")
-
         let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
         let protocolMD = try await generator.generate(
             transcript: finalTranscript,
@@ -608,14 +631,6 @@ class PipelineQueue {
             fullMD, title: job.meetingTitle, dir: protocolsDir,
         )
         logger.info("Protocol saved: \(mdPath.lastPathComponent)")
-
-        // Move audio files to recordings subdirectory
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
-        Self.copyAudioToOutput(
-            mixPath: job.mixPath, appPath: job.appPath, micPath: job.micPath,
-            title: job.meetingTitle, outputDir: recordingsDir,
-        )
-
         return mdPath
     }
 

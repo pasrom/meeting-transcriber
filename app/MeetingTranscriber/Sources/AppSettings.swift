@@ -7,6 +7,7 @@ enum ProtocolProvider: String, CaseIterable {
         case claudeCLI
     #endif
     case openAICompatible
+    case none
 
     var label: String {
         switch self {
@@ -15,6 +16,7 @@ enum ProtocolProvider: String, CaseIterable {
         #endif
 
         case .openAICompatible: "OpenAI-Compatible API"
+        case .none: "None (Transcript Only)"
         }
     }
 }
