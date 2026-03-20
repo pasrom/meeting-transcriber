@@ -2,7 +2,6 @@ import CoreGraphics
 import Foundation
 import os.log
 
-// swiftlint:disable:next unused_declaration
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MeetingDetector")
 
 /// Polls window list to detect active meeting windows.
@@ -32,13 +31,21 @@ class MeetingDetector: MeetingDetecting {
         var meeting: [String: [NSRegularExpression]] = [:]
         var idle: [String: [NSRegularExpression]] = [:]
         for p in patterns {
-            meeting[p.appName] = p.meetingPatterns.map { pattern in
-                // swiftlint:disable:next force_try
-                try! NSRegularExpression(pattern: pattern)
+            meeting[p.appName] = p.meetingPatterns.compactMap { pattern in
+                do {
+                    return try NSRegularExpression(pattern: pattern)
+                } catch {
+                    logger.error("Invalid meeting regex for \(p.appName): \(pattern) — \(error.localizedDescription)")
+                    return nil
+                }
             }
-            idle[p.appName] = p.idlePatterns.map { pattern in
-                // swiftlint:disable:next force_try
-                try! NSRegularExpression(pattern: pattern)
+            idle[p.appName] = p.idlePatterns.compactMap { pattern in
+                do {
+                    return try NSRegularExpression(pattern: pattern)
+                } catch {
+                    logger.error("Invalid idle regex for \(p.appName): \(pattern) — \(error.localizedDescription)")
+                    return nil
+                }
             }
         }
         self.compiledMeetingPatterns = meeting
