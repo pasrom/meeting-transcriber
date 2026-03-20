@@ -413,7 +413,7 @@ class PipelineQueue {
                                 // Start a timeout task that auto-skips if user doesn't respond
                                 let timeoutTask = Task { [weak self] in
                                     try await Task.sleep(for: .seconds(Self.speakerNamingTimeout))
-                                    await self?.completeSpeakerNaming(result: .skipped)
+                                    self?.completeSpeakerNaming(result: .skipped)
                                 }
                                 namingResult = await withCheckedContinuation { continuation in
                                     self.speakerNamingContinuation = continuation
