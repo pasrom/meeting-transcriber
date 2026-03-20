@@ -73,7 +73,7 @@ enum FFmpegHelper {
             "-i", url.path,
             "-vn", // no video
             "-ac", "1", // mono
-            "-ar", "16000", // 16kHz
+            "-ar", "\(AudioConstants.targetSampleRate)", // speech recognition rate
             "-f", "wav", // WAV output
             tempURL.path,
             "-y", // overwrite
@@ -134,6 +134,6 @@ enum FFmpegHelper {
         // Load the temp WAV file
         let samples = try AudioMixer.loadAudioFileAsFloat32(url: tempURL)
         logger.info("ffmpeg extracted \(samples.count) samples at 16kHz from \(url.lastPathComponent)")
-        return (samples, 16000)
+        return (samples, AudioConstants.targetSampleRate)
     }
 }

@@ -38,6 +38,7 @@ class DualSourceRecorder: RecordingProvider {
     private var startTimestamp: String?
 
     private let recordRate = 48000
+    private let targetRate = AudioConstants.targetSampleRate
     private let appChannels = 2
 
     /// Recordings directory.
@@ -166,11 +167,12 @@ class DualSourceRecorder: RecordingProvider {
                 appSamples = floats
             }
 
-            // Save app track
+            // Resample to 16kHz and save app track
+            let appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
             let appFile = recDir.appendingPathComponent("\(ts)_app.wav")
-            try AudioMixer.saveWAV(samples: appSamples, sampleRate: actualRate, url: appFile)
+            try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: appFile)
             appPath = appFile
-            logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate) Hz)")
+            logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate)→\(self.targetRate) Hz)")
         } else if FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
@@ -197,8 +199,8 @@ class DualSourceRecorder: RecordingProvider {
         }
 
         // ── Mix via AudioMixer ──
-        // Use the actual capture rate for mixing — the pipeline resamples to 16kHz later.
-        let mixRate = actualRate > 0 ? actualRate : recordRate
+        // Both app and mic are already at 16kHz at this point.
+        let mixRate = targetRate
         let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
 
         if let app = appPath, let mic = micPath {
