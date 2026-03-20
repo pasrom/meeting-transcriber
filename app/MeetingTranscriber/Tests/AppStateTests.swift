@@ -479,6 +479,50 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertFalse(existingLoop.isActive, "Existing auto-watch loop should be stopped")
     }
+
+    // MARK: - Engine Switching
+
+    func testActiveTranscriptionEngineDefaultsToWhisperKit() {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .whisperKit
+        let state = AppState(settings: settings)
+        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+    }
+
+    func testActiveTranscriptionEngineReturnsParakeetWhenSet() {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .parakeet
+        let state = AppState(settings: settings)
+        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+    }
+
+    func testActiveTranscriptionEngineSwitchesBack() {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .parakeet
+        let state = AppState(settings: settings)
+        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+
+        settings.transcriptionEngine = .whisperKit
+        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+    }
+
+    func testMakePipelineQueueUsesActiveEngine() {
+        let (state, _) = makeState()
+        XCTAssertNotNil(state.makePipelineQueue().engine, "WhisperKit engine should be set")
+
+        state.settings.transcriptionEngine = .parakeet
+        XCTAssertNotNil(state.makePipelineQueue().engine, "Parakeet engine should be set")
+    }
+
+    func testEnsurePipelineQueueWithParakeet() {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .parakeet
+        let state = AppState(settings: settings)
+
+        state.ensurePipelineQueue()
+
+        XCTAssertNotNil(state.pipelineQueue.engine)
+    }
 }
 
 // MARK: - Private helpers

@@ -129,7 +129,7 @@ final class TimestampedSegmentTests: XCTestCase {
         seg2.speaker = "Me"
 
         let merged = ([seg1] + [seg2]).sorted { $0.start < $1.start }
-        let output = merged.map { $0.formattedLine }.joined(separator: "\n")
+        let output = merged.map(\.formattedLine).joined(separator: "\n")
         XCTAssertEqual(output, "[00:00] Remote: Hello\n[00:05] Me: Hi there")
     }
 
