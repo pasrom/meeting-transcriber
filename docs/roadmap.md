@@ -150,6 +150,20 @@ Long meetings can take minutes to process with no segment-level feedback. `activ
 - Protocol generation: stream partial output to show the protocol being written
 - Surface progress in `MenuBarView` and job detail UI
 
+### Unload transcription model when idle
+
+**Status:** Not started
+**Priority:** Medium
+
+The Parakeet model (~1.5 GB peak memory) stays loaded for the entire app lifetime. For a menu bar app that sits idle most of the time, this is significant. Unloading after a configurable idle period would reduce the memory footprint between meetings.
+
+**Implementation approach:**
+- Add an idle timer in `FluidTranscriptionEngine` that starts after transcription completes
+- After timeout (e.g., 10 minutes configurable in Settings), set `manager = nil` and `modelState = .unloaded`
+- `ensureModel()` already handles lazy re-loading — no pipeline changes needed
+- Cancel the timer when a new transcription starts
+- Consider keeping the model loaded during active watching (meetings likely to start soon)
+
 ### Detect back-to-back meeting transitions
 
 **Status:** Not started
