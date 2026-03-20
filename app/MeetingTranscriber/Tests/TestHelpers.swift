@@ -1,6 +1,43 @@
 import Foundation
 @testable import MeetingTranscriber
 
+// MARK: - WatchLoop / AppState Helpers
+
+/// Returns a MeetingDetector with no patterns — never matches any window.
+func makeSilentDetector() -> MeetingDetector {
+    MeetingDetector(patterns: [])
+}
+
+/// Creates a WatchLoop backed by a MockRecorder and a silent detector.
+/// Assign the returned loop to `appState.watchLoop` in tests that need
+/// an active loop without calling toggleWatching() (which requires Permissions).
+@MainActor
+func makeTestWatchLoop(
+    pipelineQueue: PipelineQueue? = nil,
+) -> (WatchLoop, MockRecorder) {
+    let recorder = MockRecorder()
+    recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+    let loop = WatchLoop(
+        detector: makeSilentDetector(),
+        recorderFactory: { recorder },
+        pipelineQueue: pipelineQueue,
+        pollInterval: 0.05,
+        endGracePeriod: 0.1,
+    )
+    return (loop, recorder)
+}
+
+// MARK: - AppNotifying spy
+
+/// Records all notify() calls for assertions.
+final class RecordingNotifier: AppNotifying {
+    private(set) var calls: [(title: String, body: String)] = []
+
+    func notify(title: String, body: String) {
+        calls.append((title: title, body: body))
+    }
+}
+
 // MARK: - Shared Mock Classes
 
 /// Mock recorder that returns a pre-prepared fixture WAV as the recording result.
