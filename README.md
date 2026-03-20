@@ -5,8 +5,8 @@
 A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 
 ```
-Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
-File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono conversion → WhisperKit → FluidAudio Diarization → Protocol
+Meeting Detected → App Audio + Mic → FluidAudio Parakeet per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
+File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono conversion → FluidAudio Parakeet → FluidAudio Diarization → Protocol
 ```
 
 ---
@@ -15,7 +15,7 @@ File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono 
 
 - **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
-- **On-device transcription** — [WhisperKit](https://github.com/argmaxinc/WhisperKit) running on CoreML/Apple Neural Engine
+- **On-device transcription** — [FluidAudio](https://github.com/FluidInference/FluidAudio) Parakeet TDT running on CoreML/Apple Neural Engine, with optional vocabulary boosting
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidAudio) via CoreML/ANE — no HuggingFace token needed
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
 - **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity

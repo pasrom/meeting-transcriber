@@ -1,3 +1,5 @@
+> **Note (2026-03-18):** This document predates the migration from WhisperKit to FluidAudio Parakeet TDT for transcription. All references to `WhisperKitEngine` now correspond to `FluidTranscriptionEngine`. See [architecture-macos.md](../architecture-macos.md) for the current architecture.
+
 # MeetingTranscriber: Native Swift Pipeline Architecture
 
 ## 1. Overview

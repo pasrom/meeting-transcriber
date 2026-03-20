@@ -14,7 +14,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
 Meeting Window Detected (CGWindowListCopyWindowInfo)
   → DualSourceRecorder (AudioTapLib + mic)
     → AudioMixer (resample 48kHz → 16kHz)
-      → WhisperKit (CoreML/ANE transcription)
+      → FluidTranscriptionEngine (CoreML/ANE transcription)
         → [FluidDiarizer (CoreML/ANE speaker diarization)]
           → ProtocolGenerator (Claude CLI)
             → Markdown protocol + transcript
@@ -42,7 +42,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `MeetingDetector.swift` | Window polling, pattern matching, confirmation counting, cooldown |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
-| `WhisperKitEngine.swift` | Native WhisperKit transcription (single/dual-source/segments) |
+| `FluidTranscriptionEngine.swift` | FluidAudio Parakeet transcription (single/dual-source/segments) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
@@ -115,23 +115,25 @@ Raw float32 stereo → mono (channel average)
   → Save mix.wav (48kHz mono)
 ```
 
-### Resampling for WhisperKit
+### Resampling for Transcription
 
 ```
 48kHz WAV → AudioMixer.resample(from: 48000, to: 16000) → 16kHz WAV
 ```
 
-WhisperKit requires 16kHz mono input. Both app and mic tracks are resampled before transcription.
+FluidAudio requires 16kHz mono input. Both app and mic tracks are resampled before transcription.
 
 ---
 
 ## Transcription
 
-### WhisperKit Engine
+### FluidTranscriptionEngine
 
-- **Model:** `openai_whisper-large-v3-v20240930_turbo` (CoreML/ANE)
+- **Model:** `parakeet-tdt-0.6b-v2-coreml` (CoreML/ANE via FluidAudio)
 - **Pre-loading:** Model downloaded and loaded at app launch
 - **Lazy fallback:** `ensureModel()` loads on-demand if not ready
+- **Language:** English only (Parakeet TDT V2)
+- **Vocabulary boosting:** Optional CTC-based custom vocabulary via `configureVocabulary()`
 
 ### Modes
 
@@ -142,8 +144,8 @@ WhisperKit requires 16kHz mono input. Both app and mic tracks are resampled befo
 
 ### Post-processing
 
-- **Token stripping:** Regex `<\|[^|]*\|>` removes `<|startoftranscript|>`, `<|en|>`, etc.
-- **Hallucination filtering:** Skip consecutive identical segments
+- **Token grouping:** SentencePiece tokens grouped into sentences based on punctuation (`.?!`) and pauses (>1.0s)
+- **SentencePiece normalization:** `▁` markers converted to spaces
 
 ---
 
@@ -275,7 +277,7 @@ AppSettings (UserDefaults)
 3. **AudioTapLib as SPM library** — Direct in-process audio capture via CATapDescription (App Store compatible)
 4. **Dual-source recording** — Enables speaker separation without diarization (app=Remote, mic=Me)
 5. **Graceful degradation** — Diarization optional, mute detection optional, continues on partial failure
-6. **Pre-loaded model** — WhisperKit loaded at app launch, prevents delay on first meeting
+6. **Pre-loaded model** — FluidAudio Parakeet loaded at app launch, prevents delay on first meeting
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference

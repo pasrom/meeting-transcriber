@@ -19,7 +19,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     NotificationManager.swift # macOS notifications
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
-    WhisperKitEngine.swift # Native WhisperKit transcription (CoreML/ANE)
+    FluidTranscriptionEngine.swift # FluidAudio Parakeet transcription (CoreML/ANE)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
@@ -58,7 +58,6 @@ tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
 scripts/
-  build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle
@@ -86,8 +85,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → WhisperKit per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → WhisperKit → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → FluidAudio Parakeet per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → FluidAudio Parakeet → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -157,11 +156,11 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Concurrency:**
 - `WatchLoop` is `@MainActor`. Tests for this class must also be `@MainActor`.
-- `WhisperKitEngine.loadModel()` deduplicates concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
+- `FluidTranscriptionEngine.loadModel()` deduplicates concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
 - `ProtocolGenerator` uses async process I/O: `terminationHandler` + `withCheckedContinuation` instead of `process.waitUntilExit()`. stdout/stderr are read in detached `Task`s.
 
 **View architecture:**
-- `SettingsView` receives `WhisperKitEngine` as a stored property (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:)`.
+- `SettingsView` receives `FluidTranscriptionEngine` as a stored property (not `@State`). Constructor: `SettingsView(settings:transcriptionEngine:)`.
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).

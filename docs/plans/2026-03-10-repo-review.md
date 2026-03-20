@@ -1,3 +1,5 @@
+> **Note (2026-03-18):** This review predates the migration from WhisperKit to FluidAudio Parakeet TDT for transcription. References to `WhisperKitEngine` now correspond to `FluidTranscriptionEngine`.
+
 # Full Repository Review — Results
 
 > **For Claude:** This document contains the complete review findings from 7 parallel agents.

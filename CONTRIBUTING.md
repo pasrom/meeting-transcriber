@@ -46,7 +46,7 @@ Examples:
 ```
 feat(app): add Webex meeting detection
 fix(app): prevent duplicate recording on reconnect
-test(app): add WhisperKitEngine concurrency tests
+test(app): add FluidTranscriptionEngine concurrency tests
 ```
 
 ### AI-assisted development
