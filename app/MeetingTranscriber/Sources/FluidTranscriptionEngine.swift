@@ -157,7 +157,7 @@ final class FluidTranscriptionEngine {
         // Listen to progress on the main actor (manager is non-Sendable)
         nonisolated(unsafe) let unsafeManager = manager
         let progressTask = Task { @MainActor in
-            for try await progress in unsafeManager.transcriptionProgressStream {
+            for try await progress in await unsafeManager.transcriptionProgressStream {
                 self.transcriptionProgress = progress
             }
         }
