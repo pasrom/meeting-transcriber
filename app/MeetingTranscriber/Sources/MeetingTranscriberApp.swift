@@ -194,4 +194,19 @@ struct MeetingTranscriberApp: App {
         appState.watchLoop?.stop()
         NSApplication.shared.terminate(nil)
     }
+
+    // MARK: - Pure Helpers (testable without @main)
+
+    /// Whether auto-watch should be enabled based on CLI flags or user settings.
+    static func shouldAutoWatch(
+        commandLineArgs: [String] = CommandLine.arguments,
+        autoWatchSetting: Bool = UserDefaults.standard.bool(forKey: "autoWatch"),
+    ) -> Bool {
+        commandLineArgs.contains("--auto-watch") || autoWatchSetting
+    }
+
+    /// Returns the protocol path from the last completed job, if any.
+    static func lastCompletedProtocolPath(completedJobs: [PipelineJob]) -> URL? {
+        completedJobs.last?.protocolPath
+    }
 }

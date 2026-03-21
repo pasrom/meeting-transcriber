@@ -151,7 +151,7 @@ struct SpeakerNamingView: View {
         .frame(minWidth: 400, maxHeight: 700)
         .id(data.meetingTitle)
         .onAppear {
-            names = speakers.map { $0.autoName ?? "" }
+            names = Self.computeInitialNames(speakers: speakers)
             rerunCount = max(2, speakers.count + 1)
         }
         .onDisappear {
@@ -282,16 +282,41 @@ struct SpeakerNamingView: View {
 
     /// Participant names not yet assigned to any other speaker.
     private func unusedParticipants(currentIndex: Int) -> [String] {
+        Self.unusedParticipants(currentIndex: currentIndex, names: names, participants: data.participants)
+    }
+
+    private func confirm() {
+        player?.stop()
+        let mapping = Self.buildSpeakerMapping(speakers: speakers, names: names)
+        onComplete(.confirmed(mapping))
+    }
+
+    // MARK: - Pure Functions (testable without UI)
+
+    /// Computes initial text field names from speaker auto-name mappings.
+    static func computeInitialNames(
+        speakers: [(label: String, autoName: String?, speakingTime: Double)],
+    ) -> [String] {
+        speakers.map { $0.autoName ?? "" }
+    }
+
+    /// Returns participant names not yet assigned to any other speaker.
+    static func unusedParticipants(
+        currentIndex: Int, names: [String], participants: [String],
+    ) -> [String] {
         let usedNames = Set(
             names.enumerated()
                 .filter { $0.offset != currentIndex && !$0.element.isEmpty }
                 .map(\.element),
         )
-        return data.participants.filter { !usedNames.contains($0) }
+        return participants.filter { !usedNames.contains($0) }
     }
 
-    private func confirm() {
-        player?.stop()
+    /// Builds the speaker label → user-entered name mapping, skipping empty names.
+    static func buildSpeakerMapping(
+        speakers: [(label: String, autoName: String?, speakingTime: Double)],
+        names: [String],
+    ) -> [String: String] {
         var mapping: [String: String] = [:]
         for (index, speaker) in speakers.enumerated() {
             let name = index < names.count
@@ -300,6 +325,6 @@ struct SpeakerNamingView: View {
                 mapping[speaker.label] = name
             }
         }
-        onComplete(.confirmed(mapping))
+        return mapping
     }
 }

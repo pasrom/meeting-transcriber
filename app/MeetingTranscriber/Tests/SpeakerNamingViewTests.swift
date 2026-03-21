@@ -176,6 +176,94 @@ final class SpeakerNamingViewTests: XCTestCase {
         XCTAssertTrue(found, "Should show '1:30' for 90 seconds")
     }
 
+    // MARK: - Pure Function: buildSpeakerMapping
+
+    func testBuildMappingWithUserNames() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
+            (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
+        ]
+        let names = ["Alice", "Bob"]
+        let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
+        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"])
+    }
+
+    func testBuildMappingSkipsEmptyNames() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
+            (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
+        ]
+        let names = ["Alice", ""]
+        let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
+        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
+    }
+
+    func testBuildMappingSkipsWhitespaceOnlyNames() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
+        ]
+        let names = ["   "]
+        let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
+        XCTAssertTrue(mapping.isEmpty)
+    }
+
+    func testBuildMappingFewerNamesThanSpeakers() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
+            (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
+            (label: "SPEAKER_02", autoName: nil, speakingTime: 20),
+        ]
+        let names = ["Alice"]
+        let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
+        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
+    }
+
+    // MARK: - Pure Function: unusedParticipants
+
+    func testUnusedParticipantsExcludesAssigned() {
+        let names = ["Alice", "", "Charlie"]
+        let participants = ["Alice", "Bob", "Charlie"]
+        let unused = SpeakerNamingView.unusedParticipants(
+            currentIndex: 1, names: names, participants: participants,
+        )
+        XCTAssertEqual(unused, ["Bob"])
+    }
+
+    func testUnusedParticipantsAllAssignedReturnsEmpty() {
+        let names = ["Alice", "Bob"]
+        let participants = ["Alice", "Bob"]
+        let unused = SpeakerNamingView.unusedParticipants(
+            currentIndex: 2, names: names, participants: participants,
+        )
+        XCTAssertTrue(unused.isEmpty)
+    }
+
+    func testUnusedParticipantsSkipsCurrentIndex() {
+        // Current index 0 has "Alice" — but it should not be counted as "used"
+        // because it's the field we're computing suggestions for
+        let names = ["Alice", "Bob"]
+        let participants = ["Alice", "Bob", "Charlie"]
+        let unused = SpeakerNamingView.unusedParticipants(
+            currentIndex: 0, names: names, participants: participants,
+        )
+        // "Bob" is used (index 1), "Alice" is skipped (current), "Charlie" is unused
+        XCTAssertEqual(unused, ["Alice", "Charlie"])
+    }
+
+    // MARK: - Pure Function: computeInitialNames
+
+    func testComputeInitialNamesFromAutoMapping() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: "Roman", speakingTime: 60),
+            (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
+            (label: "SPEAKER_02", autoName: "Maria", speakingTime: 45),
+        ]
+        let names = SpeakerNamingView.computeInitialNames(speakers: speakers)
+        XCTAssertEqual(names, ["Roman", "", "Maria"])
+    }
+
+    // MARK: - Audio Playback
+
     func testPlayButtonShownWhenAudioPathPresent() throws {
         let dataWithAudio = PipelineQueue.SpeakerNamingData(
             jobID: UUID(),

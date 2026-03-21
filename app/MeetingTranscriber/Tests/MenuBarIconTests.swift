@@ -42,4 +42,38 @@ final class MenuBarIconTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Layout Math
+
+    func testBarsLayoutCentersHorizontally() {
+        let rect = NSRect(x: 0, y: 0, width: 18, height: 18)
+        let layout = MenuBarIcon.barsLayout(in: rect)
+        // 5 bars × 2.2 width + 4 gaps × (3.6 - 2.2) = 11 + 5.6 = 16.6
+        // left = (18 - 16.6) / 2 = 0.7
+        let barsWidth: CGFloat = 5 * 2.2 + 4 * (3.6 - 2.2)
+        let expectedLeft = (18 - barsWidth) / 2
+        XCTAssertEqual(layout.left, expectedLeft, accuracy: 0.01)
+    }
+
+    func testBarsLayoutCentersVertically() {
+        let rect = NSRect(x: 0, y: 0, width: 18, height: 18)
+        let layout = MenuBarIcon.barsLayout(in: rect)
+        XCTAssertEqual(layout.centerY, 9.0, accuracy: 0.01)
+    }
+
+    func testTextLayoutLeft() {
+        let rect = NSRect(x: 0, y: 0, width: 18, height: 18)
+        let layout = MenuBarIcon.textLayout(in: rect)
+        XCTAssertEqual(layout.left, 18 * 0.12, accuracy: 0.01)
+    }
+
+    func testTextLayoutTopCentersVertically() {
+        let rect = NSRect(x: 0, y: 0, width: 18, height: 18)
+        let layout = MenuBarIcon.textLayout(in: rect)
+        // 5 lines × 1.4 height + 4 gaps × (2.8 - 1.4) = 7 + 5.6 = 12.6
+        // top = 9 + 12.6/2 = 15.3
+        let linesHeight: CGFloat = 5 * 1.4 + 4 * (2.8 - 1.4)
+        let expectedTop = 18.0 / 2 + linesHeight / 2
+        XCTAssertEqual(layout.top, expectedTop, accuracy: 0.01)
+    }
 }

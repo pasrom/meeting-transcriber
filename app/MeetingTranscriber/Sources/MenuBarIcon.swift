@@ -48,12 +48,12 @@ enum MenuBarIcon {
     private static let lineWidths: [CGFloat] = [0.70, 0.55, 0.65, 0.50, 0.40]
     private static let lineLeftInset: CGFloat = 0.12 // multiplied by rect width
 
-    private static func barsLayout(in rect: NSRect) -> (left: CGFloat, centerY: CGFloat) {
+    static func barsLayout(in rect: NSRect) -> (left: CGFloat, centerY: CGFloat) {
         let barsWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * (barSpacing - barWidth)
         return (left: (rect.width - barsWidth) / 2, centerY: rect.height / 2)
     }
 
-    private static func textLayout(in rect: NSRect) -> (top: CGFloat, left: CGFloat) {
+    static func textLayout(in rect: NSRect) -> (top: CGFloat, left: CGFloat) {
         let linesHeight = CGFloat(barCount) * lineHeight + CGFloat(barCount - 1) * (lineSpacing - lineHeight)
         return (top: rect.height / 2 + linesHeight / 2, left: rect.width * lineLeftInset)
     }

@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.0"),
+        .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.17.0"),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.0"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.2"),
         .package(path: "../../tools/audiotap"),
@@ -24,7 +25,11 @@ let package = Package(
         ),
         .testTarget(
             name: "MeetingTranscriberTests",
-            dependencies: ["MeetingTranscriber", "ViewInspector"],
+            dependencies: [
+                "MeetingTranscriber",
+                "ViewInspector",
+                .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
+            ],
             path: "Tests",
             exclude: ["Fixtures"]
         ),
