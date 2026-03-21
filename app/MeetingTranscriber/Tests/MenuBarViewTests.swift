@@ -604,4 +604,87 @@ final class MenuBarViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertThrowsError(try body.find(text: "Update Available:"))
     }
+
+    // MARK: - Process Files button
+
+    func testProcessFilesButtonAlwaysExists() throws {
+        let sut = makeView(status: makeStatus(state: .idle))
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Process Audio/Video Files..."))
+    }
+
+    // MARK: - Error job display
+
+    func testErrorJobShowsErrorMessage() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Broken",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .error, error: "Transcription failed")
+
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            updateChecker: nil,
+            onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { _ in },
+            onQuit: {},
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Transcription failed"))
+    }
+
+    // MARK: - Multiple jobs
+
+    func testMultipleJobsRendered() throws {
+        let queue = PipelineQueue()
+        let job1 = PipelineJob(
+            meetingTitle: "Meeting 1",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix1.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        let job2 = PipelineJob(
+            meetingTitle: "Meeting 2",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix2.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job1)
+        queue.enqueue(job2)
+
+        let sut = MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            updateChecker: nil,
+            onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { _ in },
+            onQuit: {},
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Meeting 1"))
+        XCTAssertNoThrow(try body.find(text: "Meeting 2"))
+    }
 }

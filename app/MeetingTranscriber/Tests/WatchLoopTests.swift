@@ -204,4 +204,73 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(elapsed, 0.15, "Should wait at least maxDuration")
         XCTAssertLessThan(elapsed, 1.0, "Should not wait too long")
     }
+
+    // MARK: - Cancellation
+
+    func testStopDuringWatchingCleansUp() {
+        let loop = makeLoop()
+        loop.start()
+        XCTAssertEqual(loop.state, .watching)
+
+        loop.stop()
+        XCTAssertEqual(loop.state, .idle)
+        XCTAssertFalse(loop.isActive)
+    }
+
+    // MARK: - Pipeline Queue Wiring
+
+    func testPipelineQueuePassedToConstructor() {
+        let queue = PipelineQueue()
+        let loop = WatchLoop(
+            detector: PowerAssertionDetector(),
+            pipelineQueue: queue,
+        )
+        XCTAssertNotNil(loop.pipelineQueue)
+    }
+
+    // MARK: - Manual Recording
+
+    func testStartManualRecordingChangesState() throws {
+        let (loop, recorder) = makeTestWatchLoop()
+        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+
+        XCTAssertTrue(loop.isManualRecording)
+        XCTAssertTrue(recorder.startCalled)
+    }
+
+    func testManualRecordingHasMeetingInfo() throws {
+        let (loop, _) = makeTestWatchLoop()
+        try loop.startManualRecording(pid: 42, appName: "Safari", title: "Standup")
+        defer { loop.stop() }
+
+        XCTAssertEqual(loop.manualRecordingInfo?.appName, "Safari")
+        XCTAssertEqual(loop.manualRecordingInfo?.title, "Standup")
+    }
+
+    func testStopManualRecordingClearsState() throws {
+        let (loop, _) = makeTestWatchLoop()
+        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
+        loop.stop()
+
+        XCTAssertFalse(loop.isManualRecording)
+        XCTAssertEqual(loop.state, .idle)
+    }
+
+    // MARK: - Clean Title Edge Cases
+
+    func testCleanTitleNoMatchReturnsOriginal() {
+        XCTAssertEqual(
+            WatchLoop.cleanTitle("Some Random Window"),
+            "Some Random Window",
+        )
+    }
+
+    func testCleanTitleMultiplePipes() {
+        // Only the last pipe-separated suffix should be removed for Teams
+        XCTAssertEqual(
+            WatchLoop.cleanTitle("Channel | Meeting | Microsoft Teams"),
+            "Channel | Meeting",
+        )
+    }
 }

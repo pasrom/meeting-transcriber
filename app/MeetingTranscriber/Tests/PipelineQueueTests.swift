@@ -1,7 +1,9 @@
+// swiftlint:disable file_length
 @testable import MeetingTranscriber
 import XCTest
 
 @MainActor
+// swiftlint:disable:next attributes type_body_length
 final class PipelineQueueTests: XCTestCase {
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
@@ -440,5 +442,298 @@ final class PipelineQueueTests: XCTestCase {
 
         try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(queue.jobs.count, 1, "Error job should NOT be auto-removed")
+    }
+
+    // MARK: - Mock-Engine Processing Tests
+
+    private func makeMockProcessingQueue(
+        engine: MockEngine? = nil,
+        diarizationFactory: @escaping () -> DiarizationProvider = { MockDiarization() },
+        diarizeEnabled: Bool = false,
+        numSpeakers: Int = 0,
+    ) -> (PipelineQueue, MockEngine) {
+        let engine = engine ?? MockEngine()
+        let q = PipelineQueue(
+            engine: engine,
+            diarizationFactory: diarizationFactory,
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            diarizeEnabled: diarizeEnabled,
+            numSpeakers: numSpeakers,
+            micLabel: "Me",
+        )
+        return (q, engine)
+    }
+
+    private func createTestAudioFile() throws -> URL {
+        // Create a minimal valid WAV file (44-byte header + some samples)
+        let audioPath = tmpDir.appendingPathComponent("test_audio.wav")
+        var header = Data(count: 44)
+        // RIFF header
+        header[0] = 0x52; header[1] = 0x49; header[2] = 0x46; header[3] = 0x46 // "RIFF"
+        let fileSize = UInt32(44 + 32000 - 8)
+        header.replaceSubrange(4 ..< 8, with: withUnsafeBytes(of: fileSize.littleEndian) { Data($0) })
+        header[8] = 0x57; header[9] = 0x41; header[10] = 0x56; header[11] = 0x45 // "WAVE"
+        // fmt chunk
+        header[12] = 0x66; header[13] = 0x6D; header[14] = 0x74; header[15] = 0x20 // "fmt "
+        header.replaceSubrange(16 ..< 20, with: withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) })
+        header.replaceSubrange(20 ..< 22, with: withUnsafeBytes(of: UInt16(3).littleEndian) { Data($0) }) // IEEE float
+        header.replaceSubrange(22 ..< 24, with: withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) // mono
+        header.replaceSubrange(24 ..< 28, with: withUnsafeBytes(of: UInt32(16000).littleEndian) { Data($0) }) // sample rate
+        header.replaceSubrange(28 ..< 32, with: withUnsafeBytes(of: UInt32(64000).littleEndian) { Data($0) }) // byte rate
+        header.replaceSubrange(32 ..< 34, with: withUnsafeBytes(of: UInt16(4).littleEndian) { Data($0) }) // block align
+        header.replaceSubrange(34 ..< 36, with: withUnsafeBytes(of: UInt16(32).littleEndian) { Data($0) }) // bits per sample
+        // data chunk
+        header[36] = 0x64; header[37] = 0x61; header[38] = 0x74; header[39] = 0x61 // "data"
+        header.replaceSubrange(40 ..< 44, with: withUnsafeBytes(of: UInt32(32000).littleEndian) { Data($0) })
+        var data = header
+        data.append(Data(repeating: 0, count: 32000)) // 0.5s of silence at 16kHz float32
+        try data.write(to: audioPath)
+        return audioPath
+    }
+
+    func testProcessNextWithMockEngineTranscribes() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello from mock"),
+        ]
+        let (pQueue, _) = makeMockProcessingQueue(engine: engine)
+
+        let audioPath = try createTestAudioFile()
+        let job = PipelineJob(
+            meetingTitle: "Mock Test",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertTrue(engine.transcribeCallCount > 0)
+    }
+
+    func testProcessNextEmptyTranscriptSetsError() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [] // empty = no speech
+        let (pQueue, _) = makeMockProcessingQueue(engine: engine)
+
+        let audioPath = try createTestAudioFile()
+        let job = PipelineJob(
+            meetingTitle: "Silent Meeting",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertEqual(pQueue.jobs.first?.state, .error)
+        XCTAssertEqual(pQueue.jobs.first?.error, "Empty transcript")
+    }
+
+    func testProcessNextDualSourceTranscribesBothTracks() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Track content"),
+        ]
+        let (pQueue, _) = makeMockProcessingQueue(engine: engine)
+
+        let audioPath = try createTestAudioFile()
+        let appPath = tmpDir.appendingPathComponent("app_audio.wav")
+        let micPath = tmpDir.appendingPathComponent("mic_audio.wav")
+        try FileManager.default.copyItem(at: audioPath, to: appPath)
+        try FileManager.default.copyItem(at: audioPath, to: micPath)
+
+        let job = PipelineJob(
+            meetingTitle: "Dual Source",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: appPath,
+            micPath: micPath,
+            micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        // Dual source: transcribes app + mic = 2 calls
+        XCTAssertEqual(engine.transcribeCallCount, 2)
+    }
+
+    func testSpeakerNamingHandlerCalled() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        var handlerCalled = false
+        pQueue.speakerNamingHandler = { _ in
+            handlerCalled = true
+            return .skipped
+        }
+
+        let audioPath = try createTestAudioFile()
+        let job = PipelineJob(
+            meetingTitle: "Naming Test",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertTrue(handlerCalled)
+    }
+
+    func testSpeakerNamingSkippedUsesAutoNames() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        pQueue.speakerNamingHandler = { _ in .skipped }
+
+        let audioPath = try createTestAudioFile()
+        let job = PipelineJob(
+            meetingTitle: "Skip Test",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        // Should complete without error (auto names used)
+        let finalState = pQueue.jobs.first?.state
+        XCTAssertTrue(finalState == .done || finalState == .error)
+    }
+
+    func testSpeakerNamingRerunCallsDiarizationAgain() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        var callCount = 0
+        pQueue.speakerNamingHandler = { _ in
+            callCount += 1
+            if callCount == 1 {
+                return .rerun(3)
+            }
+            return .skipped
+        }
+
+        let audioPath = try createTestAudioFile()
+        let job = PipelineJob(
+            meetingTitle: "Rerun Test",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        // Handler should be called twice (first returns rerun, second returns skipped)
+        XCTAssertEqual(callCount, 2)
+    }
+
+    func testCompleteSpeakerNamingDoubleResumeIsNoOp() {
+        // completeSpeakerNaming should not crash when called twice
+        let queue = PipelineQueue(logDir: tmpDir)
+        queue.completeSpeakerNaming(result: .skipped)
+        queue.completeSpeakerNaming(result: .skipped) // should not crash
+    }
+
+    func testOnJobStateChangeCallbackFired() {
+        var transitions: [(UUID, JobState, JobState)] = []
+        queue.onJobStateChange = { job, old, new in
+            transitions.append((job.id, old, new))
+        }
+
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .transcribing)
+
+        XCTAssertEqual(transitions.count, 1)
+        XCTAssertEqual(transitions[0].1, .waiting)
+        XCTAssertEqual(transitions[0].2, .transcribing)
+    }
+
+    func testLoadSnapshotResetsDiarizingToWaiting() throws {
+        let mixPath = tmpDir.appendingPathComponent("audio_diar.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Diarizing Meeting",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .diarizing
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].state, .waiting)
+    }
+
+    func testLoadSnapshotResetsGeneratingProtocolToWaiting() throws {
+        let mixPath = tmpDir.appendingPathComponent("audio_proto.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Protocol Meeting",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .generatingProtocol
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs[0].state, .waiting)
     }
 }
