@@ -84,6 +84,12 @@ struct MeetingTranscriberApp: App {
 
                 case .parakeet:
                     await appState.parakeetEngine.loadModel()
+
+                case .qwen3:
+                    if #available(macOS 15, *) {
+                        appState.qwen3Engine.language = appState.settings.qwen3LanguageOrNil
+                        await appState.qwen3Engine.loadModel()
+                    }
                 }
             }
             .task {
@@ -109,6 +115,12 @@ struct MeetingTranscriberApp: App {
                 settings: appState.settings,
                 whisperKitEngine: appState.whisperKit,
                 parakeetEngine: appState.parakeetEngine,
+                qwen3Engine: {
+                    if #available(macOS 15, *) {
+                        return appState.qwen3Engine
+                    }
+                    return nil
+                }(),
                 updateChecker: appState.updateChecker,
             )
         }

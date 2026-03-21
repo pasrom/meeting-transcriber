@@ -5,12 +5,29 @@ private let defaults = UserDefaults.standard
 enum TranscriptionEngineSetting: String, CaseIterable {
     case whisperKit
     case parakeet
+    case qwen3
 
     var label: String {
         switch self {
         case .whisperKit: "WhisperKit (Whisper)"
         case .parakeet: "Parakeet TDT v3 (NVIDIA)"
+        case .qwen3: "Qwen3-ASR (Alibaba)"
         }
+    }
+
+    /// Whether this engine is available on the current macOS version.
+    var isAvailable: Bool {
+        switch self {
+        case .whisperKit, .parakeet: true
+
+        case .qwen3:
+            if #available(macOS 15, *) { true } else { false }
+        }
+    }
+
+    /// Cases available on the current platform. Used in UI pickers instead of allCases.
+    static var availableCases: [Self] {
+        allCases.filter(\.isAvailable)
     }
 }
 
@@ -108,6 +125,16 @@ final class AppSettings {
     /// Language as Optional for WhisperKit. Empty string → nil (auto-detect).
     var whisperLanguageOrNil: String? {
         whisperLanguage.isEmpty ? nil : whisperLanguage
+    }
+
+    /// Qwen3-ASR language hint (ISO 639-1 code). Empty string = auto-detect.
+    var qwen3Language: String = defaults.object(forKey: "qwen3Language") as? String ?? "" {
+        didSet { defaults.set(qwen3Language, forKey: "qwen3Language") }
+    }
+
+    /// Language as Optional for Qwen3. Empty string → nil (auto-detect).
+    var qwen3LanguageOrNil: String? {
+        qwen3Language.isEmpty ? nil : qwen3Language
     }
 
     var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {

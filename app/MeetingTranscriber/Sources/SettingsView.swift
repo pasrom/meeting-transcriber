@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
+    var qwen3Engine: (any TranscribingEngine)? // nil on macOS < 15
     var updateChecker: UpdateChecker?
 
     enum ConnectionTestResult {
@@ -49,6 +50,39 @@ struct SettingsView: View {
         ("pt", "Portugu\u{00EA}s"),
         ("ja", "日本語"),
         ("zh", "中文"),
+    ]
+
+    private let qwen3Languages: [(code: String, label: String)] = [
+        ("de", "Deutsch"),
+        ("en", "English"),
+        ("fr", "Fran\u{00E7}ais"),
+        ("es", "Espa\u{00F1}ol"),
+        ("it", "Italiano"),
+        ("nl", "Nederlands"),
+        ("pt", "Portugu\u{00EA}s"),
+        ("ja", "\u{65E5}\u{672C}\u{8A9E}"),
+        ("zh", "\u{4E2D}\u{6587}"),
+        ("ko", "\u{D55C}\u{AD6D}\u{C5B4}"),
+        ("ru", "\u{0420}\u{0443}\u{0441}\u{0441}\u{043A}\u{0438}\u{0439}"),
+        ("ar", "\u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064A}\u{0629}"),
+        ("tr", "T\u{00FC}rk\u{00E7}e"),
+        ("hi", "\u{0939}\u{093F}\u{0928}\u{094D}\u{0926}\u{0940}"),
+        ("th", "\u{0E44}\u{0E17}\u{0E22}"),
+        ("vi", "Ti\u{1EBF}ng Vi\u{1EC7}t"),
+        ("id", "Bahasa Indonesia"),
+        ("ms", "Bahasa Melayu"),
+        ("sv", "Svenska"),
+        ("da", "Dansk"),
+        ("fi", "Suomi"),
+        ("pl", "Polski"),
+        ("cs", "\u{010C}e\u{0161}tina"),
+        ("el", "\u{0395}\u{03BB}\u{03BB}\u{03B7}\u{03BD}\u{03B9}\u{03BA}\u{03AC}"),
+        ("hu", "Magyar"),
+        ("ro", "Rom\u{00E2}n\u{0103}"),
+        ("fa", "\u{0641}\u{0627}\u{0631}\u{0633}\u{06CC}"),
+        ("fil", "Filipino"),
+        ("mk", "\u{041C}\u{0430}\u{043A}\u{0435}\u{0434}\u{043E}\u{043D}\u{0441}\u{043A}\u{0438}"),
+        ("yue", "\u{7CB5}\u{8A9E}"),
     ]
 
     var body: some View {
@@ -110,9 +144,10 @@ struct SettingsView: View {
                 }
             }
 
+            // swiftlint:disable:next closure_body_length
             Section("Transcription") {
                 Picker("Engine", selection: $settings.transcriptionEngine) {
-                    ForEach(TranscriptionEngineSetting.allCases, id: \.self) { engine in
+                    ForEach(TranscriptionEngineSetting.availableCases, id: \.self) { engine in
                         Text(engine.label).tag(engine)
                     }
                 }
@@ -126,6 +161,15 @@ struct SettingsView: View {
 
                     Picker("Language", selection: $settings.whisperLanguage) {
                         ForEach(whisperLanguages, id: \.code) { lang in
+                            Text(lang.label).tag(lang.code)
+                        }
+                    }
+                }
+
+                if settings.transcriptionEngine == .qwen3 {
+                    Picker("Language", selection: $settings.qwen3Language) {
+                        Text("Auto-detect").tag("")
+                        ForEach(qwen3Languages, id: \.code) { lang in
                             Text(lang.label).tag(lang.code)
                         }
                     }
@@ -427,7 +471,11 @@ struct SettingsView: View {
 
     /// Active engine for status display.
     private var activeEngine: any TranscribingEngine {
-        settings.transcriptionEngine == .parakeet ? parakeetEngine : whisperKitEngine
+        switch settings.transcriptionEngine {
+        case .parakeet: parakeetEngine
+        case .qwen3: qwen3Engine ?? whisperKitEngine // Fallback for macOS < 15
+        case .whisperKit: whisperKitEngine
+        }
     }
 
     @ViewBuilder
@@ -458,6 +506,10 @@ struct SettingsView: View {
             Button("Load Model") {
                 if settings.transcriptionEngine == .whisperKit {
                     whisperKitEngine.modelVariant = settings.whisperKitModel
+                }
+                if #available(macOS 15, *), settings.transcriptionEngine == .qwen3,
+                   let qe = qwen3Engine as? Qwen3AsrEngine {
+                    qe.language = settings.qwen3LanguageOrNil
                 }
                 Task { await engine.loadModel() }
             }

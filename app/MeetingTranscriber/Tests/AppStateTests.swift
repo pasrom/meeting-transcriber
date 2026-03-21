@@ -2,7 +2,7 @@
 import XCTest
 
 @MainActor
-final class AppStateTests: XCTestCase {
+final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_length
     // MARK: - Helpers
 
     /// Yields repeatedly until `condition()` is true or the timeout elapses.
@@ -517,6 +517,47 @@ final class AppStateTests: XCTestCase {
     func testEnsurePipelineQueueWithParakeet() {
         let settings = AppSettings()
         settings.transcriptionEngine = .parakeet
+        let state = AppState(settings: settings)
+
+        state.ensurePipelineQueue()
+
+        XCTAssertNotNil(state.pipelineQueue.engine)
+    }
+
+    func testActiveTranscriptionEngineReturnsQwen3WhenSet() {
+        guard #available(macOS 15, *) else { return }
+        let settings = AppSettings()
+        settings.transcriptionEngine = .qwen3
+        let state = AppState(settings: settings)
+        XCTAssertTrue(state.activeTranscriptionEngine is Qwen3AsrEngine)
+    }
+
+    func testActiveTranscriptionEngineSwitchesToQwen3AndBack() {
+        guard #available(macOS 15, *) else { return }
+        let settings = AppSettings()
+        settings.transcriptionEngine = .whisperKit
+        let state = AppState(settings: settings)
+        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+
+        settings.transcriptionEngine = .qwen3
+        XCTAssertTrue(state.activeTranscriptionEngine is Qwen3AsrEngine)
+
+        settings.transcriptionEngine = .parakeet
+        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+    }
+
+    func testMakePipelineQueueUsesQwen3Engine() {
+        guard #available(macOS 15, *) else { return }
+        let settings = AppSettings()
+        settings.transcriptionEngine = .qwen3
+        let state = AppState(settings: settings)
+        XCTAssertNotNil(state.makePipelineQueue().engine, "Qwen3 engine should be set")
+    }
+
+    func testEnsurePipelineQueueWithQwen3() {
+        guard #available(macOS 15, *) else { return }
+        let settings = AppSettings()
+        settings.transcriptionEngine = .qwen3
         let state = AppState(settings: settings)
 
         state.ensurePipelineQueue()

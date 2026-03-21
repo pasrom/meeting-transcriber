@@ -26,7 +26,16 @@ final class AppState {
     let settings: AppSettings
     let whisperKit: WhisperKitEngine
     let parakeetEngine: ParakeetEngine
+    // Only created on macOS 15+ where Qwen3-ASR is available.
+    private let _qwen3Engine: AnyObject?
     private let notifier: any AppNotifying
+
+    /// Typed accessor (only callable under @available(macOS 15, *) checks).
+    @available(macOS 15, *)
+    var qwen3Engine: Qwen3AsrEngine {
+        // swiftlint:disable:next force_cast
+        _qwen3Engine as! Qwen3AsrEngine
+    }
 
     // MARK: - State
 
@@ -40,12 +49,18 @@ final class AppState {
         settings: AppSettings = AppSettings(),
         whisperKit: WhisperKitEngine? = nil,
         parakeetEngine: ParakeetEngine? = nil,
+        qwen3Engine: AnyObject? = nil,
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
     ) {
         self.settings = settings
         self.whisperKit = whisperKit ?? WhisperKitEngine()
         self.parakeetEngine = parakeetEngine ?? ParakeetEngine()
+        if #available(macOS 15, *) {
+            self._qwen3Engine = (qwen3Engine as? Qwen3AsrEngine) ?? Qwen3AsrEngine()
+        } else {
+            self._qwen3Engine = nil
+        }
         self.notifier = notifier
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
@@ -53,7 +68,20 @@ final class AppState {
 
     /// The active transcription engine based on the current settings.
     var activeTranscriptionEngine: any TranscribingEngine {
-        settings.transcriptionEngine == .parakeet ? parakeetEngine : whisperKit
+        switch settings.transcriptionEngine {
+        case .parakeet:
+            parakeetEngine
+
+        case .qwen3:
+            if #available(macOS 15, *) {
+                qwen3Engine
+            } else {
+                whisperKit // Fallback (should not happen -- UI prevents selection)
+            }
+
+        case .whisperKit:
+            whisperKit
+        }
     }
 
     // MARK: - Derived properties
@@ -125,9 +153,7 @@ final class AppState {
             Task { @MainActor in
                 _ = await Permissions.ensureMicrophoneAccess()
 
-                if settings.transcriptionEngine == .whisperKit {
-                    whisperKit.language = settings.whisperLanguageOrNil
-                }
+                syncLanguageSettings()
                 pipelineQueue = makePipelineQueue()
 
                 let detector: MeetingDetecting = PowerAssertionDetector()
@@ -227,11 +253,19 @@ final class AppState {
 
     // MARK: - Pipeline
 
-    func ensurePipelineQueue() {
-        guard pipelineQueue.engine == nil else { return }
+    /// Apply language settings to the active engine before creating a pipeline.
+    private func syncLanguageSettings() {
         if settings.transcriptionEngine == .whisperKit {
             whisperKit.language = settings.whisperLanguageOrNil
         }
+        if #available(macOS 15, *), settings.transcriptionEngine == .qwen3 {
+            qwen3Engine.language = settings.qwen3LanguageOrNil
+        }
+    }
+
+    func ensurePipelineQueue() {
+        guard pipelineQueue.engine == nil else { return }
+        syncLanguageSettings()
         pipelineQueue = makePipelineQueue()
         configurePipelineCallbacks()
     }
