@@ -123,4 +123,75 @@ final class SpeakerNamingViewTests: XCTestCase {
         let names = speakers.map { $0.autoName ?? "" }
         XCTAssertEqual(names.first, "Maria")
     }
+
+    // MARK: - Rerun
+
+    func testRerunButtonExists() throws {
+        let sut = SpeakerNamingView(data: makeData()) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Re-run"))
+    }
+
+    func testRerunButtonCallsOnCompleteWithRerun() throws {
+        var result: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(data: makeData()) { result = $0 }
+        let body = try sut.inspect()
+        try body.find(button: "Re-run").tap()
+        if case .rerun = result {
+            // expected
+        } else {
+            XCTFail("Expected .rerun, got \(String(describing: result))")
+        }
+    }
+
+    // MARK: - Multiple Speakers
+
+    func testMultipleSpeakersRenderedInLabelOrder() throws {
+        let data = makeData(
+            mapping: [
+                "SPEAKER_00": "SPEAKER_00",
+                "SPEAKER_01": "Anna",
+                "SPEAKER_02": "SPEAKER_02",
+            ],
+            speakingTimes: [
+                "SPEAKER_00": 60, "SPEAKER_01": 30, "SPEAKER_02": 45,
+            ],
+        )
+        let sut = SpeakerNamingView(data: data) { _ in }
+        let body = try sut.inspect()
+        let groups = body.findAll(ViewType.GroupBox.self)
+        XCTAssertEqual(groups.count, 3)
+    }
+
+    func testSpeakerRowShowsFormattedTime() throws {
+        let data = makeData(
+            mapping: ["SPEAKER_00": "SPEAKER_00"],
+            speakingTimes: ["SPEAKER_00": 90.0],
+        )
+        let sut = SpeakerNamingView(data: data) { _ in }
+        let body = try sut.inspect()
+        // formattedTime(90) = "1:30"
+        let texts = body.findAll(ViewType.Text.self)
+        let found = texts.contains { (try? $0.string())?.contains("1:30") == true }
+        XCTAssertTrue(found, "Should show '1:30' for 90 seconds")
+    }
+
+    func testPlayButtonShownWhenAudioPathPresent() throws {
+        let dataWithAudio = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(),
+            meetingTitle: "Test",
+            mapping: ["SPEAKER_00": "SPEAKER_00"],
+            speakingTimes: ["SPEAKER_00": 60],
+            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
+            audioPath: URL(fileURLWithPath: "/tmp/audio.wav"),
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_00")],
+            participants: [],
+        )
+        let sut = SpeakerNamingView(data: dataWithAudio) { _ in }
+        let body = try sut.inspect()
+        // Play button uses system image "play.circle.fill"
+        let images = body.findAll(ViewType.Image.self)
+        let hasPlayIcon = images.contains { (try? $0.actualImage().name()) == "play.circle.fill" }
+        XCTAssertTrue(hasPlayIcon, "Play button should be shown when audioPath is present")
+    }
 }

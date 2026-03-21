@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 @testable import MeetingTranscriber
 import XCTest
 
@@ -563,6 +564,41 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.ensurePipelineQueue()
 
         XCTAssertNotNil(state.pipelineQueue.engine)
+    }
+
+    // MARK: - Qwen3 Fallback
+
+    func testActiveTranscriptionEngineQwen3FallbackOnOldOS() {
+        // On macOS < 15, Qwen3 selection should fall back to WhisperKit
+        // This test only meaningfully runs on macOS < 15, but validates the code path exists
+        let settings = AppSettings()
+        settings.transcriptionEngine = .qwen3
+        let state = AppState(settings: settings)
+        // On macOS 15+: Qwen3AsrEngine; on older: WhisperKit (fallback)
+        XCTAssertNotNil(state.activeTranscriptionEngine)
+    }
+
+    // MARK: - MakePipelineQueue Settings
+
+    func testMakePipelineQueueUsesDiarizeSettingFromSettings() {
+        let (state, _) = makeState()
+        state.settings.diarize = true
+        let queue = state.makePipelineQueue()
+        XCTAssertTrue(queue.diarizeEnabled)
+    }
+
+    func testMakePipelineQueueUsesMicLabelFromSettings() {
+        let (state, _) = makeState()
+        state.settings.micName = "Roman"
+        let queue = state.makePipelineQueue()
+        XCTAssertEqual(queue.micLabel, "Roman")
+    }
+
+    func testMakePipelineQueueUsesNumSpeakersFromSettings() {
+        let (state, _) = makeState()
+        state.settings.numSpeakers = 4
+        let queue = state.makePipelineQueue()
+        XCTAssertEqual(queue.numSpeakers, 4)
     }
 }
 

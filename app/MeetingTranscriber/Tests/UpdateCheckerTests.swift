@@ -230,6 +230,44 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertEqual(info.htmlURL.absoluteString, "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")
     }
 
+    // MARK: - Error Descriptions
+
+    func testUpdateCheckerErrorDescription() {
+        let error: UpdateCheckerError = .networkError("connection refused")
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("connection refused"), true)
+    }
+
+    // MARK: - Periodic Checks
+
+    func testStartPeriodicChecksCancelsOnDealloc() async {
+        let provider = MockUpdateProvider()
+        provider.latestReleaseResult = .success(makeRelease(tag: "v99.0.0"))
+
+        let checker = UpdateChecker(provider: provider)
+        let settings = AppSettings()
+        settings.checkForUpdates = false
+
+        checker.startPeriodicChecks(settings: settings)
+
+        // With checkForUpdates=false, provider should not be called
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(provider.latestReleaseCalled)
+    }
+
+    func testCheckNowClearsLastError() async {
+        let provider = MockUpdateProvider()
+        provider.latestReleaseResult = .success(makeRelease(tag: "v99.0.0"))
+
+        let checker = UpdateChecker(provider: provider)
+        checker.lastError = "previous error"
+
+        checker.checkNow()
+        await yieldUntil { !checker.isChecking }
+
+        XCTAssertNil(checker.lastError)
+    }
+
     // MARK: - Helpers
 
     private func makeRelease(

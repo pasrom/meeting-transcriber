@@ -158,6 +158,7 @@ nesting:
 file_name:
   excluded:
     - MeetingPatterns.swift
+    - MeetingPatternsTests.swift
     - TestHelpers.swift
     - WhisperKitDualSourceTests.swift
     - main.swift

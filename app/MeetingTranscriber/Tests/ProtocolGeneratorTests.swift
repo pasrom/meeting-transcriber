@@ -265,4 +265,62 @@ final class ProtocolGeneratorTests: XCTestCase {
             )
         }
     #endif
+
+    // MARK: - Error Descriptions
+
+    func testProtocolErrorEmptyProtocol() {
+        let error: ProtocolError = .emptyProtocol
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("empty"), true)
+    }
+
+    func testProtocolErrorHTTPError() {
+        let error: ProtocolError = .httpError(500, "Internal Server Error")
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("500"), true)
+    }
+
+    func testProtocolErrorConnectionFailed() {
+        let error: ProtocolError = .connectionFailed("timeout")
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("timeout"), true)
+    }
+
+    #if !APPSTORE
+        func testProtocolErrorCLINotFound() {
+            let error: ProtocolError = .cliNotFound("claude")
+            XCTAssertNotNil(error.errorDescription)
+            XCTAssertEqual(error.errorDescription?.contains("claude"), true)
+        }
+
+        func testProtocolErrorCLIFailed() {
+            let error: ProtocolError = .cliFailed(1, "something went wrong")
+            XCTAssertNotNil(error.errorDescription)
+            XCTAssertEqual(error.errorDescription?.contains("1"), true)
+        }
+
+        func testProtocolErrorTimeout() {
+            let error: ProtocolError = .timeout
+            XCTAssertNotNil(error.errorDescription)
+        }
+    #endif
+
+    // MARK: - RecorderError Descriptions
+
+    func testRecorderErrorNotRecording() {
+        let error: RecorderError = .notRecording
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("Not currently recording"), true)
+    }
+
+    func testRecorderErrorNoAudioData() {
+        let error: RecorderError = .noAudioData
+        XCTAssertNotNil(error.errorDescription)
+    }
+
+    func testRecorderErrorUnsupportedOS() {
+        let error: RecorderError = .unsupportedOS
+        XCTAssertNotNil(error.errorDescription)
+        XCTAssertEqual(error.errorDescription?.contains("14.2"), true)
+    }
 }

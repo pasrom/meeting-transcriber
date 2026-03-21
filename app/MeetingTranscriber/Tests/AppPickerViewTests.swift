@@ -73,4 +73,30 @@ final class AppPickerViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Record App"))
     }
+
+    // MARK: - Meeting Title TextField
+
+    func testMeetingTitlePlaceholderExists() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            onStartRecording: { _, _, _ in },
+            onCancel: {},
+        )
+        let body = try sut.inspect()
+        // TextField has placeholder "Meeting title (optional)"
+        XCTAssertNoThrow(try body.find(ViewType.TextField.self))
+    }
+
+    // MARK: - Empty State
+
+    func testEmptyAppListStillShowsButtons() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: []),
+            onStartRecording: { _, _, _ in },
+            onCancel: {},
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Start Recording"))
+        XCTAssertNoThrow(try body.find(button: "Cancel"))
+    }
 }

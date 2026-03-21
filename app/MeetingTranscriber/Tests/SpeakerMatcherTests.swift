@@ -415,4 +415,57 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
         XCTAssertEqual(result["SPEAKER_1"], "SPEAKER_1")
     }
+
+    // MARK: - Additional Edge Cases
+
+    func testMatchSingleSpeakerOneStored() {
+        // Only one speaker to match against one stored → should match
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.40, confidenceMargin: 0.10)
+        let stored = [StoredSpeaker(name: "Roman", embeddings: [[1, 0, 0]])]
+        matcher.saveDB(stored)
+
+        let embeddings: [String: [Float]] = ["SPEAKER_0": [0.95, 0.1, 0]]
+        let result = matcher.match(embeddings: embeddings)
+        // Single stored speaker → no confidence margin needed
+        XCTAssertEqual(result["SPEAKER_0"], "Roman")
+    }
+
+    func testPreMatchParticipants_singleSpeakerSingleParticipant() {
+        let mapping = ["SPEAKER_0": "SPEAKER_0"]
+        let speakingTimes: [String: TimeInterval] = ["SPEAKER_0": 120.0]
+        let participants = ["Alice"]
+
+        let result = SpeakerMatcher.preMatchParticipants(
+            mapping: mapping,
+            speakingTimes: speakingTimes,
+            participants: participants,
+        )
+        XCTAssertEqual(result["SPEAKER_0"], "Alice")
+    }
+
+    func testUpdateDBDoesNotDuplicateExistingSpeaker() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Roman", embeddings: [[1, 0, 0]])])
+
+        matcher.updateDB(
+            mapping: ["SPEAKER_0": "Roman"],
+            embeddings: ["SPEAKER_0": [0.95, 0.1, 0]],
+        )
+
+        let loaded = matcher.loadDB()
+        // Should still be just one speaker, not two
+        let romanCount = loaded.count { $0.name == "Roman" }
+        XCTAssertEqual(romanCount, 1)
+        // Should have 2 embeddings now
+        XCTAssertEqual(loaded.first { $0.name == "Roman" }?.embeddings.count, 2)
+    }
+
+    func testMatchWithEmptyEmbeddingsReturnsOriginal() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = [StoredSpeaker(name: "Roman", embeddings: [[1, 0, 0]])]
+        matcher.saveDB(stored)
+
+        let result = matcher.match(embeddings: [:])
+        XCTAssertTrue(result.isEmpty)
+    }
 }

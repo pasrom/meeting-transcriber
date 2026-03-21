@@ -76,7 +76,7 @@ class MicRecorder {
     }
 
     /// Stop recording and return the output file URL.
-    func stop() { // swiftlint:disable:this unused_declaration
+    func stop() {
         guard isRecording else { return }
         isRecording = false
 
