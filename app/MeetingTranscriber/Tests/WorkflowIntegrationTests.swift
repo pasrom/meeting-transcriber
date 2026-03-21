@@ -166,4 +166,26 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertTrue(h.protocolGen.generateCalled)
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
     }
+
+    // MARK: - Happy Path: Dual-Source
+
+    func testWorkflowDualSource() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: false)
+        let job = try makeDualSourceJob(audioPath: h.audioPath)
+
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Engine called twice (app + mic tracks)
+        XCTAssertEqual(h.engine.transcribeCallCount, 2)
+
+        // Protocol generated with merged transcript containing "Remote" label
+        XCTAssertTrue(h.protocolGen.generateCalled)
+        XCTAssertTrue(
+            h.protocolGen.capturedTranscript?.contains("Remote") ?? false,
+            "Dual-source transcript should contain 'Remote' speaker label",
+        )
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+    }
 }
