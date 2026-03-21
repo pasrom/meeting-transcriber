@@ -138,4 +138,32 @@ final class WorkflowIntegrationTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
         }
     }
+
+    // MARK: - Happy Path: Single-Source, Diarization + Speaker Naming
+
+    func testWorkflowWithDiarizationAndNaming() async throws {
+        let (h, collector) = try makeHarness(diarizeEnabled: true)
+
+        h.queue.speakerNamingHandler = { data in
+            // Verify naming data is populated
+            XCTAssertFalse(data.mapping.isEmpty)
+            XCTAssertFalse(data.speakingTimes.isEmpty)
+            return .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"])
+        }
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // State transitions: waiting → transcribing → diarizing → generatingProtocol → done
+        XCTAssertEqual(
+            collector.transitions.map(\.1),
+            [.transcribing, .diarizing, .generatingProtocol, .done],
+        )
+
+        // Diarization called once, protocol generated
+        XCTAssertEqual(h.diarization.runCount, 1)
+        XCTAssertTrue(h.protocolGen.generateCalled)
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+    }
 }
