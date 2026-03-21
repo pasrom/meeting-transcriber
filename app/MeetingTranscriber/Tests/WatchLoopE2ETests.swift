@@ -299,7 +299,7 @@ final class WatchLoopE2ETests: XCTestCase {
         // Protocol should still be generated (diarization skipped gracefully)
         XCTAssertTrue(mockProtocol.generateCalled, "Protocol should be generated even when diarization is unavailable")
         XCTAssertEqual(queue.jobs[0].state, .done, "Job should complete despite unavailable diarization")
-        XCTAssertFalse(mockDiarize.runCalled, "Diarization should NOT have been run")
+        XCTAssertEqual(mockDiarize.runCount, 0, "Diarization should NOT have been run")
 
         // Verify the transcript was passed as non-diarized
         XCTAssertFalse(mockProtocol.capturedDiarized ?? true, "Should be marked as non-diarized")

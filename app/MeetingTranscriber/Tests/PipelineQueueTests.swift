@@ -466,33 +466,6 @@ final class PipelineQueueTests: XCTestCase {
         return (q, engine)
     }
 
-    private func createTestAudioFile() throws -> URL {
-        // Create a minimal valid WAV file (44-byte header + some samples)
-        let audioPath = tmpDir.appendingPathComponent("test_audio.wav")
-        var header = Data(count: 44)
-        // RIFF header
-        header[0] = 0x52; header[1] = 0x49; header[2] = 0x46; header[3] = 0x46 // "RIFF"
-        let fileSize = UInt32(44 + 32000 - 8)
-        header.replaceSubrange(4 ..< 8, with: withUnsafeBytes(of: fileSize.littleEndian) { Data($0) })
-        header[8] = 0x57; header[9] = 0x41; header[10] = 0x56; header[11] = 0x45 // "WAVE"
-        // fmt chunk
-        header[12] = 0x66; header[13] = 0x6D; header[14] = 0x74; header[15] = 0x20 // "fmt "
-        header.replaceSubrange(16 ..< 20, with: withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) })
-        header.replaceSubrange(20 ..< 22, with: withUnsafeBytes(of: UInt16(3).littleEndian) { Data($0) }) // IEEE float
-        header.replaceSubrange(22 ..< 24, with: withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) }) // mono
-        header.replaceSubrange(24 ..< 28, with: withUnsafeBytes(of: UInt32(16000).littleEndian) { Data($0) }) // sample rate
-        header.replaceSubrange(28 ..< 32, with: withUnsafeBytes(of: UInt32(64000).littleEndian) { Data($0) }) // byte rate
-        header.replaceSubrange(32 ..< 34, with: withUnsafeBytes(of: UInt16(4).littleEndian) { Data($0) }) // block align
-        header.replaceSubrange(34 ..< 36, with: withUnsafeBytes(of: UInt16(32).littleEndian) { Data($0) }) // bits per sample
-        // data chunk
-        header[36] = 0x64; header[37] = 0x61; header[38] = 0x74; header[39] = 0x61 // "data"
-        header.replaceSubrange(40 ..< 44, with: withUnsafeBytes(of: UInt32(32000).littleEndian) { Data($0) })
-        var data = header
-        data.append(Data(repeating: 0, count: 32000)) // 0.5s of silence at 16kHz float32
-        try data.write(to: audioPath)
-        return audioPath
-    }
-
     func testProcessNextWithMockEngineTranscribes() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -500,7 +473,7 @@ final class PipelineQueueTests: XCTestCase {
         ]
         let (pQueue, _) = makeMockProcessingQueue(engine: engine)
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Mock Test",
             appName: "Teams",
@@ -518,7 +491,7 @@ final class PipelineQueueTests: XCTestCase {
         engine.segmentsToReturn = [] // empty = no speech
         let (pQueue, _) = makeMockProcessingQueue(engine: engine)
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Silent Meeting",
             appName: "Teams",
@@ -539,7 +512,7 @@ final class PipelineQueueTests: XCTestCase {
         ]
         let (pQueue, _) = makeMockProcessingQueue(engine: engine)
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let appPath = tmpDir.appendingPathComponent("app_audio.wav")
         let micPath = tmpDir.appendingPathComponent("mic_audio.wav")
         try FileManager.default.copyItem(at: audioPath, to: appPath)
@@ -584,7 +557,7 @@ final class PipelineQueueTests: XCTestCase {
             return .skipped
         }
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Naming Test",
             appName: "Teams",
@@ -617,7 +590,7 @@ final class PipelineQueueTests: XCTestCase {
 
         pQueue.speakerNamingHandler = { _ in .skipped }
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Skip Test",
             appName: "Teams",
@@ -659,7 +632,7 @@ final class PipelineQueueTests: XCTestCase {
             return .skipped
         }
 
-        let audioPath = try createTestAudioFile()
+        let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Rerun Test",
             appName: "Teams",
