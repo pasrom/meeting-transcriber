@@ -5,8 +5,46 @@
 A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 
 ```
-Meeting Detected → App Audio + Mic → WhisperKit per track (CoreML) → FluidAudio Diarization per track (CoreML) → Claude CLI / OpenAI-compatible API → Markdown Protocol
-File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono conversion → WhisperKit → FluidAudio Diarization → Protocol
+         ┌──────────────────────┐         ┌──────────────────────┐
+         │   Meeting Detected   │         │     File Import      │
+         │  Teams / Zoom / Webex│         │ WAV MP3 M4A MP4 MKV  │
+         └──────────┬───────────┘         └──────────┬───────────┘
+                    │                                │
+                    ▼                                ▼
+         ┌──────────────────────┐         ┌──────────────────────┐
+         │   Dual Recording     │         │   16kHz Mono Convert │
+         │  App Audio + Mic     │         │  AVAudioFile/ffmpeg  │
+         │  (16kHz per track)   │         │                      │
+         └──────────┬───────────┘         └──────────┬───────────┘
+                    │                                │
+                    └────────────────┬───────────────┘
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   Transcription Engine   │
+                        │ ┌──────────┬───────────┐ │
+                        │ │ Whisper  │FluidAudio │ │
+                        │ │   Kit    │ Parakeet  │ │
+                        │ │          │ Qwen3-ASR │ │
+                        │ └──────────┴───────────┘ │
+                        │      CoreML / ANE        │
+                        └────────────┬─────────────┘
+                                     ▼
+                         ┌────────────────────────┐
+                         │  Speaker Diarization   │
+                         │  FluidAudio CoreML/ANE │
+                         │  + Speaker Recognition │
+                         └───────────┬────────────┘
+                                     ▼
+                         ┌────────────────────────┐
+                         │  Protocol Generation   │
+                         │  Claude CLI / OpenAI   │
+                         └───────────┬────────────┘
+                                     ▼
+                         ┌────────────────────────┐
+                         │   Markdown Protocol    │
+                         │  Summary · Decisions   │
+                         │  Tasks · Transcript    │
+                         └────────────────────────┘
 ```
 
 ---
@@ -15,8 +53,11 @@ File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono 
 
 - **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
-- **On-device transcription** — [WhisperKit](https://github.com/argmaxinc/WhisperKit) running on CoreML/Apple Neural Engine
-- **On-device speaker diarization** — [FluidAudio](https://github.com/FluidAudio) via CoreML/ANE — no HuggingFace token needed
+- **On-device transcription** — Three engines, selectable in Settings:
+  - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
+  - [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) (NVIDIA) — 25 EU languages, ~50 MB model, ~10× faster
+  - [Qwen3-ASR](https://github.com/FluidInference/FluidAudio) (Alibaba) — 30 languages, ~1.75 GB model, macOS 15+
+- **On-device speaker diarization** — [FluidAudio](https://github.com/FluidInference/FluidAudio) via CoreML/ANE — no HuggingFace token needed
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
 - **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) or OpenAI-compatible APIs (Ollama, LM Studio, etc.)
@@ -36,7 +77,7 @@ File Import → Audio/Video (WAV, MP3, M4A, MP4, MKV, WebM, OGG) → 16kHz mono 
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) — installed and logged in (`claude --version`)
   - An OpenAI-compatible API endpoint (e.g. [Ollama](https://ollama.com), LM Studio, llama.cpp) — configure in Settings
 
-No HuggingFace token needed — FluidAudio downloads its models automatically on first run (~50 MB).
+No HuggingFace token needed — FluidAudio and WhisperKit download their models automatically on first run.
 
 ### Optional: ffmpeg for extra formats
 
@@ -134,7 +175,7 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 | No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
 | No app audio | Requires macOS 14.2+ for CATapDescription audio capture |
 | Empty transcription | Check that the file contains an audio track — the app converts to 16 kHz mono automatically |
-| Models not loading | FluidAudio models download on first run; check internet connectivity |
+| Models not loading | Models download on first run (WhisperKit ~1 GB, Parakeet ~50 MB, Qwen3 ~1.75 GB); check internet connectivity |
 | OpenAI-compatible API connection failed | Verify the endpoint URL and that the local model server is running |
 
 ---
