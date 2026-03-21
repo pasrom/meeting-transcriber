@@ -188,4 +188,47 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
     }
+
+    // MARK: - Error Scenarios
+
+    func testWorkflowEmptyTranscriptEndsInError() async throws {
+        let (h, collector) = try makeHarness()
+        h.engine.segmentsToReturn = [] // no speech
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // State: waiting → transcribing → error
+        XCTAssertEqual(collector.transitions.map(\.1), [.transcribing, .error])
+        XCTAssertEqual(h.queue.jobs.first?.state, .error)
+        XCTAssertEqual(h.queue.jobs.first?.error, "Empty transcript")
+
+        // Protocol was NOT generated
+        XCTAssertFalse(h.protocolGen.generateCalled)
+    }
+
+    func testWorkflowEngineThrowsEndsInError() async throws {
+        let (h, _) = try makeHarness()
+        h.engine.shouldThrow = true
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Job ends in error
+        XCTAssertEqual(h.queue.jobs.first?.state, .error)
+        XCTAssertFalse(h.protocolGen.generateCalled)
+    }
+
+    func testWorkflowProtocolGenerationFailsEndsInError() async throws {
+        let (h, _) = try makeHarness()
+        h.protocolGen.shouldThrow = true
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .error)
+    }
 }
