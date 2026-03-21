@@ -172,7 +172,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `ProtocolGenerator` uses async process I/O: `terminationHandler` + `withCheckedContinuation` instead of `process.waitUntilExit()`. stdout/stderr are read in detached `Task`s.
 
 **View architecture:**
-- `SettingsView` receives `WhisperKitEngine` and `ParakeetEngine` as stored properties (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:parakeetEngine:)`.
+- `SettingsView` receives engine instances as stored properties (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:parakeetEngine:qwen3Engine:updateChecker:)`. `qwen3Engine` is `(any TranscribingEngine)?` — nil on macOS <15.
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).

@@ -13,7 +13,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
 ```
 Meeting Window Detected (CGWindowListCopyWindowInfo)
   → DualSourceRecorder (AudioTapLib + mic, records at 16kHz)
-    → [WhisperKit | Parakeet] (CoreML/ANE transcription)
+    → [WhisperKit | Parakeet | Qwen3] (CoreML/ANE transcription)
       → [FluidDiarizer (CoreML/ANE speaker diarization)]
         → ProtocolGenerator (Claude CLI / OpenAI-compatible API)
           → Markdown protocol + transcript
@@ -45,6 +45,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `TranscribingEngine.swift` | `TranscribingEngine` protocol + `mergeDualSourceSegments` default impl |
 | `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
 | `ParakeetEngine.swift` | NVIDIA Parakeet TDT v3 via FluidAudio (25 EU languages, ~50 MB, ~10× faster) |
+| `Qwen3AsrEngine.swift` | Qwen3-ASR 0.6B via FluidAudio (30 languages, ~1.75 GB, macOS 15+) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
@@ -127,13 +128,15 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 
 `TranscribingEngine` protocol abstracts ASR backends. `AppSettings.transcriptionEngine` selects the active engine.
 
-| | WhisperKit | Parakeet TDT v3 |
-|---|---|---|
-| **Languages** | 99+ | 25 European |
-| **Model size** | ~800 MB–1.5 GB | ~50 MB |
-| **Speed (M4 Pro)** | ~10–20× RTF | ~110× RTF |
-| **Language selection** | Manual or auto-detect | Auto-detect only |
-| **Hallucinations** | Can occur | Minimal |
+| | WhisperKit | Parakeet TDT v3 | Qwen3-ASR |
+|---|---|---|---|
+| **Languages** | 99+ | 25 European | 30 |
+| **Model size** | ~800 MB–1.5 GB | ~50 MB | ~1.75 GB |
+| **Speed (M4 Pro)** | ~10–20× RTF | ~110× RTF | TBD |
+| **Language selection** | Manual or auto-detect | Auto-detect only | Manual or auto-detect |
+| **Timestamps** | Per-segment | Per-token | None (single segment) |
+| **macOS** | 14+ | 14+ | 15+ |
+| **Hallucinations** | Can occur | Minimal | Minimal |
 
 ### WhisperKit Engine
 
@@ -147,13 +150,22 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 - **Pre-loading:** Model downloaded and loaded at app launch (when selected)
 - **Token grouping:** `groupTokensIntoSegments` groups per-token timings into sentence-level segments (split on `. ! ?` or 20 tokens)
 
+### Qwen3-ASR Engine
+
+- **Model:** Qwen3-ASR 0.6B via FluidAudio `Qwen3AsrManager` (CoreML/ANE, macOS 15+)
+- **Pre-loading:** Model downloaded and loaded at app launch (when selected)
+- **Language:** 30 languages via `Qwen3AsrConfig.Language` enum, selectable in Settings. `nil` = auto-detect.
+- **No timestamps:** Returns plain text — emits single `TimestampedSegment` spanning full audio duration
+- **Chunking:** Audio split into <=30s windows (`Qwen3AsrConfig.maxAudioSeconds`), results concatenated
+- **Availability:** `@available(macOS 15, *)` — type-erased via `AnyObject?` in AppState for macOS <15 compatibility
+
 ### Modes
 
 1. **Single source:** `transcribeSegments(audioPath:)` → `[TimestampedSegment]` with start/end/text
 2. **Dual source:** `transcribeSegments(appAudio:)` + `transcribeSegments(micAudio:)` → `mergeDualSourceSegments(appSegments:micSegments:)` → `[TimestampedSegment]` merged by timestamp
    - App segments labeled "Remote"
    - Mic segments labeled with user's mic name (default "Me")
-   - `mergeDualSourceSegments` is a protocol extension on `TranscribingEngine` — shared by both engines
+   - `mergeDualSourceSegments` is a protocol extension on `TranscribingEngine` — shared by all engines
 
 ### Post-processing (WhisperKit only)
 
@@ -293,7 +305,7 @@ AppSettings (UserDefaults)
 3. **AudioTapLib as SPM library** — Direct in-process audio capture via CATapDescription (App Store compatible)
 4. **Dual-source recording** — Enables speaker separation without diarization (app=Remote, mic=Me)
 5. **Graceful degradation** — Diarization optional, mute detection optional, continues on partial failure
-6. **Pre-loaded model** — Selected engine (WhisperKit or Parakeet) loaded at app launch, prevents delay on first meeting
+6. **Pre-loaded model** — Selected engine (WhisperKit, Parakeet, or Qwen3) loaded at app launch, prevents delay on first meeting
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference
