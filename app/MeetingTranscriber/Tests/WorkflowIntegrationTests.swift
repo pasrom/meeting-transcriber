@@ -300,4 +300,48 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(h.diarization.runCount, 2)
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
     }
+
+    // MARK: - Multi-Job
+
+    func testMultipleJobsProcessedSequentially() async throws {
+        let (h, _) = try makeHarness()
+
+        // Enqueue and process first job
+        let job1 = makeJob(title: "Meeting 1", audioPath: h.audioPath)
+        h.queue.enqueue(job1)
+        await h.queue.processNext()
+        XCTAssertEqual(h.queue.jobs.first { $0.id == job1.id }?.state, .done)
+
+        // Enqueue and process second job
+        let audio2 = try createTestAudioFile(in: tmpDir)
+        let job2 = makeJob(title: "Meeting 2", audioPath: audio2)
+        h.queue.enqueue(job2)
+        await h.queue.processNext()
+        XCTAssertEqual(h.queue.jobs.first { $0.id == job2.id }?.state, .done)
+
+        // Engine called twice total (once per job)
+        XCTAssertEqual(h.engine.transcribeCallCount, 2)
+    }
+
+    func testErrorJobDoesNotBlockNextJob() async throws {
+        let (h, _) = try makeHarness()
+
+        // First job will fail (empty transcript)
+        let audio1 = try createTestAudioFile(in: tmpDir)
+        let job1 = makeJob(title: "Silent", audioPath: audio1)
+        h.engine.segmentsToReturn = []
+        h.queue.enqueue(job1)
+        await h.queue.processNext()
+        XCTAssertEqual(h.queue.jobs.first?.state, .error)
+
+        // Second job should succeed
+        h.engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Now it works"),
+        ]
+        let audio2 = try createTestAudioFile(in: tmpDir)
+        let job2 = makeJob(title: "Working", audioPath: audio2)
+        h.queue.enqueue(job2)
+        await h.queue.processNext()
+        XCTAssertEqual(h.queue.jobs.first { $0.id == job2.id }?.state, .done)
+    }
 }
