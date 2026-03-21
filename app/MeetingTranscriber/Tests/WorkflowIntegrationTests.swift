@@ -231,4 +231,39 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         XCTAssertEqual(h.queue.jobs.first?.state, .error)
     }
+
+    // MARK: - Diarization Scenarios
+
+    func testWorkflowDiarizationUnavailableSkips() async throws {
+        let (h, collector) = try makeHarness(diarizeEnabled: true)
+        h.diarization.isAvailable = false
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Should skip diarization — no .diarizing state, but protocol still generated
+        let states = collector.transitions.map(\.1)
+        XCTAssertFalse(states.contains(.diarizing))
+        XCTAssertTrue(h.protocolGen.generateCalled)
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+    }
+
+    func testWorkflowDiarizationNoEmbeddingsFallsBack() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+        h.diarization.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_00")],
+            speakingTimes: ["SPEAKER_00": 5],
+            autoNames: [:],
+            embeddings: nil, // no embeddings → naming loop breaks early
+        )
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Should complete despite no embeddings
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertTrue(h.protocolGen.generateCalled)
+    }
 }
