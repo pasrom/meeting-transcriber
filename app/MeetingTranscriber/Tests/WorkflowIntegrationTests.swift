@@ -266,4 +266,38 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
         XCTAssertTrue(h.protocolGen.generateCalled)
     }
+
+    // MARK: - Speaker Naming Scenarios
+
+    func testWorkflowSpeakerNamingSkipped() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+        h.queue.speakerNamingHandler = { _ in .skipped }
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Still completes even when naming is skipped
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertTrue(h.protocolGen.generateCalled)
+    }
+
+    func testWorkflowSpeakerNamingRerun() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+
+        var callCount = 0
+        h.queue.speakerNamingHandler = { _ in
+            callCount += 1
+            return callCount == 1 ? .rerun(3) : .confirmed(["SPEAKER_00": "Alice"])
+        }
+
+        let job = makeJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Handler called twice (first rerun, then confirm), diarization ran twice
+        XCTAssertEqual(callCount, 2)
+        XCTAssertGreaterThanOrEqual(h.diarization.runCount, 2)
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+    }
 }
