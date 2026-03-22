@@ -400,4 +400,38 @@ final class MeetingDetectorTests: XCTestCase {
         // Should be detectable again immediately (no cooldown)
         XCTAssertNotNil(detector.checkOnce())
     }
+
+    // MARK: - Invalid Regex Graceful Handling
+
+    func testInvalidMeetingRegexSkippedGracefully() {
+        // Invalid regex should be silently skipped, not crash
+        let badPattern = AppMeetingPattern(
+            appName: "BadApp",
+            ownerNames: ["BadApp"],
+            meetingPatterns: ["[invalid(regex"],
+            idlePatterns: [],
+        )
+        let detector = MeetingDetector(patterns: [badPattern])
+        // Should not crash, and no windows match
+        detector.windowListProvider = {
+            [makeWindow(owner: "BadApp", name: "Some Title")]
+        }
+        XCTAssertNil(detector.checkOnce())
+    }
+
+    func testMixedValidAndInvalidRegexKeepsValid() {
+        // Valid patterns still work even if some are invalid
+        let mixedPattern = AppMeetingPattern(
+            appName: "Microsoft Teams",
+            ownerNames: ["Microsoft Teams"],
+            meetingPatterns: ["[bad(", ".*\\| Microsoft Teams$"],
+            idlePatterns: [],
+        )
+        let detector = MeetingDetector(patterns: [mixedPattern], confirmationCount: 1)
+        detector.windowListProvider = {
+            [makeWindow(owner: "Microsoft Teams", name: "Standup | Microsoft Teams")]
+        }
+        // Valid regex should still match
+        XCTAssertNotNil(detector.checkOnce())
+    }
 }
