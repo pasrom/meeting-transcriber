@@ -160,7 +160,7 @@ struct MeetingTranscriberApp: App {
 
     private func openLastProtocol() {
         if let job = appState.pipelineQueue.completedJobs.last,
-           let path = job.protocolPath {
+           let path = job.protocolPath ?? job.transcriptPath {
             NSWorkspace.shared.open(path)
         }
     }

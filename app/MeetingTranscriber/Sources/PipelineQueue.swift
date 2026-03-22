@@ -14,7 +14,7 @@ class PipelineQueue {
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
     let diarizationFactory: (() -> DiarizationProvider)?
-    let protocolGeneratorFactory: (() -> ProtocolGenerating)?
+    let protocolGeneratorFactory: (() -> ProtocolGenerating?)?
     let outputDir: URL?
     let diarizeEnabled: Bool
     let numSpeakers: Int
@@ -94,7 +94,7 @@ class PipelineQueue {
     init(
         engine: any TranscribingEngine,
         diarizationFactory: @escaping () -> DiarizationProvider,
-        protocolGeneratorFactory: @escaping () -> ProtocolGenerating,
+        protocolGeneratorFactory: @escaping () -> ProtocolGenerating?,
         outputDir: URL,
         logDir: URL? = nil,
         diarizeEnabled: Bool = false,
@@ -230,7 +230,7 @@ class PipelineQueue {
             isProcessing = false
             return
         }
-        guard let engine, let protocolGeneratorFactory, let outputDir else {
+        guard let engine, let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             isProcessing = false
             return
@@ -490,46 +490,49 @@ class PipelineQueue {
                 }
             }
 
-            // Save transcript
+            // --- Save Transcript & Audio (always) ---
             let protocolsDir = outputDir.appendingPathComponent("protocols")
             let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: protocolsDir)
             logger.info("Transcript saved: \(txtPath.lastPathComponent)")
 
-            // --- Protocol Generation ---
-            updateJobState(id: jobID, to: .generatingProtocol)
-            startElapsedTimer()
+            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                jobs[idx].transcriptPath = txtPath
+            }
 
-            let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
-            let protocolGenerator = protocolGeneratorFactory()
-            let protocolMD = try await protocolGenerator.generate(
-                transcript: finalTranscript,
-                title: title,
-                diarized: diarized,
-            )
-
-            let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + finalTranscript
-            let mdPath = try ProtocolGenerator.saveProtocol(fullMD, title: title, dir: protocolsDir)
-            logger.info("Protocol saved: \(mdPath.lastPathComponent)")
-
-            // Move audio files to recordings subdirectory
             let recordingsDir = outputDir.appendingPathComponent("recordings")
             Self.copyAudioToOutput(
                 mixPath: mixPath, appPath: appPath, micPath: micPath,
                 title: title, outputDir: recordingsDir,
             )
 
-            // Update job with protocol path and mark done
-            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
-                jobs[idx].protocolPath = mdPath
+            // --- Protocol Generation (optional) ---
+            if let protocolGeneratorFactory, let generator = protocolGeneratorFactory() {
+                do {
+                    updateJobState(id: jobID, to: .generatingProtocol)
+                    startElapsedTimer()
+
+                    let diarized = finalTranscript.range(of: #"\[\w[\w\s]*\]"#, options: .regularExpression) != nil
+                    let protocolMD = try await generator.generate(
+                        transcript: finalTranscript,
+                        title: title,
+                        diarized: diarized,
+                    )
+
+                    let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + finalTranscript
+                    let mdPath = try ProtocolGenerator.saveProtocol(fullMD, title: title, dir: protocolsDir)
+                    logger.info("Protocol saved: \(mdPath.lastPathComponent)")
+
+                    if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                        jobs[idx].protocolPath = mdPath
+                    }
+                } catch {
+                    logger.warning("Protocol generation failed: \(error.localizedDescription)")
+                    addWarning(id: jobID, "Protocol generation failed — transcript saved")
+                }
             }
+
             stopElapsedTimer()
             updateJobState(id: jobID, to: .done)
-            if let job = jobs.first(where: { $0.id == jobID }), !job.warnings.isEmpty {
-                NotificationManager.shared.notify(
-                    title: "Protocol Ready (with warnings)",
-                    body: job.warnings.joined(separator: "; "),
-                )
-            }
         } catch is CancellationError {
             stopElapsedTimer()
             logger.info("Job \(jobID) cancelled")

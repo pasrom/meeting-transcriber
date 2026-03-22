@@ -35,6 +35,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
     var state: JobState
     var error: String?
     var warnings: [String]
+    var transcriptPath: URL?
     var protocolPath: URL?
 
     init(
@@ -58,6 +59,7 @@ struct PipelineJob: Identifiable, Codable, Sendable {
         self.state = .waiting
         self.error = nil
         self.warnings = []
+        self.transcriptPath = nil
         self.protocolPath = nil
     }
 }
