@@ -1,36 +1,52 @@
-# Plan: Live-Transcription + Meeting-Chat
+# Plan: Live-Transcription + CC-Agent Meeting-Chat
 
 ## Ziel
-Während eines Meetings wird fortlaufend transkribiert. Das Live-Transkript + eine rollierende Zusammenfassung werden als IPC-Dateien geschrieben, sodass Claude Code (oder andere Tools) den Meeting-Kontext lesen und darauf reagieren können — z.B. automatisch Jira-Tickets erstellen, wenn jemand "Claude, erstelle ein Ticket für X" sagt.
+
+Während eines Meetings wird fortlaufend transkribiert. Bei Meeting-Start spawnt die App
+eine Claude Code Agent-Session, die das wachsende Transkript überwacht und autonom handelt:
+Zusammenfassungen schreiben, Jira-Tickets erstellen, Notizen machen — alles was CC mit
+seinen eingebauten Tools (Bash, Read, Write, etc.) kann.
 
 ## Architektur
 
 ```
-Aufnahme läuft (DualSourceRecorder)
+Meeting startet (DualSourceRecorder)
     │
     ├── App-Audio: raw Float32 @ 48kHz stereo → wachsende Temp-Datei
-    │   (POSIX write, kein Locking → concurrent read möglich)
-    │
     └── Mic-Audio: 16kHz mono 16-bit PCM WAV → wachsende WAV-Datei
-        (AVAudioFile schreibt Buffers, concurrent read möglich)
     │
     ▼  alle ~15s
 LiveTranscriptionSession
     │
     ├── Liest inkrementell neue Bytes aus beiden Dateien
     ├── Konvertiert: raw PCM → mono → resample 16kHz → temp WAV
-    ├── Transkribiert Chunk via aktive Engine (Parakeet bevorzugt: 10× schneller)
+    ├── Transkribiert Chunk via aktive Engine (Parakeet bevorzugt)
     ├── Akkumuliert Transkript
+    └── → live_transcript.txt (IPC, jedes Chunk-Update)
     │
-    ├── → live_transcript.txt (IPC, jedes Chunk-Update)
-    ├── → live_summary.md    (IPC, alle ~60s via Claude CLI / OpenAI API)
-    └── → live_commands.jsonl (IPC, erkannte Trigger-Phrasen)
+    ▼  bei Meeting-Start
+MeetingAgentSession (spawnt CC-Prozess)
+    │
+    ├── claude -p --resume <session> --allowedTools ...
+    │   "Du bist ein Meeting-Assistent. Überwache live_transcript.txt.
+    │    Reagiere auf Anweisungen. Fasse zusammen. Erstelle Tickets."
+    │
+    ├── CC hat alle Tools: Bash, Read, Write, gh, jira CLI, ...
+    ├── CC liest live_transcript.txt selbst (via Read/Bash)
+    ├── CC erkennt Commands ("Claude, erstelle Ticket...")
+    ├── CC schreibt live_summary.md
+    └── CC erstellt Tickets, Notizen, etc. autonom
+    │
+    ▼  Meeting endet
+    App stoppt Live-Transkription + sendet finalen Chunk an CC
+    CC erstellt finales Meeting-Protokoll
 ```
 
 ## Neue Dateien
 
 ### 1. `LiveTranscriptionSession.swift`
-Hauptklasse, `@MainActor @Observable`.
+
+`@MainActor @Observable` — reine Audio-Chunking + Transkription.
 
 **Verantwortlichkeiten:**
 - Timer-basierte Schleife (alle ~15s)
@@ -38,120 +54,145 @@ Hauptklasse, `@MainActor @Observable`.
   - App-Audio: `FileHandle` seek + read, raw Float32 → stereo-to-mono → resample 16kHz
   - Mic-Audio: `FileHandle` seek + read, Int16 PCM → Float32 (bereits 16kHz)
 - Chunk als temp WAV speichern → `engine.transcribeSegments()` aufrufen
-- Dual-Source: beide Tracks separat transkribieren, mergen (wie PipelineQueue)
-- Akkumuliertes Transkript verwalten
-- IPC-Dateien schreiben (`AppPaths.ipcDir/live_transcript.txt` etc.)
-- Trigger-Erkennung: Lines mit "Claude," scannen → `live_commands.jsonl`
-- Rollierende Zusammenfassung: alle ~4 Chunks via ProtocolGenerator
+- Dual-Source: beide Tracks separat transkribieren, mergen
+- Akkumuliertes Transkript in `live_transcript.txt` schreiben
 
-**Config struct:**
-- `chunkIntervalSeconds: TimeInterval = 15`
-- `summaryIntervalChunks: Int = 4` (= alle ~60s)
-- `triggerPhrases: [String] = ["claude,", "claude "]`
+**Nicht mehr zuständig für** (macht CC-Agent):
+- ~~Trigger-Erkennung~~
+- ~~Zusammenfassung~~
+- ~~Command-Ausführung~~
 
 **API:**
 - `start(appTempURL:micURL:appSampleRate:)` — startet die Chunk-Schleife
 - `stop()` — stoppt, verarbeitet letzten Rest-Chunk
 - `cleanup()` — entfernt temp + IPC-Dateien
 
+### 2. `MeetingAgentSession.swift`
+
+Verwaltet den Claude Code Subprocess der während des Meetings läuft.
+
+**Verantwortlichkeiten:**
+- CC-Prozess spawnen bei Meeting-Start mit System-Prompt
+- CC-Prozess stoppen bei Meeting-Ende
+- Session-ID verwalten (für `--resume`)
+
+**System-Prompt (eingebettet):**
+```
+Du bist ein autonomer Meeting-Assistent. Während des Meetings wird fortlaufend
+transkribiert nach: {live_transcript_path}
+
+Deine Aufgaben:
+1. Lies das Transkript regelmäßig (alle 30s) via Read tool
+2. Wenn jemand "Claude, ..." sagt, führe die Anweisung aus
+3. Halte eine laufende Zusammenfassung in: {live_summary_path}
+4. Du hast Zugriff auf alle Tools: Bash, Read, Write, gh, jira, etc.
+5. Sei proaktiv: erkenne Action Items und schlage vor
+
+Beispiel-Trigger im Transkript:
+- "Claude, erstelle ein Jira-Ticket für den Login-Bug"
+- "Claude, notiere: Deadline ist nächster Freitag"
+- "Claude, fasse die letzten 5 Minuten zusammen"
+```
+
+**Implementierung:**
+```swift
+#if !APPSTORE
+struct MeetingAgentSession {
+    let claudeBin: String
+    private var process: Process?
+    private var sessionID: String?
+
+    mutating func start(transcriptPath: URL, summaryPath: URL) throws
+    mutating func stop()
+    var isRunning: Bool
+}
+#endif
+```
+
+- Nutzt `Process()` wie `ClaudeCLIProtocolGenerator`
+- `#if !APPSTORE` (Sandbox verbietet Process)
+- Startet CC im Hintergrund, liest stdout für Status-Updates
+
 ## Änderungen an bestehenden Dateien
 
-### 2. `AppPaths.swift`
-Neue statische Properties:
+### 3. `AppPaths.swift`
 ```swift
 static let liveTranscriptFile = ipcDir.appendingPathComponent("live_transcript.txt")
 static let liveSummaryFile = ipcDir.appendingPathComponent("live_summary.md")
-static let liveCommandsFile = ipcDir.appendingPathComponent("live_commands.jsonl")
 ```
 
-### 3. `AppSettings.swift`
-Neue Settings:
+### 4. `AppSettings.swift`
 ```swift
 var liveTranscriptionEnabled: Bool  // default: false
-var liveChunkInterval: Double       // default: 15.0 (Sekunden)
-var liveSummaryEnabled: Bool        // default: true
-var liveTriggerDetection: Bool      // default: true
+var liveChunkInterval: Double       // default: 15.0
+var meetingAgentEnabled: Bool       // default: false (opt-in)
 ```
 
-### 4. `AppState.swift`
-- Neue Property: `var liveSession: LiveTranscriptionSession?`
-- `LiveTranscriptionSession` erzeugen + starten wenn Recording beginnt (in `toggleWatching()` und `startManualRecording()`)
-- Session stoppen wenn Recording endet
+### 5. `DualSourceRecorder.swift`
+Neue read-only Properties:
+```swift
+var currentAppTempURL: URL?
+var currentMicURL: URL?
+```
 
-### 5. `WatchLoop.swift`
-- Neue optionale Property: `var liveTranscriptionSession: LiveTranscriptionSession?`
-- In `handleMeeting()`: nach `recorder.start()` → `liveSession.start(appTempURL, micURL)` aufrufen
-- Vor `recorder.stop()`: `liveSession.stop()` aufrufen
-- Analog für `startManualRecording()` / `stopManualRecording()`
+### 6. `WatchLoop.swift`
+- Nach `recorder.start()` → `liveSession.start()` + `agentSession.start()`
+- Vor `recorder.stop()` → `liveSession.stop()` + `agentSession.stop()`
+- Analog für manuelle Aufnahmen
 
-### 6. `DualSourceRecorder.swift`
-- Neue read-only Properties exponieren (damit WatchLoop die URLs kennt):
-  ```swift
-  var currentAppTempURL: URL? { ... }
-  var currentMicURL: URL? { ... }
-  ```
+### 7. `AppState.swift`
+- `var liveSession: LiveTranscriptionSession?`
+- `var agentSession: MeetingAgentSession?`
+- Lifecycle-Management
 
-### 7. `SettingsView.swift`
-- Neuer Abschnitt "Live Transcription" in den Settings:
-  - Toggle: Live-Transkription aktivieren
-  - Slider: Chunk-Intervall (10-30s)
-  - Toggle: Automatische Zusammenfassung
-  - Toggle: Trigger-Erkennung
+### 8. `SettingsView.swift`
+Neuer Abschnitt "Live Transcription":
+- Toggle: Live-Transkription aktivieren
+- Slider: Chunk-Intervall (10-30s)
+- Toggle: Meeting-Agent aktivieren (startet CC-Session)
 
-## IPC-Dateien (für Claude Code)
+## IPC-Dateien
 
-| Datei | Format | Update-Frequenz | Inhalt |
-|-------|--------|-----------------|--------|
-| `live_transcript.txt` | Plain text | Alle ~15s | Vollständiges akkumuliertes Transkript |
-| `live_summary.md` | Markdown | Alle ~60s | Rollierende Meeting-Zusammenfassung |
-| `live_commands.jsonl` | JSON Lines | Bei Erkennung | `{timestamp, trigger, command, context}` |
+| Datei | Geschrieben von | Inhalt |
+|-------|----------------|--------|
+| `live_transcript.txt` | App (LiveTranscriptionSession) | Akkumuliertes Transkript, alle ~15s |
+| `live_summary.md` | CC-Agent (MeetingAgentSession) | Rollierende Zusammenfassung |
 
 **Pfad:** `~/Library/Application Support/MeetingTranscriber/ipc/`
 
-## Nutzung von Claude Code
-
-Nach Aktivierung kann der User in Claude Code z.B.:
-```
-# Transkript lesen
-cat ~/Library/Application\ Support/MeetingTranscriber/ipc/live_transcript.txt
-
-# Zusammenfassung lesen
-cat ~/Library/Application\ Support/MeetingTranscriber/ipc/live_summary.md
-
-# Auf Voice Commands reagieren
-tail -f ~/Library/Application\ Support/MeetingTranscriber/ipc/live_commands.jsonl
-```
-
-Oder Claude Code direkt bitten: "Lies das Live-Transkript und erstelle ein Jira-Ticket für den besprochenen Login-Bug."
-
 ## Tests
 
-Neue Testdatei `LiveTranscriptionSessionTests.swift`:
-- Test: Inkrementelles Lesen von wachsender raw Float32 Datei
-- Test: Inkrementelles Lesen von wachsender WAV Datei
-- Test: Trigger-Erkennung ("Claude, erstelle ein Ticket")
-- Test: IPC-Dateien werden korrekt geschrieben
-- Test: Start/Stop Lifecycle
-- Test: Leere Audio-Chunks werden übersprungen
+### `LiveTranscriptionSessionTests.swift`
+- Inkrementelles Lesen wachsender raw Float32 Datei
+- Inkrementelles Lesen wachsender WAV Datei
+- IPC-Datei wird korrekt geschrieben
+- Start/Stop Lifecycle
+- Leere Audio-Chunks werden übersprungen
 
-Mock-Engine die sofort einen fixen Text zurückgibt (existiert vermutlich schon in Tests).
+### `MeetingAgentSessionTests.swift`
+- CC-Prozess wird gestartet mit korrektem Prompt
+- CC-Prozess wird bei Stop beendet
+- Session-ID wird korrekt verwaltet
+- `#if !APPSTORE` Kompilierungstest
 
-## Einschränkungen / Bekannte Limitierungen
+## Einschränkungen
 
 1. **Latenz ~15-20s** — 15s Chunk-Sammlung + ~2-5s Transkription
-2. **Chunk-Grenzen** — Wörter können an Chunk-Grenzen abgeschnitten werden (akzeptabel für MVP)
-3. **Keine Diarization** — Live-Chunks werden ohne Diarization transkribiert (zu langsam für live)
-4. **Summary-Qualität** — Rollierende Zusammenfassung basiert auf Roh-Transkript ohne Diarization
-5. **App-Audio Latenz** — Kernel-Buffer-Delay bis Daten auf Disk sind (~10-100ms, vernachlässigbar)
+2. **Chunk-Grenzen** — Wörter können an Chunk-Grenzen abgeschnitten werden
+3. **Keine Live-Diarization** — zu langsam; Diarization nur im finalen Protokoll
+4. **CC-Agent nur Homebrew** — `#if !APPSTORE` (Sandbox verbietet Process)
+5. **CC muss installiert sein** — `claude` CLI muss im PATH sein
+6. **CC-Agent-Kosten** — Agent läuft kontinuierlich, verbraucht API-Tokens
 
 ## Implementierungs-Reihenfolge
 
-1. `LiveTranscriptionSession.swift` — Kernlogik (Chunking, inkrementelles Lesen, IPC)
-2. `AppPaths.swift` — IPC-Pfade hinzufügen
-3. `AppSettings.swift` — Settings hinzufügen
-4. `DualSourceRecorder.swift` — URLs exponieren
-5. `WatchLoop.swift` — LiveSession starten/stoppen
-6. `AppState.swift` — LiveSession verwalten
-7. `SettingsView.swift` — UI für Settings
-8. Tests schreiben
-9. Lint + Test + Commit + Push
+1. `LiveTranscriptionSession.swift` — Audio-Chunking + Transkription + IPC
+2. `MeetingAgentSession.swift` — CC-Prozess Lifecycle
+3. `AppPaths.swift` — IPC-Pfade
+4. `AppSettings.swift` — Settings
+5. `DualSourceRecorder.swift` — URLs exponieren
+6. `WatchLoop.swift` — Sessions starten/stoppen
+7. `AppState.swift` — Lifecycle-Management
+8. `SettingsView.swift` — UI
+9. Tests
+10. Lint + Test + Commit + Push
