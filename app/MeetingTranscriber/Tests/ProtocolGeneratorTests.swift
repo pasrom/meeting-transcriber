@@ -100,6 +100,37 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(txt.hasSuffix(".txt"))
     }
 
+    // MARK: - Filename Sanitization
+
+    func testFilenameSanitizesSlashes() {
+        let name = ProtocolGenerator.filename(title: "Code/Review", ext: "md")
+        XCTAssertFalse(name.contains("/"))
+        XCTAssertTrue(name.contains("codereview"))
+    }
+
+    func testFilenameSanitizesColons() {
+        let name = ProtocolGenerator.filename(title: "Meeting: Planning", ext: "md")
+        XCTAssertFalse(name.contains(":"))
+        XCTAssertTrue(name.contains("meeting_planning"))
+    }
+
+    func testFilenameSanitizesBackslashes() {
+        let name = ProtocolGenerator.filename(title: "Path\\Name", ext: "md")
+        XCTAssertFalse(name.contains("\\"))
+        XCTAssertTrue(name.contains("pathname"))
+    }
+
+    func testFilenameSanitizesNullBytes() {
+        let name = ProtocolGenerator.filename(title: "Test\0Title", ext: "md")
+        XCTAssertFalse(name.contains("\0"))
+        XCTAssertTrue(name.contains("testtitle"))
+    }
+
+    func testFilenameSanitizesMultipleForbiddenChars() {
+        let name = ProtocolGenerator.filename(title: "A/B:C\\D", ext: "txt")
+        XCTAssertTrue(name.hasSuffix("_abcd.txt"))
+    }
+
     // MARK: - File Save Operations
 
     func testSaveTranscript() throws {
