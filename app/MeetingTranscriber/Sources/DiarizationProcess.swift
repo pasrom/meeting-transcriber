@@ -129,9 +129,13 @@ enum DiarizationProcess {
         )
     }
 
+    /// Maximum silence gap (seconds) before breaking a same-speaker block.
+    /// Pauses longer than this start a new paragraph even for the same speaker.
+    static let mergeGapThreshold: TimeInterval = 2.0
+
     /// Merge consecutive segments from the same speaker into single blocks.
     /// Preserves the start timestamp of the first segment and end timestamp of the last.
-    /// Text is joined with spaces.
+    /// Text is joined with spaces. A silence gap > `mergeGapThreshold` forces a break.
     static func mergeConsecutiveSpeakers(
         _ segments: [TimestampedSegment],
     ) -> [TimestampedSegment] {
@@ -139,7 +143,8 @@ enum DiarizationProcess {
 
         var merged: [TimestampedSegment] = []
         for seg in segments.dropFirst() {
-            if seg.speaker == current.speaker {
+            let silenceGap = seg.start - current.end
+            if seg.speaker == current.speaker, silenceGap <= mergeGapThreshold {
                 current = TimestampedSegment(
                     start: current.start,
                     end: seg.end,

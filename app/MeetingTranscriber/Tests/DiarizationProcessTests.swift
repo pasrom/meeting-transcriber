@@ -1,7 +1,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
-final class DiarizationProcessTests: XCTestCase {
+final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type_body_length
     // MARK: - Speaker Assignment
 
     func testAssignSpeakers() {
@@ -347,6 +347,55 @@ final class DiarizationProcessTests: XCTestCase {
         ]
         let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
         XCTAssertEqual(merged.count, 3)
+    }
+
+    func testMergeConsecutiveSpeakers_silenceGapBreaksSameSpeaker() {
+        // Same speaker but >2s gap between segments — should NOT merge
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "First thought.", speaker: "Alice"),
+            TimestampedSegment(start: 8, end: 13, text: "Second thought.", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 2, "Silence gap >2s should break same-speaker block")
+        XCTAssertEqual(merged[0].text, "First thought.")
+        XCTAssertEqual(merged[1].text, "Second thought.")
+    }
+
+    func testMergeConsecutiveSpeakers_smallGapStillMerges() {
+        // Same speaker with <2s gap — should merge
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello.", speaker: "Alice"),
+            TimestampedSegment(start: 6, end: 10, text: "How are you?", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 1, "Small gap should still merge")
+        XCTAssertEqual(merged[0].text, "Hello. How are you?")
+    }
+
+    func testMergeConsecutiveSpeakers_exactThresholdMerges() {
+        // Gap exactly at threshold (2.0s) — should still merge
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "A.", speaker: "Alice"),
+            TimestampedSegment(start: 7, end: 10, text: "B.", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 1, "Gap exactly at threshold should merge")
+    }
+
+    func testMergeConsecutiveSpeakers_longMonologBrokenByPauses() {
+        // Simulates a long monolog with natural pauses — should break into blocks
+        let segments = [
+            TimestampedSegment(start: 0, end: 10, text: "First paragraph.", speaker: "Roman"),
+            TimestampedSegment(start: 10.5, end: 20, text: "Still first.", speaker: "Roman"),
+            TimestampedSegment(start: 23, end: 30, text: "Second paragraph.", speaker: "Roman"),
+            TimestampedSegment(start: 30.5, end: 40, text: "Still second.", speaker: "Roman"),
+            TimestampedSegment(start: 45, end: 55, text: "Third paragraph.", speaker: "Roman"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 3, "Long monolog should break at natural pauses")
+        XCTAssertEqual(merged[0].text, "First paragraph. Still first.")
+        XCTAssertEqual(merged[1].text, "Second paragraph. Still second.")
+        XCTAssertEqual(merged[2].text, "Third paragraph.")
     }
 
     func testDiarizationErrorDescription() {
