@@ -165,6 +165,18 @@ final class AppSettings {
         didSet { defaults.set(protocolProvider.rawValue, forKey: "protocolProvider") }
     }
 
+    var protocolLanguage: String = defaults.string(forKey: "protocolLanguage") ?? "German" {
+        didSet { defaults.set(protocolLanguage, forKey: "protocolLanguage") }
+    }
+
+    static let protocolLanguages = [
+        "German", "English", "French", "Spanish", "Italian",
+        "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
+        "Russian", "Arabic", "Turkish", "Hindi", "Swedish",
+        "Danish", "Finnish", "Polish", "Czech", "Greek",
+        "Hungarian", "Romanian",
+    ]
+
     #if !APPSTORE
         var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
             didSet { defaults.set(claudeBin, forKey: "claudeBin") }

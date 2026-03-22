@@ -57,7 +57,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
         // Verify the protocol prompt includes key structural elements
         let prompt = ProtocolGenerator.protocolPrompt
         XCTAssertTrue(prompt.contains("meeting minute taker"))
-        XCTAssertTrue(prompt.contains("German"))
+        XCTAssertTrue(prompt.contains("{LANGUAGE}"))
         XCTAssertTrue(prompt.contains("Markdown"))
     }
 

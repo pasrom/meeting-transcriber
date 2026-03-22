@@ -8,17 +8,25 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     let endpoint: URL
     let model: String
     let apiKey: String?
+    let language: String
     let timeoutSeconds: TimeInterval
 
-    init(endpoint: URL, model: String, apiKey: String? = nil, timeoutSeconds: TimeInterval = 600) {
+    init(
+        endpoint: URL,
+        model: String,
+        apiKey: String? = nil,
+        language: String = "German",
+        timeoutSeconds: TimeInterval = 600,
+    ) {
         self.endpoint = endpoint
         self.model = model
         self.apiKey = apiKey
+        self.language = language
         self.timeoutSeconds = timeoutSeconds
     }
 
     func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-        var systemPrompt = ProtocolGenerator.loadPrompt()
+        var systemPrompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
         if diarized {
             systemPrompt += ProtocolGenerator.diarizationNote
         }

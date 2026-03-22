@@ -8,6 +8,7 @@
     /// Claude CLI implementation that generates protocols via subprocess.
     struct ClaudeCLIProtocolGenerator: ProtocolGenerating {
         let claudeBin: String
+        let language: String
 
         static let timeoutSeconds: TimeInterval = 600
 
@@ -22,7 +23,7 @@
         // MARK: - ProtocolGenerating
 
         func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-            var prompt = ProtocolGenerator.loadPrompt()
+            var prompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
             if diarized {
                 prompt += ProtocolGenerator.diarizationNote
             }
