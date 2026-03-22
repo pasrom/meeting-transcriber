@@ -131,6 +131,24 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(name.hasSuffix("_abcd.txt"))
     }
 
+    // MARK: - Language Substitution
+
+    func testApplyLanguageReplacesPlaceholder() {
+        let prompt = "Create protocol in {LANGUAGE} from transcript."
+        let result = ProtocolGenerator.applyLanguage(prompt, language: "English")
+        XCTAssertEqual(result, "Create protocol in English from transcript.")
+    }
+
+    func testApplyLanguageNoPlaceholderPassesThrough() {
+        let custom = "Custom prompt without placeholder."
+        let result = ProtocolGenerator.applyLanguage(custom, language: "French")
+        XCTAssertEqual(result, custom)
+    }
+
+    func testDefaultPromptContainsLanguagePlaceholder() {
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{LANGUAGE}"))
+    }
+
     // MARK: - File Save Operations
 
     func testSaveTranscript() throws {

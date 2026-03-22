@@ -73,6 +73,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
         let gen = try OpenAIProtocolGenerator(
             endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
             model: "test",
+            language: "German",
         )
         XCTAssertEqual(gen.timeoutSeconds, 600)
     }
@@ -81,6 +82,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
         let gen = try OpenAIProtocolGenerator(
             endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
             model: "test",
+            language: "German",
             timeoutSeconds: 120,
         )
         XCTAssertEqual(gen.timeoutSeconds, 120)
@@ -90,6 +92,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
         let gen = try OpenAIProtocolGenerator(
             endpoint: XCTUnwrap(URL(string: "http://localhost:11434/v1/chat/completions")),
             model: "test",
+            language: "German",
         )
         XCTAssertNil(gen.apiKey)
     }

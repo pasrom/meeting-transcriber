@@ -14,14 +14,14 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     init(
         endpoint: URL,
         model: String,
+        language: String,
         apiKey: String? = nil,
-        language: String = "German",
         timeoutSeconds: TimeInterval = 600,
     ) {
         self.endpoint = endpoint
         self.model = model
-        self.apiKey = apiKey
         self.language = language
+        self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
     }
 
