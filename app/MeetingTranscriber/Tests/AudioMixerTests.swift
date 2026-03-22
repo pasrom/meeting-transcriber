@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 @testable import MeetingTranscriber
 import XCTest
@@ -349,5 +350,165 @@ final class AudioMixerTests: XCTestCase {
         let rms = sqrt(loaded.map { $0 * $0 }.reduce(0, +) / Float(loaded.count))
         // AAC encoding + 16-bit quantization reduce amplitude; 0.05 confirms it's not silence
         XCTAssertGreaterThan(rms, 0.05, "Resampled audio should not be silent")
+    }
+
+    // MARK: - Frequency Preservation (Mickey Mouse Prevention)
+
+    func testResample48kTo16kPreservesFrequency() {
+        let inputRate = 48000
+        let outputRate = 16000
+        let input = Self.generateSine(frequency: 440, sampleRate: inputRate, duration: 1.0)
+
+        let output = AudioMixer.resample(input, from: inputRate, to: outputRate)
+        let peak = Self.peakFrequency(samples: output, sampleRate: outputRate)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "48k→16k must preserve 440Hz (got \(peak)Hz)")
+    }
+
+    func testResample44kTo16kPreservesFrequency() {
+        let inputRate = 44100
+        let outputRate = 16000
+        let input = Self.generateSine(frequency: 440, sampleRate: inputRate, duration: 1.0)
+
+        let output = AudioMixer.resample(input, from: inputRate, to: outputRate)
+        let peak = Self.peakFrequency(samples: output, sampleRate: outputRate)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "44.1k→16k must preserve 440Hz (got \(peak)Hz)")
+    }
+
+    func testResample96kTo16kPreservesFrequency() {
+        let inputRate = 96000
+        let outputRate = 16000
+        let input = Self.generateSine(frequency: 440, sampleRate: inputRate, duration: 1.0)
+
+        let output = AudioMixer.resample(input, from: inputRate, to: outputRate)
+        let peak = Self.peakFrequency(samples: output, sampleRate: outputRate)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "96k→16k must preserve 440Hz (got \(peak)Hz)")
+    }
+
+    func testResample16kTo16kPreservesFrequency() {
+        let rate = 16000
+        let input = Self.generateSine(frequency: 440, sampleRate: rate, duration: 1.0)
+
+        let output = AudioMixer.resample(input, from: rate, to: rate)
+        let peak = Self.peakFrequency(samples: output, sampleRate: rate)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "Same-rate passthrough must preserve 440Hz (got \(peak)Hz)")
+    }
+
+    func testResampleWithWrongSourceRateShiftsFrequency() {
+        // 440Hz generated at 48kHz, but tell resampler it's 24kHz → frequency doubles to ~880Hz
+        let input = Self.generateSine(frequency: 440, sampleRate: 48000, duration: 1.0)
+
+        let output = AudioMixer.resample(input, from: 24000, to: 16000)
+        let peak = Self.peakFrequency(samples: output, sampleRate: 16000)
+
+        // With wrong source rate, frequency should be shifted far from 440Hz
+        let deviation = abs(peak - 440) / 440
+        XCTAssertGreaterThan(deviation, 0.3, "Wrong source rate must shift frequency (got \(peak)Hz, expected ~880Hz)")
+    }
+
+    func testResampleFilePreservesFrequency() async throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let src = tmpDir.appendingPathComponent("test_freq_src_\(UUID().uuidString).wav")
+        let dst = tmpDir.appendingPathComponent("test_freq_dst_\(UUID().uuidString).wav")
+        defer {
+            try? FileManager.default.removeItem(at: src)
+            try? FileManager.default.removeItem(at: dst)
+        }
+
+        // 440Hz sine at 48kHz, save to WAV, resample file to 16kHz
+        let input = Self.generateSine(frequency: 440, sampleRate: 48000, duration: 1.0)
+        try AudioMixer.saveWAV(samples: input, sampleRate: 48000, url: src)
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        let peak = Self.peakFrequency(samples: loaded, sampleRate: 16000)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "File round-trip must preserve 440Hz (got \(peak)Hz)")
+    }
+
+    func testSaveWAVHeaderSampleRateCorrect() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+
+        for rate in [48000, 16000, 44100] {
+            let url = tmpDir.appendingPathComponent("test_header_\(rate)_\(UUID().uuidString).wav")
+            defer { try? FileManager.default.removeItem(at: url) }
+
+            let samples = [Float](repeating: 0, count: rate) // 1s silence
+            try AudioMixer.saveWAV(samples: samples, sampleRate: rate, url: url)
+
+            let file = try AVAudioFile(forReading: url)
+            XCTAssertEqual(
+                Int(file.processingFormat.sampleRate), rate,
+                "WAV header must report \(rate)Hz",
+            )
+        }
+    }
+
+    func testResampleFileFromM4APreservesFrequency() async throws {
+        let src = fixtureURL("sine_440hz_44k.m4a")
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_freq_m4a_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: dst) }
+
+        try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
+
+        let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
+        let peak = Self.peakFrequency(samples: loaded, sampleRate: 16000)
+
+        XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "M4A→16k must preserve 440Hz (got \(peak)Hz)")
+    }
+}
+
+// MARK: - FFT Helpers
+
+private extension AudioMixerTests {
+    /// Detect dominant frequency via FFT (vDSP).
+    static func peakFrequency(samples: [Float], sampleRate: Int) -> Double {
+        let n = samples.count
+        let log2n = vDSP_Length(floor(log2(Double(n))))
+        let fftSize = Int(1 << log2n)
+        guard let fft = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else {
+            return 0
+        }
+        defer { vDSP_destroy_fftsetup(fft) }
+
+        var realPart = [Float](samples.prefix(fftSize))
+        var imagPart = [Float](repeating: 0, count: fftSize)
+
+        let peakBin: Int = realPart.withUnsafeMutableBufferPointer { realBuf in
+            imagPart.withUnsafeMutableBufferPointer { imagBuf in
+                guard let realPtr = realBuf.baseAddress,
+                      let imagPtr = imagBuf.baseAddress else { return 0 }
+                var splitComplex = DSPSplitComplex(
+                    realp: realPtr,
+                    imagp: imagPtr,
+                )
+                vDSP_fft_zip(fft, &splitComplex, 1, log2n, FFTDirection(kFFTDirection_Forward))
+
+                var magnitudes = [Float](repeating: 0, count: fftSize / 2)
+                vDSP_zvmags(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2))
+
+                // Skip bin 0 (DC offset)
+                var maxVal: Float = 0
+                var maxIdx: vDSP_Length = 0
+                vDSP_maxvi(Array(magnitudes.dropFirst()), 1, &maxVal, &maxIdx, vDSP_Length(magnitudes.count - 1))
+                return Int(maxIdx) + 1
+            }
+        }
+
+        let freqResolution = Double(sampleRate) / Double(fftSize)
+        return Double(peakBin) * freqResolution
+    }
+
+    /// Generate a mono sine wave at a given frequency.
+    static func generateSine(frequency: Double, sampleRate: Int, duration: Double) -> [Float] {
+        let sampleCount = Int(Double(sampleRate) * duration)
+        return (0 ..< sampleCount).map { i in
+            sin(2 * .pi * Float(frequency) * Float(i) / Float(sampleRate))
+        }
     }
 }
