@@ -13,5 +13,11 @@ let package = Package(
             path: "Sources",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        .testTarget(
+            name: "AudioTapLibTests",
+            dependencies: ["AudioTapLib"],
+            path: "Tests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

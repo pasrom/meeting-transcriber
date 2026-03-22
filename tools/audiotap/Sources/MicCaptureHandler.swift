@@ -6,24 +6,25 @@ import os.log
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "MicCapture")
 
 /// Records microphone audio to a WAV file via AVAudioEngine.
-/// Monitors for default input device changes (e.g. AirPods connected) via
-/// CoreAudio property listener and automatically restarts the engine.
+/// Monitors for device changes via CoreAudio property listener (default input device)
+/// and AVAudioEngine configuration change notification (format/route changes).
+/// Automatically restarts the engine on device switch, preserving the selected device
+/// when still available or falling back to system default with a warning.
 public class MicCaptureHandler {
     private var engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
     private let outputURL: URL
     private var isRecording = false
-    private var listenerInstalled = false
-    /// Stored listener block so we can pass the same instance to remove.
+    private var isRestarting = false
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
-    /// Sample rate of the WAV file (set on first start, stays fixed).
+    private var configChangeObserver: NSObjectProtocol?
+    private var selectedDeviceUID: String?
     private var fileSampleRate: Double = 0
-    /// Resampler for when device sample rate differs from file sample rate.
     private var converter: AVAudioConverter?
-    /// mach_absolute_time() of first audio callback.
+    /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
+    private var resampleRatio: Double = 1.0
     public private(set) var firstFrameTime: UInt64 = 0
 
-    /// CoreAudio property address for default input device changes.
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -32,6 +33,10 @@ public class MicCaptureHandler {
 
     public init(outputURL: URL) {
         self.outputURL = outputURL
+    }
+
+    deinit {
+        stop()
     }
 
     private static func deviceIDForUID(_ uid: String) -> AudioDeviceID {
@@ -53,8 +58,10 @@ public class MicCaptureHandler {
     }
 
     public func start(deviceUID: String? = nil) throws {
+        selectedDeviceUID = deviceUID
         try startEngine(deviceUID: deviceUID)
         installDeviceChangeListener()
+        installConfigChangeObserver()
     }
 
     // swiftlint:disable:next function_body_length
@@ -85,8 +92,7 @@ public class MicCaptureHandler {
         )! // swiftlint:disable:this force_unwrapping
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
 
-        // Create WAV file on first start; always at 16kHz (WhisperKit target rate).
-        // The AVAudioConverter below handles resampling from any hardware rate.
+        // Always 16kHz — WhisperKit target rate
         if outputFile == nil {
             fileSampleRate = speechSampleRate
             let wavSettings: [String: Any] = [
@@ -101,13 +107,14 @@ public class MicCaptureHandler {
             outputFile = try AVAudioFile(forWriting: outputURL, settings: wavSettings)
         }
 
-        // Set up resampler if device sample rate differs from file sample rate
         converter = nil
+        resampleRatio = 1.0
         if tapFormat.sampleRate != fileSampleRate {
             let outputFormat = AVAudioFormat(
                 standardFormatWithSampleRate: fileSampleRate, channels: 1,
             )! // swiftlint:disable:this force_unwrapping
             converter = AVAudioConverter(from: tapFormat, to: outputFormat)
+            resampleRatio = fileSampleRate / tapFormat.sampleRate
             logger.info("Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(self.fileSampleRate)) Hz")
         }
 
@@ -121,10 +128,8 @@ public class MicCaptureHandler {
             }
             do {
                 if let converter = self.converter {
-                    // Resample to match the WAV file's sample rate
-                    let ratio = self.fileSampleRate / tapFormat.sampleRate
                     let outputFrames = AVAudioFrameCount(
-                        Double(buffer.frameLength) * ratio,
+                        Double(buffer.frameLength) * self.resampleRatio,
                     )
                     guard let outputBuffer = AVAudioPCMBuffer(
                         pcmFormat: converter.outputFormat,
@@ -160,9 +165,8 @@ public class MicCaptureHandler {
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
     }
 
-    /// Listen for default input device changes via CoreAudio property listener.
     private func installDeviceChangeListener() {
-        guard !listenerInstalled else { return }
+        guard deviceChangeListener == nil else { return }
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.handleDefaultInputDeviceChanged()
         }
@@ -174,37 +178,86 @@ public class MicCaptureHandler {
         )
         if status == noErr {
             deviceChangeListener = listener
-            listenerInstalled = true
             logger.info("Mic: listening for default input device changes")
         } else {
             logger.warning("Failed to install device change listener (status: \(status))")
         }
     }
 
-    private func handleDefaultInputDeviceChanged() {
-        guard isRecording else { return }
-        logger.info("Mic: default input device changed, restarting engine...")
+    /// Listen for AVAudioEngine configuration changes (format changes on current device).
+    private func installConfigChangeObserver() {
+        guard configChangeObserver == nil else { return }
+        configChangeObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main,
+        ) { [weak self] _ in
+            self?.handleEngineConfigChange()
+        }
+        logger.info("Mic: listening for engine configuration changes")
+    }
 
-        // Stop current engine
+    private func handleEngineConfigChange() {
+        logger.info("Mic: engine configuration changed (format/route change)")
+        handleDeviceChange()
+    }
+
+    private func handleDefaultInputDeviceChanged() {
+        logger.info("Mic: default input device changed")
+        handleDeviceChange()
+    }
+
+    private func handleDeviceChange() {
+        let isDeviceAvailable = selectedDeviceUID.map { Self.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
+        let action = MicRestartPolicy.decideRestart(
+            isRecording: isRecording,
+            isRestarting: isRestarting,
+            selectedDeviceUID: selectedDeviceUID,
+            isSelectedDeviceAvailable: isDeviceAvailable,
+        )
+
+        switch action {
+        case let .restart(deviceUID):
+            executeRestart(deviceUID: deviceUID)
+
+        case .skip:
+            break
+        }
+    }
+
+    private func executeRestart(deviceUID: String?) {
+        isRestarting = true
+        defer { isRestarting = false }
+
+        if deviceUID == nil, let uid = selectedDeviceUID {
+            logger.warning("Mic: selected device '\(uid)' no longer available, falling back to system default")
+        }
+
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         engine.reset()
 
-        // Create a fresh engine (AVAudioEngine can be in a bad state after config change)
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configChangeObserver = nil
+        }
+
+        // AVAudioEngine can be in a bad state after config change — must recreate
         engine = AVAudioEngine()
 
-        // Restart with new system default
         do {
-            try startEngine(deviceUID: nil)
-            logger.info("Mic: engine restarted on new default device")
+            try startEngine(deviceUID: deviceUID)
+            installConfigChangeObserver()
+            logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device")
         } catch {
+            isRecording = false
             logger.error("Failed to restart mic after device change: \(error)")
         }
     }
 
     public func stop() {
         isRecording = false
-        if listenerInstalled, let listener = deviceChangeListener {
+        if let listener = deviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
                 &defaultInputAddress,
@@ -212,7 +265,10 @@ public class MicCaptureHandler {
                 listener,
             )
             deviceChangeListener = nil
-            listenerInstalled = false
+        }
+        if let observer = configChangeObserver {
+            NotificationCenter.default.removeObserver(observer)
+            configChangeObserver = nil
         }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
