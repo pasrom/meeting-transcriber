@@ -709,4 +709,54 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.count, 1)
         XCTAssertEqual(freshQueue.jobs[0].state, .waiting)
     }
+
+    // MARK: - addWarning
+
+    func testAddWarningAppendsToJob() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Warn Test",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.addWarning(id: job.id, "Test warning")
+        XCTAssertEqual(queue.jobs[0].warnings, ["Test warning"])
+    }
+
+    func testAddWarningDeduplicates() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Dedup Test",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.addWarning(id: job.id, "Same warning")
+        queue.addWarning(id: job.id, "Same warning")
+        XCTAssertEqual(queue.jobs[0].warnings.count, 1)
+    }
+
+    func testAddWarningIgnoresInvalidJobID() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        // Should not crash with non-existent job ID
+        queue.addWarning(id: UUID(), "Orphan warning")
+        XCTAssertTrue(queue.jobs.isEmpty)
+    }
+
+    func testAddWarningMultipleDistinct() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Multi Test",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.addWarning(id: job.id, "Warning A")
+        queue.addWarning(id: job.id, "Warning B")
+        XCTAssertEqual(queue.jobs[0].warnings, ["Warning A", "Warning B"])
+    }
 }
