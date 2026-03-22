@@ -298,8 +298,8 @@ final class AppState {
                     // swiftlint:disable:next force_unwrapping
                     ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
                 model: settings.openAIModel,
-                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
                 language: settings.protocolLanguage,
+                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
             )
         }
     }
