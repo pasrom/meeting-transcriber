@@ -195,7 +195,7 @@ struct SettingsView: View {
 
             // swiftlint:disable:next closure_body_length
             Section("Protocol Generation") {
-                Picker("Provider", selection: $settings.protocolProvider) {
+                Picker("LLM Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in
                         Text(provider.label).tag(provider)
                     }
@@ -280,6 +280,11 @@ struct SettingsView: View {
                             testConnection()
                         }
                     }
+
+                case .none:
+                    Text("Only the raw transcript will be saved — no LLM summarization.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Picker("Protocol Language", selection: $settings.protocolLanguage) {
                     ForEach(AppSettings.protocolLanguages, id: \.self) { lang in

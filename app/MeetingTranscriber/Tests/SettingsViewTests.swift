@@ -102,7 +102,7 @@ final class SettingsViewTests: XCTestCase {
     func testProviderPickerExists() throws {
         let sut = makeSUT()
         let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Provider"))
+        XCTAssertNoThrow(try body.find(text: "LLM Provider"))
     }
 
     #if !APPSTORE

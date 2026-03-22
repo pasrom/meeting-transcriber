@@ -399,7 +399,8 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
         state.configurePipelineCallbacks()
 
-        let job = makeJob(title: "Sprint Review")
+        var job = makeJob(title: "Sprint Review")
+        job.protocolPath = URL(fileURLWithPath: "/tmp/protocol.md")
         state.pipelineQueue.onJobStateChange?(job, .transcribing, .done)
 
         XCTAssertEqual(notifier.calls.count, 1)

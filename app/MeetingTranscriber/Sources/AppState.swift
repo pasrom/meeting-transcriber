@@ -285,7 +285,7 @@ final class AppState {
         return queue
     }
 
-    func makeProtocolGenerator() -> ProtocolGenerating {
+    func makeProtocolGenerator() -> ProtocolGenerating? {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:
@@ -301,6 +301,9 @@ final class AppState {
                 language: settings.protocolLanguage,
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
             )
+
+        case .none:
+            nil
         }
     }
 
@@ -308,7 +311,8 @@ final class AppState {
         pipelineQueue.onJobStateChange = { [notifier] job, _, newState in
             switch newState {
             case .done:
-                notifier.notify(title: "Protocol Ready", body: job.meetingTitle)
+                let title = job.protocolPath != nil ? "Protocol Ready" : "Transcript Saved"
+                notifier.notify(title: title, body: job.meetingTitle)
 
             case .error:
                 if let err = job.error {

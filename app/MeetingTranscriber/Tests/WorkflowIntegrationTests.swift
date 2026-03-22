@@ -221,7 +221,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertFalse(h.protocolGen.generateCalled)
     }
 
-    func testWorkflowProtocolGenerationFailsEndsInError() async throws {
+    func testWorkflowProtocolGenerationFailsSavesTranscriptWithWarning() async throws {
         let (h, _) = try makeHarness()
         h.protocolGen.shouldThrow = true
 
@@ -229,7 +229,11 @@ final class WorkflowIntegrationTests: XCTestCase {
         h.queue.enqueue(job)
         await h.queue.processNext()
 
-        XCTAssertEqual(h.queue.jobs.first?.state, .error)
+        // Job completes with warning (graceful fallback), transcript saved
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertNotNil(h.queue.jobs.first?.transcriptPath)
+        XCTAssertNil(h.queue.jobs.first?.protocolPath)
+        XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
     }
 
     // MARK: - Diarization Scenarios

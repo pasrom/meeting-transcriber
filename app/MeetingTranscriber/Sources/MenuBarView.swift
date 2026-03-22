@@ -179,7 +179,7 @@ struct MenuBarView: View {
                 jobStateLabel(job)
             }
             Spacer()
-            if job.state == .done, let path = job.protocolPath {
+            if job.state == .done, let path = job.protocolPath ?? job.transcriptPath {
                 Button("Open") { onOpenProtocol(path) }
                     .font(.caption2)
             }
