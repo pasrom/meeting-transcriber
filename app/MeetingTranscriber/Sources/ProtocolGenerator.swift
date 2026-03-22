@@ -12,7 +12,7 @@ protocol ProtocolGenerating {
 enum ProtocolGenerator {
     static let protocolPrompt = """
     You are a professional meeting minute taker.
-    Create a structured meeting protocol in German from the following transcript.
+    Create a structured meeting protocol in {LANGUAGE} from the following transcript.
 
     Return ONLY the finished Markdown document - no explanations, no introduction,
     no comments before or after.
@@ -75,6 +75,10 @@ enum ProtocolGenerator {
     ///
     /// Reads `AppPaths.customPromptFile` if it exists and is non-empty,
     /// otherwise falls back to the hardcoded `protocolPrompt`.
+    static func applyLanguage(_ prompt: String, language: String) -> String {
+        prompt.replacingOccurrences(of: "{LANGUAGE}", with: language)
+    }
+
     static func loadPrompt() -> String {
         let url = AppPaths.customPromptFile
         if let custom = try? String(contentsOf: url, encoding: .utf8),

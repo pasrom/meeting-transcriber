@@ -281,6 +281,11 @@ struct SettingsView: View {
                         }
                     }
                 }
+                Picker("Protocol Language", selection: $settings.protocolLanguage) {
+                    ForEach(AppSettings.protocolLanguages, id: \.self) { lang in
+                        Text(lang).tag(lang)
+                    }
+                }
 
                 HStack {
                     Text("Output Folder")

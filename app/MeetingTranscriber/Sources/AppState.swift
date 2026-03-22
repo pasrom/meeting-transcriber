@@ -289,7 +289,7 @@ final class AppState {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:
-                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin)
+                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin, language: settings.protocolLanguage)
         #endif
 
         case .openAICompatible:
@@ -299,6 +299,7 @@ final class AppState {
                     ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
                 model: settings.openAIModel,
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
+                language: settings.protocolLanguage,
             )
         }
     }
