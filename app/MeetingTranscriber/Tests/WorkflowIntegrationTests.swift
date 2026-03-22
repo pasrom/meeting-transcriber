@@ -348,4 +348,43 @@ final class WorkflowIntegrationTests: XCTestCase {
         await h.queue.processNext()
         XCTAssertEqual(h.queue.jobs.first { $0.id == job2.id }?.state, .done)
     }
+
+    // MARK: - None LLM Provider (Transcript Only)
+
+    func testWorkflowNoneProviderSavesTranscriptOnly() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello world"),
+        ]
+        let collector = TransitionCollector()
+
+        // Factory returns nil → no protocol generation
+        let queue = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+        )
+        queue.onJobStateChange = { [collector] _, old, new in
+            collector.transitions.append((old, new))
+        }
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = makeJob(title: "Transcript Only", audioPath: audioPath)
+        queue.enqueue(job)
+        await queue.processNext()
+
+        // Job completes without .generatingProtocol state
+        let states = collector.transitions.map(\.1)
+        XCTAssertFalse(states.contains(.generatingProtocol))
+        XCTAssertEqual(queue.jobs.first?.state, .done)
+
+        // Transcript saved, no protocol
+        XCTAssertNotNil(queue.jobs.first?.transcriptPath)
+        XCTAssertNil(queue.jobs.first?.protocolPath)
+
+        // No warnings (this is intentional, not a failure)
+        XCTAssertTrue(queue.jobs.first?.warnings.isEmpty ?? false)
+    }
 }

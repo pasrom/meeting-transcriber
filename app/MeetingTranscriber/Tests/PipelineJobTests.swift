@@ -50,6 +50,21 @@ final class PipelineJobTests: XCTestCase {
         XCTAssertEqual(decoded.warnings, ["Diarization failed — speakers not identified", "Speaker naming skipped"])
     }
 
+    func testTranscriptPathSurvivesEncoding() throws {
+        var job = PipelineJob(
+            meetingTitle: "Transcript Test",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.transcriptPath = URL(fileURLWithPath: "/tmp/transcript.txt")
+        let data = try JSONEncoder().encode(job)
+        let decoded = try JSONDecoder().decode(PipelineJob.self, from: data)
+        XCTAssertEqual(decoded.transcriptPath, job.transcriptPath)
+    }
+
     func testJobStateIsCodable() throws {
         for state in [
             JobState.waiting,
