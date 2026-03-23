@@ -123,8 +123,10 @@ class DualSourceRecorder: RecordingProvider {
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
         }
+        // Log prominently — wrong rate here causes Mickey Mouse voice
+        logger.info("App audio actual rate: \(actualRate) Hz (requested: \(self.recordRate) Hz, target: \(self.targetRate) Hz)")
         if actualRate != recordRate {
-            logger.info("Actual app rate: \(actualRate) Hz")
+            logger.warning("App audio rate differs from requested: \(actualRate) vs \(self.recordRate) — USB device may have negotiated different rate")
         }
 
         let recDir = Self.recordingsDir
