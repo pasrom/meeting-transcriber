@@ -84,7 +84,8 @@ public class AudioCaptureSession {
             }
         }
 
-        let actualRate = appCapture?.actualSampleRate ?? sampleRate
+        let actualRate = appCapture?.actualSampleRate ?? 0
+        let actualChannels = appCapture?.actualChannels ?? 0
 
         // Close file handle
         try? appFileHandle?.close()
@@ -94,13 +95,14 @@ public class AudioCaptureSession {
             appAudioFileURL: appOutputURL,
             micAudioFileURL: micCapture != nil ? micOutputURL : nil,
             actualSampleRate: actualRate > 0 ? actualRate : sampleRate,
+            actualChannels: actualChannels > 0 ? actualChannels : channels,
             micDelay: micDelay,
         )
 
         appCapture = nil
         micCapture = nil
 
-        logger.info("Capture session stopped (rate: \(result.actualSampleRate), micDelay: \(result.micDelay))")
+        logger.info("Capture session stopped (rate: \(result.actualSampleRate), channels: \(result.actualChannels), micDelay: \(result.micDelay))")
         return result
     }
 }

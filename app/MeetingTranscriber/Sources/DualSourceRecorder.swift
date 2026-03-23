@@ -119,12 +119,17 @@ class DualSourceRecorder: RecordingProvider {
 
         let micDelay = captureResult.micDelay
         let actualRate = captureResult.actualSampleRate
+        let actualChannels = captureResult.actualChannels
 
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
         }
+        logger.info("App audio: \(actualChannels)ch, \(actualRate) Hz (requested: \(self.appChannels)ch, \(self.recordRate) Hz)")
+        if actualChannels != appChannels {
+            logger.warning("App audio channel count differs: actual=\(actualChannels), expected=\(self.appChannels) — mono USB device?")
+        }
         if actualRate != recordRate {
-            logger.info("Actual app rate: \(actualRate) Hz")
+            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(self.recordRate)")
         }
 
         let recDir = Self.recordingsDir
@@ -155,17 +160,7 @@ class DualSourceRecorder: RecordingProvider {
                 }
             }
 
-            // Stereo → mono
-            if appChannels == 2 && floats.count >= 2 {
-                let n = floats.count - (floats.count % 2)
-                var mono = [Float](repeating: 0, count: n / 2)
-                for i in 0 ..< mono.count {
-                    mono[i] = (floats[i * 2] + floats[i * 2 + 1]) / 2
-                }
-                appSamples = mono
-            } else {
-                appSamples = floats
-            }
+            appSamples = Self.downmixToMono(floats, channels: actualChannels)
 
             // Resample to 16kHz and save app track
             let appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
@@ -229,6 +224,22 @@ class DualSourceRecorder: RecordingProvider {
             micDelay: micDelay,
             recordingStart: recordingStart,
         )
+    }
+
+    /// Downmix interleaved multi-channel audio to mono. Passthrough if already mono.
+    static func downmixToMono(_ samples: [Float], channels: Int) -> [Float] {
+        guard channels >= 2, samples.count >= channels else { return samples }
+        let n = samples.count - (samples.count % channels)
+        var mono = [Float](repeating: 0, count: n / channels)
+        let scale = 1.0 / Float(channels)
+        for i in 0 ..< mono.count {
+            var sum: Float = 0
+            for ch in 0 ..< channels {
+                sum += samples[i * channels + ch]
+            }
+            mono[i] = sum * scale
+        }
+        return mono
     }
 
     private static let timestampFormatter: DateFormatter = {

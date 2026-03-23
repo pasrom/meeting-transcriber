@@ -35,6 +35,8 @@ public class AppAudioCapture {
     public private(set) var appFirstFrameTime: UInt64 = 0
     /// Actual sample rate of the aggregate device (may differ from requested).
     public private(set) var actualSampleRate: Int = 0
+    /// Actual channel count detected from first IOProc callback.
+    public private(set) var actualChannels: Int = 0
     private var didLogFormat = false
     /// Guard against re-entrant device change handling during async restart.
     private var isRestarting = false
@@ -165,9 +167,11 @@ public class AppAudioCapture {
             if !self.didLogFormat {
                 self.didLogFormat = true
                 self.appFirstFrameTime = mach_absolute_time()
-                let frames = Int(abl.mBuffers.mDataByteSize) / MemoryLayout<Float>.size
+                self.actualChannels = Int(abl.mBuffers.mNumberChannels)
+                let ch = max(self.actualChannels, 1)
+                let frames = Int(abl.mBuffers.mDataByteSize) / (MemoryLayout<Float>.size * ch)
                 logger.info(
-                    "Audio format: \(self.actualSampleRate) Hz, \(abl.mNumberBuffers) buffers, \(frames) frames/buffer",
+                    "Audio format: \(self.actualSampleRate) Hz, \(self.actualChannels)ch, \(abl.mNumberBuffers) buffers, \(frames) frames/buffer",
                 )
             }
 
