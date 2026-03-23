@@ -129,7 +129,7 @@ class DualSourceRecorder: RecordingProvider {
             logger.warning("App audio channel count differs: actual=\(actualChannels), expected=\(self.appChannels) — mono USB device?")
         }
         if actualRate != recordRate {
-            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(self.recordRate)")
+            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(self.recordRate) — USB device may have negotiated different rate")
         }
 
         let recDir = Self.recordingsDir
