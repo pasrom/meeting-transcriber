@@ -8,6 +8,8 @@ public struct AudioCaptureResult: Sendable {
     public let micAudioFileURL: URL?
     /// Actual sample rate of the aggregate device (may differ from requested).
     public let actualSampleRate: Int
+    /// Actual channel count of the app audio (1=mono, 2=stereo).
+    public let actualChannels: Int
     /// Time delta between app and mic first frames (seconds, positive = mic started later).
     public let micDelay: TimeInterval
 }
