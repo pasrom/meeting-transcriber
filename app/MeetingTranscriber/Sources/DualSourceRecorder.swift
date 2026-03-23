@@ -119,14 +119,17 @@ class DualSourceRecorder: RecordingProvider {
 
         let micDelay = captureResult.micDelay
         let actualRate = captureResult.actualSampleRate
+        let actualChannels = captureResult.actualChannels
 
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
         }
-        // Log prominently — wrong rate here causes Mickey Mouse voice
-        logger.info("App audio actual rate: \(actualRate) Hz (requested: \(self.recordRate) Hz, target: \(self.targetRate) Hz)")
+        logger.info("App audio: \(actualChannels)ch, \(actualRate) Hz (requested: \(self.appChannels)ch, \(self.recordRate) Hz)")
+        if actualChannels != appChannels {
+            logger.warning("App audio channel count differs: actual=\(actualChannels), expected=\(self.appChannels) — mono USB device?")
+        }
         if actualRate != recordRate {
-            logger.warning("App audio rate differs from requested: \(actualRate) vs \(self.recordRate) — USB device may have negotiated different rate")
+            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(self.recordRate) — USB device may have negotiated different rate")
         }
 
         let recDir = Self.recordingsDir
@@ -157,12 +160,17 @@ class DualSourceRecorder: RecordingProvider {
                 }
             }
 
-            // Stereo → mono
-            if appChannels == 2 && floats.count >= 2 {
-                let n = floats.count - (floats.count % 2)
-                var mono = [Float](repeating: 0, count: n / 2)
+            // Multi-channel → mono (passthrough if already mono)
+            if actualChannels >= 2 && floats.count >= actualChannels {
+                let n = floats.count - (floats.count % actualChannels)
+                var mono = [Float](repeating: 0, count: n / actualChannels)
+                let scale = 1.0 / Float(actualChannels)
                 for i in 0 ..< mono.count {
-                    mono[i] = (floats[i * 2] + floats[i * 2 + 1]) / 2
+                    var sum: Float = 0
+                    for ch in 0 ..< actualChannels {
+                        sum += floats[i * actualChannels + ch]
+                    }
+                    mono[i] = sum * scale
                 }
                 appSamples = mono
             } else {
