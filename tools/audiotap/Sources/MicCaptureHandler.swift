@@ -247,8 +247,12 @@ public class MicCaptureHandler {
 
         do {
             try startEngine(deviceUID: deviceUID)
+            let hwRate = engine.inputNode.outputFormat(forBus: 0).sampleRate
+            if hwRate <= 0 {
+                logger.warning("Mic: hardware format rate is \(hwRate) after restart — may produce incorrect audio")
+            }
             installConfigChangeObserver()
-            logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device")
+            logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device (\(Int(hwRate)) Hz)")
         } catch {
             isRecording = false
             logger.error("Failed to restart mic after device change: \(error)")
