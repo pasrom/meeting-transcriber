@@ -318,26 +318,36 @@ public class AppAudioCapture {
 
         stopCapture()
 
-        // Small delay to let CoreAudio settle after device change
+        // USB devices need time to settle their format after connection.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
             do {
                 try self.startCapture()
-                self.isRestarting = false
-                logger.info("App audio: tap restarted on new output device")
+                // Verify rate was detected — USB devices may not have settled yet
+                if self.actualSampleRate <= 0 {
+                    logger.warning("App audio: rate query returned 0 after restart, retrying in 1s...")
+                    self.stopCapture()
+                    self.retryStartCapture(afterDelay: 1.0)
+                } else {
+                    self.isRestarting = false
+                    logger.info("App audio: tap restarted on new device (rate: \(self.actualSampleRate) Hz)")
+                }
             } catch {
                 logger.error("Failed to restart app audio capture: \(error)")
-                // Retry once after a longer delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    guard let self else { return }
-                    defer { self.isRestarting = false }
-                    do {
-                        try self.startCapture()
-                        logger.info("App audio: tap restarted on retry")
-                    } catch {
-                        logger.error("Retry also failed: \(error)")
-                    }
-                }
+                self.retryStartCapture(afterDelay: 1.0)
+            }
+        }
+    }
+
+    private func retryStartCapture(afterDelay delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            defer { self.isRestarting = false }
+            do {
+                try self.startCapture()
+                logger.info("App audio: tap restarted on retry (rate: \(self.actualSampleRate) Hz)")
+            } catch {
+                logger.error("Retry also failed: \(error)")
             }
         }
     }
