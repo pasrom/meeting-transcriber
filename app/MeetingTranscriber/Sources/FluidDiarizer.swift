@@ -19,8 +19,8 @@ class FluidDiarizer: DiarizationProvider {
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
-    private static func normalizeSpeakerId(_ id: String) -> String {
-        id.replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
+    private static func normalizeSpeakerLabel(_ index: Int) -> String {
+        "SPEAKER_\(index)"
     }
 
     func run(audioPath: URL, numSpeakers _: Int?, meetingTitle _: String) async throws -> MeetingTranscriber.DiarizationResult {
@@ -38,13 +38,19 @@ class FluidDiarizer: DiarizationProvider {
         // swiftlint:disable:next force_unwrapping
         let timeline = try diarizer!.processComplete(audioFileURL: audioPath)
 
-        let segments = timeline.segments.map { seg in
-            MeetingTranscriber.DiarizationResult.Segment(
-                start: TimeInterval(seg.startTimeSeconds),
-                end: TimeInterval(seg.endTimeSeconds),
-                speaker: Self.normalizeSpeakerId(seg.speakerId),
-            )
+        // Extract segments from all speakers in the timeline
+        var segments: [MeetingTranscriber.DiarizationResult.Segment] = []
+        for speaker in timeline.speakers.values {
+            let speakerLabel = Self.normalizeSpeakerLabel(speaker.index)
+            for seg in speaker.finalizedSegments {
+                segments.append(MeetingTranscriber.DiarizationResult.Segment(
+                    start: TimeInterval(seg.startTime),
+                    end: TimeInterval(seg.endTime),
+                    speaker: speakerLabel,
+                ))
+            }
         }
+        segments.sort { $0.start < $1.start }
 
         var speakingTimes: [String: TimeInterval] = [:]
         for seg in segments {
@@ -96,7 +102,7 @@ class FluidDiarizer: DiarizationProvider {
                     continue
                 }
                 // swiftlint:disable:next force_unwrapping
-                let embedding = try embeddingManager!.extractEmbedding(speakerAudio)
+                let embedding = try embeddingManager!.extractSpeakerEmbedding(from: speakerAudio)
                 embeddings[speakerId] = embedding
             }
 
