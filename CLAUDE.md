@@ -65,6 +65,9 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
+tools/whisperkit-cli/      # WhisperKit CLI transcription tool (built by build_whisperkit.sh)
+  Package.swift
+  Sources/main.swift
 scripts/
   build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
@@ -88,7 +91,6 @@ docs/
     appstate-tests.md          # AppState test expansion plan
     2026-03-10-repo-review.md  # Repository review findings
     2026-03-21-workflow-integration-tests.md  # Workflow integration test plan
-FluidAudio/                # Local FluidAudio package (CoreML speaker diarization)
 protocols/                 # Output directory (gitignored)
 speakers.json              # Saved voice profiles (gitignored, created at runtime)
 .env                       # Environment variables (gitignored)
