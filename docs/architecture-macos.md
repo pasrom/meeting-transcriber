@@ -155,7 +155,7 @@ FluidAudio requires 16kHz mono input. Both app and mic tracks are resampled befo
 
 On-device speaker diarization using FluidAudio (CoreML/ANE). No HuggingFace token or Python subprocess needed. Models downloaded automatically on first run (~50 MB).
 
-Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → `OfflineDiarizerManager` → `DiarizationResult` with segments, speaking times, and speaker embeddings.
+Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → `LSEENDDiarizer` (segments) + `DiarizerManager` (WeSpeaker embeddings) → `DiarizationResult` with segments, speaking times, and speaker embeddings.
 
 ### Speaker Matching
 

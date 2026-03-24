@@ -20,7 +20,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
     FluidTranscriptionEngine.swift # FluidAudio Parakeet transcription (CoreML/ANE)
-    FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device)
+    FluidDiarizer.swift    # LS-EEND diarization + WeSpeaker embeddings via FluidAudio (on-device)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
@@ -178,7 +178,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
 
 **Diarization:**
-- `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed.
+- `FluidDiarizer` uses two-stage FluidAudio pipeline: `LSEENDDiarizer` for segments (up to 10 speakers, handles overlap well) + `DiarizerManager` for WeSpeaker embedding extraction (cross-meeting speaker matching). No HuggingFace token needed.
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
 - `SpeakerMatcher` stores speaker embeddings in `speakers.json` and matches via cosine similarity (multi-embedding, max 5 per speaker, confidence margin 0.10).
 - `DiarizationProvider` protocol enables mock injection in tests.
