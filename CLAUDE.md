@@ -5,10 +5,11 @@
 ```
 VERSION                    # App version (read by build scripts)
 app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
-  Package.swift            # SPM manifest (ViewInspector test dep)
+  Package.swift            # SPM manifest (ViewInspector + SnapshotTesting test deps)
   Sources/
     MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
     AppState.swift         # @Observable @MainActor ViewModel (business state, badge logic, pipeline wiring)
+    AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
     MenuBarView.swift      # Menu bar dropdown UI
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
     SettingsView.swift     # Settings window
@@ -34,14 +35,16 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     DualSourceRecorder.swift  # App audio (AudioTapLib) + mic recording (captures startTime in start())
+    MeetingDetecting.swift # MeetingDetecting protocol + DetectedMeeting model
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
     FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
     AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback, MKV/WebM/OGG via ffmpeg) + mixing to 16kHz mono
     MicRecorder.swift      # Microphone recording via AVAudioEngine
-    MuteDetector.swift     # Mute state detection via accessibility API
+    PermissionRow.swift    # Permission status row UI component
     Permissions.swift      # Permission checks (mic, screen recording)
     ParticipantReader.swift # Reads meeting participants via accessibility
     MeetingPatterns.swift  # App-specific window title patterns
+    PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
     UpdateChecker.swift    # GitHub release update checker
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
@@ -58,6 +61,7 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     AudioCaptureSession.swift # Orchestrator (start/stop, computes micDelay)
     AudioCaptureResult.swift  # Result struct
     Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
+    MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
@@ -81,6 +85,9 @@ docs/
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
   plans/
     swift-architecture.md      # Detailed Swift pipeline architecture
+    appstate-tests.md          # AppState test expansion plan
+    2026-03-10-repo-review.md  # Repository review findings
+    2026-03-21-workflow-integration-tests.md  # Workflow integration test plan
 FluidAudio/                # Local FluidAudio package (CoreML speaker diarization)
 protocols/                 # Output directory (gitignored)
 speakers.json              # Saved voice profiles (gitignored, created at runtime)
@@ -155,7 +162,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 ## Conventions
 
 - All code and UI text in English
-- Protocol output generated in German (via Claude prompt)
+- Protocol output language configurable via `AppSettings.protocolLanguage` (default: German)
 
 ## Architecture Notes
 
@@ -187,6 +194,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Grace period minimum is 1 second (enforced in `AppSettings.endGrace` setter).
 
 **Detection:**
+- `MeetingDetecting` protocol abstracts detection strategies. Two implementations: `MeetingDetector` (window title matching via `CGWindowListCopyWindowInfo`) and `PowerAssertionDetector` (IOKit power assertions — sandbox-safe, no Screen Recording permission needed).
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
 
 **Diarization:**
@@ -197,7 +205,8 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
-- `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible`) selects the provider.
+- `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.
+- `AppSettings.protocolLanguage` string (default `"German"`) is substituted into the prompt as `{LANGUAGE}`.
 - `ProtocolGenerator.loadPrompt()` loads custom prompt from `AppPaths.customPromptFile` (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`), falls back to built-in default.
 - `OpenAIProtocolGenerator` supports any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.).
 
@@ -220,7 +229,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | | Homebrew | App Store |
 |---|---|---|
 | **Claude CLI** | Yes (Process subprocess) | No (sandbox forbids Process) |
-| **OpenAI API** | Yes | Yes (only option) |
+| **OpenAI API** | Yes | Yes (only LLM option) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
 | **Tests** | 618 | ~604 (14 CLI tests excluded) |

@@ -39,7 +39,9 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | File | Role |
 |------|------|
 | `WatchLoop.swift` | Main orchestrator: detect → record → enqueue PipelineJob |
-| `MeetingDetector.swift` | Window polling, pattern matching, confirmation counting, cooldown |
+| `MeetingDetecting.swift` | `MeetingDetecting` protocol + `DetectedMeeting` model |
+| `MeetingDetector.swift` | Window title polling, pattern matching, confirmation counting, cooldown |
+| `PowerAssertionDetector.swift` | IOKit power assertion–based meeting detection (sandbox-safe) |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
 | `TranscribingEngine.swift` | `TranscribingEngine` protocol + `mergeDualSourceSegments` default impl |
@@ -51,15 +53,17 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
 | `SpeakerMatcher.swift` | Speaker embedding DB + cosine similarity matching |
 | `DiarizationProcess.swift` | Diarization result types, DiarizationProvider protocol, speaker assignment (standard + dual-track) |
-| `ProtocolGenerator.swift` | Claude CLI invocation, stream-json parsing |
+| `ProtocolGenerator.swift` | Shared protocol utilities: `ProtocolGenerating` protocol, prompts, file I/O, `ProtocolError` |
+| `ClaudeCLIProtocolGenerator.swift` | Claude CLI subprocess protocol generation (`#if !APPSTORE`) |
+| `OpenAIProtocolGenerator.swift` | OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.) |
 
 ### Audio Processing
 
 | File | Role |
 |------|------|
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, mute masking, WAV I/O |
+| `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
-| `MuteDetector.swift` | Teams mute state via Accessibility API |
 | `tools/audiotap/Sources/` | AudioTapLib — CATapDescription-based app audio capture (SPM library) |
 
 ### Support
@@ -72,6 +76,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `NotificationManager.swift` | macOS notifications |
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
+| `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 
 ---
@@ -214,13 +219,22 @@ When dual-source recording (app + mic) is available:
 
 ## Protocol Generation
 
+### Provider Selection
+
+`AppSettings.protocolProvider` selects the active provider:
+- **`.claudeCLI`** — Claude CLI subprocess (`#if !APPSTORE`)
+- **`.openAICompatible`** — Any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.)
+- **`.none`** — Skip LLM generation; save transcript only
+
+`AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`.
+
 ### Claude CLI Invocation
 
 ```bash
 /usr/bin/env claude -p - --output-format stream-json --verbose --model sonnet
 ```
 
-- **Input:** German protocol prompt + transcript piped to stdin
+- **Input:** Protocol prompt (with language substituted) + transcript piped to stdin
 - **Output:** Stream-json parsed line-by-line (content_block_delta + assistant message)
 - **Environment:** `CLAUDECODE` env var stripped to allow nested invocation
 - **Timeout:** 10 minutes
@@ -277,7 +291,7 @@ AppSettings (UserDefaults)
 | Component | Injection Point |
 |-----------|----------------|
 | MeetingDetector | `windowListProvider` closure (mock window list) |
-| MuteDetector | `muteStateProvider` closure |
+| PowerAssertionDetector | `assertionProvider` + `windowListProvider` closures |
 | DiarizationProvider | `diarizationFactory` closure in PipelineQueue |
 | ProtocolGenerating | `protocolGenerator` protocol in PipelineQueue |
 | RecordingProvider | `recorderFactory` closure in WatchLoop |
