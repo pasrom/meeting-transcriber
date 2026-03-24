@@ -1,0 +1,3 @@
+import MeetingTranscriber
+
+MeetingTranscriberApp.main()

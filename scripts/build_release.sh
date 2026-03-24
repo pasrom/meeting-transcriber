@@ -68,7 +68,7 @@ if [ "$APPSTORE" = true ]; then
 fi
 (cd "$SPM_DIR" && swift build "${SWIFT_BUILD_FLAGS[@]}")
 
-cp "$SPM_DIR/.build/release/MeetingTranscriber" "$MACOS_DIR/MeetingTranscriber"
+cp "$SPM_DIR/.build/release/MeetingTranscriberApp" "$MACOS_DIR/MeetingTranscriber"
 
 # ── Step 2: Assemble app bundle ──────────────────────────────────────────────
 

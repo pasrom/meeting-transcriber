@@ -10,7 +10,7 @@ TRANSCRIBER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 export TRANSCRIBER_ROOT
 
 SPM_DIR="$TRANSCRIBER_ROOT/app/MeetingTranscriber"
-BUILD_BINARY="$SPM_DIR/.build/release/MeetingTranscriber"
+BUILD_BINARY="$SPM_DIR/.build/release/MeetingTranscriberApp"
 APP_BUNDLE="$SPM_DIR/.build/MeetingTranscriber-Dev.app"
 APP_MACOS="$APP_BUNDLE/Contents/MacOS"
 APP_BINARY="$APP_MACOS/MeetingTranscriber"

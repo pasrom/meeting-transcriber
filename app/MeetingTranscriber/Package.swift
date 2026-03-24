@@ -11,14 +11,19 @@ let package = Package(
         .package(path: "../../tools/audiotap"),
     ],
     targets: [
-        .executableTarget(
+        .target(
             name: "MeetingTranscriber",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "AudioTapLib", package: "audiotap"),
             ],
             path: "Sources",
-            exclude: ["Info.plist"]
+            exclude: ["Info.plist", "App"]
+        ),
+        .executableTarget(
+            name: "MeetingTranscriberApp",
+            dependencies: ["MeetingTranscriber"],
+            path: "Sources/App"
         ),
         .testTarget(
             name: "MeetingTranscriberTests",

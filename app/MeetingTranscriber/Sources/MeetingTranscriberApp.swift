@@ -2,13 +2,7 @@ import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension Notification.Name {
-    static let autoWatchStart = Notification.Name("autoWatchStart")
-    static let showSpeakerNaming = Notification.Name("showSpeakerNaming")
-}
-
-@main
-struct MeetingTranscriberApp: App {
+package struct MeetingTranscriberApp: App {
     @State private var settings = AppSettings()
     @State private var watchLoop: WatchLoop?
     @State private var pipelineQueue = PipelineQueue()
