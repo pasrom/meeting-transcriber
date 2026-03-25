@@ -149,10 +149,7 @@ class FluidVAD {
 
         let map = VadSegmentMap.build(from: segments)
         let trimmedPct = Int((1.0 - map.totalTrimmedDuration / (Double(samples.count) / Double(AudioMixer.transcriptionSampleRate))) * 100)
-        logger.info(
-            "VAD: \(inputPath.lastPathComponent) → \(segments.count) segments, "
-                + "removed \(trimmedPct)% silence"
-        )
+        logger.info("VAD: \(inputPath.lastPathComponent) → \(segments.count) segments, removed \(trimmedPct)% silence")
 
         return map
     }
