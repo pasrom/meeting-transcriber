@@ -90,6 +90,17 @@ final class AppSettings {
         Locale(identifier: "en").localizedString(forLanguageCode: transcriptionLanguage) ?? "English"
     }
 
+    var vadEnabled: Bool = defaults.object(forKey: "vadEnabled") as? Bool ?? true {
+        didSet { defaults.set(vadEnabled, forKey: "vadEnabled") }
+    }
+
+    var vadThreshold: Double = defaults.object(forKey: "vadThreshold") as? Double ?? 0.85 {
+        didSet {
+            vadThreshold = max(0.0, min(1.0, vadThreshold))
+            defaults.set(vadThreshold, forKey: "vadThreshold")
+        }
+    }
+
     var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }

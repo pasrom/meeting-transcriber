@@ -12,6 +12,7 @@ final class AppSettingsTests: XCTestCase {
             "watchTeams", "watchZoom", "watchWebex",
             "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
             "diarize", "numSpeakers", "transcriptionModel", "claudeBin",
+            "vadEnabled", "vadThreshold",
             "protocolProvider", "openAIEndpoint", "openAIModel",
             "checkForUpdates", "includePreReleases",
         ]
@@ -39,6 +40,8 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(settings.noMic)
         XCTAssertEqual(settings.micName, "Me")
         XCTAssertTrue(settings.diarize)
+        XCTAssertTrue(settings.vadEnabled)
+        XCTAssertEqual(settings.vadThreshold, 0.85)
         XCTAssertEqual(settings.transcriptionModel, "parakeet-tdt-0.6b-v2-coreml")
     }
 
@@ -87,6 +90,21 @@ final class AppSettingsTests: XCTestCase {
     func testNumSpeakersAcceptsValidValue() {
         settings.numSpeakers = 5
         XCTAssertEqual(settings.numSpeakers, 5)
+    }
+
+    func testVadThresholdClampedToMax() {
+        settings.vadThreshold = 1.5
+        XCTAssertEqual(settings.vadThreshold, 1.0)
+    }
+
+    func testVadThresholdClampedToMin() {
+        settings.vadThreshold = -0.5
+        XCTAssertEqual(settings.vadThreshold, 0.0)
+    }
+
+    func testVadThresholdAcceptsValidValue() {
+        settings.vadThreshold = 0.7
+        XCTAssertEqual(settings.vadThreshold, 0.7)
     }
 
     // MARK: - UserDefaults persistence

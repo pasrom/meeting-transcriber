@@ -181,7 +181,7 @@ package struct MeetingTranscriberApp: App {
         // Pipeline queue (file processing or post-recording pipeline)
         if let activeJob = pipelineQueue.activeJobs.first {
             switch activeJob.state {
-            case .transcribing: return .transcribing
+            case .detectingSpeech, .transcribing: return .transcribing
             case .diarizing: return .diarizing
             default: return .processing
             }
@@ -325,6 +325,8 @@ package struct MeetingTranscriberApp: App {
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             customVocabulary: settings.customVocabulary,
+            vadEnabled: settings.vadEnabled,
+            vadThreshold: settings.vadThreshold,
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()

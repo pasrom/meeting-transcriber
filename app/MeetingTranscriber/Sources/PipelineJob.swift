@@ -2,6 +2,7 @@ import Foundation
 
 enum JobState: String, Codable, Sendable {
     case waiting
+    case detectingSpeech
     case transcribing
     case diarizing
     // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
@@ -13,6 +14,7 @@ enum JobState: String, Codable, Sendable {
     var label: String {
         switch self {
         case .waiting: "Waiting..."
+        case .detectingSpeech: "Detecting Speech..."
         case .transcribing: "Transcribing..."
         case .diarizing: "Diarizing..."
         case .generatingProtocol: "Generating Protocol..."

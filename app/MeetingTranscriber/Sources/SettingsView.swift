@@ -178,6 +178,21 @@ struct SettingsView: View {
                     }
                 }
 
+                Toggle("Voice Activity Detection", isOn: $settings.vadEnabled)
+
+                if settings.vadEnabled {
+                    HStack {
+                        Text("Speech Threshold")
+                        Slider(value: $settings.vadThreshold, in: 0.5 ... 1.0, step: 0.05)
+                        Text(String(format: "%.2f", settings.vadThreshold))
+                            .monospacedDigit()
+                            .frame(width: 35)
+                    }
+                    Text("Higher = stricter detection. Default: 0.85")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 Toggle("Speaker Diarization", isOn: $settings.diarize)
 
                 if settings.diarize {

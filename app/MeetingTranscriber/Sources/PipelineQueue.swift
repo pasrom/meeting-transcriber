@@ -20,6 +20,8 @@ class PipelineQueue {
     let numSpeakers: Int
     let micLabel: String
     let customVocabulary: [String]
+    let vadEnabled: Bool
+    let vadThreshold: Double
     let speakerMatcherFactory: () -> SpeakerMatcher
 
     let completedJobLifetime: TimeInterval
@@ -88,6 +90,8 @@ class PipelineQueue {
         self.numSpeakers = 0
         self.micLabel = "Me"
         self.customVocabulary = []
+        self.vadEnabled = false
+        self.vadThreshold = 0.85
         self.speakerMatcherFactory = { SpeakerMatcher() }
         self.completedJobLifetime = completedJobLifetime
     }
@@ -103,6 +107,8 @@ class PipelineQueue {
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         customVocabulary: [String] = [],
+        vadEnabled: Bool = false,
+        vadThreshold: Double = 0.85,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
         completedJobLifetime: TimeInterval = 60,
     ) {
@@ -114,13 +120,15 @@ class PipelineQueue {
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
         self.customVocabulary = customVocabulary
+        self.vadEnabled = vadEnabled
+        self.vadThreshold = vadThreshold
         self.micLabel = micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
         self.completedJobLifetime = completedJobLifetime
     }
 
     var activeJobs: [PipelineJob] {
-        jobs.filter { [.transcribing, .diarizing, .generatingProtocol].contains($0.state) }
+        jobs.filter { [.detectingSpeech, .transcribing, .diarizing, .generatingProtocol].contains($0.state) }
     }
 
     var pendingJobs: [PipelineJob] {
@@ -157,7 +165,7 @@ class PipelineQueue {
             jobs.remove(at: index)
             writeSnapshot()
 
-        case .transcribing, .diarizing, .generatingProtocol:
+        case .detectingSpeech, .transcribing, .diarizing, .generatingProtocol:
             cancelledJobIDs.insert(id)
             processTask?.cancel()
             jobs.remove(at: index)
@@ -222,6 +230,15 @@ class PipelineQueue {
         let transcript: String
         let segments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
+        /// VAD segment maps for timestamp remapping (nil when VAD disabled or no speech trimmed).
+        let vadMaps: VadMaps?
+    }
+
+    /// Per-track VAD segment maps.
+    struct VadMaps {
+        let app: VadSegmentMap? // dual-source app track
+        let mic: VadSegmentMap? // dual-source mic track
+        let mix: VadSegmentMap? // single-source
     }
 
     /// Kick off processing if not already running and there are waiting jobs.
@@ -255,8 +272,8 @@ class PipelineQueue {
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
-            // --- Transcription ---
-            updateJobState(id: job.id, to: .transcribing)
+            // --- VAD + Transcription ---
+            updateJobState(id: job.id, to: vadEnabled ? .detectingSpeech : .transcribing)
             startElapsedTimer()
             let output = try await transcribe(job: job, engine: transcriptionEngine, workDir: workDir)
             stopElapsedTimer()
@@ -354,8 +371,9 @@ class PipelineQueue {
 
     // MARK: - Pipeline Stages
 
-    /// Resample and transcribe audio, handling both dual-source and single-source paths.
-    private func transcribe(
+    /// Resample, optionally run VAD to trim silence, then transcribe audio.
+    /// Handles both dual-source and single-source paths.
+    private func transcribe( // swiftlint:disable:this function_body_length
         job: PipelineJob,
         engine: FluidTranscriptionEngine,
         workDir: URL,
@@ -374,9 +392,54 @@ class PipelineQueue {
             try await appResample
             try await micResample
 
+            // --- VAD: trim silence from each track ---
+            var vadMaps: VadMaps?
+            if vadEnabled {
+                let vad = FluidVAD(threshold: Float(vadThreshold))
+                try await vad.prepare()
+
+                let appVadPath = workDir.appendingPathComponent("app_16k_vad.wav")
+                let micVadPath = workDir.appendingPathComponent("mic_16k_vad.wav")
+
+                let appMap = try await vad.trimSilence(inputPath: app16k, outputPath: appVadPath)
+                let micMap = try await vad.trimSilence(inputPath: mic16k, outputPath: micVadPath)
+
+                // If neither track has speech, return empty
+                if appMap == nil, micMap == nil {
+                    return TranscriptionOutput(
+                        transcript: "", segments: nil, isDualSource: true, vadMaps: nil
+                    )
+                }
+
+                // Overwrite originals with trimmed audio so diarization uses them too
+                if appMap != nil {
+                    try FileManager.default.removeItem(at: app16k)
+                    try FileManager.default.moveItem(at: appVadPath, to: app16k)
+                }
+                if micMap != nil {
+                    try FileManager.default.removeItem(at: mic16k)
+                    try FileManager.default.moveItem(at: micVadPath, to: mic16k)
+                }
+
+                vadMaps = VadMaps(app: appMap, mic: micMap, mix: nil)
+                updateJobState(id: job.id, to: .transcribing)
+            }
+
             // Transcribe each track separately
-            let appSegments = try await engine.transcribeSegments(audioPath: app16k)
-            let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
+            var appSegments = try await engine.transcribeSegments(audioPath: app16k)
+            var micSegments = try await engine.transcribeSegments(audioPath: mic16k)
+
+            // Remap timestamps back to original audio time
+            if let appMap = vadMaps?.app {
+                appSegments = appSegments.map {
+                    $0.remapped(using: appMap)
+                }
+            }
+            if let micMap = vadMaps?.mic {
+                micSegments = micSegments.map {
+                    $0.remapped(using: micMap)
+                }
+            }
 
             // Merge dual-source segments
             let segments = engine.mergeDualSourceSegments(
@@ -389,17 +452,49 @@ class PipelineQueue {
                 transcript: segments.map(\.formattedLine).joined(separator: "\n"),
                 segments: segments,
                 isDualSource: true,
+                vadMaps: vadMaps,
             )
         } else {
             // Single-source: resample mix to 16kHz
             let mix16k = workDir.appendingPathComponent("mix_16k.wav")
             try await AudioMixer.resampleFile(from: job.mixPath, to: mix16k)
 
-            let segments = try await engine.transcribeSegments(audioPath: mix16k)
+            // --- VAD: trim silence ---
+            var vadMaps: VadMaps?
+            if vadEnabled {
+                let vad = FluidVAD(threshold: Float(vadThreshold))
+                try await vad.prepare()
+
+                let vadPath = workDir.appendingPathComponent("mix_16k_vad.wav")
+                let mixMap = try await vad.trimSilence(inputPath: mix16k, outputPath: vadPath)
+
+                if mixMap == nil {
+                    return TranscriptionOutput(
+                        transcript: "", segments: nil, isDualSource: false, vadMaps: nil
+                    )
+                }
+
+                try FileManager.default.removeItem(at: mix16k)
+                try FileManager.default.moveItem(at: vadPath, to: mix16k)
+
+                vadMaps = VadMaps(app: nil, mic: nil, mix: mixMap)
+                updateJobState(id: job.id, to: .transcribing)
+            }
+
+            var segments = try await engine.transcribeSegments(audioPath: mix16k)
+
+            // Remap timestamps
+            if let mixMap = vadMaps?.mix {
+                segments = segments.map {
+                    $0.remapped(using: mixMap)
+                }
+            }
+
             return TranscriptionOutput(
                 transcript: segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n"),
                 segments: segments,
                 isDualSource: false,
+                vadMaps: vadMaps,
             )
         }
     }
@@ -448,6 +543,14 @@ class PipelineQueue {
                         meetingTitle: job.meetingTitle,
                     )
 
+                    // Remap diarization timestamps from trimmed to original audio time
+                    if let appMap = transcript.vadMaps?.app {
+                        appDiarization = appDiarization?.remapped(using: appMap)
+                    }
+                    if let micMap = transcript.vadMaps?.mic {
+                        micDiarization = micDiarization?.remapped(using: micMap)
+                    }
+
                     // Merge for speaker naming (prefixed IDs: R_, M_)
                     // swiftlint:disable force_unwrapping
                     diarization = DiarizationProcess.mergeDualTrackDiarization(
@@ -461,6 +564,11 @@ class PipelineQueue {
                         numSpeakers: speakerCount,
                         meetingTitle: job.meetingTitle,
                     )
+
+                    // Remap diarization timestamps from trimmed to original audio time
+                    if let mixMap = transcript.vadMaps?.mix {
+                        diarization = diarization?.remapped(using: mixMap)
+                    }
                 }
 
                 guard let currentDiarization = diarization else { break }
@@ -652,7 +760,7 @@ class PipelineQueue {
             // Reset active states back to waiting
             for i in loaded.indices {
                 switch loaded[i].state {
-                case .transcribing, .diarizing, .generatingProtocol:
+                case .detectingSpeech, .transcribing, .diarizing, .generatingProtocol:
                     loaded[i].state = .waiting
 
                 default:

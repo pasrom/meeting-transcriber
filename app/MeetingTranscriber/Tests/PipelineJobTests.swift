@@ -53,6 +53,7 @@ final class PipelineJobTests: XCTestCase {
     func testJobStateIsCodable() throws {
         for state in [
             JobState.waiting,
+            .detectingSpeech,
             .transcribing,
             .diarizing,
             .generatingProtocol,
@@ -67,6 +68,7 @@ final class PipelineJobTests: XCTestCase {
 
     func testJobStateRawValues() {
         XCTAssertEqual(JobState.waiting.rawValue, "waiting")
+        XCTAssertEqual(JobState.detectingSpeech.rawValue, "detectingSpeech")
         XCTAssertEqual(JobState.transcribing.rawValue, "transcribing")
         XCTAssertEqual(JobState.diarizing.rawValue, "diarizing")
         XCTAssertEqual(JobState.generatingProtocol.rawValue, "generatingProtocol")

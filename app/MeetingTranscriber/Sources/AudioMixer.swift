@@ -398,6 +398,31 @@ enum AudioMixer {
 
         try file.write(from: buffer)
     }
+
+    // MARK: - Segment Extraction
+
+    /// Extract audio segments and concatenate into a contiguous buffer.
+    ///
+    /// Used by VAD to produce trimmed audio containing only speech regions.
+    /// Segment boundaries are clamped to the sample buffer length.
+    static func extractSegments(
+        from samples: [Float],
+        sampleRate: Int,
+        segments: [(start: TimeInterval, end: TimeInterval)]
+    ) -> [Float] {
+        let totalSamples = samples.count
+        var result: [Float] = []
+
+        for seg in segments {
+            let startIdx = max(0, min(totalSamples, Int(seg.start * Double(sampleRate))))
+            let endIdx = max(startIdx, min(totalSamples, Int(seg.end * Double(sampleRate))))
+            if startIdx < endIdx {
+                result.append(contentsOf: samples[startIdx ..< endIdx])
+            }
+        }
+
+        return result
+    }
 }
 
 enum AudioMixerError: LocalizedError {

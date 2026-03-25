@@ -183,7 +183,7 @@ struct MenuBarView: View {
                 Button("Open") { onOpenProtocol(path) }
                     .font(.caption2)
             }
-            if job.state == .waiting || job.state == .transcribing
+            if job.state == .waiting || job.state == .detectingSpeech || job.state == .transcribing
                 || job.state == .diarizing || job.state == .generatingProtocol {
                 Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
                     .font(.caption2)
@@ -198,7 +198,7 @@ struct MenuBarView: View {
 
     private func jobStateLabel(_ job: PipelineJob) -> some View {
         Group {
-            if [.transcribing, .diarizing, .generatingProtocol].contains(job.state) {
+            if [.detectingSpeech, .transcribing, .diarizing, .generatingProtocol].contains(job.state) {
                 Text("\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))")
                     .foregroundStyle(.secondary)
             } else if job.state == .error, let msg = job.error {
@@ -226,6 +226,7 @@ struct MenuBarView: View {
     private func jobColor(_ job: PipelineJob) -> Color {
         switch job.state {
         case .waiting: .gray
+        case .detectingSpeech: .teal
         case .transcribing: .blue
         case .diarizing: .purple
         case .generatingProtocol: .orange

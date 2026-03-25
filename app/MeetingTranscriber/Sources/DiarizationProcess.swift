@@ -12,6 +12,23 @@ struct DiarizationResult {
     let speakingTimes: [String: TimeInterval]
     let autoNames: [String: String]
     var embeddings: [String: [Float]]? // swiftlint:disable:this discouraged_optional_collection
+
+    /// Return a copy with all segment timestamps remapped from trimmed-audio space to original time.
+    func remapped(using map: VadSegmentMap) -> DiarizationResult {
+        let remappedSegments = segments.map { seg in
+            Segment(
+                start: map.mapToOriginal(seg.start),
+                end: map.mapToOriginal(seg.end),
+                speaker: seg.speaker
+            )
+        }
+        return DiarizationResult(
+            segments: remappedSegments,
+            speakingTimes: speakingTimes,
+            autoNames: autoNames,
+            embeddings: embeddings
+        )
+    }
 }
 
 /// Abstraction for diarization, enabling mock injection in tests.

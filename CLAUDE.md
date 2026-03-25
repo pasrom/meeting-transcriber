@@ -20,6 +20,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
     FluidTranscriptionEngine.swift # FluidAudio Parakeet transcription (CoreML/ANE)
+    FluidVAD.swift         # Voice Activity Detection via FluidAudio (Silero VAD v6, CoreML)
     FluidDiarizer.swift    # LS-EEND diarization + WeSpeaker embeddings via FluidAudio (on-device)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
@@ -85,8 +86,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → FluidAudio Parakeet per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → FluidAudio Parakeet → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → VAD trim silence per track (optional) → FluidAudio Parakeet per track → remap timestamps → FluidAudio diarization per track (CoreML/ANE) → remap timestamps → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → VAD trim silence (optional) → FluidAudio Parakeet → remap timestamps → FluidAudio diarization → remap timestamps → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -176,6 +177,13 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Detection:**
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
+
+**Voice Activity Detection:**
+- `FluidVAD` wraps FluidAudio's `VadManager` (Silero VAD v6, CoreML/ANE) for on-device speech detection.
+- Runs as optional preprocessing step: trims silence from 16kHz audio before transcription and diarization.
+- `VadSegmentMap` remaps timestamps from trimmed-audio space back to original wall-clock time.
+- In dual-source mode, VAD runs independently on each track; trimmed files overwrite originals in workDir.
+- Controlled by `AppSettings.vadEnabled` (default `true`) and `AppSettings.vadThreshold` (default `0.85`).
 
 **Diarization:**
 - `FluidDiarizer` uses two-stage FluidAudio pipeline: `LSEENDDiarizer` for segments (up to 10 speakers, handles overlap well) + `DiarizerManager` for WeSpeaker embedding extraction (cross-meeting speaker matching). No HuggingFace token needed.

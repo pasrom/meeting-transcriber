@@ -30,6 +30,16 @@ extension TimestampedSegment {
         }
         return "\(ts) \(speaker): \(text)"
     }
+
+    /// Return a copy with timestamps remapped from trimmed-audio space to original-audio space.
+    func remapped(using map: VadSegmentMap) -> TimestampedSegment {
+        TimestampedSegment(
+            start: map.mapToOriginal(start),
+            end: map.mapToOriginal(end),
+            text: text,
+            speaker: speaker
+        )
+    }
 }
 
 enum ModelState {
