@@ -7,7 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.0"),
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.2"),
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.12.5"),
         .package(path: "../../tools/audiotap"),
     ],
     targets: [

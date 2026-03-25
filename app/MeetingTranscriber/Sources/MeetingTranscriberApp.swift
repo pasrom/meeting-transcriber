@@ -18,7 +18,7 @@ package struct MeetingTranscriberApp: App {
         watchLoop?.isActive == true && watchLoop?.isManualRecording == false
     }
 
-    init() {
+    package init() {
         AppPaths.migrateIfNeeded()
         notifications.setUp()
         DualSourceRecorder.cleanupTempFiles()
@@ -31,7 +31,7 @@ package struct MeetingTranscriberApp: App {
         }
     }
 
-    var body: some Scene {
+    package var body: some Scene {
         MenuBarExtra {
             MenuBarView(
                 status: currentStatus,
