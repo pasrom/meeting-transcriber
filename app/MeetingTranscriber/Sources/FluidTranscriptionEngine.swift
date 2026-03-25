@@ -143,7 +143,7 @@ final class FluidTranscriptionEngine {
         if terms == activeVocabularyTerms { return }
 
         if terms.isEmpty {
-            manager.disableVocabularyBoosting()
+            await manager.disableVocabularyBoosting()
             activeVocabularyTerms = []
             NSLog("FluidTranscription: vocabulary boosting disabled")
             return
@@ -178,10 +178,8 @@ final class FluidTranscriptionEngine {
 
         transcriptionProgress = 0
 
-        // Listen to progress on the main actor (manager is non-Sendable)
-        nonisolated(unsafe) let unsafeManager = manager
         let progressTask = Task { @MainActor in
-            for try await progress in await unsafeManager.transcriptionProgressStream {
+            for try await progress in await manager.transcriptionProgressStream {
                 self.transcriptionProgress = progress
             }
         }
