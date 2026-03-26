@@ -75,7 +75,6 @@ scripts/
   run_app.sh               # Build + sign + launch menu bar app bundle
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
-  generate_test_audio_10speakers.sh # Generate 10-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
 Casks/meeting-transcriber.rb # Homebrew Cask formula
