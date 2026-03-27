@@ -102,9 +102,9 @@ PipelineQueue: waiting → transcribing → [diarizing] → generatingProtocol �
 ```
 AudioTapLib (CATapDescription)
 ├─ Input: App PID → CoreAudio process tap → aggregate device
-├─ Output: Interleaved float32 stereo → FileHandle (raw PCM)
+├─ Output: Interleaved float32 (mono or stereo) → FileHandle (raw PCM)
 ├─ Mic: AVAudioEngine → mono WAV file (MicCaptureHandler)
-└─ Metadata: micDelay, actualSampleRate via AudioCaptureResult
+└─ Metadata: micDelay, actualSampleRate, actualChannels via AudioCaptureResult
 ```
 
 **Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
@@ -112,7 +112,7 @@ AudioTapLib (CATapDescription)
 ### Processing (DualSourceRecorder.stop())
 
 ```
-Raw float32 stereo → mono (channel average)
+Raw float32 (mono or stereo, actual channel count from AudioCaptureResult) → mono
   → Resample to 16kHz
   → Save app.wav (16kHz mono)
   → Load mic.wav (already 16kHz from MicCaptureHandler)

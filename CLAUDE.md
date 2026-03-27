@@ -62,6 +62,8 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     AudioCaptureResult.swift  # Result struct
     Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
+  Tests/
+    MicRestartPolicyTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
