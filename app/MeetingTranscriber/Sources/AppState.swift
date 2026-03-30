@@ -258,6 +258,9 @@ final class AppState {
         if settings.transcriptionEngine == .whisperKit {
             whisperKit.language = settings.whisperLanguageOrNil
         }
+        if settings.transcriptionEngine == .parakeet {
+            parakeetEngine.customVocabularyPath = settings.customVocabularyPath
+        }
         if #available(macOS 15, *), settings.transcriptionEngine == .qwen3 {
             qwen3Engine.language = settings.qwen3LanguageOrNil
         }

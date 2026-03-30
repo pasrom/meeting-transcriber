@@ -166,6 +166,22 @@ struct SettingsView: View {
                     }
                 }
 
+                if settings.transcriptionEngine == .parakeet {
+                    HStack {
+                        TextField("Custom vocabulary file", text: $settings.customVocabularyPath)
+                            .textFieldStyle(.roundedBorder)
+                        Button("Choose\u{2026}") {
+                            let panel = NSOpenPanel()
+                            panel.allowedContentTypes = [.plainText]
+                            panel.allowsMultipleSelection = false
+                            if panel.runModal() == .OK, let url = panel.url {
+                                settings.customVocabularyPath = url.path
+                            }
+                        }
+                    }
+                    .help("Text file with one term per line (e.g. company names, product names)")
+                }
+
                 if settings.transcriptionEngine == .qwen3 {
                     Picker("Language", selection: $settings.qwen3Language) {
                         Text("Auto-detect").tag("")

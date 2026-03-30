@@ -140,6 +140,11 @@ final class AppSettings {
         qwen3Language.isEmpty ? nil : qwen3Language
     }
 
+    /// Path to a custom vocabulary file for Parakeet CTC boosting (one term per line).
+    var customVocabularyPath: String = defaults.string(forKey: "customVocabularyPath") ?? "" {
+        didSet { defaults.set(customVocabularyPath, forKey: "customVocabularyPath") }
+    }
+
     var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
