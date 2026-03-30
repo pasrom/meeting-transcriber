@@ -311,7 +311,7 @@ class PipelineQueue {
                 }
 
                 cachedSegments = segments
-                transcript = segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
+                transcript = segments.map(\.formattedLine).joined(separator: "\n")
             }
 
             stopElapsedTimer()
@@ -582,16 +582,14 @@ class PipelineQueue {
         -> (trimmedPath: URL, map: VadSegmentMap)? {
         guard let vadConfig else { return nil }
 
-        // Lazily create FluidVAD on first use, reuse across jobs
-        if vad == nil {
-            vad = FluidVAD(threshold: vadConfig.threshold)
-        }
+        let vadInstance = vad ?? {
+            let v = FluidVAD(threshold: vadConfig.threshold)
+            vad = v
+            return v
+        }()
 
-        // Load audio once, pass samples to VAD to avoid double file load
         let (samples, _) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
-
-        // swiftlint:disable:next force_unwrapping
-        let map = try await vad!.detectSpeech(samples: samples)
+        let map = try await vadInstance.detectSpeech(samples: samples)
 
         guard !map.segments.isEmpty else {
             logger.info("VAD: no speech detected")

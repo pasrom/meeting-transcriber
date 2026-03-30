@@ -197,6 +197,13 @@ struct SettingsView: View {
                 Toggle("Speaker Diarization", isOn: $settings.diarize)
 
                 if settings.diarize {
+                    Picker("Diarizer", selection: $settings.diarizerMode) {
+                        ForEach(DiarizerMode.allCases, id: \.self) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
                     HStack {
                         Text("Expected Speakers")
                         Spacer()
