@@ -31,6 +31,18 @@ enum TranscriptionEngineSetting: String, CaseIterable {
     }
 }
 
+enum DiarizerMode: String, CaseIterable {
+    case offline
+    case sortformer
+
+    var label: String {
+        switch self {
+        case .offline: "Offline (Clustering)"
+        case .sortformer: "Sortformer (Overlap-aware)"
+        }
+    }
+}
+
 enum ProtocolProvider: String, CaseIterable {
     #if !APPSTORE
         case claudeCLI
@@ -155,6 +167,16 @@ final class AppSettings {
 
     var vadThreshold: Float = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5 {
         didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
+    }
+
+    var diarizerMode: DiarizerMode = {
+        if let raw = defaults.string(forKey: "diarizerMode"),
+           let mode = DiarizerMode(rawValue: raw) {
+            return mode
+        }
+        return .offline
+    }() {
+        didSet { defaults.set(diarizerMode.rawValue, forKey: "diarizerMode") }
     }
 
     /// Number of expected speakers. 0 = auto-detect.

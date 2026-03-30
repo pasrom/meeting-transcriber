@@ -119,7 +119,6 @@ class FluidVAD {
 
     /// Convert per-chunk VAD results into merged, filtered speech regions.
     private func buildSegmentMap(from results: [VadResult]) -> VadSegmentMap {
-        // Convert per-chunk results to speech regions
         let chunkDuration = Double(VadManager.chunkSize) / Double(VadManager.sampleRate) // ~0.256s
         var regions: [SpeechRegion] = []
         var speechStart: TimeInterval?
@@ -141,10 +140,7 @@ class FluidVAD {
             regions.append(SpeechRegion(start: start, end: endTime))
         }
 
-        // Merge regions with gaps < mergeGapSeconds
         regions = mergeCloseRegions(regions, maxGap: Self.mergeGapSeconds)
-
-        // Filter regions shorter than minRegionSeconds
         regions = regions.filter { $0.duration >= Self.minRegionSeconds }
 
         let totalDuration = Double(results.count) * chunkDuration

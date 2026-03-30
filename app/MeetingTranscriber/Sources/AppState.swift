@@ -276,7 +276,7 @@ final class AppState {
     func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
             engine: activeTranscriptionEngine,
-            diarizationFactory: { FluidDiarizer() },
+            diarizationFactory: { [self] in FluidDiarizer(mode: settings.diarizerMode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,

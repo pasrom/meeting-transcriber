@@ -117,8 +117,8 @@ final class ParakeetEngine: TranscribingEngine {
         audioPath: URL,
     ) async throws -> ASRResult {
         guard let booster = vocabularyBooster else { return result }
-        let audioConverter = AudioConverter()
-        let audioSamples = try audioConverter.resampleAudioFile(audioPath)
+        // Audio is already 16kHz mono at this point (resampled by PipelineQueue)
+        let (audioSamples, _) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
 
         let spotResult = try await booster.spotter.spotKeywordsWithLogProbs(
             audioSamples: audioSamples,
