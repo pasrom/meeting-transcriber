@@ -16,7 +16,7 @@ struct ManualRecordingInfo {
 @MainActor
 @Observable
 class WatchLoop {
-    enum State: String, Sendable {
+    enum State: String {
         case idle
         case watching
         case recording

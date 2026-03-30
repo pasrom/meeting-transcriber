@@ -1,6 +1,6 @@
 import Foundation
 
-enum JobState: String, Codable, Sendable {
+enum JobState: String, Codable {
     case waiting
     case transcribing
     case diarizing
@@ -22,7 +22,7 @@ enum JobState: String, Codable, Sendable {
     }
 }
 
-struct PipelineJob: Identifiable, Codable, Sendable {
+struct PipelineJob: Identifiable, Codable {
     let id: UUID
     let meetingTitle: String
     let appName: String
