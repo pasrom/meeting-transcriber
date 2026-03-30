@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Pattern definition for detecting active meetings via window titles.
-struct AppMeetingPattern: Sendable {
+struct AppMeetingPattern {
     let appName: String
     let ownerNames: [String]
     let meetingPatterns: [String]

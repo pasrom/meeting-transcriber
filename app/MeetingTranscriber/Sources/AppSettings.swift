@@ -45,6 +45,7 @@ enum ProtocolProvider: String, CaseIterable {
         #endif
 
         case .openAICompatible: "OpenAI-Compatible API"
+
         case .none: "None (Transcript Only)"
         }
     }

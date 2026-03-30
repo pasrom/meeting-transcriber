@@ -68,7 +68,6 @@ enum ProtocolGenerator {
     Use these labels to identify participants. \
     In the Participants section, list them by name where possible. \
     In the Topics Discussed section, attribute key statements to speakers.
-
     """
 
     /// Load the protocol prompt, preferring a custom file over the built-in default.
@@ -148,12 +147,16 @@ enum ProtocolError: LocalizedError {
         switch self {
         #if !APPSTORE
             case let .cliNotFound(bin): "'\(bin)' CLI not found. Install: npm install -g @anthropic-ai/claude-code"
+
             case let .cliFailed(code, stderr): "Claude CLI exited with code \(code)\(stderr.isEmpty ? "" : ": \(stderr)")"
+
             case .timeout: "Claude CLI took too long (>10 min)"
         #endif
 
         case .emptyProtocol: "Protocol is empty. Tip: Test manually: echo Hello | claude --print"
+
         case let .httpError(code, body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
+
         case let .connectionFailed(reason): "Connection failed: \(reason)"
         }
     }

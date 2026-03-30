@@ -3,7 +3,7 @@ import Observation
 
 // MARK: - Models
 
-struct ReleaseInfo: Sendable, Equatable {
+struct ReleaseInfo: Equatable {
     let tagName: String
     let name: String
     let prerelease: Bool
