@@ -144,6 +144,14 @@ final class AppSettings {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
 
+    var vadEnabled: Bool = defaults.object(forKey: "vadEnabled") as? Bool ?? false {
+        didSet { defaults.set(vadEnabled, forKey: "vadEnabled") }
+    }
+
+    var vadThreshold: Float = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5 {
+        didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
+    }
+
     /// Number of expected speakers. 0 = auto-detect.
     var numSpeakers: Int = defaults.object(forKey: "numSpeakers") as? Int ?? 0 {
         didSet {

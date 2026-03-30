@@ -191,6 +191,19 @@ struct SettingsView: View {
                             .labelsHidden()
                     }
                 }
+
+                Toggle("Voice Activity Detection (VAD)", isOn: $settings.vadEnabled)
+                    .help("Remove silence before transcription for better results")
+
+                if settings.vadEnabled {
+                    HStack {
+                        Text("Threshold:")
+                        Slider(value: $settings.vadThreshold, in: 0.3 ... 0.9, step: 0.05)
+                        Text(String(format: "%.2f", settings.vadThreshold))
+                            .monospacedDigit()
+                            .frame(width: 35)
+                    }
+                }
             }
 
             // swiftlint:disable:next closure_body_length

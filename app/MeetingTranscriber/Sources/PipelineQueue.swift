@@ -20,8 +20,12 @@ class PipelineQueue {
     let numSpeakers: Int
     let micLabel: String
     let speakerMatcherFactory: () -> SpeakerMatcher
+    let vadConfig: VADConfig?
 
     let completedJobLifetime: TimeInterval
+
+    /// Cached FluidVAD instance — reused across jobs to avoid model reload.
+    private var vad: FluidVAD?
 
     /// Elapsed seconds since the current pipeline stage started.
     private(set) var activeJobElapsed: TimeInterval = 0
@@ -87,6 +91,7 @@ class PipelineQueue {
         self.numSpeakers = 0
         self.micLabel = "Me"
         self.speakerMatcherFactory = { SpeakerMatcher() }
+        self.vadConfig = nil
         self.completedJobLifetime = completedJobLifetime
     }
 
@@ -101,6 +106,7 @@ class PipelineQueue {
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
+        vadConfig: VADConfig? = nil,
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -112,6 +118,7 @@ class PipelineQueue {
         self.numSpeakers = numSpeakers
         self.micLabel = micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
+        self.vadConfig = vadConfig
         self.completedJobLifetime = completedJobLifetime
     }
 
@@ -285,8 +292,24 @@ class PipelineQueue {
                 let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                 try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
 
+                // Optional VAD preprocessing: trim silence before transcription
+                var vadMap: VadSegmentMap?
+                let transcriptionPath: URL
+                if vadConfig != nil, let vadResult = try await preprocessWithVAD(audioPath: mix16k, workDir: workDir) {
+                    transcriptionPath = vadResult.trimmedPath
+                    vadMap = vadResult.map
+                } else {
+                    transcriptionPath = mix16k
+                }
+
                 // Use transcribeSegments to cache results for diarization
-                let segments = try await engine.transcribeSegments(audioPath: mix16k)
+                var segments = try await engine.transcribeSegments(audioPath: transcriptionPath)
+
+                // Remap timestamps back to original timeline if VAD was used
+                if let map = vadMap {
+                    segments = map.remapTimestamps(segments)
+                }
+
                 cachedSegments = segments
                 transcript = segments.map { "\($0.formattedTimestamp) \($0.text)" }.joined(separator: "\n")
             }
@@ -549,6 +572,43 @@ class PipelineQueue {
 
         isProcessing = false
         triggerProcessing()
+    }
+
+    // MARK: - VAD Preprocessing
+
+    /// Run VAD on a 16kHz audio file. Returns trimmed audio path and segment map,
+    /// or nil if no speech regions are detected.
+    private func preprocessWithVAD(audioPath: URL, workDir: URL) async throws
+        -> (trimmedPath: URL, map: VadSegmentMap)? {
+        guard let vadConfig else { return nil }
+
+        // Lazily create FluidVAD on first use, reuse across jobs
+        if vad == nil {
+            vad = FluidVAD(threshold: vadConfig.threshold)
+        }
+
+        // Load audio once, pass samples to VAD to avoid double file load
+        let (samples, _) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
+
+        // swiftlint:disable:next force_unwrapping
+        let map = try await vad!.detectSpeech(samples: samples)
+
+        guard !map.segments.isEmpty else {
+            logger.info("VAD: no speech detected")
+            return nil
+        }
+
+        let speechSamples = map.extractSpeechSamples(from: samples)
+        guard !speechSamples.isEmpty else { return nil }
+
+        let trimmedPath = workDir.appendingPathComponent("vad_trimmed.wav")
+        try AudioMixer.saveWAV(samples: speechSamples, sampleRate: AudioConstants.targetSampleRate, url: trimmedPath)
+
+        let origStr = String(format: "%.1f", map.originalDuration)
+        let trimStr = String(format: "%.1f", map.trimmedDuration)
+        logger.info("VAD trimmed: \(origStr)s → \(trimStr)s")
+
+        return (trimmedPath, map)
     }
 
     // MARK: - Snapshot Recovery

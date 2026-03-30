@@ -279,6 +279,7 @@ final class AppState {
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
+            vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()
