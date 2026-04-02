@@ -136,9 +136,9 @@ if [ "$NOTARIZE" = true ]; then
         "$APP_BUNDLE"
     echo "  Signed with Developer ID for notarization"
 else
-    # Use local development certificate if available
-    SIGN_HASH=$(security find-identity -v -p codesigning 2>/dev/null | head -1 | awk '{print $2}')
-    if [ -n "$SIGN_HASH" ] && [ "$SIGN_HASH" != "0" ]; then
+    # Use local development certificate if available (extract 40-char hex SHA-1 hash)
+    SIGN_HASH=$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1)
+    if [ -n "$SIGN_HASH" ]; then
         codesign --deep --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
         echo "  Signed with certificate: $SIGN_HASH"
     else
