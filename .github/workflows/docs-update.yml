@@ -1,0 +1,69 @@
+name: Docs auto-update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/MeetingTranscriber/Sources/**'
+      - 'app/MeetingTranscriber/Tests/**'
+      - 'app/MeetingTranscriber/Package.swift'
+      - 'tools/audiotap/Sources/**'
+      - 'tools/audiotap/Tests/**'
+      - 'tools/audiotap/Package.swift'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+jobs:
+  update-docs:
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run docs maintenance agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          claude --dangerously-skip-permissions -p "$(cat <<'PROMPT'
+          You are a documentation maintenance agent for the Meeting Transcriber project.
+
+          Compare the current codebase against these documentation files and update them if outdated:
+          1. CLAUDE.md — Project structure, pipeline, architecture notes, critical notes
+          2. README.md — Feature list, setup instructions, usage
+          3. docs/architecture-macos.md — High-level architecture quick-reference
+
+          How to check:
+          - Read each doc file
+          - Scan source files in app/MeetingTranscriber/Sources/, tools/audiotap/Sources/, tools/audiotap/Tests/
+          - Check Package.swift files, scripts/, .github/workflows/
+          - Run: git log --oneline -20
+
+          Rules:
+          - Only update docs that are actually outdated
+          - Keep existing style and structure
+          - All docs in English
+          - Do NOT touch code files
+          - Do NOT create new documentation files
+
+          PR strategy (use gh CLI, not MCP tools):
+          1. Check for an open docs PR: gh pr list --state open --json number,headRefName,title | grep docs/
+          2. If one exists: git fetch origin && git checkout <branch> && git pull origin <branch> && git rebase origin/main, make changes, commit, git push origin <branch>, gh pr comment <number> --body "..."
+          3. If none exists: git checkout -b docs/auto-update-$(date +%Y-%m-%d), make changes, git add <files>, git commit -m "docs: update documentation to match current codebase", git push -u origin <branch>, gh pr create --title "docs: update documentation to match current codebase" --body "Automated documentation update — see commit message for details." --base main
+          4. If nothing is outdated: do nothing
+          PROMPT
+          )"
