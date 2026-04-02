@@ -25,7 +25,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     WhisperKitEngine.swift # WhisperKit transcription engine (CoreML/ANE, 99+ languages)
     ParakeetEngine.swift   # NVIDIA Parakeet TDT v3 engine via FluidAudio (CoreML/ANE, 25 EU languages)
     Qwen3AsrEngine.swift   # Qwen3-ASR 0.6B engine via FluidAudio (CoreML/ANE, 30 languages, macOS 15+)
-    FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device)
+    FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
+    FluidVAD.swift         # VAD preprocessing via FluidAudio Silero v6 (silence trimming + timeline remapping)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
@@ -62,6 +63,10 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     AudioCaptureResult.swift  # Result struct
     Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
+    SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
+  Tests/
+    MicRestartPolicyTests.swift
+    SampleRateQueryTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
@@ -170,7 +175,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Transcription engines:**
 - `TranscribingEngine` protocol abstracts ASR backends. Three implementations: `WhisperKitEngine` (99+ languages, ~1 GB model), `ParakeetEngine` (25 EU languages, ~50 MB model, ~10× faster), and `Qwen3AsrEngine` (30 languages, ~1.75 GB model, macOS 15+).
 - `AppSettings.transcriptionEngine` enum (`.whisperKit` / `.parakeet` / `.qwen3`) selects the engine. Settings UI shows engine picker; engine-specific options hidden when not selected. `availableCases` filters by macOS version.
-- Parakeet auto-detects language (no parameter). WhisperKit and Qwen3 support explicit language selection.
+- Parakeet auto-detects language (no parameter) and supports custom vocabulary via CTC boosting (`ParakeetEngine.customVocabularyPath`). WhisperKit and Qwen3 support explicit language selection.
 - `Qwen3AsrEngine` requires macOS 15+ (`@available`). Returns plain text (no timestamps) — emits single `TimestampedSegment`. Chunks audio into <=30s windows (`Qwen3AsrConfig.maxAudioSeconds`). Type-erased in AppState via `_qwen3Engine: AnyObject?` for macOS <15 compatibility.
 - `AppState.activeTranscriptionEngine` returns the selected engine, used by `PipelineQueue`.
 
@@ -199,10 +204,14 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
 
 **Diarization:**
-- `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed.
+- `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offlineDiarizer` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
 - `SpeakerMatcher` stores speaker embeddings in `speakers.json` and matches via cosine similarity (multi-embedding, max 5 per speaker, confidence margin 0.10).
 - `DiarizationProvider` protocol enables mock injection in tests.
+
+**VAD preprocessing:**
+- `FluidVAD` wraps FluidAudio Silero v6 for voice activity detection. When enabled (`AppSettings.vadEnabled`), silence is trimmed before transcription and timestamps are remapped back to the original timeline via `VadSegmentMap`.
+- `PipelineQueue` holds a cached `FluidVAD` instance (reused across jobs). Pass `vadConfig: nil` to disable.
 
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
@@ -233,7 +242,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **OpenAI API** | Yes | Yes (only LLM option) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | 618 | ~604 (14 CLI tests excluded) |
+| **Tests** | ~795 | fewer (CLI tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
