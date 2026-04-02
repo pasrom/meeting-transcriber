@@ -64,6 +64,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, mute masking, WAV I/O |
 | `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
+| `FluidVAD.swift` | VAD preprocessing via FluidAudio Silero v6 — silence trimming + `VadSegmentMap` timeline remapping |
 | `tools/audiotap/Sources/` | AudioTapLib — CATapDescription-based app audio capture (SPM library) |
 
 ### Support
@@ -102,9 +103,9 @@ PipelineQueue: waiting → transcribing → [diarizing] → generatingProtocol �
 ```
 AudioTapLib (CATapDescription)
 ├─ Input: App PID → CoreAudio process tap → aggregate device
-├─ Output: Interleaved float32 stereo → FileHandle (raw PCM)
+├─ Output: Interleaved float32 (mono or stereo) → FileHandle (raw PCM)
 ├─ Mic: AVAudioEngine → mono WAV file (MicCaptureHandler)
-└─ Metadata: micDelay, actualSampleRate via AudioCaptureResult
+└─ Metadata: micDelay, actualSampleRate, actualChannels via AudioCaptureResult
 ```
 
 **Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
@@ -112,7 +113,7 @@ AudioTapLib (CATapDescription)
 ### Processing (DualSourceRecorder.stop())
 
 ```
-Raw float32 stereo → mono (channel average)
+Raw float32 (mono or stereo, actual channel count from AudioCaptureResult) → mono
   → Resample to 16kHz
   → Save app.wav (16kHz mono)
   → Load mic.wav (already 16kHz from MicCaptureHandler)
@@ -185,7 +186,11 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 
 On-device speaker diarization using FluidAudio (CoreML/ANE). No HuggingFace token or Python subprocess needed. Models downloaded automatically on first run (~50 MB).
 
-Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → `OfflineDiarizerManager` → `DiarizationResult` with segments, speaking times, and speaker embeddings.
+Two modes selected via `AppSettings.diarizerMode`:
+- **`.offlineDiarizer`** (default) — `OfflineDiarizerManager`, standard speaker segmentation
+- **`.sortformer`** — `SortformerDiarizer`, overlap-aware diarization (handles simultaneous speech)
+
+Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `DiarizationResult` with segments, speaking times, and speaker embeddings.
 
 ### Speaker Matching
 
