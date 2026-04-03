@@ -71,4 +71,32 @@ public enum SampleRateQuery {
             return .neitherAvailable
         }
     }
+
+    /// Standard audio sample rates for snap-to-nearest matching.
+    private static let standardRates = [
+        8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000,
+        88200, 96000, 176_400, 192_000,
+    ]
+
+    /// Snap an inferred rate to the nearest standard audio sample rate.
+    public static func snapToStandardRate(_ raw: Int) -> Int {
+        standardRates.min { abs($0 - raw) < abs($1 - raw) } ?? raw
+    }
+
+    /// Infer sample rate from raw PCM file size and known recording duration.
+    /// Returns nil if data is insufficient or result is implausible.
+    public static func inferRateFromDuration(
+        rawBytes: Int,
+        bytesPerSample: Int,
+        channels: Int,
+        durationSeconds: Double,
+    ) -> Int? {
+        guard rawBytes > 0, bytesPerSample > 0, channels > 0, durationSeconds > 1.0 else {
+            return nil
+        }
+        let totalSamples = rawBytes / bytesPerSample / channels
+        let rate = Double(totalSamples) / durationSeconds
+        guard rate > 7000, rate < Double(maxPlausibleRate) else { return nil }
+        return Int(rate.rounded())
+    }
 }
