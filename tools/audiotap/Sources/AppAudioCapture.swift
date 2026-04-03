@@ -118,8 +118,61 @@ public class AppAudioCapture {
         return Int(asbd.mSampleRate)
     }
 
+    /// Query the tap's own format — most authoritative source for tap data rate.
+    /// Uses kAudioTapPropertyFormat which returns the ASBD the tap delivers.
+    private static func queryTapSampleRate(tapID: AudioObjectID) -> Int {
+        guard tapID != kAudioObjectUnknown else { return 0 }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        )
+        var asbd = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
+        if status != noErr {
+            logger.warning("queryTapSampleRate failed (status: \(status))")
+            return 0
+        }
+        return Int(asbd.mSampleRate)
+    }
+
+    /// Query the actual measured sample rate from a running device.
+    /// Only valid after AudioDeviceStart — returns the hardware-measured rate.
+    private static func queryActualSampleRate(deviceID: AudioObjectID) -> Int {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyActualSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        )
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
+        if status != noErr { return 0 }
+        return Int(rate)
+    }
+
     /// Query, cross-validate, and return the best available sample rate for a device.
-    private static func resolveActualSampleRate(deviceID: AudioObjectID, requestedRate: Int) -> Int {
+    /// Priority: tap format > nominal rate > stream format > requested rate.
+    private static func resolveActualSampleRate(
+        deviceID: AudioObjectID,
+        tapID: AudioObjectID,
+        requestedRate: Int,
+    ) -> Int {
+        // 1. Query the tap directly — most authoritative
+        let tapRate = queryTapSampleRate(tapID: tapID)
+        if tapRate > 0 {
+            let validated = SampleRateQuery.validateSampleRate(
+                queriedRate: tapRate, requestedRate: requestedRate,
+            )
+            if validated.source == .queriedDiffersFromRequested {
+                logger.warning("Tap rate \(tapRate) Hz differs from requested \(requestedRate) Hz")
+            }
+            logger.info("Using tap format rate: \(tapRate) Hz")
+            return validated.rate
+        }
+
+        // 2. Fallback: nominal + stream cross-validation
         let nominalRate = queryNominalSampleRate(deviceID: deviceID)
         let streamRate = queryStreamSampleRate(deviceID: deviceID)
 
@@ -134,8 +187,9 @@ public class AppAudioCapture {
             bestRate = rate
 
         case let .mismatch(nominal, stream):
-            logger.warning("Rate mismatch: nominal=\(nominal), stream=\(stream) — using stream rate")
-            bestRate = stream
+            // Prefer nominal over stream — stream on output scope can return BT HFP rate
+            logger.warning("Rate mismatch: nominal=\(nominal), stream=\(stream) — using nominal rate (stream scope may reflect BT HFP)")
+            bestRate = nominal
 
         case let .onlyNominal(rate):
             bestRate = rate
@@ -144,7 +198,7 @@ public class AppAudioCapture {
             bestRate = rate
 
         case .neitherAvailable:
-            logger.warning("Cannot query aggregate device sample rate, using requested \(requestedRate) Hz")
+            logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
             return requestedRate
         }
 
@@ -242,13 +296,13 @@ public class AppAudioCapture {
                 self.appFirstFrameTime = mach_absolute_time()
                 self.actualChannels = Int(abl.mBuffers.mNumberChannels)
 
-                // Verify rate from device — may have changed since startCapture() query
-                let callbackRate = Self.queryNominalSampleRate(deviceID: self.aggregateID)
-                if callbackRate > 0, callbackRate != self.actualSampleRate {
+                // Device is running — query the measured actual rate
+                let measuredRate = Self.queryActualSampleRate(deviceID: self.aggregateID)
+                if measuredRate > 0, measuredRate != self.actualSampleRate {
                     logger.warning(
-                        "Rate drift detected at first callback: cached=\(self.actualSampleRate), device=\(callbackRate) — updating",
+                        "Measured rate \(measuredRate) Hz differs from cached \(self.actualSampleRate) Hz — updating",
                     )
-                    self.actualSampleRate = callbackRate
+                    self.actualSampleRate = measuredRate
                 }
 
                 let ch = max(self.actualChannels, 1)
@@ -292,7 +346,7 @@ public class AppAudioCapture {
         isRunning = true
 
         actualSampleRate = Self.resolveActualSampleRate(
-            deviceID: aggregateID, requestedRate: sampleRate,
+            deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
         )
         logger.info("Audio capture started (PID \(self.pid), rate: \(self.actualSampleRate) Hz)")
     }
