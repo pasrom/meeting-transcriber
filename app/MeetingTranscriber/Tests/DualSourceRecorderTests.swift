@@ -180,4 +180,66 @@ final class DualSourceRecorderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmpDir) }
         DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
     }
+
+    // MARK: - crossCheckAppRate
+
+    func testCrossCheckCorrectRateUnchanged() {
+        // 60s of 48kHz stereo float32 = 23,040,000 bytes
+        let result = DualSourceRecorder.crossCheckAppRate(
+            deviceRate: 48000,
+            appRawBytes: 23_040_000,
+            appChannels: 2,
+            micDurationSeconds: 60.0,
+            micDelay: 0,
+        )
+        XCTAssertEqual(result, 48000)
+    }
+
+    func testCrossCheckDetectsMismatch() {
+        // 60s of 48kHz stereo float32 = 23,040,000 bytes
+        // Device wrongly reports 24000 → cross-check computes ~48000 → overrides
+        let result = DualSourceRecorder.crossCheckAppRate(
+            deviceRate: 24000,
+            appRawBytes: 23_040_000,
+            appChannels: 2,
+            micDurationSeconds: 60.0,
+            micDelay: 0,
+        )
+        XCTAssertEqual(result, 48000)
+    }
+
+    func testCrossCheckWithMicDelay() {
+        // mic started 0.5s after app → app recorded 60.5s
+        // 60.5s of 48kHz stereo float32 = 60.5 * 48000 * 2 * 4 = 23,232,000
+        let result = DualSourceRecorder.crossCheckAppRate(
+            deviceRate: 24000,
+            appRawBytes: 23_232_000,
+            appChannels: 2,
+            micDurationSeconds: 60.0,
+            micDelay: 0.5,
+        )
+        XCTAssertEqual(result, 48000)
+    }
+
+    func testCrossCheckNoMicReturnsDeviceRate() {
+        let result = DualSourceRecorder.crossCheckAppRate(
+            deviceRate: 24000,
+            appRawBytes: 23_040_000,
+            appChannels: 2,
+            micDurationSeconds: nil,
+            micDelay: 0,
+        )
+        XCTAssertEqual(result, 24000)
+    }
+
+    func testCrossCheckShortRecordingReturnsDeviceRate() {
+        let result = DualSourceRecorder.crossCheckAppRate(
+            deviceRate: 24000,
+            appRawBytes: 48000 * 2 * 4 * 2,
+            appChannels: 2,
+            micDurationSeconds: 2.0,
+            micDelay: 0,
+        )
+        XCTAssertEqual(result, 24000)
+    }
 }

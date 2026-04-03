@@ -118,8 +118,28 @@ class DualSourceRecorder: RecordingProvider {
         captureSession = nil
 
         let micDelay = captureResult.micDelay
-        let actualRate = captureResult.actualSampleRate
         let actualChannels = captureResult.actualChannels
+
+        // Query raw file size before it gets deleted — needed for rate cross-check
+        let tempURL = captureResult.appAudioFileURL
+        let appRawBytes = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0
+
+        // Cross-check rate using mic duration (mic file is opened once here, reused below)
+        let micDuration: Double? = if let micURL = captureResult.micAudioFileURL,
+                                      let micFile = try? AVAudioFile(forReading: micURL),
+                                      micFile.processingFormat.sampleRate > 0 {
+            Double(micFile.length) / micFile.processingFormat.sampleRate
+        } else {
+            nil
+        }
+
+        let actualRate = Self.crossCheckAppRate(
+            deviceRate: captureResult.actualSampleRate,
+            appRawBytes: appRawBytes,
+            appChannels: actualChannels,
+            micDurationSeconds: micDuration,
+            micDelay: micDelay,
+        )
 
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
@@ -140,10 +160,7 @@ class DualSourceRecorder: RecordingProvider {
         var appPath: URL?
         var appSamples: [Float] = []
 
-        let tempURL = captureResult.appAudioFileURL
-
-        if FileManager.default.fileExists(atPath: tempURL.path),
-           (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0 > 0 {
+        if appRawBytes > 0 {
             let raw = try Data(contentsOf: tempURL)
             try? FileManager.default.removeItem(at: tempURL)
 
@@ -240,6 +257,40 @@ class DualSourceRecorder: RecordingProvider {
             mono[i] = sum * scale
         }
         return mono
+    }
+
+    /// Cross-check the device-reported sample rate against raw file size and mic duration.
+    /// Returns the corrected rate (snapped to standard), or the device rate if cross-check
+    /// is unavailable or agrees.
+    static func crossCheckAppRate(
+        deviceRate: Int,
+        appRawBytes: Int,
+        appChannels: Int,
+        micDurationSeconds: Double?,
+        micDelay: TimeInterval,
+    ) -> Int {
+        guard let micDuration = micDurationSeconds, micDuration > 3.0 else {
+            return deviceRate
+        }
+        let appDuration = micDuration + micDelay
+        guard appDuration > 3.0 else { return deviceRate }
+
+        guard let inferred = SampleRateQuery.inferRateFromDuration(
+            rawBytes: appRawBytes,
+            bytesPerSample: MemoryLayout<Float>.size,
+            channels: max(appChannels, 1),
+            durationSeconds: appDuration,
+        ) else { return deviceRate }
+
+        let snapped = SampleRateQuery.snapToStandardRate(inferred)
+
+        // Only override if significantly different (> 5% deviation)
+        let deviation = abs(Double(snapped - deviceRate)) / Double(max(deviceRate, 1))
+        if deviation > 0.05 {
+            logger.warning("Rate cross-check: device=\(deviceRate), inferred=\(inferred), snapped=\(snapped) — overriding")
+            return snapped
+        }
+        return deviceRate
     }
 
     private static let timestampFormatter: DateFormatter = {
