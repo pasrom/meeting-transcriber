@@ -101,6 +101,11 @@ final class NotificationContentTests: XCTestCase {
         XCTAssertNil(content)
     }
 
+    func testRecordingDoneNoNotification() {
+        let status = makeStatus(state: .recordingDone)
+        XCTAssertNil(NotificationManager.notificationContent(for: .recordingDone, status: status))
+    }
+
     // MARK: - No notification for intermediate states
 
     func testWatchingNoNotification() {
