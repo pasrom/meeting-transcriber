@@ -125,4 +125,54 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertEqual(result[0], 0.5, accuracy: 0.001)
         XCTAssertEqual(result[1], 0.5, accuracy: 0.001)
     }
+
+    func testDownmix4ChannelsToMono() {
+        let samples: [Float] = [0.4, 0.8, 0.0, 0.0, 0.2, 0.6, 0.0, 0.0]
+        let result = DualSourceRecorder.downmixToMono(samples, channels: 4)
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[0], 0.3, accuracy: 0.001)
+        XCTAssertEqual(result[1], 0.2, accuracy: 0.001)
+    }
+
+    // MARK: - RecorderError Descriptions
+
+    func testRecorderErrorNotRecordingDescription() {
+        XCTAssertEqual(RecorderError.notRecording.errorDescription, "Not currently recording")
+    }
+
+    func testRecorderErrorNoAudioDataDescription() {
+        XCTAssertEqual(RecorderError.noAudioData.errorDescription, "No audio data recorded")
+    }
+
+    func testRecorderErrorUnsupportedOSDescription() {
+        XCTAssertEqual(RecorderError.unsupportedOS.errorDescription, "macOS 14.2+ required for audio capture")
+    }
+
+    // MARK: - Cleanup Edge Cases
+
+    func testCleanupMultipleTmpFiles() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup_multi_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        let tmp1 = tmpDir.appendingPathComponent("20260311_100000_app_raw.tmp")
+        let tmp2 = tmpDir.appendingPathComponent("20260311_110000_app_raw.tmp")
+        let wav1 = tmpDir.appendingPathComponent("20260311_100000_mix.wav")
+        for file in [tmp1, tmp2, wav1] {
+            try Data("x".utf8).write(to: file)
+        }
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp1.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp2.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: wav1.path))
+    }
+
+    func testCleanupEmptyDirectory() throws {
+        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup_empty_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
+    }
 }
