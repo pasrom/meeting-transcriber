@@ -96,4 +96,55 @@ final class OpenAIProtocolGeneratorTests: XCTestCase {
         )
         XCTAssertNil(gen.apiKey)
     }
+
+    // MARK: - SSE Multi-Line Joining
+
+    func testParseMultipleSSELinesJoined() {
+        let lines = [
+            #"data: {"choices":[{"delta":{"content":"Hello"}}]}"#,
+            #"data: {"choices":[{"delta":{"content":" world"}}]}"#,
+            "data: [DONE]",
+        ]
+        let parts = lines.compactMap { OpenAIProtocolGenerator.parseSSELine($0) }
+        let result = parts.joined()
+        XCTAssertEqual(result, "Hello world")
+    }
+
+    // MARK: - ProtocolError Descriptions
+
+    func testEmptyProtocolErrorDescription() {
+        let error = ProtocolError.emptyProtocol
+        let description = error.errorDescription ?? ""
+        XCTAssertTrue(description.contains("empty"), "Expected 'empty' in: \(description)")
+    }
+
+    func testHttpErrorDescription() {
+        let error = ProtocolError.httpError(503, "Service Unavailable")
+        let description = error.errorDescription ?? ""
+        XCTAssertTrue(description.contains("503"), "Expected status code in: \(description)")
+        XCTAssertTrue(description.contains("Service Unavailable"), "Expected body in: \(description)")
+    }
+
+    func testHttpErrorEmptyBody() {
+        let error = ProtocolError.httpError(500, "")
+        let description = error.errorDescription ?? ""
+        XCTAssertTrue(description.contains("500"), "Expected status code in: \(description)")
+        XCTAssertFalse(description.hasSuffix(": "), "Should not end with colon-space for empty body")
+    }
+
+    func testConnectionFailedErrorDescription() {
+        let error = ProtocolError.connectionFailed("timeout reached")
+        let description = error.errorDescription ?? ""
+        XCTAssertTrue(description.contains("timeout reached"), "Expected reason in: \(description)")
+        XCTAssertTrue(description.contains("Connection failed"), "Expected prefix in: \(description)")
+    }
+
+    // MARK: - Language Substitution
+
+    func testApplyLanguageSubstitution() {
+        let template = "Write the protocol in {LANGUAGE}. Use {LANGUAGE} consistently."
+        let result = ProtocolGenerator.applyLanguage(template, language: "French")
+        XCTAssertEqual(result, "Write the protocol in French. Use French consistently.")
+        XCTAssertFalse(result.contains("{LANGUAGE}"))
+    }
 }
