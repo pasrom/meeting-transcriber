@@ -262,7 +262,66 @@ final class SpeakerNamingViewTests: XCTestCase {
         XCTAssertEqual(names, ["Roman", "", "Maria"])
     }
 
+    // MARK: - formattedTime pure function
+
+    func testFormattedTimeSecondsOnly() {
+        XCTAssertEqual(formattedTime(45), "45s")
+    }
+
+    func testFormattedTimeZero() {
+        XCTAssertEqual(formattedTime(0), "0s")
+    }
+
+    func testFormattedTimeMinutesAndSeconds() {
+        XCTAssertEqual(formattedTime(90), "1:30")
+    }
+
+    func testFormattedTimeExactMinute() {
+        XCTAssertEqual(formattedTime(120), "2:00")
+    }
+
+    func testFormattedTimePadsSeconds() {
+        XCTAssertEqual(formattedTime(65), "1:05")
+    }
+
+    func testFormattedTimeBoundaryAt59() {
+        XCTAssertEqual(formattedTime(59), "59s")
+    }
+
+    func testFormattedTimeBoundaryAt60() {
+        XCTAssertEqual(formattedTime(60), "1:00")
+    }
+
+    // MARK: - Participant suggestion buttons
+
+    func testUnusedParticipantsWithNoAssignments() {
+        // When no names are assigned, all participants are unused
+        let names = ["", ""]
+        let participants = ["Alice", "Bob"]
+        let unused = SpeakerNamingView.unusedParticipants(
+            currentIndex: 0, names: names, participants: participants,
+        )
+        XCTAssertEqual(unused, ["Alice", "Bob"])
+    }
+
+    func testUnusedParticipantsEmptyParticipantList() {
+        let names = ["Alice"]
+        let unused = SpeakerNamingView.unusedParticipants(
+            currentIndex: 0, names: names, participants: [],
+        )
+        XCTAssertTrue(unused.isEmpty)
+    }
+
     // MARK: - Audio Playback
+
+    func testPlayButtonHiddenWhenNoAudioPath() throws {
+        // Default makeData() has audioPath = nil
+        let sut = SpeakerNamingView(data: makeData()) { _ in }
+        let body = try sut.inspect()
+        let images = body.findAll(ViewType.Image.self)
+        let hasPlayIcon = images.contains { (try? $0.actualImage().name()) == "play.circle.fill" }
+        XCTAssertFalse(hasPlayIcon, "Play button should be hidden when audioPath is nil")
+    }
 
     func testPlayButtonShownWhenAudioPathPresent() throws {
         let dataWithAudio = PipelineQueue.SpeakerNamingData(
