@@ -759,4 +759,51 @@ final class PipelineQueueTests: XCTestCase {
         queue.addWarning(id: job.id, "Warning B")
         XCTAssertEqual(queue.jobs[0].warnings, ["Warning A", "Warning B"])
     }
+
+    // MARK: - State Machine Edge Cases
+
+    func testCompletedJobsFilter() {
+        var doneJob = makeJob(title: "Done Meeting")
+        doneJob.state = .done
+        queue.enqueue(doneJob)
+        queue.enqueue(makeJob(title: "Waiting Meeting"))
+
+        XCTAssertEqual(queue.completedJobs.count, 1)
+        XCTAssertEqual(queue.completedJobs[0].meetingTitle, "Done Meeting")
+    }
+
+    func testCancelNonexistentJobIsNoOp() {
+        queue.enqueue(makeJob())
+        let countBefore = queue.jobs.count
+        queue.cancelJob(id: UUID())
+        XCTAssertEqual(queue.jobs.count, countBefore)
+    }
+
+    func testUpdateJobStateNonexistentJobIsNoOp() {
+        queue.enqueue(makeJob())
+        let countBefore = queue.jobs.count
+        queue.updateJobState(id: UUID(), to: .transcribing)
+        XCTAssertEqual(queue.jobs.count, countBefore)
+        // All existing jobs should remain in their original state
+        XCTAssertEqual(queue.jobs[0].state, .waiting)
+    }
+
+    func testUpdateJobStateSetsError() {
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .error, error: "Something went wrong")
+
+        XCTAssertEqual(queue.jobs[0].state, .error)
+        XCTAssertEqual(queue.jobs[0].error, "Something went wrong")
+    }
+
+    func testLoadSnapshotCorruptJSONIsNoOp() throws {
+        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        try Data("{{not valid json".utf8).write(to: snapshotPath)
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertTrue(freshQueue.jobs.isEmpty)
+    }
 }
