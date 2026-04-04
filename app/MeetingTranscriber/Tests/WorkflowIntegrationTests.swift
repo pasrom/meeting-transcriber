@@ -349,6 +349,66 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(h.queue.jobs.first { $0.id == job2.id }?.state, .done)
     }
 
+    // MARK: - Single-Source Fallback (App-Only / Mic-Only)
+
+    func testWorkflowAppOnlyNoMic() async throws {
+        let (h, collector) = try makeHarness(diarizeEnabled: false)
+        let appPath = tmpDir.appendingPathComponent("app_\(UUID().uuidString).wav")
+        try FileManager.default.copyItem(at: h.audioPath, to: appPath)
+
+        let job = PipelineJob(
+            meetingTitle: "App Only Meeting",
+            appName: "Microsoft Teams",
+            mixPath: h.audioPath,
+            appPath: appPath,
+            micPath: nil,
+            micDelay: 0,
+        )
+
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Should complete as single-source (app track only)
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertTrue(collector.transitions.map(\.1).contains(.done))
+
+        // Engine called once (single-source fallback)
+        XCTAssertEqual(h.engine.transcribeCallCount, 1)
+
+        // Protocol generated
+        XCTAssertTrue(h.protocolGen.generateCalled)
+        XCTAssertNotNil(h.queue.jobs.first?.protocolPath)
+    }
+
+    func testWorkflowMicOnlyNoApp() async throws {
+        let (h, collector) = try makeHarness(diarizeEnabled: false)
+        let micPath = tmpDir.appendingPathComponent("mic_\(UUID().uuidString).wav")
+        try FileManager.default.copyItem(at: h.audioPath, to: micPath)
+
+        let job = PipelineJob(
+            meetingTitle: "Mic Only Meeting",
+            appName: "Microsoft Teams",
+            mixPath: h.audioPath,
+            appPath: nil,
+            micPath: micPath,
+            micDelay: 0,
+        )
+
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        // Should complete as single-source (mic track only)
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertTrue(collector.transitions.map(\.1).contains(.done))
+
+        // Engine called once (single-source fallback)
+        XCTAssertEqual(h.engine.transcribeCallCount, 1)
+
+        // Protocol generated
+        XCTAssertTrue(h.protocolGen.generateCalled)
+        XCTAssertNotNil(h.queue.jobs.first?.protocolPath)
+    }
+
     // MARK: - None LLM Provider (Transcript Only)
 
     func testWorkflowNoneProviderSavesTranscriptOnly() async throws {
