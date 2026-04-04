@@ -32,6 +32,7 @@ final class MenuBarViewTests: XCTestCase {
     private func makeView(
         status: TranscriberStatus? = nil,
         isWatching: Bool = false,
+        pipelineQueue: PipelineQueue? = nil,
         updateChecker: UpdateChecker? = nil,
         onNameSpeakers: (() -> Void)? = nil,
         onStopManualRecording: (() -> Void)? = nil,
@@ -39,7 +40,7 @@ final class MenuBarViewTests: XCTestCase {
         MenuBarView(
             status: status,
             isWatching: isWatching,
-            pipelineQueue: PipelineQueue(),
+            pipelineQueue: pipelineQueue ?? PipelineQueue(),
             updateChecker: updateChecker,
             onStartStop: {},
             onRecordApp: {},
@@ -681,6 +682,104 @@ final class MenuBarViewTests: XCTestCase {
         )
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Transcription failed"))
+    }
+
+    // MARK: - Record/Stop button mutual exclusion
+
+    func testRecordAppAndStopBothHiddenDuringAutoRecording() throws {
+        let sut = makeView(status: makeStatus(state: .recording), onStopManualRecording: nil)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Record App..."))
+        XCTAssertThrowsError(try body.find(text: "Stop Recording"))
+    }
+
+    func testStopRecordingReplacesRecordAppButton() throws {
+        // swiftlint:disable:next trailing_closure
+        let sut = makeView(status: makeStatus(state: .idle), onStopManualRecording: {})
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Stop Recording"))
+        XCTAssertThrowsError(try body.find(text: "Record App..."))
+    }
+
+    // MARK: - Job state labels
+
+    func testWaitingJobShowsWaitingLabel() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+
+        let sut = makeView(status: makeStatus(), pipelineQueue: queue)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Waiting..."))
+    }
+
+    func testCancelButtonShownForWaitingJob() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+
+        let sut = makeView(status: makeStatus(), pipelineQueue: queue)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Cancel"))
+    }
+
+    func testCancelButtonHiddenForDoneJob() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = makeView(status: makeStatus(), pipelineQueue: queue)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(button: "Cancel"))
+    }
+
+    func testDoneJobWithoutPathsHidesOpenButton() throws {
+        let queue = PipelineQueue()
+        let job = PipelineJob(
+            meetingTitle: "Sprint",
+            appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = makeView(status: makeStatus(), pipelineQueue: queue)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(button: "Open"))
+    }
+
+    // MARK: - All state labels shown
+
+    func testAllTranscriberStateLabelsRendered() throws {
+        let states: [TranscriberState] = [
+            .idle, .watching, .recording, .transcribing,
+            .generatingProtocol, .protocolReady, .error,
+        ]
+        for state in states {
+            let sut = makeView(status: makeStatus(state: state))
+            let body = try sut.inspect()
+            XCTAssertNoThrow(
+                try body.find(text: state.label),
+                "State label '\(state.label)' not found for \(state)",
+            )
+        }
     }
 
     // MARK: - Multiple jobs
