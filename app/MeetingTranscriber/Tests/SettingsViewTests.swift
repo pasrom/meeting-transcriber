@@ -215,4 +215,180 @@ final class SettingsViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
     }
+
+    // MARK: - Parakeet custom vocabulary
+
+    func testParakeetShowsCustomVocabularyField() throws {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .parakeet
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
+    }
+
+    func testParakeetVocabularyHiddenForWhisperKit() throws {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .whisperKit
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Custom vocabulary file"))
+    }
+
+    // MARK: - Diarizer mode section
+
+    func testDiarizerModeHiddenWhenDiarizeDisabled() throws {
+        let settings = AppSettings()
+        settings.diarize = false
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Expected Speakers"))
+    }
+
+    // MARK: - VAD section
+
+    func testVADToggleExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Voice Activity Detection (VAD)"))
+    }
+
+    func testVADThresholdShownWhenEnabled() throws {
+        let settings = AppSettings()
+        settings.vadEnabled = true
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Threshold:"))
+    }
+
+    func testVADThresholdHiddenWhenDisabled() throws {
+        let settings = AppSettings()
+        settings.vadEnabled = false
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Threshold:"))
+    }
+
+    // MARK: - Protocol provider: none
+
+    func testNoneProviderShowsTranscriptOnlyMessage() throws {
+        let settings = AppSettings()
+        settings.protocolProvider = .none
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Only the raw transcript will be saved — no LLM summarization."))
+    }
+
+    func testNoneProviderHidesEndpointField() throws {
+        let settings = AppSettings()
+        settings.protocolProvider = .none
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Endpoint"))
+    }
+
+    // MARK: - Protocol Language
+
+    func testProtocolLanguagePickerExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Protocol Language"))
+    }
+
+    // MARK: - Output folder
+
+    func testOutputFolderSectionExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Output Folder"))
+    }
+
+    func testResetButtonDisabledWhenNoCustomDir() throws {
+        let settings = AppSettings()
+        settings.clearCustomOutputDir()
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        let button = try body.find(button: "Reset")
+        XCTAssertTrue(try button.isDisabled())
+    }
+
+    // MARK: - Prompt management
+
+    func testEditPromptButtonExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Edit Prompt"))
+    }
+
+    func testImportPromptButtonExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Import Prompt"))
+    }
+
+    func testResetToDefaultButtonExists() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Reset to Default"))
+    }
+
+    func testDefaultPromptStatusShown() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Using default prompt"))
+    }
+
+    // MARK: - Pre-release toggle hidden
+
+    func testPreReleaseToggleHiddenWhenCheckDisabled() throws {
+        let settings = AppSettings()
+        settings.checkForUpdates = false
+        let checker = UpdateChecker(provider: MockUpdateProvider())
+        let sut = makeSUT(settings: settings, updateChecker: checker)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Include Pre-Releases"))
+    }
+
+    // MARK: - WhisperKit model picker
+
+    func testWhisperKitModelPickerShownForWhisperKit() throws {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .whisperKit
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Model"))
+        XCTAssertNoThrow(try body.find(text: "Language"))
+    }
+
+    func testWhisperKitPickersHiddenForParakeet() throws {
+        let settings = AppSettings()
+        settings.transcriptionEngine = .parakeet
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
+        XCTAssertThrowsError(try body.find(text: "Language"))
+    }
+
+    // MARK: - About section details
+
+    func testAboutSectionShowsBuildDate() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Build Date"))
+    }
+
+    func testAboutSectionShowsFfmpegStatus() throws {
+        let sut = makeSUT()
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "ffmpeg"))
+    }
+
+    // MARK: - OpenAI API Key caption
+
+    func testOpenAIAPIKeyCaptionShown() throws {
+        let settings = AppSettings()
+        settings.protocolProvider = .openAICompatible
+        let sut = makeSUT(settings: settings)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Leave empty if your local server doesn't require authentication"))
+    }
 }
