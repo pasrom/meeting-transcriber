@@ -468,4 +468,76 @@ final class SpeakerMatcherTests: XCTestCase {
         let result = matcher.match(embeddings: [:])
         XCTAssertTrue(result.isEmpty)
     }
+
+    // MARK: - Corrupt DB & Edge Cases
+
+    func testLoadDBCorruptJSONReturnsEmpty() throws {
+        // Write invalid JSON to dbPath — loadDB should return empty, not crash
+        let garbage = Data("{ not valid json !!!".utf8)
+        try garbage.write(to: dbPath)
+
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let loaded = matcher.loadDB()
+        XCTAssertTrue(loaded.isEmpty)
+    }
+
+    func testLoadDBEmptyFileReturnsEmpty() throws {
+        // Write zero bytes — loadDB should return empty
+        try Data().write(to: dbPath)
+
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let loaded = matcher.loadDB()
+        XCTAssertTrue(loaded.isEmpty)
+    }
+
+    func testUpdateDBWithMissingEmbeddingIsNoOp() {
+        // Mapping has a named speaker but embeddings dict is empty → no DB entry created
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.updateDB(
+            mapping: ["SPEAKER_0": "Roman"],
+            embeddings: [:],
+        )
+
+        let loaded = matcher.loadDB()
+        XCTAssertTrue(loaded.isEmpty, "No embedding provided, so nothing should be stored")
+    }
+
+    func testMatchThreeSpeakersTwoStored() {
+        // 3 input embeddings, 2 stored speakers → third stays unmatched
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.40, confidenceMargin: 0.10)
+        let stored = [
+            StoredSpeaker(name: "Roman", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Anna", embeddings: [[0, 1, 0]]),
+        ]
+        matcher.saveDB(stored)
+
+        let embeddings: [String: [Float]] = [
+            "SPEAKER_0": [0.98, 0.05, 0], // close to Roman
+            "SPEAKER_1": [0.05, 0.98, 0], // close to Anna
+            "SPEAKER_2": [0, 0, 1], // no match in DB
+        ]
+        let result = matcher.match(embeddings: embeddings)
+
+        XCTAssertEqual(result["SPEAKER_0"], "Roman")
+        XCTAssertEqual(result["SPEAKER_1"], "Anna")
+        XCTAssertEqual(result["SPEAKER_2"], "SPEAKER_2", "Third speaker should stay unmatched")
+    }
+
+    func testMatchIsDeterministicByKey() {
+        // Two speakers both close to the same stored speaker.
+        // Sorted by key, SPEAKER_0 < SPEAKER_1, so SPEAKER_0 claims the match first.
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.40, confidenceMargin: 0.0)
+        let stored = [StoredSpeaker(name: "Roman", embeddings: [[1, 0, 0]])]
+        matcher.saveDB(stored)
+
+        let embeddings: [String: [Float]] = [
+            "SPEAKER_0": [0.95, 0.1, 0], // close to Roman
+            "SPEAKER_1": [0.96, 0.08, 0], // also close to Roman (even closer)
+        ]
+        let result = matcher.match(embeddings: embeddings)
+
+        // SPEAKER_0 is processed first (alphabetical) and claims "Roman"
+        XCTAssertEqual(result["SPEAKER_0"], "Roman", "First key alphabetically should win the match")
+        XCTAssertEqual(result["SPEAKER_1"], "SPEAKER_1", "Second speaker left unmatched")
+    }
 }
