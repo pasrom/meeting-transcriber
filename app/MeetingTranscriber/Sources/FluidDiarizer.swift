@@ -21,7 +21,7 @@ class FluidDiarizer: DiarizationProvider {
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
-    private static func normalizeSpeakerId(_ id: String) -> String {
+    static func normalizeSpeakerId(_ id: String) -> String {
         id.replacingOccurrences(of: "Speaker ", with: "SPEAKER_")
     }
 
@@ -104,7 +104,7 @@ class FluidDiarizer: DiarizationProvider {
 
     // MARK: - Shared Result Conversion
 
-    private func buildResult(
+    func buildResult(
         segments unsorted: [MeetingTranscriber.DiarizationResult.Segment],
         speakerDatabase: [String: [Float]]?, // swiftlint:disable:this discouraged_optional_collection
     ) -> MeetingTranscriber.DiarizationResult {
