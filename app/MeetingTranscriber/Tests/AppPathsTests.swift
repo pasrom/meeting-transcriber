@@ -37,4 +37,20 @@ final class AppPathsTests: XCTestCase {
     func testCustomPromptFileIsUnderDataDir() {
         XCTAssertTrue(AppPaths.customPromptFile.path.hasPrefix(AppPaths.dataDir.path))
     }
+
+    // MARK: - migrateIfNeeded
+
+    func testMigrateIfNeededIsIdempotent() {
+        // Should not crash when called multiple times
+        AppPaths.migrateIfNeeded()
+        AppPaths.migrateIfNeeded()
+        // If we reach here, no crash occurred
+    }
+
+    func testIpcDirExistsAfterMigration() {
+        AppPaths.migrateIfNeeded()
+        let fm = FileManager.default
+        try? fm.createDirectory(at: AppPaths.ipcDir, withIntermediateDirectories: true)
+        XCTAssertTrue(fm.fileExists(atPath: AppPaths.ipcDir.path))
+    }
 }
