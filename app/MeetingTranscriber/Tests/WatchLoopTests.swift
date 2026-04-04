@@ -273,4 +273,42 @@ final class WatchLoopTests: XCTestCase {
             "Channel | Meeting",
         )
     }
+
+    // MARK: - Stop Manual Recording Enqueues Job
+
+    func testStopManualRecordingEnqueuesJob() throws {
+        let queue = PipelineQueue()
+        let (loop, recorder) = makeTestWatchLoop(pipelineQueue: queue)
+        recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+
+        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Standup")
+        XCTAssertTrue(loop.isManualRecording)
+
+        loop.stopManualRecording()
+
+        XCTAssertFalse(loop.isManualRecording)
+        XCTAssertEqual(loop.state, .idle)
+        XCTAssertTrue(recorder.stopCalled)
+        XCTAssertEqual(queue.jobs.count, 1)
+        XCTAssertEqual(queue.jobs.first?.meetingTitle, "Standup")
+        XCTAssertEqual(queue.jobs.first?.appName, "Chrome")
+    }
+
+    // MARK: - Double Start Manual Recording
+
+    func testStartManualRecordingWhileRecordingIsNoOp() throws {
+        let (loop, recorder) = makeTestWatchLoop()
+
+        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "First")
+        defer { loop.stop() }
+
+        XCTAssertTrue(loop.isManualRecording)
+        XCTAssertEqual(loop.manualRecordingInfo?.title, "First")
+
+        // Second start should be ignored because state is already .recording
+        try loop.startManualRecording(pid: 99, appName: "Safari", title: "Second")
+
+        XCTAssertEqual(loop.manualRecordingInfo?.title, "First")
+        XCTAssertTrue(recorder.startCalled)
+    }
 }
