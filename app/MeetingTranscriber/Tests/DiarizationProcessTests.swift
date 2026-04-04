@@ -498,6 +498,53 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         XCTAssertTrue(result.isEmpty)
     }
 
+    func testMergeGapThresholdValue() {
+        XCTAssertEqual(DiarizationProcess.mergeGapThreshold, 2.0)
+    }
+
+    func testMergeConsecutiveSpeakers_gapJustOverThreshold() {
+        // Gap of 2.001s (just over 2.0s threshold) — should NOT merge
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "First part.", speaker: "Alice"),
+            TimestampedSegment(start: 7.001, end: 10, text: "Second part.", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 2, "Gap of 2.001s exceeds threshold — should not merge")
+        XCTAssertEqual(merged[0].text, "First part.")
+        XCTAssertEqual(merged[0].end, 5)
+        XCTAssertEqual(merged[1].text, "Second part.")
+        XCTAssertEqual(merged[1].start, 7.001)
+    }
+
+    func testMergeConsecutiveSpeakers_overlappingSegments() {
+        // Negative gap (overlapping segments) — same speaker should merge
+        let segments = [
+            TimestampedSegment(start: 0, end: 5, text: "Overlapping start.", speaker: "Alice"),
+            TimestampedSegment(start: 4, end: 8, text: "Overlapping end.", speaker: "Alice"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 1, "Negative gap (overlap) should merge same speaker")
+        XCTAssertEqual(merged[0].text, "Overlapping start. Overlapping end.")
+        XCTAssertEqual(merged[0].start, 0)
+        XCTAssertEqual(merged[0].end, 8)
+    }
+
+    func testMergeConsecutiveSpeakers_rapidSpeakerAlternation() {
+        // A, B, A, B — different speakers should never merge even with no gap
+        let segments = [
+            TimestampedSegment(start: 0, end: 2, text: "A1", speaker: "Alice"),
+            TimestampedSegment(start: 2, end: 4, text: "B1", speaker: "Bob"),
+            TimestampedSegment(start: 4, end: 6, text: "A2", speaker: "Alice"),
+            TimestampedSegment(start: 6, end: 8, text: "B2", speaker: "Bob"),
+        ]
+        let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
+        XCTAssertEqual(merged.count, 4, "Rapid A-B-A-B alternation should stay as 4 segments")
+        XCTAssertEqual(merged[0].speaker, "Alice")
+        XCTAssertEqual(merged[1].speaker, "Bob")
+        XCTAssertEqual(merged[2].speaker, "Alice")
+        XCTAssertEqual(merged[3].speaker, "Bob")
+    }
+
     func testAssignSpeakersDualTrackSortsByStartTime() {
         let appSegments = [
             TimestampedSegment(start: 10, end: 15, text: "Late app"),
