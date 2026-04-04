@@ -4,44 +4,33 @@ import XCTest
 
 @MainActor
 final class PermissionRowTests: XCTestCase {
+    // MARK: - Helpers
+
+    private func iconNames(for row: PermissionRow) throws -> [String] {
+        let images = try row.inspect().findAll(ViewType.Image.self)
+        return images.compactMap { try? $0.actualImage().name() }
+    }
+
     // MARK: - Icon Tests
 
     func testGrantedShowsCheckmarkIcon() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Granted", granted: true)
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertTrue(systemNames.contains("checkmark.circle.fill"), "Expected checkmark.circle.fill, got: \(systemNames)")
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Granted", granted: true))
+        XCTAssertTrue(names.contains("checkmark.circle.fill"))
     }
 
     func testDeniedShowsXmarkIcon() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Denied", granted: false)
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertTrue(systemNames.contains("xmark.circle.fill"), "Expected xmark.circle.fill, got: \(systemNames)")
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Denied", granted: false))
+        XCTAssertTrue(names.contains("xmark.circle.fill"))
     }
 
     func testWarningShowsTriangleIcon() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Warning", granted: false, warning: true)
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertTrue(
-            systemNames.contains("exclamationmark.triangle.fill"),
-            "Expected exclamationmark.triangle.fill, got: \(systemNames)",
-        )
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Warning", granted: false, warning: true))
+        XCTAssertTrue(names.contains("exclamationmark.triangle.fill"))
     }
 
     func testOptionalShowsTriangleIcon() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Optional", granted: false, optional: true)
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertTrue(
-            systemNames.contains("exclamationmark.triangle.fill"),
-            "Expected exclamationmark.triangle.fill, got: \(systemNames)",
-        )
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Optional", granted: false, optional: true))
+        XCTAssertTrue(names.contains("exclamationmark.triangle.fill"))
     }
 
     // MARK: - Label & Detail
@@ -56,18 +45,31 @@ final class PermissionRowTests: XCTestCase {
     // MARK: - Help Button
 
     func testHelpButtonShownWhenHelpNonEmpty() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Detail", granted: true, help: "some text")
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertTrue(systemNames.contains("questionmark.circle"), "Expected questionmark.circle when help is non-empty")
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Detail", granted: true, help: "some text"))
+        XCTAssertTrue(names.contains("questionmark.circle"))
     }
 
     func testHelpButtonHiddenWhenHelpEmpty() throws {
-        let sut = PermissionRow(label: "Mic", detail: "Detail", granted: true, help: "")
-        let body = try sut.inspect()
-        let images = try body.findAll(ViewType.Image.self)
-        let systemNames = images.compactMap { try? $0.actualImage().name() }
-        XCTAssertFalse(systemNames.contains("questionmark.circle"), "Expected no questionmark.circle when help is empty")
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Detail", granted: true, help: ""))
+        XCTAssertFalse(names.contains("questionmark.circle"))
+    }
+
+    // MARK: - Icon Priority
+
+    func testGrantedTakesPriorityOverWarning() throws {
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Detail", granted: true, warning: true))
+        XCTAssertTrue(names.contains("checkmark.circle.fill"))
+        XCTAssertFalse(names.contains("exclamationmark.triangle.fill"))
+    }
+
+    func testGrantedTakesPriorityOverOptional() throws {
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Detail", granted: true, optional: true))
+        XCTAssertTrue(names.contains("checkmark.circle.fill"))
+    }
+
+    func testWarningTakesPriorityOverDenied() throws {
+        let names = try iconNames(for: PermissionRow(label: "Mic", detail: "Detail", granted: false, warning: true))
+        XCTAssertTrue(names.contains("exclamationmark.triangle.fill"))
+        XCTAssertFalse(names.contains("xmark.circle.fill"))
     }
 }
