@@ -10,6 +10,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     let apiKey: String?
     let language: String
     let timeoutSeconds: TimeInterval
+    let session: URLSession
 
     init(
         endpoint: URL,
@@ -17,12 +18,14 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         language: String,
         apiKey: String? = nil,
         timeoutSeconds: TimeInterval = 600,
+        session: URLSession = .shared,
     ) {
         self.endpoint = endpoint
         self.model = model
         self.language = language
         self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
+        self.session = session
     }
 
     func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
@@ -57,7 +60,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
         let (bytes, response): (URLSession.AsyncBytes, URLResponse)
         do {
-            (bytes, response) = try await URLSession.shared.bytes(for: request)
+            (bytes, response) = try await session.bytes(for: request)
         } catch {
             throw ProtocolError.connectionFailed(error.localizedDescription)
         }
@@ -114,7 +117,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
     /// Test connection to the API by querying available models.
     /// Returns model names on success.
-    static func testConnection(endpoint: String, model _: String, apiKey: String?) async -> Result<[String], Error> {
+    static func testConnection(endpoint: String, model _: String, apiKey: String?, session: URLSession = .shared) async -> Result<[String], Error> {
         // Derive models endpoint from chat completions endpoint
         guard let chatURL = URL(string: endpoint) else {
             return .failure(ProtocolError.connectionFailed("Invalid endpoint URL"))
@@ -132,7 +135,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         }
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse,
                   (200 ... 299).contains(httpResponse.statusCode)
             else {
