@@ -76,4 +76,258 @@ final class MenuBarIconTests: XCTestCase {
         let expectedTop = 18.0 / 2 + linesHeight / 2
         XCTAssertEqual(layout.top, expectedTop, accuracy: 0.01)
     }
+
+    // MARK: - BadgeKind.compute()
+
+    // 1. Recording while watchLoop recording
+    func testCompute_watchLoopRecording_returnsRecording() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .recording,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .recording)
+    }
+
+    // 2. Recording takes priority over transcriberState
+    func testCompute_watchLoopRecording_priorityOverTranscriberState() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .recording,
+            transcriberState: .transcribing,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .recording)
+    }
+
+    // 3. UserAction for waitingForSpeakerCount
+    func testCompute_waitingForSpeakerCount_returnsUserAction() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .waitingForSpeakerCount,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .userAction)
+    }
+
+    // 4. UserAction for waitingForSpeakerNames
+    func testCompute_waitingForSpeakerNames_returnsUserAction() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .waitingForSpeakerNames,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .userAction)
+    }
+
+    // 5. Done for protocolReady
+    func testCompute_protocolReady_returnsDone() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .protocolReady,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .done)
+    }
+
+    // 6. Error for transcriberError
+    func testCompute_transcriberError_returnsError() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .error,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .error)
+    }
+
+    // 7. Transcribing for transcriberTranscribing
+    func testCompute_transcriberTranscribing_returnsTranscribing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .transcribing,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .transcribing)
+    }
+
+    // 8. Transcribing for recordingDone
+    func testCompute_recordingDone_returnsTranscribing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .recordingDone,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .transcribing)
+    }
+
+    // 9. Processing for generatingProtocol
+    func testCompute_generatingProtocol_returnsProcessing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .generatingProtocol,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .processing)
+    }
+
+    // 10. ActiveJob transcribing (watchLoop inactive)
+    func testCompute_activeJobTranscribing_returnsTranscribing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .transcribing,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .transcribing)
+    }
+
+    // 11. ActiveJob diarizing
+    func testCompute_activeJobDiarizing_returnsDiarizing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .diarizing,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .diarizing)
+    }
+
+    // 12. ActiveJob generatingProtocol → processing
+    func testCompute_activeJobGeneratingProtocol_returnsProcessing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .generatingProtocol,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .processing)
+    }
+
+    // 13. ActiveJob waiting → processing
+    func testCompute_activeJobWaiting_returnsProcessing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .waiting,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .processing)
+    }
+
+    // 14. ActiveJob done → processing
+    func testCompute_activeJobDone_returnsProcessing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .done,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .processing)
+    }
+
+    // 15. ActiveJob error → processing
+    func testCompute_activeJobError_returnsProcessing() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .error,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .processing)
+    }
+
+    // 16. UpdateAvailable when all idle
+    func testCompute_updateAvailable_returnsUpdateAvailable() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: true,
+        )
+        XCTAssertEqual(result, .updateAvailable)
+    }
+
+    // 17. Inactive when all idle
+    func testCompute_allIdle_returnsInactive() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .inactive)
+    }
+
+    // 18. WatchLoop active but idle transcriberState → inactive
+    func testCompute_watchLoopActiveIdleTranscriber_returnsInactive() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .inactive)
+    }
+
+    // 19. ActiveJob takes priority over updateAvailable
+    func testCompute_activeJob_priorityOverUpdateAvailable() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: .transcribing,
+            updateAvailable: true,
+        )
+        XCTAssertEqual(result, .transcribing)
+    }
+
+    // 20. WatchLoop recording takes priority over activeJob and updateAvailable
+    func testCompute_watchLoopRecording_priorityOverActiveJobAndUpdate() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .recording,
+            transcriberState: .idle,
+            activeJobState: .transcribing,
+            updateAvailable: true,
+        )
+        XCTAssertEqual(result, .recording)
+    }
+
+    // 21. WatchLoop active with .watching transcriberState → falls through to inactive
+    func testCompute_watchLoopActiveWatchingState_fallsThroughToInactive() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .watching,
+            activeJobState: nil,
+            updateAvailable: false,
+        )
+        XCTAssertEqual(result, .inactive)
+    }
 }
