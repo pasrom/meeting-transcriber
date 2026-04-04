@@ -43,6 +43,24 @@ final class MenuBarIconTests: XCTestCase {
         }
     }
 
+    // MARK: - Frame Wrapping
+
+    func testAnimationFrameWrapsAroundFrameCount() {
+        let badge = BadgeKind.recording
+        let normal = MenuBarIcon.image(badge: badge, animationFrame: 2)
+        let wrapped = MenuBarIcon.image(badge: badge, animationFrame: 2 + MenuBarIcon.frameCount)
+        XCTAssertTrue(normal.isTemplate)
+        XCTAssertTrue(wrapped.isTemplate)
+        XCTAssertEqual(normal.size, wrapped.size)
+    }
+
+    func testLargeAnimationFrameDoesNotCrash() {
+        for badge in BadgeKind.allCases where badge.isAnimated {
+            let image = MenuBarIcon.image(badge: badge, animationFrame: 999)
+            XCTAssertTrue(image.isTemplate, "Large frame index should wrap safely for \(badge)")
+        }
+    }
+
     // MARK: - Layout Math
 
     func testBarsLayoutCentersHorizontally() {
