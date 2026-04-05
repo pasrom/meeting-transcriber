@@ -314,6 +314,65 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
             XCTFail("Expected failure for empty endpoint")
         }
     }
+
+    // MARK: - Full Protocol Roundtrip
+
+    func testFullProtocolRoundtrip() async throws {
+        let sseChunks = [
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"# Meeting\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" Protocol\\n\\n\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"## Summary\\n\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Discussion about project status.\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"\\n\\n## Action Items\\n\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"- Review PR by Friday\"}}]}",
+            "data: [DONE]",
+        ]
+        let sseBody = sseChunks.joined(separator: "\n")
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            return self.mockResponse(request, body: Data(sseBody.utf8))
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        let transcript = """
+        [00:00] Alice: Let's discuss the project status.
+        [00:15] Bob: The PR is ready for review.
+        [00:30] Alice: Please review it by Friday.
+        """
+
+        let result = try await gen.generate(
+            transcript: transcript,
+            title: "Sprint Planning",
+            diarized: true,
+        )
+
+        XCTAssertTrue(result.contains("# Meeting Protocol"))
+        XCTAssertTrue(result.contains("## Summary"))
+        XCTAssertTrue(result.contains("Discussion about project status."))
+        XCTAssertTrue(result.contains("## Action Items"))
+        XCTAssertTrue(result.contains("Review PR by Friday"))
+    }
+
+    func testRoundtripWithSpecialCharacters() async throws {
+        let sseLines = [
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Ä Ö Ü ß\"}}]}",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" — \\\"quotes\\\" & <html>\"}}]}",
+            "data: [DONE]",
+        ]
+        let sseBody = sseLines.joined(separator: "\n")
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, body: Data(sseBody.utf8))
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        let result = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+
+        XCTAssertTrue(result.contains("Ä Ö Ü ß"))
+        XCTAssertTrue(result.contains("\"quotes\""))
+    }
 }
 
 // MARK: - MockURLProtocol
