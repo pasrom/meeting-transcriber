@@ -806,4 +806,116 @@ final class PipelineQueueTests: XCTestCase {
 
         XCTAssertTrue(freshQueue.jobs.isEmpty)
     }
+
+    // MARK: - Crash-Recovery E2E
+
+    func testCrashRecoveryResumesAndCompletesJob() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Recovery test"),
+        ]
+        let protocolGen = MockProtocolGen()
+        let audioPath = try createTestAudioFile(in: tmpDir)
+
+        let queue1 = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { protocolGen },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+        )
+
+        let job = PipelineJob(
+            meetingTitle: "Crash Test",
+            appName: "Test",
+            mixPath: audioPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        queue1.enqueue(job)
+        queue1.updateJobState(id: job.id, to: .transcribing)
+        queue1.saveSnapshot()
+
+        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath.path))
+
+        // "Crash" — create fresh queue from snapshot
+        let engine2 = MockEngine()
+        engine2.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Recovery works"),
+        ]
+        let protocolGen2 = MockProtocolGen()
+
+        let queue2 = PipelineQueue(
+            engine: engine2,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { protocolGen2 },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+        )
+
+        queue2.loadSnapshot()
+        XCTAssertEqual(queue2.jobs.count, 1)
+        XCTAssertEqual(queue2.jobs.first?.state, .waiting)
+        XCTAssertEqual(queue2.jobs.first?.meetingTitle, "Crash Test")
+
+        await queue2.processNext()
+
+        XCTAssertEqual(queue2.jobs.first?.state, .done)
+        XCTAssertEqual(engine2.transcribeCallCount, 1)
+        XCTAssertTrue(protocolGen2.generateCalled)
+        XCTAssertNotNil(queue2.jobs.first?.protocolPath)
+    }
+
+    func testCrashRecoveryDuringDiarizingResumes() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Diarize recovery"),
+        ]
+        let audioPath = try createTestAudioFile(in: tmpDir)
+
+        let queue1 = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+        )
+
+        let job = PipelineJob(
+            meetingTitle: "Diarize Crash",
+            appName: "Test",
+            mixPath: audioPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        queue1.enqueue(job)
+        queue1.updateJobState(id: job.id, to: .diarizing)
+        queue1.saveSnapshot()
+
+        let engine2 = MockEngine()
+        engine2.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Recovered"),
+        ]
+        let protocolGen2 = MockProtocolGen()
+
+        let queue2 = PipelineQueue(
+            engine: engine2,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { protocolGen2 },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+        )
+        queue2.speakerNamingHandler = { _ in .skipped }
+
+        queue2.loadSnapshot()
+        XCTAssertEqual(queue2.jobs.first?.state, .waiting)
+
+        await queue2.processNext()
+        XCTAssertEqual(queue2.jobs.first?.state, .done)
+    }
 }
