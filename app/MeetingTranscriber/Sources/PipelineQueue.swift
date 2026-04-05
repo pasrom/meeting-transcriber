@@ -137,7 +137,7 @@ class PipelineQueue {
     func enqueue(_ job: PipelineJob) {
         jobs.append(job)
         appendLog(jobID: job.id, event: "enqueued", from: nil, to: job.state)
-        writeSnapshot()
+        saveSnapshot()
         logger.info("Enqueued job: \(job.meetingTitle) (\(job.id))")
         triggerProcessing()
     }
@@ -147,7 +147,7 @@ class PipelineQueue {
             markProcessed(mixPath: jobs[index].mixPath)
             jobs.remove(at: index)
         }
-        writeSnapshot()
+        saveSnapshot()
     }
 
     /// Cancel a job. Removes waiting/active jobs from the queue and cancels the
@@ -158,13 +158,13 @@ class PipelineQueue {
         switch state {
         case .waiting:
             jobs.remove(at: index)
-            writeSnapshot()
+            saveSnapshot()
 
         case .transcribing, .diarizing, .generatingProtocol:
             cancelledJobIDs.insert(id)
             processTask?.cancel()
             jobs.remove(at: index)
-            writeSnapshot()
+            saveSnapshot()
 
         case .done, .error:
             break
@@ -177,7 +177,7 @@ class PipelineQueue {
         jobs[index].state = newState
         if let error { jobs[index].error = error }
         appendLog(jobID: id, event: "state_change", from: oldState, to: newState)
-        writeSnapshot()
+        saveSnapshot()
         onJobStateChange?(jobs[index], oldState, newState)
 
         if newState == .done || newState == .error {
@@ -611,7 +611,7 @@ class PipelineQueue {
 
     // MARK: - Snapshot Recovery
 
-    /// Load pipeline queue from the JSON snapshot written by `writeSnapshot()`.
+    /// Load pipeline queue from the JSON snapshot written by `saveSnapshot()`.
     /// Resets in-progress jobs to `.waiting`, discards `.done` jobs, and drops
     /// jobs whose `mixPath` no longer exists on disk.
     func loadSnapshot() {
@@ -647,7 +647,7 @@ class PipelineQueue {
             }
 
             jobs = loaded
-            writeSnapshot()
+            saveSnapshot()
             logger.info("Restored \(loaded.count) jobs from snapshot")
             triggerProcessing()
         } catch {
@@ -782,7 +782,7 @@ class PipelineQueue {
         }
 
         if recovered > 0 {
-            writeSnapshot()
+            saveSnapshot()
             logger.info("Recovered \(recovered) orphaned recording(s)")
             triggerProcessing()
         }
@@ -827,7 +827,7 @@ class PipelineQueue {
         logDirCreated = true
     }
 
-    private func writeSnapshot() {
+    func saveSnapshot() {
         do {
             ensureLogDir()
             let data = try JSONEncoder().encode(jobs)
