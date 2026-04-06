@@ -42,6 +42,7 @@ final class AppState {
     var watchLoop: WatchLoop?
     var pipelineQueue: PipelineQueue
     var updateChecker: UpdateChecker
+    var permissionHealth: HealthCheckResult?
 
     // MARK: - Init
 
@@ -97,6 +98,7 @@ final class AppState {
             transcriberState: watchLoop?.transcriberState ?? .idle,
             activeJobState: pipelineQueue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
+            permissionProblem: permissionHealth?.isHealthy == false,
         )
     }
 
@@ -187,6 +189,10 @@ final class AppState {
                     }
                 }
 
+                if let health = permissionHealth {
+                    loop.permissionChecker = { health }
+                }
+
                 configurePipelineCallbacks()
 
                 watchLoop = loop
@@ -216,8 +222,13 @@ final class AppState {
             )
             watchLoop = loop
 
+            // Use cached health check result instead of live probe
+            if let health = permissionHealth {
+                loop.permissionChecker = { health }
+            }
+
             do {
-                try loop.startManualRecording(pid: pid, appName: appName, title: title)
+                try await loop.startManualRecording(pid: pid, appName: appName, title: title)
                 notifier.notify(
                     title: "Manual Recording",
                     body: "Recording: \(title)",
@@ -249,6 +260,23 @@ final class AppState {
             )
             pipelineQueue.enqueue(job)
         }
+    }
+
+    // MARK: - Permission Health
+
+    func handlePermissionHealth(_ result: HealthCheckResult) {
+        permissionHealth = result
+        if !result.isHealthy {
+            notifier.notify(
+                title: "Permission Problem",
+                body: result.notificationBody,
+            )
+        }
+    }
+
+    func checkPermissions() async {
+        let result = await PermissionHealthCheck.runLive()
+        handlePermissionHealth(result)
     }
 
     // MARK: - Pipeline
