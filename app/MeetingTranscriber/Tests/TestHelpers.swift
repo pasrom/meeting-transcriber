@@ -25,6 +25,9 @@ func makeTestWatchLoop(
         pollInterval: 0.05,
         endGracePeriod: 0.1,
     )
+    loop.permissionChecker = {
+        HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+    }
     return (loop, recorder)
 }
 

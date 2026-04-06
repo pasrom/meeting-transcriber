@@ -41,6 +41,7 @@ class WatchLoop {
     let detector: MeetingDetecting
     let recorderFactory: @MainActor () -> RecordingProvider
     var pipelineQueue: PipelineQueue?
+    var permissionChecker: () async -> HealthCheckResult = { await PermissionHealthCheck.runLive() }
 
     // Settings
     let pollInterval: TimeInterval
@@ -113,10 +114,15 @@ class WatchLoop {
 
     // MARK: - Manual Recording
 
-    func startManualRecording(pid: pid_t, appName: String, title: String) throws {
+    func startManualRecording(pid: pid_t, appName: String, title: String) async throws {
         guard state != .recording else {
             logger.warning("Cannot start manual recording — already recording")
             return
+        }
+
+        let health = await permissionChecker()
+        if !health.isHealthy {
+            throw RecorderError.permissionDenied(health.notificationBody)
         }
 
         // Stop auto-watch if active

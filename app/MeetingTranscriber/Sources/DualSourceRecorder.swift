@@ -257,12 +257,14 @@ enum RecorderError: LocalizedError {
     case notRecording
     case noAudioData
     case unsupportedOS
+    case permissionDenied(String)
 
     var errorDescription: String? {
         switch self {
         case .notRecording: "Not currently recording"
         case .noAudioData: "No audio data recorded"
         case .unsupportedOS: "macOS 14.2+ required for audio capture"
+        case let .permissionDenied(reason): "Permission problem: \(reason)"
         }
     }
 }

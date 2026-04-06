@@ -230,27 +230,27 @@ final class WatchLoopTests: XCTestCase {
 
     // MARK: - Manual Recording
 
-    func testStartManualRecordingChangesState() throws {
+    func testStartManualRecordingChangesState() async throws {
         let (loop, recorder) = makeTestWatchLoop()
-        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
 
         XCTAssertTrue(loop.isManualRecording)
         XCTAssertTrue(recorder.startCalled)
     }
 
-    func testManualRecordingHasMeetingInfo() throws {
+    func testManualRecordingHasMeetingInfo() async throws {
         let (loop, _) = makeTestWatchLoop()
-        try loop.startManualRecording(pid: 42, appName: "Safari", title: "Standup")
+        try await loop.startManualRecording(pid: 42, appName: "Safari", title: "Standup")
         defer { loop.stop() }
 
         XCTAssertEqual(loop.manualRecordingInfo?.appName, "Safari")
         XCTAssertEqual(loop.manualRecordingInfo?.title, "Standup")
     }
 
-    func testStopManualRecordingClearsState() throws {
+    func testStopManualRecordingClearsState() async throws {
         let (loop, _) = makeTestWatchLoop()
-        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
         loop.stop()
 
         XCTAssertFalse(loop.isManualRecording)
@@ -276,12 +276,12 @@ final class WatchLoopTests: XCTestCase {
 
     // MARK: - Stop Manual Recording Enqueues Job
 
-    func testStopManualRecordingEnqueuesJob() throws {
+    func testStopManualRecordingEnqueuesJob() async throws {
         let queue = PipelineQueue()
         let (loop, recorder) = makeTestWatchLoop(pipelineQueue: queue)
         recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
 
-        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "Standup")
+        try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Standup")
         XCTAssertTrue(loop.isManualRecording)
 
         loop.stopManualRecording()
@@ -296,19 +296,52 @@ final class WatchLoopTests: XCTestCase {
 
     // MARK: - Double Start Manual Recording
 
-    func testStartManualRecordingWhileRecordingIsNoOp() throws {
+    func testStartManualRecordingWhileRecordingIsNoOp() async throws {
         let (loop, recorder) = makeTestWatchLoop()
 
-        try loop.startManualRecording(pid: 42, appName: "Chrome", title: "First")
+        try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "First")
         defer { loop.stop() }
 
         XCTAssertTrue(loop.isManualRecording)
         XCTAssertEqual(loop.manualRecordingInfo?.title, "First")
 
         // Second start should be ignored because state is already .recording
-        try loop.startManualRecording(pid: 99, appName: "Safari", title: "Second")
+        try await loop.startManualRecording(pid: 99, appName: "Safari", title: "Second")
 
         XCTAssertEqual(loop.manualRecordingInfo?.title, "First")
+        XCTAssertTrue(recorder.startCalled)
+    }
+
+    // MARK: - Permission Pre-Check
+
+    func testManualRecordingFailsWhenPermissionBroken() async {
+        let (loop, _) = makeTestWatchLoop()
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .broken)
+        }
+
+        do {
+            try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
+            XCTFail("Expected permissionDenied error")
+        } catch let error as RecorderError {
+            if case let .permissionDenied(reason) = error {
+                XCTAssertTrue(reason.contains("Microphone"))
+            } else {
+                XCTFail("Expected permissionDenied, got \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testManualRecordingProceedsWhenPermissionsHealthy() async throws {
+        let (loop, recorder) = makeTestWatchLoop()
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        }
+        recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+
+        try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
         XCTAssertTrue(recorder.startCalled)
     }
 }
