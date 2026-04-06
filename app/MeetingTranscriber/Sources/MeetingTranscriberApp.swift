@@ -95,6 +95,9 @@ struct MeetingTranscriberApp: App {
             .task {
                 appState.updateChecker.startPeriodicChecks(settings: appState.settings)
             }
+            .task {
+                await appState.checkPermissions()
+            }
         }
 
         Window("Name Speakers", id: "speaker-naming") {
