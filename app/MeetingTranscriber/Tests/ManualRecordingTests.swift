@@ -16,22 +16,25 @@ final class ManualRecordingTests: XCTestCase {
             pollInterval: 0.05,
             maxDuration: 10,
         )
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        }
         return (loop, mock)
     }
 
     // MARK: - Start
 
-    func testStartManualRecordingTransitionsToRecording() throws {
+    func testStartManualRecordingTransitionsToRecording() async throws {
         let (loop, _) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertEqual(loop.state, .recording)
         XCTAssertTrue(loop.isActive)
         loop.stop()
     }
 
-    func testManualRecordingInfoIsSet() throws {
+    func testManualRecordingInfoIsSet() async throws {
         let (loop, _) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
         XCTAssertTrue(loop.isManualRecording)
         XCTAssertEqual(loop.manualRecordingInfo?.pid, 1234)
         XCTAssertEqual(loop.manualRecordingInfo?.appName, "Chrome")
@@ -39,30 +42,30 @@ final class ManualRecordingTests: XCTestCase {
         loop.stop()
     }
 
-    func testStartManualRecordingCallsRecorderStart() throws {
+    func testStartManualRecordingCallsRecorderStart() async throws {
         let (loop, mock) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertTrue(mock.startCalled)
         loop.stop()
     }
 
-    func testStartManualRecordingWhileAlreadyRecordingIsNoOp() throws {
+    func testStartManualRecordingWhileAlreadyRecordingIsNoOp() async throws {
         let (loop, _) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting 1")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting 1")
         XCTAssertEqual(loop.state, .recording)
 
         // Trying to start again on the same loop should be a no-op
-        try loop.startManualRecording(pid: 5678, appName: "Firefox", title: "Meeting 2")
+        try await loop.startManualRecording(pid: 5678, appName: "Firefox", title: "Meeting 2")
         XCTAssertEqual(loop.manualRecordingInfo?.pid, 1234)
         loop.stop()
     }
 
     // MARK: - Stop
 
-    func testStopManualRecordingEnqueuesJob() throws {
+    func testStopManualRecordingEnqueuesJob() async throws {
         let queue = PipelineQueue()
         let (loop, _) = makeLoop(pipelineQueue: queue)
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
 
         loop.stopManualRecording()
 
@@ -71,9 +74,9 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertEqual(queue.jobs.first?.appName, "Chrome")
     }
 
-    func testStopManualRecordingTransitionsToIdle() throws {
+    func testStopManualRecordingTransitionsToIdle() async throws {
         let (loop, _) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
 
         loop.stopManualRecording()
 
@@ -82,9 +85,9 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertNil(loop.manualRecordingInfo)
     }
 
-    func testStopManualRecordingCallsRecorderStop() throws {
+    func testStopManualRecordingCallsRecorderStop() async throws {
         let (loop, mock) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
 
         loop.stopManualRecording()
 
@@ -93,9 +96,9 @@ final class ManualRecordingTests: XCTestCase {
 
     // MARK: - Stop cleanup
 
-    func testStopCleansUpManualRecording() throws {
+    func testStopCleansUpManualRecording() async throws {
         let (loop, _) = makeLoop()
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertTrue(loop.isManualRecording)
 
         loop.stop()
@@ -107,14 +110,14 @@ final class ManualRecordingTests: XCTestCase {
 
     // MARK: - State change callback
 
-    func testManualRecordingTriggersStateChangeCallback() throws {
+    func testManualRecordingTriggersStateChangeCallback() async throws {
         let (loop, _) = makeLoop()
         var transitions: [(WatchLoop.State, WatchLoop.State)] = []
         loop.onStateChange = { old, new in
             transitions.append((old, new))
         }
 
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertEqual(transitions.count, 1)
         XCTAssertEqual(transitions[0].0, .idle)
         XCTAssertEqual(transitions[0].1, .recording)
@@ -127,12 +130,12 @@ final class ManualRecordingTests: XCTestCase {
 
     // MARK: - Auto-watch interaction
 
-    func testStartManualRecordingStopsAutoWatch() throws {
+    func testStartManualRecordingStopsAutoWatch() async throws {
         let (loop, _) = makeLoop()
         loop.start()
         XCTAssertEqual(loop.state, .watching)
 
-        try loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertEqual(loop.state, .recording)
         XCTAssertTrue(loop.isManualRecording)
         loop.stop()

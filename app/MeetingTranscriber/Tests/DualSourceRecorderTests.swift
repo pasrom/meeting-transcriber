@@ -169,6 +169,11 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: wav1.path))
     }
 
+    func testRecorderErrorPermissionDeniedDescription() {
+        let error = RecorderError.permissionDenied("Microphone broken")
+        XCTAssertEqual(error.errorDescription, "Permission problem: Microphone broken")
+    }
+
     func testCleanupEmptyDirectory() throws {
         let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup_empty_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
