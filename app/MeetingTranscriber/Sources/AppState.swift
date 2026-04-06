@@ -266,7 +266,9 @@ final class AppState {
 
     func handlePermissionHealth(_ result: HealthCheckResult) {
         permissionHealth = result
+        print("[PermissionHealthCheck] screen=\(result.screenRecording) mic=\(result.microphone) healthy=\(result.isHealthy) problems=\(result.problems)")
         if !result.isHealthy {
+            print("[PermissionHealthCheck] Sending notification: \(result.notificationBody)")
             notifier.notify(
                 title: "Permission Problem",
                 body: result.notificationBody,

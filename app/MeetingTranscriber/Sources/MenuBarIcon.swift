@@ -95,6 +95,14 @@ enum MenuBarIcon {
             case .processing:
                 drawProtocolAnimation(in: rect, frame: frame)
 
+            case .error:
+                // Use menu bar foreground color since this badge is non-template
+                let isDark = NSApp?.effectiveAppearance
+                    .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                (isDark ? NSColor.white : NSColor.black).setFill()
+                drawRecordingAnimation(in: rect, frame: 0)
+                drawExclamationBadge(in: rect)
+
             case .updateAvailable:
                 drawRecordingAnimation(in: rect, frame: 0)
                 drawUpdateArrow(in: rect)
@@ -105,7 +113,7 @@ enum MenuBarIcon {
 
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = badge != .error
         return image
     }
 
@@ -198,6 +206,38 @@ enum MenuBarIcon {
                 yRadius: barWidth / 2,
             ).fill()
         }
+    }
+
+    // MARK: - Error Badge (exclamation mark in bottom-right)
+
+    private static func drawExclamationBadge(in rect: NSRect) {
+        let size: CGFloat = 7.0
+        let margin: CGFloat = 0.5
+        let cx = rect.maxX - size / 2 - margin
+        let cy = rect.minY + size / 2 + margin
+
+        // Red circle
+        NSColor.systemRed.setFill()
+        NSBezierPath(
+            ovalIn: NSRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size),
+        ).fill()
+
+        // White "!" on top
+        NSColor.white.setFill()
+
+        // Stem
+        let stemW: CGFloat = 1.3
+        let stemH: CGFloat = 2.8
+        let stemY = cy + size / 2 - 1.8 - stemH
+        NSBezierPath(
+            roundedRect: NSRect(x: cx - stemW / 2, y: stemY, width: stemW, height: stemH),
+            xRadius: stemW / 2, yRadius: stemW / 2,
+        ).fill()
+
+        // Dot
+        let dotSize: CGFloat = 1.3
+        let dotY = cy - size / 2 + 1.0
+        NSBezierPath(ovalIn: NSRect(x: cx - dotSize / 2, y: dotY, width: dotSize, height: dotSize)).fill()
     }
 
     // MARK: - Update Available (small upward arrow badge in bottom-right)

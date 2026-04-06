@@ -16,7 +16,11 @@ final class MenuBarIconTests: XCTestCase {
     func testAllBadgeKindsProduceValidImages() {
         for badge in BadgeKind.allCases {
             let image = MenuBarIcon.image(badge: badge)
-            XCTAssertTrue(image.isTemplate, "Badge \(badge) should produce a template image")
+            if badge == .error {
+                XCTAssertFalse(image.isTemplate, "Error badge should be non-template (colored)")
+            } else {
+                XCTAssertTrue(image.isTemplate, "Badge \(badge) should produce a template image")
+            }
             XCTAssertEqual(image.size.width, 18, accuracy: 0.01, "Badge \(badge) width")
             XCTAssertEqual(image.size.height, 18, accuracy: 0.01, "Badge \(badge) height")
         }
