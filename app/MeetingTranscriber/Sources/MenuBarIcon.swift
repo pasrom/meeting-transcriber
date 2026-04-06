@@ -254,6 +254,7 @@ extension BadgeKind {
         transcriberState: TranscriberState,
         activeJobState: JobState?,
         updateAvailable: Bool,
+        permissionProblem: Bool = false,
     ) -> BadgeKind {
         if watchLoopActive {
             if watchLoopState == .recording { return .recording }
@@ -272,6 +273,7 @@ extension BadgeKind {
         case .some: return .processing
         case .none: break
         }
+        if permissionProblem { return .error }
         if updateAvailable { return .updateAvailable }
         return .inactive
     }

@@ -348,4 +348,40 @@ final class MenuBarIconTests: XCTestCase {
         )
         XCTAssertEqual(result, .inactive)
     }
+
+    func testCompute_permissionBroken_returnsError() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: false,
+            permissionProblem: true,
+        )
+        XCTAssertEqual(result, .error)
+    }
+
+    func testCompute_recordingOverridesPermissionProblem() {
+        let result = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .recording,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: false,
+            permissionProblem: true,
+        )
+        XCTAssertEqual(result, .recording)
+    }
+
+    func testCompute_permissionProblemOverridesUpdate() {
+        let result = BadgeKind.compute(
+            watchLoopActive: false,
+            watchLoopState: .idle,
+            transcriberState: .idle,
+            activeJobState: nil,
+            updateAvailable: true,
+            permissionProblem: true,
+        )
+        XCTAssertEqual(result, .error)
+    }
 }
