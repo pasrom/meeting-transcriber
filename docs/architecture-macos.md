@@ -32,6 +32,8 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `SettingsView.swift` | Settings window (apps, recording, transcription, diarization) |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `AppPickerView.swift` | App picker for manual recording |
+| `MenuBarIcon.swift` | Animated waveform menu bar icon, `BadgeKind.compute()` pure function |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
 
 ### Core Pipeline
@@ -62,6 +64,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | File | Role |
 |------|------|
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, mute masking, WAV I/O |
+| `FFmpegHelper.swift` | ffmpeg CLI detection + audio extraction for MKV/WebM/OGG |
 | `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
 | `FluidVAD.swift` | VAD preprocessing via FluidAudio Silero v6 — silence trimming + `VadSegmentMap` timeline remapping |
@@ -76,6 +79,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `AXHelper.swift` | Shared accessibility API helper (MuteDetector + ParticipantReader) |
 | `NotificationManager.swift` | macOS notifications |
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
+| `UpdateChecker.swift` | GitHub release update checker |
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |

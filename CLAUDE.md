@@ -242,7 +242,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **OpenAI API** | Yes | Yes (only LLM option) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~795 | fewer (CLI tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~950 | fewer (CLI tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
