@@ -76,12 +76,13 @@ jobs:
           TEAM_ID: ${{ secrets.TEAM_ID }}
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         run: |
-          # Use tag name as version (v0.3.0-rc1 → 0.3.0-rc1), fall back to VERSION file
+          # Tag builds: use tag as version and staple notarization for offline Gatekeeper
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             BUILD_VERSION="--version=${GITHUB_REF_NAME#v}"
+            STAPLE_FLAG="--staple"
           fi
           if [ "${{ matrix.variant }}" = "homebrew" ] && [ -n "${DEVELOPER_ID:-}" ]; then
-            ./scripts/build_release.sh ${BUILD_VERSION:-}
+            ./scripts/build_release.sh $STAPLE_FLAG ${BUILD_VERSION:-}
           else
             ./scripts/build_release.sh ${{ matrix.build-flags }} --no-notarize ${BUILD_VERSION:-}
           fi
