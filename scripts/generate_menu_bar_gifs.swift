@@ -132,6 +132,34 @@ func drawProtocol(in rect: NSRect, frame: Int) {
     }
 }
 
+// Red circle with white "!" in the bottom-right corner.
+// Mirrors MenuBarIcon.drawExclamationBadge — used for the permission-problem overlay.
+func drawExclamationBadge(in rect: NSRect) {
+    let size: CGFloat = 7.0
+    let margin: CGFloat = 0.5
+    let cx = rect.maxX - size / 2 - margin
+    let cy = rect.minY + size / 2 + margin
+
+    NSColor.systemRed.setFill()
+    NSBezierPath(
+        ovalIn: NSRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size),
+    ).fill()
+
+    NSColor.white.setFill()
+
+    let stemW: CGFloat = 1.3
+    let stemH: CGFloat = 2.8
+    let stemY = cy + size / 2 - 1.8 - stemH
+    NSBezierPath(
+        roundedRect: NSRect(x: cx - stemW / 2, y: stemY, width: stemW, height: stemH),
+        xRadius: stemW / 2, yRadius: stemW / 2,
+    ).fill()
+
+    let dotSize: CGFloat = 1.3
+    let dotY = cy - size / 2 + 1.0
+    NSBezierPath(ovalIn: NSRect(x: cx - dotSize / 2, y: dotY, width: dotSize, height: dotSize)).fill()
+}
+
 // MARK: - Rendering
 
 let nativeSize: CGFloat = 18
@@ -227,5 +255,14 @@ writeGIF(name: "menu-bar-diarizing.gif", frames: diarFrames)
 // Protocol
 let protoFrames = (0 ..< frameCount).map { i in renderFrame { drawProtocol(in: $0, frame: i) } }
 writeGIF(name: "menu-bar-protocol.gif", frames: protoFrames)
+
+// Permission problem (static: idle waveform with red exclamation badge overlay).
+// Shown whenever Mic, Screen Recording, or Accessibility is denied or broken.
+let permissionFrame = renderFrame { rect in
+    drawIdle(in: rect)
+    drawExclamationBadge(in: rect)
+}
+
+writeGIF(name: "menu-bar-permission.gif", frames: [permissionFrame, permissionFrame], delay: 1.0)
 
 print("Done!")
