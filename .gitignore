@@ -11,6 +11,9 @@ tools/audiotap/.build/
 # Release build artifacts
 .build/
 
+# Git worktrees
+.worktrees/
+
 # Python
 __pycache__/
 *.pyc
