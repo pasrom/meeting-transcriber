@@ -73,17 +73,42 @@ enum MenuBarIcon {
     // MARK: - Public
 
     /// Returns a pre-rendered 18x18pt template `NSImage` for the given badge and animation frame.
-    static func image(badge: BadgeKind, animationFrame: Int = 0) -> NSImage {
+    ///
+    /// If `permissionOverlay` is true, a red exclamation badge is composited over the base icon
+    /// to signal a permission problem — this bypasses the pre-rendered cache and forces a
+    /// non-template image, because the overlay is red (template rendering is monochrome).
+    static func image(
+        badge: BadgeKind,
+        animationFrame: Int = 0,
+        permissionOverlay: Bool = false,
+    ) -> NSImage {
+        if permissionOverlay {
+            return renderImage(badge: badge, frame: animationFrame, permissionOverlay: true)
+        }
         guard let frames = cache[badge] else { return renderImage(badge: badge, frame: animationFrame) }
         return frames[animationFrame % frames.count]
     }
 
     // MARK: - Rendering
 
-    private static func renderImage(badge: BadgeKind, frame: Int) -> NSImage {
+    private static func renderImage(
+        badge: BadgeKind,
+        frame: Int,
+        permissionOverlay: Bool = false,
+    ) -> NSImage {
         let size = NSSize(width: 18, height: 18)
+        // The `.error` badge and the permission overlay both need an explicit foreground color
+        // (matching the menu bar appearance), because the image is non-template (the red dot
+        // must stay red in both light and dark mode).
+        let needsExplicitForeground = badge == .error || permissionOverlay
         let image = NSImage(size: size, flipped: false) { rect in
-            NSColor.black.setFill()
+            if needsExplicitForeground {
+                let isDark = NSApp?.effectiveAppearance
+                    .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                (isDark ? NSColor.white : NSColor.black).setFill()
+            } else {
+                NSColor.black.setFill()
+            }
 
             switch badge {
             case .transcribing:
@@ -96,12 +121,7 @@ enum MenuBarIcon {
                 drawProtocolAnimation(in: rect, frame: frame)
 
             case .error:
-                // Use menu bar foreground color since this badge is non-template
-                let isDark = NSApp?.effectiveAppearance
-                    .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                (isDark ? NSColor.white : NSColor.black).setFill()
                 drawRecordingAnimation(in: rect, frame: 0)
-                drawExclamationBadge(in: rect)
 
             case .updateAvailable:
                 drawRecordingAnimation(in: rect, frame: 0)
@@ -111,9 +131,13 @@ enum MenuBarIcon {
                 drawRecordingAnimation(in: rect, frame: frame)
             }
 
+            if needsExplicitForeground {
+                drawExclamationBadge(in: rect)
+            }
+
             return true
         }
-        image.isTemplate = badge != .error
+        image.isTemplate = !needsExplicitForeground
         return image
     }
 

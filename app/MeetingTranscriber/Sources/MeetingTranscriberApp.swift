@@ -60,6 +60,7 @@ struct MeetingTranscriberApp: App {
                 Image(nsImage: MenuBarIcon.image(
                     badge: appState.currentBadge,
                     animationFrame: iconAnimationFrame,
+                    permissionOverlay: appState.permissionHealth?.isHealthy == false,
                 ))
             }
             .onReceive(iconTimer) { _ in

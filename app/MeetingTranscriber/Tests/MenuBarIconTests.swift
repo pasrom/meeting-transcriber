@@ -58,6 +58,30 @@ final class MenuBarIconTests: XCTestCase {
         XCTAssertEqual(normal.size, wrapped.size)
     }
 
+    // MARK: - Permission Overlay
+
+    func testPermissionOverlayIsNonTemplate() {
+        // Recording is normally a template image — with the overlay it must become non-template
+        // because the red exclamation dot can't be monochrome.
+        let image = MenuBarIcon.image(badge: .recording, animationFrame: 0, permissionOverlay: true)
+        XCTAssertFalse(image.isTemplate)
+    }
+
+    func testPermissionOverlayAppliesToAllActiveBadges() {
+        for badge in BadgeKind.allCases {
+            let image = MenuBarIcon.image(badge: badge, animationFrame: 0, permissionOverlay: true)
+            XCTAssertFalse(image.isTemplate, "Overlay on \(badge) should be non-template")
+            XCTAssertEqual(image.size.width, 18, accuracy: 0.01)
+            XCTAssertEqual(image.size.height, 18, accuracy: 0.01)
+        }
+    }
+
+    func testPermissionOverlayDefaultsToFalse() {
+        let withoutParam = MenuBarIcon.image(badge: .recording, animationFrame: 0)
+        let explicitFalse = MenuBarIcon.image(badge: .recording, animationFrame: 0, permissionOverlay: false)
+        XCTAssertEqual(withoutParam.isTemplate, explicitFalse.isTemplate)
+    }
+
     func testLargeAnimationFrameDoesNotCrash() {
         for badge in BadgeKind.allCases where badge.isAnimated {
             let image = MenuBarIcon.image(badge: badge, animationFrame: 999)
