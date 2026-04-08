@@ -53,7 +53,7 @@ final class ParakeetEngine: TranscribingEngine {
                 modelState = .loading
                 downloadProgress = 1.0
                 let manager = AsrManager(config: .default)
-                try await manager.initialize(models: models)
+                try await manager.loadModels(models)
                 asrManager = manager
                 modelState = .loaded
 
