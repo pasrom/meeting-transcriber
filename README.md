@@ -145,6 +145,20 @@ The app uses an animated waveform icon in the menu bar that reflects the current
 
 **Idle** → **Recording** (bars bounce) → **Transcribing** (bars morph to text) → **Diarizing** (bars split into groups) → **Protocol** (lines appear sequentially)
 
+### Permission problem badge
+
+<p>
+<img src="docs/menu-bar-permission.gif" width="80" alt="Permission problem">
+</p>
+
+A red exclamation mark in the bottom-right corner is overlaid on top of the current icon (idle, recording, transcribing, …) whenever one of the required permissions is missing or broken. It means at least one of the following is not in a working state:
+
+- **Microphone** — denied, or granted but the capture engine can't open the device
+- **Screen Recording** — denied, or granted but `CGWindowListCopyWindowInfo` returns no window titles (TCC state out of sync)
+- **Accessibility** — denied, or granted but the AX API refuses to read Teams participant/mute info
+
+The health check distinguishes *denied* from *broken*. "Broken" usually means the permission is toggled on in System Settings but macOS hasn't actually wired it through — the fix is to toggle the permission off and on again for Meeting Transcriber under **System Settings → Privacy & Security**. Open the menu bar dropdown to see which specific permission is affected; a notification is also posted when the state changes.
+
 ---
 
 ## Usage

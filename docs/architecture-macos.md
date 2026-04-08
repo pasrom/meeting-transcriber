@@ -315,6 +315,22 @@ AppSettings (UserDefaults)
 | Accessibility | Mute detection, participant reading | Teams AX tree |
 | None | App audio capture | CATapDescription (purple dot only) |
 
+### Permission health check + badge overlay
+
+`PermissionHealthCheck` verifies each of the three TCC permissions by combining the system verdict with a live probe (e.g. `CGWindowListCopyWindowInfo` returning non-empty window titles for Screen Recording). Each permission resolves to `PermissionStatus.healthy | .denied | .broken | .notDetermined` — `.broken` means "TCC says allowed but the probe disagrees," which happens when macOS hasn't actually wired the permission through and the user needs to toggle it off and on in System Settings.
+
+`WatchLoop` runs the check on startup and `AppState` re-runs it on app activation. When the result is unhealthy:
+
+1. `MeetingTranscriberApp` passes `permissionOverlay: true` to `MenuBarIcon.image(...)`, which composites a red circle with a white "!" in the bottom-right corner over the current badge (`MenuBarIcon.drawExclamationBadge`). This bypasses the cached template icons and renders a non-template image because the overlay must stay red in both light and dark mode.
+2. `BadgeKind.compute(...)` returns `.error` when idle-with-problem, so the icon also reflects the problem state when no job is active.
+3. A notification is posted via `NotificationManager` with the list of affected permissions (deduplicated — only re-posted when the problem set actually changes).
+
+The overlay lives over the *currently active* animation (idle, recording, transcribing, …) so the user still sees what the app is doing and is simultaneously told "one of the permissions is wrong."
+
+<p>
+<img src="menu-bar-permission.gif" width="80" alt="Permission problem badge">
+</p>
+
 ---
 
 ## Key Architectural Decisions
