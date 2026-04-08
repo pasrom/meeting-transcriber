@@ -99,6 +99,14 @@ struct MeetingTranscriberApp: App {
             .task {
                 await appState.checkPermissions()
             }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                // Re-check permissions when the user returns to the app (e.g. from System
+                // Settings after toggling a permission). Debounced so rapid Cmd-Tab cycles
+                // don't repeatedly churn the mic HAL via the 500 ms probe.
+                Task { @MainActor in
+                    await appState.checkPermissions(minimumInterval: 3)
+                }
+            }
         }
 
         Window("Name Speakers", id: "speaker-naming") {

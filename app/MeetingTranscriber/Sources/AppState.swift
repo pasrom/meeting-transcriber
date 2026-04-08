@@ -265,10 +265,15 @@ final class AppState {
     // MARK: - Permission Health
 
     func handlePermissionHealth(_ result: HealthCheckResult) {
+        let previousProblems = permissionHealth?.problems ?? []
         permissionHealth = result
-        print("[PermissionHealthCheck] screen=\(result.screenRecording) mic=\(result.microphone) healthy=\(result.isHealthy) problems=\(result.problems)")
-        if !result.isHealthy {
-            print("[PermissionHealthCheck] Sending notification: \(result.notificationBody)")
+        let line = "[PermissionHealthCheck] screen=\(result.screenRecording) mic=\(result.microphone) " +
+            "ax=\(result.accessibility) healthy=\(result.isHealthy) problems=\(result.problems)"
+        PermissionHealthCheck.debugLog(line)
+
+        let problems = result.problems
+        if !problems.isEmpty, problems != previousProblems {
+            PermissionHealthCheck.debugLog("[PermissionHealthCheck] Sending notification: \(result.notificationBody)")
             notifier.notify(
                 title: "Permission Problem",
                 body: result.notificationBody,
@@ -276,8 +281,24 @@ final class AppState {
         }
     }
 
-    func checkPermissions() async {
+    /// Timestamp of the last completed `checkPermissions()` run. Used to debounce repeated
+    /// calls triggered by `NSApplication.didBecomeActiveNotification` so the 500 ms mic
+    /// probe doesn't churn the audio HAL on every Cmd-Tab.
+    private var lastPermissionCheckAt: Date?
+
+    /// Run the live permission health check.
+    ///
+    /// - Parameter minimumInterval: if non-nil, skip the run when the last completed check
+    ///   happened less than `minimumInterval` seconds ago. The initial startup call passes
+    ///   `nil` so it always runs; the `didBecomeActive` handler passes a small value to
+    ///   avoid HAL churn on rapid re-activations.
+    func checkPermissions(minimumInterval: TimeInterval? = nil) async {
+        if let minimumInterval, let last = lastPermissionCheckAt,
+           Date().timeIntervalSince(last) < minimumInterval {
+            return
+        }
         let result = await PermissionHealthCheck.runLive()
+        lastPermissionCheckAt = Date()
         handlePermissionHealth(result)
     }
 

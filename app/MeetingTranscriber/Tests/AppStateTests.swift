@@ -636,6 +636,47 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.handlePermissionHealth(result)
         XCTAssertEqual(state.permissionHealth, result)
     }
+
+    func testHandlePermissionHealthDedupsRepeatedProblem() {
+        let notifier = RecordingNotifier()
+        let state = AppState(notifier: notifier)
+        let broken = HealthCheckResult(screenRecording: .healthy, microphone: .broken)
+        state.handlePermissionHealth(broken)
+        state.handlePermissionHealth(broken)
+        state.handlePermissionHealth(broken)
+        XCTAssertEqual(notifier.calls.count, 1, "Identical problem set should only notify once")
+    }
+
+    func testHandlePermissionHealthReNotifiesAfterRecovery() {
+        let notifier = RecordingNotifier()
+        let state = AppState(notifier: notifier)
+        let broken = HealthCheckResult(screenRecording: .healthy, microphone: .broken)
+        let healthy = HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        state.handlePermissionHealth(broken) // notify #1
+        state.handlePermissionHealth(healthy) // clears dedup memory
+        state.handlePermissionHealth(broken) // notify #2
+        XCTAssertEqual(notifier.calls.count, 2)
+    }
+
+    func testHandlePermissionHealthNotifiesWhenProblemChanges() {
+        let notifier = RecordingNotifier()
+        let state = AppState(notifier: notifier)
+        state.handlePermissionHealth(HealthCheckResult(screenRecording: .healthy, microphone: .broken))
+        state.handlePermissionHealth(HealthCheckResult(screenRecording: .broken, microphone: .healthy))
+        XCTAssertEqual(notifier.calls.count, 2, "Different problem sets should each trigger a notification")
+    }
+
+    func testHandlePermissionHealthAccessibilityBrokenNotifies() {
+        let notifier = RecordingNotifier()
+        let state = AppState(notifier: notifier)
+        state.handlePermissionHealth(HealthCheckResult(
+            screenRecording: .healthy,
+            microphone: .healthy,
+            accessibility: .broken,
+        ))
+        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertTrue(notifier.calls.first?.body.contains("Accessibility") ?? false)
+    }
 }
 
 // MARK: - Private helpers
