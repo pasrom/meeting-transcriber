@@ -35,6 +35,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-tags: true
 
       - name: Cache SPM dependencies
         uses: actions/cache@v5
@@ -92,7 +94,9 @@ jobs:
           else
             VERSION=$(cat VERSION | tr -d '[:space:]')
           fi
+          PRERELEASE=$([[ "${GITHUB_REF_NAME}" == *-* ]] && echo true || echo false)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Compute DMG SHA256
         if: matrix.variant == 'homebrew'
@@ -110,13 +114,20 @@ jobs:
           path: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           retention-days: 3
 
-      - name: Find previous stable release
+      - name: Find previous release tag for changelog
         if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
         id: prev
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || echo "")
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          if [[ "$CURRENT_TAG" == *-* ]]; then
+            # Prerelease (RC): find the immediately preceding tag (RC or stable)
+            TAG=$(git tag --sort=-v:refname | awk -v cur="$CURRENT_TAG" 'found {print; exit} $0 == cur {found=1}')
+          else
+            # Stable release: find previous stable release only
+            TAG=$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty' 2>/dev/null || echo "")
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
@@ -126,7 +137,7 @@ jobs:
           artifacts: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           generateReleaseNotes: true
           generateReleaseNotesPreviousTag: ${{ steps.prev.outputs.tag }}
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           body: |
             ## MeetingTranscriber ${{ steps.version.outputs.version }}
 
