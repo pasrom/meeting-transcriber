@@ -166,31 +166,48 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           SHA="${{ steps.sha.outputs.sha256 }}"
+          PRERELEASE="${{ steps.version.outputs.prerelease }}"
 
           DMG=".build/release/MeetingTranscriber-${VERSION}.dmg"
 
           # Upload DMG to public tap repo (main repo is private)
+          PRERELEASE_FLAG=""
+          [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
+
           gh release create "v${VERSION}" "$DMG" \
             --repo pasrom/homebrew-meeting-transcriber \
             --title "v${VERSION}" \
             --notes "DMG for Homebrew Cask distribution" \
+            $PRERELEASE_FLAG \
             || gh release upload "v${VERSION}" "$DMG" \
               --repo pasrom/homebrew-meeting-transcriber --clobber
 
-          # Clone the tap repo and update Cask formula
+          # Clone the tap repo and update the appropriate Cask formula
           git clone https://x-access-token:${GH_TOKEN}@github.com/pasrom/homebrew-meeting-transcriber.git /tmp/tap
           cd /tmp/tap
 
-          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/meeting-transcriber.rb
-          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" Casks/meeting-transcriber.rb
+          if [ "$PRERELEASE" = "true" ]; then
+            CASK="Casks/meeting-transcriber@beta.rb"
+          else
+            CASK="Casks/meeting-transcriber.rb"
+          fi
 
-          echo "Updated Cask formula:"
-          cat Casks/meeting-transcriber.rb
+          # Seed beta cask from source repo if it doesn't exist in tap yet
+          if [ ! -f "$CASK" ]; then
+            mkdir -p "$(dirname "$CASK")"
+            cp "${GITHUB_WORKSPACE}/$CASK" "$CASK"
+          fi
+
+          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" "$CASK"
+          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" "$CASK"
+
+          echo "Updated Cask formula ($CASK):"
+          cat "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/meeting-transcriber.rb
-          git commit -m "Update meeting-transcriber to v${VERSION}"
+          git add "$CASK"
+          git commit -m "Update $(basename "$CASK" .rb) to v${VERSION}"
           git push
 
       - name: Cleanup keychain
