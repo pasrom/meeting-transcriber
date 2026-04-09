@@ -4,20 +4,25 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "FluidDiarizer")
 
+protocol OfflineDiarizationProcessing {
+    mutating func prepare(numSpeakers: Int?) async throws
+    func process(audioPath: URL) async throws -> DiarizationResult
+}
+
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
 class FluidDiarizer: DiarizationProvider {
     let mode: DiarizerMode
+    private var offlineProcessor: OfflineDiarizationProcessing
 
-    private var offlineManager: OfflineDiarizerManager?
     private var sortformerDiarizer: SortformerDiarizer?
-    private var currentNumSpeakers: Int?
 
     var isAvailable: Bool {
         true
     }
 
-    init(mode: DiarizerMode = .offline) {
+    init(mode: DiarizerMode = .offline, offlineProcessor: OfflineDiarizationProcessing? = nil) {
         self.mode = mode
+        self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor()
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
@@ -39,38 +44,31 @@ class FluidDiarizer: DiarizationProvider {
         }
     }
 
-    // MARK: - Offline Mode (OfflineDiarizerManager)
+    // MARK: - Offline Mode
 
     private func runOffline(
         audioPath: URL,
         numSpeakers: Int?,
     ) async throws -> MeetingTranscriber.DiarizationResult {
-        // Recreate manager if numSpeakers changed
-        if offlineManager == nil || numSpeakers != currentNumSpeakers {
-            var config = OfflineDiarizerConfig()
-            if let n = numSpeakers, n > 0 {
-                config = config.withSpeakers(exactly: n)
-            }
-            let newManager = OfflineDiarizerManager(config: config)
-            try await newManager.prepareModels()
-            offlineManager = newManager
-            currentNumSpeakers = numSpeakers
-            logger.info("FluidAudio offline models ready")
-        }
+        try await offlineProcessor.prepare(numSpeakers: numSpeakers)
 
         logger.info("Starting offline diarization: \(audioPath.lastPathComponent)")
-        // swiftlint:disable:next force_unwrapping
-        let fluidResult = try await offlineManager!.process(audioPath)
 
-        let segments = fluidResult.segments.map { seg in
-            MeetingTranscriber.DiarizationResult.Segment(
-                start: TimeInterval(seg.startTimeSeconds),
-                end: TimeInterval(seg.endTimeSeconds),
-                speaker: Self.normalizeSpeakerId(seg.speakerId),
+        do {
+            return try await offlineProcessor.process(audioPath: audioPath)
+        } catch {
+            // If numSpeakers was specified, retry with auto-detect as fallback
+            guard let numSpeakers, numSpeakers > 0 else {
+                throw error
+            }
+
+            logger.warning(
+                "Diarization failed with numSpeakers=\(numSpeakers), retrying with auto-detect: \(error.localizedDescription)",
             )
-        }
 
-        return buildResult(segments: segments, speakerDatabase: fluidResult.speakerDatabase)
+            try await offlineProcessor.prepare(numSpeakers: nil)
+            return try await offlineProcessor.process(audioPath: audioPath)
+        }
     }
 
     // MARK: - Sortformer Mode (SortformerDiarizer)
@@ -99,12 +97,12 @@ class FluidDiarizer: DiarizationProvider {
             }
         }
 
-        return buildResult(segments: segments, speakerDatabase: nil)
+        return Self.buildResult(segments: segments, speakerDatabase: nil)
     }
 
     // MARK: - Shared Result Conversion
 
-    func buildResult(
+    static func buildResult(
         segments unsorted: [MeetingTranscriber.DiarizationResult.Segment],
         speakerDatabase: [String: [Float]]?, // swiftlint:disable:this discouraged_optional_collection
     ) -> MeetingTranscriber.DiarizationResult {
@@ -131,5 +129,43 @@ class FluidDiarizer: DiarizationProvider {
             autoNames: [:],
             embeddings: embeddings,
         )
+    }
+}
+
+// MARK: - FluidAudio Offline Processor (production implementation)
+
+struct FluidOfflineProcessor: OfflineDiarizationProcessing {
+    private var manager: OfflineDiarizerManager?
+    private var currentNumSpeakers: Int?
+
+    mutating func prepare(numSpeakers: Int?) async throws {
+        guard manager == nil || numSpeakers != currentNumSpeakers else { return }
+
+        // Explicitly deallocate previous manager to prevent resource conflicts
+        manager = nil
+        var config = OfflineDiarizerConfig()
+        if let n = numSpeakers, n > 0 {
+            config = config.withSpeakers(min: 1, max: n)
+        }
+        let newManager = OfflineDiarizerManager(config: config)
+        try await newManager.prepareModels()
+        manager = newManager
+        currentNumSpeakers = numSpeakers
+        logger.info("FluidAudio offline models ready")
+    }
+
+    func process(audioPath: URL) async throws -> DiarizationResult {
+        guard let manager else {
+            throw DiarizationError.notPrepared
+        }
+        let fluidResult = try await manager.process(audioPath)
+        let segments = fluidResult.segments.map { seg in
+            DiarizationResult.Segment(
+                start: TimeInterval(seg.startTimeSeconds),
+                end: TimeInterval(seg.endTimeSeconds),
+                speaker: FluidDiarizer.normalizeSpeakerId(seg.speakerId),
+            )
+        }
+        return FluidDiarizer.buildResult(segments: segments, speakerDatabase: fluidResult.speakerDatabase)
     }
 }

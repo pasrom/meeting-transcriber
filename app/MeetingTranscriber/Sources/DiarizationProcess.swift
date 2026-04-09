@@ -179,10 +179,12 @@ enum DiarizationProcess {
 
 enum DiarizationError: LocalizedError {
     case notAvailable
+    case notPrepared
 
     var errorDescription: String? {
         switch self {
         case .notAvailable: "Diarization not available"
+        case .notPrepared: "Offline diarization manager not prepared"
         }
     }
 }
