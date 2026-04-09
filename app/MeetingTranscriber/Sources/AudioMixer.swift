@@ -396,6 +396,12 @@ enum AudioMixer {
         }
 
         try file.write(from: buffer)
+
+        // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path,
+        )
     }
 }
 
