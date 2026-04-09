@@ -155,6 +155,18 @@ final class AudioMixerTests: XCTestCase {
         XCTAssertGreaterThan(size, 44) // WAV header is 44 bytes minimum
     }
 
+    func testSaveWAVSetsOwnerOnlyPermissions() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+        let wavURL = tmpDir.appendingPathComponent("test_perms_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: wavURL) }
+
+        try AudioMixer.saveWAV(samples: [0.0, 0.5, -0.5], sampleRate: 16000, url: wavURL)
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: wavURL.path)
+        let perms = attrs[.posixPermissions] as? Int
+        XCTAssertEqual(perms, 0o600, "Audio files must be owner-only (0600)")
+    }
+
     // MARK: - Multi-format Loading
 
     func testLoadAudioAsFloat32WAV() async throws {

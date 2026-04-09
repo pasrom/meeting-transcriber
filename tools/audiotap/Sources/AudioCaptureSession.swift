@@ -37,7 +37,12 @@ public class AudioCaptureSession {
     /// Start capturing app audio (and optionally mic audio).
     public func start() throws {
         // Create app output file and get its file descriptor
-        FileManager.default.createFile(atPath: appOutputURL.path, contents: nil)
+        // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
+        FileManager.default.createFile(
+            atPath: appOutputURL.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600],
+        )
         let handle = try FileHandle(forWritingTo: appOutputURL)
 
         let capture = AppAudioCapture(

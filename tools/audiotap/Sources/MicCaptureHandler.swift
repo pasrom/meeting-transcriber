@@ -105,6 +105,11 @@ public class MicCaptureHandler {
                 AVLinearPCMIsNonInterleaved: false,
             ]
             outputFile = try AVAudioFile(forWriting: outputURL, settings: wavSettings)
+            // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: outputURL.path,
+            )
         }
 
         converter = nil
