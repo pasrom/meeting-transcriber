@@ -131,6 +131,29 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(name.hasSuffix("_abcd.txt"))
     }
 
+    // MARK: - Slug Sanitization (Path Traversal Prevention)
+
+    func testSanitizeSlugStripsPathSeparators() {
+        let slug = ProtocolGenerator.sanitizeSlug("../../etc/passwd")
+        XCTAssertFalse(slug.contains("/"), "Slug must not contain path separators")
+        XCTAssertFalse(slug.contains(".."), "Slug must not contain parent directory traversal")
+    }
+
+    func testSanitizeSlugPreservesAlphanumericAndHyphens() {
+        let slug = ProtocolGenerator.sanitizeSlug("Team-Meeting 2024")
+        XCTAssertEqual(slug, "team-meeting_2024")
+    }
+
+    func testSanitizeSlugEmptyTitleFallback() {
+        let slug = ProtocolGenerator.sanitizeSlug("///")
+        XCTAssertEqual(slug, "meeting")
+    }
+
+    func testFilenameWithPathTraversalTitle() {
+        let name = ProtocolGenerator.filename(title: "../../etc/passwd", ext: "md")
+        XCTAssertFalse(name.contains("/"), "Filename must not contain path separators")
+    }
+
     // MARK: - Language Substitution
 
     func testApplyLanguageReplacesPlaceholder() {

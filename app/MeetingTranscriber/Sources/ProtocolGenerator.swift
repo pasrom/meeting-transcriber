@@ -122,13 +122,25 @@ enum ProtocolGenerator {
         return fmt
     }()
 
+    /// Sanitize a title into a safe filename slug (path-traversal safe).
+    /// Falls back to `"meeting"` if no allowed characters remain.
+    private static let slugAllowed = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "-_"))
+
+    static func sanitizeSlug(_ title: String) -> String {
+        let slug = String(title
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "_")
+            .unicodeScalars
+            .filter { slugAllowed.contains($0) }
+            .map(Character.init))
+        return slug.isEmpty ? "meeting" : slug
+    }
+
     /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`
     static func filename(title: String, ext: String) -> String {
         let date = filenameFormatter.string(from: Date())
-        let slug = title
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "_")
-            .filter { !"/:\\\u{0}".contains($0) }
+        let slug = sanitizeSlug(title)
         return "\(date)_\(slug).\(ext)"
     }
 }
