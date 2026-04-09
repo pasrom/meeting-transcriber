@@ -110,6 +110,15 @@ brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
 ```
 
+### Pre-release (RC) via Homebrew
+
+```bash
+brew tap pasrom/meeting-transcriber
+brew install --cask meeting-transcriber@beta
+```
+
+> Note: The stable and beta casks conflict — uninstall one before installing the other.
+
 ### Build from source
 
 ```bash
