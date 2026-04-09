@@ -82,7 +82,8 @@ scripts/
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
-Casks/meeting-transcriber.rb # Homebrew Cask formula
+Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
+Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
 .github/workflows/
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
@@ -144,13 +145,19 @@ The app can be distributed as a self-contained `.app` via Homebrew Cask:
 # Build DMG locally
 ./scripts/build_release.sh
 
-# Install via Homebrew (once published)
+# Install stable via Homebrew
 brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
+
+# Install pre-release (RC) via Homebrew
+brew install --cask meeting-transcriber@beta
 ```
 
+> Note: The stable and beta casks conflict — uninstall one before installing the other.
+
 **Release workflow:** Push a `v*` tag to trigger `.github/workflows/release.yml` which
-builds the DMG on a macOS runner and creates a GitHub Release.
+builds the DMG on a macOS runner and creates a GitHub Release. Stable tags update the
+`meeting-transcriber` cask, pre-release tags (containing `-`) update `meeting-transcriber@beta`.
 
 ## Git Workflow
 
