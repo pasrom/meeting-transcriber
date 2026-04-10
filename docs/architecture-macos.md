@@ -77,6 +77,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `NotificationManager.swift` | macOS notifications |
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
+| `PermissionHealthCheck.swift` | `PermissionStatus`/`PermissionProblem` — functional health probes for all three TCC permissions (denied vs. broken detection) |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 

@@ -43,6 +43,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MicRecorder.swift      # Microphone recording via AVAudioEngine
     PermissionRow.swift    # Permission status row UI component
     Permissions.swift      # Permission checks (mic, screen recording)
+    PermissionHealthCheck.swift # PermissionStatus/PermissionProblem — functional health probes for all three TCC permissions
     ParticipantReader.swift # Reads meeting participants via accessibility
     MeetingPatterns.swift  # App-specific window title patterns
     PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
@@ -65,6 +66,8 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
     SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
   Tests/
+    AudioCaptureResultTests.swift
+    HelpersTests.swift
     MicRestartPolicyTests.swift
     SampleRateQueryTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
