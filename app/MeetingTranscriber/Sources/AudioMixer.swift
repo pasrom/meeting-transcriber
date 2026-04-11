@@ -8,6 +8,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMi
 enum AudioMixer {
     // MARK: - Mix
 
+    /// Maximum plausible mic-to-app delay (seconds). Values beyond this indicate
+    /// a corrupted timestamp (e.g. device restart mid-recording, see #99).
+    static let maxMicDelay: TimeInterval = 30
+
     /// Mix app and mic audio tracks into a single mono WAV.
     ///
     /// Applies echo suppression, delay alignment, then averages the two tracks.
@@ -21,25 +25,31 @@ enum AudioMixer {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
 
+        // Clamp to ±maxMicDelay (see #99).
+        let clampedDelay = min(max(micDelay, -maxMicDelay), maxMicDelay)
+        if clampedDelay != micDelay {
+            logger.warning("micDelay \(micDelay)s outside ±\(Self.maxMicDelay)s — clamped to \(clampedDelay)s")
+        }
+
         // Apply echo suppression
         if !appSamples.isEmpty && !micSamples.isEmpty {
             suppressEcho(
                 appSamples: appSamples,
                 micSamples: &micSamples,
                 sampleRate: sampleRate,
-                micDelay: micDelay,
+                micDelay: clampedDelay,
             )
         }
 
         // Align by mic delay (shift mic samples)
-        if micDelay > 0 {
-            let delaySamples = Int(micDelay * Double(sampleRate))
+        if clampedDelay > 0 {
+            let delaySamples = Int(clampedDelay * Double(sampleRate))
             if delaySamples > 0 && delaySamples < micSamples.count {
                 // Mic started later: prepend zeros
                 micSamples = [Float](repeating: 0, count: delaySamples) + micSamples
             }
-        } else if micDelay < 0 {
-            let delaySamples = Int(-micDelay * Double(sampleRate))
+        } else if clampedDelay < 0 {
+            let delaySamples = Int(-clampedDelay * Double(sampleRate))
             if delaySamples > 0 && delaySamples < appSamples.count {
                 // App started later: prepend zeros to app
                 appSamples = [Float](repeating: 0, count: delaySamples) + appSamples
