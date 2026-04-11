@@ -41,6 +41,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
     AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback, MKV/WebM/OGG via ffmpeg) + mixing to 16kHz mono
     MicRecorder.swift      # Microphone recording via AVAudioEngine
+    PermissionHealthCheck.swift # Permission health check (TCC verdict + live probe → PermissionStatus)
     PermissionRow.swift    # Permission status row UI component
     Permissions.swift      # Permission checks (mic, screen recording)
     ParticipantReader.swift # Reads meeting participants via accessibility
@@ -231,6 +232,11 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `MenuBarIcon` renders animated waveform reflecting pipeline state (idle, recording, transcribing, diarizing, protocol).
 - `AppPickerView` enables manual recording of any app via app picker.
 - `UpdateChecker` checks GitHub releases for newer versions, shows badge on menu bar icon.
+
+**Permission health check:**
+- `PermissionHealthCheck` verifies each TCC permission by combining the system verdict with a live probe. Each resolves to `PermissionStatus` (`.healthy | .denied | .broken | .notDetermined`). `.broken` means TCC says allowed but the probe disagrees — fix is to toggle the permission off and on in System Settings.
+- `WatchLoop` runs the check on startup; `AppState` re-runs on app activation.
+- When unhealthy: `MenuBarIcon` composites a red "!" badge over the current icon (non-template, stays red in dark mode). `BadgeKind.compute()` returns `.error` when idle with a problem. A deduped notification is posted via `NotificationManager`.
 
 ## Critical Notes
 
