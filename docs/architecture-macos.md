@@ -78,6 +78,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
+| `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 
 ---
