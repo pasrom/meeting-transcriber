@@ -156,6 +156,60 @@ class MockEngine: TranscribingEngine {
     }
 }
 
+// MARK: - Meeting Simulator (for E2E tests)
+
+/// Helpers for building and launching the meeting-simulator tool.
+enum SimulatorHelper {
+    /// Project root derived from the test file location.
+    /// Tests/ → MeetingTranscriber/ → app/ → project root
+    static let projectRoot: URL = .init(fileURLWithPath: #filePath)
+        .deletingLastPathComponent() // Tests/
+        .deletingLastPathComponent() // MeetingTranscriber/
+        .deletingLastPathComponent() // app/
+        .deletingLastPathComponent() // project root
+
+    /// Path to the meeting-simulator SPM package.
+    static let simulatorPackage = projectRoot.appendingPathComponent("tools/meeting-simulator")
+
+    /// Path to the two-speaker German test fixture.
+    static let fixtureAudio: URL = .init(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/two_speakers_de.wav")
+
+    /// Builds the meeting-simulator executable and returns the binary path.
+    static func buildSimulator() throws -> URL {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+        process.arguments = ["build", "-c", "release"]
+        process.currentDirectoryURL = simulatorPackage
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        // Drain pipe before waitUntilExit to prevent deadlock if output exceeds pipe buffer
+        let outputData = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let output = String(data: outputData, encoding: .utf8) ?? ""
+            throw NSError(
+                domain: "SimulatorHelper",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "meeting-simulator build failed: \(output)"],
+            )
+        }
+        return simulatorPackage.appendingPathComponent(".build/release/meeting-simulator")
+    }
+
+    /// Launches the meeting-simulator as a subprocess playing the given audio file.
+    static func launchSimulator(binary: URL, audioPath: URL) throws -> Process {
+        let process = Process()
+        process.executableURL = binary
+        process.arguments = [audioPath.path]
+        try process.run()
+        return process
+    }
+}
+
 // MARK: - Test Audio Fixture
 
 /// Create a minimal valid 16kHz Float32 mono WAV (0.5s silence).

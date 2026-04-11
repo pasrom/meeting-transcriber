@@ -1,0 +1,21 @@
+name: E2E Pipeline Tests
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  e2e:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: E2E full pipeline test
+        env:
+          E2E_ENABLED: "1"
+        run: |
+          cd app/MeetingTranscriber
+          swift test --filter E2EFullPipeline
