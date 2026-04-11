@@ -8,13 +8,13 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AudioMi
 enum AudioMixer {
     // MARK: - Mix
 
-    /// Mix app and mic audio tracks into a single mono WAV.
-    ///
-    /// Applies echo suppression, delay alignment, then averages the two tracks.
     /// Maximum plausible mic-to-app delay (seconds). Values beyond this indicate
     /// a corrupted timestamp (e.g. device restart mid-recording, see #99).
     static let maxMicDelay: TimeInterval = 30
 
+    /// Mix app and mic audio tracks into a single mono WAV.
+    ///
+    /// Applies echo suppression, delay alignment, then averages the two tracks.
     static func mix(
         appAudioPath: URL,
         micAudioPath: URL,
@@ -25,9 +25,7 @@ enum AudioMixer {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
 
-        // Clamp delay to a sane range — a device restart mid-recording can
-        // corrupt the first-frame timestamp, producing delays of hundreds of
-        // seconds which would double the mix duration (see #99).
+        // Clamp to ±maxMicDelay (see #99).
         let clampedDelay = min(max(micDelay, -maxMicDelay), maxMicDelay)
         if clampedDelay != micDelay {
             logger.warning("micDelay \(micDelay)s outside ±\(Self.maxMicDelay)s — clamped to \(clampedDelay)s")
