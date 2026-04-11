@@ -57,4 +57,36 @@ final class AudioMixerDelayTests: XCTestCase {
         let output = try mixWithDelay(0)
         XCTAssertEqual(output.count, sampleCount)
     }
+
+    // MARK: - micDelay clamp (#99)
+
+    func testMixExcessivePositiveDelayIsClamped() throws {
+        // 500s delay would double a 1s track — must be clamped to maxMicDelay
+        let output = try mixWithDelay(500)
+        let maxPad = Int(AudioMixer.maxMicDelay * Double(sampleRate))
+        XCTAssertLessThanOrEqual(
+            output.count,
+            sampleCount + maxPad,
+            "Excessive positive delay must be clamped",
+        )
+    }
+
+    func testMixExcessiveNegativeDelayIsClamped() throws {
+        // -500s delay would double a 1s track — must be clamped
+        let output = try mixWithDelay(-500)
+        let maxPad = Int(AudioMixer.maxMicDelay * Double(sampleRate))
+        XCTAssertLessThanOrEqual(
+            output.count,
+            sampleCount + maxPad,
+            "Excessive negative delay must be clamped",
+        )
+    }
+
+    func testMaxMicDelayConstant() {
+        XCTAssertEqual(
+            AudioMixer.maxMicDelay,
+            30,
+            "maxMicDelay should be 30 seconds",
+        )
+    }
 }

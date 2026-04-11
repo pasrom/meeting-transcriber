@@ -293,7 +293,13 @@ public class AppAudioCapture {
             // Log format on first callback
             if !self.didLogFormat {
                 self.didLogFormat = true
-                self.appFirstFrameTime = mach_absolute_time()
+                // Only record the very first frame time — not after device restarts.
+                // MicCaptureHandler uses the same guard. Without this, a device change
+                // mid-recording overwrites the timestamp, corrupting the micDelay
+                // calculation and producing a mix.wav at 2× duration (see #99).
+                if self.appFirstFrameTime == 0 {
+                    self.appFirstFrameTime = mach_absolute_time()
+                }
                 self.actualChannels = Int(abl.mBuffers.mNumberChannels)
 
                 // Device is running — query the measured actual rate
