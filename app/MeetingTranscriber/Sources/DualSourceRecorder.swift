@@ -159,6 +159,7 @@ class DualSourceRecorder: RecordingProvider {
         // ── Convert app audio from temp file to Float32 mono ──
         var appPath: URL?
         var appSamples: [Float] = []
+        var appSamples16k: [Float] = []
 
         if appRawBytes > 0 {
             let raw = try Data(contentsOf: tempURL)
@@ -180,7 +181,7 @@ class DualSourceRecorder: RecordingProvider {
             appSamples = Self.downmixToMono(floats, channels: actualChannels)
 
             // Resample to 16kHz and save app track
-            let appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
+            appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
             let appFile = recDir.appendingPathComponent("\(ts)_app.wav")
             try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: appFile)
             appPath = appFile
@@ -224,8 +225,8 @@ class DualSourceRecorder: RecordingProvider {
                 micDelay: micDelay,
                 sampleRate: mixRate,
             )
-        } else if !appSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: appSamples, sampleRate: mixRate, url: mixPath)
+        } else if !appSamples16k.isEmpty {
+            try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: mixRate, url: mixPath)
         } else if !micSamples.isEmpty {
             try AudioMixer.saveWAV(samples: micSamples, sampleRate: mixRate, url: mixPath)
         } else {
