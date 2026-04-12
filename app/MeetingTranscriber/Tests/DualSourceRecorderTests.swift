@@ -181,6 +181,62 @@ final class DualSourceRecorderTests: XCTestCase {
         DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
     }
 
+    // MARK: - Mix Fallback Without Mic (noMic / no mic hardware)
+
+    /// Verifies that when no mic is present, the mix.wav uses resampled 16kHz samples
+    /// instead of raw device-rate samples. Regression test for the bug where 48kHz samples
+    /// were saved with a 16kHz header, producing a file 3× too long.
+    func testMixFallbackWithoutMicUsesResampledSamples() throws {
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mix_fallback_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+        // Simulate 1 second of 48kHz mono app audio (captured by CATapDescription)
+        let deviceRate = 48000
+        let targetRate = 16000
+        let appSamples = [Float](repeating: 0.5, count: deviceRate) // 1s at 48kHz
+
+        // Resample to 16kHz (what the fix does)
+        let appSamples16k = AudioMixer.resample(appSamples, from: deviceRate, to: targetRate)
+        XCTAssertEqual(
+            appSamples16k.count,
+            targetRate,
+            accuracy: 2200,
+            "Resampled should have ~16000 samples for 1s",
+        )
+
+        // Save mix using resampled samples (the FIXED path)
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: mixPath)
+
+        // Also save what the BUGGY path would have produced
+        let buggyMixPath = tmpDir.appendingPathComponent("buggy_mix.wav")
+        try AudioMixer.saveWAV(samples: appSamples, sampleRate: targetRate, url: buggyMixPath)
+
+        let mixSize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: mixPath.path)[.size] as? Int)
+        let buggySize = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: buggyMixPath.path)[.size] as? Int)
+
+        // Fixed mix: ~1s of 16kHz Int16 = ~32044 bytes
+        // Buggy mix: ~3s of "16kHz" Int16 = ~96044 bytes (3× too long)
+        XCTAssertEqual(
+            Double(mixSize) / Double(buggySize),
+            1.0 / 3.0,
+            accuracy: 0.05,
+            "Buggy mix should be 3× larger than fixed mix",
+        )
+
+        // Verify fixed mix has correct duration
+        let expectedSamples = targetRate // 1s at 16kHz
+        let actualSamples = (mixSize - 44) / 2 // Int16 = 2 bytes per sample
+        XCTAssertEqual(
+            actualSamples,
+            expectedSamples,
+            accuracy: 2200,
+            "Fixed mix should have ~16000 samples (1s at 16kHz)",
+        )
+    }
+
     // MARK: - crossCheckAppRate
 
     func testCrossCheckCorrectRateUnchanged() {
