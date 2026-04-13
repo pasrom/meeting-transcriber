@@ -88,7 +88,7 @@ struct MenuBarView: View {
             .keyboardShortcut("r")
         }
 
-        if state == .waitingForSpeakerNames, let onNameSpeakers {
+        if let onNameSpeakers {
             Button {
                 onNameSpeakers()
             } label: {
@@ -184,7 +184,7 @@ struct MenuBarView: View {
                     .font(.caption2)
             }
             if job.state == .speakerNamingPending {
-                Button("Name Speakers") { onDismissJob(job.id) }
+                Button("Name Speakers") { onNameSpeakers?() }
                     .font(.caption2)
             }
             if job.state == .waiting || job.state == .transcribing

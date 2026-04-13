@@ -46,7 +46,7 @@ struct MeetingTranscriberApp: App {
                 onOpenSettings: {
                     bringWindowToFront(id: "settings")
                 },
-                onNameSpeakers: {
+                onNameSpeakers: appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty ? nil : {
                     bringWindowToFront(id: "speaker-naming")
                 },
                 onProcessFiles: processAudioFiles,
