@@ -6,6 +6,8 @@ enum JobState: String, Codable {
     case diarizing
     // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case generatingProtocol
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
+    case speakerNamingPending
     case done
     case error
 
@@ -16,6 +18,7 @@ enum JobState: String, Codable {
         case .transcribing: "Transcribing..."
         case .diarizing: "Diarizing..."
         case .generatingProtocol: "Generating Protocol..."
+        case .speakerNamingPending: "Name Speakers..."
         case .done: "Done"
         case .error: "Error"
         }

@@ -166,7 +166,7 @@ class PipelineQueue {
             jobs.remove(at: index)
             saveSnapshot()
 
-        case .done, .error:
+        case .speakerNamingPending, .done, .error:
             break
         }
     }

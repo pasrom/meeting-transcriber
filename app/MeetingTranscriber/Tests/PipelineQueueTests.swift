@@ -918,4 +918,15 @@ final class PipelineQueueTests: XCTestCase {
         await queue2.processNext()
         XCTAssertEqual(queue2.jobs.first?.state, .done)
     }
+
+    func testJobStateSpeakerNamingPendingLabel() {
+        XCTAssertEqual(JobState.speakerNamingPending.label, "Name Speakers...")
+    }
+
+    func testJobStateSpeakerNamingPendingIsCodable() throws {
+        let state = JobState.speakerNamingPending
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(JobState.self, from: data)
+        XCTAssertEqual(decoded, state)
+    }
 }
