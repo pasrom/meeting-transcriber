@@ -51,4 +51,11 @@ final class MicRecorderTests: XCTestCase {
             "Expected description to contain '-50', got: \(error.errorDescription ?? "nil")",
         )
     }
+
+    // MARK: - No Input Device Guard (#104)
+
+    func testErrorNoInputDevice() {
+        let error = MicRecorderError.noInputDevice
+        XCTAssertEqual(error.errorDescription, "No microphone hardware available")
+    }
 }
