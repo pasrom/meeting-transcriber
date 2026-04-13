@@ -40,6 +40,7 @@ struct PipelineJob: Identifiable, Codable {
     var warnings: [String]
     var transcriptPath: URL?
     var protocolPath: URL?
+    var namingSlug: String?
 
     init(
         meetingTitle: String,
@@ -64,5 +65,6 @@ struct PipelineJob: Identifiable, Codable {
         self.warnings = []
         self.transcriptPath = nil
         self.protocolPath = nil
+        self.namingSlug = nil
     }
 }

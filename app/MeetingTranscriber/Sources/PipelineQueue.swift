@@ -40,15 +40,22 @@ class PipelineQueue {
     // MARK: - Speaker Naming
 
     /// Data for the speaker naming popup.
-    struct SpeakerNamingData {
+    struct SpeakerNamingData: Codable {
         let jobID: UUID
         let meetingTitle: String
         let mapping: [String: String] // label → auto-matched name or label
         let speakingTimes: [String: TimeInterval]
         let embeddings: [String: [Float]]
         let audioPath: URL? // 16kHz mix for playback
-        let segments: [DiarizationResult.Segment] // for extracting speaker snippets
+        let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
+        let isDualSource: Bool
+
+        struct Segment: Codable {
+            let start: TimeInterval
+            let end: TimeInterval
+            let speaker: String
+        }
     }
 
     /// Result from the speaker naming popup.
@@ -58,21 +65,45 @@ class PipelineQueue {
         case skipped // user skipped
     }
 
-    /// Set when the pipeline is waiting for the user to name speakers.
-    var pendingSpeakerNaming: SpeakerNamingData?
+    /// RAM cache of naming data, rebuilt from disk on loadSnapshot().
+    private(set) var speakerNamingDataByJob: [UUID: SpeakerNamingData] = [:]
+
+    /// The currently displayed naming data (first pending item).
+    var pendingSpeakerNaming: SpeakerNamingData? {
+        guard let firstPendingJob = pendingSpeakerNamingJobs.first else { return nil }
+        return speakerNamingDataByJob[firstPendingJob.id]
+    }
+
+    /// Jobs in speakerNamingPending state.
+    var pendingSpeakerNamingJobs: [PipelineJob] {
+        jobs.filter { $0.state == .speakerNamingPending }
+    }
+
     private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
 
     /// Timeout for the speaker naming popup (seconds). If the user does not respond
     /// within this time, the continuation resumes with `.skipped`.
     static let speakerNamingTimeout: TimeInterval = 120
 
-    /// Called by the UI when the user confirms or skips speaker naming.
-    func completeSpeakerNaming(result: SpeakerNamingResult) {
-        pendingSpeakerNaming = nil
-        // Guard against double-resume: only resume if continuation is still set
+    /// Called by the UI when the user confirms or skips speaker naming for a specific job.
+    func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
+        speakerNamingDataByJob.removeValue(forKey: jobID)
         guard let continuation = speakerNamingContinuation else { return }
         speakerNamingContinuation = nil
         continuation.resume(returning: result)
+    }
+
+    /// Called by the UI when the user confirms or skips speaker naming.
+    func completeSpeakerNaming(result: SpeakerNamingResult) {
+        // Find the job that has pending naming data
+        if let jobID = pendingSpeakerNamingJobs.first?.id ?? speakerNamingDataByJob.keys.first {
+            completeSpeakerNaming(jobID: jobID, result: result)
+        } else {
+            // Fallback: just resume continuation if it exists
+            guard let continuation = speakerNamingContinuation else { return }
+            speakerNamingContinuation = nil
+            continuation.resume(returning: result)
+        }
     }
 
     /// Handler for speaker naming. When set, called instead of the default
@@ -407,8 +438,11 @@ class PipelineQueue {
                                 speakingTimes: currentDiarization.speakingTimes,
                                 embeddings: embeddings,
                                 audioPath: mix16k,
-                                segments: currentDiarization.segments,
+                                segments: currentDiarization.segments.map {
+                                    SpeakerNamingData.Segment(start: $0.start, end: $0.end, speaker: $0.speaker)
+                                },
                                 participants: participants,
+                                isDualSource: isDualSource,
                             )
 
                             stopElapsedTimer()
@@ -423,7 +457,7 @@ class PipelineQueue {
                                 }
                                 namingResult = await withCheckedContinuation { continuation in
                                     self.speakerNamingContinuation = continuation
-                                    self.pendingSpeakerNaming = namingData
+                                    self.speakerNamingDataByJob[jobID] = namingData
                                     NotificationCenter.default.post(
                                         name: .showSpeakerNaming,
                                         object: nil,
@@ -572,6 +606,34 @@ class PipelineQueue {
 
         isProcessing = false
         triggerProcessing()
+    }
+
+    // MARK: - Speaker Naming Persistence
+
+    func saveNamingData(_ data: SpeakerNamingData, slug: String) {
+        guard let outputDir else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+        let path = recordingsDir.appendingPathComponent("\(slug)_naming.json")
+        do {
+            let json = try JSONEncoder().encode(data)
+            try json.write(to: path, options: .atomic)
+        } catch {
+            logger.error("Failed to save naming data: \(error)")
+        }
+    }
+
+    func loadNamingData(slug: String) -> SpeakerNamingData? {
+        guard let outputDir else { return nil }
+        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
+        guard let json = try? Data(contentsOf: path) else { return nil }
+        return try? JSONDecoder().decode(SpeakerNamingData.self, from: json)
+    }
+
+    func deleteNamingData(slug: String?) {
+        guard let slug, let outputDir else { return }
+        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
+        try? FileManager.default.removeItem(at: path)
     }
 
     // MARK: - VAD Preprocessing

@@ -929,4 +929,38 @@ final class PipelineQueueTests: XCTestCase {
         let decoded = try JSONDecoder().decode(JobState.self, from: data)
         XCTAssertEqual(decoded, state)
     }
+
+    // MARK: - SpeakerNamingData Codable
+
+    func testSpeakerNamingDataRoundTripsThroughJSON() throws {
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(),
+            meetingTitle: "Test Meeting",
+            mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
+            speakingTimes: ["SPEAKER_0": 120.5, "SPEAKER_1": 85.3],
+            embeddings: ["SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.3, 0.4]],
+            audioPath: URL(fileURLWithPath: "/tmp/test_16k.wav"),
+            segments: [
+                .init(start: 0.0, end: 5.0, speaker: "SPEAKER_0"),
+                .init(start: 5.0, end: 10.0, speaker: "SPEAKER_1"),
+            ],
+            participants: ["Alice", "Bob", "Charlie"],
+            isDualSource: false
+        )
+
+        let encoded = try JSONEncoder().encode(data)
+        let decoded = try JSONDecoder().decode(PipelineQueue.SpeakerNamingData.self, from: encoded)
+
+        XCTAssertEqual(decoded.jobID, data.jobID)
+        XCTAssertEqual(decoded.meetingTitle, data.meetingTitle)
+        XCTAssertEqual(decoded.mapping, data.mapping)
+        XCTAssertEqual(decoded.participants, data.participants)
+        XCTAssertEqual(decoded.isDualSource, false)
+        XCTAssertEqual(decoded.segments.count, 2)
+    }
+
+    func testPendingSpeakerNamingJobsReturnsNamingPendingJobs() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        XCTAssertTrue(queue.pendingSpeakerNamingJobs.isEmpty)
+    }
 }
