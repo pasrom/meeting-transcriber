@@ -113,15 +113,8 @@ class PipelineQueue {
         case let .confirmed(userMapping):
             Task { await reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
 
-        case .rerun:
-            // Late re-run: placeholder for Task 7
-            logger.warning("Late re-run not yet implemented, skipping")
-            speakerNamingDataByJob.removeValue(forKey: jobID)
-            deleteNamingData(slug: slug)
-            if let idx = jobs.firstIndex(where: { $0.id == jobID }),
-               jobs[idx].state == .speakerNamingPending {
-                updateJobState(id: jobID, to: .done)
-            }
+        case let .rerun(count):
+            Task { await lateDiarization(jobID: jobID, speakerCount: count) }
 
         case .skipped:
             speakerNamingDataByJob.removeValue(forKey: jobID)
@@ -763,6 +756,106 @@ class PipelineQueue {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         deleteNamingData(slug: slug)
         updateJobState(id: jobID, to: .done)
+    }
+
+    // MARK: - Late Re-diarization
+
+    /// Re-run diarization from persisted 16kHz audio after pipeline completed.
+    private func lateDiarization(jobID: UUID, speakerCount: Int) async {
+        guard let namingData = speakerNamingDataByJob[jobID],
+              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }),
+              let diarizationFactory,
+              let slug = jobs[jobIndex].namingSlug,
+              let outputDir else {
+            logger.warning("Cannot re-diarize: missing data or configuration")
+            return
+        }
+
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        let diarizeProcess = diarizationFactory()
+        guard diarizeProcess.isAvailable else {
+            logger.warning("Diarization not available for late re-run")
+            return
+        }
+
+        updateJobState(id: jobID, to: .diarizing)
+        startElapsedTimer()
+
+        do {
+            let title = jobs[jobIndex].meetingTitle
+            let diarization: DiarizationResult
+
+            if namingData.isDualSource {
+                let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
+                let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
+                let appDiar = try await diarizeProcess.run(
+                    audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
+                )
+                let micDiar = try await diarizeProcess.run(
+                    audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
+                )
+                diarization = DiarizationProcess.mergeDualTrackDiarization(
+                    appDiarization: appDiar, micDiarization: micDiar,
+                )
+            } else {
+                let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+                diarization = try await diarizeProcess.run(
+                    audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
+                )
+            }
+
+            stopElapsedTimer()
+
+            guard let embeddings = diarization.embeddings else {
+                logger.warning("Late re-diarization produced no embeddings")
+                updateJobState(id: jobID, to: .speakerNamingPending)
+                return
+            }
+
+            let matcher = speakerMatcherFactory()
+            var autoNames = matcher.match(embeddings: embeddings)
+
+            if !namingData.participants.isEmpty {
+                autoNames = SpeakerMatcher.preMatchParticipants(
+                    mapping: autoNames,
+                    speakingTimes: diarization.speakingTimes,
+                    participants: namingData.participants,
+                )
+            }
+
+            // Build new naming data with fresh diarization results
+            let newNamingData = SpeakerNamingData(
+                jobID: jobID,
+                meetingTitle: title,
+                mapping: autoNames,
+                speakingTimes: diarization.speakingTimes,
+                embeddings: embeddings,
+                audioPath: namingData.audioPath,
+                segments: diarization.segments.map { seg in
+                    SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
+                },
+                participants: namingData.participants,
+                isDualSource: namingData.isDualSource,
+            )
+
+            // Update disk + RAM
+            speakerNamingDataByJob[jobID] = newNamingData
+            saveNamingData(newNamingData, slug: slug)
+
+            // Show naming dialog again
+            updateJobState(id: jobID, to: .speakerNamingPending)
+            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+
+            // If test handler is set, call it directly
+            if let handler = speakerNamingHandler {
+                let result = await handler(newNamingData)
+                completeSpeakerNaming(jobID: jobID, result: result)
+            }
+        } catch {
+            logger.error("Late re-diarization failed: \(error)")
+            stopElapsedTimer()
+            updateJobState(id: jobID, to: .speakerNamingPending)
+        }
     }
 
     // MARK: - Speaker Naming Persistence

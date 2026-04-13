@@ -1232,6 +1232,74 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertFalse(rewritten.contains("[John]"), "Old auto-matched name should be gone")
     }
 
+    // MARK: - Late Re-diarization
+
+    func testLateRerunDiarizesFromPersistedAudio() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+        // Use short timeout so pipeline completes without user response
+        pQueue.speakerNamingTimeoutSeconds = 2
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Late Rerun Test",
+            appName: "TestApp",
+            mixPath: audioPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        pQueue.enqueue(job)
+
+        // Wait for speakerNamingPending (timeout path leaves naming data intact)
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending {
+                pendingExpectation.fulfill()
+            }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+
+        XCTAssertEqual(pQueue.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(pQueue.speakerNamingDataByJob[job.id])
+
+        // Now set handler to confirm after re-run
+        var rerunHandlerCalled = false
+        pQueue.speakerNamingHandler = { data in
+            rerunHandlerCalled = true
+            return .confirmed([:])
+        }
+
+        // Request re-run with 3 speakers
+        let doneExpectation = XCTestExpectation(description: "done after rerun")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done {
+                doneExpectation.fulfill()
+            }
+        }
+
+        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
+        await fulfillment(of: [doneExpectation], timeout: 60)
+
+        XCTAssertTrue(rerunHandlerCalled, "Handler should be called with new diarization results")
+        XCTAssertEqual(pQueue.jobs.first?.state, .done)
+    }
+
     func testLateConfirmationWithNoNamingDataIsNoOp() {
         let queue = PipelineQueue(logDir: tmpDir)
         var job = PipelineJob(
