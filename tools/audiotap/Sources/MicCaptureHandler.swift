@@ -66,6 +66,12 @@ public class MicCaptureHandler {
 
     // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
+        // No input device available (e.g. Mac Mini server without mic hardware) —
+        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            throw MicCaptureError.noInputDevice
+        }
+
         let inputNode = engine.inputNode
 
         if let uid = deviceUID {
@@ -284,5 +290,15 @@ public class MicCaptureHandler {
         engine.reset()
         outputFile = nil
         logger.info("Mic recording stopped")
+    }
+}
+
+public enum MicCaptureError: LocalizedError {
+    case noInputDevice
+
+    public var errorDescription: String? {
+        switch self {
+        case .noInputDevice: "No microphone hardware available"
+        }
     }
 }

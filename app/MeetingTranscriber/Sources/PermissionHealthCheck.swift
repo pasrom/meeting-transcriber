@@ -187,6 +187,13 @@ enum PermissionHealthCheck {
     static let probePollInterval: TimeInterval = 0.02
 
     static func probeMicrophone() async -> Bool {
+        // No input device available (e.g. Mac Mini server without mic hardware) —
+        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            debugLog("probeMicrophone: no input device available")
+            return false
+        }
+
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)

@@ -22,6 +22,12 @@ class MicRecorder {
     ///   - deviceUID: CoreAudio device UID (nil = system default)
     ///   - sampleRate: Target sample rate (default 48000)
     func start(outputPath: URL, deviceUID: String? = nil, sampleRate: Double = 48000) throws { // swiftlint:disable:this unused_declaration
+        // No input device available (e.g. Mac Mini server without mic hardware) —
+        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
+        guard AVCaptureDevice.default(for: .audio) != nil else {
+            throw MicRecorderError.noInputDevice
+        }
+
         let engine = AVAudioEngine()
 
         // Select input device if specified
@@ -221,12 +227,14 @@ class MicRecorder {
 }
 
 enum MicRecorderError: LocalizedError {
+    case noInputDevice
     case formatCreationFailed
     case deviceNotFound(String)
     case deviceSetFailed(String, OSStatus)
 
     var errorDescription: String? {
         switch self {
+        case .noInputDevice: "No microphone hardware available"
         case .formatCreationFailed: "Failed to create audio format"
         case let .deviceNotFound(uid): "Audio device not found: \(uid)"
         case let .deviceSetFailed(uid, status): "Failed to set device \(uid): OSStatus \(status)"
