@@ -110,8 +110,8 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testFullPipelineDetectRecordTranscribeProtocol() async throws {
         try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            shouldSkipE2E,
+            "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)",
         )
 
         let fixture = fixtureURL()
@@ -167,8 +167,8 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testDualSourceTranscriptionPath() async throws {
         try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            shouldSkipE2E,
+            "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)",
         )
 
         let fixture = fixtureURL()
@@ -262,8 +262,8 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testDiarizationSkippedWhenNotAvailable() async throws {
         try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            shouldSkipE2E,
+            "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)",
         )
 
         let fixture = fixtureURL()
@@ -335,8 +335,8 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testResamplePathProduces16kHzForWhisperKit() async throws {
         try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
+            shouldSkipE2E,
+            "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)",
         )
 
         let fixture = fixtureURL()
@@ -381,8 +381,8 @@ final class WatchLoopE2ETests: XCTestCase {
 
     func testFullPipelineWithRealDiarization() async throws {
         try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model + FluidAudio diarization",
+            shouldSkipE2E,
+            "Skipping in CI: requires WhisperKit model + FluidAudio diarization (set E2E_ENABLED=1)",
         )
 
         let fixture = fixtureURL()
