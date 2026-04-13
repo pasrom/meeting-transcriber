@@ -159,7 +159,8 @@ final class WhisperKitE2ETests: XCTestCase {
 
     func testTranscribeSegmentsWithFixture() async throws {
         // This test downloads a WhisperKit model (~1GB) - skip in CI
-        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)")
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -204,7 +205,8 @@ final class WhisperKitE2ETests: XCTestCase {
 
     func testTranscribeSegmentsHallucinationFilter() async throws {
         // This test downloads a WhisperKit model (~1GB) - skip in CI
-        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)")
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -232,7 +234,8 @@ final class WhisperKitE2ETests: XCTestCase {
 
     func testFullDualSourcePipeline() async throws {
         // This test downloads a WhisperKit model (~1GB) - skip in CI
-        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)")
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -350,7 +353,8 @@ final class WhisperKitE2ETests: XCTestCase {
     }
 
     func testTranscribeMultiFormatContent() async throws {
-        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires WhisperKit model download (set E2E_ENABLED=1)")
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
 
         let engine = WhisperKitEngine()
         engine.modelVariant = "openai_whisper-small"
