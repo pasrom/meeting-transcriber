@@ -104,10 +104,7 @@ class PipelineQueue {
             speakerNamingTimeoutTask?.cancel()
             speakerNamingTimeoutTask = nil
             if case .confirmed = result {
-                speakerNamingDataByJob.removeValue(forKey: jobID)
-                let confirmedSlug = jobs.first { $0.id == jobID }?.namingSlug
-                deleteNamingData(slug: confirmedSlug)
-                cleanupSidecarFiles(slug: confirmedSlug)
+                removeNamingData(jobID: jobID, slug: jobs.first { $0.id == jobID }?.namingSlug)
             }
             continuation.resume(returning: result)
             return
@@ -125,9 +122,7 @@ class PipelineQueue {
             Task { await lateDiarization(jobID: jobID, speakerCount: count) }
 
         case .skipped:
-            speakerNamingDataByJob.removeValue(forKey: jobID)
-            deleteNamingData(slug: slug)
-            cleanupSidecarFiles(slug: slug)
+            removeNamingData(jobID: jobID, slug: slug)
             if let idx = jobs.firstIndex(where: { $0.id == jobID }),
                jobs[idx].state == .speakerNamingPending {
                 updateJobState(id: jobID, to: .done)
@@ -335,8 +330,7 @@ class PipelineQueue {
             defer { try? FileManager.default.removeItem(at: workDir) }
 
             // Compute slug early so it's available for persisted file names
-            let slug = ProtocolGenerator.filename(title: title, ext: "txt")
-                .replacingOccurrences(of: ".txt", with: "")
+            let slug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
 
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)
@@ -625,20 +619,18 @@ class PipelineQueue {
                 title: title, outputDir: recordingsDir,
             )
 
-            // --- Persist 16kHz audio for re-diarization ---
-            let mix16kSrc = workDir.appendingPathComponent("mix_16k.wav")
-            if FileManager.default.fileExists(atPath: mix16kSrc.path) {
-                let dst = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
-                try? FileManager.default.copyItem(at: mix16kSrc, to: dst)
-            }
+            // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
+            try? FileManager.default.moveItem(
+                at: workDir.appendingPathComponent("mix_16k.wav"),
+                to: recordingsDir.appendingPathComponent("\(slug)_16k.wav"),
+            )
 
             if isDualSource {
                 for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
-                    let src = workDir.appendingPathComponent(name)
-                    if FileManager.default.fileExists(atPath: src.path) {
-                        let dst = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
-                        try? FileManager.default.copyItem(at: src, to: dst)
-                    }
+                    try? FileManager.default.moveItem(
+                        at: workDir.appendingPathComponent(name),
+                        to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"),
+                    )
                 }
             }
 
@@ -721,12 +713,10 @@ class PipelineQueue {
 
         if let transcriptPath = jobs[jobIndex].transcriptPath {
             do {
-                // Re-read transcript and replace speaker labels
                 var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
                 for (label, name) in mapping where !name.isEmpty {
-                    // Replace [SPEAKER_0] or [R_SPEAKER_0] style labels
                     transcript = transcript.replacingOccurrences(of: "[\(label)]", with: "[\(name)]")
-                    // Also replace the auto-matched name if different
+                    // Replace auto-matched name too, to cover both raw label and matched variant
                     if let autoName = namingData.mapping[label], autoName != label, autoName != name {
                         transcript = transcript.replacingOccurrences(of: "[\(autoName)]", with: "[\(name)]")
                     }
@@ -761,10 +751,7 @@ class PipelineQueue {
             }
         }
 
-        // Clean up naming data, sidecar files, and transition to done
-        speakerNamingDataByJob.removeValue(forKey: jobID)
-        deleteNamingData(slug: slug)
-        cleanupSidecarFiles(slug: slug)
+        removeNamingData(jobID: jobID, slug: slug)
         updateJobState(id: jobID, to: .done)
     }
 
@@ -798,13 +785,13 @@ class PipelineQueue {
             if namingData.isDualSource {
                 let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
                 let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
-                let appDiar = try await diarizeProcess.run(
+                async let appDiar = diarizeProcess.run(
                     audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
                 )
-                let micDiar = try await diarizeProcess.run(
+                async let micDiar = diarizeProcess.run(
                     audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
                 )
-                diarization = DiarizationProcess.mergeDualTrackDiarization(
+                diarization = try await DiarizationProcess.mergeDualTrackDiarization(
                     appDiarization: appDiar, micDiarization: micDiar,
                 )
             } else {
@@ -896,6 +883,13 @@ class PipelineQueue {
         try? FileManager.default.removeItem(at: path)
     }
 
+    /// Remove all naming-related data for a job: RAM cache, disk JSON, and sidecar files.
+    private func removeNamingData(jobID: UUID, slug: String?) {
+        speakerNamingDataByJob.removeValue(forKey: jobID)
+        deleteNamingData(slug: slug)
+        cleanupSidecarFiles(slug: slug)
+    }
+
     /// Delete 16kHz audio and segment sidecar files for a slug.
     func cleanupSidecarFiles(slug: String?) {
         guard let slug, let outputDir else { return }
@@ -914,11 +908,7 @@ class PipelineQueue {
         for job in jobs where job.state == .speakerNamingPending {
             if now.timeIntervalSince(job.enqueuedAt) > maxAge {
                 logger.info("Auto-resolving stale pending naming for \(job.meetingTitle)")
-                speakerNamingDataByJob.removeValue(forKey: job.id)
-                if let slug = job.namingSlug {
-                    deleteNamingData(slug: slug)
-                    cleanupSidecarFiles(slug: slug)
-                }
+                removeNamingData(jobID: job.id, slug: job.namingSlug)
                 updateJobState(id: job.id, to: .done)
             }
         }
