@@ -3,7 +3,7 @@ import Foundation
 import WhisperKit
 
 /// A transcribed segment with timestamps and optional speaker label.
-struct TimestampedSegment {
+struct TimestampedSegment: Codable {
     let start: TimeInterval // seconds
     let end: TimeInterval // seconds
     let text: String

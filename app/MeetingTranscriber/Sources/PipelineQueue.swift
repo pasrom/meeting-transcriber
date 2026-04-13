@@ -292,6 +292,10 @@ class PipelineQueue {
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
+            // Compute slug early so it's available for persisted file names
+            let slug = ProtocolGenerator.filename(title: title, ext: "txt")
+                .replacingOccurrences(of: ".txt", with: "")
+
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)
             var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
@@ -431,19 +435,29 @@ class PipelineQueue {
                                 )
                             }
 
+                            // Use persisted 16kHz path (survives workDir cleanup)
+                            let recordingsDir = outputDir.appendingPathComponent("recordings")
+                            let persistedAudioPath = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+
                             let namingData = SpeakerNamingData(
                                 jobID: jobID,
                                 meetingTitle: title,
                                 mapping: autoNames,
                                 speakingTimes: currentDiarization.speakingTimes,
                                 embeddings: embeddings,
-                                audioPath: mix16k,
-                                segments: currentDiarization.segments.map {
-                                    SpeakerNamingData.Segment(start: $0.start, end: $0.end, speaker: $0.speaker)
+                                audioPath: persistedAudioPath,
+                                segments: currentDiarization.segments.map { seg in
+                                    SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
                                 },
                                 participants: participants,
                                 isDualSource: isDualSource,
                             )
+
+                            // Persist naming data and set slug early
+                            saveNamingData(namingData, slug: slug)
+                            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                                jobs[idx].namingSlug = slug
+                            }
 
                             stopElapsedTimer()
                             let namingResult: SpeakerNamingResult
@@ -554,6 +568,7 @@ class PipelineQueue {
 
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].transcriptPath = txtPath
+                jobs[idx].namingSlug = slug
             }
 
             let recordingsDir = outputDir.appendingPathComponent("recordings")
@@ -561,6 +576,31 @@ class PipelineQueue {
                 mixPath: mixPath, appPath: appPath, micPath: micPath,
                 title: title, outputDir: recordingsDir,
             )
+
+            // --- Persist 16kHz audio for re-diarization ---
+            let mix16kSrc = workDir.appendingPathComponent("mix_16k.wav")
+            if FileManager.default.fileExists(atPath: mix16kSrc.path) {
+                let dst = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+                try? FileManager.default.copyItem(at: mix16kSrc, to: dst)
+            }
+
+            if isDualSource {
+                for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
+                    let src = workDir.appendingPathComponent(name)
+                    if FileManager.default.fileExists(atPath: src.path) {
+                        let dst = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
+                        try? FileManager.default.copyItem(at: src, to: dst)
+                    }
+                }
+            }
+
+            // --- Persist transcript segments for late re-assignment ---
+            if let cachedSegments {
+                let segPath = recordingsDir.appendingPathComponent("\(slug)_segments.json")
+                if let data = try? JSONEncoder().encode(cachedSegments) {
+                    try? data.write(to: segPath, options: .atomic)
+                }
+            }
 
             // --- Protocol Generation (optional) ---
             if let protocolGeneratorFactory, let generator = protocolGeneratorFactory() {
