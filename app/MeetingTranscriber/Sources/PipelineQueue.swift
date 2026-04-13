@@ -66,7 +66,8 @@ class PipelineQueue {
     }
 
     /// RAM cache of naming data, rebuilt from disk on loadSnapshot().
-    private(set) var speakerNamingDataByJob: [UUID: SpeakerNamingData] = [:]
+    /// Internal setter allows test access via @testable import.
+    var speakerNamingDataByJob: [UUID: SpeakerNamingData] = [:]
 
     /// The currently displayed naming data (first pending item).
     var pendingSpeakerNaming: SpeakerNamingData? {
@@ -80,17 +81,39 @@ class PipelineQueue {
     }
 
     private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
+    private var speakerNamingTimeoutTask: Task<Void, any Error>?
 
     /// Timeout for the speaker naming popup (seconds). If the user does not respond
     /// within this time, the continuation resumes with `.skipped`.
     static let speakerNamingTimeout: TimeInterval = 120
 
+    /// Instance-level timeout (defaults to static). Can be overridden for testing.
+    var speakerNamingTimeoutSeconds: TimeInterval = PipelineQueue.speakerNamingTimeout
+
     /// Called by the UI when the user confirms or skips speaker naming for a specific job.
     func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
+        // If continuation exists → pipeline is still waiting → resume it
+        if let continuation = speakerNamingContinuation {
+            speakerNamingContinuation = nil
+            speakerNamingTimeoutTask?.cancel()
+            speakerNamingTimeoutTask = nil
+            if case .confirmed = result {
+                speakerNamingDataByJob.removeValue(forKey: jobID)
+                deleteNamingData(slug: jobs.first { $0.id == jobID }?.namingSlug)
+            }
+            continuation.resume(returning: result)
+            return
+        }
+
+        // Late completion — pipeline already done
+        // For now, just clean up and transition to .done
+        // (Task 6 will add re-apply logic for .confirmed, Task 7 adds re-diarization for .rerun)
         speakerNamingDataByJob.removeValue(forKey: jobID)
-        guard let continuation = speakerNamingContinuation else { return }
-        speakerNamingContinuation = nil
-        continuation.resume(returning: result)
+        deleteNamingData(slug: jobs.first { $0.id == jobID }?.namingSlug)
+        if let idx = jobs.firstIndex(where: { $0.id == jobID }),
+           jobs[idx].state == .speakerNamingPending {
+            updateJobState(id: jobID, to: .done)
+        }
     }
 
     /// Called by the UI when the user confirms or skips speaker naming.
@@ -464,11 +487,16 @@ class PipelineQueue {
                             if let handler = speakerNamingHandler {
                                 namingResult = await handler(namingData)
                             } else {
-                                // Start a timeout task that auto-skips if user doesn't respond
+                                // Start a timeout task that auto-skips if user doesn't respond.
+                                // Resume pipeline but DON'T remove naming data — it stays for later.
+                                let timeoutSeconds = speakerNamingTimeoutSeconds
                                 let timeoutTask = Task { [weak self] in
-                                    try await Task.sleep(for: .seconds(Self.speakerNamingTimeout))
-                                    await self?.completeSpeakerNaming(result: .skipped)
+                                    try await Task.sleep(for: .seconds(timeoutSeconds))
+                                    guard let cont = self?.speakerNamingContinuation else { return }
+                                    self?.speakerNamingContinuation = nil
+                                    cont.resume(returning: .skipped)
                                 }
+                                self.speakerNamingTimeoutTask = timeoutTask
                                 namingResult = await withCheckedContinuation { continuation in
                                     self.speakerNamingContinuation = continuation
                                     self.speakerNamingDataByJob[jobID] = namingData
@@ -477,7 +505,8 @@ class PipelineQueue {
                                         object: nil,
                                     )
                                 }
-                                timeoutTask.cancel()
+                                speakerNamingTimeoutTask?.cancel()
+                                speakerNamingTimeoutTask = nil
                             }
 
                             switch namingResult {
@@ -629,7 +658,11 @@ class PipelineQueue {
             }
 
             stopElapsedTimer()
-            updateJobState(id: jobID, to: .done)
+            if speakerNamingDataByJob[jobID] != nil {
+                updateJobState(id: jobID, to: .speakerNamingPending)
+            } else {
+                updateJobState(id: jobID, to: .done)
+            }
         } catch is CancellationError {
             stopElapsedTimer()
             logger.info("Job \(jobID) cancelled")

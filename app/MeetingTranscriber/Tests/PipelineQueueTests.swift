@@ -945,7 +945,7 @@ final class PipelineQueueTests: XCTestCase {
                 .init(start: 5.0, end: 10.0, speaker: "SPEAKER_1"),
             ],
             participants: ["Alice", "Bob", "Charlie"],
-            isDualSource: false
+            isDualSource: false,
         )
 
         let encoded = try JSONEncoder().encode(data)
@@ -962,5 +962,128 @@ final class PipelineQueueTests: XCTestCase {
     func testPendingSpeakerNamingJobsReturnsNamingPendingJobs() {
         let queue = PipelineQueue(logDir: tmpDir)
         XCTAssertTrue(queue.pendingSpeakerNamingJobs.isEmpty)
+    }
+
+    // MARK: - Pipeline Timeout → speakerNamingPending
+
+    func testPipelineSetsSpeakerNamingPendingAfterTimeout() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+        // Use a short timeout for testing (2s instead of 120s)
+        pQueue.speakerNamingTimeoutSeconds = 2
+        // Don't set speakerNamingHandler — simulate no user response (timeout)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Timeout Test",
+            appName: "TestApp",
+            mixPath: audioPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        pQueue.enqueue(job)
+
+        let expectation = XCTestExpectation(description: "Pipeline completes")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending {
+                expectation.fulfill()
+            }
+        }
+
+        await pQueue.processNext()
+
+        await fulfillment(of: [expectation], timeout: 10)
+
+        let finalJob = pQueue.jobs.first
+        XCTAssertEqual(
+            finalJob?.state, .speakerNamingPending,
+            "Job should be speakerNamingPending when naming was not confirmed",
+        )
+        XCTAssertNotNil(
+            pQueue.speakerNamingDataByJob[job.id],
+            "Naming data should still be available",
+        )
+    }
+
+    func testPipelineSetsDoneWhenNamingConfirmed() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        pQueue.speakerNamingHandler = { _ in .confirmed(["SPEAKER_0": "Alice"]) }
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Confirm Test",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        let finalState = pQueue.jobs.first?.state
+        XCTAssertEqual(finalState, .done, "Confirmed naming should end as .done")
+    }
+
+    func testCompleteSpeakerNamingLateTransitionsToDone() {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let jobID = UUID()
+        var job = PipelineJob(
+            meetingTitle: "Late Naming",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        queue.enqueue(job)
+
+        // Simulate naming data still present
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Late Naming",
+            mapping: [:],
+            speakingTimes: [:],
+            embeddings: [:],
+            audioPath: nil,
+            segments: [],
+            participants: [],
+            isDualSource: false,
+        )
+        queue.speakerNamingDataByJob[job.id] = namingData
+
+        // Late completion: no continuation, pipeline done
+        queue.completeSpeakerNaming(jobID: job.id, result: .confirmed([:]))
+
+        XCTAssertEqual(queue.jobs.first?.state, .done)
+        XCTAssertNil(queue.speakerNamingDataByJob[job.id])
     }
 }
