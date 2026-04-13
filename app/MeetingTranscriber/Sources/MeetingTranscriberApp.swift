@@ -110,46 +110,7 @@ struct MeetingTranscriberApp: App {
         }
 
         Window("Name Speakers", id: "speaker-naming") {
-            if let data = appState.pipelineQueue.speakerNamingData(
-                forJobID: appState.selectedNamingJobID,
-            ) {
-                VStack(spacing: 0) {
-                    // Show picker when multiple pending
-                    if appState.pipelineQueue.pendingSpeakerNamingJobs.count > 1 {
-                        Picker("Meeting", selection: Binding(
-                            get: {
-                                appState.selectedNamingJobID
-                                    ?? appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
-                            },
-                            set: { appState.selectedNamingJobID = $0 },
-                        )) {
-                            ForEach(appState.pipelineQueue.pendingSpeakerNamingJobs) { job in
-                                Text(job.meetingTitle).tag(Optional(job.id))
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-                    }
-
-                    SpeakerNamingView(data: data) { result in
-                        appState.pipelineQueue.completeSpeakerNaming(
-                            jobID: data.jobID,
-                            result: result,
-                        )
-                        if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
-                            closeWindow(id: "speaker-naming")
-                        } else {
-                            // Auto-advance to next pending meeting
-                            appState.selectedNamingJobID =
-                                appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
-                        }
-                    }
-                }
-            } else {
-                Text("No speaker data available.")
-                    .padding()
-            }
+            speakerNamingContent
         }
         .windowResizability(.contentSize)
 
@@ -179,6 +140,49 @@ struct MeetingTranscriberApp: App {
             )
         }
         .windowResizability(.contentSize)
+    }
+
+    // MARK: - Speaker Naming Window
+
+    @ViewBuilder private var speakerNamingContent: some View {
+        if let data = appState.pipelineQueue.speakerNamingData(
+            forJobID: appState.selectedNamingJobID,
+        ) {
+            VStack(spacing: 0) {
+                if appState.pipelineQueue.pendingSpeakerNamingJobs.count > 1 {
+                    Picker("Meeting", selection: Binding(
+                        get: {
+                            appState.selectedNamingJobID
+                                ?? appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
+                        },
+                        set: { appState.selectedNamingJobID = $0 },
+                    )) {
+                        ForEach(appState.pipelineQueue.pendingSpeakerNamingJobs) { job in
+                            Text(job.meetingTitle).tag(Optional(job.id))
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                }
+
+                SpeakerNamingView(data: data) { result in
+                    appState.pipelineQueue.completeSpeakerNaming(
+                        jobID: data.jobID,
+                        result: result,
+                    )
+                    if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
+                        closeWindow(id: "speaker-naming")
+                    } else {
+                        appState.selectedNamingJobID =
+                            appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
+                    }
+                }
+            }
+        } else {
+            Text("No speaker data available.")
+                .padding()
+        }
     }
 
     // MARK: - UI Actions

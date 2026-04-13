@@ -803,37 +803,14 @@ class PipelineQueue {
 
             stopElapsedTimer()
 
-            guard let embeddings = diarization.embeddings else {
+            guard let newNamingData = buildNamingData(
+                jobID: jobID, title: title,
+                diarization: diarization, prior: namingData,
+            ) else {
                 logger.warning("Late re-diarization produced no embeddings")
                 updateJobState(id: jobID, to: .speakerNamingPending)
                 return
             }
-
-            let matcher = speakerMatcherFactory()
-            var autoNames = matcher.match(embeddings: embeddings)
-
-            if !namingData.participants.isEmpty {
-                autoNames = SpeakerMatcher.preMatchParticipants(
-                    mapping: autoNames,
-                    speakingTimes: diarization.speakingTimes,
-                    participants: namingData.participants,
-                )
-            }
-
-            // Build new naming data with fresh diarization results
-            let newNamingData = SpeakerNamingData(
-                jobID: jobID,
-                meetingTitle: title,
-                mapping: autoNames,
-                speakingTimes: diarization.speakingTimes,
-                embeddings: embeddings,
-                audioPath: namingData.audioPath,
-                segments: diarization.segments.map { seg in
-                    SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
-                },
-                participants: namingData.participants,
-                isDualSource: namingData.isDualSource,
-            )
 
             // Update disk + RAM
             speakerNamingDataByJob[jobID] = newNamingData
@@ -853,6 +830,34 @@ class PipelineQueue {
             stopElapsedTimer()
             updateJobState(id: jobID, to: .speakerNamingPending)
         }
+    }
+
+    /// Build SpeakerNamingData from fresh diarization, reusing context from prior naming data.
+    private func buildNamingData(
+        jobID: UUID, title: String,
+        diarization: DiarizationResult, prior: SpeakerNamingData,
+    ) -> SpeakerNamingData? {
+        guard let embeddings = diarization.embeddings else { return nil }
+
+        let matcher = speakerMatcherFactory()
+        var autoNames = matcher.match(embeddings: embeddings)
+        if !prior.participants.isEmpty {
+            autoNames = SpeakerMatcher.preMatchParticipants(
+                mapping: autoNames,
+                speakingTimes: diarization.speakingTimes,
+                participants: prior.participants,
+            )
+        }
+
+        return SpeakerNamingData(
+            jobID: jobID, meetingTitle: title, mapping: autoNames,
+            speakingTimes: diarization.speakingTimes, embeddings: embeddings,
+            audioPath: prior.audioPath,
+            segments: diarization.segments.map { seg in
+                SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
+            },
+            participants: prior.participants, isDualSource: prior.isDualSource,
+        )
     }
 
     // MARK: - Speaker Naming Persistence
