@@ -111,7 +111,7 @@ struct MeetingTranscriberApp: App {
 
         Window("Name Speakers", id: "speaker-naming") {
             if let data = appState.pipelineQueue.speakerNamingData(
-                forJobID: appState.selectedNamingJobID
+                forJobID: appState.selectedNamingJobID,
             ) {
                 VStack(spacing: 0) {
                     // Show picker when multiple pending
@@ -121,7 +121,7 @@ struct MeetingTranscriberApp: App {
                                 appState.selectedNamingJobID
                                     ?? appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
                             },
-                            set: { appState.selectedNamingJobID = $0 }
+                            set: { appState.selectedNamingJobID = $0 },
                         )) {
                             ForEach(appState.pipelineQueue.pendingSpeakerNamingJobs) { job in
                                 Text(job.meetingTitle).tag(Optional(job.id))
@@ -135,7 +135,7 @@ struct MeetingTranscriberApp: App {
                     SpeakerNamingView(data: data) { result in
                         appState.pipelineQueue.completeSpeakerNaming(
                             jobID: data.jobID,
-                            result: result
+                            result: result,
                         )
                         if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
                             closeWindow(id: "speaker-naming")

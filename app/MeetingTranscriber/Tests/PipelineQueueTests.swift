@@ -1280,7 +1280,7 @@ final class PipelineQueueTests: XCTestCase {
 
         // Now set handler to confirm after re-run
         var rerunHandlerCalled = false
-        pQueue.speakerNamingHandler = { data in
+        pQueue.speakerNamingHandler = { _ in
             rerunHandlerCalled = true
             return .confirmed([:])
         }
@@ -1371,9 +1371,9 @@ final class PipelineQueueTests: XCTestCase {
 
         // Verify: job still in speakerNamingPending, naming data loaded
         XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
-        XCTAssertNotNil(freshQueue.speakerNamingDataByJob[freshQueue.jobs.first!.id])
+        XCTAssertNotNil(try freshQueue.speakerNamingDataByJob[XCTUnwrap(freshQueue.jobs.first?.id)])
         XCTAssertEqual(
-            freshQueue.speakerNamingDataByJob[freshQueue.jobs.first!.id]?.mapping["SPEAKER_0"],
+            try freshQueue.speakerNamingDataByJob[XCTUnwrap(freshQueue.jobs.first?.id)]?.mapping["SPEAKER_0"],
             "Alice",
         )
     }
