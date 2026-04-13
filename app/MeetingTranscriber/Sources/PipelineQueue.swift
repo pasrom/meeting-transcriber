@@ -106,13 +106,30 @@ class PipelineQueue {
         }
 
         // Late completion — pipeline already done
-        // For now, just clean up and transition to .done
-        // (Task 6 will add re-apply logic for .confirmed, Task 7 adds re-diarization for .rerun)
-        speakerNamingDataByJob.removeValue(forKey: jobID)
-        deleteNamingData(slug: jobs.first { $0.id == jobID }?.namingSlug)
-        if let idx = jobs.firstIndex(where: { $0.id == jobID }),
-           jobs[idx].state == .speakerNamingPending {
-            updateJobState(id: jobID, to: .done)
+        guard speakerNamingDataByJob[jobID] != nil else { return }
+        let slug = jobs.first { $0.id == jobID }?.namingSlug
+
+        switch result {
+        case let .confirmed(userMapping):
+            Task { await reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
+
+        case .rerun:
+            // Late re-run: placeholder for Task 7
+            logger.warning("Late re-run not yet implemented, skipping")
+            speakerNamingDataByJob.removeValue(forKey: jobID)
+            deleteNamingData(slug: slug)
+            if let idx = jobs.firstIndex(where: { $0.id == jobID }),
+               jobs[idx].state == .speakerNamingPending {
+                updateJobState(id: jobID, to: .done)
+            }
+
+        case .skipped:
+            speakerNamingDataByJob.removeValue(forKey: jobID)
+            deleteNamingData(slug: slug)
+            if let idx = jobs.firstIndex(where: { $0.id == jobID }),
+               jobs[idx].state == .speakerNamingPending {
+                updateJobState(id: jobID, to: .done)
+            }
         }
     }
 
@@ -679,6 +696,73 @@ class PipelineQueue {
 
         isProcessing = false
         triggerProcessing()
+    }
+
+    // MARK: - Late Re-apply Speaker Names
+
+    /// Re-apply speaker names after the pipeline has already completed.
+    /// Reads the saved transcript, replaces generic speaker labels with user-provided names,
+    /// updates the matcher DB, and re-saves. Then re-generates protocol.
+    private func reapplySpeakerNames(jobID: UUID, mapping: [String: String]) async {
+        guard let namingData = speakerNamingDataByJob[jobID],
+              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+
+        let slug = jobs[jobIndex].namingSlug
+
+        // Update speaker matcher DB
+        let matcher = speakerMatcherFactory()
+        var fullMapping = namingData.mapping
+        for (label, name) in mapping where !name.isEmpty {
+            fullMapping[label] = name
+        }
+        matcher.updateDB(mapping: fullMapping, embeddings: namingData.embeddings)
+
+        if let transcriptPath = jobs[jobIndex].transcriptPath {
+            do {
+                // Re-read transcript and replace speaker labels
+                var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
+                for (label, name) in mapping where !name.isEmpty {
+                    // Replace [SPEAKER_0] or [R_SPEAKER_0] style labels
+                    transcript = transcript.replacingOccurrences(of: "[\(label)]", with: "[\(name)]")
+                    // Also replace the auto-matched name if different
+                    if let autoName = namingData.mapping[label], autoName != label, autoName != name {
+                        transcript = transcript.replacingOccurrences(of: "[\(autoName)]", with: "[\(name)]")
+                    }
+                }
+                try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+                // Re-generate protocol
+                if let protocolGeneratorFactory, let generator = protocolGeneratorFactory() {
+                    updateJobState(id: jobID, to: .generatingProtocol)
+                    startElapsedTimer()
+                    let diarized = transcript.range(
+                        of: #"\[\w[\w\s]*\]"#, options: .regularExpression,
+                    ) != nil
+                    let title = jobs[jobIndex].meetingTitle
+                    let protocolMD = try await generator.generate(
+                        transcript: transcript, title: title, diarized: diarized,
+                    )
+                    let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
+                    if let outputDir {
+                        let protocolsDir = outputDir.appendingPathComponent("protocols")
+                        let mdPath = try ProtocolGenerator.saveProtocol(
+                            fullMD, title: title, dir: protocolsDir,
+                        )
+                        if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                            jobs[idx].protocolPath = mdPath
+                        }
+                    }
+                    stopElapsedTimer()
+                }
+            } catch {
+                logger.error("Failed to re-apply speaker names: \(error)")
+            }
+        }
+
+        // Clean up naming data and transition to done
+        speakerNamingDataByJob.removeValue(forKey: jobID)
+        deleteNamingData(slug: slug)
+        updateJobState(id: jobID, to: .done)
     }
 
     // MARK: - Speaker Naming Persistence
