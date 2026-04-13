@@ -156,6 +156,17 @@ class MockEngine: TranscribingEngine {
     }
 }
 
+// MARK: - E2E Skip Logic
+
+/// Whether E2E tests should be skipped in the current environment.
+/// - Local dev: CI unset → run
+/// - Regular CI: CI set, E2E_ENABLED unset → skip
+/// - E2E workflow: CI set, E2E_ENABLED set → run
+var shouldSkipE2E: Bool {
+    ProcessInfo.processInfo.environment["CI"] != nil
+        && ProcessInfo.processInfo.environment["E2E_ENABLED"] == nil
+}
+
 // MARK: - Test Audio Fixture
 
 /// Create a minimal valid 16kHz Float32 mono WAV (0.5s silence).
