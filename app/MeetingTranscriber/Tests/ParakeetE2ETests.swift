@@ -7,8 +7,7 @@ final class ParakeetE2ETests: XCTestCase {
     // MARK: - Model loading
 
     func testParakeetModelLoadsSuccessfully() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let engine = ParakeetEngine()
         await engine.loadModel()
@@ -18,8 +17,7 @@ final class ParakeetE2ETests: XCTestCase {
     // MARK: - Transcription with fixture
 
     func testTranscribeSegmentsWithFixture() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -51,8 +49,7 @@ final class ParakeetE2ETests: XCTestCase {
     }
 
     func testTranscribeSegmentsProducesGermanContent() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -75,8 +72,7 @@ final class ParakeetE2ETests: XCTestCase {
     }
 
     func testTranscribeSegmentsGroupsIntoSentences() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -103,8 +99,7 @@ final class ParakeetE2ETests: XCTestCase {
     // MARK: - Progress tracking
 
     func testDownloadProgressReachesOne() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let engine = ParakeetEngine()
         await engine.loadModel()
@@ -113,8 +108,7 @@ final class ParakeetE2ETests: XCTestCase {
     }
 
     func testTranscriptionProgressReachesOne() async throws {
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Parakeet model download")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Parakeet model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
