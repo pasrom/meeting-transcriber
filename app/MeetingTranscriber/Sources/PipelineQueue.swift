@@ -959,6 +959,20 @@ class PipelineQueue {
             }
 
             jobs = loaded
+
+            // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
+            for job in jobs where job.state == .speakerNamingPending {
+                if let slug = job.namingSlug, let data = loadNamingData(slug: slug) {
+                    speakerNamingDataByJob[job.id] = data
+                } else {
+                    // Naming data lost — transition to done
+                    logger.warning("Naming data not found for job \(job.id), marking as done")
+                    if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                        jobs[idx].state = .done
+                    }
+                }
+            }
+
             saveSnapshot()
             logger.info("Restored \(loaded.count) jobs from snapshot")
             triggerProcessing()

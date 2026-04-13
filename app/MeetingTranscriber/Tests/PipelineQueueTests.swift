@@ -1317,4 +1317,91 @@ final class PipelineQueueTests: XCTestCase {
         // State should NOT change since guard fails
         XCTAssertEqual(queue.jobs.first?.state, .speakerNamingPending)
     }
+
+    // MARK: - Snapshot Restore + Speaker Naming Cache
+
+    func testLoadSnapshotRebuildsSpeakerNamingCache() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        // Create a job in speakerNamingPending state and write snapshot JSON directly
+        var job = PipelineJob(
+            meetingTitle: "Snapshot Test",
+            appName: "App",
+            mixPath: mixPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "snapshot_test"
+        let snapshotData = try JSONEncoder().encode([job])
+        try snapshotData.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        // Save naming data as sidecar JSON
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Snapshot Test",
+            mapping: ["SPEAKER_0": "Alice"],
+            speakingTimes: ["SPEAKER_0": 60.0],
+            embeddings: ["SPEAKER_0": [0.1, 0.2]],
+            audioPath: recordingsDir.appendingPathComponent("snapshot_test_16k.wav"),
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            participants: [],
+            isDualSource: false,
+        )
+        let json = try JSONEncoder().encode(namingData)
+        try json.write(to: recordingsDir.appendingPathComponent("snapshot_test_naming.json"))
+
+        // Load snapshot in a new queue that has outputDir set
+        let mockEngine = MockEngine()
+        let freshQueue = PipelineQueue(
+            engine: mockEngine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: outputDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+        )
+        freshQueue.loadSnapshot()
+
+        // Verify: job still in speakerNamingPending, naming data loaded
+        XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(freshQueue.speakerNamingDataByJob[freshQueue.jobs.first!.id])
+        XCTAssertEqual(
+            freshQueue.speakerNamingDataByJob[freshQueue.jobs.first!.id]?.mapping["SPEAKER_0"],
+            "Alice",
+        )
+    }
+
+    func testLoadSnapshotFallsToDoneWhenNamingDataMissing() throws {
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Missing Data Test",
+            appName: "App",
+            mixPath: mixPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "missing_data_test"
+        let snapshotData = try JSONEncoder().encode([job])
+        try snapshotData.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+
+        // Load without saving naming JSON — should fall back to .done
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        // Job transitions to .done in the naming rebuild loop (after removeAll ran),
+        // so it remains in the list as .done
+        let finalJob = freshQueue.jobs.first
+        XCTAssertEqual(finalJob?.state, .done)
+    }
 }
