@@ -1404,4 +1404,73 @@ final class PipelineQueueTests: XCTestCase {
         let finalJob = freshQueue.jobs.first
         XCTAssertEqual(finalJob?.state, .done)
     }
+
+    // MARK: - Stale Pending Cleanup
+
+    func testCleanupStalePendingTransitionsToDone() {
+        var job = PipelineJob(
+            meetingTitle: "Old Meeting",
+            appName: "App",
+            mixPath: tmpDir.appendingPathComponent("mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        queue.enqueue(job)
+
+        // enqueuedAt is "now" — calling with maxAge: 0 should clean it up
+        queue.cleanupStalePending(maxAge: 0)
+
+        XCTAssertEqual(queue.jobs.first?.state, .done)
+        XCTAssertNil(queue.speakerNamingDataByJob[job.id])
+    }
+
+    func testCleanupStalePendingKeepsRecentJobs() {
+        var job = PipelineJob(
+            meetingTitle: "Recent Meeting",
+            appName: "App",
+            mixPath: tmpDir.appendingPathComponent("mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        queue.enqueue(job)
+
+        // With default 24h maxAge, a fresh job should not be cleaned up
+        queue.cleanupStalePending()
+
+        XCTAssertEqual(queue.jobs.first?.state, .speakerNamingPending)
+    }
+
+    func testCleanupSidecarFilesDeletesPersistedFiles() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let slug = "test_cleanup"
+        for suffix in ["_16k.wav", "_segments.json", "_naming.json"] {
+            try Data([0]).write(to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
+        }
+
+        let localQueue = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: outputDir,
+            logDir: self.tmpDir,
+        )
+
+        localQueue.cleanupSidecarFiles(slug: slug)
+        localQueue.deleteNamingData(slug: slug)
+
+        for suffix in ["_16k.wav", "_segments.json", "_naming.json"] {
+            let path = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: path.path),
+                "\(suffix) should be deleted",
+            )
+        }
+    }
 }

@@ -99,7 +99,9 @@ class PipelineQueue {
             speakerNamingTimeoutTask = nil
             if case .confirmed = result {
                 speakerNamingDataByJob.removeValue(forKey: jobID)
-                deleteNamingData(slug: jobs.first { $0.id == jobID }?.namingSlug)
+                let confirmedSlug = jobs.first { $0.id == jobID }?.namingSlug
+                deleteNamingData(slug: confirmedSlug)
+                cleanupSidecarFiles(slug: confirmedSlug)
             }
             continuation.resume(returning: result)
             return
@@ -119,6 +121,7 @@ class PipelineQueue {
         case .skipped:
             speakerNamingDataByJob.removeValue(forKey: jobID)
             deleteNamingData(slug: slug)
+            cleanupSidecarFiles(slug: slug)
             if let idx = jobs.firstIndex(where: { $0.id == jobID }),
                jobs[idx].state == .speakerNamingPending {
                 updateJobState(id: jobID, to: .done)
@@ -752,9 +755,10 @@ class PipelineQueue {
             }
         }
 
-        // Clean up naming data and transition to done
+        // Clean up naming data, sidecar files, and transition to done
         speakerNamingDataByJob.removeValue(forKey: jobID)
         deleteNamingData(slug: slug)
+        cleanupSidecarFiles(slug: slug)
         updateJobState(id: jobID, to: .done)
     }
 
@@ -886,6 +890,34 @@ class PipelineQueue {
         try? FileManager.default.removeItem(at: path)
     }
 
+    /// Delete 16kHz audio and segment sidecar files for a slug.
+    func cleanupSidecarFiles(slug: String?) {
+        guard let slug, let outputDir else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        let suffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
+        for suffix in suffixes {
+            let path = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
+            try? FileManager.default.removeItem(at: path)
+        }
+    }
+
+    /// Auto-resolve pending naming items older than maxAge (default: 24h).
+    /// Transitions them to .done and deletes sidecar files.
+    func cleanupStalePending(maxAge: TimeInterval = 86400) {
+        let now = Date()
+        for job in jobs where job.state == .speakerNamingPending {
+            if now.timeIntervalSince(job.enqueuedAt) > maxAge {
+                logger.info("Auto-resolving stale pending naming for \(job.meetingTitle)")
+                speakerNamingDataByJob.removeValue(forKey: job.id)
+                if let slug = job.namingSlug {
+                    deleteNamingData(slug: slug)
+                    cleanupSidecarFiles(slug: slug)
+                }
+                updateJobState(id: job.id, to: .done)
+            }
+        }
+    }
+
     // MARK: - VAD Preprocessing
 
     /// Run VAD on a 16kHz audio file. Returns trimmed audio path and segment map,
@@ -974,6 +1006,7 @@ class PipelineQueue {
             }
 
             saveSnapshot()
+            cleanupStalePending()
             logger.info("Restored \(loaded.count) jobs from snapshot")
             triggerProcessing()
         } catch {
