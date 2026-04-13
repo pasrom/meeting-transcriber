@@ -19,8 +19,7 @@ class E2EFullPipelineTests: XCTestCase {
     // MARK: - Setup
 
     private static var shouldSkip: Bool {
-        ProcessInfo.processInfo.environment["CI"] != nil
-            && ProcessInfo.processInfo.environment["E2E_ENABLED"] == nil
+        shouldSkipE2E
     }
 
     override class func setUp() {

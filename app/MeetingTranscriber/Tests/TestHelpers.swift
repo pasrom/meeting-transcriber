@@ -156,6 +156,17 @@ class MockEngine: TranscribingEngine {
     }
 }
 
+// MARK: - E2E Skip Logic
+
+/// Whether E2E tests should be skipped in the current environment.
+/// - Local dev: CI unset → run
+/// - Regular CI: CI set, E2E_ENABLED unset → skip
+/// - E2E workflow: CI set, E2E_ENABLED set → run
+var shouldSkipE2E: Bool {
+    ProcessInfo.processInfo.environment["CI"] != nil
+        && ProcessInfo.processInfo.environment["E2E_ENABLED"] == nil
+}
+
 // MARK: - Meeting Simulator (for E2E tests)
 
 /// Helpers for building and launching the meeting-simulator tool.

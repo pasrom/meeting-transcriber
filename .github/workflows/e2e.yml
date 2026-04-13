@@ -1,21 +1,57 @@
-name: E2E Pipeline Tests
+name: E2E Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      engine:
+        description: "Transcription engine filter (WhisperKit, Parakeet, Qwen3, WatchLoop, or all)"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - WhisperKit
+          - Parakeet
+          - Qwen3
+          - WatchLoop
   push:
     tags:
       - "v*"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      E2E_ENABLED: "1"
+
     steps:
       - uses: actions/checkout@v6
 
-      - name: E2E full pipeline test
-        env:
-          E2E_ENABLED: "1"
+      - name: Resolve test filter
+        id: filter
+        run: |
+          ENGINE="${{ github.event.inputs.engine || 'all' }}"
+          if [ "$ENGINE" = "all" ]; then
+            FILTER="E2E"
+          else
+            FILTER="${ENGINE}E2E"
+          fi
+          echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
+          echo "Running E2E tests with filter: $FILTER"
+
+      - name: Cache SPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: app/MeetingTranscriber/.build
+          key: spm-e2e-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+          restore-keys: spm-e2e-${{ runner.os }}-
+
+      - name: Run E2E tests
         run: |
           cd app/MeetingTranscriber
-          swift test --filter E2EFullPipeline
+          swift test --filter '${{ steps.filter.outputs.filter }}'
