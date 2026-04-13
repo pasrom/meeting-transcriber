@@ -42,6 +42,7 @@ final class AppState {
     var watchLoop: WatchLoop?
     var pipelineQueue: PipelineQueue
     var updateChecker: UpdateChecker
+    var selectedNamingJobID: UUID?
     var permissionHealth: HealthCheckResult?
 
     // MARK: - Init

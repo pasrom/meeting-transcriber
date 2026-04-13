@@ -75,6 +75,12 @@ class PipelineQueue {
         return speakerNamingDataByJob[firstPendingJob.id]
     }
 
+    /// Returns naming data for a specific job ID, or the first pending job as fallback.
+    func speakerNamingData(forJobID jobID: UUID?) -> SpeakerNamingData? {
+        if let jobID, let data = speakerNamingDataByJob[jobID] { return data }
+        return pendingSpeakerNaming
+    }
+
     /// Jobs in speakerNamingPending state.
     var pendingSpeakerNamingJobs: [PipelineJob] {
         jobs.filter { $0.state == .speakerNamingPending }
