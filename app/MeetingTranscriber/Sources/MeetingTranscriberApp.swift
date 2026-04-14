@@ -111,6 +111,12 @@ struct MeetingTranscriberApp: App {
 
         Window("Name Speakers", id: "speaker-naming") {
             speakerNamingContent
+                .onAppear {
+                    // Close restored window if no naming data available (macOS state restoration)
+                    if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
+                        closeWindow(id: "speaker-naming")
+                    }
+                }
         }
         .windowResizability(.contentSize)
 
