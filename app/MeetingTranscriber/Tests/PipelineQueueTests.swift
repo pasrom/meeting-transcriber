@@ -983,9 +983,7 @@ final class PipelineQueueTests: XCTestCase {
             diarizationFactory: { mockDiar },
             diarizeEnabled: true,
         )
-        // Use a short timeout for testing (2s instead of 120s)
-        pQueue.speakerNamingTimeoutSeconds = 2
-        // Don't set speakerNamingHandler — simulate no user response (timeout)
+        // Don't set speakerNamingHandler — pipeline proceeds with auto-names immediately
 
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
@@ -1251,8 +1249,7 @@ final class PipelineQueueTests: XCTestCase {
             diarizationFactory: { mockDiar },
             diarizeEnabled: true,
         )
-        // Use short timeout so pipeline completes without user response
-        pQueue.speakerNamingTimeoutSeconds = 2
+        // No handler → pipeline proceeds immediately with auto-names
 
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(

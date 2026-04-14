@@ -86,31 +86,9 @@ class PipelineQueue {
         jobs.filter { $0.state == .speakerNamingPending }
     }
 
-    private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
-    private var speakerNamingTimeoutTask: Task<Void, any Error>?
-
-    /// Timeout for the speaker naming popup (seconds). If the user does not respond
-    /// within this time, the continuation resumes with `.skipped`.
-    static let speakerNamingTimeout: TimeInterval = 120
-
-    /// Instance-level timeout (defaults to static). Can be overridden for testing.
-    var speakerNamingTimeoutSeconds: TimeInterval = PipelineQueue.speakerNamingTimeout
-
-    /// Called by the UI when the user confirms or skips speaker naming for a specific job.
+    /// Called by the UI when the user confirms, skips, or re-runs speaker naming.
+    /// Always handles "late" completion — the pipeline never blocks on naming.
     func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
-        // If continuation exists → pipeline is still waiting → resume it
-        if let continuation = speakerNamingContinuation {
-            speakerNamingContinuation = nil
-            speakerNamingTimeoutTask?.cancel()
-            speakerNamingTimeoutTask = nil
-            if case .confirmed = result {
-                removeNamingData(jobID: jobID, slug: jobs.first { $0.id == jobID }?.namingSlug)
-            }
-            continuation.resume(returning: result)
-            return
-        }
-
-        // Late completion — pipeline already done
         guard speakerNamingDataByJob[jobID] != nil else { return }
         let slug = jobs.first { $0.id == jobID }?.namingSlug
 
@@ -132,14 +110,8 @@ class PipelineQueue {
 
     /// Called by the UI when the user confirms or skips speaker naming.
     func completeSpeakerNaming(result: SpeakerNamingResult) {
-        // Find the job that has pending naming data
         if let jobID = pendingSpeakerNamingJobs.first?.id ?? speakerNamingDataByJob.keys.first {
             completeSpeakerNaming(jobID: jobID, result: result)
-        } else {
-            // Fallback: just resume continuation if it exists
-            guard let continuation = speakerNamingContinuation else { return }
-            speakerNamingContinuation = nil
-            continuation.resume(returning: result)
         }
     }
 
@@ -496,50 +468,39 @@ class PipelineQueue {
                             }
 
                             stopElapsedTimer()
-                            let namingResult: SpeakerNamingResult
+
+                            // Non-blocking: allow test handler to confirm synchronously,
+                            // otherwise proceed with auto-names immediately.
+                            // User can confirm/re-run later via the naming dialog.
                             if let handler = speakerNamingHandler {
-                                namingResult = await handler(namingData)
+                                let namingResult = await handler(namingData)
+                                switch namingResult {
+                                case let .confirmed(userMapping):
+                                    for (label, name) in userMapping where !name.isEmpty {
+                                        autoNames[label] = name
+                                    }
+                                    matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                                    speakerNamingDataByJob.removeValue(forKey: jobID)
+
+                                case let .rerun(count):
+                                    speakerCount = count
+                                    updateJobState(id: jobID, to: .diarizing)
+                                    startElapsedTimer()
+                                    logger.info("Re-running diarization with \(count) speakers")
+                                    continue diarizationLoop
+
+                                case .skipped:
+                                    break
+                                }
                             } else {
-                                // Start a timeout task that auto-skips if user doesn't respond.
-                                // Resume pipeline but DON'T remove naming data — it stays for later.
-                                let timeoutSeconds = speakerNamingTimeoutSeconds
-                                let timeoutTask = Task { [weak self] in
-                                    try await Task.sleep(for: .seconds(timeoutSeconds))
-                                    guard let cont = self?.speakerNamingContinuation else { return }
-                                    self?.speakerNamingContinuation = nil
-                                    cont.resume(returning: .skipped)
-                                }
-                                self.speakerNamingTimeoutTask = timeoutTask
-                                namingResult = await withCheckedContinuation { continuation in
-                                    self.speakerNamingContinuation = continuation
-                                    self.speakerNamingDataByJob[jobID] = namingData
-                                    NotificationCenter.default.post(
-                                        name: .showSpeakerNaming,
-                                        object: nil,
-                                    )
-                                }
-                                speakerNamingTimeoutTask?.cancel()
-                                speakerNamingTimeoutTask = nil
+                                // Production: show dialog, don't block pipeline
+                                speakerNamingDataByJob[jobID] = namingData
+                                NotificationCenter.default.post(
+                                    name: .showSpeakerNaming,
+                                    object: nil,
+                                )
                             }
-
-                            switch namingResult {
-                            case let .confirmed(userMapping):
-                                for (label, name) in userMapping where !name.isEmpty {
-                                    autoNames[label] = name
-                                }
-                                matcher.updateDB(mapping: autoNames, embeddings: embeddings)
-                                break diarizationLoop
-
-                            case let .rerun(count):
-                                speakerCount = count
-                                updateJobState(id: jobID, to: .diarizing)
-                                startElapsedTimer()
-                                logger.info("Re-running diarization with \(count) speakers")
-                                continue diarizationLoop
-
-                            case .skipped:
-                                break diarizationLoop
-                            }
+                            break diarizationLoop
                         }
 
                         // Apply speaker names to segments
