@@ -66,6 +66,9 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
     SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
   Tests/
+    AudioCaptureResultTests.swift
+    HelpersTests.swift
+    MicCaptureErrorTests.swift
     MicRestartPolicyTests.swift
     SampleRateQueryTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
@@ -89,6 +92,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
+  e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
 docs/
   architecture-macos.md        # High-level architecture quick-reference
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
@@ -255,7 +259,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **OpenAI API** | Yes | Yes (only LLM option) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~795 | fewer (CLI tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~996 | fewer (CLI tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
