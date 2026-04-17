@@ -13,6 +13,21 @@
 
 set -euo pipefail
 
+# === Sourceable helpers (no side effects on source) ===
+
+# Returns first 40-hex codesigning identity SHA-1 hash, or empty string if none.
+# `|| true` guards against grep exit-1 (no match) propagating under pipefail.
+detect_sign_hash() {
+    security find-identity -v -p codesigning 2>/dev/null \
+        | grep -oE '[0-9A-F]{40}' | head -1 || true
+}
+
+# === Source guard: only run the build when executed, not when sourced ===
+
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -165,7 +180,7 @@ if [ "$NOTARIZE" = true ]; then
     fi
 else
     # Use local development certificate if available (extract 40-char hex SHA-1 hash)
-    SIGN_HASH=$(security find-identity -v -p codesigning 2>/dev/null | grep -oE '[0-9A-F]{40}' | head -1)
+    SIGN_HASH=$(detect_sign_hash)
     if [ -n "$SIGN_HASH" ]; then
         codesign --deep --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE"
         echo "  Signed with certificate: $SIGN_HASH"
