@@ -28,6 +28,8 @@ jobs:
             scripts/generate_menu_bar_gifs.swift
       - name: SwiftLint
         run: swiftlint lint --strict --reporter github-actions-logging
+      - name: Build script regression tests
+        run: bash scripts/tests/test_build_release_signing.sh
 
   analyze:
     runs-on: macos-26
