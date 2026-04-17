@@ -1,0 +1,32 @@
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for safe bumps
+        # Auto-merge: all github-actions bumps + patch/minor for swift packages.
+        # Major swift bumps still require manual review. Other ecosystems must
+        # be added explicitly here when introduced in dependabot.yml.
+        if: |
+          steps.meta.outputs.package-ecosystem == 'github_actions' ||
+          (steps.meta.outputs.package-ecosystem == 'swift' &&
+           (steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+            steps.meta.outputs.update-type == 'version-update:semver-minor'))
+        run: gh pr merge --rebase --auto "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
