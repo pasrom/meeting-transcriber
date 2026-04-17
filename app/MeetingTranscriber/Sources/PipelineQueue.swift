@@ -40,15 +40,22 @@ class PipelineQueue {
     // MARK: - Speaker Naming
 
     /// Data for the speaker naming popup.
-    struct SpeakerNamingData {
+    struct SpeakerNamingData: Codable {
         let jobID: UUID
         let meetingTitle: String
         let mapping: [String: String] // label → auto-matched name or label
         let speakingTimes: [String: TimeInterval]
         let embeddings: [String: [Float]]
         let audioPath: URL? // 16kHz mix for playback
-        let segments: [DiarizationResult.Segment] // for extracting speaker snippets
+        let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
+        let isDualSource: Bool
+
+        struct Segment: Codable {
+            let start: TimeInterval
+            let end: TimeInterval
+            let speaker: String
+        }
     }
 
     /// Result from the speaker naming popup.
@@ -58,21 +65,54 @@ class PipelineQueue {
         case skipped // user skipped
     }
 
-    /// Set when the pipeline is waiting for the user to name speakers.
-    var pendingSpeakerNaming: SpeakerNamingData?
-    private var speakerNamingContinuation: CheckedContinuation<SpeakerNamingResult, Never>?
+    /// RAM cache of naming data, rebuilt from disk on loadSnapshot().
+    /// Internal setter allows test access via @testable import.
+    var speakerNamingDataByJob: [UUID: SpeakerNamingData] = [:]
 
-    /// Timeout for the speaker naming popup (seconds). If the user does not respond
-    /// within this time, the continuation resumes with `.skipped`.
-    static let speakerNamingTimeout: TimeInterval = 120
+    /// The currently displayed naming data (first pending item).
+    var pendingSpeakerNaming: SpeakerNamingData? {
+        guard let firstPendingJob = pendingSpeakerNamingJobs.first else { return nil }
+        return speakerNamingDataByJob[firstPendingJob.id]
+    }
+
+    /// Returns naming data for a specific job ID, or the first pending job as fallback.
+    func speakerNamingData(forJobID jobID: UUID?) -> SpeakerNamingData? {
+        if let jobID, let data = speakerNamingDataByJob[jobID] { return data }
+        return pendingSpeakerNaming
+    }
+
+    /// Jobs in speakerNamingPending state.
+    var pendingSpeakerNamingJobs: [PipelineJob] {
+        jobs.filter { $0.state == .speakerNamingPending }
+    }
+
+    /// Called by the UI when the user confirms, skips, or re-runs speaker naming.
+    /// Always handles "late" completion — the pipeline never blocks on naming.
+    func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
+        guard speakerNamingDataByJob[jobID] != nil else { return }
+        let slug = jobs.first { $0.id == jobID }?.namingSlug
+
+        switch result {
+        case let .confirmed(userMapping):
+            Task { await reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
+
+        case let .rerun(count):
+            Task { await lateDiarization(jobID: jobID, speakerCount: count) }
+
+        case .skipped:
+            removeNamingData(jobID: jobID, slug: slug)
+            if let idx = jobs.firstIndex(where: { $0.id == jobID }),
+               jobs[idx].state == .speakerNamingPending {
+                updateJobState(id: jobID, to: .done)
+            }
+        }
+    }
 
     /// Called by the UI when the user confirms or skips speaker naming.
     func completeSpeakerNaming(result: SpeakerNamingResult) {
-        pendingSpeakerNaming = nil
-        // Guard against double-resume: only resume if continuation is still set
-        guard let continuation = speakerNamingContinuation else { return }
-        speakerNamingContinuation = nil
-        continuation.resume(returning: result)
+        if let jobID = pendingSpeakerNamingJobs.first?.id ?? speakerNamingDataByJob.keys.first {
+            completeSpeakerNaming(jobID: jobID, result: result)
+        }
     }
 
     /// Handler for speaker naming. When set, called instead of the default
@@ -166,7 +206,7 @@ class PipelineQueue {
             jobs.remove(at: index)
             saveSnapshot()
 
-        case .done, .error:
+        case .speakerNamingPending, .done, .error:
             break
         }
     }
@@ -260,6 +300,9 @@ class PipelineQueue {
                 .appendingPathComponent("pipeline_\(jobID.uuidString)")
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
+
+            // Compute slug early so it's available for persisted file names
+            let slug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
 
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)
@@ -400,56 +443,64 @@ class PipelineQueue {
                                 )
                             }
 
+                            // Use persisted 16kHz path (survives workDir cleanup)
+                            let recordingsDir = outputDir.appendingPathComponent("recordings")
+                            let persistedAudioPath = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+
                             let namingData = SpeakerNamingData(
                                 jobID: jobID,
                                 meetingTitle: title,
                                 mapping: autoNames,
                                 speakingTimes: currentDiarization.speakingTimes,
                                 embeddings: embeddings,
-                                audioPath: mix16k,
-                                segments: currentDiarization.segments,
+                                audioPath: persistedAudioPath,
+                                segments: currentDiarization.segments.map { seg in
+                                    SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
+                                },
                                 participants: participants,
+                                isDualSource: isDualSource,
                             )
 
+                            // Persist naming data and set slug early
+                            saveNamingData(namingData, slug: slug)
+                            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                                jobs[idx].namingSlug = slug
+                            }
+
                             stopElapsedTimer()
-                            let namingResult: SpeakerNamingResult
+
+                            // Non-blocking: allow test handler to confirm synchronously,
+                            // otherwise proceed with auto-names immediately.
+                            // User can confirm/re-run later via the naming dialog.
                             if let handler = speakerNamingHandler {
-                                namingResult = await handler(namingData)
+                                let namingResult = await handler(namingData)
+                                switch namingResult {
+                                case let .confirmed(userMapping):
+                                    for (label, name) in userMapping where !name.isEmpty {
+                                        autoNames[label] = name
+                                    }
+                                    matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                                    speakerNamingDataByJob.removeValue(forKey: jobID)
+
+                                case let .rerun(count):
+                                    speakerCount = count
+                                    updateJobState(id: jobID, to: .diarizing)
+                                    startElapsedTimer()
+                                    logger.info("Re-running diarization with \(count) speakers")
+                                    continue diarizationLoop
+
+                                case .skipped:
+                                    break
+                                }
                             } else {
-                                // Start a timeout task that auto-skips if user doesn't respond
-                                let timeoutTask = Task { [weak self] in
-                                    try await Task.sleep(for: .seconds(Self.speakerNamingTimeout))
-                                    await self?.completeSpeakerNaming(result: .skipped)
-                                }
-                                namingResult = await withCheckedContinuation { continuation in
-                                    self.speakerNamingContinuation = continuation
-                                    self.pendingSpeakerNaming = namingData
-                                    NotificationCenter.default.post(
-                                        name: .showSpeakerNaming,
-                                        object: nil,
-                                    )
-                                }
-                                timeoutTask.cancel()
+                                // Production: show dialog, don't block pipeline
+                                speakerNamingDataByJob[jobID] = namingData
+                                NotificationCenter.default.post(
+                                    name: .showSpeakerNaming,
+                                    object: nil,
+                                )
                             }
-
-                            switch namingResult {
-                            case let .confirmed(userMapping):
-                                for (label, name) in userMapping where !name.isEmpty {
-                                    autoNames[label] = name
-                                }
-                                matcher.updateDB(mapping: autoNames, embeddings: embeddings)
-                                break diarizationLoop
-
-                            case let .rerun(count):
-                                speakerCount = count
-                                updateJobState(id: jobID, to: .diarizing)
-                                startElapsedTimer()
-                                logger.info("Re-running diarization with \(count) speakers")
-                                continue diarizationLoop
-
-                            case .skipped:
-                                break diarizationLoop
-                            }
+                            break diarizationLoop
                         }
 
                         // Apply speaker names to segments
@@ -520,6 +571,7 @@ class PipelineQueue {
 
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].transcriptPath = txtPath
+                jobs[idx].namingSlug = slug
             }
 
             let recordingsDir = outputDir.appendingPathComponent("recordings")
@@ -527,6 +579,29 @@ class PipelineQueue {
                 mixPath: mixPath, appPath: appPath, micPath: micPath,
                 title: title, outputDir: recordingsDir,
             )
+
+            // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
+            try? FileManager.default.moveItem(
+                at: workDir.appendingPathComponent("mix_16k.wav"),
+                to: recordingsDir.appendingPathComponent("\(slug)_16k.wav"),
+            )
+
+            if isDualSource {
+                for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
+                    try? FileManager.default.moveItem(
+                        at: workDir.appendingPathComponent(name),
+                        to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"),
+                    )
+                }
+            }
+
+            // --- Persist transcript segments for late re-assignment ---
+            if let cachedSegments {
+                let segPath = recordingsDir.appendingPathComponent("\(slug)_segments.json")
+                if let data = try? JSONEncoder().encode(cachedSegments) {
+                    try? data.write(to: segPath, options: .atomic)
+                }
+            }
 
             // --- Protocol Generation (optional) ---
             if let protocolGeneratorFactory, let generator = protocolGeneratorFactory() {
@@ -555,7 +630,11 @@ class PipelineQueue {
             }
 
             stopElapsedTimer()
-            updateJobState(id: jobID, to: .done)
+            if speakerNamingDataByJob[jobID] != nil {
+                updateJobState(id: jobID, to: .speakerNamingPending)
+            } else {
+                updateJobState(id: jobID, to: .done)
+            }
         } catch is CancellationError {
             stopElapsedTimer()
             logger.info("Job \(jobID) cancelled")
@@ -572,6 +651,233 @@ class PipelineQueue {
 
         isProcessing = false
         triggerProcessing()
+    }
+
+    // MARK: - Late Re-apply Speaker Names
+
+    /// Re-apply speaker names after the pipeline has already completed.
+    /// Reads the saved transcript, replaces generic speaker labels with user-provided names,
+    /// updates the matcher DB, and re-saves. Then re-generates protocol.
+    private func reapplySpeakerNames(jobID: UUID, mapping: [String: String]) async {
+        guard let namingData = speakerNamingDataByJob[jobID],
+              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+
+        let slug = jobs[jobIndex].namingSlug
+
+        // Update speaker matcher DB
+        let matcher = speakerMatcherFactory()
+        var fullMapping = namingData.mapping
+        for (label, name) in mapping where !name.isEmpty {
+            fullMapping[label] = name
+        }
+        matcher.updateDB(mapping: fullMapping, embeddings: namingData.embeddings)
+
+        if let transcriptPath = jobs[jobIndex].transcriptPath {
+            do {
+                var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
+                for (label, name) in mapping where !name.isEmpty {
+                    transcript = transcript.replacingOccurrences(of: "[\(label)]", with: "[\(name)]")
+                    // Replace auto-matched name too, to cover both raw label and matched variant
+                    if let autoName = namingData.mapping[label], autoName != label, autoName != name {
+                        transcript = transcript.replacingOccurrences(of: "[\(autoName)]", with: "[\(name)]")
+                    }
+                }
+                try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+                // Re-generate protocol
+                if let protocolGeneratorFactory, let generator = protocolGeneratorFactory() {
+                    updateJobState(id: jobID, to: .generatingProtocol)
+                    startElapsedTimer()
+                    let diarized = transcript.range(
+                        of: #"\[\w[\w\s]*\]"#, options: .regularExpression,
+                    ) != nil
+                    let title = jobs[jobIndex].meetingTitle
+                    let protocolMD = try await generator.generate(
+                        transcript: transcript, title: title, diarized: diarized,
+                    )
+                    let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
+                    if let outputDir {
+                        let protocolsDir = outputDir.appendingPathComponent("protocols")
+                        let mdPath = try ProtocolGenerator.saveProtocol(
+                            fullMD, title: title, dir: protocolsDir,
+                        )
+                        if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                            jobs[idx].protocolPath = mdPath
+                        }
+                    }
+                    stopElapsedTimer()
+                }
+            } catch {
+                logger.error("Failed to re-apply speaker names: \(error)")
+            }
+        }
+
+        removeNamingData(jobID: jobID, slug: slug)
+        updateJobState(id: jobID, to: .done)
+    }
+
+    // MARK: - Late Re-diarization
+
+    /// Re-run diarization from persisted 16kHz audio after pipeline completed.
+    private func lateDiarization(jobID: UUID, speakerCount: Int) async {
+        guard let namingData = speakerNamingDataByJob[jobID],
+              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }),
+              let diarizationFactory,
+              let slug = jobs[jobIndex].namingSlug,
+              let outputDir else {
+            logger.warning("Cannot re-diarize: missing data or configuration")
+            return
+        }
+
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        let diarizeProcess = diarizationFactory()
+        guard diarizeProcess.isAvailable else {
+            logger.warning("Diarization not available for late re-run")
+            return
+        }
+
+        updateJobState(id: jobID, to: .diarizing)
+        startElapsedTimer()
+
+        do {
+            let title = jobs[jobIndex].meetingTitle
+            let diarization: DiarizationResult
+
+            if namingData.isDualSource {
+                let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
+                let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
+                async let appDiar = diarizeProcess.run(
+                    audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
+                )
+                async let micDiar = diarizeProcess.run(
+                    audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
+                )
+                diarization = try await DiarizationProcess.mergeDualTrackDiarization(
+                    appDiarization: appDiar, micDiarization: micDiar,
+                )
+            } else {
+                let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+                diarization = try await diarizeProcess.run(
+                    audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
+                )
+            }
+
+            stopElapsedTimer()
+
+            guard let newNamingData = buildNamingData(
+                jobID: jobID, title: title,
+                diarization: diarization, prior: namingData,
+            ) else {
+                logger.warning("Late re-diarization produced no embeddings")
+                updateJobState(id: jobID, to: .speakerNamingPending)
+                return
+            }
+
+            // Update disk + RAM
+            speakerNamingDataByJob[jobID] = newNamingData
+            saveNamingData(newNamingData, slug: slug)
+
+            // Show naming dialog again
+            updateJobState(id: jobID, to: .speakerNamingPending)
+            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+
+            // If test handler is set, call it directly
+            if let handler = speakerNamingHandler {
+                let result = await handler(newNamingData)
+                completeSpeakerNaming(jobID: jobID, result: result)
+            }
+        } catch {
+            logger.error("Late re-diarization failed: \(error)")
+            stopElapsedTimer()
+            updateJobState(id: jobID, to: .speakerNamingPending)
+        }
+    }
+
+    /// Build SpeakerNamingData from fresh diarization, reusing context from prior naming data.
+    private func buildNamingData(
+        jobID: UUID, title: String,
+        diarization: DiarizationResult, prior: SpeakerNamingData,
+    ) -> SpeakerNamingData? {
+        guard let embeddings = diarization.embeddings else { return nil }
+
+        let matcher = speakerMatcherFactory()
+        var autoNames = matcher.match(embeddings: embeddings)
+        if !prior.participants.isEmpty {
+            autoNames = SpeakerMatcher.preMatchParticipants(
+                mapping: autoNames,
+                speakingTimes: diarization.speakingTimes,
+                participants: prior.participants,
+            )
+        }
+
+        return SpeakerNamingData(
+            jobID: jobID, meetingTitle: title, mapping: autoNames,
+            speakingTimes: diarization.speakingTimes, embeddings: embeddings,
+            audioPath: prior.audioPath,
+            segments: diarization.segments.map { seg in
+                SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
+            },
+            participants: prior.participants, isDualSource: prior.isDualSource,
+        )
+    }
+
+    // MARK: - Speaker Naming Persistence
+
+    func saveNamingData(_ data: SpeakerNamingData, slug: String) {
+        guard let outputDir else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+        let path = recordingsDir.appendingPathComponent("\(slug)_naming.json")
+        do {
+            let json = try JSONEncoder().encode(data)
+            try json.write(to: path, options: .atomic)
+        } catch {
+            logger.error("Failed to save naming data: \(error)")
+        }
+    }
+
+    func loadNamingData(slug: String) -> SpeakerNamingData? {
+        guard let outputDir else { return nil }
+        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
+        guard let json = try? Data(contentsOf: path) else { return nil }
+        return try? JSONDecoder().decode(SpeakerNamingData.self, from: json)
+    }
+
+    func deleteNamingData(slug: String?) {
+        guard let slug, let outputDir else { return }
+        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
+        try? FileManager.default.removeItem(at: path)
+    }
+
+    /// Remove all naming-related data for a job: RAM cache, disk JSON, and sidecar files.
+    private func removeNamingData(jobID: UUID, slug: String?) {
+        speakerNamingDataByJob.removeValue(forKey: jobID)
+        deleteNamingData(slug: slug)
+        cleanupSidecarFiles(slug: slug)
+    }
+
+    /// Delete 16kHz audio and segment sidecar files for a slug.
+    func cleanupSidecarFiles(slug: String?) {
+        guard let slug, let outputDir else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        let suffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
+        for suffix in suffixes {
+            let path = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
+            try? FileManager.default.removeItem(at: path)
+        }
+    }
+
+    /// Auto-resolve pending naming items older than maxAge (default: 24h).
+    /// Transitions them to .done and deletes sidecar files.
+    func cleanupStalePending(maxAge: TimeInterval = 86400) {
+        let now = Date()
+        for job in jobs where job.state == .speakerNamingPending {
+            if now.timeIntervalSince(job.enqueuedAt) > maxAge {
+                logger.info("Auto-resolving stale pending naming for \(job.meetingTitle)")
+                removeNamingData(jobID: job.id, slug: job.namingSlug)
+                updateJobState(id: job.id, to: .done)
+            }
+        }
     }
 
     // MARK: - VAD Preprocessing
@@ -647,7 +953,22 @@ class PipelineQueue {
             }
 
             jobs = loaded
+
+            // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
+            for job in jobs where job.state == .speakerNamingPending {
+                if let slug = job.namingSlug, let data = loadNamingData(slug: slug) {
+                    speakerNamingDataByJob[job.id] = data
+                } else {
+                    // Naming data lost — transition to done
+                    logger.warning("Naming data not found for job \(job.id), marking as done")
+                    if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                        jobs[idx].state = .done
+                    }
+                }
+            }
+
             saveSnapshot()
+            cleanupStalePending()
             logger.info("Restored \(loaded.count) jobs from snapshot")
             triggerProcessing()
         } catch {
