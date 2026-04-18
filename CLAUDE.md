@@ -93,6 +93,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
+  dependabot-auto-merge.yml # Auto-merge Dependabot PRs (patch/minor swift + all github-actions)
 docs/
   architecture-macos.md        # High-level architecture quick-reference
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
