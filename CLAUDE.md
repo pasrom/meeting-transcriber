@@ -86,6 +86,8 @@ scripts/
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
+  tests/
+    test_build_release_signing.sh  # Regression tests for build_release.sh codesign-identity detection
 Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
 Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
 .github/workflows/
@@ -93,9 +95,10 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
+  dependabot-auto-merge.yml  # Auto-merge Dependabot PRs (patch/minor Swift packages, all GitHub Actions bumps)
 docs/
   architecture-macos.md        # High-level architecture quick-reference
-  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
+  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol, permission)
   plans/
     swift-architecture.md      # Detailed Swift pipeline architecture
     appstate-tests.md          # AppState test expansion plan
