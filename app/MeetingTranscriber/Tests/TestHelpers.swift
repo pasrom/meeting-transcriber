@@ -53,7 +53,7 @@ class MockRecorder: RecordingProvider {
     var startCalled = false
     var stopCalled = false
 
-    func start(appPID _: pid_t, noMic _: Bool, micDeviceUID _: String?) {
+    func start(appPID _: pid_t, noMic _: Bool, micDeviceUID _: String?, debugLogging _: Bool) {
         startCalled = true
     }
 

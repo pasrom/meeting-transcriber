@@ -292,6 +292,17 @@ final class AppSettings {
         customOutputDir ?? AppPaths.downloadsProtocolsDir
     }
 
+    // MARK: - Diagnostics
+
+    /// Enables verbose logging in the audio-capture path: process/device identity,
+    /// periodic RMS energy of the captured stream, output-device-change details.
+    /// Off by default; toggle for forensic debugging when audio recordings are silent
+    /// or otherwise unexpected. Logs go to the unified log subsystem
+    /// `com.meetingtranscriber.audiotap`.
+    var audioDebugLogging: Bool = defaults.object(forKey: "audioDebugLogging") as? Bool ?? false {
+        didSet { defaults.set(audioDebugLogging, forKey: "audioDebugLogging") }
+    }
+
     // MARK: - Updates
 
     var checkForUpdates: Bool = defaults.object(forKey: "checkForUpdates") as? Bool ?? true {

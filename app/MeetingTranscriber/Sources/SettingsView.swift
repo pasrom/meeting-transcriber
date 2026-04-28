@@ -480,6 +480,18 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Diagnostics") {
+                Toggle("Verbose Audio Logging", isOn: $settings.audioDebugLogging)
+                Text(
+                    "Logs process and output-device identity, plus a 5-second RMS"
+                        + " energy report of the captured app audio. Use to"
+                        + " investigate silent recordings. Logs go to subsystem"
+                        + " com.meetingtranscriber.audiotap (view via Console.app).",
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Section("About") {
                 HStack {
                     Text("Version")
