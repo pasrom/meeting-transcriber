@@ -249,6 +249,17 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)
 
+## Diagnostics
+
+`AppSettings.audioDebugLogging` (Settings → Diagnostics → "Verbose Audio Logging") enables forensic logging in the audio-capture path:
+
+- `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` at start
+- `[debug] Default output device: name=… uid=…` at start and on device change
+- `[debug] App audio RMS (5s): … dBFS, samples=…, totalBytes=…` every 5 s during capture — live signal whether the tap is delivering real audio or zero/noise
+- `[debug] App audio capture stopping: totalBytes=…` at stop
+
+View via Console.app, subsystem `com.meetingtranscriber.audiotap`. Off by default; turn on when investigating silent recordings or unusual routing.
+
 ## Build Variants
 
 Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPSTORE`):
