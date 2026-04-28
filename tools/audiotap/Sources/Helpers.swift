@@ -59,3 +59,50 @@ func getDefaultOutputDeviceUID() -> String? {
     guard uidStatus == noErr, let cfUID = uid?.takeRetainedValue() else { return nil }
     return cfUID as String
 }
+
+/// Read a CFString-valued audio property. Returns nil if the property is unavailable.
+func readCFStringAudioProperty(
+    _ id: AudioObjectID,
+    _ selector: AudioObjectPropertySelector,
+    scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
+) -> String? {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: selector,
+        mScope: scope,
+        mElement: kAudioObjectPropertyElementMain,
+    )
+    var s: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    let status = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &s)
+    guard status == noErr, let cf = s?.takeRetainedValue() else { return nil }
+    return cf as String
+}
+
+/// Bundle ID of a CoreAudio process AudioObject (e.g. "com.microsoft.teams2").
+public func getProcessBundleID(_ processObjectID: AudioObjectID) -> String? {
+    readCFStringAudioProperty(processObjectID, kAudioProcessPropertyBundleID)
+}
+
+/// Human-readable name of the default output device (e.g. "AirPods Pro", "MacBook Pro Speakers").
+public func getDefaultOutputDeviceName() -> String? {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    )
+    var deviceID = AudioObjectID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioObjectID>.size)
+    let status = AudioObjectGetPropertyData(
+        AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID,
+    )
+    guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    return readCFStringAudioProperty(deviceID, kAudioObjectPropertyName)
+}
+
+/// Process executable name (e.g. "MSTeams") for a PID. Returns "?" on lookup failure.
+public func getExecutableName(pid: pid_t) -> String {
+    var name = [CChar](repeating: 0, count: 1024)
+    let result = proc_name(pid, &name, UInt32(name.count))
+    if result <= 0 { return "?" }
+    return String(cString: name)
+}
