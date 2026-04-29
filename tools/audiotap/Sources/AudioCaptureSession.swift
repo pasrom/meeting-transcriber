@@ -66,7 +66,7 @@ public class AudioCaptureSession {
 
         // Start mic capture if requested
         if let micURL = micOutputURL {
-            let mic = MicCaptureHandler(outputURL: micURL)
+            let mic = MicCaptureHandler(outputURL: micURL, debugLogging: debugLogging)
             do {
                 try mic.start(deviceUID: micDeviceUID)
                 micCapture = mic
