@@ -414,6 +414,11 @@ public class AppAudioCapture {
             AudioDeviceDestroyIOProcID(aggregateID, procID)
             self.procID = nil
         }
+        // Drain pending IOProc blocks before the caller closes the fd —
+        // AudioDeviceStop doesn't synchronize against blocks already dispatched
+        // onto writeQueue, so without this barrier a late buffer could write
+        // to a closed/recycled fd.
+        writeQueue.sync {}
         if aggregateID != kAudioObjectUnknown {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = AudioObjectID(kAudioObjectUnknown)
