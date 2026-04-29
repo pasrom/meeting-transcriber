@@ -10,8 +10,7 @@ final class Qwen3E2ETests: XCTestCase {
         guard #available(macOS 15, *) else {
             throw XCTSkip("Qwen3-ASR requires macOS 15+")
         }
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Qwen3-ASR model download (~1.75 GB)")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Qwen3-ASR model download (set E2E_ENABLED=1)")
 
         let engine = Qwen3AsrEngine()
         await engine.loadModel()
@@ -24,8 +23,7 @@ final class Qwen3E2ETests: XCTestCase {
         guard #available(macOS 15, *) else {
             throw XCTSkip("Qwen3-ASR requires macOS 15+")
         }
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Qwen3-ASR model download (~1.75 GB)")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Qwen3-ASR model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -62,8 +60,7 @@ final class Qwen3E2ETests: XCTestCase {
         guard #available(macOS 15, *) else {
             throw XCTSkip("Qwen3-ASR requires macOS 15+")
         }
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Qwen3-ASR model download (~1.75 GB)")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Qwen3-ASR model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -92,8 +89,7 @@ final class Qwen3E2ETests: XCTestCase {
         guard #available(macOS 15, *) else {
             throw XCTSkip("Qwen3-ASR requires macOS 15+")
         }
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Qwen3-ASR model download (~1.75 GB)")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Qwen3-ASR model download (set E2E_ENABLED=1)")
 
         let engine = Qwen3AsrEngine()
         await engine.loadModel()
@@ -105,8 +101,7 @@ final class Qwen3E2ETests: XCTestCase {
         guard #available(macOS 15, *) else {
             throw XCTSkip("Qwen3-ASR requires macOS 15+")
         }
-        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
-        try XCTSkipIf(isCI, "Skipping in CI: requires Qwen3-ASR model download (~1.75 GB)")
+        try XCTSkipIf(shouldSkipE2E, "Skipping in CI: requires Qwen3-ASR model download (set E2E_ENABLED=1)")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
