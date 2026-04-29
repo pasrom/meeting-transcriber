@@ -134,6 +134,47 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.jobs.count, 0)
     }
 
+    func testCancelDuringSpeakerNamingResumesContinuation() async {
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .diarizing)
+        queue.pendingSpeakerNaming = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Test",
+            mapping: [:],
+            speakingTimes: [:],
+            embeddings: [:],
+            audioPath: nil,
+            segments: [],
+            participants: [],
+        )
+        // Drive the actual fix path: a pending continuation that must resume.
+        let result = await withCheckedContinuation { (continuation: CheckedContinuation<PipelineQueue.SpeakerNamingResult, Never>) in
+            queue.setSpeakerNamingContinuationForTesting(continuation)
+            queue.cancelJob(id: job.id)
+        }
+
+        if case .skipped = result {
+            // expected
+        } else {
+            XCTFail("expected .skipped, got \(result)")
+        }
+        XCTAssertNil(queue.pendingSpeakerNaming, "popup data must be cleared on cancel")
+        XCTAssertEqual(queue.jobs.count, 0)
+    }
+
+    func testCancelActiveJobWithoutPendingNamingIsSafe() {
+        let job = makeJob()
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .diarizing)
+        XCTAssertNil(queue.pendingSpeakerNaming)
+
+        queue.cancelJob(id: job.id)
+
+        XCTAssertNil(queue.pendingSpeakerNaming)
+        XCTAssertEqual(queue.jobs.count, 0)
+    }
+
     func testCancelDoneJobIsNoOp() {
         let job = makeJob()
         queue.enqueue(job)
