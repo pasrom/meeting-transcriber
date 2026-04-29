@@ -25,10 +25,7 @@ public class AppAudioCapture {
         label: "audiotap.writer", qos: .userInteractive,
     )
 
-    // Debug-only counters (only mutated in IOProc when debugLogging=true).
-    private var debugRMSAccumulator: Double = 0
-    private var debugSampleCount: Int = 0
-    private var debugLastReportTime: TimeInterval = 0
+    private var debugRMS = DebugRMSReporter()
     private var debugTotalBytes: UInt64 = 0
 
     /// CoreAudio property address for default output device changes.
@@ -251,8 +248,10 @@ public class AppAudioCapture {
 
         if debugLogging {
             let deviceName = getDefaultOutputDeviceName() ?? "?"
+            let transport = getDefaultOutputDeviceTransportType() ?? "?"
+            let deviceRate = getDefaultOutputDeviceSampleRate() ?? 0
             logger.info(
-                "[debug] Default output device: name=\(deviceName, privacy: .public) uid=\(systemOutputUID, privacy: .public)",
+                "[debug] Default output device: name=\(deviceName, privacy: .public) uid=\(systemOutputUID, privacy: .public) transport=\(transport, privacy: .public) rate=\(deviceRate, privacy: .public)",
             )
         }
 
@@ -276,6 +275,13 @@ public class AppAudioCapture {
         }
         tapID = newTapID
         logger.info("Created process tap: \(self.tapID)")
+
+        if debugLogging {
+            let tapRate = Self.queryTapSampleRate(tapID: tapID)
+            logger.info(
+                "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(self.tapID, privacy: .public)",
+            )
+        }
 
         // Create aggregate device with the tap
         let desc: [String: Any] = [
@@ -511,8 +517,8 @@ extension AppAudioCapture {
 
 @available(macOS 14.2, *)
 extension AppAudioCapture {
-    /// Accumulate squared-sample sum and count for the next periodic RMS report.
     /// Called from the IOProc (serial writeQueue) only when debugLogging=true.
+    /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
     func accumulateDebugRMS(data: UnsafeMutableRawPointer, byteCount: Int) {
         let count = byteCount / MemoryLayout<Float>.size
         guard count > 0 else { return }
@@ -523,34 +529,17 @@ extension AppAudioCapture {
         for sample in buf {
             sumSq += Double(sample) * Double(sample)
         }
-        debugRMSAccumulator += sumSq
-        debugSampleCount += count
+        debugRMS.add(sumSq: sumSq, samples: count)
         debugTotalBytes += UInt64(byteCount)
     }
 
-    /// Emit a single RMS-energy log line every ~5 s of capture, with reset.
-    /// Provides a live signal whether the tap is delivering real audio or zero/noise.
+    /// Emit a single RMS-energy log line every ~5 s of capture.
+    /// Live signal whether the tap is delivering real audio or zero/noise.
     func maybeReportDebugRMS() {
-        let now = Date().timeIntervalSinceReferenceDate
-        if debugLastReportTime == 0 {
-            debugLastReportTime = now
-            return
-        }
-        guard now - debugLastReportTime >= 5.0 else { return }
-        let dB: Double
-        if debugSampleCount > 0 {
-            let meanSq = debugRMSAccumulator / Double(debugSampleCount)
-            let rms = meanSq > 0 ? sqrt(meanSq) : 0
-            dB = rms > 0 ? 20 * log10(rms) : -120
-        } else {
-            dB = -120
-        }
-        let dBStr = String(format: "%.1f", dB)
+        guard let report = debugRMS.tick() else { return }
+        let dBStr = String(format: "%.1f", report.dBFS)
         logger.info(
-            "[debug] App audio RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(self.debugSampleCount, privacy: .public), totalBytes=\(self.debugTotalBytes, privacy: .public)",
+            "[debug] App audio RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public), totalBytes=\(self.debugTotalBytes, privacy: .public)",
         )
-        debugRMSAccumulator = 0
-        debugSampleCount = 0
-        debugLastReportTime = now
     }
 }
