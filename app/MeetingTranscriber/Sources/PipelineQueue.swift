@@ -66,6 +66,14 @@ class PipelineQueue {
     /// within this time, the continuation resumes with `.skipped`.
     static let speakerNamingTimeout: TimeInterval = 120
 
+    /// Test seam: install a CheckedContinuation that the test will await for
+    /// `cancelJob`-during-naming to resume.
+    func setSpeakerNamingContinuationForTesting(
+        _ continuation: CheckedContinuation<SpeakerNamingResult, Never>,
+    ) {
+        speakerNamingContinuation = continuation
+    }
+
     /// Called by the UI when the user confirms or skips speaker naming.
     func completeSpeakerNaming(result: SpeakerNamingResult) {
         pendingSpeakerNaming = nil
@@ -162,6 +170,12 @@ class PipelineQueue {
 
         case .transcribing, .diarizing, .generatingProtocol:
             cancelledJobIDs.insert(id)
+            // If this job is waiting on speaker-naming UI, resolve the continuation
+            // before cancelling the task. Otherwise the continuation only resumes via
+            // the 120 s timeout, leaving the pipeline frozen and the popup on screen.
+            if pendingSpeakerNaming?.jobID == id {
+                completeSpeakerNaming(result: .skipped)
+            }
             processTask?.cancel()
             jobs.remove(at: index)
             saveSnapshot()
