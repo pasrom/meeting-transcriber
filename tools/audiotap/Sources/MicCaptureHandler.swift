@@ -145,7 +145,7 @@ public class MicCaptureHandler {
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
             [weak self] buffer, _ in
             // swiftlint:enable closure_parameter_position closure_body_length
-            guard let self else { return }
+            guard let self, self.isRecording else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
             }
@@ -287,6 +287,8 @@ public class MicCaptureHandler {
     }
 
     public func stop() {
+        // Set isRecording=false first so any in-flight tap closure short-circuits
+        // before touching the soon-released AVAudioFile.
         isRecording = false
         if let listener = deviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
