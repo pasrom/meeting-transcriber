@@ -17,7 +17,7 @@ struct RecordingResult {
 /// Abstraction for recording, enabling mock injection in tests.
 @MainActor
 protocol RecordingProvider {
-    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?) throws
+    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging: Bool) throws
     func stop() throws -> RecordingResult
 }
 
@@ -65,6 +65,7 @@ class DualSourceRecorder: RecordingProvider {
         appPID: pid_t,
         noMic: Bool = false,
         micDeviceUID: String? = nil,
+        debugLogging: Bool = false,
     ) throws {
         guard !isRecording else { return }
         guard #available(macOS 14.2, *) else {
@@ -88,6 +89,7 @@ class DualSourceRecorder: RecordingProvider {
             channels: appChannels,
             micOutputURL: micURL,
             micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
+            debugLogging: debugLogging,
         )
         try session.start()
         captureSession = session

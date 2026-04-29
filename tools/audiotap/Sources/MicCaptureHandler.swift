@@ -14,6 +14,7 @@ public class MicCaptureHandler {
     private var engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
     private let outputURL: URL
+    private let debugLogging: Bool
     private var isRecording = false
     private var isRestarting = false
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
@@ -25,14 +26,17 @@ public class MicCaptureHandler {
     private var resampleRatio: Double = 1.0
     public private(set) var firstFrameTime: UInt64 = 0
 
+    private var debugRMS = DebugRMSReporter()
+
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain,
     )
 
-    public init(outputURL: URL) {
+    public init(outputURL: URL, debugLogging: Bool = false) {
         self.outputURL = outputURL
+        self.debugLogging = debugLogging
     }
 
     deinit {
@@ -93,6 +97,14 @@ public class MicCaptureHandler {
         let hwFormat = inputNode.outputFormat(forBus: 0)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
 
+        if debugLogging {
+            let inUID = getDefaultInputDeviceUID() ?? "?"
+            let inName = getDefaultInputDeviceName() ?? "?"
+            logger.info(
+                "[debug] Mic input device: name=\(inName, privacy: .public) uid=\(inUID, privacy: .public) hwRate=\(hwFormat.sampleRate, privacy: .public) hwChannels=\(hwFormat.channelCount, privacy: .public)",
+            )
+        }
+
         let tapFormat = AVAudioFormat(
             standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
         )! // swiftlint:disable:this force_unwrapping
@@ -136,6 +148,10 @@ public class MicCaptureHandler {
             guard let self else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
+            }
+            if self.debugLogging {
+                self.accumulateDebugRMS(buffer: buffer)
+                self.maybeReportDebugRMS()
             }
             do {
                 if let converter = self.converter {
@@ -291,6 +307,64 @@ public class MicCaptureHandler {
         outputFile = nil
         logger.info("Mic recording stopped")
     }
+}
+
+// MARK: - Debug logging helpers
+
+extension MicCaptureHandler {
+    /// Sum squares across all channels of an AVAudioPCMBuffer into the shared
+    /// reporter. AVAudioEngine taps deliver float buffers in practice; the int16
+    /// branch is a safety net.
+    func accumulateDebugRMS(buffer: AVAudioPCMBuffer) {
+        let frames = Int(buffer.frameLength)
+        let channelCount = Int(buffer.format.channelCount)
+        guard frames > 0, channelCount > 0 else { return }
+        let sumSq: Double
+        if let floatData = buffer.floatChannelData {
+            sumSq = sumOfSquaresFloat(floatData, frames: frames, channels: channelCount)
+        } else if let int16Data = buffer.int16ChannelData {
+            sumSq = sumOfSquaresInt16(int16Data, frames: frames, channels: channelCount)
+        } else {
+            return
+        }
+        debugRMS.add(sumSq: sumSq, samples: frames * channelCount)
+    }
+
+    func maybeReportDebugRMS() {
+        guard let report = debugRMS.tick() else { return }
+        let dBStr = String(format: "%.1f", report.dBFS)
+        logger.info(
+            "[debug] Mic RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public)",
+        )
+    }
+}
+
+private func sumOfSquaresFloat(
+    _ data: UnsafePointer<UnsafeMutablePointer<Float>>, frames: Int, channels: Int,
+) -> Double {
+    var sumSq: Double = 0
+    for ch in 0 ..< channels {
+        let ptr = data[ch]
+        for i in 0 ..< frames {
+            sumSq += Double(ptr[i]) * Double(ptr[i])
+        }
+    }
+    return sumSq
+}
+
+private func sumOfSquaresInt16(
+    _ data: UnsafePointer<UnsafeMutablePointer<Int16>>, frames: Int, channels: Int,
+) -> Double {
+    let scale = 1.0 / 32768.0
+    var sumSq: Double = 0
+    for ch in 0 ..< channels {
+        let ptr = data[ch]
+        for i in 0 ..< frames {
+            let s = Double(ptr[i]) * scale
+            sumSq += s * s
+        }
+    }
+    return sumSq
 }
 
 public enum MicCaptureError: LocalizedError {

@@ -13,6 +13,7 @@ public class AudioCaptureSession {
     private let appOutputURL: URL
     private let micOutputURL: URL?
     private let micDeviceUID: String?
+    private let debugLogging: Bool
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -25,6 +26,7 @@ public class AudioCaptureSession {
         channels: Int = 2,
         micOutputURL: URL? = nil,
         micDeviceUID: String? = nil,
+        debugLogging: Bool = false,
     ) {
         self.pid = pid
         self.sampleRate = sampleRate
@@ -32,6 +34,7 @@ public class AudioCaptureSession {
         self.appOutputURL = appOutputURL
         self.micOutputURL = micOutputURL
         self.micDeviceUID = micDeviceUID
+        self.debugLogging = debugLogging
     }
 
     /// Start capturing app audio (and optionally mic audio).
@@ -50,6 +53,7 @@ public class AudioCaptureSession {
             outputFileDescriptor: handle.fileDescriptor,
             sampleRate: sampleRate,
             channels: channels,
+            debugLogging: debugLogging,
         )
         do {
             try capture.start()
@@ -62,7 +66,7 @@ public class AudioCaptureSession {
 
         // Start mic capture if requested
         if let micURL = micOutputURL {
-            let mic = MicCaptureHandler(outputURL: micURL)
+            let mic = MicCaptureHandler(outputURL: micURL, debugLogging: debugLogging)
             do {
                 try mic.start(deviceUID: micDeviceUID)
                 micCapture = mic

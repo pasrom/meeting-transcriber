@@ -167,6 +167,8 @@ final class AppState {
                     endGracePeriod: settings.endGrace,
                     noMic: settings.noMic,
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
+                    // swiftlint:disable:next trailing_closure
+                    audioDebugLogging: { [settings] in settings.audioDebugLogging },
                 )
 
                 loop.onStateChange = { [weak loop, notifier] _, newState in
@@ -219,6 +221,8 @@ final class AppState {
                 pollInterval: settings.pollInterval,
                 noMic: settings.noMic,
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
+                // swiftlint:disable:next trailing_closure
+                audioDebugLogging: { [settings] in settings.audioDebugLogging },
             )
             watchLoop = loop
 

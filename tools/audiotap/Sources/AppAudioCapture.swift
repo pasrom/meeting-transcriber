@@ -13,6 +13,7 @@ public class AppAudioCapture {
     private let sampleRate: Int
     private let channels: Int
     private let outputFileDescriptor: Int32
+    private let debugLogging: Bool
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -23,6 +24,9 @@ public class AppAudioCapture {
     private let writeQueue = DispatchQueue(
         label: "audiotap.writer", qos: .userInteractive,
     )
+
+    private var debugRMS = DebugRMSReporter()
+    private var debugTotalBytes: UInt64 = 0
 
     /// CoreAudio property address for default output device changes.
     private var defaultOutputAddress = AudioObjectPropertyAddress(
@@ -46,11 +50,20 @@ public class AppAudioCapture {
     ///   - outputFileDescriptor: File descriptor to write raw PCM data to.
     ///   - sampleRate: Desired sample rate (default 48000).
     ///   - channels: Number of audio channels (default 2).
-    public init(pid: pid_t, outputFileDescriptor: Int32, sampleRate: Int = 48000, channels: Int = 2) {
+    ///   - debugLogging: When true, emit verbose forensic logs (process identity,
+    ///     output device, periodic RMS energy of captured samples).
+    public init(
+        pid: pid_t,
+        outputFileDescriptor: Int32,
+        sampleRate: Int = 48000,
+        channels: Int = 2,
+        debugLogging: Bool = false,
+    ) {
         self.pid = pid
         self.outputFileDescriptor = outputFileDescriptor
         self.sampleRate = sampleRate
         self.channels = channels
+        self.debugLogging = debugLogging
     }
 
     /// Translate PID to CoreAudio process AudioObjectID.
@@ -216,6 +229,14 @@ public class AppAudioCapture {
         let processObjectID = try translatePID()
         logger.info("Process audio object ID: \(processObjectID)")
 
+        if debugLogging {
+            let bundleID = getProcessBundleID(processObjectID) ?? "?"
+            let exeName = getExecutableName(pid: pid)
+            logger.info(
+                "[debug] Tap target: pid=\(self.pid, privacy: .public) exe=\(exeName, privacy: .public) bundle=\(bundleID, privacy: .public) audioObjectID=\(processObjectID, privacy: .public)",
+            )
+        }
+
         // Get default output device UID
         guard let systemOutputUID = getDefaultOutputDeviceUID() else {
             throw NSError(
@@ -224,6 +245,15 @@ public class AppAudioCapture {
             )
         }
         logger.info("System output device: \(systemOutputUID)")
+
+        if debugLogging {
+            let deviceName = getDefaultOutputDeviceName() ?? "?"
+            let transport = getDefaultOutputDeviceTransportType() ?? "?"
+            let deviceRate = getDefaultOutputDeviceSampleRate() ?? 0
+            logger.info(
+                "[debug] Default output device: name=\(deviceName, privacy: .public) uid=\(systemOutputUID, privacy: .public) transport=\(transport, privacy: .public) rate=\(deviceRate, privacy: .public)",
+            )
+        }
 
         // Create CATapDescription for the target process
         let tap = CATapDescription(stereoMixdownOfProcesses: [processObjectID])
@@ -245,6 +275,13 @@ public class AppAudioCapture {
         }
         tapID = newTapID
         logger.info("Created process tap: \(self.tapID)")
+
+        if debugLogging {
+            let tapRate = Self.queryTapSampleRate(tapID: tapID)
+            logger.info(
+                "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(self.tapID, privacy: .public)",
+            )
+        }
 
         // Create aggregate device with the tap
         let desc: [String: Any] = [
@@ -320,7 +357,13 @@ public class AppAudioCapture {
 
             // CATapDescription delivers interleaved float32 — write directly
             guard let data = abl.mBuffers.mData else { return }
-            writeAllToFileHandle(fd, data, count: Int(abl.mBuffers.mDataByteSize))
+            let byteCount = Int(abl.mBuffers.mDataByteSize)
+            writeAllToFileHandle(fd, data, count: byteCount)
+
+            if self.debugLogging {
+                self.accumulateDebugRMS(data: data, byteCount: byteCount)
+                self.maybeReportDebugRMS()
+            }
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
@@ -357,67 +400,14 @@ public class AppAudioCapture {
         logger.info("Audio capture started (PID \(self.pid), rate: \(self.actualSampleRate) Hz)")
     }
 
-    private func installOutputDeviceChangeListener() {
-        guard !outputListenerInstalled else { return }
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.handleOutputDeviceChanged()
-        }
-        let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &defaultOutputAddress,
-            DispatchQueue.main,
-            listener,
-        )
-        if status == noErr {
-            outputDeviceChangeListener = listener
-            outputListenerInstalled = true
-            logger.info("App audio: listening for default output device changes")
-        }
-    }
-
-    private func handleOutputDeviceChanged() {
-        guard isRunning, !isRestarting else { return }
-        isRestarting = true
-        logger.info("App audio: default output device changed, recreating tap...")
-
-        stopCapture()
-
-        // USB devices need time to settle their format after connection.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            do {
-                try self.startCapture()
-                // Verify rate was detected — USB devices may not have settled yet
-                if self.actualSampleRate <= 0 {
-                    logger.warning("App audio: rate query returned 0 after restart, retrying in 1s...")
-                    self.stopCapture()
-                    self.retryStartCapture(afterDelay: 1.0)
-                } else {
-                    self.isRestarting = false
-                    logger.info("App audio: tap restarted on new device (rate: \(self.actualSampleRate) Hz)")
-                }
-            } catch {
-                logger.error("Failed to restart app audio capture: \(error)")
-                self.retryStartCapture(afterDelay: 1.0)
-            }
-        }
-    }
-
-    private func retryStartCapture(afterDelay delay: TimeInterval) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self else { return }
-            defer { self.isRestarting = false }
-            do {
-                try self.startCapture()
-                logger.info("App audio: tap restarted on retry (rate: \(self.actualSampleRate) Hz)")
-            } catch {
-                logger.error("Retry also failed: \(error)")
-            }
-        }
-    }
-
     private func stopCapture() {
         isRunning = false
+
+        if debugLogging {
+            logger.info(
+                "[debug] App audio capture stopping: totalBytes=\(self.debugTotalBytes, privacy: .public)",
+            )
+        }
 
         if let procID {
             AudioDeviceStop(aggregateID, procID)
@@ -448,5 +438,108 @@ public class AppAudioCapture {
             outputListenerInstalled = false
         }
         logger.info("Audio capture stopped")
+    }
+}
+
+// MARK: - Output device change handling
+
+@available(macOS 14.2, *)
+extension AppAudioCapture {
+    func installOutputDeviceChangeListener() {
+        guard !outputListenerInstalled else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.handleOutputDeviceChanged()
+        }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject),
+            &defaultOutputAddress,
+            DispatchQueue.main,
+            listener,
+        )
+        if status == noErr {
+            outputDeviceChangeListener = listener
+            outputListenerInstalled = true
+            logger.info("App audio: listening for default output device changes")
+        }
+    }
+
+    func handleOutputDeviceChanged() {
+        guard isRunning, !isRestarting else { return }
+        isRestarting = true
+        logger.info("App audio: default output device changed, recreating tap...")
+
+        if debugLogging {
+            let newName = getDefaultOutputDeviceName() ?? "?"
+            let newUID = getDefaultOutputDeviceUID() ?? "?"
+            logger.info(
+                "[debug] Output device change → name=\(newName, privacy: .public) uid=\(newUID, privacy: .public)",
+            )
+        }
+
+        stopCapture()
+
+        // USB devices need time to settle their format after connection.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            do {
+                try self.startCapture()
+                // Verify rate was detected — USB devices may not have settled yet
+                if self.actualSampleRate <= 0 {
+                    logger.warning("App audio: rate query returned 0 after restart, retrying in 1s...")
+                    self.stopCapture()
+                    self.retryStartCapture(afterDelay: 1.0)
+                } else {
+                    self.isRestarting = false
+                    logger.info("App audio: tap restarted on new device (rate: \(self.actualSampleRate) Hz)")
+                }
+            } catch {
+                logger.error("Failed to restart app audio capture: \(error)")
+                self.retryStartCapture(afterDelay: 1.0)
+            }
+        }
+    }
+
+    func retryStartCapture(afterDelay delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            defer { self.isRestarting = false }
+            do {
+                try self.startCapture()
+                logger.info("App audio: tap restarted on retry (rate: \(self.actualSampleRate) Hz)")
+            } catch {
+                logger.error("Retry also failed: \(error)")
+            }
+        }
+    }
+}
+
+// MARK: - Debug logging helpers
+
+@available(macOS 14.2, *)
+extension AppAudioCapture {
+    /// Called from the IOProc (serial writeQueue) only when debugLogging=true.
+    /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
+    func accumulateDebugRMS(data: UnsafeMutableRawPointer, byteCount: Int) {
+        let count = byteCount / MemoryLayout<Float>.size
+        guard count > 0 else { return }
+        let buf = UnsafeBufferPointer(
+            start: data.assumingMemoryBound(to: Float.self), count: count,
+        )
+        var sumSq: Double = 0
+        for sample in buf {
+            sumSq += Double(sample) * Double(sample)
+        }
+        debugRMS.add(sumSq: sumSq, samples: count)
+        debugTotalBytes += UInt64(byteCount)
+    }
+
+    /// Emit a single RMS-energy log line every ~5 s of capture.
+    /// Live signal whether the tap is delivering real audio or zero/noise.
+    func maybeReportDebugRMS() {
+        guard let report = debugRMS.tick() else { return }
+        let dBStr = String(format: "%.1f", report.dBFS)
+        logger.info(
+            "[debug] App audio RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public), totalBytes=\(self.debugTotalBytes, privacy: .public)",
+        )
     }
 }

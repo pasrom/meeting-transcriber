@@ -49,6 +49,9 @@ class WatchLoop {
     let maxDuration: TimeInterval
     let noMic: Bool
     let micDeviceUID: String?
+    /// Dynamic accessor — read at recording-start time so toggling the setting
+    /// at runtime takes effect on the next recording without an app restart.
+    let audioDebugLogging: () -> Bool
 
     private var watchTask: Task<Void, Never>?
 
@@ -64,6 +67,7 @@ class WatchLoop {
         maxDuration: TimeInterval = 14400,
         noMic: Bool = false,
         micDeviceUID: String? = nil,
+        audioDebugLogging: @escaping () -> Bool = { false },
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -73,6 +77,7 @@ class WatchLoop {
         self.maxDuration = maxDuration
         self.noMic = noMic
         self.micDeviceUID = micDeviceUID
+        self.audioDebugLogging = audioDebugLogging
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -130,7 +135,10 @@ class WatchLoop {
         watchTask = nil
 
         let recorder = recorderFactory()
-        try recorder.start(appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID)
+        try recorder.start(
+            appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID,
+            debugLogging: audioDebugLogging(),
+        )
 
         activeRecorder = recorder
         manualRecordingInfo = ManualRecordingInfo(pid: pid, appName: appName, title: title)
@@ -237,6 +245,7 @@ class WatchLoop {
             appPID: meeting.windowPID,
             noMic: noMic,
             micDeviceUID: micDeviceUID,
+            debugLogging: audioDebugLogging(),
         )
 
         // Read participants (Teams)
