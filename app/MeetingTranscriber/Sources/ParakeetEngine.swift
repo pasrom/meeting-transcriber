@@ -90,7 +90,8 @@ final class ParakeetEngine: TranscribingEngine {
         }
 
         transcriptionProgress = 0
-        var result = try await manager.transcribe(audioPath, source: .system)
+        var decoderState = await TdtDecoderState.make(decoderLayers: manager.decoderLayerCount)
+        var result = try await manager.transcribe(audioPath, decoderState: &decoderState)
         transcriptionProgress = 1.0
 
         // Apply CTC vocabulary rescoring if configured
