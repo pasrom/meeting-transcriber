@@ -42,8 +42,8 @@ public class AppAudioCapture {
     /// Actual channel count detected from first IOProc callback.
     public private(set) var actualChannels: Int = 0
     private var didLogFormat = false
-    /// Guard against re-entrant device change handling during async restart.
-    private var isRestarting = false
+    /// Pure state machine that decides when/what to dispatch on device-change events.
+    private var deviceChangeCoordinator = OutputDeviceChangeCoordinator()
 
     /// - Parameters:
     ///   - pid: Process ID of the app to capture audio from.
@@ -469,10 +469,11 @@ extension AppAudioCapture {
     }
 
     func handleOutputDeviceChanged() {
-        guard isRunning, !isRestarting else { return }
-        isRestarting = true
-        logger.info("App audio: default output device changed, recreating tap...")
+        guard isRunning else { return }
+        let action = deviceChangeCoordinator.handle(.deviceChanged)
+        guard action != .ignore else { return }
 
+        logger.info("App audio: default output device changed, recreating tap...")
         if debugLogging {
             let newName = getDefaultOutputDeviceName() ?? "?"
             let newUID = getDefaultOutputDeviceUID() ?? "?"
@@ -480,40 +481,46 @@ extension AppAudioCapture {
                 "[debug] Output device change → name=\(newName, privacy: .public) uid=\(newUID, privacy: .public)",
             )
         }
+        applyAction(action)
+    }
 
-        stopCapture()
+    /// Try a startCapture() and feed the result into the coordinator, dispatching
+    /// any follow-up restart/retry/give-up action it asks for.
+    private func completeRestart() {
+        let event: OutputDeviceChangeCoordinator.Event
+        do {
+            try startCapture()
+            event = .startSucceeded(rate: actualSampleRate)
+        } catch {
+            logger.error("Failed to restart app audio capture: \(error)")
+            event = .startFailed
+        }
+        applyAction(deviceChangeCoordinator.handle(event))
+    }
 
-        // USB devices need time to settle their format after connection.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            do {
-                try self.startCapture()
-                // Verify rate was detected — USB devices may not have settled yet
-                if self.actualSampleRate <= 0 {
-                    logger.warning("App audio: rate query returned 0 after restart, retrying in 1s...")
-                    self.stopCapture()
-                    self.retryStartCapture(afterDelay: 1.0)
-                } else {
-                    self.isRestarting = false
-                    logger.info("App audio: tap restarted on new device (rate: \(self.actualSampleRate) Hz)")
-                }
-            } catch {
-                logger.error("Failed to restart app audio capture: \(error)")
-                self.retryStartCapture(afterDelay: 1.0)
-            }
+    private func applyAction(_ action: OutputDeviceChangeCoordinator.Action) {
+        switch action {
+        case .ignore:
+            break
+
+        case let .stopAndRetry(delay):
+            stopCapture()
+            scheduleRetry(after: delay)
+
+        case let .restart(delay):
+            scheduleRetry(after: delay)
+
+        case .complete:
+            logger.info("App audio: tap restarted (rate: \(self.actualSampleRate) Hz)")
+
+        case .giveUp:
+            logger.error("App audio: retry failed; giving up")
         }
     }
 
-    func retryStartCapture(afterDelay delay: TimeInterval) {
+    private func scheduleRetry(after delay: TimeInterval) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self else { return }
-            defer { self.isRestarting = false }
-            do {
-                try self.startCapture()
-                logger.info("App audio: tap restarted on retry (rate: \(self.actualSampleRate) Hz)")
-            } catch {
-                logger.error("Retry also failed: \(error)")
-            }
+            self?.completeRestart()
         }
     }
 }
