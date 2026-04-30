@@ -66,11 +66,14 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     Helpers.swift          # machTicksToSeconds, CoreAudio device helpers (name, UID, transport type, sample rate)
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
     SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
+    DebugRMSReporter.swift # Throttled RMS accumulator/reporter shared by app-audio and mic debug logging
+    OutputDeviceChangeCoordinator.swift # Pure state machine for output device change/restart flow
   Tests/
     AudioCaptureResultTests.swift
     HelpersTests.swift
     MicCaptureErrorTests.swift
     MicRestartPolicyTests.swift
+    OutputDeviceChangeCoordinatorTests.swift
     SampleRateQueryTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
@@ -88,7 +91,7 @@ scripts/
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
   tests/
-    test_build_release_signing.sh  # Regression tests for build script codesign pipeline
+    test_build_release_signing.sh  # Regression tests for codesign pipeline in build_release.sh
 Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
 Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
 .github/workflows/
@@ -96,7 +99,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
-  dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
+  dependabot-auto-merge.yml # Auto-merge safe Dependabot bumps (patch/minor Swift + all GitHub Actions)
 docs/
   architecture-macos.md        # High-level architecture quick-reference
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol, permission)
@@ -258,9 +261,10 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 `AppSettings.audioDebugLogging` (Settings → Diagnostics → "Verbose Audio Logging") enables forensic logging in the audio-capture path:
 
 - `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` at start
-- `[debug] Default output device: name=… uid=… transport=… rate=…` at start and on device change (transport type: Built-In, Bluetooth, USB, etc.)
-- `[debug] Tap format: rate=… Hz, tapID=…` immediately after tap creation — reveals tap/aggregate rate mismatches
+- `[debug] Default output device: name=… uid=… transport=… rate=…` at start and on device change
+- `[debug] Tap format: rate=… Hz, tapID=…` at start
 - `[debug] App audio RMS (5s): … dBFS, samples=…, totalBytes=…` every 5 s during capture — live signal whether the tap is delivering real audio or zero/noise
+- `[debug] Output device change → name=… uid=…` when the system output device changes mid-recording
 - `[debug] App audio capture stopping: totalBytes=…` at stop
 - `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` at mic start
 - `[debug] Mic RMS (5s): … dBFS, samples=…` every 5 s during capture — mic-side counterpart to the app-audio RMS
