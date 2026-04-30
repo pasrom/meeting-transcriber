@@ -67,13 +67,31 @@ func formattedTime(_ seconds: Double) -> String {
 /// Window that lets the user name speakers after diarization.
 struct SpeakerNamingView: View {
     let data: PipelineQueue.SpeakerNamingData
+    /// Names of speakers known from previous meetings, surfaced as quick-pick chips
+    /// in addition to the current meeting's participants. Empty array hides the row.
+    let knownSpeakerNames: [String]
     let onComplete: (PipelineQueue.SpeakerNamingResult) -> Void
+
+    init(
+        data: PipelineQueue.SpeakerNamingData,
+        knownSpeakerNames: [String] = [],
+        onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void,
+    ) {
+        self.data = data
+        self.knownSpeakerNames = knownSpeakerNames
+        self.onComplete = onComplete
+    }
 
     @State private var names: [String] = []
     @State private var completed = false
     @State private var player: AVAudioPlayer?
     @State private var playingLabel: String?
     @State private var rerunCount: Int = 2
+    /// Indices of speaker rows where the user clicked "Mehr…" to reveal the full
+    /// known-names list instead of the top-N ranked subset.
+    @State private var knownExpanded: Set<Int> = []
+    /// Number of "Known:" chips shown by default before "Mehr…" appears.
+    private static let knownChipsCollapsedLimit = 8
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
@@ -85,11 +103,6 @@ struct SpeakerNamingView: View {
                 speakingTime: data.speakingTimes[label] ?? 0,
             )
         }
-    }
-
-    init(data: PipelineQueue.SpeakerNamingData, onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void) {
-        self.data = data
-        self.onComplete = onComplete
     }
 
     var body: some View {
@@ -209,23 +222,85 @@ struct SpeakerNamingView: View {
                         placeholder: "Name",
                         identifier: "speaker-name-\(speaker.label)",
                     )
-
-                    if !unusedParticipants(currentIndex: index).isEmpty {
-                        HStack(spacing: 4) {
-                            ForEach(unusedParticipants(currentIndex: index), id: \.self) { name in
-                                Button(name) {
-                                    names[index] = name
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .font(.caption)
-                            }
-                        }
-                    }
+                    suggestionChips(for: index)
                 }
             }
             .padding(4)
         }
+    }
+
+    @ViewBuilder
+    private func suggestionChips(for index: Int) -> some View {
+        let participants = unusedParticipants(currentIndex: index)
+        if !participants.isEmpty {
+            chipRow(names: participants, idPrefix: "participant-name-") { names[index] = $0 }
+        }
+
+        let known = unusedKnownNames(currentIndex: index)
+        if !known.isEmpty {
+            let autoName = index < speakers.count ? speakers[index].autoName : nil
+            let ranked = Self.rankedKnownNames(
+                known: known, autoName: autoName, participants: data.participants,
+            )
+            let expanded = knownExpanded.contains(index)
+            let visible = expanded ? ranked : Array(ranked.prefix(Self.knownChipsCollapsedLimit))
+            let hidden = ranked.count - visible.count
+            let speakerLabel = index < speakers.count ? speakers[index].label : "\(index)"
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Known:")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ChipFlowLayout(spacing: 4) {
+                    ForEach(visible, id: \.self) { name in
+                        chipButton(label: name, identifier: "known-name-\(name)") {
+                            names[index] = name
+                        }
+                    }
+                    if hidden > 0 {
+                        chipMoreButton(
+                            label: "More (\(hidden))…",
+                            identifier: "known-more-\(speakerLabel)",
+                        ) { knownExpanded.insert(index) }
+                    } else if expanded, ranked.count > Self.knownChipsCollapsedLimit {
+                        chipMoreButton(
+                            label: "Less",
+                            identifier: "known-less-\(speakerLabel)",
+                        ) { knownExpanded.remove(index) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func chipRow(
+        names: [String], idPrefix: String, onSelect: @escaping (String) -> Void,
+    ) -> some View {
+        ChipFlowLayout(spacing: 4) {
+            ForEach(names, id: \.self) { name in
+                chipButton(label: name, identifier: "\(idPrefix)\(name)") { onSelect(name) }
+            }
+        }
+    }
+
+    private func chipButton(
+        label: String, identifier: String, action: @escaping () -> Void,
+    ) -> some View {
+        Button(label, action: action)
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .font(.caption)
+            .accessibilityIdentifier(identifier)
+    }
+
+    private func chipMoreButton(
+        label: String, identifier: String, action: @escaping () -> Void,
+    ) -> some View {
+        Button(label, action: action)
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .font(.caption)
+            .accessibilityIdentifier(identifier)
     }
 
     /// Play the longest segment of a speaker from the audio file.
@@ -285,6 +360,17 @@ struct SpeakerNamingView: View {
         Self.unusedParticipants(currentIndex: currentIndex, names: names, participants: data.participants)
     }
 
+    /// Known speaker names (from `speakers.json`) not in the meeting participant list
+    /// and not already assigned to another row in this dialog.
+    private func unusedKnownNames(currentIndex: Int) -> [String] {
+        Self.unusedKnownNames(
+            currentIndex: currentIndex,
+            names: names,
+            knownNames: knownSpeakerNames,
+            participants: data.participants,
+        )
+    }
+
     private func confirm() {
         player?.stop()
         let mapping = Self.buildSpeakerMapping(speakers: speakers, names: names)
@@ -300,16 +386,78 @@ struct SpeakerNamingView: View {
         speakers.map { $0.autoName ?? "" }
     }
 
-    /// Returns participant names not yet assigned to any other speaker.
-    static func unusedParticipants(
-        currentIndex: Int, names: [String], participants: [String],
-    ) -> [String] {
-        let usedNames = Set(
+    /// Names assigned to other rows (i.e. excluding `currentIndex`'s own value).
+    /// Empty strings are ignored. Used to avoid suggesting a chip that's already
+    /// in another row.
+    private static func usedNamesExcluding(currentIndex: Int, names: [String]) -> Set<String> {
+        Set(
             names.enumerated()
                 .filter { $0.offset != currentIndex && !$0.element.isEmpty }
                 .map(\.element),
         )
-        return participants.filter { !usedNames.contains($0) }
+    }
+
+    /// Returns participant names not yet assigned to any other speaker.
+    static func unusedParticipants(
+        currentIndex: Int, names: [String], participants: [String],
+    ) -> [String] {
+        let used = usedNamesExcluding(currentIndex: currentIndex, names: names)
+        return participants.filter { !used.contains($0) }
+    }
+
+    /// Returns known names that are not already in the participant list (avoiding
+    /// duplicate chips) and not yet assigned to another row.
+    static func unusedKnownNames(
+        currentIndex: Int, names: [String], knownNames: [String], participants: [String],
+    ) -> [String] {
+        let participantSet = Set(participants)
+        let used = usedNamesExcluding(currentIndex: currentIndex, names: names)
+        return knownNames.filter { !participantSet.contains($0) && !used.contains($0) }
+    }
+
+    private enum NameRelevance: Int, Comparable {
+        case autoNameMatch = 0
+        case participantMatch = 1
+        case other = 2
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            lhs.rawValue < rhs.rawValue
+        }
+    }
+
+    /// Sort known names by relevance for this row's "Known:" chips.
+    /// Order:
+    /// 1. Names whose first token matches the auto-name (case-insensitive).
+    ///    e.g. autoName "Marwin" → "Marwin Schmidt", "Marwin Müller" first.
+    /// 2. Names sharing a first token with any meeting participant.
+    ///    e.g. participant "Anna Berger" → "Anna Klein" ranks up.
+    /// 3. Remaining names in input order (caller already sorts alphabetically).
+    /// Stable within each tier so the alphabetical input order from
+    /// `SpeakerMatcher.allSpeakerNames()` is preserved.
+    static func rankedKnownNames(
+        known: [String], autoName: String?, participants: [String],
+    ) -> [String] {
+        let autoToken = (autoName.map(firstToken) ?? "").lowercased()
+        let participantTokens = Set(participants.map { firstToken($0).lowercased() }.filter { !$0.isEmpty })
+
+        func relevance(of name: String) -> NameRelevance {
+            let token = firstToken(name).lowercased()
+            if !autoToken.isEmpty, token == autoToken { return .autoNameMatch }
+            if participantTokens.contains(token) { return .participantMatch }
+            return .other
+        }
+
+        return known.enumerated()
+            .map { (offset: $0.offset, relevance: relevance(of: $0.element), name: $0.element) }
+            .sorted { lhs, rhs in
+                if lhs.relevance != rhs.relevance { return lhs.relevance < rhs.relevance }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.name)
+    }
+
+    /// First space-separated token of a name (e.g. "Anna Berger" → "Anna").
+    private static func firstToken(_ name: String) -> String {
+        name.split(separator: " ").first.map(String.init) ?? name
     }
 
     /// Builds the speaker label → user-entered name mapping, skipping empty names.
@@ -326,5 +474,52 @@ struct SpeakerNamingView: View {
             }
         }
         return mapping
+    }
+}
+
+/// Layout that arranges its children left-to-right and wraps to a new row when
+/// the row width is exhausted. Used for the suggestion-chip rows in
+/// `SpeakerNamingView`, where a fixed-width HStack would either overflow or
+/// truncate button labels when the speaker DB grows large.
+struct ChipFlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let containerWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxWidth: CGFloat = 0
+        for sv in subviews {
+            let size = sv.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > containerWidth {
+                y += rowHeight + spacing
+                x = 0
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxWidth = max(maxWidth, x - spacing)
+        }
+        // Report the actual content width (capped at the container) so unconstrained
+        // parents (proposal == .infinity) don't get an infinite frame.
+        return CGSize(width: min(maxWidth, containerWidth), height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for sv in subviews {
+            let size = sv.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                y += rowHeight + spacing
+                x = bounds.minX
+                rowHeight = 0
+            }
+            sv.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
