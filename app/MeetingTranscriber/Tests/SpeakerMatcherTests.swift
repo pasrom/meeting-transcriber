@@ -1,8 +1,13 @@
+// swiftlint:disable file_length
 @testable import MeetingTranscriber
 import XCTest
 
 // swiftlint:disable:next type_body_length
 final class SpeakerMatcherTests: XCTestCase {
+    /// Fixed reference timestamp used by recency-tracking tests so assertions
+    /// don't depend on wall-clock time.
+    private static let testEpoch = Date(timeIntervalSince1970: 1_700_000_000)
+
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
     private var dbPath: URL!
@@ -114,7 +119,7 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertTrue(matcher.allSpeakerNames().isEmpty)
     }
 
-    func testAllSpeakerNamesSortsAlphabeticallyCaseInsensitive() {
+    func testAllSpeakerNamesSortsAlphabeticallyCaseInsensitiveWhenUnused() {
         let matcher = SpeakerMatcher(dbPath: dbPath)
         matcher.saveDB([
             StoredSpeaker(name: "charlie", embeddings: [[1, 0, 0]]),
@@ -122,6 +127,82 @@ final class SpeakerMatcherTests: XCTestCase {
             StoredSpeaker(name: "bob", embeddings: [[0, 0, 1]]),
         ])
         XCTAssertEqual(matcher.allSpeakerNames(), ["Alice", "bob", "charlie"])
+    }
+
+    // MARK: - rankByRecency
+
+    func testRankByRecencyMostRecentFirst() {
+        let now = Date()
+        let speakers = [
+            StoredSpeaker(name: "Old", embeddings: [], lastUsed: now.addingTimeInterval(-3600), useCount: 5),
+            StoredSpeaker(name: "Newest", embeddings: [], lastUsed: now, useCount: 1),
+            StoredSpeaker(name: "Middle", embeddings: [], lastUsed: now.addingTimeInterval(-60), useCount: 2),
+        ]
+        let ranked = SpeakerMatcher.rankByRecency(speakers: speakers)
+        XCTAssertEqual(ranked.map(\.name), ["Newest", "Middle", "Old"])
+    }
+
+    func testRankByRecencyTiesBrokenByUseCount() {
+        let t = Date()
+        let speakers = [
+            StoredSpeaker(name: "Less", embeddings: [], lastUsed: t, useCount: 1),
+            StoredSpeaker(name: "More", embeddings: [], lastUsed: t, useCount: 10),
+        ]
+        let ranked = SpeakerMatcher.rankByRecency(speakers: speakers)
+        XCTAssertEqual(ranked.map(\.name), ["More", "Less"])
+    }
+
+    func testRankByRecencyLegacyEntriesAlphabeticAtEnd() {
+        let now = Date()
+        let speakers = [
+            StoredSpeaker(name: "zelda", embeddings: []), // legacy: no lastUsed
+            StoredSpeaker(name: "Newest", embeddings: [], lastUsed: now, useCount: 1),
+            StoredSpeaker(name: "anna", embeddings: []), // legacy
+        ]
+        let ranked = SpeakerMatcher.rankByRecency(speakers: speakers)
+        XCTAssertEqual(ranked.map(\.name), ["Newest", "anna", "zelda"])
+    }
+
+    // MARK: - updateDB recency tracking
+
+    func testUpdateDBSetsLastUsedAndIncrementsUseCount() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.updateDB(
+            mapping: ["S0": "Anna"],
+            embeddings: ["S0": [1, 0, 0]],
+            now: Self.testEpoch,
+        )
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0].name, "Anna")
+        XCTAssertEqual(stored[0].lastUsed, Self.testEpoch)
+        XCTAssertEqual(stored[0].useCount, 1)
+    }
+
+    func testUpdateDBIncrementsUseCountForExistingSpeaker() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let later = Self.testEpoch.addingTimeInterval(1000)
+        matcher.updateDB(mapping: ["S0": "Anna"], embeddings: ["S0": [1, 0, 0]], now: Self.testEpoch)
+        matcher.updateDB(mapping: ["S1": "Anna"], embeddings: ["S1": [0, 1, 0]], now: later)
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0].useCount, 2)
+        XCTAssertEqual(stored[0].lastUsed, later, "lastUsed should advance to most recent confirmation")
+    }
+
+    // MARK: - Backward-compat decode
+
+    func testLoadDBDecodesLegacyEntriesWithoutRecencyFields() throws {
+        // Older speakers.json predates lastUsed/useCount — decode must default them.
+        let legacy = """
+        [{"name":"Roman","embeddings":[[1,0,0]]}]
+        """
+        try legacy.data(using: .utf8)?.write(to: dbPath)
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertNil(stored[0].lastUsed)
+        XCTAssertEqual(stored[0].useCount, 0)
     }
 
     // MARK: - Update DB
