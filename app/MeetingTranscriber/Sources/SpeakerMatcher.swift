@@ -6,8 +6,17 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 struct StoredSpeaker: Codable {
     let name: String
     let embeddings: [[Float]]
+    /// Wall-clock time when this speaker was last confirmed by the user via
+    /// `updateDB`. Used to rank suggestion chips by recency. nil for entries
+    /// migrated from older DB versions that didn't track usage.
+    let lastUsed: Date?
+    /// Number of times this speaker has been confirmed by the user across
+    /// recordings. Defaults to 0 for entries that pre-date usage tracking.
+    let useCount: Int
 
-    // Migrate old single-embedding format automatically
+    // Migrate old single-embedding format automatically (legacy `embedding`
+    // key) and default lastUsed/useCount for entries written before recency
+    // tracking shipped.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
@@ -18,21 +27,31 @@ struct StoredSpeaker: Codable {
         } else {
             embeddings = []
         }
+        lastUsed = try container.decodeIfPresent(Date.self, forKey: .lastUsed)
+        useCount = try container.decodeIfPresent(Int.self, forKey: .useCount) ?? 0
     }
 
-    init(name: String, embeddings: [[Float]]) {
+    init(name: String, embeddings: [[Float]], lastUsed: Date? = nil, useCount: Int = 0) {
         self.name = name
         self.embeddings = embeddings
+        self.lastUsed = lastUsed
+        self.useCount = useCount
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, embeddings, embedding
+        case name, embeddings, embedding, lastUsed, useCount
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(embeddings, forKey: .embeddings)
+        try container.encodeIfPresent(lastUsed, forKey: .lastUsed)
+        // Skip when 0 so entries that pre-date recency tracking round-trip
+        // byte-identical (no spurious useCount=0 field added on first save).
+        if useCount > 0 {
+            try container.encode(useCount, forKey: .useCount)
+        }
     }
 }
 
@@ -109,8 +128,11 @@ class SpeakerMatcher {
     }
 
     /// Update speaker DB with confirmed names and their embeddings.
-    /// Appends new embedding to the speaker's list (FIFO, max 5).
-    func updateDB(mapping: [String: String], embeddings: [String: [Float]]) {
+    /// Appends new embedding to the speaker's list (FIFO, max 5) and bumps
+    /// `lastUsed` / `useCount` so the picker can rank by recency.
+    func updateDB(
+        mapping: [String: String], embeddings: [String: [Float]], now: Date = Date(),
+    ) {
         var stored = loadDB()
 
         for (label, name) in mapping {
@@ -122,9 +144,16 @@ class SpeakerMatcher {
                 if updated.count > Self.maxEmbeddingsPerSpeaker {
                     updated.removeFirst(updated.count - Self.maxEmbeddingsPerSpeaker)
                 }
-                stored[idx] = StoredSpeaker(name: name, embeddings: updated)
+                stored[idx] = StoredSpeaker(
+                    name: name,
+                    embeddings: updated,
+                    lastUsed: now,
+                    useCount: stored[idx].useCount + 1,
+                )
             } else {
-                stored.append(StoredSpeaker(name: name, embeddings: [embedding]))
+                stored.append(StoredSpeaker(
+                    name: name, embeddings: [embedding], lastUsed: now, useCount: 1,
+                ))
             }
         }
 
@@ -136,11 +165,33 @@ class SpeakerMatcher {
         return (try? JSONDecoder().decode([StoredSpeaker].self, from: data)) ?? []
     }
 
-    /// Names of all stored speakers, sorted alphabetically. Used as suggestion
-    /// chips in the speaker-naming UI ("Known voices" row) so the user can
-    /// reuse names from previous meetings with one click.
+    /// Names of all stored speakers, ordered for picker display: most recently
+    /// used first, then by `useCount` descending, then alphabetically. Speakers
+    /// without `lastUsed` (legacy entries) are sorted alphabetically at the end.
+    /// This is the source-of-truth ordering for the "Known voices" row.
     func allSpeakerNames() -> [String] {
-        loadDB().map(\.name).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        Self.rankByRecency(speakers: loadDB()).map(\.name)
+    }
+
+    /// Sort stored speakers for picker display. Pure for testability.
+    /// Tier order:
+    /// 1. Speakers with `lastUsed != nil`, most recent first.
+    /// 2. Within that group, ties (same timestamp) broken by `useCount` desc.
+    /// 3. Speakers without `lastUsed` come last, alphabetically.
+    static func rankByRecency(speakers: [StoredSpeaker]) -> [StoredSpeaker] {
+        let used = speakers.filter { $0.lastUsed != nil }
+        let unused = speakers.filter { $0.lastUsed == nil }
+        let sortedUsed = used.sorted { lhs, rhs in
+            let l = lhs.lastUsed ?? .distantPast
+            let r = rhs.lastUsed ?? .distantPast
+            if l != r { return l > r }
+            if lhs.useCount != rhs.useCount { return lhs.useCount > rhs.useCount }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        let sortedUnused = unused.sorted { lhs, rhs in
+            lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+        return sortedUsed + sortedUnused
     }
 
     func saveDB(_ speakers: [StoredSpeaker]) {
