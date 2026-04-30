@@ -451,7 +451,11 @@ class PipelineQueue {
                                 for (label, name) in userMapping where !name.isEmpty {
                                     autoNames[label] = name
                                 }
-                                matcher.updateDB(mapping: autoNames, embeddings: embeddings)
+                                matcher.updateDB(
+                                    mapping: autoNames,
+                                    embeddings: embeddings,
+                                    speakingTimes: currentDiarization.speakingTimes,
+                                )
                                 break diarizationLoop
 
                             case let .rerun(count):

@@ -1,3 +1,7 @@
+// swiftlint:disable discouraged_optional_collection
+// Optional `[Float]?` is intentional throughout this file: nil signals
+// "no centroid yet" (legacy entries / dim-mismatch / empty input), which is
+// semantically distinct from an empty embedding vector.
 import Foundation
 import os.log
 
@@ -5,7 +9,18 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 
 struct StoredSpeaker: Codable {
     let name: String
+    /// Recent quality samples (FIFO, max `SpeakerMatcher.maxRecentSamples`).
+    /// Used as a fallback when the centroid match is borderline, and as the
+    /// seed for `centroid` on first confirmation after the v3 schema upgrade.
     let embeddings: [[Float]]
+    /// Running mean of all quality-filtered embeddings ever confirmed for this
+    /// speaker. The primary match anchor in v3+. nil for legacy entries; the
+    /// matcher computes `meanEmbedding(embeddings)` lazily until the next
+    /// confirmation persists a real centroid.
+    let centroid: [Float]?
+    /// Number of embeddings folded into `centroid` so far. Drives the running-
+    /// average update math and tells us whether we trust the centroid.
+    let centroidSampleCount: Int
     /// Wall-clock time when this speaker was last confirmed by the user via
     /// `updateDB`. Used to rank suggestion chips by recency. nil for entries
     /// migrated from older DB versions that didn't track usage.
@@ -15,8 +30,8 @@ struct StoredSpeaker: Codable {
     let useCount: Int
 
     // Migrate old single-embedding format automatically (legacy `embedding`
-    // key) and default lastUsed/useCount for entries written before recency
-    // tracking shipped.
+    // key); default lastUsed/useCount for entries before recency tracking;
+    // default centroid/centroidSampleCount for entries before v3 schema.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
@@ -27,25 +42,40 @@ struct StoredSpeaker: Codable {
         } else {
             embeddings = []
         }
+        centroid = try container.decodeIfPresent([Float].self, forKey: .centroid)
+        centroidSampleCount = try container.decodeIfPresent(Int.self, forKey: .centroidSampleCount) ?? 0
         lastUsed = try container.decodeIfPresent(Date.self, forKey: .lastUsed)
         useCount = try container.decodeIfPresent(Int.self, forKey: .useCount) ?? 0
     }
 
-    init(name: String, embeddings: [[Float]], lastUsed: Date? = nil, useCount: Int = 0) {
+    init(
+        name: String,
+        embeddings: [[Float]],
+        centroid: [Float]? = nil,
+        centroidSampleCount: Int = 0,
+        lastUsed: Date? = nil,
+        useCount: Int = 0,
+    ) {
         self.name = name
         self.embeddings = embeddings
+        self.centroid = centroid
+        self.centroidSampleCount = centroidSampleCount
         self.lastUsed = lastUsed
         self.useCount = useCount
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, embeddings, embedding, lastUsed, useCount
+        case name, embeddings, embedding, centroid, centroidSampleCount, lastUsed, useCount
     }
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(embeddings, forKey: .embeddings)
+        try container.encodeIfPresent(centroid, forKey: .centroid)
+        if centroidSampleCount > 0 {
+            try container.encode(centroidSampleCount, forKey: .centroidSampleCount)
+        }
         try container.encodeIfPresent(lastUsed, forKey: .lastUsed)
         // Skip when 0 so entries that pre-date recency tracking round-trip
         // byte-identical (no spurious useCount=0 field added on first save).
@@ -59,7 +89,13 @@ class SpeakerMatcher {
     private let dbPath: URL
     private let threshold: Float
     private let confidenceMargin: Float
-    private static let maxEmbeddingsPerSpeaker = 5
+    /// Recent-samples FIFO size (was 5 before centroid landed; 3 is enough as
+    /// fallback because the centroid is the primary anchor now).
+    static let maxRecentSamples = 3
+    /// Minimum total speaking time (seconds) for an embedding to be folded
+    /// into the centroid. Short snippets are still kept as fallback samples
+    /// but don't pollute the running average.
+    static let minSpeakingTimeForCentroid: TimeInterval = 3.0
 
     init(dbPath: URL? = nil, threshold: Float = 0.40, confidenceMargin: Float = 0.10) {
         self.dbPath = dbPath ?? AppPaths.speakersDB
@@ -84,8 +120,11 @@ class SpeakerMatcher {
     }
 
     /// Match diarization embeddings against stored speakers.
-    /// Uses min-distance across all stored embeddings per speaker,
-    /// with confidence margin to reject ambiguous matches.
+    /// Distance uses `min(cosineDistance over [centroid] + recent samples)`
+    /// — the centroid is treated as one additional anchor alongside the
+    /// recent-samples FIFO, never replacing them. This preserves the
+    /// previous algorithm's behaviour on identical-sample queries while
+    /// adding the centroid's drift-resistance for free.
     func match(embeddings: [String: [Float]]) -> [String: String] {
         let stored = loadDB()
         var mapping: [String: String] = [:]
@@ -99,11 +138,7 @@ class SpeakerMatcher {
             var secondBestDistance = Float.greatestFiniteMagnitude
 
             for speaker in stored where !usedNames.contains(speaker.name) {
-                // Min distance across all stored embeddings for this speaker
-                let dist = speaker.embeddings
-                    .map { Self.cosineDistance(embedding, $0) }
-                    .min() ?? Float.greatestFiniteMagnitude
-
+                let dist = Self.distance(query: embedding, speaker: speaker)
                 if dist < bestDistance {
                     secondBestDistance = bestDistance
                     bestDistance = dist
@@ -113,7 +148,6 @@ class SpeakerMatcher {
                 }
             }
 
-            // Must be below threshold AND have sufficient margin over second-best
             if let name = bestName,
                bestDistance < threshold,
                secondBestDistance - bestDistance >= confidenceMargin {
@@ -127,37 +161,148 @@ class SpeakerMatcher {
         return mapping
     }
 
+    /// Distance from a query embedding to a stored speaker.
+    /// Computes `min(cosineDistance over [centroid] + recent samples)`.
+    /// For legacy entries (no centroid persisted), the recent-samples FIFO
+    /// is the sole anchor — which is identical to the pre-centroid algorithm.
+    static func distance(query: [Float], speaker: StoredSpeaker) -> Float {
+        var anchors = speaker.embeddings
+        if let c = speaker.centroid { anchors.append(c) }
+        return anchors.map { cosineDistance(query, $0) }.min() ?? .greatestFiniteMagnitude
+    }
+
+    /// Element-wise mean of a non-empty list of equal-length embedding
+    /// vectors. Returns nil for an empty input or for vectors of mixed
+    /// dimensionality (we never produce mixed-dim arrays in normal flow,
+    /// but we don't trust historical entries).
+    static func meanEmbedding(_ vectors: [[Float]]) -> [Float]? {
+        guard let first = vectors.first, !first.isEmpty else { return nil }
+        let dim = first.count
+        guard vectors.allSatisfy({ $0.count == dim }) else { return nil }
+        var sum = [Float](repeating: 0, count: dim)
+        for vec in vectors {
+            for i in 0 ..< dim {
+                sum[i] += vec[i]
+            }
+        }
+        let n = Float(vectors.count)
+        return sum.map { $0 / n }
+    }
+
+    /// Update an existing centroid with a new sample using a running average:
+    /// `new = (centroid * count + sample) / (count + 1)`. Returns nil if the
+    /// sample dimensionality doesn't match the centroid (we never let a bad
+    /// sample corrupt the centroid).
+    static func updateCentroid(
+        current: [Float]?, count: Int, with sample: [Float],
+    ) -> (centroid: [Float], count: Int)? {
+        guard !sample.isEmpty else { return nil }
+        guard let current, !current.isEmpty else {
+            return (sample, 1)
+        }
+        guard current.count == sample.count else { return nil }
+        let n = Float(count)
+        let total = n + 1
+        var updated = [Float](repeating: 0, count: current.count)
+        for i in 0 ..< current.count {
+            updated[i] = (current[i] * n + sample[i]) / total
+        }
+        return (updated, count + 1)
+    }
+
     /// Update speaker DB with confirmed names and their embeddings.
-    /// Appends new embedding to the speaker's list (FIFO, max 5) and bumps
-    /// `lastUsed` / `useCount` so the picker can rank by recency.
+    /// - Embeddings from speakers with at least `minSpeakingTimeForCentroid`
+    ///   seconds of speaking time are folded into the running-mean `centroid`
+    ///   (the primary match anchor).
+    /// - All confirmed embeddings are appended to the recent-samples FIFO
+    ///   (max `maxRecentSamples`) regardless of duration, so a borderline
+    ///   centroid match can be rescued by a fallback sample distance.
+    /// - `lastUsed` / `useCount` are bumped on every confirmation.
     func updateDB(
-        mapping: [String: String], embeddings: [String: [Float]], now: Date = Date(),
+        mapping: [String: String],
+        embeddings: [String: [Float]],
+        speakingTimes: [String: TimeInterval] = [:],
+        now: Date = Date(),
     ) {
         var stored = loadDB()
 
         for (label, name) in mapping {
             guard name != label, let embedding = embeddings[label] else { continue }
+            let duration = speakingTimes[label] ?? 0
 
             if let idx = stored.firstIndex(where: { $0.name == name }) {
-                var updated = stored[idx].embeddings
-                updated.append(embedding)
-                if updated.count > Self.maxEmbeddingsPerSpeaker {
-                    updated.removeFirst(updated.count - Self.maxEmbeddingsPerSpeaker)
-                }
-                stored[idx] = StoredSpeaker(
-                    name: name,
-                    embeddings: updated,
-                    lastUsed: now,
-                    useCount: stored[idx].useCount + 1,
+                stored[idx] = Self.applyConfirmation(
+                    to: stored[idx],
+                    embedding: embedding,
+                    duration: duration,
+                    now: now,
                 )
             } else {
-                stored.append(StoredSpeaker(
-                    name: name, embeddings: [embedding], lastUsed: now, useCount: 1,
+                stored.append(Self.newSpeaker(
+                    name: name, embedding: embedding, duration: duration, now: now,
                 ))
             }
         }
 
         saveDB(stored)
+    }
+
+    /// Pure helper: fold a confirmed embedding into an existing `StoredSpeaker`.
+    /// Centroid is updated only when `duration >= minSpeakingTimeForCentroid`.
+    /// FIFO of recent samples is bumped unconditionally.
+    static func applyConfirmation(
+        to speaker: StoredSpeaker, embedding: [Float], duration: TimeInterval, now: Date,
+    ) -> StoredSpeaker {
+        var samples = speaker.embeddings
+        samples.append(embedding)
+        if samples.count > maxRecentSamples {
+            samples.removeFirst(samples.count - maxRecentSamples)
+        }
+
+        let qualifies = duration >= minSpeakingTimeForCentroid
+        // Seed the centroid from the existing sample list on first qualifying
+        // confirmation after a v3 schema upgrade. Subsequent confirmations
+        // run the normal incremental update.
+        let seedCentroid = speaker.centroid ?? meanEmbedding(speaker.embeddings)
+        let seedCount = speaker.centroid != nil
+            ? speaker.centroidSampleCount
+            : (seedCentroid != nil ? speaker.embeddings.count : 0)
+
+        let nextCentroid: [Float]?
+        let nextCount: Int
+        if qualifies, let updated = updateCentroid(
+            current: seedCentroid, count: seedCount, with: embedding,
+        ) {
+            nextCentroid = updated.centroid
+            nextCount = updated.count
+        } else {
+            nextCentroid = seedCentroid
+            nextCount = seedCount
+        }
+
+        return StoredSpeaker(
+            name: speaker.name,
+            embeddings: samples,
+            centroid: nextCentroid,
+            centroidSampleCount: nextCount,
+            lastUsed: now,
+            useCount: speaker.useCount + 1,
+        )
+    }
+
+    /// Pure helper: build a fresh `StoredSpeaker` from a single confirmation.
+    static func newSpeaker(
+        name: String, embedding: [Float], duration: TimeInterval, now: Date,
+    ) -> StoredSpeaker {
+        let qualifies = duration >= minSpeakingTimeForCentroid
+        return StoredSpeaker(
+            name: name,
+            embeddings: [embedding],
+            centroid: qualifies ? embedding : nil,
+            centroidSampleCount: qualifies ? 1 : 0,
+            lastUsed: now,
+            useCount: 1,
+        )
     }
 
     func loadDB() -> [StoredSpeaker] {
@@ -267,3 +412,5 @@ class SpeakerMatcher {
         return 1 - dot / denom
     }
 }
+
+// swiftlint:enable discouraged_optional_collection

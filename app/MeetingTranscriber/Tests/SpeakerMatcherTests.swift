@@ -192,6 +192,169 @@ final class SpeakerMatcherTests: XCTestCase {
 
     // MARK: - Backward-compat decode
 
+    // MARK: - meanEmbedding
+
+    func testMeanEmbeddingSimpleAverage() {
+        let mean = SpeakerMatcher.meanEmbedding([[0, 0], [2, 4]])
+        XCTAssertEqual(mean, [1, 2])
+    }
+
+    func testMeanEmbeddingEmptyReturnsNil() {
+        XCTAssertNil(SpeakerMatcher.meanEmbedding([]))
+        XCTAssertNil(SpeakerMatcher.meanEmbedding([[]]))
+    }
+
+    func testMeanEmbeddingMixedDimensionsReturnsNil() {
+        XCTAssertNil(SpeakerMatcher.meanEmbedding([[1, 2], [3, 4, 5]]))
+    }
+
+    // MARK: - updateCentroid
+
+    func testUpdateCentroidFromNilSeedsWithSample() {
+        let result = SpeakerMatcher.updateCentroid(current: nil, count: 0, with: [1, 2, 3])
+        XCTAssertEqual(result?.centroid, [1, 2, 3])
+        XCTAssertEqual(result?.count, 1)
+    }
+
+    func testUpdateCentroidRunningAverage() {
+        // current = [2, 4] over 2 samples; new sample [4, 8] → mean = [(2*2+4)/3, (4*2+8)/3] = [8/3, 16/3]
+        let result = SpeakerMatcher.updateCentroid(current: [2, 4], count: 2, with: [4, 8])
+        XCTAssertEqual(result?.count, 3)
+        XCTAssertEqual(result?.centroid[0] ?? 0, 8.0 / 3.0, accuracy: 0.001)
+        XCTAssertEqual(result?.centroid[1] ?? 0, 16.0 / 3.0, accuracy: 0.001)
+    }
+
+    func testUpdateCentroidMixedDimensionsReturnsNil() {
+        XCTAssertNil(SpeakerMatcher.updateCentroid(current: [1, 2], count: 1, with: [1, 2, 3]))
+    }
+
+    // MARK: - applyConfirmation / newSpeaker
+
+    func testNewSpeakerWithSufficientDurationSeedsCentroid() {
+        let speaker = SpeakerMatcher.newSpeaker(
+            name: "Anna", embedding: [1, 0], duration: 5.0, now: Self.testEpoch,
+        )
+        XCTAssertEqual(speaker.centroid, [1, 0])
+        XCTAssertEqual(speaker.centroidSampleCount, 1)
+        XCTAssertEqual(speaker.embeddings, [[1, 0]])
+    }
+
+    func testNewSpeakerWithShortDurationSkipsCentroid() {
+        // Short snippet still appended to embeddings (fallback) but doesn't pollute centroid.
+        let speaker = SpeakerMatcher.newSpeaker(
+            name: "Anna", embedding: [1, 0], duration: 1.0, now: Self.testEpoch,
+        )
+        XCTAssertNil(speaker.centroid)
+        XCTAssertEqual(speaker.centroidSampleCount, 0)
+        XCTAssertEqual(speaker.embeddings, [[1, 0]])
+    }
+
+    func testApplyConfirmationFifoCapsRecentSamplesAtThree() {
+        var speaker = StoredSpeaker(name: "Anna", embeddings: [[1, 0], [0, 1], [1, 1]])
+        speaker = SpeakerMatcher.applyConfirmation(
+            to: speaker, embedding: [2, 2], duration: 5, now: Self.testEpoch,
+        )
+        XCTAssertEqual(speaker.embeddings.count, SpeakerMatcher.maxRecentSamples)
+        XCTAssertEqual(speaker.embeddings.last, [2, 2])
+        XCTAssertEqual(speaker.embeddings.first, [0, 1], "oldest sample dropped")
+    }
+
+    func testApplyConfirmationSeedsCentroidFromLegacySamplesOnFirstQualifyingConfirmation() {
+        // Legacy entry: pre-v3, no centroid yet, embeddings populated.
+        let legacy = StoredSpeaker(name: "Anna", embeddings: [[1, 0], [0, 1]])
+        let updated = SpeakerMatcher.applyConfirmation(
+            to: legacy, embedding: [2, 2], duration: 5, now: Self.testEpoch,
+        )
+        // Seed: meanEmbedding(legacy.embeddings) = [0.5, 0.5] over 2 samples,
+        // then folded with [2, 2] → ((0.5*2+2)/3, (0.5*2+2)/3) = (1.0, 1.0)
+        XCTAssertNotNil(updated.centroid)
+        XCTAssertEqual(updated.centroid?[0] ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(updated.centroid?[1] ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(updated.centroidSampleCount, 3)
+    }
+
+    func testApplyConfirmationShortSnippetDoesNotMoveExistingCentroid() {
+        let speaker = StoredSpeaker(
+            name: "Anna",
+            embeddings: [[1, 0]],
+            centroid: [1, 0],
+            centroidSampleCount: 1,
+        )
+        let updated = SpeakerMatcher.applyConfirmation(
+            to: speaker, embedding: [9, 9], duration: 0.5, now: Self.testEpoch,
+        )
+        XCTAssertEqual(updated.centroid, [1, 0], "short snippet must not pollute centroid")
+        XCTAssertEqual(updated.centroidSampleCount, 1)
+        XCTAssertEqual(updated.embeddings.count, 2, "but is still kept as fallback sample")
+    }
+
+    // MARK: - updateDB recency tracking with quality filter
+
+    func testUpdateDBPersistsCentroidWhenSpeakingTimeQualifies() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.updateDB(
+            mapping: ["S0": "Anna"],
+            embeddings: ["S0": [1, 0]],
+            speakingTimes: ["S0": 5.0],
+            now: Self.testEpoch,
+        )
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.first?.centroid, [1, 0])
+        XCTAssertEqual(stored.first?.centroidSampleCount, 1)
+    }
+
+    func testUpdateDBSkipsCentroidWhenSpeakingTimeShort() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.updateDB(
+            mapping: ["S0": "Anna"],
+            embeddings: ["S0": [1, 0]],
+            speakingTimes: ["S0": 1.0],
+            now: Self.testEpoch,
+        )
+        let stored = matcher.loadDB()
+        XCTAssertNil(stored.first?.centroid)
+        XCTAssertEqual(stored.first?.embeddings, [[1, 0]])
+    }
+
+    // MARK: - match with centroid
+
+    func testMatchPrefersCentroidOverNoisySample() {
+        // A speaker whose centroid says "[1, 0]" but whose embeddings list has
+        // a noisy outlier "[0.7, 0.7]". A query "[0.99, 0.01]" should match.
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.5)
+        matcher.saveDB([StoredSpeaker(
+            name: "Anna",
+            embeddings: [[1, 0], [0.7, 0.7]],
+            centroid: [1, 0],
+            centroidSampleCount: 5,
+        )])
+        let result = matcher.match(embeddings: ["S0": [0.99, 0.01]])
+        XCTAssertEqual(result["S0"], "Anna")
+    }
+
+    func testMatchUsesSamplesAsFallbackForLegacyEntries() {
+        // Legacy entry: no centroid; matcher should compute meanEmbedding lazily.
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.5)
+        matcher.saveDB([StoredSpeaker(name: "Anna", embeddings: [[1, 0]])])
+        let result = matcher.match(embeddings: ["S0": [0.99, 0.01]])
+        XCTAssertEqual(result["S0"], "Anna")
+    }
+
+    // MARK: - Backward-compat decode
+
+    func testLoadDBDecodesLegacyEntriesWithoutCentroidFields() throws {
+        // Pre-v3 entries decode with centroid=nil, centroidSampleCount=0.
+        let legacy = """
+        [{"name":"Roman","embeddings":[[1,0,0]],"lastUsed":700000000,"useCount":3}]
+        """
+        try legacy.data(using: .utf8)?.write(to: dbPath)
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = matcher.loadDB()
+        XCTAssertNil(stored[0].centroid)
+        XCTAssertEqual(stored[0].centroidSampleCount, 0)
+        XCTAssertEqual(stored[0].useCount, 3)
+    }
+
     func testLoadDBDecodesLegacyEntriesWithoutRecencyFields() throws {
         // Older speakers.json predates lastUsed/useCount — decode must default them.
         let legacy = """
@@ -395,19 +558,16 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result["SPEAKER_0"], "Roman")
     }
 
-    func testMultiEmbeddingMaxFive() {
+    func testRecentSamplesFifoCappedAtMaxRecentSamples() {
         let matcher = SpeakerMatcher(dbPath: dbPath)
-        // Start with 5 embeddings
         let stored = [StoredSpeaker(name: "Roman", embeddings: [
             [1, 0, 0],
             [0.9, 0.1, 0],
             [0.8, 0.2, 0],
-            [0.7, 0.3, 0],
-            [0.6, 0.4, 0],
         ])]
         matcher.saveDB(stored)
 
-        // Update with new embedding → should drop oldest (FIFO)
+        // Update with new embedding → should drop oldest (FIFO).
         let newEmb: [Float] = [0.5, 0.5, 0]
         matcher.updateDB(
             mapping: ["SPEAKER_0": "Roman"],
@@ -415,11 +575,9 @@ final class SpeakerMatcherTests: XCTestCase {
         )
 
         let loaded = matcher.loadDB()
-        XCTAssertEqual(loaded[0].embeddings.count, 5)
-        // Oldest [1, 0, 0] should be gone
-        XCTAssertFalse(loaded[0].embeddings.contains([1, 0, 0]))
-        // Newest should be present
-        XCTAssertTrue(loaded[0].embeddings.contains(newEmb))
+        XCTAssertEqual(loaded[0].embeddings.count, SpeakerMatcher.maxRecentSamples)
+        XCTAssertFalse(loaded[0].embeddings.contains([1, 0, 0]), "oldest sample dropped")
+        XCTAssertTrue(loaded[0].embeddings.contains(newEmb), "newest sample present")
     }
 
     // MARK: - Confidence Margin
