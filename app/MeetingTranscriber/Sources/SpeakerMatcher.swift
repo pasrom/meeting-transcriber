@@ -136,6 +136,13 @@ class SpeakerMatcher {
         return (try? JSONDecoder().decode([StoredSpeaker].self, from: data)) ?? []
     }
 
+    /// Names of all stored speakers, sorted alphabetically. Used as suggestion
+    /// chips in the speaker-naming UI ("Known voices" row) so the user can
+    /// reuse names from previous meetings with one click.
+    func allSpeakerNames() -> [String] {
+        loadDB().map(\.name).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     func saveDB(_ speakers: [StoredSpeaker]) {
         do {
             let data = try JSONEncoder().encode(speakers)

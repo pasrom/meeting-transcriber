@@ -111,7 +111,10 @@ struct MeetingTranscriberApp: App {
 
         Window("Name Speakers", id: "speaker-naming") {
             if let data = appState.pipelineQueue.pendingSpeakerNaming {
-                SpeakerNamingView(data: data) { result in
+                SpeakerNamingView(
+                    data: data,
+                    knownSpeakerNames: appState.pipelineQueue.speakerMatcherFactory().allSpeakerNames(),
+                ) { result in
                     appState.pipelineQueue.completeSpeakerNaming(result: result)
                     closeWindow(id: "speaker-naming")
                 }

@@ -1,6 +1,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
+// swiftlint:disable:next type_body_length
 final class SpeakerMatcherTests: XCTestCase {
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
@@ -104,6 +105,23 @@ final class SpeakerMatcherTests: XCTestCase {
         let matcher = SpeakerMatcher(dbPath: dbPath)
         let loaded = matcher.loadDB()
         XCTAssertTrue(loaded.isEmpty)
+    }
+
+    // MARK: - allSpeakerNames
+
+    func testAllSpeakerNamesEmptyWhenNoDB() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        XCTAssertTrue(matcher.allSpeakerNames().isEmpty)
+    }
+
+    func testAllSpeakerNamesSortsAlphabeticallyCaseInsensitive() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([
+            StoredSpeaker(name: "charlie", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Alice", embeddings: [[0, 1, 0]]),
+            StoredSpeaker(name: "bob", embeddings: [[0, 0, 1]]),
+        ])
+        XCTAssertEqual(matcher.allSpeakerNames(), ["Alice", "bob", "charlie"])
     }
 
     // MARK: - Update DB
