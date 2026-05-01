@@ -21,6 +21,9 @@ class PipelineQueue {
     let micLabel: String
     let speakerMatcherFactory: () -> SpeakerMatcher
     let vadConfig: VADConfig?
+    /// nil disables JSONL logging. AppState injects a real instance for production;
+    /// tests leave it nil unless they explicitly want to assert on the log.
+    let recognitionStatsLog: RecognitionStatsLog?
 
     let completedJobLifetime: TimeInterval
 
@@ -100,6 +103,7 @@ class PipelineQueue {
         self.micLabel = "Me"
         self.speakerMatcherFactory = { SpeakerMatcher() }
         self.vadConfig = nil
+        self.recognitionStatsLog = nil
         self.completedJobLifetime = completedJobLifetime
     }
 
@@ -115,6 +119,7 @@ class PipelineQueue {
         micLabel: String = "Me",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
         vadConfig: VADConfig? = nil,
+        recognitionStatsLog: RecognitionStatsLog? = nil,
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -127,6 +132,7 @@ class PipelineQueue {
         self.micLabel = micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
         self.vadConfig = vadConfig
+        self.recognitionStatsLog = recognitionStatsLog
         self.completedJobLifetime = completedJobLifetime
     }
 
@@ -414,6 +420,13 @@ class PipelineQueue {
                                 )
                             }
 
+                            let suggestedAtDialog = autoNames
+                            let autoMatched = matched.count { $0.key != $0.value }
+                            let unknown = matched.count - autoMatched
+                            logger.info(
+                                "[recognition] \(matched.count) speakers, \(autoMatched) auto, \(unknown) unknown",
+                            )
+
                             let namingData = SpeakerNamingData(
                                 jobID: jobID,
                                 meetingTitle: title,
@@ -456,6 +469,11 @@ class PipelineQueue {
                                     embeddings: embeddings,
                                     speakingTimes: currentDiarization.speakingTimes,
                                 )
+                                recordRecognition(
+                                    suggested: suggestedAtDialog,
+                                    userMapping: userMapping,
+                                    jobID: jobID, title: title,
+                                )
                                 break diarizationLoop
 
                             case let .rerun(count):
@@ -466,6 +484,11 @@ class PipelineQueue {
                                 continue diarizationLoop
 
                             case .skipped:
+                                recordRecognition(
+                                    suggested: suggestedAtDialog,
+                                    userMapping: nil,
+                                    jobID: jobID, title: title,
+                                )
                                 break diarizationLoop
                             }
                         }
@@ -883,6 +906,32 @@ class PipelineQueue {
             }
         } catch {
             logger.error("Failed to append pipeline log: \(error)")
+        }
+    }
+
+    /// Build recognition events and persist them off the pipeline path. Logs
+    /// outcome counts immediately; JSONL append runs in a detached Task.
+    private func recordRecognition(
+        suggested: [String: String],
+        // swiftlint:disable:next discouraged_optional_collection
+        userMapping: [String: String]?,
+        jobID: UUID,
+        title: String,
+    ) {
+        let events = RecognitionStats.buildEvents(
+            suggested: suggested, userMapping: userMapping,
+            jobID: jobID, meetingTitle: title,
+        )
+        var counts: [RecognitionAction: Int] = [:]
+        for e in events {
+            counts[e.action, default: 0] += 1
+        }
+        let parts = RecognitionAction.allCases
+            .map { "\($0.rawValue)=\(counts[$0] ?? 0)" }
+            .joined(separator: " ")
+        logger.info("[recognition] outcome \(parts, privacy: .public)")
+        if let recognitionStatsLog {
+            Task { await recognitionStatsLog.append(events) }
         }
     }
 }
