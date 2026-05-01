@@ -797,4 +797,66 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result["SPEAKER_0"], "Roman", "First key alphabetically should win the match")
         XCTAssertEqual(result["SPEAKER_1"], "SPEAKER_1", "Second speaker left unmatched")
     }
+
+    // MARK: - matchVerbose
+
+    func testMatchVerboseReturnsRankedCandidates() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = [
+            StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Speaker B", embeddings: [[0, 1, 0]]),
+            StoredSpeaker(name: "Speaker C", embeddings: [[0, 0, 1]]),
+        ]
+        matcher.saveDB(stored)
+
+        let result = matcher.matchVerbose(embeddings: ["SPEAKER_0": [0.99, 0.01, 0]])
+        let entry = result["SPEAKER_0"]
+
+        XCTAssertEqual(entry?.assignedName, "Speaker A")
+        XCTAssertEqual(entry?.topCandidates.count, 3)
+        XCTAssertEqual(entry?.topCandidates.first?.name, "Speaker A")
+        // Speaker A is closest; the other two are orthogonal at distance 1.
+        XCTAssertLessThan(entry?.topCandidates.first?.hybrid ?? 1, 0.1)
+    }
+
+    func testMatchVerboseExposesCentroidDistance() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = [
+            StoredSpeaker(
+                name: "Speaker A", embeddings: [[1, 0, 0]],
+                centroid: [0.9, 0.1, 0], centroidSampleCount: 5,
+            ),
+        ]
+        matcher.saveDB(stored)
+
+        let result = matcher.matchVerbose(embeddings: ["S0": [1, 0, 0]])
+        let cand = result["S0"]?.topCandidates.first
+        XCTAssertEqual(cand?.name, "Speaker A")
+        XCTAssertNotNil(cand?.centroid, "Centroid distance should be reported when stored")
+        XCTAssertEqual(cand?.sample ?? 1, 0, accuracy: 0.001)
+    }
+
+    func testMatchVerboseLegacyEntriesHaveNilCentroid() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        // No centroid persisted (legacy entry)
+        let stored = [StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])]
+        matcher.saveDB(stored)
+
+        let result = matcher.matchVerbose(embeddings: ["S0": [1, 0, 0]])
+        XCTAssertNil(result["S0"]?.topCandidates.first?.centroid)
+    }
+
+    func testMatchVerboseAssignsLabelWhenBelowConfidenceMargin() {
+        let matcher = SpeakerMatcher(dbPath: dbPath, confidenceMargin: 0.5)
+        let stored = [
+            StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Speaker B", embeddings: [[0.99, 0.01, 0]]),
+        ]
+        matcher.saveDB(stored)
+
+        let result = matcher.matchVerbose(embeddings: ["S0": [1, 0, 0]])
+        XCTAssertEqual(result["S0"]?.assignedName, "S0")
+        // Both candidates still surfaced
+        XCTAssertEqual(result["S0"]?.topCandidates.count, 2)
+    }
 }

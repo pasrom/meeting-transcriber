@@ -6,28 +6,28 @@ final class RecognitionStatsTests: XCTestCase {
     // MARK: - classify
 
     func testClassifyAccepted() {
-        XCTAssertEqual(RecognitionStats.classify(autoName: "Roman", userName: "Roman"), .accepted)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "Speaker A", userName: "Speaker A"), .accepted)
     }
 
     func testClassifyCorrected() {
-        XCTAssertEqual(RecognitionStats.classify(autoName: "Roman", userName: "Alex"), .corrected)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "Speaker A", userName: "Speaker B"), .corrected)
     }
 
     func testClassifyAdded() {
-        XCTAssertEqual(RecognitionStats.classify(autoName: nil, userName: "Roman"), .added)
-        XCTAssertEqual(RecognitionStats.classify(autoName: "", userName: "Roman"), .added)
+        XCTAssertEqual(RecognitionStats.classify(autoName: nil, userName: "Speaker A"), .added)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "", userName: "Speaker A"), .added)
     }
 
     func testClassifySkipped() {
-        XCTAssertEqual(RecognitionStats.classify(autoName: "Roman", userName: nil), .skipped)
-        XCTAssertEqual(RecognitionStats.classify(autoName: "Roman", userName: ""), .skipped)
-        XCTAssertEqual(RecognitionStats.classify(autoName: "Roman", userName: "   "), .skipped)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "Speaker A", userName: nil), .skipped)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "Speaker A", userName: ""), .skipped)
+        XCTAssertEqual(RecognitionStats.classify(autoName: "Speaker A", userName: "   "), .skipped)
         XCTAssertEqual(RecognitionStats.classify(autoName: nil, userName: nil), .skipped)
     }
 
     func testClassifyTrimsWhitespace() {
         XCTAssertEqual(
-            RecognitionStats.classify(autoName: " Roman ", userName: "Roman"), .accepted,
+            RecognitionStats.classify(autoName: " Speaker A ", userName: "Speaker A"), .accepted,
         )
     }
 
@@ -83,14 +83,14 @@ final class RecognitionStatsTests: XCTestCase {
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
         let events: [RecognitionEvent] = [
-            event(name: "Roman", action: .accepted, ts: now),
-            event(name: "Alex", action: .corrected, ts: now),
+            event(name: "Speaker A", action: .accepted, ts: now),
+            event(name: "Speaker B", action: .corrected, ts: now),
         ]
         await log.append(events)
 
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 2)
-        XCTAssertEqual(loaded.map(\.userName).sorted { ($0 ?? "") < ($1 ?? "") }, ["Alex", "Roman"])
+        XCTAssertEqual(loaded.map(\.userName).sorted { ($0 ?? "") < ($1 ?? "") }, ["Speaker A", "Speaker B"])
 
         try? FileManager.default.removeItem(at: tmp)
     }
@@ -112,7 +112,7 @@ final class RecognitionStatsTests: XCTestCase {
         let tmp = uniqueTempPath()
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
-        await log.append([event(name: "Roman", action: .accepted, ts: now)])
+        await log.append([event(name: "Speaker A", action: .accepted, ts: now)])
 
         // Append a garbage line
         let handle = try FileHandle(forWritingTo: tmp)
@@ -122,7 +122,7 @@ final class RecognitionStatsTests: XCTestCase {
 
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 1)
-        XCTAssertEqual(loaded.first?.userName, "Roman")
+        XCTAssertEqual(loaded.first?.userName, "Speaker A")
 
         try? FileManager.default.removeItem(at: tmp)
     }
@@ -147,19 +147,20 @@ final class RecognitionStatsTests: XCTestCase {
 
     func testBuildEventsClassifiesAllActions() {
         let suggested = [
-            "R_S1": "Roman", // accepted
-            "R_S2": "Alex", // corrected
+            "R_S1": "Speaker A", // accepted
+            "R_S2": "Speaker B", // corrected
             "R_S3": "R_S3", // added (no auto)
-            "M_S1": "Susi", // skipped (user clears)
+            "M_S1": "Speaker C", // skipped (user clears)
         ]
         let userMapping = [
-            "R_S1": "Roman",
-            "R_S2": "Bob",
-            "R_S3": "Charlie",
+            "R_S1": "Speaker A",
+            "R_S2": "Speaker D",
+            "R_S3": "Speaker E",
             "M_S1": "",
         ]
         let events = RecognitionStats.buildEvents(
             suggested: suggested, userMapping: userMapping,
+            topCandidates: [:],
             jobID: UUID(), meetingTitle: "Test",
         )
         let byLabel = Dictionary(uniqueKeysWithValues: events.map { ($0.label, $0) })
@@ -174,16 +175,17 @@ final class RecognitionStatsTests: XCTestCase {
     }
 
     func testBuildEventsDismissedWhenUserMappingNil() {
-        let suggested = ["R_S1": "Roman", "R_S2": "R_S2"]
+        let suggested = ["R_S1": "Speaker A", "R_S2": "R_S2"]
         let events = RecognitionStats.buildEvents(
             suggested: suggested, userMapping: nil,
+            topCandidates: [:],
             jobID: UUID(), meetingTitle: "Test",
         )
         XCTAssertEqual(events.count, 2)
         XCTAssertTrue(events.allSatisfy { $0.action == .dismissed })
         XCTAssertTrue(events.allSatisfy { $0.userName == nil })
         let s1 = events.first { $0.label == "R_S1" }
-        XCTAssertEqual(s1?.autoName, "Roman")
+        XCTAssertEqual(s1?.autoName, "Speaker A")
         let s2 = events.first { $0.label == "R_S2" }
         XCTAssertNil(s2.flatMap(\.autoName))
     }
@@ -198,8 +200,28 @@ final class RecognitionStatsTests: XCTestCase {
             track: .single, label: "S1",
             autoName: action == .added ? nil : name,
             userName: action == .skipped || action == .dismissed ? nil : name,
-            action: action,
+            action: action, topCandidates: nil,
         )
+    }
+
+    func testBuildEventsThreadsTopCandidates() {
+        let suggested = ["R_S1": "Speaker A"]
+        let userMapping = ["R_S1": "Speaker A"]
+        let candidates = [
+            "R_S1": [
+                TopCandidate(name: "Speaker A", sample: 0.10, centroid: 0.22),
+                TopCandidate(name: "Speaker B", sample: 0.40, centroid: nil),
+            ],
+        ]
+        let events = RecognitionStats.buildEvents(
+            suggested: suggested, userMapping: userMapping,
+            topCandidates: candidates,
+            jobID: UUID(), meetingTitle: "Test",
+        )
+        XCTAssertEqual(events.first?.topCandidates?.count, 2)
+        XCTAssertEqual(events.first?.topCandidates?.first?.name, "Speaker A")
+        let lastCentroid: Float? = events.first?.topCandidates?.last?.centroid
+        XCTAssertNil(lastCentroid)
     }
 
     private func uniqueTempPath() -> URL {

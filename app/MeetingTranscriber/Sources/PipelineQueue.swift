@@ -408,8 +408,10 @@ class PipelineQueue {
                             guard let embeddings = currentDiarization.embeddings else { break }
 
                             let matcher = speakerMatcherFactory()
-                            let matched = matcher.match(embeddings: embeddings)
+                            let verbose = matcher.matchVerbose(embeddings: embeddings)
+                            let matched = verbose.mapValues(\.assignedName)
                             autoNames = matched
+                            let topCandidates = verbose.mapValues(\.topCandidates)
 
                             // Pre-match participants to remaining speakers
                             if !participants.isEmpty {
@@ -472,6 +474,7 @@ class PipelineQueue {
                                 recordRecognition(
                                     suggested: suggestedAtDialog,
                                     userMapping: userMapping,
+                                    topCandidates: topCandidates,
                                     jobID: jobID, title: title,
                                 )
                                 break diarizationLoop
@@ -487,6 +490,7 @@ class PipelineQueue {
                                 recordRecognition(
                                     suggested: suggestedAtDialog,
                                     userMapping: nil,
+                                    topCandidates: topCandidates,
                                     jobID: jobID, title: title,
                                 )
                                 break diarizationLoop
@@ -915,11 +919,13 @@ class PipelineQueue {
         suggested: [String: String],
         // swiftlint:disable:next discouraged_optional_collection
         userMapping: [String: String]?,
+        topCandidates: [String: [TopCandidate]],
         jobID: UUID,
         title: String,
     ) {
         let events = RecognitionStats.buildEvents(
             suggested: suggested, userMapping: userMapping,
+            topCandidates: topCandidates,
             jobID: jobID, meetingTitle: title,
         )
         var counts: [RecognitionAction: Int] = [:]
