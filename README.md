@@ -210,13 +210,13 @@ If a recording's `_app.wav` is silent or unexpectedly quiet, enable verbose audi
 2. Reproduce the failing recording.
 3. Open **Console.app**, filter by subsystem `com.meetingtranscriber.audiotap`, and look for `[debug]` lines:
    - `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` — which process the tap targeted
-   - `[debug] Default output device: name=… uid=… transport=… rate=…` — output device identity and transport type (Built-In, Bluetooth, USB, etc.) at start
-   - `[debug] Tap format: rate=… Hz, tapID=…` — the rate the CATapDescription reports right after tap creation; a mismatch vs the aggregate device rate explains garbled audio
+   - `[debug] Default output device: name=… uid=… transport=… rate=…` — output device at start
+   - `[debug] Tap format: rate=… Hz, tapID=…` — sample rate and tap ID after the tap is configured
    - `[debug] App audio RMS (5s): …dBFS, samples=…, totalBytes=…` — every 5 seconds; **tells you live whether the tap is delivering real audio (-40 dBFS or higher) or near-silence (≤ -90 dBFS)**
    - `[debug] Output device change → name=… uid=…` — emitted when the system output device changes mid-recording
-   - `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` — mic hardware identity at start
-   - `[debug] Mic RMS (5s): …dBFS, samples=…` — every 5 seconds for the mic track; use when `_mic.wav` is silent
-4. Turn the toggle off again when done — the per-5 s RMS logs are moderately chatty.
+   - `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` — mic hardware device at capture start
+   - `[debug] Mic RMS (5s): …dBFS, samples=…` — every 5 seconds during mic capture
+4. Turn the toggle off again when done — the per-5 s RMS log is moderately chatty.
 
 The toggle persists in `UserDefaults` and takes effect on the next recording without an app restart.
 
