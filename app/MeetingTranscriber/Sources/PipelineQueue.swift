@@ -91,6 +91,16 @@ class PipelineQueue {
     /// Used by tests to auto-complete without UI interaction.
     var speakerNamingHandler: ((SpeakerNamingData) async -> SpeakerNamingResult)?
 
+    /// Default factory for `speakerMatcherFactory`: a matcher that writes to a
+    /// throwaway tmp path. Production callers (AppState) MUST inject an explicit
+    /// factory pointing at the real `speakers.json`. This keeps the user's real
+    /// DB safe from any test that constructs a PipelineQueue without injection.
+    nonisolated static func throwawayMatcherFactory() -> () -> SpeakerMatcher {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PipelineQueue-throwaway-\(UUID().uuidString).json")
+        return { SpeakerMatcher(dbPath: path) }
+    }
+
     /// Simple init for skeleton tests and basic queue usage.
     init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -101,7 +111,7 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
-        self.speakerMatcherFactory = { SpeakerMatcher() }
+        self.speakerMatcherFactory = Self.throwawayMatcherFactory()
         self.vadConfig = nil
         self.recognitionStatsLog = nil
         self.completedJobLifetime = completedJobLifetime
@@ -117,7 +127,7 @@ class PipelineQueue {
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
-        speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
+        speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         vadConfig: VADConfig? = nil,
         recognitionStatsLog: RecognitionStatsLog? = nil,
         completedJobLifetime: TimeInterval = 60,
