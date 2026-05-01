@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var availableModels: [String] = []
     @State private var showResetPromptConfirmation = false
     @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
+    @State private var showKnownVoices = false
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
     var qwen3Engine: (any TranscribingEngine)? // nil on macOS < 15
@@ -481,6 +482,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Known Voices") {
+                Button("Manage…") { showKnownVoices = true }
+                Text("Rename, delete, or merge entries in your speaker DB.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             RecognitionStatsView(log: recognitionStatsLog)
 
             Section("Diagnostics") {
@@ -522,6 +530,9 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520)
+        .sheet(isPresented: $showKnownVoices) {
+            KnownVoicesView(matcher: SpeakerMatcher())
+        }
         .onAppear {
             #if !APPSTORE
                 claudeBinaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()

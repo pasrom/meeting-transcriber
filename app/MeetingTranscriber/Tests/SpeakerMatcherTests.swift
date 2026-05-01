@@ -859,4 +859,108 @@ final class SpeakerMatcherTests: XCTestCase {
         // Both candidates still surfaced
         XCTAssertEqual(result["S0"]?.topCandidates.count, 2)
     }
+
+    // MARK: - Rename / delete / merge
+
+    func testRenameSpeakerHappyPath() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+
+        XCTAssertEqual(matcher.renameSpeaker(from: "Speaker A", to: "Speaker A1"), .renamed)
+        XCTAssertEqual(matcher.allSpeakerNames(), ["Speaker A1"])
+    }
+
+    func testRenameSpeakerToExistingNameMerges() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([
+            StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]], useCount: 2),
+            StoredSpeaker(name: "Speaker B", embeddings: [[0.9, 0.1, 0]], useCount: 3),
+        ])
+
+        XCTAssertEqual(matcher.renameSpeaker(from: "Speaker A", to: "Speaker B"), .merged)
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0].name, "Speaker B")
+        XCTAssertEqual(stored[0].useCount, 5)
+    }
+
+    func testRenameSpeakerNotFound() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        XCTAssertEqual(matcher.renameSpeaker(from: "X", to: "Y"), .notFound)
+    }
+
+    func testRenameSpeakerNoop() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        XCTAssertEqual(matcher.renameSpeaker(from: "X", to: "X"), .noop)
+    }
+
+    func testDeleteSpeaker() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([
+            StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Speaker B", embeddings: [[0, 1, 0]]),
+        ])
+        XCTAssertTrue(matcher.deleteSpeaker(name: "Speaker A"))
+        XCTAssertEqual(matcher.allSpeakerNames(), ["Speaker B"])
+        XCTAssertFalse(matcher.deleteSpeaker(name: "Speaker A"))
+    }
+
+    func testMergeSpeakersCombinesMetrics() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let now = Date()
+        matcher.saveDB([
+            StoredSpeaker(
+                name: "Speaker A", embeddings: [[1, 0, 0]],
+                centroid: [1, 0, 0], centroidSampleCount: 4,
+                lastUsed: now.addingTimeInterval(-100), useCount: 2,
+            ),
+            StoredSpeaker(
+                name: "Speaker B", embeddings: [[0.9, 0.1, 0]],
+                centroid: [0.9, 0.1, 0], centroidSampleCount: 1,
+                lastUsed: now, useCount: 3,
+            ),
+        ])
+
+        XCTAssertTrue(matcher.mergeSpeakers(from: "Speaker A", into: "Speaker B"))
+        let stored = matcher.loadDB()
+        XCTAssertEqual(stored.count, 1)
+        XCTAssertEqual(stored[0].name, "Speaker B")
+        XCTAssertEqual(stored[0].useCount, 5)
+        XCTAssertEqual(stored[0].centroidSampleCount, 5)
+        XCTAssertEqual(stored[0].lastUsed, now)
+        // Centroid weighted-average: (dst*1 + src*4) / 5
+        // dst.centroid = (0.9, 0.1, 0) count=1; src.centroid = (1, 0, 0) count=4.
+        // (0.9*1 + 1*4)/5 = 0.98, (0.1*1)/5 = 0.02
+        XCTAssertEqual(stored[0].centroid?[0] ?? 0, 0.98, accuracy: 0.001)
+        XCTAssertEqual(stored[0].centroid?[1] ?? 0, 0.02, accuracy: 0.001)
+    }
+
+    func testMergeSpeakersMissingSourceReturnsFalse() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+        XCTAssertFalse(matcher.mergeSpeakers(from: "missing", into: "Speaker A"))
+    }
+
+    func testMergeCentroidsBothNilReturnsNil() {
+        let result = SpeakerMatcher.mergeCentroids(a: nil, aCount: 0, b: nil, bCount: 0)
+        XCTAssertNil(result.centroid)
+    }
+
+    func testMergeCentroidsOneNilReturnsOther() {
+        let result = SpeakerMatcher.mergeCentroids(
+            a: [1, 0, 0], aCount: 5, b: nil, bCount: 0,
+        )
+        XCTAssertEqual(result.centroid ?? [], [1, 0, 0])
+        XCTAssertEqual(result.count, 5)
+    }
+
+    func testMergeCentroidsWeightedAverage() {
+        // (3 * (1,0,0) + 1 * (0,1,0)) / 4 = (0.75, 0.25, 0)
+        let result = SpeakerMatcher.mergeCentroids(
+            a: [1, 0, 0], aCount: 3, b: [0, 1, 0], bCount: 1,
+        )
+        XCTAssertEqual(result.centroid?[0] ?? 0, 0.75, accuracy: 0.001)
+        XCTAssertEqual(result.centroid?[1] ?? 0, 0.25, accuracy: 0.001)
+        XCTAssertEqual(result.count, 4)
+    }
 }

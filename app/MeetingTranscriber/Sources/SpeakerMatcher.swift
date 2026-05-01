@@ -7,7 +7,11 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "SpeakerMatcher")
 
-struct StoredSpeaker: Codable {
+struct StoredSpeaker: Codable, Identifiable {
+    var id: String {
+        name
+    }
+
     let name: String
     /// Recent quality samples (FIFO, max `SpeakerMatcher.maxRecentSamples`).
     /// Used as a fallback when the centroid match is borderline, and as the
@@ -327,6 +331,128 @@ class SpeakerMatcher {
             lastUsed: now,
             useCount: 1,
         )
+    }
+
+    enum RenameResult: Equatable {
+        case renamed
+        case merged
+        case notFound
+        case noop
+    }
+
+    /// Rename a speaker. If a speaker with `to` already exists, merges `from`
+    /// into it. Persists immediately. `noop` covers same-source-and-target;
+    /// `notFound` covers a missing source.
+    @discardableResult
+    func renameSpeaker(from: String, to: String) -> RenameResult {
+        guard from != to else { return .noop }
+        var stored = loadDB()
+        guard let srcIdx = stored.firstIndex(where: { $0.name == from }) else {
+            return .notFound
+        }
+        if let dstIdx = stored.firstIndex(where: { $0.name == to }) {
+            stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
+            stored.remove(at: srcIdx)
+            saveDB(stored)
+            return .merged
+        }
+        let src = stored[srcIdx]
+        stored[srcIdx] = StoredSpeaker(
+            name: to,
+            embeddings: src.embeddings,
+            centroid: src.centroid,
+            centroidSampleCount: src.centroidSampleCount,
+            lastUsed: src.lastUsed,
+            useCount: src.useCount,
+        )
+        saveDB(stored)
+        return .renamed
+    }
+
+    /// Remove a speaker. Returns `false` if no speaker with that name was found.
+    @discardableResult
+    func deleteSpeaker(name: String) -> Bool {
+        var stored = loadDB()
+        guard let idx = stored.firstIndex(where: { $0.name == name }) else { return false }
+        stored.remove(at: idx)
+        saveDB(stored)
+        return true
+    }
+
+    /// Merge `from` into `into`. Embeddings concatenated and FIFO-trimmed,
+    /// centroid weighted-averaged, lastUsed/useCount combined. Returns false
+    /// if either name is missing or if `from == into`.
+    @discardableResult
+    func mergeSpeakers(from: String, into: String) -> Bool {
+        guard from != into else { return false }
+        var stored = loadDB()
+        guard let srcIdx = stored.firstIndex(where: { $0.name == from }),
+              let dstIdx = stored.firstIndex(where: { $0.name == into }) else {
+            return false
+        }
+        stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
+        stored.removeAll { $0.name == from }
+        saveDB(stored)
+        return true
+    }
+
+    /// Pure helper: combine `src` into `dst`. Used by both rename-collision
+    /// and explicit merge.
+    static func merged(into dst: StoredSpeaker, from src: StoredSpeaker) -> StoredSpeaker {
+        var samples = dst.embeddings + src.embeddings
+        if samples.count > maxRecentSamples {
+            samples.removeFirst(samples.count - maxRecentSamples)
+        }
+        let combined = mergeCentroids(
+            a: dst.centroid, aCount: dst.centroidSampleCount,
+            b: src.centroid, bCount: src.centroidSampleCount,
+        )
+        let centroid = combined.centroid ?? meanEmbedding(samples)
+        let lastUsed: Date? = switch (dst.lastUsed, src.lastUsed) {
+        case let (a?, b?): max(a, b)
+        case let (a?, nil): a
+        case let (nil, b?): b
+        case (nil, nil): nil
+        }
+        return StoredSpeaker(
+            name: dst.name,
+            embeddings: samples,
+            centroid: centroid,
+            centroidSampleCount: combined.count,
+            lastUsed: lastUsed,
+            useCount: dst.useCount + src.useCount,
+        )
+    }
+
+    /// Pure helper: weighted-average two centroids. Returns nil centroid if
+    /// both inputs are nil. Dimension mismatches yield the larger-count side
+    /// (we never let a dim-mismatched merge corrupt the centroid).
+    static func mergeCentroids(
+        a: [Float]?, aCount: Int, b: [Float]?, bCount: Int,
+    ) -> (centroid: [Float]?, count: Int) {
+        switch (a, b) {
+        case (nil, nil):
+            return (nil, aCount + bCount)
+
+        case let (a?, nil):
+            return (a, aCount + bCount)
+
+        case let (nil, b?):
+            return (b, aCount + bCount)
+
+        case let (a?, b?):
+            guard a.count == b.count, !a.isEmpty else {
+                return aCount >= bCount ? (a, aCount + bCount) : (b, aCount + bCount)
+            }
+            let total = Float(max(aCount + bCount, 1))
+            let aw = Float(aCount) / total
+            let bw = Float(bCount) / total
+            var merged = [Float](repeating: 0, count: a.count)
+            for i in 0 ..< a.count {
+                merged[i] = a[i] * aw + b[i] * bw
+            }
+            return (merged, aCount + bCount)
+        }
     }
 
     func loadDB() -> [StoredSpeaker] {
