@@ -27,6 +27,27 @@ struct RecognitionEvent: Codable, Equatable {
     let autoName: String?
     let userName: String?
     let action: RecognitionAction
+    // Top candidates the matcher considered, with per-anchor distances.
+    // Optional so old log lines without this field still decode.
+    // swiftlint:disable:next discouraged_optional_collection
+    let topCandidates: [TopCandidate]?
+}
+
+/// Per-candidate distance forensics for a single match decision. Used both
+/// as the matcher's ranked-candidate value and as the JSONL log schema.
+struct TopCandidate: Codable, Equatable {
+    let name: String
+    /// Min cosine distance over the speaker's recent samples.
+    let sample: Float
+    /// Cosine distance to the speaker's centroid; nil for legacy speakers
+    /// without a persisted centroid.
+    let centroid: Float?
+
+    /// Ranking metric: the closer of the two anchors. Matches what
+    /// `SpeakerMatcher.distance(query:speaker:)` returns.
+    var hybrid: Float {
+        min(sample, centroid ?? .greatestFiniteMagnitude)
+    }
 }
 
 enum RecognitionStats {
@@ -49,6 +70,7 @@ enum RecognitionStats {
         suggested: [String: String],
         // swiftlint:disable:next discouraged_optional_collection
         userMapping: [String: String]?,
+        topCandidates: [String: [TopCandidate]],
         jobID: UUID,
         meetingTitle: String,
         now: Date = Date(),
@@ -69,6 +91,7 @@ enum RecognitionStats {
                 autoName: auto,
                 userName: user,
                 action: action,
+                topCandidates: topCandidates[label],
             )
         }
     }

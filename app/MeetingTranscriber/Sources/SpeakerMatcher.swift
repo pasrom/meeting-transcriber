@@ -126,39 +126,63 @@ class SpeakerMatcher {
     /// previous algorithm's behaviour on identical-sample queries while
     /// adding the centroid's drift-resistance for free.
     func match(embeddings: [String: [Float]]) -> [String: String] {
+        matchVerbose(embeddings: embeddings).mapValues(\.assignedName)
+    }
+
+    /// Per-label match result. Reuses `TopCandidate` so the matcher and the
+    /// JSONL log share one shape — eliminates a field-by-field re-pack at the
+    /// call site.
+    struct VerboseMatch {
+        /// Real speaker name when the threshold + margin checks pass; the
+        /// label itself otherwise.
+        let assignedName: String
+        /// Candidates sorted by `hybrid` ascending; empty if the DB is empty.
+        let topCandidates: [TopCandidate]
+    }
+
+    /// Match each label against the stored DB, returning the top candidates
+    /// with their per-anchor distances.
+    func matchVerbose(embeddings: [String: [Float]], topK: Int = 3)
+        -> [String: VerboseMatch] {
         let stored = loadDB()
-        var mapping: [String: String] = [:]
+        var result: [String: VerboseMatch] = [:]
         var usedNames: Set<String> = []
 
         let sorted = embeddings.sorted { $0.key < $1.key }
 
         for (label, embedding) in sorted {
-            var bestName: String?
-            var bestDistance = Float.greatestFiniteMagnitude
-            var secondBestDistance = Float.greatestFiniteMagnitude
-
-            for speaker in stored where !usedNames.contains(speaker.name) {
-                let dist = Self.distance(query: embedding, speaker: speaker)
-                if dist < bestDistance {
-                    secondBestDistance = bestDistance
-                    bestDistance = dist
-                    bestName = speaker.name
-                } else if dist < secondBestDistance {
-                    secondBestDistance = dist
+            let scored = stored
+                .filter { !usedNames.contains($0.name) }
+                .map { speaker -> TopCandidate in
+                    let sampleDist = speaker.embeddings
+                        .map { Self.cosineDistance(embedding, $0) }.min()
+                        ?? Float.greatestFiniteMagnitude
+                    let centroidDist = speaker.centroid.map { vec in
+                        Self.cosineDistance(embedding, vec)
+                    }
+                    return TopCandidate(
+                        name: speaker.name, sample: sampleDist, centroid: centroidDist,
+                    )
                 }
-            }
+                .sorted { $0.hybrid < $1.hybrid }
 
-            if let name = bestName,
-               bestDistance < threshold,
-               secondBestDistance - bestDistance >= confidenceMargin {
-                mapping[label] = name
-                usedNames.insert(name)
+            let best = scored.first
+            let second = scored.count > 1 ? scored[1] : nil
+            let assignedName: String
+            if let best,
+               best.hybrid < threshold,
+               (second?.hybrid ?? .greatestFiniteMagnitude) - best.hybrid >= confidenceMargin {
+                assignedName = best.name
+                usedNames.insert(best.name)
             } else {
-                mapping[label] = label
+                assignedName = label
             }
+            result[label] = VerboseMatch(
+                assignedName: assignedName, topCandidates: Array(scored.prefix(topK)),
+            )
         }
 
-        return mapping
+        return result
     }
 
     /// Distance from a query embedding to a stored speaker.
