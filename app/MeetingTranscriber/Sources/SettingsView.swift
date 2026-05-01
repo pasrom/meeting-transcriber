@@ -24,6 +24,7 @@ struct SettingsView: View {
     var parakeetEngine: ParakeetEngine
     var qwen3Engine: (any TranscribingEngine)? // nil on macOS < 15
     var updateChecker: UpdateChecker?
+    var recognitionStatsLog: RecognitionStatsLog = .init()
 
     enum ConnectionTestResult {
         case success(String)
@@ -479,6 +480,8 @@ struct SettingsView: View {
                     }
                 }
             }
+
+            RecognitionStatsView(log: recognitionStatsLog)
 
             Section("Diagnostics") {
                 Toggle("Verbose Audio Logging", isOn: $settings.audioDebugLogging)
