@@ -338,6 +338,7 @@ final class AppState {
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
+            recognitionStatsLog: RecognitionStatsLog(),
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()
