@@ -1,4 +1,5 @@
 #if !APPSTORE
+    import AppKit
     import Foundation
     import Network
     import os.log
@@ -144,8 +145,42 @@
             case ("GET", "/healthz"):
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
+            case ("GET", "/screenshot"):
+                if let png = Self.captureFrontmostWindowPNG() {
+                    return HTTPResponse.ok(body: png, contentType: "image/png")
+                }
+                return HTTPResponse(
+                    status: 503, reason: "Service Unavailable",
+                    body: Data("no window\n".utf8), contentType: "text/plain",
+                )
+
             default:
                 return HTTPResponse.notFound()
+            }
+        }
+
+        // MARK: - Screenshot
+
+        /// PNG of the app's frontmost window, or nil if no window is visible.
+        /// Uses the in-process NSWindow → bitmap path; no Screen Recording
+        /// permission needed (the app captures itself).
+        nonisolated static func captureFrontmostWindowPNG() -> Data? {
+            // Hop to the main thread synchronously — NSApp/NSWindow are
+            // main-thread-only and the receive() handler already lives there,
+            // but `nonisolated static` means callers from tests or background
+            // contexts can also reach this safely.
+            MainActor.assumeIsolated {
+                // NSApplication.shared lazily inits NSApp; access it first so
+                // headless test runs don't crash on the implicit-unwrap NSApp.
+                let app = NSApplication.shared
+                guard let window = app.keyWindow ?? app.windows.first(where: \.isVisible) else {
+                    return nil
+                }
+                guard let view = window.contentView,
+                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+                else { return nil }
+                view.cacheDisplay(in: view.bounds, to: rep)
+                return rep.representation(using: .png, properties: [:])
             }
         }
     }

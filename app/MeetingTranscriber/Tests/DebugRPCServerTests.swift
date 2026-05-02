@@ -103,6 +103,15 @@
         }
 
         @MainActor
+        func testRouteScreenshotNoWindowReturns503() {
+            // Tests run headless — NSApp has no visible window, so the
+            // capture helper returns nil and the route maps to 503.
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let response = server.route(authedRequest(method: "GET", path: "/screenshot"))
+            XCTAssertEqual(response.status, 503)
+        }
+
+        @MainActor
         func testRouteUnknown() {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
             let response = server.route(authedRequest(method: "GET", path: "/nope"))
