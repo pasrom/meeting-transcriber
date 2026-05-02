@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 extension Notification.Name {
     static let autoWatchStart = Notification.Name("autoWatchStart")
     static let showSpeakerNaming = Notification.Name("showSpeakerNaming")
+    static let showSettings = Notification.Name("showSettings")
+    static let closeSettings = Notification.Name("closeSettings")
 }
 
 @main
@@ -75,6 +77,12 @@ struct MeetingTranscriberApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
                 bringWindowToFront(id: "speaker-naming")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in
+                bringWindowToFront(id: "settings")
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .closeSettings)) { _ in
+                closeWindow(id: "settings")
             }
             .task {
                 switch appState.settings.transcriptionEngine {

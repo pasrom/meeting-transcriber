@@ -103,6 +103,23 @@
         }
 
         @MainActor
+        func testRouteOpenSettingsReturnsOk() {
+            // The actual AppKit selector is a no-op in the test harness (no
+            // Settings scene declared); we only verify the route plumbs through.
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let response = server.route(authedRequest(method: "POST", path: "/action/openSettings"))
+            XCTAssertEqual(response.status, 200)
+        }
+
+        @MainActor
+        func testRouteCloseSettingsReturnsOk() {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let response = server.route(authedRequest(method: "POST", path: "/action/closeSettings"))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(String(data: response.body, encoding: .utf8), "ok\n")
+        }
+
+        @MainActor
         func testRouteScreenshotNoWindowReturns503() {
             // Tests run headless — NSApp has no visible window, so the
             // capture helper returns nil and the route maps to 503.

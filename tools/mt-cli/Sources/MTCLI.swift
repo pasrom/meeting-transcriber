@@ -6,7 +6,7 @@ struct MTCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mt-cli",
         abstract: "Thin client for the Meeting Transcriber debug RPC server.",
-        subcommands: [State.self, Healthz.self, Screenshot.self],
+        subcommands: [State.self, Healthz.self, Screenshot.self, OpenSettings.self, CloseSettings.self],
     )
 }
 
@@ -32,6 +32,32 @@ struct Healthz: AsyncParsableCommand {
         let client = try RPCClient.loadDefault()
         _ = try await client.get("/healthz")
         print("ok")
+    }
+}
+
+struct OpenSettings: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "open-settings",
+        abstract: "Open the app's Settings window.",
+    )
+
+    func run() async throws {
+        let client = try RPCClient.loadDefault()
+        _ = try await client.post("/action/openSettings", json: [:])
+        print("ok")
+    }
+}
+
+struct CloseSettings: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "close-settings",
+        abstract: "Close the Settings window if it is open.",
+    )
+
+    func run() async throws {
+        let client = try RPCClient.loadDefault()
+        let data = try await client.post("/action/closeSettings", json: [:])
+        FileHandle.standardOutput.write(data)
     }
 }
 
