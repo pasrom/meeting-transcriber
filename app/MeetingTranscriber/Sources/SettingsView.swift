@@ -15,22 +15,56 @@ struct SettingsView: View {
     /// True when the pipeline is processing a job — soft hint only.
     var pipelineBusy: Bool = false
 
+    @State private var selection: SettingsTab = .general
+
     var body: some View {
-        TabView {
+        if #available(macOS 13, *) {
+            splitView
+        } else {
+            tabContent
+        }
+    }
+
+    @available(macOS 13, *)
+    private var splitView: some View {
+        NavigationSplitView {
+            List(SettingsTab.allCases, selection: $selection) { tab in
+                Label(tab.label, systemImage: tab.systemImage)
+                    .tag(tab)
+            }
+            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 240)
+        } detail: {
+            detailView(for: selection)
+        }
+        .navigationTitle("Settings")
+        .frame(
+            minWidth: 760,
+            idealWidth: 860,
+            maxWidth: 1000,
+            minHeight: 520,
+            idealHeight: 640,
+            maxHeight: .infinity,
+        )
+    }
+
+    @ViewBuilder
+    private func detailView(for tab: SettingsTab) -> some View {
+        switch tab {
+        case .general:
             GeneralSettingsView(settings: settings, updateChecker: updateChecker)
-                .tabItem { Label("General", systemImage: "gear") }
 
+        case .audio:
             AudioSettingsView(settings: settings)
-                .tabItem { Label("Audio", systemImage: "mic") }
 
+        case .transcription:
             TranscriptionSettingsView(
                 settings: settings,
                 whisperKitEngine: whisperKitEngine,
                 parakeetEngine: parakeetEngine,
                 qwen3Engine: qwen3Engine,
             )
-            .tabItem { Label("Transcription", systemImage: "waveform") }
 
+        case .speakers:
             SpeakersSettingsView(
                 settings: settings,
                 recognitionStatsLog: recognitionStatsLog,
@@ -38,21 +72,60 @@ struct SettingsView: View {
                 namingDialogActive: namingDialogActive,
                 pipelineBusy: pipelineBusy,
             )
-            .tabItem { Label("Speakers", systemImage: "person.2") }
 
+        case .output:
             OutputSettingsView(settings: settings)
-                .tabItem { Label("Output", systemImage: "doc.text") }
 
+        case .advanced:
             AdvancedSettingsView(settings: settings)
-                .tabItem { Label("Advanced", systemImage: "wrench.and.screwdriver") }
+        }
+    }
+
+    private var tabContent: some View {
+        TabView(selection: $selection) {
+            ForEach(SettingsTab.allCases) { tab in
+                detailView(for: tab)
+                    .tabItem { Label(tab.label, systemImage: tab.systemImage) }
+                    .tag(tab)
+            }
         }
         .frame(
-            minWidth: 620,
-            idealWidth: 720,
-            maxWidth: 900,
-            minHeight: 480,
-            idealHeight: 600,
+            minWidth: 760,
+            idealWidth: 860,
+            maxWidth: 1000,
+            minHeight: 520,
+            idealHeight: 640,
             maxHeight: .infinity,
         )
+    }
+}
+
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case general, audio, transcription, speakers, output, advanced
+
+    var id: String {
+        rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .general: "General"
+        case .audio: "Audio"
+        case .transcription: "Transcription"
+        case .speakers: "Speakers"
+        case .output: "Output"
+        case .advanced: "Advanced"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gear"
+        case .audio: "mic"
+        case .transcription: "waveform"
+        case .speakers: "person.2"
+        case .output: "doc.text"
+        case .advanced: "wrench.and.screwdriver"
+        }
     }
 }
