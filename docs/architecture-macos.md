@@ -87,7 +87,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `MeetingTranscriberApp.swift` | `@main` UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace. Observes `.showSettings` / `.closeSettings` / `.showSpeakerNaming` notifications for RPC- and pipeline-driven scene control |
 | `AppState.swift` | `@Observable @MainActor` ViewModel — business state, badge logic, pipeline wiring |
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
-| `SettingsView.swift` | Settings window (apps, recording, transcription, diarization) |
+| `SettingsView.swift` | Settings window — `TabView` shell hosting six topic-grouped sub-views in `Sources/Settings/` |
+| `Settings/GeneralSettingsView.swift` | Apps to Watch · Detection (Poll Interval, Grace Period) · Updates |
+| `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) |
+| `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status |
+| `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats |
+| `Settings/OutputSettingsView.swift` | LLM provider · protocol language · output folder · custom prompt |
+| `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics · About |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
 
@@ -398,6 +404,34 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 <p>
 <img src="menu-bar-permission.gif" width="80" alt="Permission problem badge">
 </p>
+
+---
+
+## Settings UI
+
+`SettingsView` is a thin `TabView` shell. Each tab is a self-contained `View` in `Sources/Settings/` owning only the bindings it needs and its own local `@State`. The settings window is resizable (`minWidth: 620, idealWidth: 720, maxWidth: 900`).
+
+| Tab | Sections | Bindings | Local state |
+|---|---|---|---|
+| **General** | Apps to Watch · Detection · Updates | `settings`, `updateChecker?` | — |
+| **Audio** | Microphone · VAD | `settings` | `audioDevices` |
+| **Transcription** | Engine + per-engine options + status | `settings`, three engines | — |
+| **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `showKnownVoices` |
+| **Output** | LLM Provider · Protocol Language · Output Folder · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
+| **Advanced** | Permissions · Diagnostics · About | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
+
+**Conditional rendering rules:**
+- `noMic` hides the mic-device picker (Audio) and the Speaker Identity section (Speakers)
+- `diarize` hides the diarizer-mode picker and Expected Speakers stepper
+- `vadEnabled` hides the VAD threshold slider
+- `transcriptionEngine` switches between WhisperKit / Parakeet / Qwen3 option panels
+- `protocolProvider` switches between Claude CLI / OpenAI-compatible / None panels
+- `#if APPSTORE` removes the Claude CLI provider option entirely
+- `updateChecker == nil` hides the entire Updates section
+
+**Cross-cutting concerns owned by sub-views:**
+- `OutputSettingsView` owns OpenAI-endpoint connection testing (`testConnection()`) and custom-prompt I/O (`openCustomPrompt`, `importCustomPrompt`, reset confirmation)
+- `AdvancedSettingsView` owns permission live-probing (`refreshPermissions()`) and version/build/ffmpeg status
 
 ---
 
