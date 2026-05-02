@@ -23,13 +23,19 @@
         nonisolated static let defaultPort: UInt16 = 9876
         nonisolated static let tokenFileURL = AppPaths.dataDir.appendingPathComponent(".rpc-token")
 
+        /// Cap accumulated bytes per connection so a misbehaving client
+        /// streaming bytes without `\r\n\r\n` can't OOM the app.
+        private static let maxRequestBytes = 64 * 1024
+
+        /// Skip status-item-style windows. The menu-bar `keyWindow` at idle is a
+        /// 68×66 invisible rect — capturing it returns useless white pixels.
+        private static let minWindowAreaPx: CGFloat = 10000
+
         private let port: NWEndpoint.Port
         private let snapshot: () -> RPCStateSnapshot
         private let expectedAuth: String
         private var listener: NWListener?
 
-        /// True when the env flag is set. Use this from `AppState` to decide
-        /// whether to construct + start a server at all.
         nonisolated static var enabled: Bool {
             ProcessInfo.processInfo.environment[envVar] == "1"
         }
@@ -112,7 +118,10 @@
                     }
                     var buffer = accumulated
                     if let data { buffer.append(data) }
-                    // Wait for the full request line + headers (terminator \r\n\r\n)
+                    if buffer.count > Self.maxRequestBytes {
+                        connection.cancel()
+                        return
+                    }
                     if let request = HTTPRequest.parse(buffer) {
                         let response = self.route(request)
                         connection.send(content: response.serialize(), completion: .contentProcessed { _ in
@@ -145,6 +154,14 @@
             case ("GET", "/healthz"):
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
+            case ("POST", "/action/openSettings"):
+                Self.openSettings()
+                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+
+            case ("POST", "/action/closeSettings"):
+                Self.closeSettings()
+                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+
             case ("GET", "/screenshot"):
                 if let png = Self.captureFrontmostWindowPNG() {
                     return HTTPResponse.ok(body: png, contentType: "image/png")
@@ -159,29 +176,48 @@
             }
         }
 
+        // MARK: - Actions
+
+        /// Open the Settings window. Mirrors the menu-bar path:
+        /// the @main scene listens for `.showSettings` and calls `bringWindowToFront`.
+        @MainActor
+        static func openSettings() {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .showSettings, object: nil)
+        }
+
+        /// Fire-and-forget close. SwiftUI no-ops when the window isn't open.
+        @MainActor
+        static func closeSettings() {
+            NotificationCenter.default.post(name: .closeSettings, object: nil)
+        }
+
         // MARK: - Screenshot
 
-        /// PNG of the app's frontmost window, or nil if no window is visible.
-        /// Uses the in-process NSWindow → bitmap path; no Screen Recording
-        /// permission needed (the app captures itself).
-        nonisolated static func captureFrontmostWindowPNG() -> Data? {
-            // Hop to the main thread synchronously — NSApp/NSWindow are
-            // main-thread-only and the receive() handler already lives there,
-            // but `nonisolated static` means callers from tests or background
-            // contexts can also reach this safely.
-            MainActor.assumeIsolated {
-                // NSApplication.shared lazily inits NSApp; access it first so
-                // headless test runs don't crash on the implicit-unwrap NSApp.
-                let app = NSApplication.shared
-                guard let window = app.keyWindow ?? app.windows.first(where: \.isVisible) else {
-                    return nil
-                }
-                guard let view = window.contentView,
-                      let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-                else { return nil }
-                view.cacheDisplay(in: view.bounds, to: rep)
-                return rep.representation(using: .png, properties: [:])
+        /// PNG of the largest visible content window, or nil when none qualifies.
+        /// The app captures itself, so no Screen Recording permission is needed.
+        @MainActor
+        static func captureFrontmostWindowPNG() -> Data? {
+            let app = NSApplication.shared
+            let area: (NSWindow) -> CGFloat = { window in
+                let b = window.contentView?.bounds ?? .zero
+                return b.width * b.height
             }
+            let candidate = app.windows
+                .filter { $0.isVisible && $0.contentView != nil }
+                .max { area($0) < area($1) }
+            guard let window = candidate, area(window) >= minWindowAreaPx else { return nil }
+            // CGWindowListCreateImage composites real SwiftUI/Metal content;
+            // NSView.cacheDisplay produces blank PNGs for layer-backed views.
+            let windowID = CGWindowID(window.windowNumber)
+            guard let cgImage = CGWindowListCreateImage(
+                .null,
+                .optionIncludingWindow,
+                windowID,
+                [.bestResolution, .boundsIgnoreFraming],
+            ) else { return nil }
+            let rep = NSBitmapImageRep(cgImage: cgImage)
+            return rep.representation(using: .png, properties: [:])
         }
     }
 
@@ -201,8 +237,6 @@
         }
 
         static func parse(_ data: Data) -> Self? {
-            // Need a complete header section before we can parse — the body
-            // length is in Content-Length.
             let separator = Data("\r\n\r\n".utf8)
             guard let separatorRange = data.range(of: separator) else { return nil }
             let headerData = data.subdata(in: 0 ..< separatorRange.lowerBound)
@@ -268,8 +302,8 @@
 
     // MARK: - State snapshot
 
-    /// JSON-serialisable snapshot of the bits of app state useful for shell
-    /// inspection. Kept deliberately minimal — extend as endpoints need it.
+    /// JSON-serialisable snapshot of state useful for shell inspection.
+    /// Deliberately minimal — extend as endpoints need it.
     struct RPCStateSnapshot: Codable {
         let pipeline: Pipeline
         let speakerDB: SpeakerDB
@@ -284,7 +318,6 @@
 
         struct SpeakerDB: Codable {
             let count: Int
-            /// Top-N most recently used names — useful to confirm a confirm hit DB.
             let recentNames: [String]
         }
 
