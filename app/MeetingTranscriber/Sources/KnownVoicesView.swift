@@ -7,8 +7,17 @@ struct KnownVoicesView: View {
     @State private var selection: String?
     @State private var filter = ""
     @State private var modal: ActiveModal?
+    @State private var showingEnrollment = false
 
     private let matcher: SpeakerMatcher
+    private let diarizerFactory: (() -> DiarizationProvider)?
+    /// Set by the parent when a meeting is currently waiting on a naming
+    /// dialog — we then disable the enroll button to avoid two
+    /// SpeakerNamingViews fighting for the user's attention.
+    private let namingDialogActive: Bool
+    /// Soft hint when the pipeline is busy (transcribing / diarizing).
+    /// Doesn't block enrollment; just shows a caption.
+    private let pipelineBusy: Bool
     @Environment(\.dismiss)
     private var dismiss
 
@@ -18,8 +27,16 @@ struct KnownVoicesView: View {
         return f
     }()
 
-    init(matcher: SpeakerMatcher) {
+    init(
+        matcher: SpeakerMatcher,
+        diarizerFactory: (() -> DiarizationProvider)? = nil,
+        namingDialogActive: Bool = false,
+        pipelineBusy: Bool = false,
+    ) {
         self.matcher = matcher
+        self.diarizerFactory = diarizerFactory
+        self.namingDialogActive = namingDialogActive
+        self.pipelineBusy = pipelineBusy
     }
 
     enum ActiveModal: Identifiable {
@@ -54,18 +71,11 @@ struct KnownVoicesView: View {
             }
             .frame(minHeight: 280)
 
-            HStack {
-                Button("Rename") { startRename() }
-                    .disabled(selection == nil)
-                Button("Merge into…") { startMerge() }
-                    .disabled(selection == nil || speakers.count < 2)
-                Button("Delete", role: .destructive) {
-                    if let selection { modal = .delete(name: selection) }
-                }
-                .disabled(selection == nil)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+            actionButtonsRow
+            if pipelineBusy, diarizerFactory != nil {
+                Text("Pipeline busy — diarization may be slower.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(20)
@@ -85,6 +95,17 @@ struct KnownVoicesView: View {
             Text("\(deletingName) will be removed. This cannot be undone.")
         }
         .sheet(isPresented: isMerge) { mergeSheet }
+        .sheet(isPresented: $showingEnrollment) {
+            if let diarizerFactory {
+                VoiceEnrollmentView(
+                    matcher: matcher,
+                    diarizerFactory: diarizerFactory,
+                ) {
+                    showingEnrollment = false
+                    reload()
+                }
+            }
+        }
     }
 
     // MARK: - Modal bindings
@@ -183,6 +204,31 @@ struct KnownVoicesView: View {
     }
 
     // MARK: - Actions
+
+    private var actionButtonsRow: some View {
+        HStack {
+            if diarizerFactory != nil {
+                Button("Add from Recording…") { showingEnrollment = true }
+                    .disabled(namingDialogActive)
+                    .help(
+                        namingDialogActive
+                            ? "Finish the open naming dialog before enrolling new voices."
+                            : "Diarize an existing audio file and seed speaker DB entries.",
+                    )
+            }
+            Button("Rename") { startRename() }
+                .disabled(selection == nil)
+            Button("Merge into…") { startMerge() }
+                .disabled(selection == nil || speakers.count < 2)
+            Button("Delete", role: .destructive) {
+                if let selection { modal = .delete(name: selection) }
+            }
+            .disabled(selection == nil)
+            Spacer()
+            Button("Done") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+        }
+    }
 
     private func reload() {
         speakers = SpeakerMatcher.rankByRecency(speakers: matcher.loadDB())
