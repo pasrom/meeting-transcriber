@@ -32,6 +32,8 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `SettingsView.swift` | Settings window (apps, recording, transcription, diarization) |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `KnownVoicesView.swift` | Settings UI to manage persisted speaker DB (rename, delete, merge entries) |
+| `RecognitionStatsView.swift` | Settings UI to surface recognition quality stats from `recognition_log.jsonl` |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
 
 ### Core Pipeline
@@ -80,6 +82,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
+| `RecognitionStats.swift` | Speaker recognition outcome logging to `recognition_log.jsonl` + in-memory stats |
 
 ---
 
@@ -195,7 +198,7 @@ Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `Dia
 
 ### Speaker Matching
 
-`SpeakerMatcher` matches diarization speaker embeddings against a persistent speaker database (`speakers.json`) using cosine similarity (threshold: 0.40, confidence margin: 0.10). Stores up to 5 embeddings per speaker (FIFO). Enables recognition of returning speakers across meetings.
+`SpeakerMatcher` matches diarization speaker embeddings against a persistent speaker database (`speakers.json`) using cosine similarity (threshold: 0.40, confidence margin: 0.10). Stores a running-mean centroid (primary match anchor) plus a recent-samples FIFO (max 3, fallback when centroid match is borderline). Quality filter: embeddings from segments shorter than 3 s are excluded from the centroid but kept as fallback samples. Speakers are ranked by recency and use count in the naming UI. Enables recognition of returning speakers across meetings.
 
 ### Speaker Assignment
 

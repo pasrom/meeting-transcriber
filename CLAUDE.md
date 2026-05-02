@@ -14,6 +14,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
     SettingsView.swift     # Settings window
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
+    KnownVoicesView.swift  # Settings UI to manage persisted speaker DB (rename, delete, merge)
+    RecognitionStatsView.swift # Settings UI to surface recognition quality stats from JSONL log
     AppPickerView.swift    # App picker for manual recording
     AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
     AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
@@ -28,6 +30,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
     FluidVAD.swift         # VAD preprocessing via FluidAudio Silero v6 (silence trimming + timeline remapping)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
+    RecognitionStats.swift # Speaker recognition outcome logging (JSONL) + in-memory stats
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     PipelineJob.swift      # Pipeline job model
@@ -62,14 +65,17 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     MicCaptureHandler.swift # AVAudioEngine → WAV
     AudioCaptureSession.swift # Orchestrator (start/stop, computes micDelay)
     AudioCaptureResult.swift  # Result struct
+    DebugRMSReporter.swift # Throttled RMS accumulator/reporter for debug logging paths
     Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
     MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
+    OutputDeviceChangeCoordinator.swift  # Pure state machine for output device change handling
     SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
   Tests/
     AudioCaptureResultTests.swift
     HelpersTests.swift
     MicCaptureErrorTests.swift
     MicRestartPolicyTests.swift
+    OutputDeviceChangeCoordinatorTests.swift
     SampleRateQueryTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
@@ -86,6 +92,8 @@ scripts/
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
+  tests/
+    test_build_release_signing.sh  # Regression tests for build script codesign pipeline
 Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
 Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
 .github/workflows/
@@ -93,9 +101,10 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
+  dependabot-auto-merge.yml  # Auto-merge Dependabot patch/minor and github-actions bumps
 docs/
   architecture-macos.md        # High-level architecture quick-reference
-  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
+  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol, permission)
   plans/
     swift-architecture.md      # Detailed Swift pipeline architecture
     appstate-tests.md          # AppState test expansion plan
@@ -218,7 +227,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Diarization:**
 - `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offlineDiarizer` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
-- `SpeakerMatcher` stores speaker embeddings in `speakers.json` and matches via cosine similarity (multi-embedding, max 5 per speaker, confidence margin 0.10).
+- `SpeakerMatcher` stores speakers in `speakers.json` with a running-mean **centroid** (primary anchor) plus a recent-samples FIFO (max 3, fallback when centroid match is borderline). Quality filter: embeddings from segments shorter than `minSpeakingTimeForCentroid` (3 s) are kept as fallback samples but excluded from the centroid. Threshold 0.40, confidence margin 0.10. Legacy entries without a persisted centroid compute `meanEmbedding(embeddings)` lazily until the next confirmation seeds a real centroid.
 - `DiarizationProvider` protocol enables mock injection in tests.
 
 **VAD preprocessing:**
@@ -248,6 +257,21 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
 - Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)
+
+## Diagnostics
+
+`AppSettings.audioDebugLogging` (Settings → Diagnostics → "Verbose Audio Logging") enables forensic logging in the audio-capture path:
+
+- `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` at start
+- `[debug] Default output device: name=… uid=… transport=… rate=…` at start and on device change
+- `[debug] Tap format: rate=… Hz, tapID=…` after tap is configured
+- `[debug] Output device change → name=… uid=…` when system output device changes mid-capture
+- `[debug] App audio RMS (5s): … dBFS, samples=…, totalBytes=…` every 5 s during capture — live signal whether the tap is delivering real audio or zero/noise
+- `[debug] App audio capture stopping: totalBytes=…` at stop
+- `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` at mic capture start
+- `[debug] Mic RMS (5s): … dBFS, samples=…` every 5 s during mic capture
+
+View via Console.app, subsystem `com.meetingtranscriber.audiotap`. Off by default; turn on when investigating silent recordings or unusual routing.
 
 ## Build Variants
 
