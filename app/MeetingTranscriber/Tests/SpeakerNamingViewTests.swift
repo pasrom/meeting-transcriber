@@ -47,9 +47,9 @@ final class SpeakerNamingViewTests: XCTestCase {
     }
 
     func testShowsAutoNameWhenPresent() throws {
-        let sut = SpeakerNamingView(data: makeData(mapping: ["SPEAKER_00": "Roman"])) { _ in }
+        let sut = SpeakerNamingView(data: makeData(mapping: ["SPEAKER_00": "Speaker A"])) { _ in }
         let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(text: "Auto: Roman"))
+        XCTAssertNoThrow(try body.find(text: "Auto: Speaker A"))
     }
 
     func testShowsUnknownWhenNoAutoName() throws {
@@ -115,14 +115,14 @@ final class SpeakerNamingViewTests: XCTestCase {
 
     func testPreFillsAutoNameInMapping() {
         // When mapping has a matched name (different from label), it's an auto name
-        let data = makeData(mapping: ["SPEAKER_00": "Maria"])
+        let data = makeData(mapping: ["SPEAKER_00": "Speaker I"])
         let speakers = data.mapping.keys.sorted().map { label in
             let autoName = data.mapping[label]
             let isAutoNamed = autoName != nil && autoName != label
             return (label: label, autoName: isAutoNamed ? autoName : nil)
         }
         let names = speakers.map { $0.autoName ?? "" }
-        XCTAssertEqual(names.first, "Maria")
+        XCTAssertEqual(names.first, "Speaker I")
     }
 
     // MARK: - Rerun
@@ -151,7 +151,7 @@ final class SpeakerNamingViewTests: XCTestCase {
         let data = makeData(
             mapping: [
                 "SPEAKER_00": "SPEAKER_00",
-                "SPEAKER_01": "Anna",
+                "SPEAKER_01": "Speaker B",
                 "SPEAKER_02": "SPEAKER_02",
             ],
             speakingTimes: [
@@ -184,9 +184,9 @@ final class SpeakerNamingViewTests: XCTestCase {
             (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
             (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
         ]
-        let names = ["Alice", "Bob"]
+        let names = ["Alice", "Speaker C"]
         let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
-        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"])
+        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice", "SPEAKER_01": "Speaker C"])
     }
 
     func testBuildMappingSkipsEmptyNames() {
@@ -222,7 +222,7 @@ final class SpeakerNamingViewTests: XCTestCase {
     // MARK: - Pure Function: filterByQuery
 
     func testFilterByQueryEmptyReturnsUnchanged() {
-        let names = ["Alpha", "Bravo", "Charlie"]
+        let names = ["Alpha", "Bravo", "Speaker D"]
         XCTAssertEqual(SpeakerNamingView.filterByQuery(names: names, query: ""), names)
     }
 
@@ -233,7 +233,7 @@ final class SpeakerNamingViewTests: XCTestCase {
 
     func testFilterByQueryPrefixOfFirstToken() {
         // "Tea" matches the prefix of "Teams" and "Teal".
-        let names = ["Aleksej", "Teams", "Bravo", "Teal"]
+        let names = ["Speaker Z", "Teams", "Bravo", "Teal"]
         XCTAssertEqual(
             SpeakerNamingView.filterByQuery(names: names, query: "Tea"),
             ["Teams", "Teal"],
@@ -241,20 +241,20 @@ final class SpeakerNamingViewTests: XCTestCase {
     }
 
     func testFilterByQuerySecondTokenPrefix() {
-        // "Mü" matches second token of "Alexander Müller".
-        let names = ["Aleksej", "Alexander Müller", "Charlie"]
+        // "Mü" matches the second token "Münze".
+        let names = ["Speaker Z", "Speaker Münze", "Speaker D"]
         XCTAssertEqual(
             SpeakerNamingView.filterByQuery(names: names, query: "Mü"),
-            ["Alexander Müller"],
+            ["Speaker Münze"],
         )
     }
 
     func testFilterByQueryContainsTier() {
-        // "an" — "Anna" prefix tier, "Susan" contains tier.
-        let names = ["Susan", "Anna", "Bob"]
+        // "an" — "Antares" prefix tier, "Susan" contains tier.
+        let names = ["Susan", "Antares", "Speaker C"]
         XCTAssertEqual(
             SpeakerNamingView.filterByQuery(names: names, query: "an"),
-            ["Anna", "Susan"],
+            ["Antares", "Susan"],
         )
     }
 
@@ -276,11 +276,11 @@ final class SpeakerNamingViewTests: XCTestCase {
     func testRankedKnownNamesAutoNameMatchFirst() {
         // First-token "Bravo" → both "Bravo …" entries rank ahead.
         let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Alpha Berger", "Bravo Schmidt", "Charlie Klein", "Bravo Müller"],
+            known: ["Alpha Berger", "Bravo Schmidt", "Speaker D Klein", "Bravo Münze"],
             autoName: "Bravo",
             participants: [],
         )
-        XCTAssertEqual(ranked, ["Bravo Schmidt", "Bravo Müller", "Alpha Berger", "Charlie Klein"])
+        XCTAssertEqual(ranked, ["Bravo Schmidt", "Bravo Münze", "Alpha Berger", "Speaker D Klein"])
     }
 
     func testRankedKnownNamesEmptyAutoNameDoesNotPromote() {

@@ -73,7 +73,7 @@ final class WatchLoopE2ETests: XCTestCase {
         diarization: MockDiarization = MockDiarization(),
         protocolGen: MockProtocolGen = MockProtocolGen(),
         diarizeEnabled: Bool = false,
-        micLabel: String = "Roman",
+        micLabel: String = "Speaker A",
     ) -> PipelineQueue {
         PipelineQueue(
             engine: engine ?? WhisperKitEngine(),
@@ -196,7 +196,7 @@ final class WatchLoopE2ETests: XCTestCase {
             engine: engine,
             protocolGen: mockProtocol,
             diarizeEnabled: false,
-            micLabel: "Roman",
+            micLabel: "Speaker A",
         )
         let loop = makeLoop(recorder: recorder, pipelineQueue: queue)
 
@@ -215,9 +215,9 @@ final class WatchLoopE2ETests: XCTestCase {
         XCTAssertTrue(mockProtocol.generateCalled, "Protocol generator should have been called")
         XCTAssertEqual(queue.jobs[0].state, .done, "Job should be done after dual-source processing")
 
-        // Verify transcript contains speaker labels (Roman / Remote)
+        // Verify transcript contains speaker labels (Speaker A / Remote)
         if let transcript = mockProtocol.capturedTranscript {
-            let hasLabels = transcript.contains("Roman") || transcript.contains("Remote")
+            let hasLabels = transcript.contains("Speaker A") || transcript.contains("Remote")
             XCTAssertTrue(hasLabels, "Dual-source transcript should contain speaker labels, got: \(transcript.prefix(200))")
         }
     }
@@ -414,7 +414,7 @@ final class WatchLoopE2ETests: XCTestCase {
             outputDir: tmpDir,
             logDir: tmpDir,
             diarizeEnabled: true,
-            micLabel: "Roman",
+            micLabel: "Speaker A",
             speakerMatcherFactory: { SpeakerMatcher(dbPath: testDB) },
         )
         // swiftlint:enable trailing_closure

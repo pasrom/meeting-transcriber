@@ -592,9 +592,9 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     func testMakePipelineQueueUsesMicLabelFromSettings() {
         let (state, _) = makeState()
-        state.settings.micName = "Roman"
+        state.settings.micName = "Speaker A"
         let queue = state.makePipelineQueue()
-        XCTAssertEqual(queue.micLabel, "Roman")
+        XCTAssertEqual(queue.micLabel, "Speaker A")
     }
 
     func testMakePipelineQueueUsesNumSpeakersFromSettings() {

@@ -140,8 +140,8 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testMicNameSavedToDefaults() {
-        settings.micName = "Roman"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "micName"), "Roman")
+        settings.micName = "Speaker A"
+        XCTAssertEqual(UserDefaults.standard.string(forKey: "micName"), "Speaker A")
     }
 
     // MARK: - Protocol Provider
