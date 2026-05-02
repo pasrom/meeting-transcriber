@@ -45,6 +45,12 @@ final class AppState {
     var selectedNamingJobID: UUID?
     var permissionHealth: HealthCheckResult?
 
+    #if !APPSTORE
+        /// Lazy-started debug RPC server. Only constructed if the env var is
+        /// set — otherwise `nil` and zero overhead.
+        var debugRPCServer: DebugRPCServer?
+    #endif
+
     // MARK: - Init
 
     init(
@@ -66,7 +72,44 @@ final class AppState {
         self.notifier = notifier
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
+        #if !APPSTORE
+            if DebugRPCServer.enabled {
+                let server = DebugRPCServer { [weak self] in
+                    self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
+                }
+                server.start()
+                self.debugRPCServer = server
+            }
+        #endif
     }
+
+    #if !APPSTORE
+        /// Build a snapshot of state for the debug RPC. Read-only.
+        func rpcStateSnapshot() -> RPCStateSnapshot {
+            let stored = SpeakerMatcher().loadDB()
+            let recentNames = SpeakerMatcher.rankByRecency(speakers: stored)
+                .prefix(10).map(\.name)
+            let pendingJobs = pipelineQueue.pendingSpeakerNamingJobs.map { job in
+                let data = pipelineQueue.speakerNamingDataByJob[job.id]
+                return RPCStateSnapshot.PendingNaming(
+                    jobID: job.id.uuidString,
+                    meetingTitle: job.meetingTitle,
+                    speakerCount: data?.mapping.count ?? 0,
+                    namingSlug: job.namingSlug,
+                )
+            }
+            return RPCStateSnapshot(
+                pipeline: .init(
+                    isProcessing: pipelineQueue.isProcessing,
+                    activeJobCount: pipelineQueue.activeJobs.count,
+                    waitingJobCount: pipelineQueue.pendingJobs.count,
+                    pendingNamingJobCount: pendingJobs.count,
+                ),
+                speakerDB: .init(count: stored.count, recentNames: recentNames),
+                pendingNamingJobs: pendingJobs,
+            )
+        }
+    #endif
 
     /// The active transcription engine based on the current settings.
     var activeTranscriptionEngine: any TranscribingEngine {
