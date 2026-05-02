@@ -164,12 +164,10 @@ struct SpeakerNamingView: View {
             names = Self.computeInitialNames(speakers: speakers)
             rerunCount = max(2, speakers.count + 1)
         }
-        .onDisappear {
-            if !completed {
-                completed = true
-                onComplete(.skipped)
-            }
-        }
+        // No onDisappear → .skipped: in the non-blocking architecture closing
+        // the window (Cmd+Q, click X, app quit) leaves the job in
+        // .speakerNamingPending so the user can re-open later. Explicit Skip
+        // button still calls onComplete(.skipped).
     }
 
     private func speakerRow(
