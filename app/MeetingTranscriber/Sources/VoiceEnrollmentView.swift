@@ -229,8 +229,13 @@ struct VoiceEnrollmentView: View {
             speakingTimes: diarization.speakingTimes,
             embeddings: diarization.embeddings ?? [:],
             audioPath: url,
-            segments: diarization.segments,
+            segments: diarization.segments.map { seg in
+                PipelineQueue.SpeakerNamingData.Segment(
+                    start: seg.start, end: seg.end, speaker: seg.speaker,
+                )
+            },
             participants: [],
+            isDualSource: false,
         )
         let speakerCount = Set(diarization.segments.map(\.speaker)).count
         return NamingPayload(

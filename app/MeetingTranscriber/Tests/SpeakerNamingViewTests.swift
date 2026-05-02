@@ -19,6 +19,7 @@ final class SpeakerNamingViewTests: XCTestCase {
             audioPath: nil,
             segments: [],
             participants: [],
+            isDualSource: false,
         )
     }
 
@@ -354,6 +355,7 @@ final class SpeakerNamingViewTests: XCTestCase {
             audioPath: URL(fileURLWithPath: "/tmp/audio.wav"),
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_00")],
             participants: [],
+            isDualSource: false,
         )
         let sut = SpeakerNamingView(data: dataWithAudio) { _ in }
         let body = try sut.inspect()
