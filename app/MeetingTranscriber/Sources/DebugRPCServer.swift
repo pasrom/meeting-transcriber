@@ -9,16 +9,22 @@
     /// Gated by `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var; never started in
     /// production builds (the `#if !APPSTORE` wraps the whole file).
     ///
-    /// Bind: `127.0.0.1:9876`. No auth — relies on the loopback interface
-    /// being trusted (anyone with shell access on this box can already read
-    /// the underlying state files).
+    /// Bind: `127.0.0.1:9876`. Two layers of defense:
+    /// - Origin-header reject blocks browser CSRF / DNS-rebinding (`fetch()` from a
+    ///   page on the user's machine sends Origin; curl and native CLIs don't).
+    /// - Bearer-token auth read from `~/Library/Application Support/MeetingTranscriber/.rpc-token`
+    ///   (chmod 0600) keeps other local users on a shared Mac out and adds
+    ///   defense-in-depth against compromised processes that lack read access
+    ///   to the user's data dir.
     @MainActor
     final class DebugRPCServer {
         nonisolated static let envVar = "MEETINGTRANSCRIBER_DEBUG_RPC"
         nonisolated static let defaultPort: UInt16 = 9876
+        nonisolated static let tokenFileURL = AppPaths.dataDir.appendingPathComponent(".rpc-token")
 
         private let port: NWEndpoint.Port
         private let snapshot: () -> RPCStateSnapshot
+        private let expectedAuth: String
         private var listener: NWListener?
 
         /// True when the env flag is set. Use this from `AppState` to decide
@@ -27,13 +33,45 @@
             ProcessInfo.processInfo.environment[envVar] == "1"
         }
 
-        init(port: UInt16 = DebugRPCServer.defaultPort, snapshot: @escaping () -> RPCStateSnapshot) {
-            // 9876 is a known-valid port literal; if a caller passes 0 the
-            // listener picks a free port at bind time and we just need a
-            // non-nil placeholder until then.
-            let parsed = NWEndpoint.Port(rawValue: port == 0 ? 9876 : port)
-            self.port = parsed ?? NWEndpoint.Port.any
+        init(
+            port: UInt16 = DebugRPCServer.defaultPort,
+            token: String = DebugRPCServer.loadOrCreateToken(),
+            snapshot: @escaping () -> RPCStateSnapshot,
+        ) {
+            self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
+            self.expectedAuth = "Bearer \(token)"
             self.snapshot = snapshot
+        }
+
+        /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
+        /// Reuses an existing non-empty file so `mt-cli` survives across launches.
+        nonisolated static func loadOrCreateToken() -> String {
+            let url = tokenFileURL
+            if let data = try? Data(contentsOf: url),
+               let existing = String(data: data, encoding: .utf8)?
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+               !existing.isEmpty {
+                return existing
+            }
+            var bytes = [UInt8](repeating: 0, count: 32)
+            // SecRandomCopyBytes returning non-zero means the buffer is
+            // unmodified (all zeros) — refuse to write that as a token.
+            guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+                logger.error("DebugRPCServer: SecRandomCopyBytes failed; using UUID fallback")
+                return UUID().uuidString
+            }
+            let token = bytes.map { String(format: "%02x", $0) }.joined()
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
+            )
+            // createFile with .posixPermissions sets mode at creation time —
+            // avoids the brief 0644 window that a write-then-chmod sequence has.
+            FileManager.default.createFile(
+                atPath: url.path,
+                contents: Data(token.utf8),
+                attributes: [.posixPermissions: 0o600],
+            )
+            return token
         }
 
         /// Start listening. Failures (port in use, etc.) are logged and the
@@ -91,6 +129,13 @@
         // MARK: - Routing
 
         func route(_ request: HTTPRequest) -> HTTPResponse {
+            if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
+                return HTTPResponse.forbidden()
+            }
+            guard request.headers["authorization"] == expectedAuth else {
+                return HTTPResponse.unauthorized()
+            }
+
             switch (request.method, request.path) {
             case ("GET", "/state"):
                 let json = try? snapshot().jsonData()
@@ -110,7 +155,15 @@
     struct HTTPRequest: Equatable {
         let method: String
         let path: String
+        let headers: [String: String]
         let body: Data
+
+        init(method: String, path: String, headers: [String: String] = [:], body: Data = Data()) {
+            self.method = method
+            self.path = path
+            self.headers = headers
+            self.body = body
+        }
 
         static func parse(_ data: Data) -> Self? {
             // Need a complete header section before we can parse — the body
@@ -126,22 +179,21 @@
             let method = String(parts[0])
             let path = String(parts[1])
 
-            var contentLength = 0
+            var headers: [String: String] = [:]
             for line in lines.dropFirst() {
                 let pieces = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true)
                 guard pieces.count == 2 else { continue }
                 let key = pieces[0].trimmingCharacters(in: .whitespaces).lowercased()
                 let value = pieces[1].trimmingCharacters(in: .whitespaces)
-                if key == "content-length", let n = Int(value) {
-                    contentLength = n
-                }
+                headers[key] = value
             }
 
+            let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
             let bodyStart = separatorRange.upperBound
             let availableBody = data.count - bodyStart
             guard availableBody >= contentLength else { return nil }
             let body = data.subdata(in: bodyStart ..< bodyStart + contentLength)
-            return Self(method: method, path: path, body: body)
+            return Self(method: method, path: path, headers: headers, body: body)
         }
     }
 
@@ -157,6 +209,14 @@
 
         static func notFound() -> Self {
             Self(status: 404, reason: "Not Found", body: Data(), contentType: "text/plain")
+        }
+
+        static func unauthorized() -> Self {
+            Self(status: 401, reason: "Unauthorized", body: Data(), contentType: "text/plain")
+        }
+
+        static func forbidden() -> Self {
+            Self(status: 403, reason: "Forbidden", body: Data(), contentType: "text/plain")
         }
 
         func serialize() -> Data {
