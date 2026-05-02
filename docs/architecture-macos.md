@@ -11,13 +11,70 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
 ## Pipeline
 
 ```
-Meeting Window Detected (CGWindowListCopyWindowInfo)
-  → DualSourceRecorder (AudioTapLib + mic, records at 16kHz)
-    → [WhisperKit | Parakeet | Qwen3] (CoreML/ANE transcription)
-      → [FluidDiarizer (CoreML/ANE speaker diarization)]
-        → ProtocolGenerator (Claude CLI / OpenAI-compatible API)
-          → Markdown protocol + transcript
+                ┌──────────────────────────────────────────────────┐
+                │           MeetingTranscriberApp (@main)          │
+                │   SwiftUI: MenuBarExtra + Settings + Naming      │
+                └──────────────────────────┬───────────────────────┘
+                                           │ owns
+                ┌──────────────────────────▼───────────────────────┐
+                │            AppState (@Observable @MainActor)     │
+                │   watchLoop, pipelineQueue, settings, engines    │
+                └────────┬─────────────────────────────────┬───────┘
+                         │                                 │ optional
+                         │                                 │ (#if !APPSTORE
+                         │                                 │  + env flag)
+                         │                                 ▼
+                         │                  ┌──────────────────────────┐
+                         │                  │  DebugRPCServer          │
+                         │                  │  127.0.0.1:9876          │
+                         │                  │  /state /healthz         │
+                         │                  │  /screenshot             │
+                         │                  │  /action/openSettings    │
+                         │                  │  /action/closeSettings   │
+                         │                  │  Bearer-token + Origin   │
+                         │                  │  reject. Driven by mt-cli│
+                         │                  └──────────────────────────┘
+                         │
+                         ▼
+                ┌─────────────────────────────────────────────────┐
+                │           WatchLoop (@MainActor)                │
+                │   idle → watching → recording → watching        │
+                └────┬───────────────┬────────────────────┬───────┘
+                     │ polls         │ starts/stops       │ enqueues
+                     ▼               ▼                    ▼
+        ┌─────────────────────┐  ┌────────────────┐  ┌────────────────────┐
+        │ MeetingDetecting    │  │ DualSource-    │  │   PipelineQueue    │
+        │  • MeetingDetector  │  │   Recorder     │  │   (@MainActor)     │
+        │    (CGWindowList +  │  │                │  │                    │
+        │     regex)          │  │  AudioTapLib   │  │  Sequential job    │
+        │  • PowerAssertion-  │  │  (CATap +      │  │  processing →      │
+        │    Detector (IOKit, │  │   AVAudioEng.) │  │  see breakdown     │
+        │    sandbox-safe)    │  │  + AudioMixer  │  │  below             │
+        └─────────────────────┘  └────────────────┘  └─────────┬──────────┘
+                                                               │
+        PipelineQueue per-job processing:                      │
+        ┌──────────────────────────────────────────────────────▼─────────┐
+        │ 1. Resample to 16 kHz mono (AudioMixer; AVAsset / ffmpeg fb)   │
+        │ 2. (opt) FluidVAD silence-trim + timeline remap                │
+        │ 3. Transcribe via active engine                                │
+        │      └─ TranscribingEngine: WhisperKit | Parakeet | Qwen3      │
+        │         (dual-source: each track separately, then merge)       │
+        │ 4. (opt) Diarize via FluidDiarizer                             │
+        │      └─ Mode: .offlineDiarizer | .sortformer                   │
+        │      └─ Dual-source: app + mic diarized separately,            │
+        │         IDs prefixed R_ (remote) / M_ (mic), then merged       │
+        │ 5. SpeakerMatcher: cosine match against speakers.json          │
+        │      (centroid + recent-FIFO, threshold 0.40, margin 0.10)     │
+        │ 6. Speaker naming UI (suspended via CheckedContinuation)       │
+        │ 7. Assign speakers to transcript by temporal overlap           │
+        │ 8. Save transcript (.txt)                                      │
+        │ 9. Protocol generation                                         │
+        │      └─ ProtocolProvider: .claudeCLI | .openAICompatible | .none│
+        │ 10. Save protocol (.md, transcript appended)                   │
+        └────────────────────────────────────────────────────────────────┘
 ```
+
+State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 
 ---
 
@@ -27,7 +84,7 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 
 | File | Role |
 |------|------|
-| `MeetingTranscriberApp.swift` | `@main` UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace |
+| `MeetingTranscriberApp.swift` | `@main` UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace. Observes `.showSettings` / `.closeSettings` / `.showSpeakerNaming` notifications for RPC- and pipeline-driven scene control |
 | `AppState.swift` | `@Observable @MainActor` ViewModel — business state, badge logic, pipeline wiring |
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `SettingsView.swift` | Settings window (apps, recording, transcription, diarization) |
@@ -80,6 +137,15 @@ Meeting Window Detected (CGWindowListCopyWindowInfo)
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
+| `DebugRPCServer.swift` | Embedded HTTP RPC server for shell-driven inspection. `#if !APPSTORE`, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`. Bearer-token + Origin reject; binds 127.0.0.1 only |
+
+### Companion CLIs
+
+| Path | Role |
+|------|------|
+| `tools/mt-cli/` | Thin Swift client for `DebugRPCServer`. Subcommands: `state`, `healthz`, `screenshot`, `open-settings`, `close-settings`. Reads token from `~/Library/Application Support/MeetingTranscriber/.rpc-token`. Skill doc at `tools/mt-cli/skill.md`. |
+| `tools/whisperkit-cli/` | WhisperKit transcription CLI (used by `scripts/build_whisperkit.sh`) |
+| `tools/meeting-simulator/` | Test fixture: spawns a fake meeting window for E2E detection tests |
 
 ---
 
@@ -304,6 +370,7 @@ AppSettings (UserDefaults)
 | ProtocolGenerator | `claudeBin` parameter |
 | AppNotifying | `notifier` parameter in `AppState.init` (`SilentNotifier` default, `RecordingNotifier` in tests) |
 | BadgeKind.compute | Pure static function — call directly with any input combination, no WatchLoop needed |
+| DebugRPCServer | Out-of-process inspection via HTTP. Endpoints: `GET /state /healthz /screenshot`, `POST /action/openSettings /action/closeSettings`. `#if !APPSTORE` + env-gated. `boundPort` exposes OS-assigned port for in-process integration tests. `tools/mt-cli/` is the matching CLI. `scripts/test_rpc.sh` is a live smoketest (build + launch + drive + assert). |
 
 ---
 
@@ -345,3 +412,4 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference
+10. **Embedded debug RPC** — In-process HTTP server (`DebugRPCServer`) exposes state + screenshot + scene actions for shell-driven inspection and integration tests. Off by default, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`, excluded from App Store builds via `#if !APPSTORE`. Action endpoints route through existing `Notification.Name` observers in `MeetingTranscriberApp`, so RPC-driven flows mirror real menu-bar paths.

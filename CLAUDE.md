@@ -48,6 +48,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MeetingPatterns.swift  # App-specific window title patterns
     PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
     UpdateChecker.swift    # GitHub release update checker
+    DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
   Entitlements/
@@ -77,6 +78,13 @@ tools/meeting-simulator/   # Meeting simulator tool for testing
 tools/whisperkit-cli/      # WhisperKit CLI transcription tool (used by build_whisperkit.sh)
   Package.swift
   Sources/main.swift
+tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screenshot, open-settings, …)
+  Package.swift
+  Sources/
+    MTCLI.swift            # ArgumentParser entrypoint
+    RPCClient.swift        # HTTP client; reads token from AppPaths-equivalent path
+  Tests/RPCClientTests.swift
+  skill.md                 # Claude skill: when to use mt-cli, with examples
 scripts/
   build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
@@ -85,6 +93,7 @@ scripts/
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
+  test_rpc.sh               # Live smoketest for DebugRPCServer (build + launch + drive via mt-cli + assert)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
 Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
 Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
@@ -137,6 +146,15 @@ cd app/MeetingTranscriber && swift test
 
 # Build self-contained .app + DMG for distribution (Homebrew)
 ./scripts/build_release.sh
+
+# Run app with debug RPC server enabled (dev-only; binds 127.0.0.1:9876)
+MEETINGTRANSCRIBER_DEBUG_RPC=1 ./scripts/run_app.sh
+
+# Build mt-cli (talks to the running RPC server)
+cd tools/mt-cli && swift build && .build/debug/mt-cli state
+
+# Live smoketest of the RPC server (kills + builds + launches + asserts)
+./scripts/test_rpc.sh
 
 # Build App Store variant (sandbox, no Claude CLI)
 ./scripts/build_release.sh --appstore --no-notarize
@@ -242,6 +260,13 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `WatchLoop` runs the check on startup; `AppState` re-runs on app activation.
 - When unhealthy: `MenuBarIcon` composites a red "!" badge over the current icon (non-template, stays red in dark mode). `BadgeKind.compute()` returns `.error` when idle with a problem. A deduped notification is posted via `NotificationManager`.
 
+**Debug RPC server (dev-only):**
+- `DebugRPCServer` is an embedded HTTP server bound to `127.0.0.1:9876` that exposes app state, screenshots, and scene actions for shell-driven inspection. Whole file is `#if !APPSTORE`; opt-in per session via `MEETINGTRANSCRIBER_DEBUG_RPC=1`.
+- Endpoints: `GET /state` (pipeline + speaker DB JSON), `GET /healthz`, `GET /screenshot` (PNG of the largest visible window), `POST /action/openSettings`, `POST /action/closeSettings`.
+- Two-layer auth: 32-byte hex bearer token at `~/Library/Application Support/MeetingTranscriber/.rpc-token` (chmod 0600) + reject on any non-empty browser `Origin` header.
+- Action endpoints post `Notification.Name.showSettings` / `.closeSettings` that the `@main` scene observes and routes to `bringWindowToFront(id: "settings")` / `closeWindow(id: "settings")` — same path the menu bar uses.
+- `tools/mt-cli` is the matching CLI client; `scripts/test_rpc.sh` is a live end-to-end smoketest. In-process integration tests live in `Tests/DebugRPCServerIntegrationTests.swift` (real sockets via OS-assigned port exposed through `DebugRPCServer.boundPort`).
+
 ## Critical Notes
 
 - AudioTapLib (CATapDescription) requires macOS 14.2+ — compiled as SPM library, no separate binary needed
@@ -268,11 +293,12 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 |---|---|---|
 | **Claude CLI** | Yes (Process subprocess) | No (sandbox forbids Process) |
 | **OpenAI API** | Yes | Yes (only LLM option) |
+| **Debug RPC server** | Yes (env-gated) | No (`#if !APPSTORE`) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~996 | fewer (CLI tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~996 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
-- CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` (entire file `#if !APPSTORE`)
+- CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
 - `ProtocolError` has `#if !APPSTORE` around CLI error cases (enum cases cannot be added via extension)
 - FFmpegHelper also uses `Process()` but falls back gracefully to `nil` — no `#if` needed
