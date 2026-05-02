@@ -88,7 +88,7 @@ struct MenuBarView: View {
             .keyboardShortcut("r")
         }
 
-        if state == .waitingForSpeakerNames, let onNameSpeakers {
+        if let onNameSpeakers {
             Button {
                 onNameSpeakers()
             } label: {
@@ -183,12 +183,16 @@ struct MenuBarView: View {
                 Button("Open") { onOpenProtocol(path) }
                     .font(.caption2)
             }
+            if job.state == .speakerNamingPending {
+                Button("Name Speakers") { onNameSpeakers?() }
+                    .font(.caption2)
+            }
             if job.state == .waiting || job.state == .transcribing
                 || job.state == .diarizing || job.state == .generatingProtocol {
                 Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
                     .font(.caption2)
             }
-            if job.state == .done || job.state == .error {
+            if job.state == .done || job.state == .error || job.state == .speakerNamingPending {
                 Button("Dismiss") { onDismissJob(job.id) }
                     .font(.caption2)
             }
@@ -229,6 +233,7 @@ struct MenuBarView: View {
         case .transcribing: .blue
         case .diarizing: .purple
         case .generatingProtocol: .orange
+        case .speakerNamingPending: .purple
         case .done: job.warnings.isEmpty ? .green : .yellow
         case .error: .red
         }
