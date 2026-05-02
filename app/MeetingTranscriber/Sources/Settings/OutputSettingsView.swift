@@ -21,8 +21,8 @@ struct OutputSettingsView: View {
     }
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
-            // swiftlint:disable:next closure_body_length
             Section("Protocol Generation") {
                 Picker("LLM Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in
@@ -165,8 +165,7 @@ struct OutputSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var promptControls: some View { // swiftlint:disable:this attributes
+    private var promptControls: some View {
         // swiftlint:disable:next closure_body_length
         HStack {
             Button("Edit Prompt") {

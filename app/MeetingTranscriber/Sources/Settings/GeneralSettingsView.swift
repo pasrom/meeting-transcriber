@@ -44,8 +44,8 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
     }
 
-    @ViewBuilder
     private func updatesSection(updateChecker: UpdateChecker) -> some View {
+        // swiftlint:disable:next closure_body_length
         Section("Updates") {
             Toggle("Check for Updates", isOn: $settings.checkForUpdates)
 
