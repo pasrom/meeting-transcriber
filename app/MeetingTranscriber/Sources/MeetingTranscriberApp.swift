@@ -137,6 +137,9 @@ struct MeetingTranscriberApp: App {
                     return nil
                 }(),
                 updateChecker: appState.updateChecker,
+                enrollmentDiarizerFactory: { FluidDiarizer(mode: appState.settings.diarizerMode) },
+                namingDialogActive: appState.pipelineQueue.pendingSpeakerNaming != nil,
+                pipelineBusy: appState.pipelineQueue.isProcessing,
             )
         }
         .windowResizability(.contentSize)

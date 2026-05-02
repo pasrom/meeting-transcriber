@@ -26,6 +26,13 @@ struct SettingsView: View {
     var qwen3Engine: (any TranscribingEngine)? // nil on macOS < 15
     var updateChecker: UpdateChecker?
     var recognitionStatsLog: RecognitionStatsLog = .init()
+    /// Factory for the voice-enrollment diarizer. nil → enroll button hidden.
+    var enrollmentDiarizerFactory: (() -> DiarizationProvider)?
+    /// True when a meeting is currently waiting on a naming dialog. We gate
+    /// the enroll button to avoid two `SpeakerNamingView` instances.
+    var namingDialogActive: Bool = false
+    /// True when the pipeline is processing a job — soft hint only.
+    var pipelineBusy: Bool = false
 
     enum ConnectionTestResult {
         case success(String)
@@ -531,7 +538,12 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 520)
         .sheet(isPresented: $showKnownVoices) {
-            KnownVoicesView(matcher: SpeakerMatcher())
+            KnownVoicesView(
+                matcher: SpeakerMatcher(),
+                diarizerFactory: enrollmentDiarizerFactory,
+                namingDialogActive: namingDialogActive,
+                pipelineBusy: pipelineBusy,
+            )
         }
         .onAppear {
             #if !APPSTORE
