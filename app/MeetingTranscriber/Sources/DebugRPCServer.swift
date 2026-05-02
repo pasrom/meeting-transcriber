@@ -35,6 +35,9 @@
         private let snapshot: () -> RPCStateSnapshot
         private let expectedAuth: String
         private var listener: NWListener?
+        /// OS-assigned port once the listener is `.ready`. Useful for tests
+        /// that bind to port 0 and need to know where to connect back.
+        private(set) var boundPort: UInt16?
 
         nonisolated static var enabled: Bool {
             ProcessInfo.processInfo.environment[envVar] == "1"
@@ -91,6 +94,10 @@
                 let listener = try NWListener(using: params, on: port)
                 listener.newConnectionHandler = { [weak self] connection in
                     Task { @MainActor in self?.handle(connection) }
+                }
+                listener.stateUpdateHandler = { [weak self] state in
+                    guard case .ready = state, let self else { return }
+                    Task { @MainActor in self.boundPort = listener.port?.rawValue }
                 }
                 listener.start(queue: .main)
                 self.listener = listener
