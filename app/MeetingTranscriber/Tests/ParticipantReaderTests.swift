@@ -5,9 +5,9 @@ final class ParticipantReaderTests: XCTestCase {
     // MARK: - Basic Filtering
 
     func testFilterValidNames() {
-        let input = ["Alice Smith", "Bob Jones", "Carol Lee"]
+        let input = ["Alice Smith", "Speaker C Jones", "Carol Lee"]
         let result = ParticipantReader.filterParticipantNames(input)
-        XCTAssertEqual(result, ["Alice Smith", "Bob Jones", "Carol Lee"])
+        XCTAssertEqual(result, ["Alice Smith", "Speaker C Jones", "Carol Lee"])
     }
 
     func testFilterRemovesEmptyAndShort() {
@@ -17,9 +17,9 @@ final class ParticipantReaderTests: XCTestCase {
     }
 
     func testFilterRemovesDuplicates() {
-        let input = ["Alice", "Alice", "Bob"]
+        let input = ["Alice", "Alice", "Speaker C"]
         let result = ParticipantReader.filterParticipantNames(input)
-        XCTAssertEqual(result, ["Alice", "Bob"])
+        XCTAssertEqual(result, ["Alice", "Speaker C"])
     }
 
     func testFilterRemovesYouSuffix() {
@@ -54,9 +54,9 @@ final class ParticipantReaderTests: XCTestCase {
     }
 
     func testFilterRemovesArrowSeparators() {
-        let input = ["Home → Settings → Profile", "Bob"]
+        let input = ["Home → Settings → Profile", "Speaker C"]
         let result = ParticipantReader.filterParticipantNames(input)
-        XCTAssertEqual(result, ["Bob"])
+        XCTAssertEqual(result, ["Speaker C"])
     }
 
     func testFilterRemovesChevronSeparators() {
@@ -113,11 +113,11 @@ final class ParticipantReaderTests: XCTestCase {
     func testRealWorldTeamsRoster() {
         let texts = [
             "People", "In this meeting", "4",
-            "Alice Johnson (you)", "Bob Smith", "Charlie Brown", "Diana Prince",
+            "Alice Johnson (you)", "Speaker C Smith", "Speaker D Brown", "Speaker E Prince",
             "Mute", "Camera", "Raise hand",
         ]
         let result = ParticipantReader.filterParticipantNames(texts)
-        XCTAssertEqual(result, ["Alice Johnson", "Bob Smith", "Charlie Brown", "Diana Prince"])
+        XCTAssertEqual(result, ["Alice Johnson", "Speaker C Smith", "Speaker D Brown", "Speaker E Prince"])
     }
 
     // MARK: - Realistic Screen Share Scenario
@@ -125,12 +125,12 @@ final class ParticipantReaderTests: XCTestCase {
     func testFilterRealisticScreenShareArtifacts() {
         let input = [
             "Alice Smith",
-            "Bob Jones",
+            "Speaker C Jones",
             "Go to App → Settings → Connectors/Integrations → Connection:",
             "Integration-Page::",
             "https://id.example.com/manage-profile",
         ]
         let result = ParticipantReader.filterParticipantNames(input)
-        XCTAssertEqual(result, ["Alice Smith", "Bob Jones"])
+        XCTAssertEqual(result, ["Alice Smith", "Speaker C Jones"])
     }
 }

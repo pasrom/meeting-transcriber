@@ -14,9 +14,9 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         let diarization = DiarizationResult(
             segments: [
                 .init(start: 0, end: 6, speaker: "Alice"),
-                .init(start: 6, end: 15, speaker: "Bob"),
+                .init(start: 6, end: 15, speaker: "Speaker C"),
             ],
-            speakingTimes: ["Alice": 6, "Bob": 9],
+            speakingTimes: ["Alice": 6, "Speaker C": 9],
             autoNames: [:],
             embeddings: nil,
         )
@@ -26,8 +26,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         )
 
         XCTAssertEqual(result[0].speaker, "Alice") // 0-5 overlaps Alice (0-6)
-        XCTAssertEqual(result[1].speaker, "Bob") // 5-10: 1s Alice, 4s Bob -> Bob
-        XCTAssertEqual(result[2].speaker, "Bob") // 10-15 fully Bob
+        XCTAssertEqual(result[1].speaker, "Speaker C") // 5-10: 1s Alice, 4s Speaker C -> Speaker C
+        XCTAssertEqual(result[2].speaker, "Speaker C") // 10-15 fully Speaker C
     }
 
     func testAssignSpeakersNoOverlap() {
@@ -64,7 +64,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
                 .init(start: 6, end: 10, speaker: "SPEAKER_1"),
             ],
             speakingTimes: ["SPEAKER_0": 6, "SPEAKER_1": 4],
-            autoNames: ["SPEAKER_0": "Roman", "SPEAKER_1": "Anna"],
+            autoNames: ["SPEAKER_0": "Speaker A", "SPEAKER_1": "Speaker B"],
             embeddings: nil,
         )
 
@@ -72,8 +72,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
             transcript: transcript, diarization: diarization,
         )
 
-        XCTAssertEqual(result[0].speaker, "Roman")
-        XCTAssertEqual(result[1].speaker, "Anna")
+        XCTAssertEqual(result[0].speaker, "Speaker A")
+        XCTAssertEqual(result[1].speaker, "Speaker B")
     }
 
     func testAssignSpeakersEmpty() {
@@ -98,7 +98,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
                 .init(start: 15, end: 20, speaker: "SPEAKER_1"),
             ],
             speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
-            autoNames: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
+            autoNames: ["SPEAKER_0": "Alice", "SPEAKER_1": "Speaker C"],
             embeddings: nil,
         )
 
@@ -106,8 +106,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
             transcript: transcript, diarization: diarization,
         )
 
-        // Gap to SPEAKER_1 is 15-14=1s, gap to SPEAKER_0 is 12-5=7s → nearest is Bob
-        XCTAssertEqual(result[0].speaker, "Bob")
+        // Gap to SPEAKER_1 is 15-14=1s, gap to SPEAKER_0 is 12-5=7s → nearest is Speaker C
+        XCTAssertEqual(result[0].speaker, "Speaker C")
     }
 
     func testAssignSpeakersNoDiarizationSegments() {
@@ -219,7 +219,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
                 .init(start: 8, end: 15, speaker: "R_SPEAKER_1"),
             ],
             speakingTimes: ["R_SPEAKER_0": 6, "R_SPEAKER_1": 7],
-            autoNames: ["R_SPEAKER_0": "Anna", "R_SPEAKER_1": "Max"],
+            autoNames: ["R_SPEAKER_0": "Speaker B", "R_SPEAKER_1": "Max"],
             embeddings: nil,
         )
 
@@ -228,7 +228,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
                 .init(start: 4, end: 11, speaker: "M_SPEAKER_0"),
             ],
             speakingTimes: ["M_SPEAKER_0": 7],
-            autoNames: ["M_SPEAKER_0": "Roman"],
+            autoNames: ["M_SPEAKER_0": "Speaker A"],
             embeddings: nil,
         )
 
@@ -241,8 +241,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
 
         // Sorted by start time
         XCTAssertEqual(result.count, 3)
-        XCTAssertEqual(result[0].speaker, "Anna") // app 0-5 overlaps R_SPEAKER_0
-        XCTAssertEqual(result[1].speaker, "Roman") // mic 5-10 overlaps M_SPEAKER_0
+        XCTAssertEqual(result[0].speaker, "Speaker B") // app 0-5 overlaps R_SPEAKER_0
+        XCTAssertEqual(result[1].speaker, "Speaker A") // mic 5-10 overlaps M_SPEAKER_0
         XCTAssertEqual(result[2].speaker, "Max") // app 10-15 overlaps R_SPEAKER_1
     }
 
@@ -250,13 +250,13 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         let appDiar = DiarizationResult(
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
             speakingTimes: ["SPEAKER_0": 5],
-            autoNames: ["SPEAKER_0": "Anna"],
+            autoNames: ["SPEAKER_0": "Speaker B"],
             embeddings: nil,
         )
         let micDiar = DiarizationResult(
             segments: [.init(start: 0, end: 3, speaker: "SPEAKER_0")],
             speakingTimes: ["SPEAKER_0": 3],
-            autoNames: ["SPEAKER_0": "Roman"],
+            autoNames: ["SPEAKER_0": "Speaker A"],
             embeddings: nil,
         )
 
@@ -264,8 +264,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
             appDiarization: appDiar, micDiarization: micDiar,
         )
 
-        XCTAssertEqual(merged.autoNames["R_SPEAKER_0"], "Anna")
-        XCTAssertEqual(merged.autoNames["M_SPEAKER_0"], "Roman")
+        XCTAssertEqual(merged.autoNames["R_SPEAKER_0"], "Speaker B")
+        XCTAssertEqual(merged.autoNames["M_SPEAKER_0"], "Speaker A")
     }
 
     func testMergeDualTrackDiarization_nilEmbeddingsBothSides() {
@@ -290,8 +290,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         let segments = [
             TimestampedSegment(start: 0, end: 5, text: "Hello there.", speaker: "Alice"),
             TimestampedSegment(start: 5, end: 10, text: "How are you?", speaker: "Alice"),
-            TimestampedSegment(start: 10, end: 15, text: "I'm fine.", speaker: "Bob"),
-            TimestampedSegment(start: 15, end: 20, text: "Thanks.", speaker: "Bob"),
+            TimestampedSegment(start: 10, end: 15, text: "I'm fine.", speaker: "Speaker C"),
+            TimestampedSegment(start: 15, end: 20, text: "Thanks.", speaker: "Speaker C"),
             TimestampedSegment(start: 20, end: 25, text: "Great!", speaker: "Alice"),
         ]
 
@@ -302,7 +302,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         XCTAssertEqual(merged[0].text, "Hello there. How are you?")
         XCTAssertEqual(merged[0].start, 0)
         XCTAssertEqual(merged[0].end, 10)
-        XCTAssertEqual(merged[1].speaker, "Bob")
+        XCTAssertEqual(merged[1].speaker, "Speaker C")
         XCTAssertEqual(merged[1].text, "I'm fine. Thanks.")
         XCTAssertEqual(merged[1].start, 10)
         XCTAssertEqual(merged[1].end, 20)
@@ -342,7 +342,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
     func testMergeConsecutiveSpeakers_allDifferent() {
         let segments = [
             TimestampedSegment(start: 0, end: 5, text: "A", speaker: "Alice"),
-            TimestampedSegment(start: 5, end: 10, text: "B", speaker: "Bob"),
+            TimestampedSegment(start: 5, end: 10, text: "B", speaker: "Speaker C"),
             TimestampedSegment(start: 10, end: 15, text: "C", speaker: "Carol"),
         ]
         let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
@@ -385,11 +385,11 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
     func testMergeConsecutiveSpeakers_longMonologBrokenByPauses() {
         // Simulates a long monolog with natural pauses — should break into blocks
         let segments = [
-            TimestampedSegment(start: 0, end: 10, text: "First paragraph.", speaker: "Roman"),
-            TimestampedSegment(start: 10.5, end: 20, text: "Still first.", speaker: "Roman"),
-            TimestampedSegment(start: 23, end: 30, text: "Second paragraph.", speaker: "Roman"),
-            TimestampedSegment(start: 30.5, end: 40, text: "Still second.", speaker: "Roman"),
-            TimestampedSegment(start: 45, end: 55, text: "Third paragraph.", speaker: "Roman"),
+            TimestampedSegment(start: 0, end: 10, text: "First paragraph.", speaker: "Speaker A"),
+            TimestampedSegment(start: 10.5, end: 20, text: "Still first.", speaker: "Speaker A"),
+            TimestampedSegment(start: 23, end: 30, text: "Second paragraph.", speaker: "Speaker A"),
+            TimestampedSegment(start: 30.5, end: 40, text: "Still second.", speaker: "Speaker A"),
+            TimestampedSegment(start: 45, end: 55, text: "Third paragraph.", speaker: "Speaker A"),
         ]
         let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
         XCTAssertEqual(merged.count, 3, "Long monolog should break at natural pauses")
@@ -411,7 +411,7 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         let appDiarization = DiarizationResult(
             segments: [.init(start: 0, end: 5, speaker: "R_SPEAKER_0")],
             speakingTimes: ["R_SPEAKER_0": 5],
-            autoNames: ["R_SPEAKER_0": "Anna"],
+            autoNames: ["R_SPEAKER_0": "Speaker B"],
             embeddings: nil,
         )
 
@@ -429,8 +429,8 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
             micDiarization: micDiarization,
         )
 
-        // Nearest fallback: Anna
-        XCTAssertEqual(result[0].speaker, "Anna")
+        // Nearest fallback: Speaker B
+        XCTAssertEqual(result[0].speaker, "Speaker B")
     }
 
     // MARK: - Edge Cases
@@ -533,16 +533,16 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         // A, B, A, B — different speakers should never merge even with no gap
         let segments = [
             TimestampedSegment(start: 0, end: 2, text: "A1", speaker: "Alice"),
-            TimestampedSegment(start: 2, end: 4, text: "B1", speaker: "Bob"),
+            TimestampedSegment(start: 2, end: 4, text: "B1", speaker: "Speaker C"),
             TimestampedSegment(start: 4, end: 6, text: "A2", speaker: "Alice"),
-            TimestampedSegment(start: 6, end: 8, text: "B2", speaker: "Bob"),
+            TimestampedSegment(start: 6, end: 8, text: "B2", speaker: "Speaker C"),
         ]
         let merged = DiarizationProcess.mergeConsecutiveSpeakers(segments)
         XCTAssertEqual(merged.count, 4, "Rapid A-B-A-B alternation should stay as 4 segments")
         XCTAssertEqual(merged[0].speaker, "Alice")
-        XCTAssertEqual(merged[1].speaker, "Bob")
+        XCTAssertEqual(merged[1].speaker, "Speaker C")
         XCTAssertEqual(merged[2].speaker, "Alice")
-        XCTAssertEqual(merged[3].speaker, "Bob")
+        XCTAssertEqual(merged[3].speaker, "Speaker C")
     }
 
     func testAssignSpeakersDualTrackSortsByStartTime() {

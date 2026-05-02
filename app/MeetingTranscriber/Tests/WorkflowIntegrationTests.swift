@@ -148,7 +148,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             // Verify naming data is populated
             XCTAssertFalse(data.mapping.isEmpty)
             XCTAssertFalse(data.speakingTimes.isEmpty)
-            return .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"])
+            return .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Speaker C"])
         }
 
         let job = makeJob(audioPath: h.audioPath)

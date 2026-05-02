@@ -395,7 +395,7 @@ final class PipelineQueueTests: XCTestCase {
         q1.markProcessed(mixPath: mixPath)
 
         // New queue instance should see the processed path
-        let q2 = PipelineQueue(logDir: tmpDir)
+        _ = PipelineQueue(logDir: tmpDir)
         let recDir = tmpDir.appendingPathComponent("recordings")
         try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
         // Create a file with the same standardized name
@@ -970,7 +970,7 @@ final class PipelineQueueTests: XCTestCase {
         let data = PipelineQueue.SpeakerNamingData(
             jobID: UUID(),
             meetingTitle: "Test Meeting",
-            mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"],
+            mapping: ["SPEAKER_0": "Alice", "SPEAKER_1": "Speaker C"],
             speakingTimes: ["SPEAKER_0": 120.5, "SPEAKER_1": 85.3],
             embeddings: ["SPEAKER_0": [0.1, 0.2], "SPEAKER_1": [0.3, 0.4]],
             audioPath: URL(fileURLWithPath: "/tmp/test_16k.wav"),
@@ -978,7 +978,7 @@ final class PipelineQueueTests: XCTestCase {
                 .init(start: 0.0, end: 5.0, speaker: "SPEAKER_0"),
                 .init(start: 5.0, end: 10.0, speaker: "SPEAKER_1"),
             ],
-            participants: ["Alice", "Bob", "Charlie"],
+            participants: ["Alice", "Speaker C", "Speaker D"],
             isDualSource: false,
         )
 
@@ -1199,7 +1199,7 @@ final class PipelineQueueTests: XCTestCase {
             }
         }
 
-        queue.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice", "SPEAKER_1": "Bob"]))
+        queue.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice", "SPEAKER_1": "Speaker C"]))
 
         await fulfillment(of: [doneExpectation], timeout: 5)
 
@@ -1209,7 +1209,7 @@ final class PipelineQueueTests: XCTestCase {
         // Verify transcript was rewritten with user-provided names
         let rewritten = try String(contentsOf: transcriptPath, encoding: .utf8)
         XCTAssertTrue(rewritten.contains("[Alice]"), "Transcript should contain user-provided name Alice")
-        XCTAssertTrue(rewritten.contains("[Bob]"), "Transcript should contain user-provided name Bob")
+        XCTAssertTrue(rewritten.contains("[Speaker C]"), "Transcript should contain user-provided name Speaker C")
         XCTAssertFalse(rewritten.contains("[SPEAKER_0]"), "Generic label should be replaced")
         XCTAssertFalse(rewritten.contains("[SPEAKER_1]"), "Generic label should be replaced")
     }
