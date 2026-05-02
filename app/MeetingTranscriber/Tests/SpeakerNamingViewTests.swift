@@ -218,184 +218,89 @@ final class SpeakerNamingViewTests: XCTestCase {
         XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
     }
 
-    // MARK: - Pure Function: unusedParticipants
+    // MARK: - Pure Function: filterByQuery
 
-    func testUnusedParticipantsExcludesAssigned() {
-        let names = ["Alice", "", "Charlie"]
-        let participants = ["Alice", "Bob", "Charlie"]
-        let unused = SpeakerNamingView.unusedParticipants(
-            currentIndex: 1, names: names, participants: participants,
-        )
-        XCTAssertEqual(unused, ["Bob"])
+    func testFilterByQueryEmptyReturnsUnchanged() {
+        let names = ["Alpha", "Bravo", "Charlie"]
+        XCTAssertEqual(SpeakerNamingView.filterByQuery(names: names, query: ""), names)
     }
 
-    func testUnusedParticipantsAllAssignedReturnsEmpty() {
-        let names = ["Alice", "Bob"]
-        let participants = ["Alice", "Bob"]
-        let unused = SpeakerNamingView.unusedParticipants(
-            currentIndex: 2, names: names, participants: participants,
-        )
-        XCTAssertTrue(unused.isEmpty)
+    func testFilterByQueryWhitespaceReturnsUnchanged() {
+        let names = ["Alpha", "Bravo"]
+        XCTAssertEqual(SpeakerNamingView.filterByQuery(names: names, query: "   "), names)
     }
 
-    func testUnusedParticipantsSkipsCurrentIndex() {
-        // Current index 0 has "Alice" — but it should not be counted as "used"
-        // because it's the field we're computing suggestions for
-        let names = ["Alice", "Bob"]
-        let participants = ["Alice", "Bob", "Charlie"]
-        let unused = SpeakerNamingView.unusedParticipants(
-            currentIndex: 0, names: names, participants: participants,
+    func testFilterByQueryPrefixOfFirstToken() {
+        // "Tea" matches the prefix of "Teams" and "Teal".
+        let names = ["Aleksej", "Teams", "Bravo", "Teal"]
+        XCTAssertEqual(
+            SpeakerNamingView.filterByQuery(names: names, query: "Tea"),
+            ["Teams", "Teal"],
         )
-        // "Bob" is used (index 1), "Alice" is skipped (current), "Charlie" is unused
-        XCTAssertEqual(unused, ["Alice", "Charlie"])
     }
 
-    // MARK: - Pure Function: unusedKnownNames
-
-    func testUnusedKnownNamesExcludesParticipants() {
-        // "Alice" is in participants — it should not appear as a known-name chip
-        // (avoids duplicate buttons in the UI).
-        let names = ["", "", ""]
-        let unused = SpeakerNamingView.unusedKnownNames(
-            currentIndex: 0,
-            names: names,
-            knownNames: ["Alice", "Charlie", "Diana"],
-            participants: ["Alice", "Bob"],
+    func testFilterByQuerySecondTokenPrefix() {
+        // "Mü" matches second token of "Alexander Müller".
+        let names = ["Aleksej", "Alexander Müller", "Charlie"]
+        XCTAssertEqual(
+            SpeakerNamingView.filterByQuery(names: names, query: "Mü"),
+            ["Alexander Müller"],
         )
-        XCTAssertEqual(unused, ["Charlie", "Diana"])
     }
 
-    func testUnusedKnownNamesExcludesAlreadyAssigned() {
-        let names = ["Charlie", "", ""]
-        let unused = SpeakerNamingView.unusedKnownNames(
-            currentIndex: 1,
-            names: names,
-            knownNames: ["Charlie", "Diana", "Eve"],
-            participants: [],
+    func testFilterByQueryContainsTier() {
+        // "an" — "Anna" prefix tier, "Susan" contains tier.
+        let names = ["Susan", "Anna", "Bob"]
+        XCTAssertEqual(
+            SpeakerNamingView.filterByQuery(names: names, query: "an"),
+            ["Anna", "Susan"],
         )
-        XCTAssertEqual(unused, ["Diana", "Eve"])
     }
 
-    func testUnusedKnownNamesEmptyKnownNames() {
-        let unused = SpeakerNamingView.unusedKnownNames(
-            currentIndex: 0,
-            names: ["", ""],
-            knownNames: [],
-            participants: ["Alice"],
+    func testFilterByQueryCaseInsensitive() {
+        XCTAssertEqual(
+            SpeakerNamingView.filterByQuery(names: ["Alpha"], query: "alp"),
+            ["Alpha"],
         )
-        XCTAssertTrue(unused.isEmpty)
     }
 
-    func testUnusedKnownNamesPreservesInputOrder() {
-        // Caller (`SpeakerMatcher.allSpeakerNames()`) already sorts; the filter
-        // must preserve that order so chips render alphabetically.
-        let unused = SpeakerNamingView.unusedKnownNames(
-            currentIndex: 0,
-            names: ["", ""],
-            knownNames: ["Anna", "Bob", "Charlie"],
-            participants: [],
+    func testFilterByQueryNoMatch() {
+        XCTAssertTrue(
+            SpeakerNamingView.filterByQuery(names: ["Alpha", "Bravo"], query: "zz").isEmpty,
         )
-        XCTAssertEqual(unused, ["Anna", "Bob", "Charlie"])
     }
 
     // MARK: - Pure Function: rankedKnownNames
 
     func testRankedKnownNamesAutoNameMatchFirst() {
-        // autoName "Marwin" → both "Marwin …" entries rank ahead of others.
+        // First-token "Bravo" → both "Bravo …" entries rank ahead.
         let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Anna Berger", "Marwin Schmidt", "Bruno Klein", "Marwin Müller"],
-            autoName: "Marwin",
+            known: ["Alpha Berger", "Bravo Schmidt", "Charlie Klein", "Bravo Müller"],
+            autoName: "Bravo",
             participants: [],
         )
-        XCTAssertEqual(ranked, ["Marwin Schmidt", "Marwin Müller", "Anna Berger", "Bruno Klein"])
-    }
-
-    func testRankedKnownNamesParticipantTokenSecondTier() {
-        // participant "Anna Berger" → "Anna Klein" (same first token) ranks up.
-        // No autoName, so only participant tier + alphabetic remainder.
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Bruno Klein", "Anna Klein", "Charlie Tay"],
-            autoName: nil,
-            participants: ["Anna Berger"],
-        )
-        XCTAssertEqual(ranked, ["Anna Klein", "Bruno Klein", "Charlie Tay"])
-    }
-
-    func testRankedKnownNamesAutoNameOutranksParticipant() {
-        // autoName "Bruno" beats participant token "Anna".
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Anna Klein", "Bruno Schmidt"],
-            autoName: "Bruno",
-            participants: ["Anna Berger"],
-        )
-        XCTAssertEqual(ranked, ["Bruno Schmidt", "Anna Klein"])
-    }
-
-    func testRankedKnownNamesIsCaseInsensitiveOnTokenMatch() {
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["bruno klein", "anna meyer"],
-            autoName: "Bruno",
-            participants: [],
-        )
-        XCTAssertEqual(ranked, ["bruno klein", "anna meyer"])
-    }
-
-    func testRankedKnownNamesPreservesInputOrderWithinTier() {
-        // No matches at all → all names land in tier 2; input order preserved.
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Charlie", "Alice", "Bob"],
-            autoName: nil,
-            participants: [],
-        )
-        XCTAssertEqual(ranked, ["Charlie", "Alice", "Bob"])
-    }
-
-    func testRankedKnownNamesEmptyInput() {
-        XCTAssertTrue(
-            SpeakerNamingView.rankedKnownNames(known: [], autoName: "Foo", participants: ["Bar"]).isEmpty,
-        )
+        XCTAssertEqual(ranked, ["Bravo Schmidt", "Bravo Müller", "Alpha Berger", "Charlie Klein"])
     }
 
     func testRankedKnownNamesEmptyAutoNameDoesNotPromote() {
-        // autoName "" must not promote names whose first token is empty.
         let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Anna Klein", "Bob Schmidt"],
+            known: ["Alpha Klein", "Bravo Schmidt"],
             autoName: "",
             participants: [],
         )
-        XCTAssertEqual(ranked, ["Anna Klein", "Bob Schmidt"])
-    }
-
-    func testRankedKnownNamesSingleTokenNamesMatch() {
-        // Single-token participant "Madonna" — known "Madonna Smith" matches via first token.
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Bob Schmidt", "Madonna Smith"],
-            autoName: nil,
-            participants: ["Madonna"],
-        )
-        XCTAssertEqual(ranked, ["Madonna Smith", "Bob Schmidt"])
-    }
-
-    func testRankedKnownNamesSingleTokenKnownMatchesSingleTokenAuto() {
-        // No whitespace anywhere; first token of each is the whole string.
-        let ranked = SpeakerNamingView.rankedKnownNames(
-            known: ["Charlie", "Alice"],
-            autoName: "Charlie",
-            participants: [],
-        )
-        XCTAssertEqual(ranked, ["Charlie", "Alice"])
+        XCTAssertEqual(ranked, ["Alpha Klein", "Bravo Schmidt"])
     }
 
     // MARK: - Pure Function: computeInitialNames
 
     func testComputeInitialNamesFromAutoMapping() {
         let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
-            (label: "SPEAKER_00", autoName: "Roman", speakingTime: 60),
+            (label: "SPEAKER_00", autoName: "Speaker A", speakingTime: 60),
             (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
-            (label: "SPEAKER_02", autoName: "Maria", speakingTime: 45),
+            (label: "SPEAKER_02", autoName: "Speaker B", speakingTime: 45),
         ]
         let names = SpeakerNamingView.computeInitialNames(speakers: speakers)
-        XCTAssertEqual(names, ["Roman", "", "Maria"])
+        XCTAssertEqual(names, ["Speaker A", "", "Speaker B"])
     }
 
     // MARK: - formattedTime pure function
@@ -426,26 +331,6 @@ final class SpeakerNamingViewTests: XCTestCase {
 
     func testFormattedTimeBoundaryAt60() {
         XCTAssertEqual(formattedTime(60), "1:00")
-    }
-
-    // MARK: - Participant suggestion buttons
-
-    func testUnusedParticipantsWithNoAssignments() {
-        // When no names are assigned, all participants are unused
-        let names = ["", ""]
-        let participants = ["Alice", "Bob"]
-        let unused = SpeakerNamingView.unusedParticipants(
-            currentIndex: 0, names: names, participants: participants,
-        )
-        XCTAssertEqual(unused, ["Alice", "Bob"])
-    }
-
-    func testUnusedParticipantsEmptyParticipantList() {
-        let names = ["Alice"]
-        let unused = SpeakerNamingView.unusedParticipants(
-            currentIndex: 0, names: names, participants: [],
-        )
-        XCTAssertTrue(unused.isEmpty)
     }
 
     // MARK: - Audio Playback
