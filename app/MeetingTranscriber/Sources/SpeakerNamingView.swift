@@ -5,14 +5,11 @@ import SwiftUI
 /// to the delegate so the SwiftUI Binding stays in sync.
 private final class AutomationTextField: NSTextField {
     override func setAccessibilityValue(_ value: Any?) {
-        if let str = value as? String {
-            self.stringValue = str
-            // Post the same notification that user typing would trigger
-            NotificationCenter.default.post(
-                name: NSControl.textDidChangeNotification,
-                object: self,
-            )
-        }
+        guard let str = value as? String else { return }
+        stringValue = str
+        NotificationCenter.default.post(
+            name: NSControl.textDidChangeNotification, object: self,
+        )
     }
 }
 
@@ -87,10 +84,10 @@ struct SpeakerNamingView: View {
     @State private var player: AVAudioPlayer?
     @State private var playingLabel: String?
     @State private var rerunCount: Int = 2
-    /// Indices of speaker rows where the user clicked "Mehr…" to reveal the full
+    /// Indices of speaker rows where the user clicked "More…" to reveal the full
     /// known-names list instead of the top-N ranked subset.
     @State private var knownExpanded: Set<Int> = []
-    /// Number of "Known:" chips shown by default before "Mehr…" appears.
+    /// Number of "Known:" chips shown by default before "More…" appears.
     private static let knownChipsCollapsedLimit = 8
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
@@ -217,11 +214,7 @@ struct SpeakerNamingView: View {
                 }
 
                 if index < names.count {
-                    AccessibleTextField(
-                        text: $names[index],
-                        placeholder: "Name",
-                        identifier: "speaker-name-\(speaker.label)",
-                    )
+                    nameField(for: index, label: speaker.label)
                     suggestionChips(for: index)
                 }
             }
@@ -229,21 +222,46 @@ struct SpeakerNamingView: View {
         }
     }
 
+    private func nameField(for index: Int, label: String) -> some View {
+        AccessibleTextField(
+            text: $names[index],
+            placeholder: "Name",
+            identifier: "speaker-name-\(label)",
+        )
+    }
+
+    /// Live-filtered chip rows. Typing in the field shrinks both rows to names
+    /// matching the query — typing IS the filter UI, no separate dropdown.
+    /// Same name in multiple rows is allowed (legitimate in dual-track when
+    /// M_ and R_ pick up the same speaker).
     @ViewBuilder
     private func suggestionChips(for index: Int) -> some View {
-        let participants = unusedParticipants(currentIndex: index)
+        let query = index < names.count ? names[index] : ""
+        participantChips(for: index, query: query)
+        knownChips(for: index, query: query)
+    }
+
+    @ViewBuilder
+    private func participantChips(for index: Int, query: String) -> some View {
+        let participants = Self.filterByQuery(names: data.participants, query: query)
         if !participants.isEmpty {
             chipRow(names: participants, idPrefix: "participant-name-") { names[index] = $0 }
         }
+    }
 
-        let known = unusedKnownNames(currentIndex: index)
+    @ViewBuilder
+    private func knownChips(for index: Int, query: String) -> some View {
+        let known = Self.filterByQuery(names: knownNamesNotInParticipants, query: query)
         if !known.isEmpty {
             let autoName = index < speakers.count ? speakers[index].autoName : nil
             let ranked = Self.rankedKnownNames(
                 known: known, autoName: autoName, participants: data.participants,
             )
             let expanded = knownExpanded.contains(index)
-            let visible = expanded ? ranked : Array(ranked.prefix(Self.knownChipsCollapsedLimit))
+            // Don't bother with the Top-N cap once the user has typed — they're
+            // already looking at a filtered short list.
+            let limit = query.isEmpty ? Self.knownChipsCollapsedLimit : ranked.count
+            let visible = expanded ? ranked : Array(ranked.prefix(limit))
             let hidden = ranked.count - visible.count
             let speakerLabel = index < speakers.count ? speakers[index].label : "\(index)"
 
@@ -271,6 +289,13 @@ struct SpeakerNamingView: View {
                 }
             }
         }
+    }
+
+    /// Known speakers minus participants (avoids duplicate chips when a known
+    /// speaker is also a meeting participant).
+    private var knownNamesNotInParticipants: [String] {
+        let participantSet = Set(data.participants)
+        return knownSpeakerNames.filter { !participantSet.contains($0) }
     }
 
     private func chipRow(
@@ -355,22 +380,6 @@ struct SpeakerNamingView: View {
         }
     }
 
-    /// Participant names not yet assigned to any other speaker.
-    private func unusedParticipants(currentIndex: Int) -> [String] {
-        Self.unusedParticipants(currentIndex: currentIndex, names: names, participants: data.participants)
-    }
-
-    /// Known speaker names (from `speakers.json`) not in the meeting participant list
-    /// and not already assigned to another row in this dialog.
-    private func unusedKnownNames(currentIndex: Int) -> [String] {
-        Self.unusedKnownNames(
-            currentIndex: currentIndex,
-            names: names,
-            knownNames: knownSpeakerNames,
-            participants: data.participants,
-        )
-    }
-
     private func confirm() {
         player?.stop()
         let mapping = Self.buildSpeakerMapping(speakers: speakers, names: names)
@@ -386,33 +395,24 @@ struct SpeakerNamingView: View {
         speakers.map { $0.autoName ?? "" }
     }
 
-    /// Names assigned to other rows (i.e. excluding `currentIndex`'s own value).
-    /// Empty strings are ignored. Used to avoid suggesting a chip that's already
-    /// in another row.
-    private static func usedNamesExcluding(currentIndex: Int, names: [String]) -> Set<String> {
-        Set(
-            names.enumerated()
-                .filter { $0.offset != currentIndex && !$0.element.isEmpty }
-                .map(\.element),
-        )
-    }
-
-    /// Returns participant names not yet assigned to any other speaker.
-    static func unusedParticipants(
-        currentIndex: Int, names: [String], participants: [String],
-    ) -> [String] {
-        let used = usedNamesExcluding(currentIndex: currentIndex, names: names)
-        return participants.filter { !used.contains($0) }
-    }
-
-    /// Returns known names that are not already in the participant list (avoiding
-    /// duplicate chips) and not yet assigned to another row.
-    static func unusedKnownNames(
-        currentIndex: Int, names: [String], knownNames: [String], participants: [String],
-    ) -> [String] {
-        let participantSet = Set(participants)
-        let used = usedNamesExcluding(currentIndex: currentIndex, names: names)
-        return knownNames.filter { !participantSet.contains($0) && !used.contains($0) }
+    /// Filter names against the user's current input. Empty query → unchanged.
+    /// Non-empty → prefix-of-any-token matches first, then contains-substring,
+    /// both case-insensitive, stable within each tier.
+    static func filterByQuery(names: [String], query: String) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return names }
+        let needle = trimmed.lowercased()
+        var prefix: [String] = []
+        var contains: [String] = []
+        for name in names {
+            let lower = name.lowercased()
+            if lower.split(separator: " ").contains(where: { $0.hasPrefix(needle) }) {
+                prefix.append(name)
+            } else if lower.contains(needle) {
+                contains.append(name)
+            }
+        }
+        return prefix + contains
     }
 
     private enum NameRelevance: Int, Comparable {
@@ -424,20 +424,18 @@ struct SpeakerNamingView: View {
         }
     }
 
-    /// Sort known names by relevance for this row's "Known:" chips.
-    /// Order:
-    /// 1. Names whose first token matches the auto-name (case-insensitive).
-    ///    e.g. autoName "Marwin" → "Marwin Schmidt", "Marwin Müller" first.
-    /// 2. Names sharing a first token with any meeting participant.
-    ///    e.g. participant "Anna Berger" → "Anna Klein" ranks up.
-    /// 3. Remaining names in input order (caller already sorts alphabetically).
-    /// Stable within each tier so the alphabetical input order from
-    /// `SpeakerMatcher.allSpeakerNames()` is preserved.
+    /// Sort known names by relevance for the "Known:" chips:
+    /// 1. First-token matches the auto-name (case-insensitive).
+    /// 2. First-token matches a meeting participant.
+    /// 3. Remaining names in input order.
+    /// Stable within each tier.
     static func rankedKnownNames(
         known: [String], autoName: String?, participants: [String],
     ) -> [String] {
         let autoToken = (autoName.map(firstToken) ?? "").lowercased()
-        let participantTokens = Set(participants.map { firstToken($0).lowercased() }.filter { !$0.isEmpty })
+        let participantTokens = Set(
+            participants.map { firstToken($0).lowercased() }.filter { !$0.isEmpty },
+        )
 
         func relevance(of name: String) -> NameRelevance {
             let token = firstToken(name).lowercased()
@@ -455,7 +453,6 @@ struct SpeakerNamingView: View {
             .map(\.name)
     }
 
-    /// First space-separated token of a name (e.g. "Anna Berger" → "Anna").
     private static func firstToken(_ name: String) -> String {
         name.split(separator: " ").first.map(String.init) ?? name
     }
