@@ -64,7 +64,9 @@ struct TranscriptionSettingsView: View {
     ]
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
+            // swiftlint:disable:next closure_body_length
             Section("Transcription") {
                 Picker("Engine", selection: $settings.transcriptionEngine) {
                     ForEach(TranscriptionEngineSetting.availableCases, id: \.self) { engine in

@@ -20,6 +20,7 @@ struct AdvancedSettingsView: View {
     @State private var accessibilityOK = false
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
             Section("Permissions") {
                 PermissionRow(

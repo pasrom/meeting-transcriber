@@ -10,6 +10,7 @@ struct SpeakersSettingsView: View {
     @State private var showKnownVoices = false
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
             Section("Diarization") {
                 Toggle("Speaker Diarization", isOn: $settings.diarize)
