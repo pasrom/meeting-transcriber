@@ -97,7 +97,6 @@ docs/
   architecture-macos.md        # High-level architecture quick-reference
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol)
   plans/
-    swift-architecture.md      # Detailed Swift pipeline architecture
     appstate-tests.md          # AppState test expansion plan
     2026-03-10-repo-review.md  # Repository review findings
     2026-03-21-workflow-integration-tests.md  # Workflow integration test plan
