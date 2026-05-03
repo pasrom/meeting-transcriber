@@ -264,61 +264,42 @@ final class ProtocolGeneratorTests: XCTestCase {
 
     // MARK: - Custom Prompt Loading
 
-    /// Run a test block with a temporary custom prompt file, restoring the original state afterwards.
-    private func withCustomPromptFile(_ body: (URL) throws -> Void) throws {
-        let url = AppPaths.customPromptFile
-        let fm = FileManager.default
-        let backup = fm.fileExists(atPath: url.path)
-            ? try? String(contentsOf: url, encoding: .utf8)
-            : nil
-        defer {
-            if let backup {
-                try? backup.write(to: url, atomically: true, encoding: .utf8)
-            } else {
-                try? fm.removeItem(at: url)
-            }
-        }
-        try body(url)
+    /// Unique-per-test prompt file path. Avoids racing on the shared
+    /// `AppPaths.customPromptFile` location under `swift test --parallel`.
+    private func makeTempPromptFile() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("test-prompt-\(UUID().uuidString).md")
     }
 
-    func testLoadPromptReturnsDefaultWhenNoFile() throws {
-        try withCustomPromptFile { url in
-            try? FileManager.default.removeItem(at: url)
-
-            let prompt = ProtocolGenerator.loadPrompt()
-            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
-        }
+    func testLoadPromptReturnsDefaultWhenNoFile() {
+        let url = makeTempPromptFile()
+        // File doesn't exist → loadPrompt falls back to the built-in default.
+        XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)
     }
 
     func testLoadPromptReadsCustomFile() throws {
-        try withCustomPromptFile { url in
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let custom = "Custom prompt for testing"
-            try custom.write(to: url, atomically: true, encoding: .utf8)
+        let url = makeTempPromptFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let custom = "Custom prompt for testing"
+        try custom.write(to: url, atomically: true, encoding: .utf8)
 
-            let prompt = ProtocolGenerator.loadPrompt()
-            XCTAssertEqual(prompt, custom)
-        }
+        XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), custom)
     }
 
     func testLoadPromptIgnoresEmptyFile() throws {
-        try withCustomPromptFile { url in
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try "".write(to: url, atomically: true, encoding: .utf8)
+        let url = makeTempPromptFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "".write(to: url, atomically: true, encoding: .utf8)
 
-            let prompt = ProtocolGenerator.loadPrompt()
-            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
-        }
+        XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)
     }
 
     func testLoadPromptIgnoresWhitespaceOnlyFile() throws {
-        try withCustomPromptFile { url in
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try "   \n  \n  ".write(to: url, atomically: true, encoding: .utf8)
+        let url = makeTempPromptFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try "   \n  \n  ".write(to: url, atomically: true, encoding: .utf8)
 
-            let prompt = ProtocolGenerator.loadPrompt()
-            XCTAssertEqual(prompt, ProtocolGenerator.protocolPrompt)
-        }
+        XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)
     }
 
     #if !APPSTORE
