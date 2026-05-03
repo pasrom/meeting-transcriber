@@ -164,15 +164,17 @@ jobs:
           generateReleaseNotesPreviousTag: ${{ steps.prev.outputs.tag }}
           prerelease: ${{ steps.version.outputs.prerelease }}
           body: |
-            ## MeetingTranscriber ${{ steps.version.outputs.version }}
+            ## MeetingTranscriber ${{ steps.version.outputs.version }}${{ steps.version.outputs.prerelease == 'true' && ' (Pre-release)' || '' }}
 
             ### Installation
 
-            **Via Homebrew (recommended):**
+            **Via Homebrew (${{ steps.version.outputs.prerelease == 'true' && 'Beta channel' || 'recommended' }}):**
             ```bash
             brew tap pasrom/meeting-transcriber
-            brew install --cask meeting-transcriber
+            brew install --cask ${{ steps.version.outputs.prerelease == 'true' && 'meeting-transcriber@beta' || 'meeting-transcriber' }}
             ```
+
+            ${{ steps.version.outputs.prerelease == 'true' && '> Release candidate from the **beta channel**. The stable and beta casks conflict — uninstall one before installing the other.' || '' }}
 
             **Manual:**
             1. Download the DMG below
