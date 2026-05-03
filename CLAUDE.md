@@ -266,6 +266,13 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Action endpoints post `Notification.Name.showSettings` / `.closeSettings` that the `@main` scene observes and routes to `bringWindowToFront(id: "settings")` / `closeWindow(id: "settings")` — same path the menu bar uses.
 - `tools/mt-cli` is the matching CLI client; `scripts/test_rpc.sh` is a live end-to-end smoketest. In-process integration tests live in `Tests/DebugRPCServerIntegrationTests.swift` (real sockets via OS-assigned port exposed through `DebugRPCServer.boundPort`).
 
+**Record-only mode:**
+- When `AppSettings.recordOnly` is true, `WatchLoop.enqueueRecording()` moves the dual-source WAVs into `<settings.effectiveOutputDir>/recordings/` and writes a `<basename>_meta.json` `RecordingSidecar` next to them, skipping the entire post-processing pipeline (VAD, transcription, diarization, protocol generation). Both call sites — auto-detected meetings (`handleMeeting`) and manual recordings (`stopManualRecording`) — flow through the same branch. The destination is wrapped in `startAccessingSecurityScopedResource()` to honour user-picked Output Folder bookmarks (relevant for the App Store sandboxed build).
+- Sidecar JSON contains: `version` (currently `RecordingSidecar.currentVersion = 1`), `title`, `appName`, `startedAt`/`stoppedAt` (ISO 8601, reconstructed from `recordingStart` uptime), `participants`, `micDelaySeconds`, `files` (basenames only). Optional `app` / `mic` filenames are omitted when nil. Suffix constants live as static lets on the relevant types: `RecordingSidecar.filenameSuffix = "_meta.json"`, `DualSourceRecorder.mixFilenameSuffix = "_mix.wav"`.
+- Intended for fleet topologies where macOS clients capture and a separate machine (e.g. Linux GPU host) processes the audio via Syncthing or similar.
+- Menu bar: the small red dot is rendered as a **persistent overlay** (`MenuBarIcon.image(..., recordOnlyOverlay:)`) on top of *whatever* primary badge `BadgeKind.compute(...)` would otherwise show — idle, recording, transcribing, etc. — so the mode is always visible. Permission overlay (red exclamation) takes precedence when both apply, since a permission problem actually breaks recording. Settings tabs dim Transcription / Protocol / VAD / Diarization sections via `View.recordOnlyDisabled(_:)` and show a banner in the General tab pointing at the active output dir.
+- Sidecar write failures notify the user via `NotificationManager` (injected as `any AppNotifying` on `WatchLoop`) since record-only does not transition state to `.error`.
+
 ## Critical Notes
 
 - AudioTapLib (CATapDescription) requires macOS 14.2+ — compiled as SPM library, no separate binary needed
