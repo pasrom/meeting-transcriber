@@ -4,36 +4,40 @@ import XCTest
 
 @MainActor
 final class SettingsViewTests: XCTestCase {
-    /// Keys that other test classes may have written to the shared on-disk
-    /// plist; cleared at setUp + tearDown so parallel test processes don't
-    /// leak state into each other.
-    private static let pollutedDefaultsKeys = [
-        "transcriptionEngine", "protocolProvider",
-        "diarize", "vadEnabled", "diarizerMode",
-        "whisperKitModel", "whisperKitLanguage",
-        "qwen3Language", "customVocabularyPath",
-        "checkForUpdates", "includePreReleases",
-        "debugRPCEnabled",
-    ]
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var defaults: UserDefaults!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var testSuiteName: String!
 
+    /// Per-test isolated UserDefaults suite — same pattern as AppSettingsTests.
+    /// Avoids `swift test --parallel` plist races AND prevents test pollution
+    /// from leaking into the dev app's `.standard` plist when a test process
+    /// is killed before tearDown runs.
     override func setUp() {
         super.setUp()
-        for key in Self.pollutedDefaultsKeys {
-            UserDefaults.standard.removeObject(forKey: key)
+        testSuiteName = "SettingsViewTests-\(getpid())-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+            XCTFail("Could not create test UserDefaults suite")
+            return
         }
+        defaults = suite
     }
 
     override func tearDown() {
-        for key in Self.pollutedDefaultsKeys {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
+        defaults?.removePersistentDomain(forName: testSuiteName)
+        defaults = nil
+        testSuiteName = nil
         super.tearDown()
     }
 
     // MARK: - Helpers
 
+    private func makeSettings() -> AppSettings {
+        AppSettings(defaults: defaults)
+    }
+
     private func makeSettingsView(
-        settings: AppSettings = AppSettings(),
+        settings: AppSettings? = nil,
         updateChecker: UpdateChecker? = nil,
     ) -> SettingsView {
         let qwen3: (any TranscribingEngine)? = {
@@ -41,7 +45,7 @@ final class SettingsViewTests: XCTestCase {
             return nil
         }()
         return SettingsView(
-            settings: settings,
+            settings: settings ?? makeSettings(),
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
             qwen3Engine: qwen3,
@@ -50,32 +54,32 @@ final class SettingsViewTests: XCTestCase {
     }
 
     private func makeGeneral(
-        settings: AppSettings = AppSettings(),
+        settings: AppSettings? = nil,
         updateChecker: UpdateChecker? = nil,
     ) -> GeneralSettingsView {
-        GeneralSettingsView(settings: settings, updateChecker: updateChecker)
+        GeneralSettingsView(settings: settings ?? makeSettings(), updateChecker: updateChecker)
     }
 
-    private func makeAudio(settings: AppSettings = AppSettings()) -> AudioSettingsView {
-        AudioSettingsView(settings: settings)
+    private func makeAudio(settings: AppSettings? = nil) -> AudioSettingsView {
+        AudioSettingsView(settings: settings ?? makeSettings())
     }
 
-    private func makeTranscription(settings: AppSettings = AppSettings()) -> TranscriptionSettingsView {
+    private func makeTranscription(settings: AppSettings? = nil) -> TranscriptionSettingsView {
         let qwen3: (any TranscribingEngine)? = {
             if #available(macOS 15, *) { return Qwen3AsrEngine() }
             return nil
         }()
         return TranscriptionSettingsView(
-            settings: settings,
+            settings: settings ?? makeSettings(),
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
             qwen3Engine: qwen3,
         )
     }
 
-    private func makeSpeakers(settings: AppSettings = AppSettings()) -> SpeakersSettingsView {
+    private func makeSpeakers(settings: AppSettings? = nil) -> SpeakersSettingsView {
         SpeakersSettingsView(
-            settings: settings,
+            settings: settings ?? makeSettings(),
             recognitionStatsLog: RecognitionStatsLog(),
             enrollmentDiarizerFactory: nil,
             namingDialogActive: false,
@@ -83,12 +87,12 @@ final class SettingsViewTests: XCTestCase {
         )
     }
 
-    private func makeOutput(settings: AppSettings = AppSettings()) -> OutputSettingsView {
-        OutputSettingsView(settings: settings)
+    private func makeOutput(settings: AppSettings? = nil) -> OutputSettingsView {
+        OutputSettingsView(settings: settings ?? makeSettings())
     }
 
-    private func makeAdvanced(settings: AppSettings = AppSettings()) -> AdvancedSettingsView {
-        AdvancedSettingsView(settings: settings)
+    private func makeAdvanced(settings: AppSettings? = nil) -> AdvancedSettingsView {
+        AdvancedSettingsView(settings: settings ?? makeSettings())
     }
 
     // MARK: - Top-level SettingsView
@@ -129,7 +133,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testPreReleaseToggleShownWhenCheckEnabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.checkForUpdates = true
         let checker = UpdateChecker(provider: MockUpdateProvider())
         let body = try makeGeneral(settings: settings, updateChecker: checker).inspect()
@@ -137,7 +141,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testPreReleaseToggleHiddenWhenCheckDisabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.checkForUpdates = false
         let checker = UpdateChecker(provider: MockUpdateProvider())
         let body = try makeGeneral(settings: settings, updateChecker: checker).inspect()
@@ -157,14 +161,14 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testVADThresholdShownWhenEnabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.vadEnabled = true
         let body = try makeAudio(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Threshold:"))
     }
 
     func testVADThresholdHiddenWhenDisabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.vadEnabled = false
         let body = try makeAudio(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(text: "Threshold:"))
@@ -183,14 +187,14 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testWhisperKitLanguagePickerShownForWhisperKit() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Language"))
     }
 
     func testWhisperKitModelPickerShownForWhisperKit() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
@@ -198,7 +202,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testParakeetHidesLanguagePicker() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
         let body = try makeTranscription(settings: settings).inspect()
         // Parakeet has no language picker — verify the engine section is still present via the Engine picker
@@ -206,21 +210,21 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testParakeetShowsCustomVocabularyField() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
     }
 
     func testParakeetVocabularyHiddenForWhisperKit() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(text: "Custom vocabulary file"))
     }
 
     func testWhisperKitPickersHiddenForParakeet() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
@@ -229,7 +233,7 @@ final class SettingsViewTests: XCTestCase {
 
     func testQwen3LanguagePickerShownWhenQwen3Selected() throws {
         guard #available(macOS 15, *) else { return }
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.transcriptionEngine = .qwen3
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Language"))
@@ -244,35 +248,35 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testDiarizeEnabledShowsExpectedSpeakers() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.diarize = true
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Expected Speakers"))
     }
 
     func testDiarizerModeHiddenWhenDiarizeDisabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.diarize = false
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(text: "Expected Speakers"))
     }
 
     func testMicSectionShownWhenMicEnabled() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.noMic = false
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Mic Speaker Name"))
     }
 
     func testMicSectionHiddenWhenNoMic() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.noMic = true
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(text: "Mic Speaker Name"))
     }
 
     func testSortformerWarningShownWhenSelected() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.diarize = true
         settings.diarizerMode = .sortformer
         let body = try makeSpeakers(settings: settings).inspect()
@@ -282,7 +286,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testSortformerWarningHiddenForOfflineMode() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.diarize = true
         settings.diarizerMode = .offline
         let body = try makeSpeakers(settings: settings).inspect()
@@ -300,7 +304,7 @@ final class SettingsViewTests: XCTestCase {
 
     #if !APPSTORE
         func testClaudeCLIProviderShowsBinaryPicker() throws {
-            let settings = AppSettings()
+            let settings = makeSettings()
             settings.protocolProvider = .claudeCLI
             let body = try makeOutput(settings: settings).inspect()
             XCTAssertNoThrow(try body.find(text: "Claude CLI"))
@@ -308,7 +312,7 @@ final class SettingsViewTests: XCTestCase {
     #endif
 
     func testOpenAIProviderShowsEndpointField() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.protocolProvider = .openAICompatible
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Endpoint"))
@@ -317,21 +321,21 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testOpenAIModelFieldShown() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.protocolProvider = .openAICompatible
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
     }
 
     func testNoneProviderShowsTranscriptOnlyMessage() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.protocolProvider = .none
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Only the raw transcript will be saved — no LLM summarization."))
     }
 
     func testNoneProviderHidesEndpointField() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.protocolProvider = .none
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(text: "Endpoint"))
@@ -348,7 +352,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testResetButtonDisabledWhenNoCustomDir() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.clearCustomOutputDir()
         let body = try makeOutput(settings: settings).inspect()
         let button = try body.find(button: "Reset")
@@ -376,7 +380,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testOpenAIAPIKeyCaptionShown() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.protocolProvider = .openAICompatible
         let body = try makeOutput(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Leave empty if your local server doesn't require authentication"))
@@ -413,7 +417,7 @@ final class SettingsViewTests: XCTestCase {
         }
 
         func testDebugRPCToggleBindsToSetting() throws {
-            let settings = AppSettings()
+            let settings = makeSettings()
             settings.debugRPCEnabled = false
             let view = AdvancedSettingsView(settings: settings)
             let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
@@ -432,21 +436,21 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testRecordOnlyBannerHiddenWhenOff() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = false
         let body = try makeGeneral(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: "recordOnlyBanner"))
     }
 
     func testRecordOnlyBannerVisibleWhenOn() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = true
         let body = try makeGeneral(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: "recordOnlyBanner"))
     }
 
     func testRecordOnlyDisablesTranscriptionSection() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = true
         let body = try makeTranscription(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "transcriptionSection")
@@ -454,7 +458,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testRecordOnlyDisablesProtocolSection() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = true
         let body = try makeOutput(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "protocolSection")
@@ -462,7 +466,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testRecordOnlyDisablesDiarizationSection() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = true
         let body = try makeSpeakers(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "diarizationSection")
@@ -470,7 +474,7 @@ final class SettingsViewTests: XCTestCase {
     }
 
     func testRecordOnlyDisablesVadSection() throws {
-        let settings = AppSettings()
+        let settings = makeSettings()
         settings.recordOnly = true
         let body = try makeAudio(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "vadSection")
