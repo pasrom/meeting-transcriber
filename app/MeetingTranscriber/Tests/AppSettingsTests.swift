@@ -224,6 +224,17 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "includePreReleases"))
     }
 
+    // MARK: - Record Only
+
+    func test_recordOnly_defaultsToFalse() {
+        XCTAssertFalse(settings.recordOnly)
+    }
+
+    func test_recordOnly_persistsToUserDefaults() {
+        settings.recordOnly = true
+        XCTAssertTrue(defaults.bool(forKey: "recordOnly"))
+    }
+
     // MARK: - Keychain
 
     func testKeychainRoundTrip() {

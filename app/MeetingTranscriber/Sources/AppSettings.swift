@@ -107,6 +107,13 @@ final class AppSettings {
         didSet { defaults.set(noMic, forKey: "noMic") }
     }
 
+    /// When true, skip the entire post-recording pipeline (VAD, transcription,
+    /// diarization, protocol generation) and write a `<slug>_meta.json` sidecar
+    /// next to the WAVs for an external pipeline to consume.
+    var recordOnly: Bool {
+        didSet { defaults.set(recordOnly, forKey: "recordOnly") }
+    }
+
     /// CoreAudio device UID for mic selection. Empty string = system default.
     var micDeviceUID: String {
         didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
@@ -315,6 +322,7 @@ final class AppSettings {
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0
         endGrace = defaults.object(forKey: "endGrace") as? Double ?? 15.0
         noMic = defaults.object(forKey: "noMic") as? Bool ?? false
+        recordOnly = defaults.object(forKey: "recordOnly") as? Bool ?? false
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
 
