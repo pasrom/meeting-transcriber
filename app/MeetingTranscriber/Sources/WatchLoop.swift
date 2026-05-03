@@ -54,7 +54,10 @@ class WatchLoop {
     let audioDebugLogging: () -> Bool
     /// Dynamic accessor — when true, skip the post-processing pipeline and
     /// instead write a `<basename>_meta.json` sidecar next to the recording.
-    let recordOnly: @MainActor () -> Bool
+    let recordOnly: () -> Bool
+    /// Surface user-facing failures (e.g. sidecar write errors) that don't
+    /// transition state to `.error`. Defaults to a silent no-op for tests.
+    let notifier: any AppNotifying
 
     private var watchTask: Task<Void, Never>?
 
@@ -71,7 +74,8 @@ class WatchLoop {
         noMic: Bool = false,
         micDeviceUID: String? = nil,
         audioDebugLogging: @escaping () -> Bool = { false },
-        recordOnly: @MainActor @escaping () -> Bool = { false },
+        recordOnly: @escaping () -> Bool = { false },
+        notifier: any AppNotifying = SilentNotifier(),
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -83,6 +87,7 @@ class WatchLoop {
         self.micDeviceUID = micDeviceUID
         self.audioDebugLogging = audioDebugLogging
         self.recordOnly = recordOnly
+        self.notifier = notifier
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -381,6 +386,13 @@ class WatchLoop {
         } catch {
             logger.error("Failed to write record-only sidecar: \(error.localizedDescription)")
             lastError = "Sidecar write failed: \(error.localizedDescription)"
+            // Record-only skips state transitions, so `lastError` alone is
+            // never surfaced. Notify directly so the user learns about the
+            // silent data-loss for downstream pipelines.
+            notifier.notify(
+                title: "Record-only sidecar failed",
+                body: error.localizedDescription,
+            )
         }
     }
 
