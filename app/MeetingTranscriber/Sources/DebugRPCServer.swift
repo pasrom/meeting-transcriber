@@ -107,6 +107,13 @@
             }
         }
 
+        /// Cancel the listener and free the port. Idempotent.
+        func stop() {
+            listener?.cancel()
+            listener = nil
+            boundPort = nil
+        }
+
         // MARK: - Connection handling
 
         private func handle(_ connection: NWConnection) {

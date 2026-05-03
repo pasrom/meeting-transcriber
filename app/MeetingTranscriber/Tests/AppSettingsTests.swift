@@ -136,6 +136,18 @@ final class AppSettingsTests: XCTestCase {
             settings.claudeBin = "claude-work"
             XCTAssertEqual(defaults.string(forKey: "claudeBin"), "claude-work")
         }
+
+        func testDebugRPCEnabledDefault() {
+            XCTAssertFalse(settings.debugRPCEnabled)
+        }
+
+        func testDebugRPCEnabledPersistence() {
+            settings.debugRPCEnabled = true
+            XCTAssertTrue(defaults.bool(forKey: "debugRPCEnabled"))
+            // Verify a fresh instance reads it back from the same suite.
+            let fresh = AppSettings(defaults: defaults)
+            XCTAssertTrue(fresh.debugRPCEnabled)
+        }
     #endif
 
     // MARK: - WhisperKit Model

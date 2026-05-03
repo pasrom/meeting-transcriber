@@ -65,6 +65,17 @@ struct AdvancedSettingsView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                #if !APPSTORE
+                    Toggle("Debug RPC Server", isOn: $settings.debugRPCEnabled)
+                    Text(
+                        "Exposes pipeline state on 127.0.0.1:9876 for `mt-cli`."
+                            + " Localhost-only, bearer-token auth. Off by default;"
+                            + " enable only when you need shell-driven inspection.",
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                #endif
             }
 
             Section("About") {

@@ -17,12 +17,16 @@ machen" / "ist das im Menü sichtbar".
 - You're debugging a UI bug and would otherwise have to ask the user to describe state
 - You're verifying a fix end-to-end after editing code
 
-Don't use it for production debugging — RPC is `#if !APPSTORE` only and gated
-by the `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var.
+Don't use it for production debugging — RPC is `#if !APPSTORE` only.
 
 ## How to enable
 
-The user must launch the dev app with the env flag set:
+Either persistent (preferred for repeated dev sessions):
+
+- Settings → Advanced → toggle **Debug RPC Server** on. The server starts
+  immediately and survives app relaunches.
+
+Or per-session (one-shot, e.g. for `scripts/test_rpc.sh`):
 
 ```bash
 MEETINGTRANSCRIBER_DEBUG_RPC=1 ./scripts/run_app.sh
@@ -51,8 +55,9 @@ cd tools/mt-cli && swift build
 
 ## Failure modes
 
-- **"app is not running on http://127.0.0.1:9876"** → user hasn't launched
-  the dev app, or didn't set the env flag. Ask them to run
+- **"app is not running on http://127.0.0.1:9876"** → either the dev app
+  isn't running, or the toggle / env flag was off when it launched. Ask the
+  user to enable Settings → Advanced → Debug RPC Server, or relaunch with
   `MEETINGTRANSCRIBER_DEBUG_RPC=1 ./scripts/run_app.sh`.
 - **"RPC token not found"** → same as above; the token is created on first
   successful start.
