@@ -46,6 +46,10 @@ class DualSourceRecorder: RecordingProvider {
         AppPaths.recordingsDir
     }
 
+    /// Suffix on the merged-output WAV file, used by downstream code (the
+    /// record-only sidecar writer) to recover the recording basename.
+    static let mixFilenameSuffix = "_mix.wav"
+
     /// Remove leftover `*_app_raw.tmp` files from a previous crash.
     static func cleanupTempFiles(recordingsDir: URL = AppPaths.recordingsDir) {
         let fm = FileManager.default
@@ -216,7 +220,7 @@ class DualSourceRecorder: RecordingProvider {
         // ── Mix via AudioMixer ──
         // Both app and mic are already at 16kHz at this point.
         let mixRate = targetRate
-        let mixPath = recDir.appendingPathComponent("\(ts)_mix.wav")
+        let mixPath = recDir.appendingPathComponent("\(ts)\(Self.mixFilenameSuffix)")
 
         if let app = appPath, let mic = micPath {
             // Delegate mute masking, echo suppression, delay alignment, and mixing

@@ -213,6 +213,9 @@ final class AppState {
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     audioDebugLogging: { [settings] in settings.audioDebugLogging },
                     recordOnly: { [settings] in settings.recordOnly },
+                    recordOnlyOutputDir: { [settings] in
+                        settings.effectiveOutputDir.appendingPathComponent("recordings")
+                    },
                     notifier: notifier,
                 )
 
@@ -268,6 +271,9 @@ final class AppState {
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                 audioDebugLogging: { [settings] in settings.audioDebugLogging },
                 recordOnly: { [settings] in settings.recordOnly },
+                recordOnlyOutputDir: { [settings] in
+                    settings.effectiveOutputDir.appendingPathComponent("recordings")
+                },
                 notifier: notifier,
             )
             watchLoop = loop

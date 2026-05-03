@@ -215,7 +215,7 @@ struct OutputSettingsView: View {
         hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
     }
 
-    private func testConnection() {
+    func testConnection() {
         testingConnection = true
         didAttemptConnectionTest = true
         connectionTestResult = nil

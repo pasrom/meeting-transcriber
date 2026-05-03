@@ -54,7 +54,7 @@ struct GeneralSettingsView: View {
     }
 
     private var recordOnlyBanner: some View {
-        let path = AppPaths.recordingsDir.path
+        let path = settings.effectiveOutputDir.appendingPathComponent("recordings").path
         let home = NSHomeDirectory()
         let display = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
         return Label {

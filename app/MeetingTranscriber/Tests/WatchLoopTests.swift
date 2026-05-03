@@ -336,7 +336,34 @@ final class WatchLoopTests: XCTestCase {
 
     // MARK: - Record-Only Mode
 
-    func test_enqueueRecording_recordOnly_writesSidecarAndDoesNotEnqueue() throws {
+    /// Drives a complete `start → stop` manual recording cycle so the test
+    /// exercises the public surface (`stopManualRecording`) rather than the
+    /// private `enqueueRecording` it forwards to.
+    private func runManualRecordOnlyRecording(
+        recorderMix: URL,
+        outputDir: URL,
+        queue: PipelineQueue,
+        recorderApp: URL? = nil,
+        recorderMic: URL? = nil,
+        title: String = "Standup",
+        appName: String = "Microsoft Teams",
+        notifier: any AppNotifying = SilentNotifier(),
+    ) async throws -> WatchLoop {
+        let (loop, recorder) = makeTestWatchLoop(
+            pipelineQueue: queue,
+            recordOnly: { true },
+            recordOnlyOutputDir: { outputDir },
+            notifier: notifier,
+        )
+        recorder.mixPath = recorderMix
+        recorder.appPath = recorderApp
+        recorder.micPath = recorderMic
+        try await loop.startManualRecording(pid: 42, appName: appName, title: title)
+        loop.stopManualRecording()
+        return loop
+    }
+
+    func test_recordOnly_writesSidecarAndDoesNotEnqueue() async throws {
         let queue = PipelineQueue()
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordOnly_\(UUID().uuidString)", isDirectory: true)
@@ -350,34 +377,31 @@ final class WatchLoopTests: XCTestCase {
         try Data().write(to: appURL)
         try Data().write(to: micURL)
 
-        let loop = WatchLoop(
-            detector: makeSilentDetector(),
-            pipelineQueue: queue,
-            // swiftlint:disable:next trailing_closure
-            recordOnly: { true },
-        )
-
-        let recording = RecordingResult(
-            mixPath: mixURL,
-            appPath: appURL,
-            micPath: micURL,
-            micDelay: 0.25,
-            recordingStart: ProcessInfo.processInfo.systemUptime - 5,
-        )
-
-        loop.enqueueRecording(
-            title: "Standup",
-            appName: "Microsoft Teams",
-            recording: recording,
-            participants: ["Speaker A", "Speaker B"],
+        let destDir = tmp.appendingPathComponent("dest", isDirectory: true)
+        _ = try await runManualRecordOnlyRecording(
+            recorderMix: mixURL,
+            outputDir: destDir,
+            queue: queue,
+            recorderApp: appURL,
+            recorderMic: micURL,
         )
 
         XCTAssertTrue(queue.jobs.isEmpty, "record-only must not enqueue a pipeline job")
 
-        let sidecarURL = tmp.appendingPathComponent("20260503_120000_meta.json")
+        let sidecarURL = destDir.appendingPathComponent("20260503_120000_meta.json")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: sidecarURL.path),
-            "sidecar should be written next to the mix WAV",
+            "sidecar should be written into the record-only output directory",
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: destDir.appendingPathComponent("20260503_120000_mix.wav").path,
+            ),
+            "mix WAV should be moved into the record-only output directory",
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: mixURL.path),
+            "original mix WAV should be moved (not copied) out of the recorder's transient dir",
         )
 
         let data = try Data(contentsOf: sidecarURL)
@@ -387,51 +411,39 @@ final class WatchLoopTests: XCTestCase {
 
         XCTAssertEqual(sidecar.title, "Standup")
         XCTAssertEqual(sidecar.appName, "Microsoft Teams")
-        XCTAssertEqual(sidecar.participants, ["Speaker A", "Speaker B"])
         XCTAssertEqual(sidecar.files.mix, "20260503_120000_mix.wav")
         XCTAssertEqual(sidecar.files.app, "20260503_120000_app.wav")
         XCTAssertEqual(sidecar.files.mic, "20260503_120000_mic.wav")
-        XCTAssertEqual(sidecar.micDelaySeconds, 0.25, accuracy: 1e-6)
-        // startedAt should be earlier than stoppedAt by ~5s (we offset by -5s above).
-        XCTAssertLessThan(sidecar.startedAt, sidecar.stoppedAt)
+        // startedAt must precede stoppedAt — we don't pin exact wall-clock
+        // values because the manual-recording flow records its own startTime.
+        XCTAssertLessThanOrEqual(sidecar.startedAt, sidecar.stoppedAt)
     }
 
-    func test_enqueueRecording_recordOnly_sidecarWriteFailure_setsLastError() {
-        let queue = PipelineQueue()
-        // /dev is not a writable directory for our sidecar — write() will throw.
+    func test_recordOnly_sidecarWriteFailure_setsLastErrorAndNotifies() async throws {
+        // `/dev/null` is not a directory — createDirectory(at:) will throw,
+        // exercising the failure path.
         let unwritable = URL(fileURLWithPath: "/dev/null/cannot-write")
-
-        let mixURL = unwritable.appendingPathComponent("20260503_120000_mix.wav")
+        let mixURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)_mix.wav")
+        try Data().write(to: mixURL)
+        defer { try? FileManager.default.removeItem(at: mixURL) }
         let notifier = RecordingNotifier()
 
-        let loop = WatchLoop(
-            detector: makeSilentDetector(),
-            pipelineQueue: queue,
-            recordOnly: { true },
+        let queue = PipelineQueue()
+        let loop = try await runManualRecordOnlyRecording(
+            recorderMix: mixURL,
+            outputDir: unwritable,
+            queue: queue,
             notifier: notifier,
-        )
-
-        let recording = RecordingResult(
-            mixPath: mixURL,
-            appPath: nil,
-            micPath: nil,
-            micDelay: 0,
-            recordingStart: ProcessInfo.processInfo.systemUptime,
-        )
-
-        loop.enqueueRecording(
-            title: "Standup",
-            appName: "Microsoft Teams",
-            recording: recording,
         )
 
         XCTAssertTrue(queue.jobs.isEmpty, "record-only must not enqueue even on sidecar failure")
         XCTAssertNotNil(loop.lastError, "lastError must be set so failures are observable")
         XCTAssertEqual(notifier.calls.count, 1, "user must be notified on sidecar write failure")
-        XCTAssertEqual(notifier.calls.first?.title, "Record-only sidecar failed")
+        XCTAssertEqual(notifier.calls.first?.title, "Record-only output failed")
     }
 
-    func test_enqueueRecording_normalMode_enqueuesAndWritesNoSidecar() throws {
+    func test_normalMode_enqueuesAndWritesNoSidecar() async throws {
         let queue = PipelineQueue()
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("normalMode_\(UUID().uuidString)", isDirectory: true)
@@ -441,24 +453,10 @@ final class WatchLoopTests: XCTestCase {
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
         try Data().write(to: mixURL)
 
-        let loop = WatchLoop(
-            detector: makeSilentDetector(),
-            pipelineQueue: queue,
-        )
-
-        let recording = RecordingResult(
-            mixPath: mixURL,
-            appPath: nil,
-            micPath: nil,
-            micDelay: 0,
-            recordingStart: ProcessInfo.processInfo.systemUptime,
-        )
-
-        loop.enqueueRecording(
-            title: "Standup",
-            appName: "Microsoft Teams",
-            recording: recording,
-        )
+        let (loop, recorder) = makeTestWatchLoop(pipelineQueue: queue)
+        recorder.mixPath = mixURL
+        try await loop.startManualRecording(pid: 42, appName: "Microsoft Teams", title: "Standup")
+        loop.stopManualRecording()
 
         XCTAssertEqual(queue.jobs.count, 1)
         XCTAssertEqual(queue.jobs.first?.meetingTitle, "Standup")

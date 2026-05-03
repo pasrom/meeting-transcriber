@@ -55,6 +55,11 @@ class WatchLoop {
     /// Dynamic accessor — when true, skip the post-processing pipeline and
     /// instead write a `<basename>_meta.json` sidecar next to the recording.
     let recordOnly: () -> Bool
+    /// Dynamic accessor — destination directory for record-only output (WAVs +
+    /// sidecar JSON). Defaults to the app's transient `recordingsDir`; in
+    /// production wired to `<effectiveOutputDir>/recordings/` so users can
+    /// point Syncthing or similar at a visible folder.
+    let recordOnlyOutputDir: () -> URL
     /// Surface user-facing failures (e.g. sidecar write errors) that don't
     /// transition state to `.error`. Defaults to a silent no-op for tests.
     let notifier: any AppNotifying
@@ -75,6 +80,7 @@ class WatchLoop {
         micDeviceUID: String? = nil,
         audioDebugLogging: @escaping () -> Bool = { false },
         recordOnly: @escaping () -> Bool = { false },
+        recordOnlyOutputDir: @escaping () -> URL = { AppPaths.recordingsDir },
         notifier: any AppNotifying = SilentNotifier(),
     ) {
         self.detector = detector
@@ -87,6 +93,7 @@ class WatchLoop {
         self.micDeviceUID = micDeviceUID
         self.audioDebugLogging = audioDebugLogging
         self.recordOnly = recordOnly
+        self.recordOnlyOutputDir = recordOnlyOutputDir
         self.notifier = notifier
     }
 
@@ -315,7 +322,7 @@ class WatchLoop {
 
     // MARK: - Helpers
 
-    func enqueueRecording(
+    private func enqueueRecording(
         title: String,
         appName: String,
         recording: RecordingResult,
@@ -360,40 +367,63 @@ class WatchLoop {
         let stoppedAt = Date()
         let startedAt = wallClockDate(forUptime: recording.recordingStart, now: stoppedAt)
 
-        let dir = recording.mixPath.deletingLastPathComponent()
         let mixName = recording.mixPath.lastPathComponent
-        let basename: String = if mixName.hasSuffix("_mix.wav") {
-            String(mixName.dropLast("_mix.wav".count))
+        let mixSuffix = DualSourceRecorder.mixFilenameSuffix
+        let basename: String = if mixName.hasSuffix(mixSuffix) {
+            String(mixName.dropLast(mixSuffix.count))
         } else {
             recording.mixPath.deletingPathExtension().lastPathComponent
         }
 
-        let sidecar = RecordingSidecar(
-            title: title,
-            appName: appName,
-            startedAt: startedAt,
-            stoppedAt: stoppedAt,
-            participants: participants,
-            micDelaySeconds: recording.micDelay,
-            mixFilename: mixName,
-            appFilename: recording.appPath?.lastPathComponent,
-            micFilename: recording.micPath?.lastPathComponent,
-        )
-
         do {
-            try sidecar.write(toDirectory: dir, basename: basename)
-            logger.info("Record-only: wrote sidecar for \(title)")
+            let destDir = recordOnlyOutputDir()
+            // The destination may be a user-chosen folder reached via a security-scoped
+            // bookmark (App Store sandboxed build, or any custom Output Folder pick).
+            // Without start/stopAccessingSecurityScopedResource the writes would silently
+            // fail. Other writers (ProtocolGenerator, PipelineQueue) follow the same pattern.
+            let accessing = destDir.startAccessingSecurityScopedResource()
+            defer { if accessing { destDir.stopAccessingSecurityScopedResource() } }
+
+            try FileManager.default.createDirectory(
+                at: destDir, withIntermediateDirectories: true,
+            )
+            let movedMix = try Self.move(recording.mixPath, into: destDir)
+            let movedApp = try recording.appPath.map { try Self.move($0, into: destDir) }
+            let movedMic = try recording.micPath.map { try Self.move($0, into: destDir) }
+
+            let sidecar = RecordingSidecar(
+                title: title,
+                appName: appName,
+                startedAt: startedAt,
+                stoppedAt: stoppedAt,
+                participants: participants,
+                micDelaySeconds: recording.micDelay,
+                mixFilename: movedMix.lastPathComponent,
+                appFilename: movedApp?.lastPathComponent,
+                micFilename: movedMic?.lastPathComponent,
+            )
+            try sidecar.write(toDirectory: destDir, basename: basename)
+            logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title)")
         } catch {
-            logger.error("Failed to write record-only sidecar: \(error.localizedDescription)")
-            lastError = "Sidecar write failed: \(error.localizedDescription)"
+            logger.error("Record-only: \(error.localizedDescription)")
+            lastError = "Record-only output failed: \(error.localizedDescription)"
             // Record-only skips state transitions, so `lastError` alone is
             // never surfaced. Notify directly so the user learns about the
             // silent data-loss for downstream pipelines.
             notifier.notify(
-                title: "Record-only sidecar failed",
+                title: "Record-only output failed",
                 body: error.localizedDescription,
             )
         }
+    }
+
+    /// Move a file into `destDir`, returning its new URL. If a file with the
+    /// same name already exists at the destination it is overwritten.
+    private static func move(_ source: URL, into destDir: URL) throws -> URL {
+        let dest = destDir.appendingPathComponent(source.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.moveItem(at: source, to: dest)
+        return dest
     }
 
     private func transition(to newState: State) {

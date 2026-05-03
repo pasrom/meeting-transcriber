@@ -15,6 +15,9 @@ func makeSilentDetector() -> MeetingDetector {
 @MainActor
 func makeTestWatchLoop(
     pipelineQueue: PipelineQueue? = nil,
+    recordOnly: @escaping () -> Bool = { false },
+    recordOnlyOutputDir: @escaping () -> URL = { AppPaths.recordingsDir },
+    notifier: any AppNotifying = SilentNotifier(),
 ) -> (WatchLoop, MockRecorder) {
     let recorder = MockRecorder()
     recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
@@ -24,6 +27,9 @@ func makeTestWatchLoop(
         pipelineQueue: pipelineQueue,
         pollInterval: 0.05,
         endGracePeriod: 0.1,
+        recordOnly: recordOnly,
+        recordOnlyOutputDir: recordOnlyOutputDir,
+        notifier: notifier,
     )
     loop.permissionChecker = {
         HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
