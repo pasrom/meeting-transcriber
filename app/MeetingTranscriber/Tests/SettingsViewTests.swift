@@ -13,6 +13,7 @@ final class SettingsViewTests: XCTestCase {
         "whisperKitModel", "whisperKitLanguage",
         "qwen3Language", "customVocabularyPath",
         "checkForUpdates", "includePreReleases",
+        "debugRPCEnabled",
     ]
 
     override func setUp() {
@@ -404,6 +405,24 @@ final class SettingsViewTests: XCTestCase {
         let body = try makeAdvanced().inspect()
         XCTAssertNoThrow(try body.find(text: "ffmpeg"))
     }
+
+    #if !APPSTORE
+        func testDebugRPCToggleExists() throws {
+            let body = try makeAdvanced().inspect()
+            XCTAssertNoThrow(try body.find(text: "Debug RPC Server"))
+        }
+
+        func testDebugRPCToggleBindsToSetting() throws {
+            let settings = AppSettings()
+            settings.debugRPCEnabled = false
+            let view = AdvancedSettingsView(settings: settings)
+            let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
+                try toggle.labelView().text().string() == "Debug RPC Server"
+            }
+            try toggle.tap()
+            XCTAssertTrue(settings.debugRPCEnabled)
+        }
+    #endif
 
     // MARK: - Record-only mode
 

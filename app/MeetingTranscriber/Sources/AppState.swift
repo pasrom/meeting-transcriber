@@ -73,15 +73,44 @@ final class AppState {
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
         #if !APPSTORE
-            if DebugRPCServer.enabled {
+            applyDebugRPCSetting()
+            observeDebugRPCSetting()
+        #endif
+    }
+
+    #if !APPSTORE
+        /// Reconcile the debug RPC server with the current setting + env var.
+        /// The env var force-starts the server regardless of the setting,
+        /// preserving back-compat with `scripts/test_rpc.sh` and CI.
+        func applyDebugRPCSetting() {
+            let shouldRun = DebugRPCServer.enabled || settings.debugRPCEnabled
+            if shouldRun, debugRPCServer == nil {
                 let server = DebugRPCServer { [weak self] in
                     self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
                 }
                 server.start()
-                self.debugRPCServer = server
+                debugRPCServer = server
+            } else if !shouldRun, let server = debugRPCServer {
+                server.stop()
+                debugRPCServer = nil
             }
-        #endif
-    }
+        }
+
+        /// `withObservationTracking` is one-shot — re-arm after each fire so
+        /// the AppState reacts to every toggle of `settings.debugRPCEnabled`,
+        /// not just the first one.
+        private func observeDebugRPCSetting() {
+            withObservationTracking {
+                _ = settings.debugRPCEnabled
+            } onChange: { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.applyDebugRPCSetting()
+                    self.observeDebugRPCSetting()
+                }
+            }
+        }
+    #endif
 
     #if !APPSTORE
         /// Build a snapshot of state for the debug RPC. Read-only.

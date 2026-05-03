@@ -184,6 +184,20 @@
             XCTAssertEqual(DebugRPCServer.enabled, value == "1")
         }
 
+        // MARK: - Lifecycle
+
+        @MainActor
+        func testStopIsIdempotent() {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            // Safe to call before start.
+            server.stop()
+            server.stop()
+            // Safe to call after start.
+            server.start()
+            server.stop()
+            server.stop()
+        }
+
         // MARK: - Token persistence
 
         func testLoadOrCreateTokenIsStableAndChmod600() throws {

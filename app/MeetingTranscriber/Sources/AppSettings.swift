@@ -289,6 +289,12 @@ final class AppSettings {
         didSet { defaults.set(audioDebugLogging, forKey: "audioDebugLogging") }
     }
 
+    #if !APPSTORE
+        var debugRPCEnabled: Bool {
+            didSet { defaults.set(debugRPCEnabled, forKey: "debugRPCEnabled") }
+        }
+    #endif
+
     // MARK: - Updates
 
     var checkForUpdates: Bool {
@@ -355,6 +361,9 @@ final class AppSettings {
         openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
 
         audioDebugLogging = defaults.object(forKey: "audioDebugLogging") as? Bool ?? false
+        #if !APPSTORE
+            debugRPCEnabled = defaults.object(forKey: "debugRPCEnabled") as? Bool ?? false
+        #endif
         checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
         includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
     }
