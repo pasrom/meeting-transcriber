@@ -7,6 +7,14 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
+            Section("Mode") {
+                Toggle("Record-only mode", isOn: $settings.recordOnly)
+                    .accessibilityIdentifier("recordOnlyToggle")
+                if settings.recordOnly {
+                    recordOnlyBanner
+                }
+            }
+
             Section("Apps to Watch") {
                 Toggle("Microsoft Teams", isOn: $settings.watchTeams)
                 Toggle("Zoom", isOn: $settings.watchZoom)
@@ -42,6 +50,31 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var recordOnlyBanner: some View { // swiftlint:disable:this attributes
+        let path = AppPaths.recordingsDir.path
+        let home = NSHomeDirectory()
+        let display = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+        return Label {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Record-only mode is active.")
+                    .font(.callout.weight(.semibold))
+                Text(
+                    "Files land in `\(display)`. Each recording gets a `<timestamp>_meta.json` " +
+                        "sidecar next to its WAVs. No transcription, diarization, or protocol " +
+                        "generation runs on this device.",
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "info.circle.fill")
+                .foregroundStyle(.blue)
+        }
+        .padding(8)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        .accessibilityIdentifier("recordOnlyBanner")
     }
 
     private func updatesSection(updateChecker: UpdateChecker) -> some View {

@@ -404,4 +404,57 @@ final class SettingsViewTests: XCTestCase {
         let body = try makeAdvanced().inspect()
         XCTAssertNoThrow(try body.find(text: "ffmpeg"))
     }
+
+    // MARK: - Record-only mode
+
+    func testRecordOnlyToggleExists() throws {
+        let body = try makeGeneral().inspect()
+        XCTAssertNoThrow(try body.find(text: "Record-only mode"))
+    }
+
+    func testRecordOnlyBannerHiddenWhenOff() throws {
+        let settings = AppSettings()
+        settings.recordOnly = false
+        let body = try makeGeneral(settings: settings).inspect()
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: "recordOnlyBanner"))
+    }
+
+    func testRecordOnlyBannerVisibleWhenOn() throws {
+        let settings = AppSettings()
+        settings.recordOnly = true
+        let body = try makeGeneral(settings: settings).inspect()
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: "recordOnlyBanner"))
+    }
+
+    func testRecordOnlyDisablesTranscriptionSection() throws {
+        let settings = AppSettings()
+        settings.recordOnly = true
+        let body = try makeTranscription(settings: settings).inspect()
+        let section = try body.find(viewWithAccessibilityIdentifier: "transcriptionSection")
+        XCTAssertTrue(try section.isDisabled())
+    }
+
+    func testRecordOnlyDisablesProtocolSection() throws {
+        let settings = AppSettings()
+        settings.recordOnly = true
+        let body = try makeOutput(settings: settings).inspect()
+        let section = try body.find(viewWithAccessibilityIdentifier: "protocolSection")
+        XCTAssertTrue(try section.isDisabled())
+    }
+
+    func testRecordOnlyDisablesDiarizationSection() throws {
+        let settings = AppSettings()
+        settings.recordOnly = true
+        let body = try makeSpeakers(settings: settings).inspect()
+        let section = try body.find(viewWithAccessibilityIdentifier: "diarizationSection")
+        XCTAssertTrue(try section.isDisabled())
+    }
+
+    func testRecordOnlyDisablesVadSection() throws {
+        let settings = AppSettings()
+        settings.recordOnly = true
+        let body = try makeAudio(settings: settings).inspect()
+        let section = try body.find(viewWithAccessibilityIdentifier: "vadSection")
+        XCTAssertTrue(try section.isDisabled())
+    }
 }
