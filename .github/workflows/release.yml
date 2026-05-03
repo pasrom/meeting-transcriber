@@ -16,7 +16,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Mirror of CI's path filter — see ci.yml for the full rationale. Push to
+  # main, version tags, and workflow_dispatch fall through to `code = 'true'`
+  # so they always build.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      code: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!*.md'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.gitignore'
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-26  # Apple Silicon runner (Swift 6.0+)
     timeout-minutes: 30
     strategy:
