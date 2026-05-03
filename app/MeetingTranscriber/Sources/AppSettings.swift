@@ -1,7 +1,5 @@
 import SwiftUI
 
-private let defaults = UserDefaults.standard
-
 enum TranscriptionEngineSetting: String, CaseIterable {
     case whisperKit
     case parakeet
@@ -65,75 +63,73 @@ enum ProtocolProvider: String, CaseIterable {
 
 @Observable
 final class AppSettings {
+    /// Backing store. Production callers pass nothing → `.standard`. Tests
+    /// inject their own `UserDefaults(suiteName:)` so parallel test
+    /// processes don't race on the shared on-disk plist.
+    @ObservationIgnored private let defaults: UserDefaults
+
     // MARK: - Apps to Watch
 
-    var watchTeams: Bool = defaults.object(forKey: "watchTeams") as? Bool ?? true {
+    var watchTeams: Bool {
         didSet { defaults.set(watchTeams, forKey: "watchTeams") }
     }
 
-    var watchZoom: Bool = defaults.object(forKey: "watchZoom") as? Bool ?? true {
+    var watchZoom: Bool {
         didSet { defaults.set(watchZoom, forKey: "watchZoom") }
     }
 
-    var watchWebex: Bool = defaults.object(forKey: "watchWebex") as? Bool ?? true {
+    var watchWebex: Bool {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
     /// Auto-start watching on app launch.
-    var autoWatch: Bool = defaults.object(forKey: "autoWatch") as? Bool ?? false {
+    var autoWatch: Bool {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
     }
 
     // MARK: - Recording
 
-    var pollInterval: Double = defaults.object(forKey: "pollInterval") as? Double ?? 3.0 {
+    var pollInterval: Double {
         didSet {
             if pollInterval < 1.0 { pollInterval = 1.0 }
             defaults.set(pollInterval, forKey: "pollInterval")
         }
     }
 
-    var endGrace: Double = defaults.object(forKey: "endGrace") as? Double ?? 15.0 {
+    var endGrace: Double {
         didSet {
             if endGrace < 1.0 { endGrace = 1.0 }
             defaults.set(endGrace, forKey: "endGrace")
         }
     }
 
-    var noMic: Bool = defaults.object(forKey: "noMic") as? Bool ?? false {
+    var noMic: Bool {
         didSet { defaults.set(noMic, forKey: "noMic") }
     }
 
     /// CoreAudio device UID for mic selection. Empty string = system default.
-    var micDeviceUID: String = defaults.object(forKey: "micDeviceUID") as? String ?? "" {
+    var micDeviceUID: String {
         didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
     }
 
     /// Label for the local mic speaker in dual-source mode.
     /// Default "Me". Empty string = diarize mic track (multi-person room).
-    var micName: String = defaults.object(forKey: "micName") as? String ?? "Me" {
+    var micName: String {
         didSet { defaults.set(micName, forKey: "micName") }
     }
 
     // MARK: - Transcription
 
-    var transcriptionEngine: TranscriptionEngineSetting = {
-        if let raw = defaults.string(forKey: "transcriptionEngine"),
-           let engine = TranscriptionEngineSetting(rawValue: raw) {
-            return engine
-        }
-        return .whisperKit
-    }() {
+    var transcriptionEngine: TranscriptionEngineSetting {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }
 
-    var whisperKitModel: String = defaults.object(forKey: "whisperKitModel") as? String
-        ?? "openai_whisper-large-v3-v20240930_turbo" {
+    var whisperKitModel: String {
         didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
     }
 
     /// Whisper transcription language. Empty string = auto-detect (maps to nil on WhisperKitEngine).
-    var whisperLanguage: String = defaults.object(forKey: "whisperLanguage") as? String ?? "de" {
+    var whisperLanguage: String {
         didSet { defaults.set(whisperLanguage, forKey: "whisperLanguage") }
     }
 
@@ -143,7 +139,7 @@ final class AppSettings {
     }
 
     /// Qwen3-ASR language hint (ISO 639-1 code). Empty string = auto-detect.
-    var qwen3Language: String = defaults.object(forKey: "qwen3Language") as? String ?? "" {
+    var qwen3Language: String {
         didSet { defaults.set(qwen3Language, forKey: "qwen3Language") }
     }
 
@@ -153,34 +149,28 @@ final class AppSettings {
     }
 
     /// Path to a custom vocabulary file for Parakeet CTC boosting (one term per line).
-    var customVocabularyPath: String = defaults.string(forKey: "customVocabularyPath") ?? "" {
+    var customVocabularyPath: String {
         didSet { defaults.set(customVocabularyPath, forKey: "customVocabularyPath") }
     }
 
-    var diarize: Bool = defaults.object(forKey: "diarize") as? Bool ?? true {
+    var diarize: Bool {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
 
-    var vadEnabled: Bool = defaults.object(forKey: "vadEnabled") as? Bool ?? false {
+    var vadEnabled: Bool {
         didSet { defaults.set(vadEnabled, forKey: "vadEnabled") }
     }
 
-    var vadThreshold: Float = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5 {
+    var vadThreshold: Float {
         didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
     }
 
-    var diarizerMode: DiarizerMode = {
-        if let raw = defaults.string(forKey: "diarizerMode"),
-           let mode = DiarizerMode(rawValue: raw) {
-            return mode
-        }
-        return .offline
-    }() {
+    var diarizerMode: DiarizerMode {
         didSet { defaults.set(diarizerMode.rawValue, forKey: "diarizerMode") }
     }
 
     /// Number of expected speakers. 0 = auto-detect.
-    var numSpeakers: Int = defaults.object(forKey: "numSpeakers") as? Int ?? 0 {
+    var numSpeakers: Int {
         didSet {
             if numSpeakers < 0 { numSpeakers = 0 }
             defaults.set(numSpeakers, forKey: "numSpeakers")
@@ -189,21 +179,11 @@ final class AppSettings {
 
     // MARK: - Protocol Generation
 
-    var protocolProvider: ProtocolProvider = {
-        if let raw = defaults.string(forKey: "protocolProvider"),
-           let provider = ProtocolProvider(rawValue: raw) {
-            return provider
-        }
-        #if APPSTORE
-            return .openAICompatible
-        #else
-            return .claudeCLI
-        #endif
-    }() {
+    var protocolProvider: ProtocolProvider {
         didSet { defaults.set(protocolProvider.rawValue, forKey: "protocolProvider") }
     }
 
-    var protocolLanguage: String = defaults.string(forKey: "protocolLanguage") ?? "German" {
+    var protocolLanguage: String {
         didSet { defaults.set(protocolLanguage, forKey: "protocolLanguage") }
     }
 
@@ -216,17 +196,16 @@ final class AppSettings {
     ]
 
     #if !APPSTORE
-        var claudeBin: String = defaults.object(forKey: "claudeBin") as? String ?? "claude" {
+        var claudeBin: String {
             didSet { defaults.set(claudeBin, forKey: "claudeBin") }
         }
     #endif
 
-    var openAIEndpoint: String = defaults.object(forKey: "openAIEndpoint") as? String
-        ?? "http://localhost:11434/v1/chat/completions" {
+    var openAIEndpoint: String {
         didSet { defaults.set(openAIEndpoint, forKey: "openAIEndpoint") }
     }
 
-    var openAIModel: String = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1" {
+    var openAIModel: String {
         didSet { defaults.set(openAIModel, forKey: "openAIModel") }
     }
 
@@ -299,17 +278,17 @@ final class AppSettings {
     /// Off by default; toggle for forensic debugging when audio recordings are silent
     /// or otherwise unexpected. Logs go to the unified log subsystem
     /// `com.meetingtranscriber.audiotap`.
-    var audioDebugLogging: Bool = defaults.object(forKey: "audioDebugLogging") as? Bool ?? false {
+    var audioDebugLogging: Bool {
         didSet { defaults.set(audioDebugLogging, forKey: "audioDebugLogging") }
     }
 
     // MARK: - Updates
 
-    var checkForUpdates: Bool = defaults.object(forKey: "checkForUpdates") as? Bool ?? true {
+    var checkForUpdates: Bool {
         didSet { defaults.set(checkForUpdates, forKey: "checkForUpdates") }
     }
 
-    var includePreReleases: Bool = defaults.object(forKey: "includePreReleases") as? Bool ?? false {
+    var includePreReleases: Bool {
         didSet { defaults.set(includePreReleases, forKey: "includePreReleases") }
     }
 
@@ -321,5 +300,54 @@ final class AppSettings {
         if watchZoom { apps.append("Zoom") }
         if watchWebex { apps.append("Webex") }
         return apps
+    }
+
+    // MARK: - Init
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
+        watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
+        watchWebex = defaults.object(forKey: "watchWebex") as? Bool ?? true
+        autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
+
+        pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0
+        endGrace = defaults.object(forKey: "endGrace") as? Double ?? 15.0
+        noMic = defaults.object(forKey: "noMic") as? Bool ?? false
+        micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
+        micName = defaults.object(forKey: "micName") as? String ?? "Me"
+
+        transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
+            .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
+        whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
+            ?? "openai_whisper-large-v3-v20240930_turbo"
+        whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        qwen3Language = defaults.object(forKey: "qwen3Language") as? String ?? ""
+        customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
+        diarize = defaults.object(forKey: "diarize") as? Bool ?? true
+        vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
+        vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
+        diarizerMode = (defaults.string(forKey: "diarizerMode")
+            .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
+        numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0
+
+        let storedProvider = defaults.string(forKey: "protocolProvider")
+            .flatMap(ProtocolProvider.init(rawValue:))
+        #if APPSTORE
+            protocolProvider = storedProvider ?? .openAICompatible
+        #else
+            protocolProvider = storedProvider ?? .claudeCLI
+            claudeBin = defaults.object(forKey: "claudeBin") as? String ?? "claude"
+        #endif
+        protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
+
+        openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
+            ?? "http://localhost:11434/v1/chat/completions"
+        openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
+
+        audioDebugLogging = defaults.object(forKey: "audioDebugLogging") as? Bool ?? false
+        checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
+        includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
     }
 }

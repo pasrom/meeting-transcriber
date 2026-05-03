@@ -5,25 +5,31 @@ import XCTest
 final class AppSettingsTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var settings: AppSettings!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var defaults: UserDefaults!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var testSuiteName: String!
 
+    /// Each test gets its own volatile `UserDefaults(suiteName:)` so
+    /// `swift test --parallel` doesn't race on the shared on-disk plist.
+    /// AppSettings receives the suite via constructor injection.
     override func setUp() {
         super.setUp()
-        let keys = [
-            "watchTeams", "watchZoom", "watchWebex",
-            "pollInterval", "endGrace", "noMic", "micDeviceUID", "micName",
-            "diarize", "numSpeakers", "whisperKitModel", "claudeBin",
-            "protocolProvider", "openAIEndpoint", "openAIModel",
-            "checkForUpdates", "includePreReleases",
-        ]
-        KeychainHelper.delete(key: "openAIAPIKey")
-        for key in keys {
-            UserDefaults.standard.removeObject(forKey: key)
+        testSuiteName = "AppSettingsTests-\(getpid())-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+            XCTFail("Could not create test UserDefaults suite")
+            return
         }
-        settings = AppSettings()
+        defaults = suite
+        KeychainHelper.delete(key: "openAIAPIKey")
+        settings = AppSettings(defaults: defaults)
     }
 
     override func tearDown() {
         settings = nil
+        defaults.removePersistentDomain(forName: testSuiteName)
+        defaults = nil
+        testSuiteName = nil
         super.tearDown()
     }
 
@@ -93,12 +99,12 @@ final class AppSettingsTests: XCTestCase {
 
     func testPollIntervalSavedToDefaults() {
         settings.pollInterval = 7.0
-        XCTAssertEqual(UserDefaults.standard.double(forKey: "pollInterval"), 7.0)
+        XCTAssertEqual(defaults.double(forKey: "pollInterval"), 7.0)
     }
 
     func testClampedValueSavedToDefaults() {
         settings.pollInterval = 0.5
-        XCTAssertEqual(UserDefaults.standard.double(forKey: "pollInterval"), 1.0)
+        XCTAssertEqual(defaults.double(forKey: "pollInterval"), 1.0)
     }
 
     // MARK: - watchApps
@@ -128,7 +134,7 @@ final class AppSettingsTests: XCTestCase {
 
         func testClaudeBinSavedToDefaults() {
             settings.claudeBin = "claude-work"
-            XCTAssertEqual(UserDefaults.standard.string(forKey: "claudeBin"), "claude-work")
+            XCTAssertEqual(defaults.string(forKey: "claudeBin"), "claude-work")
         }
     #endif
 
@@ -136,12 +142,12 @@ final class AppSettingsTests: XCTestCase {
 
     func testWhisperKitModelSavedToDefaults() {
         settings.whisperKitModel = "openai_whisper-small"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "whisperKitModel"), "openai_whisper-small")
+        XCTAssertEqual(defaults.string(forKey: "whisperKitModel"), "openai_whisper-small")
     }
 
     func testMicNameSavedToDefaults() {
         settings.micName = "Speaker A"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "micName"), "Speaker A")
+        XCTAssertEqual(defaults.string(forKey: "micName"), "Speaker A")
     }
 
     // MARK: - Protocol Provider
@@ -157,11 +163,11 @@ final class AppSettingsTests: XCTestCase {
     func testProtocolProviderPersistence() {
         settings.protocolProvider = .openAICompatible
         XCTAssertEqual(
-            UserDefaults.standard.string(forKey: "protocolProvider"),
+            defaults.string(forKey: "protocolProvider"),
             "openAICompatible",
         )
-        // Verify a fresh instance reads it back
-        let fresh = AppSettings()
+        // Verify a fresh instance reads it back from the same suite.
+        let fresh = AppSettings(defaults: defaults)
         XCTAssertEqual(fresh.protocolProvider, .openAICompatible)
     }
 
@@ -188,14 +194,14 @@ final class AppSettingsTests: XCTestCase {
     func testOpenAIEndpointSavedToDefaults() {
         settings.openAIEndpoint = "http://localhost:8080/v1/chat/completions"
         XCTAssertEqual(
-            UserDefaults.standard.string(forKey: "openAIEndpoint"),
+            defaults.string(forKey: "openAIEndpoint"),
             "http://localhost:8080/v1/chat/completions",
         )
     }
 
     func testOpenAIModelSavedToDefaults() {
         settings.openAIModel = "mistral"
-        XCTAssertEqual(UserDefaults.standard.string(forKey: "openAIModel"), "mistral")
+        XCTAssertEqual(defaults.string(forKey: "openAIModel"), "mistral")
     }
 
     // MARK: - Update Settings
@@ -210,12 +216,12 @@ final class AppSettingsTests: XCTestCase {
 
     func testCheckForUpdatesPersistence() {
         settings.checkForUpdates = false
-        XCTAssertFalse(UserDefaults.standard.bool(forKey: "checkForUpdates"))
+        XCTAssertFalse(defaults.bool(forKey: "checkForUpdates"))
     }
 
     func testIncludePreReleasesPersistence() {
         settings.includePreReleases = true
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: "includePreReleases"))
+        XCTAssertTrue(defaults.bool(forKey: "includePreReleases"))
     }
 
     // MARK: - Keychain
