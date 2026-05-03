@@ -11,7 +11,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Detect whether anything outside docs/markdown changed. The filter only runs
+  # for PR events; for push/tag/dispatch the step is skipped, leaving the step
+  # output empty, and the job output falls back to 'true' so the full suite
+  # always runs on non-PR triggers. Skipped required checks count as success
+  # in branch protection, so docs-only PRs stay mergeable.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      code: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!*.md'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!LICENSE'
+              - '!.gitignore'
+
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 10
     steps:
@@ -34,6 +60,8 @@ jobs:
         run: bash scripts/tests/test_build_release_signing.sh
 
   analyze:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -48,6 +76,8 @@ jobs:
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
 
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 30
     strategy:
