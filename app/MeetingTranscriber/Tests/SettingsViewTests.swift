@@ -270,6 +270,26 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertThrowsError(try body.find(text: "Mic Speaker Name"))
     }
 
+    func testSortformerWarningShownWhenSelected() throws {
+        let settings = AppSettings()
+        settings.diarize = true
+        settings.diarizerMode = .sortformer
+        let body = try makeSpeakers(settings: settings).inspect()
+        XCTAssertNoThrow(try body.find(
+            text: "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
+        ))
+    }
+
+    func testSortformerWarningHiddenForOfflineMode() throws {
+        let settings = AppSettings()
+        settings.diarize = true
+        settings.diarizerMode = .offline
+        let body = try makeSpeakers(settings: settings).inspect()
+        XCTAssertThrowsError(try body.find(
+            text: "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
+        ))
+    }
+
     // MARK: - Output tab
 
     func testProviderPickerExists() throws {

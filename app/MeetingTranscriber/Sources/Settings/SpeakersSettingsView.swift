@@ -23,6 +23,15 @@ struct SpeakersSettingsView: View {
                     }
                     .pickerStyle(.segmented)
 
+                    if settings.diarizerMode == .sortformer {
+                        Label(
+                            "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
+                            systemImage: "exclamationmark.triangle.fill",
+                        )
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                    }
+
                     HStack {
                         Text("Expected Speakers")
                         Spacer()
