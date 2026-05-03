@@ -213,6 +213,7 @@ final class AppState {
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     audioDebugLogging: { [settings] in settings.audioDebugLogging },
                     recordOnly: { [settings] in settings.recordOnly },
+                    notifier: notifier,
                 )
 
                 loop.onStateChange = { [weak loop, notifier] _, newState in
@@ -267,6 +268,7 @@ final class AppState {
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                 audioDebugLogging: { [settings] in settings.audioDebugLogging },
                 recordOnly: { [settings] in settings.recordOnly },
+                notifier: notifier,
             )
             watchLoop = loop
 

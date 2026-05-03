@@ -160,6 +160,20 @@ func drawExclamationBadge(in rect: NSRect) {
     NSBezierPath(ovalIn: NSRect(x: cx - dotSize / 2, y: dotY, width: dotSize, height: dotSize)).fill()
 }
 
+// Plain red dot in the bottom-right corner (no exclamation glyph).
+// Mirrors MenuBarIcon.drawRecordOnlyBadge — used for the record-only overlay.
+func drawRecordOnlyBadge(in rect: NSRect) {
+    let size: CGFloat = 5.0
+    let margin: CGFloat = 0.5
+    let cx = rect.maxX - size / 2 - margin
+    let cy = rect.minY + size / 2 + margin
+
+    NSColor.systemRed.setFill()
+    NSBezierPath(
+        ovalIn: NSRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size),
+    ).fill()
+}
+
 // MARK: - Rendering
 
 let nativeSize: CGFloat = 18
@@ -264,5 +278,14 @@ let permissionFrame = renderFrame { rect in
 }
 
 writeGIF(name: "menu-bar-permission.gif", frames: [permissionFrame, permissionFrame], delay: 1.0)
+
+// Record-only mode (static: idle waveform with red dot overlay).
+// Shown while watching when AppSettings.recordOnly is enabled.
+let recordOnlyFrame = renderFrame { rect in
+    drawIdle(in: rect)
+    drawRecordOnlyBadge(in: rect)
+}
+
+writeGIF(name: "menu-bar-record-only.gif", frames: [recordOnlyFrame, recordOnlyFrame], delay: 1.0)
 
 print("Done!")

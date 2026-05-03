@@ -74,16 +74,25 @@ enum MenuBarIcon {
 
     /// Returns a pre-rendered 18x18pt template `NSImage` for the given badge and animation frame.
     ///
-    /// If `permissionOverlay` is true, a red exclamation badge is composited over the base icon
-    /// to signal a permission problem — this bypasses the pre-rendered cache and forces a
-    /// non-template image, because the overlay is red (template rendering is monochrome).
+    /// If `permissionOverlay` or `recordOnlyOverlay` is true, a red badge is composited over the
+    /// base icon — this bypasses the pre-rendered cache and forces a non-template image, because
+    /// the overlay is red (template rendering is monochrome).
     static func image(
         badge: BadgeKind,
         animationFrame: Int = 0,
         permissionOverlay: Bool = false,
+        recordOnlyOverlay: Bool = false,
     ) -> NSImage {
-        if permissionOverlay {
-            return renderImage(badge: badge, frame: animationFrame, permissionOverlay: true)
+        if permissionOverlay || recordOnlyOverlay {
+            // Honour the cache's frame discipline: animated badges advance, static ones
+            // stay on frame 0. Without this, the live animationFrame leaks through and
+            // makes `.inactive` (idle waveform) bounce as if recording.
+            let frame = badge.isAnimated ? animationFrame : 0
+            return renderImage(
+                badge: badge, frame: frame,
+                permissionOverlay: permissionOverlay,
+                recordOnlyOverlay: recordOnlyOverlay,
+            )
         }
         guard let frames = cache[badge] else { return renderImage(badge: badge, frame: animationFrame) }
         return frames[animationFrame % frames.count]
@@ -95,12 +104,13 @@ enum MenuBarIcon {
         badge: BadgeKind,
         frame: Int,
         permissionOverlay: Bool = false,
+        recordOnlyOverlay: Bool = false,
     ) -> NSImage {
         let size = NSSize(width: 18, height: 18)
-        // The `.error` badge and the permission overlay both need an explicit foreground color
-        // (matching the menu bar appearance), because the image is non-template (the red dot
+        // The `.error` badge and either red-dot overlay all need an explicit foreground color
+        // (matching the menu bar appearance), because the image is non-template (the red mark
         // must stay red in both light and dark mode).
-        let needsExplicitForeground = badge == .error || permissionOverlay
+        let needsExplicitForeground = badge == .error || permissionOverlay || recordOnlyOverlay
         let image = NSImage(size: size, flipped: false) { rect in
             if needsExplicitForeground {
                 let isDark = NSApp?.effectiveAppearance
@@ -131,8 +141,12 @@ enum MenuBarIcon {
                 drawRecordingAnimation(in: rect, frame: frame)
             }
 
-            if needsExplicitForeground {
+            // Overlay precedence: permission errors win over record-only because a permission
+            // problem actually breaks recording, so the user must see it first.
+            if permissionOverlay || badge == .error {
                 drawExclamationBadge(in: rect)
+            } else if recordOnlyOverlay {
+                drawRecordOnlyBadge(in: rect)
             }
 
             return true
@@ -262,6 +276,20 @@ enum MenuBarIcon {
         let dotSize: CGFloat = 1.3
         let dotY = cy - size / 2 + 1.0
         NSBezierPath(ovalIn: NSRect(x: cx - dotSize / 2, y: dotY, width: dotSize, height: dotSize)).fill()
+    }
+
+    // MARK: - Record-Only Badge (solid red dot in bottom-right)
+
+    private static func drawRecordOnlyBadge(in rect: NSRect) {
+        let size: CGFloat = 5.0
+        let margin: CGFloat = 0.5
+        let cx = rect.maxX - size / 2 - margin
+        let cy = rect.minY + size / 2 + margin
+
+        NSColor.systemRed.setFill()
+        NSBezierPath(
+            ovalIn: NSRect(x: cx - size / 2, y: cy - size / 2, width: size, height: size),
+        ).fill()
     }
 
     // MARK: - Update Available (small upward arrow badge in bottom-right)

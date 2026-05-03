@@ -63,6 +63,7 @@ struct MeetingTranscriberApp: App {
                     badge: appState.currentBadge,
                     animationFrame: iconAnimationFrame,
                     permissionOverlay: appState.permissionHealth?.isHealthy == false,
+                    recordOnlyOverlay: appState.settings.recordOnly,
                 ))
             }
             .onReceive(iconTimer) { _ in
