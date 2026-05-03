@@ -116,8 +116,7 @@ struct TranscriptionSettingsView: View {
                 engineStatusView
             }
             .accessibilityIdentifier("transcriptionSection")
-            .disabled(settings.recordOnly)
-            .opacity(settings.recordOnly ? 0.5 : 1)
+            .recordOnlyDisabled(settings.recordOnly)
         }
         .formStyle(.grouped)
     }

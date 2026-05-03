@@ -6,6 +6,7 @@ struct GeneralSettingsView: View {
     var updateChecker: UpdateChecker?
 
     var body: some View {
+        // swiftlint:disable:next closure_body_length
         Form {
             Section("Mode") {
                 Toggle("Record-only mode", isOn: $settings.recordOnly)
@@ -52,7 +53,7 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
     }
 
-    private var recordOnlyBanner: some View { // swiftlint:disable:this attributes
+    private var recordOnlyBanner: some View {
         let path = AppPaths.recordingsDir.path
         let home = NSHomeDirectory()
         let display = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path

@@ -36,8 +36,7 @@ struct AudioSettingsView: View {
                 }
             }
             .accessibilityIdentifier("vadSection")
-            .disabled(settings.recordOnly)
-            .opacity(settings.recordOnly ? 0.5 : 1)
+            .recordOnlyDisabled(settings.recordOnly)
         }
         .formStyle(.grouped)
     }

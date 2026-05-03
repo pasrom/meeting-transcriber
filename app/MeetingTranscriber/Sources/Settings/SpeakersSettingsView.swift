@@ -43,6 +43,8 @@ struct SpeakersSettingsView: View {
                     }
                 }
             }
+            .accessibilityIdentifier("diarizationSection")
+            .recordOnlyDisabled(settings.recordOnly)
 
             if !settings.noMic {
                 Section("Speaker Identity") {
@@ -57,10 +59,8 @@ struct SpeakersSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .recordOnlyDisabled(settings.recordOnly)
             }
-            .accessibilityIdentifier("diarizationSection")
-            .disabled(settings.recordOnly)
-            .opacity(settings.recordOnly ? 0.5 : 1)
 
             Section("Known Voices") {
                 Button("Manage\u{2026}") { showKnownVoices = true }
