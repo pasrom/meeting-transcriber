@@ -73,27 +73,34 @@ final class AppState {
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
         #if !APPSTORE
-            applyDebugRPCSetting()
+            // Env var force-enables at launch only — preserves back-compat with
+            // scripts/test_rpc.sh and CI. After init, settings.debugRPCEnabled
+            // is the sole driver, so toggling off mid-session works even when
+            // the env var was set at launch.
+            if DebugRPCServer.enabled || settings.debugRPCEnabled {
+                startDebugRPCServer()
+            }
             observeDebugRPCSetting()
         #endif
     }
 
     #if !APPSTORE
-        /// Reconcile the debug RPC server with the current setting + env var.
-        /// The env var force-starts the server regardless of the setting,
-        /// preserving back-compat with `scripts/test_rpc.sh` and CI.
+        /// Reconcile the debug RPC server with the current setting.
         func applyDebugRPCSetting() {
-            let shouldRun = DebugRPCServer.enabled || settings.debugRPCEnabled
-            if shouldRun, debugRPCServer == nil {
-                let server = DebugRPCServer { [weak self] in
-                    self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
-                }
-                server.start()
-                debugRPCServer = server
-            } else if !shouldRun, let server = debugRPCServer {
+            if settings.debugRPCEnabled, debugRPCServer == nil {
+                startDebugRPCServer()
+            } else if !settings.debugRPCEnabled, let server = debugRPCServer {
                 server.stop()
                 debugRPCServer = nil
             }
+        }
+
+        private func startDebugRPCServer() {
+            let server = DebugRPCServer { [weak self] in
+                self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
+            }
+            server.start()
+            debugRPCServer = server
         }
 
         /// `withObservationTracking` is one-shot — re-arm after each fire so
