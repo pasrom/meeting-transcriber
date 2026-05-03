@@ -52,6 +52,9 @@ class WatchLoop {
     /// Dynamic accessor — read at recording-start time so toggling the setting
     /// at runtime takes effect on the next recording without an app restart.
     let audioDebugLogging: () -> Bool
+    /// Dynamic accessor — when true, skip the post-processing pipeline and
+    /// instead write a `<basename>_meta.json` sidecar next to the recording.
+    let recordOnly: @MainActor () -> Bool
 
     private var watchTask: Task<Void, Never>?
 
@@ -68,6 +71,7 @@ class WatchLoop {
         noMic: Bool = false,
         micDeviceUID: String? = nil,
         audioDebugLogging: @escaping () -> Bool = { false },
+        recordOnly: @MainActor @escaping () -> Bool = { false },
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -78,6 +82,7 @@ class WatchLoop {
         self.noMic = noMic
         self.micDeviceUID = micDeviceUID
         self.audioDebugLogging = audioDebugLogging
+        self.recordOnly = recordOnly
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -305,12 +310,22 @@ class WatchLoop {
 
     // MARK: - Helpers
 
-    private func enqueueRecording(
+    func enqueueRecording(
         title: String,
         appName: String,
         recording: RecordingResult,
         participants: [String] = [],
     ) {
+        if recordOnly() {
+            writeRecordOnlySidecar(
+                title: title,
+                appName: appName,
+                recording: recording,
+                participants: participants,
+            )
+            return
+        }
+
         let job = PipelineJob(
             meetingTitle: title,
             appName: appName,
@@ -322,6 +337,51 @@ class WatchLoop {
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title)")
+    }
+
+    /// Convert a `ProcessInfo.systemUptime`-based timestamp captured at recording
+    /// start into a wall-clock `Date` by anchoring against "now" (also systemUptime).
+    private func wallClockDate(forUptime uptime: TimeInterval, now: Date = Date()) -> Date {
+        let elapsed = ProcessInfo.processInfo.systemUptime - uptime
+        return now.addingTimeInterval(-elapsed)
+    }
+
+    private func writeRecordOnlySidecar(
+        title: String,
+        appName: String,
+        recording: RecordingResult,
+        participants: [String],
+    ) {
+        let stoppedAt = Date()
+        let startedAt = wallClockDate(forUptime: recording.recordingStart, now: stoppedAt)
+
+        let dir = recording.mixPath.deletingLastPathComponent()
+        let mixName = recording.mixPath.lastPathComponent
+        let basename: String = if mixName.hasSuffix("_mix.wav") {
+            String(mixName.dropLast("_mix.wav".count))
+        } else {
+            recording.mixPath.deletingPathExtension().lastPathComponent
+        }
+
+        let sidecar = RecordingSidecar(
+            title: title,
+            appName: appName,
+            startedAt: startedAt,
+            stoppedAt: stoppedAt,
+            participants: participants,
+            micDelaySeconds: recording.micDelay,
+            mixFilename: mixName,
+            appFilename: recording.appPath?.lastPathComponent,
+            micFilename: recording.micPath?.lastPathComponent,
+        )
+
+        do {
+            try sidecar.write(toDirectory: dir, basename: basename)
+            logger.info("Record-only: wrote sidecar for \(title)")
+        } catch {
+            logger.error("Failed to write record-only sidecar: \(error.localizedDescription)")
+            lastError = "Sidecar write failed: \(error.localizedDescription)"
+        }
     }
 
     private func transition(to newState: State) {

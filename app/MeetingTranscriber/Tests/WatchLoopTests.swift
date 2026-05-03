@@ -334,6 +334,107 @@ final class WatchLoopTests: XCTestCase {
         }
     }
 
+    // MARK: - Record-Only Mode
+
+    func test_enqueueRecording_recordOnly_writesSidecarAndDoesNotEnqueue() throws {
+        let queue = PipelineQueue()
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("recordOnly_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
+        let appURL = tmp.appendingPathComponent("20260503_120000_app.wav")
+        let micURL = tmp.appendingPathComponent("20260503_120000_mic.wav")
+        try Data().write(to: mixURL)
+        try Data().write(to: appURL)
+        try Data().write(to: micURL)
+
+        let loop = WatchLoop(
+            detector: makeSilentDetector(),
+            pipelineQueue: queue,
+            // swiftlint:disable:next trailing_closure
+            recordOnly: { true },
+        )
+
+        let recording = RecordingResult(
+            mixPath: mixURL,
+            appPath: appURL,
+            micPath: micURL,
+            micDelay: 0.25,
+            recordingStart: ProcessInfo.processInfo.systemUptime - 5,
+        )
+
+        loop.enqueueRecording(
+            title: "Standup",
+            appName: "Microsoft Teams",
+            recording: recording,
+            participants: ["Speaker A", "Speaker B"],
+        )
+
+        XCTAssertTrue(queue.jobs.isEmpty, "record-only must not enqueue a pipeline job")
+
+        let sidecarURL = tmp.appendingPathComponent("20260503_120000_meta.json")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: sidecarURL.path),
+            "sidecar should be written next to the mix WAV",
+        )
+
+        let data = try Data(contentsOf: sidecarURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(RecordingSidecar.self, from: data)
+
+        XCTAssertEqual(sidecar.title, "Standup")
+        XCTAssertEqual(sidecar.appName, "Microsoft Teams")
+        XCTAssertEqual(sidecar.participants, ["Speaker A", "Speaker B"])
+        XCTAssertEqual(sidecar.files.mix, "20260503_120000_mix.wav")
+        XCTAssertEqual(sidecar.files.app, "20260503_120000_app.wav")
+        XCTAssertEqual(sidecar.files.mic, "20260503_120000_mic.wav")
+        XCTAssertEqual(sidecar.micDelaySeconds, 0.25, accuracy: 1e-6)
+        // startedAt should be earlier than stoppedAt by ~5s (we offset by -5s above).
+        XCTAssertLessThan(sidecar.startedAt, sidecar.stoppedAt)
+    }
+
+    func test_enqueueRecording_normalMode_enqueuesAndWritesNoSidecar() throws {
+        let queue = PipelineQueue()
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("normalMode_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
+        try Data().write(to: mixURL)
+
+        let loop = WatchLoop(
+            detector: makeSilentDetector(),
+            pipelineQueue: queue,
+        )
+
+        let recording = RecordingResult(
+            mixPath: mixURL,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+            recordingStart: ProcessInfo.processInfo.systemUptime,
+        )
+
+        loop.enqueueRecording(
+            title: "Standup",
+            appName: "Microsoft Teams",
+            recording: recording,
+        )
+
+        XCTAssertEqual(queue.jobs.count, 1)
+        XCTAssertEqual(queue.jobs.first?.meetingTitle, "Standup")
+
+        let sidecarURL = tmp.appendingPathComponent("20260503_120000_meta.json")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: sidecarURL.path),
+            "sidecar must not be written in normal mode",
+        )
+    }
+
     func testManualRecordingProceedsWhenPermissionsHealthy() async throws {
         let (loop, recorder) = makeTestWatchLoop()
         loop.permissionChecker = {
