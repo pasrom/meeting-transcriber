@@ -396,7 +396,7 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertLessThan(sidecar.startedAt, sidecar.stoppedAt)
     }
 
-    func test_enqueueRecording_recordOnly_sidecarWriteFailure_setsLastError() throws {
+    func test_enqueueRecording_recordOnly_sidecarWriteFailure_setsLastError() {
         let queue = PipelineQueue()
         // /dev is not a writable directory for our sidecar — write() will throw.
         let unwritable = URL(fileURLWithPath: "/dev/null/cannot-write")
