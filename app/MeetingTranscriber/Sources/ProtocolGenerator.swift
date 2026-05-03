@@ -78,8 +78,11 @@ enum ProtocolGenerator {
         prompt.replacingOccurrences(of: "{LANGUAGE}", with: language)
     }
 
-    static func loadPrompt() -> String {
-        let url = AppPaths.customPromptFile
+    /// Load the protocol generation prompt. Reads from `url` (default
+    /// `AppPaths.customPromptFile`) when present and non-empty; falls back
+    /// to the built-in `protocolPrompt`. The `url` parameter exists so tests
+    /// can use unique per-test paths instead of racing on the shared one.
+    static func loadPrompt(from url: URL = AppPaths.customPromptFile) -> String {
         if let custom = try? String(contentsOf: url, encoding: .utf8),
            !custom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logger.info("Using custom protocol prompt from \(url.path)")
