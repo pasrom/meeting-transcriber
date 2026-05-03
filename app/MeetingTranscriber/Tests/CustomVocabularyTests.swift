@@ -5,15 +5,28 @@ import XCTest
 final class CustomVocabularyTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var settings: AppSettings!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var defaults: UserDefaults!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var testSuiteName: String!
 
+    /// Per-test isolated UserDefaults suite — see AppSettingsTests for why.
     override func setUp() {
         super.setUp()
-        UserDefaults.standard.removeObject(forKey: "customVocabularyPath")
-        settings = AppSettings()
+        testSuiteName = "CustomVocabularyTests-\(getpid())-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: testSuiteName) else {
+            XCTFail("Could not create test UserDefaults suite")
+            return
+        }
+        defaults = suite
+        settings = AppSettings(defaults: defaults)
     }
 
     override func tearDown() {
         settings = nil
+        defaults.removePersistentDomain(forName: testSuiteName)
+        defaults = nil
+        testSuiteName = nil
         super.tearDown()
     }
 
@@ -29,9 +42,8 @@ final class CustomVocabularyTests: XCTestCase {
         settings.customVocabularyPath = "/tmp/vocab.txt"
         XCTAssertEqual(settings.customVocabularyPath, "/tmp/vocab.txt")
 
-        // Verify it persists to UserDefaults
-        let stored = UserDefaults.standard.string(forKey: "customVocabularyPath")
-        XCTAssertEqual(stored, "/tmp/vocab.txt")
+        // Verify it persists to the injected store.
+        XCTAssertEqual(defaults.string(forKey: "customVocabularyPath"), "/tmp/vocab.txt")
     }
 
     func testCustomVocabularyPathClear() {

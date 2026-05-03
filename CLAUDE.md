@@ -134,8 +134,8 @@ Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fa
 # Run menu bar app
 ./scripts/run_app.sh
 
-# Swift tests
-cd app/MeetingTranscriber && swift test
+# Swift tests (parallel — ~1.4× faster than sequential)
+cd app/MeetingTranscriber && swift test --parallel
 
 # Lint & format check (dry-run, no changes)
 ./scripts/lint.sh
