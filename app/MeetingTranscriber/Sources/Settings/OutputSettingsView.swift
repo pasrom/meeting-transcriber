@@ -62,6 +62,9 @@ struct OutputSettingsView: View {
 
                 promptControls
             }
+            .accessibilityIdentifier("protocolSection")
+            .disabled(settings.recordOnly)
+            .opacity(settings.recordOnly ? 0.5 : 1)
         }
         .formStyle(.grouped)
         .onAppear {

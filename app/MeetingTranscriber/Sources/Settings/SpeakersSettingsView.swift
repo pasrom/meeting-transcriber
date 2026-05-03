@@ -58,6 +58,9 @@ struct SpeakersSettingsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .accessibilityIdentifier("diarizationSection")
+            .disabled(settings.recordOnly)
+            .opacity(settings.recordOnly ? 0.5 : 1)
 
             Section("Known Voices") {
                 Button("Manage\u{2026}") { showKnownVoices = true }
