@@ -178,6 +178,23 @@ You can also batch-process existing audio and video files via the menu (⌘P) �
 
 ---
 
+## Configuration
+
+Open Settings via the menu bar item or ⌘,.
+
+<img src="docs/settings-overview.png" width="600" alt="Settings window">
+
+| Tab | What's in it |
+|---|---|
+| **General** | Apps to watch (Teams/Zoom/Webex), detection timing, update checks |
+| **Audio** | Microphone device, voice activity detection (VAD) |
+| **Transcribe** | ASR engine (WhisperKit / Parakeet / Qwen3) and per-engine options (model, language, custom vocabulary) |
+| **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), protocol language, output folder, custom prompt |
+| **Advanced** | Permissions status, diagnostics, version info |
+
+---
+
 ## Output
 
 Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`:
