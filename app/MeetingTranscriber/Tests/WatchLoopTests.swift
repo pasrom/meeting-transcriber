@@ -396,6 +396,41 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertLessThan(sidecar.startedAt, sidecar.stoppedAt)
     }
 
+    func test_enqueueRecording_recordOnly_sidecarWriteFailure_setsLastError() throws {
+        let queue = PipelineQueue()
+        // /dev is not a writable directory for our sidecar — write() will throw.
+        let unwritable = URL(fileURLWithPath: "/dev/null/cannot-write")
+
+        let mixURL = unwritable.appendingPathComponent("20260503_120000_mix.wav")
+        let notifier = RecordingNotifier()
+
+        let loop = WatchLoop(
+            detector: makeSilentDetector(),
+            pipelineQueue: queue,
+            recordOnly: { true },
+            notifier: notifier,
+        )
+
+        let recording = RecordingResult(
+            mixPath: mixURL,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+            recordingStart: ProcessInfo.processInfo.systemUptime,
+        )
+
+        loop.enqueueRecording(
+            title: "Standup",
+            appName: "Microsoft Teams",
+            recording: recording,
+        )
+
+        XCTAssertTrue(queue.jobs.isEmpty, "record-only must not enqueue even on sidecar failure")
+        XCTAssertNotNil(loop.lastError, "lastError must be set so failures are observable")
+        XCTAssertEqual(notifier.calls.count, 1, "user must be notified on sidecar write failure")
+        XCTAssertEqual(notifier.calls.first?.title, "Record-only sidecar failed")
+    }
+
     func test_enqueueRecording_normalMode_enqueuesAndWritesNoSidecar() throws {
         let queue = PipelineQueue()
         let tmp = FileManager.default.temporaryDirectory
