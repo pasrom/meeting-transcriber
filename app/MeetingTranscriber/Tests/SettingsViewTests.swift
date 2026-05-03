@@ -4,6 +4,31 @@ import XCTest
 
 @MainActor
 final class SettingsViewTests: XCTestCase {
+    /// Keys that other test classes may have written to the shared on-disk
+    /// plist; cleared at setUp + tearDown so parallel test processes don't
+    /// leak state into each other.
+    private static let pollutedDefaultsKeys = [
+        "transcriptionEngine", "protocolProvider",
+        "diarize", "vadEnabled", "diarizerMode",
+        "whisperKitModel", "whisperKitLanguage",
+        "qwen3Language", "customVocabularyPath",
+        "checkForUpdates", "includePreReleases",
+    ]
+
+    override func setUp() {
+        super.setUp()
+        for key in Self.pollutedDefaultsKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    override func tearDown() {
+        for key in Self.pollutedDefaultsKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        super.tearDown()
+    }
+
     // MARK: - Helpers
 
     private func makeSettingsView(
