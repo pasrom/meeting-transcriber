@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -89,6 +90,23 @@ final class AppState {
 
             PersistentDiagnosticLog.cleanup()
             self.persistentLogStreamer = try? PersistentDiagnosticLog.startForToday()
+            // Stop the streamer cleanly when the app terminates so the file
+            // handle flushes and the child `log` process exits. Done via
+            // NotificationCenter rather than a SwiftUI `.onReceive` so the
+            // observer doesn't churn through the SwiftUI modifier-chain
+            // `#if APPSTORE` minefield.
+            // AppState lives for the entire process lifetime, so leaking
+            // this notification observer until app exit is intentional —
+            // there's no point removing it in a deinit that won't run.
+            // swiftlint:disable:next discarded_notification_center_observer
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification,
+                object: nil, queue: .main,
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.stopPersistentLogStreamer()
+                }
+            }
         #endif
     }
 
