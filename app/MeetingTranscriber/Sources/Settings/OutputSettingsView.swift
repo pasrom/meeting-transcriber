@@ -23,21 +23,9 @@ struct OutputSettingsView: View {
     var body: some View {
         // swiftlint:disable:next closure_body_length
         Form {
-            Section("Protocol Generation") {
-                Picker("LLM Provider", selection: $settings.protocolProvider) {
-                    ForEach(ProtocolProvider.allCases, id: \.self) { provider in
-                        Text(provider.label).tag(provider)
-                    }
-                }
-
-                providerConfigView
-
-                Picker("Protocol Language", selection: $settings.protocolLanguage) {
-                    ForEach(AppSettings.protocolLanguages, id: \.self) { lang in
-                        Text(lang).tag(lang)
-                    }
-                }
-
+            // Output folder applies to record-only AND protocol mode, so this
+            // section deliberately sits outside the .recordOnlyDisabled block.
+            Section("Output Folder") {
                 HStack {
                     Text("Output Folder")
                     Spacer()
@@ -58,6 +46,23 @@ struct OutputSettingsView: View {
                     .disabled(settings.customOutputDirBookmark == nil)
 
                     Spacer()
+                }
+            }
+            .accessibilityIdentifier("outputFolderSection")
+
+            Section("Protocol Generation") {
+                Picker("LLM Provider", selection: $settings.protocolProvider) {
+                    ForEach(ProtocolProvider.allCases, id: \.self) { provider in
+                        Text(provider.label).tag(provider)
+                    }
+                }
+
+                providerConfigView
+
+                Picker("Protocol Language", selection: $settings.protocolLanguage) {
+                    ForEach(AppSettings.protocolLanguages, id: \.self) { lang in
+                        Text(lang).tag(lang)
+                    }
                 }
 
                 promptControls

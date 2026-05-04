@@ -465,6 +465,16 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertTrue(try section.isDisabled())
     }
 
+    func testRecordOnlyDoesNotDisableOutputFolderSection() throws {
+        // Output Folder is where WAVs land in record-only mode too,
+        // so it must remain interactive when the rest of Output is dimmed.
+        let settings = makeSettings()
+        settings.recordOnly = true
+        let body = try makeOutput(settings: settings).inspect()
+        let section = try body.find(viewWithAccessibilityIdentifier: "outputFolderSection")
+        XCTAssertFalse(try section.isDisabled())
+    }
+
     func testRecordOnlyDisablesDiarizationSection() throws {
         let settings = makeSettings()
         settings.recordOnly = true
