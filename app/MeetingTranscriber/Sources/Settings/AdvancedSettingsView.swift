@@ -61,6 +61,7 @@ struct AdvancedSettingsView: View {
                 .font(.caption)
             }
 
+            // swiftlint:disable:next closure_body_length
             Section("Diagnostics") {
                 Toggle("Verbose Diagnostic Logging", isOn: $settings.verboseDiagnostics)
                 Text(

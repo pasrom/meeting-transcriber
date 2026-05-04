@@ -22,6 +22,7 @@
 
         // MARK: - ProtocolGenerating
 
+        // swiftlint:disable:next function_body_length
         func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
             var prompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
             if diarized {
