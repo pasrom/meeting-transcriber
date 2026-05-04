@@ -5,6 +5,11 @@ import OSLog
 /// to a shareable `.log` file with a header describing the app build state.
 /// Used by Settings → Advanced → "Export Diagnostics…".
 enum DiagnosticExporter {
+    /// Shared formatter — `ISO8601DateFormatter` init is non-trivial, so we
+    /// keep one instance for both the header timestamp and per-entry timestamps
+    /// in `export(...)`.
+    private static let formatter = ISO8601DateFormatter()
+
     /// Build the header that prefixes every exported diagnostic file.
     /// Pure function — settings dict is stringified verbatim into `key=value`
     /// pairs, sorted alphabetically for deterministic output. No PII is
@@ -18,7 +23,7 @@ enum DiagnosticExporter {
         let pairs = settings.sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
-        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let timestamp = formatter.string(from: Date())
         return """
         # MeetingTranscriber \(appVersion) (\(commit))
         # macOS \(macOSVersion)
@@ -52,7 +57,6 @@ enum DiagnosticExporter {
             macOSVersion: macOSVersion, settings: settings,
         )]
         var count = 0
-        let formatter = ISO8601DateFormatter()
         for entry in entries {
             guard let log = entry as? OSLogEntryLog else { continue }
             let timestamp = formatter.string(from: log.date)
