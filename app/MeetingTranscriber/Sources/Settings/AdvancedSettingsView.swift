@@ -136,8 +136,8 @@ struct AdvancedSettingsView: View {
     #endif
 
     private static let versionString: String = {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
+        let version = Bundle.main.appVersion
+        let commit = Bundle.main.gitCommitHash
         #if APPSTORE
             let variant = "App Store"
         #else
@@ -167,11 +167,9 @@ struct AdvancedSettingsView: View {
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingTranscriber-diagnostics-\(stamp).log")
         do {
-            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-            let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
             let info = DiagnosticExporter.HeaderInfo(
-                appVersion: appVersion,
-                commit: commit,
+                appVersion: Bundle.main.appVersion,
+                commit: Bundle.main.gitCommitHash,
                 macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
                 settings: [
                     "verboseDiagnostics": "\(settings.verboseDiagnostics)",
