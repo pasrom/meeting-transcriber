@@ -147,9 +147,31 @@ class FluidVAD {
         let speechDuration = regions.reduce(0.0) { $0 + $1.duration }
         let speechStr = String(format: "%.1f", speechDuration)
         let totalStr = String(format: "%.1f", totalDuration)
-        logger.info("VAD: \(regions.count) speech regions, \(speechStr)s speech / \(totalStr)s total")
+        let trimRatio = totalDuration > 0 ? (1.0 - speechDuration / totalDuration) : 0
+        let trimRatioStr = String(format: "%.2f", trimRatio)
+        logger.info(
+            "vad_extract regions=\(regions.count, privacy: .public) speech=\(speechStr, privacy: .public)s total=\(totalStr, privacy: .public)s trimRatio=\(trimRatioStr, privacy: .public)",
+        )
 
-        return VadSegmentMap(segments: regions, sampleRate: AudioConstants.targetSampleRate)
+        let map = VadSegmentMap(segments: regions, sampleRate: AudioConstants.targetSampleRate)
+
+        // Round-trip sanity: pick the midpoint of the trimmed timeline, map back
+        // to the original timeline, verify the result lands inside one of the
+        // detected speech regions. If it doesn't, the mapping is inconsistent.
+        if !regions.isEmpty {
+            let probe = speechDuration / 2.0
+            let mapped = map.toOriginalTime(probe)
+            let inRegion = regions.contains { mapped >= $0.start && mapped <= $0.end }
+            if !inRegion {
+                let probeStr = String(format: "%.3f", probe)
+                let mappedStr = String(format: "%.3f", mapped)
+                logger.warning(
+                    "vad_roundtrip_drift probe=\(probeStr, privacy: .public)s mapped=\(mappedStr, privacy: .public)s — VadSegmentMap may be inconsistent",
+                )
+            }
+        }
+
+        return map
     }
 
     /// Merge regions that are closer together than maxGap seconds.
