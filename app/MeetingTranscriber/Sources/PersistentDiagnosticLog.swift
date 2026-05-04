@@ -48,15 +48,17 @@ enum PersistentDiagnosticLog {
         return name.range(of: pattern, options: .regularExpression) != nil
     }
 
-    /// Convenience: open today's log file as the stream target. Returns the
-    /// running streamer so the caller can stop it on app shutdown.
-    @discardableResult
-    static func startForToday() throws -> Streamer {
-        let target = logDirectory.appendingPathComponent(logFileName(for: Date()))
-        let streamer = try Streamer(targetURL: target)
-        try streamer.start()
-        return streamer
-    }
+    #if !APPSTORE
+        /// Convenience: open today's log file as the stream target. Returns the
+        /// running streamer so the caller can stop it on app shutdown.
+        @discardableResult
+        static func startForToday() throws -> Streamer {
+            let target = logDirectory.appendingPathComponent(logFileName(for: Date()))
+            let streamer = try Streamer(targetURL: target)
+            try streamer.start()
+            return streamer
+        }
+    #endif
 
     /// Delete diagnostic-log files older than `retentionDays`. Non-matching files
     /// (anything not `diagnostics-YYYY-MM-DD.log`) are left alone. Safe to call
@@ -82,11 +84,15 @@ enum PersistentDiagnosticLog {
         }
     }
 
+    #if !APPSTORE
     /// Wraps a running `log stream` subprocess that mirrors our subsystems
     /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
     /// `init(targetURL:)` opens the file, `start()` launches the subprocess
     /// and pipes its stdout into the file, `stop()` terminates the process
     /// and closes the file handle.
+    ///
+    /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
+    /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
     final class Streamer {
         private let process = Process()
         private let logFileHandle: FileHandle
@@ -143,4 +149,5 @@ enum PersistentDiagnosticLog {
             }
         }
     }
+    #endif
 }
