@@ -55,4 +55,117 @@ final class DiagnosticExporterTests: XCTestCase {
         )
         XCTAssertFalse(header.isEmpty)
     }
+
+    // MARK: - parseSyslogDate
+
+    func test_parseSyslogDate_validPrefix_returnsDateInCurrentYear() throws {
+        let date = try XCTUnwrap(DiagnosticExporter.parseSyslogDate("May 04 21:25:34 MeetingTranscriber"))
+        let comps = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second], from: date,
+        )
+        XCTAssertEqual(comps.year, Calendar.current.component(.year, from: Date()))
+        XCTAssertEqual(comps.month, 5)
+        XCTAssertEqual(comps.day, 4)
+        XCTAssertEqual(comps.hour, 21)
+        XCTAssertEqual(comps.minute, 25)
+        XCTAssertEqual(comps.second, 34)
+    }
+
+    func test_parseSyslogDate_singleDigitDay_works() throws {
+        XCTAssertNotNil(DiagnosticExporter.parseSyslogDate("May  4 21:25:34 rest of line"))
+    }
+
+    func test_parseSyslogDate_invalidPrefix_returnsNil() {
+        XCTAssertNil(DiagnosticExporter.parseSyslogDate("abc"))
+        XCTAssertNil(DiagnosticExporter.parseSyslogDate("not a date at all here"))
+        XCTAssertNil(DiagnosticExporter.parseSyslogDate(""))
+    }
+
+    // MARK: - exportFromFile
+
+    func test_exportFromFile_writesHeaderPlusBody_withinWindow() throws {
+        let tmpSrc = FileManager.default.temporaryDirectory
+            .appendingPathComponent("src-\(UUID().uuidString).log")
+        let tmpDst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dst-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: tmpSrc)
+            try? FileManager.default.removeItem(at: tmpDst)
+        }
+        let now = Date()
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        let stamp = fmt.string(from: now)
+        let line = "\(stamp) MeetingTranscriber[1234]: hello world"
+        try line.write(to: tmpSrc, atomically: true, encoding: .utf8)
+
+        let count = try DiagnosticExporter.exportFromFile(
+            sourceFile: tmpSrc,
+            to: tmpDst,
+            windowSeconds: 60,
+            appVersion: "1.0",
+            commit: "abc",
+            macOSVersion: "14.5",
+            settings: [:],
+        )
+        XCTAssertEqual(count, 1)
+        let written = try String(contentsOf: tmpDst, encoding: .utf8)
+        XCTAssertTrue(written.contains("MeetingTranscriber 1.0"))
+        XCTAssertTrue(written.contains("hello world"))
+    }
+
+    func test_exportFromFile_filtersOutEntriesOlderThanWindow() throws {
+        let tmpSrc = FileManager.default.temporaryDirectory
+            .appendingPathComponent("src-\(UUID().uuidString).log")
+        let tmpDst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dst-\(UUID().uuidString).log")
+        defer {
+            try? FileManager.default.removeItem(at: tmpSrc)
+            try? FileManager.default.removeItem(at: tmpDst)
+        }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        let now = Date()
+        let recentStamp = fmt.string(from: now)
+        let oldStamp = fmt.string(from: now.addingTimeInterval(-7200))
+
+        let body = """
+        \(oldStamp) MeetingTranscriber[1234]: too-old line
+        \(recentStamp) MeetingTranscriber[1234]: recent line
+        """
+        try body.write(to: tmpSrc, atomically: true, encoding: .utf8)
+
+        let count = try DiagnosticExporter.exportFromFile(
+            sourceFile: tmpSrc,
+            to: tmpDst,
+            windowSeconds: 1800,
+            appVersion: "1.0", commit: "abc",
+            macOSVersion: "14.5", settings: [:],
+        )
+        XCTAssertEqual(count, 1)
+        let written = try String(contentsOf: tmpDst, encoding: .utf8)
+        XCTAssertTrue(written.contains("recent line"))
+        XCTAssertFalse(written.contains("too-old line"))
+    }
+
+    func test_exportFromFile_missingSource_writesHeaderOnly() throws {
+        let bogusSrc = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-\(UUID().uuidString).log")
+        let tmpDst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dst-\(UUID().uuidString).log")
+        defer { try? FileManager.default.removeItem(at: tmpDst) }
+
+        let count = try DiagnosticExporter.exportFromFile(
+            sourceFile: bogusSrc,
+            to: tmpDst,
+            windowSeconds: 60,
+            appVersion: "1.0", commit: "abc",
+            macOSVersion: "14.5", settings: [:],
+        )
+        XCTAssertEqual(count, 0)
+        let written = try String(contentsOf: tmpDst, encoding: .utf8)
+        XCTAssertTrue(written.contains("MeetingTranscriber 1.0"))
+    }
 }
