@@ -1,4 +1,9 @@
 import Foundation
+import os.log
+
+private let logger = Logger(
+    subsystem: AppPaths.logSubsystem, category: "PersistentDiagnosticLog",
+)
 
 /// Manages a rolling on-disk mirror of `os.Logger` output for the
 /// `com.meetingtranscriber*` subsystems. Files are written by a background
@@ -43,6 +48,16 @@ enum PersistentDiagnosticLog {
         return name.range(of: pattern, options: .regularExpression) != nil
     }
 
+    /// Convenience: open today's log file as the stream target. Returns the
+    /// running streamer so the caller can stop it on app shutdown.
+    @discardableResult
+    static func startForToday() throws -> Streamer {
+        let target = logDirectory.appendingPathComponent(logFileName(for: Date()))
+        let streamer = try Streamer(targetURL: target)
+        try streamer.start()
+        return streamer
+    }
+
     /// Delete diagnostic-log files older than `retentionDays`. Non-matching files
     /// (anything not `diagnostics-YYYY-MM-DD.log`) are left alone. Safe to call
     /// multiple times; idempotent. Silently no-ops if the directory is missing.
@@ -64,6 +79,68 @@ enum PersistentDiagnosticLog {
                   isExpired(modifiedAt: mtime, retentionDays: retentionDays)
             else { continue }
             try? fm.removeItem(at: url)
+        }
+    }
+
+    /// Wraps a running `log stream` subprocess that mirrors our subsystems
+    /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
+    /// `init(targetURL:)` opens the file, `start()` launches the subprocess
+    /// and pipes its stdout into the file, `stop()` terminates the process
+    /// and closes the file handle.
+    final class Streamer {
+        private let process = Process()
+        private let logFileHandle: FileHandle
+        private let pipe = Pipe()
+        private(set) var isRunning = false
+
+        init(targetURL: URL) throws {
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: targetURL.path) {
+                fm.createFile(atPath: targetURL.path, contents: nil)
+            }
+            self.logFileHandle = try FileHandle(forWritingTo: targetURL)
+            try self.logFileHandle.seekToEnd()
+        }
+
+        func start() throws {
+            guard !isRunning else { return }
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
+            process.arguments = [
+                "stream",
+                "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
+                "--style", "syslog",
+                "--info",
+            ]
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            let handle = pipe.fileHandleForReading
+            handle.readabilityHandler = { [weak self] fh in
+                let data = fh.availableData
+                guard !data.isEmpty else { return }
+                try? self?.logFileHandle.write(contentsOf: data)
+            }
+
+            try process.run()
+            isRunning = true
+            logger.info(
+                "persistent_log_streamer_started pid=\(self.process.processIdentifier, privacy: .public)",
+            )
+        }
+
+        func stop() {
+            guard isRunning else { return }
+            process.terminate()
+            try? logFileHandle.close()
+            isRunning = false
+            logger.info("persistent_log_streamer_stopped")
+        }
+
+        deinit {
+            if isRunning {
+                process.terminate()
+                try? logFileHandle.close()
+            }
         }
     }
 }
