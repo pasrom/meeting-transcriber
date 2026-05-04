@@ -26,13 +26,18 @@ enum PersistentDiagnosticLog {
     /// Default retention in days. Older files are deleted on app launch.
     static let defaultRetentionDays = 30
 
-    /// File name for a given date, rotating daily. UTC so the file boundary
-    /// is stable regardless of where the user travels.
-    static func logFileName(for date: Date) -> String {
+    /// Cached file-name formatter. UTC so the file boundary is stable
+    /// regardless of where the user travels.
+    private static let fileNameFormatter: DateFormatter = {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         fmt.timeZone = TimeZone(identifier: "UTC")
-        return "diagnostics-\(fmt.string(from: date)).log"
+        return fmt
+    }()
+
+    /// File name for a given date, rotating daily.
+    static func logFileName(for date: Date) -> String {
+        "diagnostics-\(fileNameFormatter.string(from: date)).log"
     }
 
     /// True when the file's mtime is older than `retentionDays` ago.

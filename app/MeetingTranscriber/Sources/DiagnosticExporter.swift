@@ -22,6 +22,18 @@ enum DiagnosticExporter {
     /// keep one instance for both the header timestamp and per-entry timestamps.
     private static let formatter = ISO8601DateFormatter()
 
+    /// Cached `DateFormatter` for syslog-style line prefixes (`MMM d HH:mm:ss`).
+    /// Reused for every line in `exportFromFile`'s filter loop — at thousands
+    /// of lines the per-call allocation cost matters. Locale-pinned to
+    /// `en_US_POSIX` so output of `log stream` is parsed consistently.
+    private static let syslogFormatter: DateFormatter = {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        fmt.timeZone = TimeZone.current
+        return fmt
+    }()
+
     /// Build the header that prefixes every exported diagnostic file.
     /// Pure function — settings dict is stringified verbatim into `key=value`
     /// pairs, sorted alphabetically for deterministic output. No PII is
@@ -138,16 +150,13 @@ enum DiagnosticExporter {
 
     /// Parses `syslog` style line prefix `Mmm d HH:mm:ss` (15 chars) to a
     /// `Date` in the current year. Returns nil for lines without that prefix
-    /// (e.g. multi-line continuations). Locale-pinned to `en_US_POSIX` so
-    /// `log stream` output is parsed consistently regardless of user locale.
+    /// (e.g. multi-line continuations). Uses the cached `syslogFormatter` —
+    /// avoids per-call DateFormatter allocation when filtering thousands of
+    /// lines in `exportFromFile`.
     static func parseSyslogDate(_ line: String) -> Date? {
         guard line.count >= 15 else { return nil }
         let prefix = String(line.prefix(15))
-        let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d HH:mm:ss"
-        fmt.locale = Locale(identifier: "en_US_POSIX")
-        fmt.timeZone = TimeZone.current
-        guard let parsed = fmt.date(from: prefix) else { return nil }
+        guard let parsed = syslogFormatter.date(from: prefix) else { return nil }
         // The parsed date defaults to year 2000; rebuild with current year.
         var components = Calendar.current.dateComponents(
             [.month, .day, .hour, .minute, .second], from: parsed,

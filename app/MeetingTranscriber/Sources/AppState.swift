@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import os.log
 
 // MARK: - AppNotifying
 
@@ -89,7 +90,13 @@ final class AppState {
             observeDebugRPCSetting()
 
             PersistentDiagnosticLog.cleanup()
-            self.persistentLogStreamer = try? PersistentDiagnosticLog.startForToday()
+            do {
+                self.persistentLogStreamer = try PersistentDiagnosticLog.startForToday()
+            } catch {
+                Logger(subsystem: AppPaths.logSubsystem, category: "AppState")
+                    .error("persistent_log_streamer_failed_to_start error=\(error.localizedDescription, privacy: .public)")
+                self.persistentLogStreamer = nil
+            }
             // Stop the streamer cleanly when the app terminates so the file
             // handle flushes and the child `log` process exits. Done via
             // NotificationCenter rather than a SwiftUI `.onReceive` so the
