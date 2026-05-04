@@ -49,6 +49,11 @@ final class AppState {
         /// Lazy-started debug RPC server. Only constructed if the env var is
         /// set — otherwise `nil` and zero overhead.
         var debugRPCServer: DebugRPCServer?
+
+        /// Background `log stream` subprocess that mirrors our subsystems to
+        /// `~/Library/Logs/MeetingTranscriber/diagnostics-YYYY-MM-DD.log`.
+        /// Survives longer than OSLogStore retention (~1h for `.info`).
+        private(set) var persistentLogStreamer: PersistentDiagnosticLog.Streamer?
     #endif
 
     // MARK: - Init
@@ -81,8 +86,20 @@ final class AppState {
                 startDebugRPCServer()
             }
             observeDebugRPCSetting()
+
+            PersistentDiagnosticLog.cleanup()
+            self.persistentLogStreamer = try? PersistentDiagnosticLog.startForToday()
         #endif
     }
+
+    #if !APPSTORE
+        /// Stop the persistent log streamer cleanly. Called from the
+        /// `NSApplication.willTerminateNotification` handler.
+        func stopPersistentLogStreamer() {
+            persistentLogStreamer?.stop()
+            persistentLogStreamer = nil
+        }
+    #endif
 
     #if !APPSTORE
         /// Reconcile the debug RPC server with the current setting.

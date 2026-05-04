@@ -85,6 +85,11 @@ struct MeetingTranscriberApp: App {
             .onReceive(NotificationCenter.default.publisher(for: .closeSettings)) { _ in
                 closeWindow(id: "settings")
             }
+            #if !APPSTORE
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.stopPersistentLogStreamer()
+                }
+            #endif
             .task {
                 switch appState.settings.transcriptionEngine {
                 case .whisperKit:
