@@ -3,19 +3,33 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import os
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Permissions")
 
 enum Permissions {
     /// Check if Screen Recording permission is granted.
     static func checkScreenRecording() -> Bool {
-        PermissionHealthCheck.checkScreenRecordingLive() == .healthy
+        let granted = PermissionHealthCheck.checkScreenRecordingLive() == .healthy
+        if !granted {
+            logger.warning("permission_denied resource=screen_recording — required for meeting detection")
+        }
+        return granted
     }
 
     static func ensureMicrophoneAccess() async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         if status == .authorized { return true }
         if status == .notDetermined {
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            if !granted {
+                logger.warning("permission_denied resource=microphone status=user_denied_prompt")
+            }
+            return granted
         }
+        logger.warning(
+            "permission_denied resource=microphone status=\(status.rawValue, privacy: .public)",
+        )
         return false
     }
 
@@ -28,8 +42,15 @@ enum Permissions {
             prompted = true
             return false
         }
-        guard !alreadyPrompted else { return false }
+        guard !alreadyPrompted else {
+            logger.warning("permission_denied resource=accessibility status=already_prompted")
+            return false
+        }
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        return AXIsProcessTrustedWithOptions(options)
+        let granted = AXIsProcessTrustedWithOptions(options)
+        if !granted {
+            logger.warning("permission_denied resource=accessibility status=user_denied_prompt")
+        }
+        return granted
     }
 }
