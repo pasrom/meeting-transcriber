@@ -12,6 +12,21 @@ enum AudioMixer {
     /// a corrupted timestamp (e.g. device restart mid-recording, see #99).
     static let maxMicDelay: TimeInterval = 30
 
+    /// Clamps `delay` to ±`maxMicDelay`. Logs a warning if clamping occurred —
+    /// excessive deltas usually mean the output device was switched mid-recording,
+    /// resetting the first-frame timestamp on one but not the other source.
+    static func clampMicDelay(_ delay: TimeInterval) -> TimeInterval {
+        let clamped = min(max(delay, -maxMicDelay), maxMicDelay)
+        if clamped != delay {
+            let delayStr = String(format: "%.2f", delay)
+            let clampedStr = String(format: "%.2f", clamped)
+            logger.warning(
+                "mic_delay_clamped original=\(delayStr, privacy: .public)s clamped=\(clampedStr, privacy: .public)s — possible output-device switch during recording",
+            )
+        }
+        return clamped
+    }
+
     /// Mix app and mic audio tracks into a single mono WAV.
     ///
     /// Applies echo suppression, delay alignment, then averages the two tracks.
@@ -25,11 +40,7 @@ enum AudioMixer {
         var appSamples = try loadAudioFileAsFloat32(url: appAudioPath)
         var micSamples = try loadAudioFileAsFloat32(url: micAudioPath)
 
-        // Clamp to ±maxMicDelay (see #99).
-        let clampedDelay = min(max(micDelay, -maxMicDelay), maxMicDelay)
-        if clampedDelay != micDelay {
-            logger.warning("micDelay \(micDelay)s outside ±\(Self.maxMicDelay)s — clamped to \(clampedDelay)s")
-        }
+        let clampedDelay = clampMicDelay(micDelay)
 
         // Apply echo suppression
         if !appSamples.isEmpty && !micSamples.isEmpty {
