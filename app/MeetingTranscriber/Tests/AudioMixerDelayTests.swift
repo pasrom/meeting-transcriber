@@ -92,4 +92,25 @@ final class AudioMixerDelayTests: XCTestCase {
             "50s positive delay on 60s track must be clamped (#99)",
         )
     }
+
+    // MARK: - clampMicDelay
+
+    func test_clampMicDelay_withinBound_unchanged() {
+        XCTAssertEqual(AudioMixer.clampMicDelay(5.0), 5.0)
+        XCTAssertEqual(AudioMixer.clampMicDelay(-5.0), -5.0)
+        XCTAssertEqual(AudioMixer.clampMicDelay(0), 0)
+    }
+
+    func test_clampMicDelay_excessivePositive_clampsToMax() {
+        XCTAssertEqual(AudioMixer.clampMicDelay(45.0), AudioMixer.maxMicDelay)
+    }
+
+    func test_clampMicDelay_excessiveNegative_clampsToNegMax() {
+        XCTAssertEqual(AudioMixer.clampMicDelay(-45.0), -AudioMixer.maxMicDelay)
+    }
+
+    func test_clampMicDelay_atBoundary_unchanged() {
+        XCTAssertEqual(AudioMixer.clampMicDelay(AudioMixer.maxMicDelay), AudioMixer.maxMicDelay)
+        XCTAssertEqual(AudioMixer.clampMicDelay(-AudioMixer.maxMicDelay), -AudioMixer.maxMicDelay)
+    }
 }
