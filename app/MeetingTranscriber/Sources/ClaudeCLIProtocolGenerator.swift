@@ -69,6 +69,9 @@
             do {
                 try process.run()
             } catch {
+                logger.error(
+                    "claude_cli_not_found bin=\(self.claudeBin, privacy: .public) resolvedPath=\(resolvedBin, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
+                )
                 throw ProtocolError.cliNotFound(claudeBin)
             }
 
@@ -77,12 +80,11 @@
             // but AsyncStream buffers the yield so we won't miss it.
             // No additional check needed — AsyncStream handles the race.
 
-            logger.info("Generating protocol with Claude CLI ...")
-
             // C6 fix: Write stdin in a detached task to avoid deadlock on large transcripts.
             // The pipe buffer is finite (~64KB); if the prompt exceeds it, a synchronous
             // write blocks until the reader drains — but we haven't started reading yet.
             let promptData = Data(prompt.utf8)
+            logger.info("claude_cli_subprocess_start prompt_bytes=\(promptData.count, privacy: .public)")
             let stdinWriteTask = Task.detached {
                 stdinPipe.fileHandleForWriting.write(promptData)
                 stdinPipe.fileHandleForWriting.closeFile()
@@ -107,11 +109,15 @@
             if process.terminationStatus != 0 {
                 let stderrData = await stderrRead
                 let stderrText = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                logger.error(
+                    "claude_cli_failed exit=\(process.terminationStatus, privacy: .public) stderr=\(stderrText, privacy: .public)",
+                )
                 throw ProtocolError.cliFailed(Int(process.terminationStatus), stderrText)
             }
 
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
+                logger.error("claude_cli_empty_response — subprocess exited 0 with empty output")
                 throw ProtocolError.emptyProtocol
             }
 
@@ -130,6 +136,11 @@
             var buffer = Data()
             while true {
                 if ProcessInfo.processInfo.systemUptime - startTime > timeoutSeconds {
+                    let elapsed = ProcessInfo.processInfo.systemUptime - startTime
+                    let elapsedStr = String(format: "%.1f", elapsed)
+                    logger.error(
+                        "claude_cli_timeout elapsed=\(elapsedStr, privacy: .public)s parts_received=\(parts.count, privacy: .public)",
+                    )
                     process.terminate()
                     throw ProtocolError.timeout
                 }

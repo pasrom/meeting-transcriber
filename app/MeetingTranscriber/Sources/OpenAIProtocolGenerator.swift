@@ -62,10 +62,14 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         do {
             (bytes, response) = try await session.bytes(for: request)
         } catch {
+            logger.error(
+                "openai_connection_failed endpoint=\(self.endpoint.absoluteString, privacy: .public) model=\(self.model, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
+            )
             throw ProtocolError.connectionFailed(error.localizedDescription)
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            logger.error("openai_invalid_response endpoint=\(self.endpoint.absoluteString, privacy: .public)")
             throw ProtocolError.connectionFailed("Invalid response")
         }
 
@@ -76,6 +80,9 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
                 errorBody += line
                 if errorBody.count > 500 { break }
             }
+            logger.error(
+                "openai_http_error status=\(httpResponse.statusCode, privacy: .public) endpoint=\(self.endpoint.absoluteString, privacy: .public) body=\(errorBody, privacy: .public)",
+            )
             throw ProtocolError.httpError(httpResponse.statusCode, errorBody)
         }
 
