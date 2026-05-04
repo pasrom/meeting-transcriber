@@ -1,6 +1,9 @@
 import FluidAudio
 import Foundation
+import os.log
 import WhisperKit
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Qwen3AsrEngine")
 
 /// Transcription engine backed by Qwen3-ASR 0.6B via FluidAudio CoreML.
 ///
@@ -44,7 +47,7 @@ final class Qwen3AsrEngine: TranscribingEngine {
                 asrManager = manager
                 modelState = .loaded
             } catch {
-                NSLog("Qwen3-ASR model load failed: \(error)")
+                logger.error("Qwen3-ASR model load failed: \(error.localizedDescription, privacy: .public)")
                 modelState = .unloaded
                 downloadProgress = 0
             }
@@ -56,13 +59,13 @@ final class Qwen3AsrEngine: TranscribingEngine {
 
     private func ensureModel() async throws {
         if asrManager != nil { return }
-        NSLog("Qwen3-ASR: model not loaded, loading...")
+        logger.info("Qwen3-ASR: model not loaded, loading...")
         await loadModel()
         guard asrManager != nil else {
-            NSLog("Qwen3-ASR: model load FAILED, state=\(modelState)")
+            logger.error("Qwen3-ASR: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded
         }
-        NSLog("Qwen3-ASR: model loaded successfully")
+        logger.info("Qwen3-ASR: model loaded successfully")
     }
 
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
