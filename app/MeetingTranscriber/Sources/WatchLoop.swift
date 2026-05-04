@@ -51,7 +51,7 @@ class WatchLoop {
     let micDeviceUID: String?
     /// Dynamic accessor — read at recording-start time so toggling the setting
     /// at runtime takes effect on the next recording without an app restart.
-    let audioDebugLogging: () -> Bool
+    let verboseDiagnostics: () -> Bool
     /// Dynamic accessor — when true, skip the post-processing pipeline and
     /// instead write a `<basename>_meta.json` sidecar next to the recording.
     let recordOnly: () -> Bool
@@ -78,7 +78,7 @@ class WatchLoop {
         maxDuration: TimeInterval = 14400,
         noMic: Bool = false,
         micDeviceUID: String? = nil,
-        audioDebugLogging: @escaping () -> Bool = { false },
+        verboseDiagnostics: @escaping () -> Bool = { false },
         recordOnly: @escaping () -> Bool = { false },
         recordOnlyOutputDir: @escaping () -> URL = { AppPaths.recordingsDir },
         notifier: any AppNotifying = SilentNotifier(),
@@ -91,7 +91,7 @@ class WatchLoop {
         self.maxDuration = maxDuration
         self.noMic = noMic
         self.micDeviceUID = micDeviceUID
-        self.audioDebugLogging = audioDebugLogging
+        self.verboseDiagnostics = verboseDiagnostics
         self.recordOnly = recordOnly
         self.recordOnlyOutputDir = recordOnlyOutputDir
         self.notifier = notifier
@@ -154,7 +154,7 @@ class WatchLoop {
         let recorder = recorderFactory()
         try recorder.start(
             appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID,
-            debugLogging: audioDebugLogging(),
+            debugLogging: verboseDiagnostics(),
         )
 
         activeRecorder = recorder
@@ -262,7 +262,7 @@ class WatchLoop {
             appPID: meeting.windowPID,
             noMic: noMic,
             micDeviceUID: micDeviceUID,
-            debugLogging: audioDebugLogging(),
+            debugLogging: verboseDiagnostics(),
         )
 
         // Read participants (Teams)

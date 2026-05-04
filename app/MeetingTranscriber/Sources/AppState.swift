@@ -247,7 +247,7 @@ final class AppState {
                     endGracePeriod: settings.endGrace,
                     noMic: settings.noMic,
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                    audioDebugLogging: { [settings] in settings.audioDebugLogging },
+                    verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
                     recordOnly: { [settings] in settings.recordOnly },
                     recordOnlyOutputDir: { [settings] in
                         settings.effectiveOutputDir.appendingPathComponent("recordings")
@@ -305,7 +305,7 @@ final class AppState {
                 pollInterval: settings.pollInterval,
                 noMic: settings.noMic,
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                audioDebugLogging: { [settings] in settings.audioDebugLogging },
+                verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
                 recordOnly: { [settings] in settings.recordOnly },
                 recordOnlyOutputDir: { [settings] in
                     settings.effectiveOutputDir.appendingPathComponent("recordings")

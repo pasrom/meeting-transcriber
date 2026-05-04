@@ -280,13 +280,16 @@ final class AppSettings {
 
     // MARK: - Diagnostics
 
-    /// Enables verbose logging in the audio-capture path: process/device identity,
-    /// periodic RMS energy of the captured stream, output-device-change details.
-    /// Off by default; toggle for forensic debugging when audio recordings are silent
-    /// or otherwise unexpected. Logs go to the unified log subsystem
-    /// `com.meetingtranscriber.audiotap`.
-    var audioDebugLogging: Bool {
-        didSet { defaults.set(audioDebugLogging, forKey: "audioDebugLogging") }
+    /// Enables verbose diagnostic logging across **all** pipelines: audio
+    /// capture (process/device identity, periodic RMS), transcription
+    /// (segment counts, input RMS, sample-rate validation), VAD (segment
+    /// boundaries, round-trip checks), diarization, speaker matching
+    /// (top-2 candidates + margins), and protocol generation. Off by
+    /// default. Logs go to `com.meetingtranscriber` and
+    /// `com.meetingtranscriber.audiotap`. Use the "Export Diagnostics"
+    /// button in Settings → Advanced to attach a log to a bug report.
+    var verboseDiagnostics: Bool {
+        didSet { defaults.set(verboseDiagnostics, forKey: "verboseDiagnostics") }
     }
 
     #if !APPSTORE
@@ -360,7 +363,16 @@ final class AppSettings {
             ?? "http://localhost:11434/v1/chat/completions"
         openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
 
-        audioDebugLogging = defaults.object(forKey: "audioDebugLogging") as? Bool ?? false
+        // Migrate legacy "audioDebugLogging" key (renamed to "verboseDiagnostics" 2026-05-04).
+        // New key wins if both are set; legacy value seeds the new key on first launch.
+        if let new = defaults.object(forKey: "verboseDiagnostics") as? Bool {
+            verboseDiagnostics = new
+        } else if let legacy = defaults.object(forKey: "audioDebugLogging") as? Bool {
+            verboseDiagnostics = legacy
+            defaults.set(legacy, forKey: "verboseDiagnostics")
+        } else {
+            verboseDiagnostics = false
+        }
         #if !APPSTORE
             debugRPCEnabled = defaults.object(forKey: "debugRPCEnabled") as? Bool ?? false
         #endif

@@ -247,6 +247,47 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "recordOnly"))
     }
 
+    // MARK: - Verbose Diagnostics (legacy audioDebugLogging migration)
+
+    func test_verboseDiagnostics_defaultsToFalse() {
+        XCTAssertFalse(settings.verboseDiagnostics)
+    }
+
+    func test_verboseDiagnostics_persistsUnderNewKey() {
+        settings.verboseDiagnostics = true
+        XCTAssertTrue(defaults.bool(forKey: "verboseDiagnostics"))
+    }
+
+    func test_verboseDiagnostics_migratesFromLegacyAudioDebugLoggingKey() {
+        let suiteName = "AppSettingsTests-migration-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create suite")
+            return
+        }
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+
+        suite.set(true, forKey: "audioDebugLogging")
+
+        let migrated = AppSettings(defaults: suite)
+        XCTAssertTrue(migrated.verboseDiagnostics)
+        XCTAssertTrue(suite.bool(forKey: "verboseDiagnostics"))
+    }
+
+    func test_verboseDiagnostics_newKeyTakesPrecedenceOverLegacy() {
+        let suiteName = "AppSettingsTests-precedence-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create suite")
+            return
+        }
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+
+        suite.set(true, forKey: "audioDebugLogging")
+        suite.set(false, forKey: "verboseDiagnostics")
+
+        let migrated = AppSettings(defaults: suite)
+        XCTAssertFalse(migrated.verboseDiagnostics)
+    }
+
     // MARK: - Keychain
 
     func testKeychainRoundTrip() {

@@ -56,12 +56,13 @@ struct AdvancedSettingsView: View {
             }
 
             Section("Diagnostics") {
-                Toggle("Verbose Audio Logging", isOn: $settings.audioDebugLogging)
+                Toggle("Verbose Diagnostic Logging", isOn: $settings.verboseDiagnostics)
                 Text(
-                    "Logs process and output-device identity, plus a 5-second RMS"
-                        + " energy report of the captured app audio. Use to"
-                        + " investigate silent recordings. Logs go to subsystem"
-                        + " com.meetingtranscriber.audiotap (view via Console.app).",
+                    "Logs detailed diagnostics across recording, transcription,"
+                        + " diarization, and protocol generation. Used to debug"
+                        + " issues. Off by default — toggle on, reproduce the"
+                        + " problem, then click \"Export Diagnostics…\" below to"
+                        + " attach a redacted log file to a bug report.",
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
