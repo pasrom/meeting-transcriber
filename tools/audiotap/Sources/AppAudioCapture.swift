@@ -265,12 +265,13 @@ public class AppAudioCapture {
         var newTapID = AudioObjectID(kAudioObjectUnknown)
         let tapStatus = AudioHardwareCreateProcessTap(tap, &newTapID)
         guard tapStatus == noErr else {
+            let hint = Self.describeTapError(tapStatus)
+            logger.error(
+                "Failed to create process tap (pid=\(self.pid, privacy: .public)): \(hint, privacy: .public)",
+            )
             throw NSError(
                 domain: "audiotap", code: Int(tapStatus),
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Failed to create process tap (status: \(tapStatus))",
-                ],
+                userInfo: [NSLocalizedDescriptionKey: hint],
             )
         }
         tapID = newTapID
@@ -443,6 +444,25 @@ public class AppAudioCapture {
             outputListenerInstalled = false
         }
         logger.info("Audio capture stopped")
+    }
+
+    /// Translates an `AudioHardwareCreateProcessTap` OSStatus to a human hint.
+    /// Exposed `internal` for unit tests.
+    static func describeTapError(_ status: OSStatus) -> String {
+        switch status {
+        case -12_988:
+            return "OSStatus -12988: likely missing permission. " +
+                "Check System Settings → Privacy & Security → Screen Recording " +
+                "and enable Meeting Transcriber."
+        case -10_851:
+            return "OSStatus -10851 (kAudioUnitErr_InvalidProperty): " +
+                "the tap target may have exited before the tap was created."
+        case -50:
+            return "OSStatus -50 (paramErr): invalid CATapDescription parameter " +
+                "(target process may not be capturable)."
+        default:
+            return "OSStatus \(status): unrecognised — see CoreAudio headers."
+        }
     }
 }
 
