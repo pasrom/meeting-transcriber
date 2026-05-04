@@ -382,6 +382,7 @@ class PipelineQueue {
             return
         }
         let jobID = jobs[index].id
+        let shortID = jobs[index].shortID
         let title = jobs[index].meetingTitle
         let mixPath = jobs[index].mixPath
         let appPath = jobs[index].appPath
@@ -393,6 +394,7 @@ class PipelineQueue {
             // --- Transcription ---
             updateJobState(id: jobID, to: .transcribing)
             startElapsedTimer()
+            logger.info("[\(shortID, privacy: .public)] transcription_start title=\(title, privacy: .private)")
 
             // Create a temp directory for intermediate 16kHz files
             let workDir = FileManager.default.temporaryDirectory
@@ -676,21 +678,21 @@ class PipelineQueue {
                             finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
                         }
                         let segCount = diarization?.segments.count ?? 0
-                        logger.info("Diarization complete: \(segCount) segments")
+                        logger.info("[\(shortID, privacy: .public)] diarization_complete segments=\(segCount, privacy: .public)")
                     } catch {
-                        logger.warning("Diarization failed, using undiarized transcript: \(error.localizedDescription)")
+                        logger.warning("[\(shortID, privacy: .public)] diarization_failed error=\(error.localizedDescription, privacy: .public)")
                         addWarning(id: jobID, "Diarization failed — speakers not identified")
                         // Continue with original transcript
                     }
                 } else {
-                    logger.info("Diarization not available")
+                    logger.info("[\(shortID, privacy: .public)] diarization_skipped")
                 }
             }
 
             // --- Save Transcript & Audio (always) ---
             let protocolsDir = outputDir.appendingPathComponent("protocols")
             let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: protocolsDir)
-            logger.info("Transcript saved: \(txtPath.lastPathComponent)")
+            logger.info("[\(shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .public)")
 
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].transcriptPath = txtPath
@@ -779,6 +781,7 @@ class PipelineQueue {
         guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
             return
         }
+        let shortID = String(jobID.uuidString.prefix(8).lowercased())
         do {
             updateJobState(id: jobID, to: .generatingProtocol)
             startElapsedTimer()
@@ -792,13 +795,13 @@ class PipelineQueue {
             let mdPath = try ProtocolGenerator.saveProtocol(
                 fullMD, title: title, dir: protocolsDir,
             )
-            logger.info("Protocol saved: \(mdPath.lastPathComponent)")
+            logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .public)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].protocolPath = mdPath
             }
             stopElapsedTimer()
         } catch {
-            logger.warning("Protocol generation failed: \(error.localizedDescription)")
+            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
             stopElapsedTimer()
         }

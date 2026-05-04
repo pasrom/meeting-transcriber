@@ -80,6 +80,45 @@ final class PipelineJobTests: XCTestCase {
         }
     }
 
+    func test_shortID_isEightLowercaseHexChars() {
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        XCTAssertEqual(job.shortID.count, 8)
+        XCTAssertTrue(job.shortID.allSatisfy { "0123456789abcdef".contains($0) })
+    }
+
+    func test_shortID_isStableForSameJob() {
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        XCTAssertEqual(job.shortID, job.shortID)
+    }
+
+    func test_shortID_differsAcrossJobs() {
+        let a = PipelineJob(
+            meetingTitle: "A", appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        let b = PipelineJob(
+            meetingTitle: "B", appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        XCTAssertNotEqual(a.shortID, b.shortID)
+    }
+
     func testJobStateRawValues() {
         XCTAssertEqual(JobState.waiting.rawValue, "waiting")
         XCTAssertEqual(JobState.transcribing.rawValue, "transcribing")
