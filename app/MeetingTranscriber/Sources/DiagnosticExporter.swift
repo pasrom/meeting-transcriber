@@ -9,6 +9,15 @@ import OSLog
 /// file exists, read from that (survives longer than OSLogStore retention).
 /// Otherwise fall back to `OSLogStore` (~1h window for `.info`-level entries).
 enum DiagnosticExporter {
+    /// Bundle of identity fields stamped into the export header. Keeps the
+    /// `export(...)` parameter count manageable.
+    struct HeaderInfo {
+        let appVersion: String
+        let commit: String
+        let macOSVersion: String
+        let settings: [String: String]
+    }
+
     /// Shared formatter — `ISO8601DateFormatter` init is non-trivial, so we
     /// keep one instance for both the header timestamp and per-entry timestamps.
     private static let formatter = ISO8601DateFormatter()
@@ -36,6 +45,16 @@ enum DiagnosticExporter {
         """
     }
 
+    /// Build header from a `HeaderInfo` bundle.
+    static func makeHeader(_ info: HeaderInfo) -> String {
+        makeHeader(
+            appVersion: info.appVersion,
+            commit: info.commit,
+            macOSVersion: info.macOSVersion,
+            settings: info.settings,
+        )
+    }
+
     /// Reads the last `windowSeconds` of unified-log entries for our subsystems
     /// and writes them to `outputURL`. Returns the number of log entries
     /// written (excluding the header). Prefers the persistent file source
@@ -43,10 +62,7 @@ enum DiagnosticExporter {
     @available(macOS 12, *)
     static func export(
         to outputURL: URL,
-        appVersion: String,
-        commit: String,
-        macOSVersion: String,
-        settings: [String: String],
+        info: HeaderInfo,
         windowSeconds: TimeInterval = 1800,
     ) throws -> Int {
         let todayFile = PersistentDiagnosticLog.logDirectory
@@ -55,20 +71,14 @@ enum DiagnosticExporter {
             return try exportFromFile(
                 sourceFile: todayFile,
                 to: outputURL,
+                info: info,
                 windowSeconds: windowSeconds,
-                appVersion: appVersion,
-                commit: commit,
-                macOSVersion: macOSVersion,
-                settings: settings,
             )
         }
         return try exportFromOSLogStore(
             to: outputURL,
+            info: info,
             windowSeconds: windowSeconds,
-            appVersion: appVersion,
-            commit: commit,
-            macOSVersion: macOSVersion,
-            settings: settings,
         )
     }
 
@@ -78,16 +88,10 @@ enum DiagnosticExporter {
     static func exportFromFile(
         sourceFile: URL,
         to outputURL: URL,
+        info: HeaderInfo,
         windowSeconds: TimeInterval,
-        appVersion: String,
-        commit: String,
-        macOSVersion: String,
-        settings: [String: String],
     ) throws -> Int {
-        let header = makeHeader(
-            appVersion: appVersion, commit: commit,
-            macOSVersion: macOSVersion, settings: settings,
-        )
+        let header = makeHeader(info)
 
         let raw = (try? String(contentsOf: sourceFile, encoding: .utf8)) ?? ""
         let cutoff = Date().addingTimeInterval(-windowSeconds)
@@ -107,11 +111,8 @@ enum DiagnosticExporter {
     @available(macOS 12, *)
     static func exportFromOSLogStore(
         to outputURL: URL,
+        info: HeaderInfo,
         windowSeconds: TimeInterval,
-        appVersion: String,
-        commit: String,
-        macOSVersion: String,
-        settings: [String: String],
     ) throws -> Int {
         let store = try OSLogStore(scope: .currentProcessIdentifier)
         let position = store.position(date: Date().addingTimeInterval(-windowSeconds))
@@ -120,10 +121,7 @@ enum DiagnosticExporter {
         )
         let entries = try store.getEntries(at: position, matching: predicate)
 
-        var lines: [String] = [makeHeader(
-            appVersion: appVersion, commit: commit,
-            macOSVersion: macOSVersion, settings: settings,
-        )]
+        var lines: [String] = [makeHeader(info)]
         var count = 0
         for entry in entries {
             guard let log = entry as? OSLogEntryLog else { continue }
