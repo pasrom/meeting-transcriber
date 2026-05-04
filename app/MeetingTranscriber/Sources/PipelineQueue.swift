@@ -460,7 +460,17 @@ class PipelineQueue {
 
             stopElapsedTimer()
 
+            let segCount = cachedSegments?.count ?? 0
+            let totalSecs = cachedSegments?.last?.end ?? 0
+            let inputRMS = AudioMixer.rmsDecibels(forFileAt: mixPath) ?? .nan
+            logger.info(
+                "[\(shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s inputRMSdBFS=\(inputRMS, privacy: .public)",
+            )
+
             guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                logger.warning(
+                    "[\(shortID, privacy: .public)] transcription_empty inputRMSdBFS=\(inputRMS, privacy: .public). Likely silent input or ASR misconfiguration — check microphone level and engine settings.",
+                )
                 updateJobState(id: jobID, to: .error, error: "Empty transcript")
                 isProcessing = false
                 triggerProcessing()

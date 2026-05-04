@@ -473,6 +473,42 @@ final class AudioMixerTests: XCTestCase {
 
         XCTAssertEqual(peak, 440, accuracy: 440 * 0.05, "M4A→16k must preserve 440Hz (got \(peak)Hz)")
     }
+
+    // MARK: - RMS
+
+    func test_rmsDecibels_emptyBuffer_returnsNegativeInfinity() {
+        XCTAssertEqual(AudioMixer.rmsDecibels(samples: []), -.infinity)
+    }
+
+    func test_rmsDecibels_silentBuffer_isVeryLow() {
+        let silent = [Float](repeating: 0, count: 1024)
+        let rms = AudioMixer.rmsDecibels(samples: silent)
+        XCTAssertLessThan(rms, -190, "Silent buffer should be ~-200 dBFS, got \(rms)")
+    }
+
+    func test_rmsDecibels_fullScaleSine_isAroundMinus3() {
+        let sine = Self.generateSine(frequency: 440, sampleRate: 16000, duration: 0.5)
+        let rms = AudioMixer.rmsDecibels(samples: sine)
+        XCTAssertEqual(rms, -3, accuracy: 0.5, "Full-scale sine RMS should be ~-3 dBFS, got \(rms)")
+    }
+
+    func test_rmsDecibels_forFileAt_silentWAV() throws {
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rms_silent_\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+        let silent = [Float](repeating: 0, count: 16000)
+        try AudioMixer.saveWAV(samples: silent, sampleRate: 16000, url: tmpURL)
+
+        let rms = AudioMixer.rmsDecibels(forFileAt: tmpURL)
+        XCTAssertNotNil(rms)
+        XCTAssertLessThan(rms ?? 0, -190)
+    }
+
+    func test_rmsDecibels_forFileAt_missingFile_returnsNil() {
+        let bogus = URL(fileURLWithPath: "/tmp/does-not-exist-\(UUID().uuidString).wav")
+        XCTAssertNil(AudioMixer.rmsDecibels(forFileAt: bogus))
+    }
 }
 
 // MARK: - FFT Helpers

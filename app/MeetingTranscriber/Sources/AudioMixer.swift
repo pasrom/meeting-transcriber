@@ -335,6 +335,22 @@ enum AudioMixer {
         return try readSamplesFromAudioFile(file)
     }
 
+    /// RMS in dBFS for a Float32 PCM sample buffer.
+    /// Returns `-Float.infinity` for an empty buffer (true silence).
+    static func rmsDecibels(samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return -.infinity }
+        let sumSq = samples.reduce(Float(0)) { $0 + $1 * $1 }
+        let rms = (sumSq / Float(samples.count)).squareRoot()
+        return 20 * log10(max(rms, 1e-10))
+    }
+
+    /// Convenience: RMS in dBFS for a WAV / AVAudioFile-readable file.
+    /// Returns `nil` if the file cannot be read.
+    static func rmsDecibels(forFileAt url: URL) -> Float? {
+        guard let samples = try? loadAudioFileAsFloat32(url: url) else { return nil }
+        return rmsDecibels(samples: samples)
+    }
+
     /// Read mono Float32 samples from an already-opened AVAudioFile.
     private static func readSamplesFromAudioFile(_ file: AVAudioFile) throws -> [Float] {
         let format = file.processingFormat
