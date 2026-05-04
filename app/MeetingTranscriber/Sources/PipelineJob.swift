@@ -27,6 +27,14 @@ enum JobState: String, Codable {
 
 struct PipelineJob: Identifiable, Codable {
     let id: UUID
+
+    /// Short 8-hex-char form of `id`, used as a `[xxxxxxxx]` log prefix to
+    /// correlate diagnostic lines across the transcribe → diarize → protocol
+    /// stages of the same job.
+    var shortID: String {
+        String(id.uuidString.prefix(8).lowercased())
+    }
+
     let meetingTitle: String
     let appName: String
     let mixPath: URL
