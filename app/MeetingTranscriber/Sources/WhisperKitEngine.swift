@@ -1,6 +1,9 @@
 import AVFoundation
 import Foundation
+import os.log
 import WhisperKit
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WhisperKitEngine")
 
 /// A transcribed segment with timestamps and optional speaker label.
 struct TimestampedSegment: Codable {
@@ -75,7 +78,7 @@ final class WhisperKitEngine: TranscribingEngine {
                 )
                 modelState = .loaded
             } catch {
-                NSLog("WhisperKit model load failed: \(error)")
+                logger.error("WhisperKit model load failed: \(error.localizedDescription, privacy: .public)")
                 modelState = .unloaded
                 downloadProgress = 0
             }
@@ -88,13 +91,13 @@ final class WhisperKitEngine: TranscribingEngine {
     /// Ensure model is loaded, loading it if necessary.
     private func ensureModel() async throws {
         if pipe != nil { return }
-        NSLog("WhisperKit: model not loaded, loading \(modelVariant)...")
+        logger.info("WhisperKit: model not loaded, loading \(self.modelVariant, privacy: .public)...")
         await loadModel()
         guard pipe != nil else {
-            NSLog("WhisperKit: model load FAILED, state=\(modelState)")
+            logger.error("WhisperKit: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded
         }
-        NSLog("WhisperKit: model loaded successfully")
+        logger.info("WhisperKit: model loaded successfully")
     }
 
     /// Transcribe a WAV file. Returns lines in `[MM:SS] text` format matching Python output.
