@@ -181,6 +181,11 @@ class SpeakerMatcher {
             } else {
                 assignedName = label
             }
+            Self.logMatchDecision(
+                label: label, best: best, second: second,
+                assigned: assignedName, threshold: threshold,
+                margin: confidenceMargin,
+            )
             result[label] = VerboseMatch(
                 assignedName: assignedName, topCandidates: Array(scored.prefix(topK)),
             )
@@ -544,6 +549,44 @@ class SpeakerMatcher {
         }
 
         return updated
+    }
+
+    /// Forensic log for a single label match decision. Names are
+    /// SHA-256-pseudonymized via `String.pseudonymized` so the log can be
+    /// shared in bug reports without leaking real speaker names. Distances
+    /// and margins are public; the per-label classifier ID is public too.
+    private static func logMatchDecision(
+        label: String,
+        best: TopCandidate?,
+        second: TopCandidate?,
+        assigned: String,
+        threshold: Float,
+        margin: Float,
+    ) {
+        guard let best else {
+            logger.info(
+                "speaker_match label=\(label, privacy: .public) result=no_candidates",
+            )
+            return
+        }
+        let bestPseudo = best.name.pseudonymized
+        let secondPseudo = second?.name.pseudonymized ?? "none"
+        let secondDist = second?.hybrid ?? .greatestFiniteMagnitude
+        let actualMargin = secondDist - best.hybrid
+
+        if assigned == best.name {
+            logger.info(
+                "speaker_match_assigned label=\(label, privacy: .public) speaker=\(bestPseudo, privacy: .public) bestDist=\(best.hybrid, privacy: .public) secondDist=\(secondDist, privacy: .public) margin=\(actualMargin, privacy: .public)",
+            )
+        } else if best.hybrid >= threshold {
+            logger.info(
+                "speaker_match_rejected label=\(label, privacy: .public) reason=above_threshold dist=\(best.hybrid, privacy: .public) threshold=\(threshold, privacy: .public) candidate=\(bestPseudo, privacy: .public)",
+            )
+        } else {
+            logger.info(
+                "speaker_match_rejected label=\(label, privacy: .public) reason=below_margin margin=\(actualMargin, privacy: .public) min=\(margin, privacy: .public) candidate=\(bestPseudo, privacy: .public) runner_up=\(secondPseudo, privacy: .public)",
+            )
+        }
     }
 
     /// Cosine distance: 0 = identical, 2 = opposite.
