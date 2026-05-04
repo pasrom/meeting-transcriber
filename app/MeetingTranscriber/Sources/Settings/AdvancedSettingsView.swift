@@ -1,6 +1,10 @@
+import AppKit
 import ApplicationServices
 import AVFoundation
+import os.log
 import SwiftUI
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AdvancedSettingsView")
 
 private enum PrivacyPane: String {
     case screenCapture = "Privacy_ScreenCapture"
@@ -18,6 +22,8 @@ struct AdvancedSettingsView: View {
     @State private var micPermission: AVAuthorizationStatus = .notDetermined
     @State private var screenRecordingOK = false
     @State private var accessibilityOK = false
+    @State private var lastExportFile: String?
+    @State private var lastExportError: String?
 
     var body: some View {
         // swiftlint:disable:next closure_body_length
@@ -66,6 +72,18 @@ struct AdvancedSettingsView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                Button("Export Diagnostics…") { exportDiagnostics() }
+                if let file = lastExportFile {
+                    Text("Exported to: \(file)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let err = lastExportError {
+                    Text("Export failed: \(err)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
 
                 #if !APPSTORE
                     Toggle("Debug RPC Server", isOn: $settings.debugRPCEnabled)
@@ -129,5 +147,41 @@ struct AdvancedSettingsView: View {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
         screenRecordingOK = Permissions.checkScreenRecording()
         accessibilityOK = AXIsProcessTrusted()
+    }
+
+    private func exportDiagnostics() {
+        let stamp = Int(Date().timeIntervalSince1970)
+        let outURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingTranscriber-diagnostics-\(stamp).log")
+        do {
+            let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+            let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
+            let count = try DiagnosticExporter.export(
+                to: outURL,
+                appVersion: appVersion,
+                commit: commit,
+                macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+                settings: [
+                    "verboseDiagnostics": "\(settings.verboseDiagnostics)",
+                    "diarize": "\(settings.diarize)",
+                    "vadEnabled": "\(settings.vadEnabled)",
+                    "transcriptionEngine": settings.transcriptionEngine.rawValue,
+                    "protocolProvider": settings.protocolProvider.rawValue,
+                    "recordOnly": "\(settings.recordOnly)",
+                ],
+            )
+            lastExportFile = outURL.lastPathComponent
+            lastExportError = nil
+            NSWorkspace.shared.activateFileViewerSelecting([outURL])
+            logger.info(
+                "diagnostics_exported lines=\(count, privacy: .public) file=\(outURL.lastPathComponent, privacy: .public)",
+            )
+        } catch {
+            lastExportFile = nil
+            lastExportError = error.localizedDescription
+            logger.error(
+                "diagnostics_export_failed error=\(error.localizedDescription, privacy: .public)",
+            )
+        }
     }
 }
