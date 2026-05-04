@@ -1,5 +1,5 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class LogRedactionTests: XCTestCase {
     func test_pseudonymized_isStable() {

@@ -23,6 +23,7 @@ extension String {
         case 1: return "*"
         case 2: return "\(chars[0])*"
         case 3: return "\(chars[0])**"
+
         default:
             let middle = String(repeating: "*", count: chars.count - 2)
             return "\(chars[0])\(middle)\(chars.last!)"
