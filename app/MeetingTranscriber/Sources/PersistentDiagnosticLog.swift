@@ -85,69 +85,69 @@ enum PersistentDiagnosticLog {
     }
 
     #if !APPSTORE
-    /// Wraps a running `log stream` subprocess that mirrors our subsystems
-    /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
-    /// `init(targetURL:)` opens the file, `start()` launches the subprocess
-    /// and pipes its stdout into the file, `stop()` terminates the process
-    /// and closes the file handle.
-    ///
-    /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
-    /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
-    final class Streamer {
-        private let process = Process()
-        private let logFileHandle: FileHandle
-        private let pipe = Pipe()
-        private(set) var isRunning = false
+        /// Wraps a running `log stream` subprocess that mirrors our subsystems
+        /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
+        /// `init(targetURL:)` opens the file, `start()` launches the subprocess
+        /// and pipes its stdout into the file, `stop()` terminates the process
+        /// and closes the file handle.
+        ///
+        /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
+        /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
+        final class Streamer {
+            private let process = Process()
+            private let logFileHandle: FileHandle
+            private let pipe = Pipe()
+            private(set) var isRunning = false
 
-        init(targetURL: URL) throws {
-            let fm = FileManager.default
-            if !fm.fileExists(atPath: targetURL.path) {
-                fm.createFile(atPath: targetURL.path, contents: nil)
-            }
-            self.logFileHandle = try FileHandle(forWritingTo: targetURL)
-            try self.logFileHandle.seekToEnd()
-        }
-
-        func start() throws {
-            guard !isRunning else { return }
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-            process.arguments = [
-                "stream",
-                "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
-                "--style", "syslog",
-                "--info",
-            ]
-            process.standardOutput = pipe
-            process.standardError = pipe
-
-            let handle = pipe.fileHandleForReading
-            handle.readabilityHandler = { [weak self] fh in
-                let data = fh.availableData
-                guard !data.isEmpty else { return }
-                try? self?.logFileHandle.write(contentsOf: data)
+            init(targetURL: URL) throws {
+                let fm = FileManager.default
+                if !fm.fileExists(atPath: targetURL.path) {
+                    fm.createFile(atPath: targetURL.path, contents: nil)
+                }
+                self.logFileHandle = try FileHandle(forWritingTo: targetURL)
+                try self.logFileHandle.seekToEnd()
             }
 
-            try process.run()
-            isRunning = true
-            logger.info(
-                "persistent_log_streamer_started pid=\(self.process.processIdentifier, privacy: .public)",
-            )
-        }
+            func start() throws {
+                guard !isRunning else { return }
+                process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
+                process.arguments = [
+                    "stream",
+                    "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
+                    "--style", "syslog",
+                    "--info",
+                ]
+                process.standardOutput = pipe
+                process.standardError = pipe
 
-        func stop() {
-            guard isRunning else { return }
-            process.terminate()
-            try? logFileHandle.close()
-            isRunning = false
-            logger.info("persistent_log_streamer_stopped")
-        }
+                let handle = pipe.fileHandleForReading
+                handle.readabilityHandler = { [weak self] fh in
+                    let data = fh.availableData
+                    guard !data.isEmpty else { return }
+                    try? self?.logFileHandle.write(contentsOf: data)
+                }
 
-        deinit {
-            if isRunning {
+                try process.run()
+                isRunning = true
+                logger.info(
+                    "persistent_log_streamer_started pid=\(self.process.processIdentifier, privacy: .public)",
+                )
+            }
+
+            func stop() {
+                guard isRunning else { return }
                 process.terminate()
                 try? logFileHandle.close()
+                isRunning = false
+                logger.info("persistent_log_streamer_stopped")
+            }
+
+            deinit {
+                if isRunning {
+                    process.terminate()
+                    try? logFileHandle.close()
+                }
             }
         }
-    }
     #endif
 }

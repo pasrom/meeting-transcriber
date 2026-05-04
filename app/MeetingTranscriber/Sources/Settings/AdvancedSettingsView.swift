@@ -87,6 +87,18 @@ struct AdvancedSettingsView: View {
                 }
 
                 #if !APPSTORE
+                    Button("Open Diagnostic Logs Folder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([PersistentDiagnosticLog.logDirectory])
+                    }
+                    Text(
+                        "Persistent logs are kept for 30 days at"
+                            + " ~/Library/Logs/MeetingTranscriber/. Useful when"
+                            + " you need to attach logs from a session that"
+                            + " happened earlier today (or yesterday).",
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                     Toggle("Debug RPC Server", isOn: $settings.debugRPCEnabled)
                     Text(
                         "Exposes pipeline state on 127.0.0.1:9876 for `mt-cli`."
@@ -157,8 +169,7 @@ struct AdvancedSettingsView: View {
         do {
             let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
             let commit = Bundle.main.infoDictionary?["GitCommitHash"] as? String ?? "dev"
-            let count = try DiagnosticExporter.export(
-                to: outURL,
+            let info = DiagnosticExporter.HeaderInfo(
                 appVersion: appVersion,
                 commit: commit,
                 macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
@@ -171,6 +182,7 @@ struct AdvancedSettingsView: View {
                     "recordOnly": "\(settings.recordOnly)",
                 ],
             )
+            let count = try DiagnosticExporter.export(to: outURL, info: info)
             lastExportFile = outURL.lastPathComponent
             lastExportError = nil
             NSWorkspace.shared.activateFileViewerSelecting([outURL])

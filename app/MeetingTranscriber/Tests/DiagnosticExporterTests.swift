@@ -71,7 +71,7 @@ final class DiagnosticExporterTests: XCTestCase {
         XCTAssertEqual(comps.second, 34)
     }
 
-    func test_parseSyslogDate_singleDigitDay_works() throws {
+    func test_parseSyslogDate_singleDigitDay_works() {
         XCTAssertNotNil(DiagnosticExporter.parseSyslogDate("May  4 21:25:34 rest of line"))
     }
 
@@ -100,14 +100,14 @@ final class DiagnosticExporterTests: XCTestCase {
         let line = "\(stamp) MeetingTranscriber[1234]: hello world"
         try line.write(to: tmpSrc, atomically: true, encoding: .utf8)
 
+        let info = DiagnosticExporter.HeaderInfo(
+            appVersion: "1.0", commit: "abc", macOSVersion: "14.5", settings: [:],
+        )
         let count = try DiagnosticExporter.exportFromFile(
             sourceFile: tmpSrc,
             to: tmpDst,
+            info: info,
             windowSeconds: 60,
-            appVersion: "1.0",
-            commit: "abc",
-            macOSVersion: "14.5",
-            settings: [:],
         )
         XCTAssertEqual(count, 1)
         let written = try String(contentsOf: tmpDst, encoding: .utf8)
@@ -137,12 +137,14 @@ final class DiagnosticExporterTests: XCTestCase {
         """
         try body.write(to: tmpSrc, atomically: true, encoding: .utf8)
 
+        let info = DiagnosticExporter.HeaderInfo(
+            appVersion: "1.0", commit: "abc", macOSVersion: "14.5", settings: [:],
+        )
         let count = try DiagnosticExporter.exportFromFile(
             sourceFile: tmpSrc,
             to: tmpDst,
+            info: info,
             windowSeconds: 1800,
-            appVersion: "1.0", commit: "abc",
-            macOSVersion: "14.5", settings: [:],
         )
         XCTAssertEqual(count, 1)
         let written = try String(contentsOf: tmpDst, encoding: .utf8)
@@ -157,12 +159,14 @@ final class DiagnosticExporterTests: XCTestCase {
             .appendingPathComponent("dst-\(UUID().uuidString).log")
         defer { try? FileManager.default.removeItem(at: tmpDst) }
 
+        let info = DiagnosticExporter.HeaderInfo(
+            appVersion: "1.0", commit: "abc", macOSVersion: "14.5", settings: [:],
+        )
         let count = try DiagnosticExporter.exportFromFile(
             sourceFile: bogusSrc,
             to: tmpDst,
+            info: info,
             windowSeconds: 60,
-            appVersion: "1.0", commit: "abc",
-            macOSVersion: "14.5", settings: [:],
         )
         XCTAssertEqual(count, 0)
         let written = try String(contentsOf: tmpDst, encoding: .utf8)
