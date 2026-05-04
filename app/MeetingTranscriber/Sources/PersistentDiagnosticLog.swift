@@ -42,4 +42,28 @@ enum PersistentDiagnosticLog {
         let pattern = #"^diagnostics-\d{4}-\d{2}-\d{2}\.log$"#
         return name.range(of: pattern, options: .regularExpression) != nil
     }
+
+    /// Delete diagnostic-log files older than `retentionDays`. Non-matching files
+    /// (anything not `diagnostics-YYYY-MM-DD.log`) are left alone. Safe to call
+    /// multiple times; idempotent. Silently no-ops if the directory is missing.
+    static func cleanup(
+        in directory: URL = logDirectory,
+        retentionDays: Int = defaultRetentionDays,
+    ) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+        ) else {
+            return
+        }
+        for url in entries {
+            guard isOurLogFile(url.lastPathComponent) else { continue }
+            guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+                  let mtime = attrs[.modificationDate] as? Date,
+                  isExpired(modifiedAt: mtime, retentionDays: retentionDays)
+            else { continue }
+            try? fm.removeItem(at: url)
+        }
+    }
 }
