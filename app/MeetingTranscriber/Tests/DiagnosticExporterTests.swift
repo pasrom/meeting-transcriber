@@ -37,14 +37,14 @@ final class DiagnosticExporterTests: XCTestCase {
         XCTAssertTrue(header.contains("diarize=false"))
     }
 
-    func test_makeHeader_settingsSortedAlphabetically() {
+    func test_makeHeader_settingsSortedAlphabetically() throws {
         let header = DiagnosticExporter.makeHeader(
             appVersion: "0", commit: "x", macOSVersion: "0",
             settings: ["zebra": "1", "apple": "2", "mango": "3"],
         )
-        let appleIdx = header.range(of: "apple=")!.lowerBound
-        let mangoIdx = header.range(of: "mango=")!.lowerBound
-        let zebraIdx = header.range(of: "zebra=")!.lowerBound
+        let appleIdx = try XCTUnwrap(header.range(of: "apple=")?.lowerBound)
+        let mangoIdx = try XCTUnwrap(header.range(of: "mango=")?.lowerBound)
+        let zebraIdx = try XCTUnwrap(header.range(of: "zebra=")?.lowerBound)
         XCTAssertLessThan(appleIdx, mangoIdx)
         XCTAssertLessThan(mangoIdx, zebraIdx)
     }

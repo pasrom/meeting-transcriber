@@ -3,7 +3,6 @@ import AVFoundation
 import CoreGraphics
 import Foundation
 import os
-import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Permissions")
 

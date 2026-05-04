@@ -15,7 +15,7 @@ enum DiagnosticExporter {
         macOSVersion: String,
         settings: [String: String],
     ) -> String {
-        let pairs = settings.sorted(by: { $0.key < $1.key })
+        let pairs = settings.sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         let timestamp = ISO8601DateFormatter().string(from: Date())
@@ -34,11 +34,11 @@ enum DiagnosticExporter {
     @available(macOS 12, *)
     static func export(
         to outputURL: URL,
-        windowSeconds: TimeInterval = 1800,
         appVersion: String,
         commit: String,
         macOSVersion: String,
         settings: [String: String],
+        windowSeconds: TimeInterval = 1800,
     ) throws -> Int {
         let store = try OSLogStore(scope: .currentProcessIdentifier)
         let position = store.position(date: Date().addingTimeInterval(-windowSeconds))

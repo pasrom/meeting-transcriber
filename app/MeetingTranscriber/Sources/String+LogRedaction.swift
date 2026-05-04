@@ -18,15 +18,12 @@ extension String {
     /// machine-readable forensic logs, prefer `pseudonymized`.
     var redactedName: String {
         let chars = Array(self)
-        switch chars.count {
-        case 0: return ""
-        case 1: return "*"
-        case 2: return "\(chars[0])*"
-        case 3: return "\(chars[0])**"
-
-        default:
-            let middle = String(repeating: "*", count: chars.count - 2)
-            return "\(chars[0])\(middle)\(chars.last!)"
-        }
+        if chars.isEmpty { return "" }
+        if chars.count == 1 { return "*" }
+        if chars.count == 2 { return "\(chars[0])*" }
+        if chars.count == 3 { return "\(chars[0])**" }
+        let last = chars[chars.count - 1]
+        let middle = String(repeating: "*", count: chars.count - 2)
+        return "\(chars[0])\(middle)\(last)"
     }
 }
