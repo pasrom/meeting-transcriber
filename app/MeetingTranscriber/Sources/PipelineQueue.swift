@@ -208,7 +208,11 @@ class PipelineQueue {
     }
 
     /// Simple init for skeleton tests and basic queue usage.
-    init(logDir: URL? = nil, completedJobLifetime: TimeInterval = 60) {
+    init(
+        logDir: URL? = nil,
+        speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
+        completedJobLifetime: TimeInterval = 60,
+    ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.engine = nil
         self.diarizationFactory = nil
@@ -217,10 +221,54 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
-        self.speakerMatcherFactory = Self.throwawayMatcherFactory()
+        self.speakerMatcherFactory = speakerMatcherFactory
         self.vadConfig = nil
         self.recognitionStatsLog = nil
         self.completedJobLifetime = completedJobLifetime
+    }
+
+    // MARK: - Known speaker names (issue #155)
+
+    //
+    // Cached snapshot of speaker names for the SpeakerNamingView's
+    // "known voices" chip row. SwiftUI re-evaluates view bodies often
+    // (every keystroke / hover / @State change in any sub-view), so
+    // doing the work in the body — `speakerMatcherFactory().allSpeakerNames()`
+    // — re-opens speakers.json and re-decodes every embedding per render.
+    // With ~37 embeddings the main thread pinned at 100% CPU after
+    // extended uptime (issue #155).
+    //
+    // The cache is refreshed on init and after every code path that
+    // mutates the on-disk DB (recognition outcomes, rename, delete,
+    // merge). UI reads `knownSpeakerNames` directly with zero I/O.
+
+    private(set) var knownSpeakerNames: [String] = []
+
+    func refreshKnownSpeakerNames() {
+        let next = speakerMatcherFactory().allSpeakerNames()
+        // Compare-before-assign: @Observable fires SwiftUI invalidations on
+        // every set, even when the value is identical. The factory + decode
+        // already happened at this point, but skipping the assign keeps
+        // downstream view bodies from re-rendering unnecessarily.
+        guard next != knownSpeakerNames else { return }
+        knownSpeakerNames = next
+    }
+
+    /// Apply a speaker DB update via the matcher AND refresh the cached
+    /// names in one step. Use instead of calling `matcher.updateDB(...)` +
+    /// `refreshKnownSpeakerNames()` separately at internal pipeline sites.
+    private func updateSpeakerDB(
+        matcher: SpeakerMatcher,
+        mapping: [String: String],
+        embeddings: [String: [Float]],
+        speakingTimes: [String: TimeInterval] = [:],
+    ) {
+        matcher.updateDB(
+            mapping: mapping,
+            embeddings: embeddings,
+            speakingTimes: speakingTimes,
+        )
+        refreshKnownSpeakerNames()
     }
 
     /// Full init with all processing dependencies.
@@ -608,7 +656,8 @@ class PipelineQueue {
                                     for (label, name) in userMapping where !name.isEmpty {
                                         autoNames[label] = name
                                     }
-                                    matcher.updateDB(
+                                    updateSpeakerDB(
+                                        matcher: matcher,
                                         mapping: autoNames,
                                         embeddings: embeddings,
                                         speakingTimes: currentDiarization.speakingTimes,
@@ -837,7 +886,11 @@ class PipelineQueue {
         for (label, name) in mapping where !name.isEmpty {
             fullMapping[label] = name
         }
-        matcher.updateDB(mapping: fullMapping, embeddings: namingData.embeddings)
+        updateSpeakerDB(
+            matcher: matcher,
+            mapping: fullMapping,
+            embeddings: namingData.embeddings,
+        )
 
         if let transcriptPath = jobs[jobIndex].transcriptPath {
             do {

@@ -1504,4 +1504,87 @@ final class PipelineQueueTests: XCTestCase {
             )
         }
     }
+
+    // MARK: - knownSpeakerNames cache (issue #155)
+
+    //
+    // The SpeakerNamingView dialog used to call
+    // `appState.pipelineQueue.speakerMatcherFactory().allSpeakerNames()`
+    // inside the SwiftUI body getter. Each body re-eval re-constructed a
+    // SpeakerMatcher (running migrateIfNeeded → file read) and re-parsed
+    // the entire speakers.json (including embeddings) just to extract
+    // names — pinning the main thread at 100% CPU after extended uptime.
+    //
+    // Fix: cache the result on PipelineQueue, refresh only on updateDB
+    // and explicit calls. UI reads `pipelineQueue.knownSpeakerNames`
+    // directly with zero per-render I/O.
+
+    func testKnownSpeakerNamesIsExposedAsCachedProperty() {
+        // The cached property must exist on PipelineQueue. Empty DB → empty list.
+        let dbURL = tmpDir.appendingPathComponent("speakers.json")
+        let localQueue = PipelineQueue(
+            logDir: tmpDir,
+        ) { SpeakerMatcher(dbPath: dbURL) }
+        XCTAssertEqual(localQueue.knownSpeakerNames, [])
+    }
+
+    func testKnownSpeakerNamesReflectsDBAfterRefresh() {
+        let dbURL = tmpDir.appendingPathComponent("speakers.json")
+        // Seed the on-disk DB before constructing the queue.
+        let seeded = SpeakerMatcher(dbPath: dbURL)
+        seeded.updateDB(
+            mapping: ["S0": "Alice", "S1": "Bob"],
+            embeddings: ["S0": [0.1, 0.2], "S1": [0.3, 0.4]],
+        )
+
+        let localQueue = PipelineQueue(
+            logDir: tmpDir,
+        ) { SpeakerMatcher(dbPath: dbURL) }
+        localQueue.refreshKnownSpeakerNames()
+
+        XCTAssertEqual(Set(localQueue.knownSpeakerNames), Set(["Alice", "Bob"]))
+    }
+
+    func testKnownSpeakerNamesRefreshesAfterFactoryDBChange() {
+        let dbURL = tmpDir.appendingPathComponent("speakers.json")
+        let localQueue = PipelineQueue(
+            logDir: tmpDir,
+        ) { SpeakerMatcher(dbPath: dbURL) }
+        localQueue.refreshKnownSpeakerNames()
+        XCTAssertEqual(localQueue.knownSpeakerNames, [], "Empty DB at start")
+
+        // Simulate a recognition outcome that adds a new speaker.
+        let matcher = localQueue.speakerMatcherFactory()
+        matcher.updateDB(
+            mapping: ["S0": "Charlie"], embeddings: ["S0": [0.5, 0.6]],
+        )
+        localQueue.refreshKnownSpeakerNames()
+
+        XCTAssertEqual(localQueue.knownSpeakerNames, ["Charlie"])
+    }
+
+    func testKnownSpeakerNamesReadsAreFreeFromFactoryInvocation() {
+        // Property reads must not invoke the factory — that's the whole
+        // point of the cache. The factory is the heavy operation that was
+        // re-firing per SwiftUI render in the bug report.
+        let dbURL = tmpDir.appendingPathComponent("speakers.json")
+        var factoryCalls = 0
+        let localQueue = PipelineQueue(
+            logDir: tmpDir,
+        ) {
+            factoryCalls += 1
+            return SpeakerMatcher(dbPath: dbURL)
+        }
+        localQueue.refreshKnownSpeakerNames()
+        let baseline = factoryCalls
+
+        for _ in 0 ..< 10 {
+            _ = localQueue.knownSpeakerNames
+        }
+
+        XCTAssertEqual(
+            factoryCalls, baseline,
+            "Reading knownSpeakerNames must not invoke speakerMatcherFactory",
+        )
+    }
 }

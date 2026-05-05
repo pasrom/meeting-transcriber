@@ -200,7 +200,7 @@ struct MeetingTranscriberApp: App {
     ) -> some View {
         SpeakerNamingView(
             data: data,
-            knownSpeakerNames: appState.pipelineQueue.speakerMatcherFactory().allSpeakerNames(),
+            knownSpeakerNames: appState.pipelineQueue.knownSpeakerNames,
         ) { result in
             appState.pipelineQueue.completeSpeakerNaming(jobID: data.jobID, result: result)
             if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
