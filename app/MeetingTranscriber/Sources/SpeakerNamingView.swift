@@ -80,7 +80,12 @@ struct SpeakerNamingView: View {
     }
 
     @State private var names: [String] = []
-    @State private var completed = false
+    /// Job-ID for which this view has already fired `onComplete`. Tracked
+    /// per-job (not just a Bool) so that when the window switches to a
+    /// different pending job, the `Confirm` / `Skip` / `Re-run` buttons
+    /// are responsive again. Previous Bool-only guard could get stuck
+    /// across multi-job switching, leaving the dialog effectively dead.
+    @State private var completedJobID: UUID?
     @State private var player: AVAudioPlayer?
     @State private var playingLabel: String?
     @State private var rerunCount: Int = 2
@@ -128,8 +133,8 @@ struct SpeakerNamingView: View {
                     .font(.caption)
                     .accessibilityIdentifier("rerun-stepper")
                 Button("Re-run") {
-                    guard !completed else { return }
-                    completed = true
+                    guard completedJobID != data.jobID else { return }
+                    completedJobID = data.jobID
                     player?.stop()
                     onComplete(.rerun(rerunCount))
                 }
@@ -139,16 +144,16 @@ struct SpeakerNamingView: View {
 
             HStack(spacing: 12) {
                 Button("Skip") {
-                    guard !completed else { return }
-                    completed = true
+                    guard completedJobID != data.jobID else { return }
+                    completedJobID = data.jobID
                     onComplete(.skipped)
                 }
                 .keyboardShortcut(.escape)
                 .accessibilityIdentifier("skip-button")
 
                 Button("Confirm") {
-                    guard !completed else { return }
-                    completed = true
+                    guard completedJobID != data.jobID else { return }
+                    completedJobID = data.jobID
                     confirm()
                 }
                 .keyboardShortcut(.return)

@@ -91,6 +91,32 @@ final class SpeakerNamingViewTests: XCTestCase {
         }
     }
 
+    /// Regression test for the multi-job stuck-state bug: when the window
+    /// switches to a different `data.jobID`, the per-job guard
+    /// (`completedJobID != data.jobID`) must re-allow taps. The previous
+    /// global Bool guard would silently swallow every click after the first.
+    func testConfirmFiresForEachDistinctJob() throws {
+        var jobIDsConfirmed: [UUID] = []
+
+        let dataA = makeData(title: "Meeting A")
+        let viewA = SpeakerNamingView(data: dataA) { result in
+            if case .confirmed = result { jobIDsConfirmed.append(dataA.jobID) }
+        }
+        try viewA.inspect().find(button: "Confirm").tap()
+
+        let dataB = makeData(title: "Meeting B")
+        let viewB = SpeakerNamingView(data: dataB) { result in
+            if case .confirmed = result { jobIDsConfirmed.append(dataB.jobID) }
+        }
+        try viewB.inspect().find(button: "Confirm").tap()
+
+        XCTAssertEqual(
+            jobIDsConfirmed,
+            [dataA.jobID, dataB.jobID],
+            "Each distinct jobID must be confirmable independently",
+        )
+    }
+
     // MARK: - Speaker details
 
     func testShowsSpeakerLabel() throws {
