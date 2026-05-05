@@ -473,6 +473,7 @@ final class AppState {
         )
         queue.loadSnapshot()
         queue.recoverOrphanedRecordings()
+        queue.refreshKnownSpeakerNames()
         return queue
     }
 
