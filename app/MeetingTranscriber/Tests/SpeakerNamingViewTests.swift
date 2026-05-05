@@ -117,6 +117,55 @@ final class SpeakerNamingViewTests: XCTestCase {
         )
     }
 
+    /// Skip shares the same per-job guard as Confirm. If a future refactor
+    /// reverts Skip's guard to a global Bool, the multi-job stuck-state
+    /// would resurface for users who hit Skip on back-to-back meetings.
+    func testSkipFiresForEachDistinctJob() throws {
+        var jobIDsSkipped: [UUID] = []
+
+        let dataA = makeData(title: "Meeting A")
+        let viewA = SpeakerNamingView(data: dataA) { result in
+            if case .skipped = result { jobIDsSkipped.append(dataA.jobID) }
+        }
+        try viewA.inspect().find(button: "Skip").tap()
+
+        let dataB = makeData(title: "Meeting B")
+        let viewB = SpeakerNamingView(data: dataB) { result in
+            if case .skipped = result { jobIDsSkipped.append(dataB.jobID) }
+        }
+        try viewB.inspect().find(button: "Skip").tap()
+
+        XCTAssertEqual(
+            jobIDsSkipped,
+            [dataA.jobID, dataB.jobID],
+            "Each distinct jobID must be skippable independently",
+        )
+    }
+
+    /// Re-run shares the same per-job guard as Confirm and Skip — same
+    /// regression risk if the guard ever reverts to a global Bool.
+    func testRerunFiresForEachDistinctJob() throws {
+        var jobIDsRerun: [UUID] = []
+
+        let dataA = makeData(title: "Meeting A")
+        let viewA = SpeakerNamingView(data: dataA) { result in
+            if case .rerun = result { jobIDsRerun.append(dataA.jobID) }
+        }
+        try viewA.inspect().find(button: "Re-run").tap()
+
+        let dataB = makeData(title: "Meeting B")
+        let viewB = SpeakerNamingView(data: dataB) { result in
+            if case .rerun = result { jobIDsRerun.append(dataB.jobID) }
+        }
+        try viewB.inspect().find(button: "Re-run").tap()
+
+        XCTAssertEqual(
+            jobIDsRerun,
+            [dataA.jobID, dataB.jobID],
+            "Each distinct jobID must be re-runnable independently",
+        )
+    }
+
     // MARK: - Speaker details
 
     func testShowsSpeakerLabel() throws {
