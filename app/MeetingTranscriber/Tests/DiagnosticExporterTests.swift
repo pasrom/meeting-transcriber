@@ -81,6 +81,30 @@ final class DiagnosticExporterTests: XCTestCase {
         XCTAssertNil(DiagnosticExporter.parseSyslogDate(""))
     }
 
+    func test_parseSyslogDate_yearBoundary_rollsBackToPreviousYear() throws {
+        // Pretend it's Jan 2 2027 and we're parsing a Dec 31 log line.
+        // Without year-rollback, the line would parse as Dec 31 2027 (in
+        // the future), then get filtered out as "too new" by the window
+        // filter — making the export empty for cross-year diagnostics.
+        let now = try XCTUnwrap(makeDate(year: 2027, month: 1, day: 2, hour: 10))
+        let parsed = try XCTUnwrap(DiagnosticExporter.parseSyslogDate(
+            "Dec 31 23:59:00 some log line", now: now,
+        ))
+        let comps = Calendar.current.dateComponents([.year, .month, .day], from: parsed)
+        XCTAssertEqual(comps.year, 2026)
+        XCTAssertEqual(comps.month, 12)
+        XCTAssertEqual(comps.day, 31)
+    }
+
+    private func makeDate(year: Int, month: Int, day: Int, hour: Int) -> Date? {
+        var c = DateComponents()
+        c.year = year
+        c.month = month
+        c.day = day
+        c.hour = hour
+        return Calendar.current.date(from: c)
+    }
+
     // MARK: - exportFromFile
 
     func test_exportFromFile_writesHeaderPlusBody_withinWindow() throws {

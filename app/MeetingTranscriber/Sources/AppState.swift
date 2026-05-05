@@ -110,7 +110,7 @@ final class AppState {
                 forName: NSApplication.willTerminateNotification,
                 object: nil, queue: .main,
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                Task { @MainActor in
                     self?.stopPersistentLogStreamer()
                 }
             }

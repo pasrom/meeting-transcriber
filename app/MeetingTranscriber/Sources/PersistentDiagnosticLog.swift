@@ -102,7 +102,7 @@ enum PersistentDiagnosticLog {
             private let process = Process()
             private let logFileHandle: FileHandle
             private let pipe = Pipe()
-            private(set) var isRunning = false
+            private var isRunning = false
 
             init(targetURL: URL) throws {
                 let fm = FileManager.default
