@@ -86,7 +86,7 @@
         func testStateReturnsValidJSON() async throws {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: true, activeJobCount: 2, waitingJobCount: 0, pendingNamingJobCount: 1),
-                speakerDB: .init(count: 7, recentNames: ["Alice"]),
+                speakerDB: .init(count: 7, recentNames: ["Alice"], knownSpeakerNames: ["Alice"]),
                 pendingNamingJobs: [],
             )
             let base = try await startServer(snapshot: snapshot)
