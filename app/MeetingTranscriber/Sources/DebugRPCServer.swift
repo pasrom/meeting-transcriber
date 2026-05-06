@@ -413,7 +413,13 @@
 
         struct SpeakerDB: Codable {
             let count: Int
+            /// Top-10 names ranked by recency, read fresh from the matcher on
+            /// every snapshot — independent of any cache.
             let recentNames: [String]
+            /// `PipelineQueue.knownSpeakerNames` — the cache the next naming
+            /// dialog reads. Surfaced separately so smoketests can verify the
+            /// invalidation flow (#155 → #158 → #159).
+            let knownSpeakerNames: [String]
         }
 
         struct PendingNaming: Codable {
@@ -434,7 +440,7 @@
                 isProcessing: false, activeJobCount: 0,
                 waitingJobCount: 0, pendingNamingJobCount: 0,
             ),
-            speakerDB: .init(count: 0, recentNames: []),
+            speakerDB: .init(count: 0, recentNames: [], knownSpeakerNames: []),
             pendingNamingJobs: [],
         )
     }

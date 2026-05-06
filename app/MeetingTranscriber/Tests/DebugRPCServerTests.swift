@@ -82,7 +82,7 @@
         func testRouteState() {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: false, activeJobCount: 1, waitingJobCount: 0, pendingNamingJobCount: 0),
-                speakerDB: .init(count: 5, recentNames: ["Speaker A"]),
+                speakerDB: .init(count: 5, recentNames: ["Speaker A"], knownSpeakerNames: ["Speaker A"]),
                 pendingNamingJobs: [],
             )
             let server = DebugRPCServer(port: 0, token: Self.testToken) { snapshot }
@@ -339,6 +339,19 @@
             let body = Data(#"{"from":"X","into":"Y"}"#.utf8)
             let response = server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
             XCTAssertEqual(response.status, 404)
+        }
+
+        @MainActor
+        func testRouteStateExposesKnownSpeakerNames() throws {
+            let snapshot = RPCStateSnapshot(
+                pipeline: .init(isProcessing: false, activeJobCount: 0, waitingJobCount: 0, pendingNamingJobCount: 0),
+                speakerDB: .init(count: 2, recentNames: ["Alice", "Bob"], knownSpeakerNames: ["Alice", "Bob"]),
+                pendingNamingJobs: [],
+            )
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { snapshot }
+            let response = server.route(authedRequest(method: "GET", path: "/state"))
+            let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: response.body)
+            XCTAssertEqual(decoded.speakerDB.knownSpeakerNames, ["Alice", "Bob"])
         }
 
         @MainActor

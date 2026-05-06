@@ -23,7 +23,11 @@
                     waitingJobCount: pipelineQueue.pendingJobs.count,
                     pendingNamingJobCount: pendingJobs.count,
                 ),
-                speakerDB: .init(count: stored.count, recentNames: recentNames),
+                speakerDB: .init(
+                    count: stored.count,
+                    recentNames: recentNames,
+                    knownSpeakerNames: pipelineQueue.knownSpeakerNames,
+                ),
                 pendingNamingJobs: pendingJobs,
             )
         }
