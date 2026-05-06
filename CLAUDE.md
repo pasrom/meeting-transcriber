@@ -216,6 +216,10 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 - All code and UI text in English
 - Protocol output language configurable via `AppSettings.protocolLanguage` (default: German)
+- **Plan files:**
+  - `docs/plans/` (committed) — RFCs and reference docs for future features that should be visible to anyone reading the repo
+  - `docs/plans/.local/` (gitignored) — personal scratch; optional subfolders `open/`, `research/`, `done/`, `future/`, `deferred/`
+  - Default to `.local/` for ad-hoc notes, diagnostic dumps, and active finding-trackers; promote to committed `docs/plans/` only when the plan is shared reference material
 
 ## Architecture Notes
 
