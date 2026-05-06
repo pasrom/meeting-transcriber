@@ -26,6 +26,11 @@ jobs:
         uses: dorny/paths-filter@v4
         id: filter
         with:
+          # `every` is required for the exclusion-style filter below: with the
+          # v4 default `some`, the `**` catch-all alone marks every file as
+          # matched and the `!…` negations never actually exclude anything,
+          # so docs-only PRs still trigger the full build/test suite.
+          predicate-quantifier: every
           filters: |
             code:
               - '**'
