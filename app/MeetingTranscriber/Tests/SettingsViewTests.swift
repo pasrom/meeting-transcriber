@@ -77,13 +77,17 @@ final class SettingsViewTests: XCTestCase {
         )
     }
 
-    private func makeSpeakers(settings: AppSettings? = nil) -> SpeakersSettingsView {
+    private func makeSpeakers(
+        settings: AppSettings? = nil,
+        matcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
+    ) -> SpeakersSettingsView {
         SpeakersSettingsView(
             settings: settings ?? makeSettings(),
             recognitionStatsLog: RecognitionStatsLog(),
             enrollmentDiarizerFactory: nil,
             namingDialogActive: false,
             pipelineBusy: false,
+            matcherFactory: matcherFactory,
         )
     }
 
@@ -293,6 +297,31 @@ final class SettingsViewTests: XCTestCase {
         XCTAssertThrowsError(try body.find(
             text: "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
         ))
+    }
+
+    // SpeakerMatcher.init reads + decodes speakers.json. It must run only
+    // when the user opens the Known Voices sheet, never as a side effect
+    // of body evaluation.
+    func testKnownVoicesMatcherNotCreatedOnBodyEval() throws {
+        var matcherInits = 0
+        let view = makeSpeakers {
+            matcherInits += 1
+            return SpeakerMatcher()
+        }
+        _ = try view.inspect()
+        XCTAssertEqual(matcherInits, 0)
+    }
+
+    // Companion: tapping "Manage…" invokes the factory exactly once.
+    func testKnownVoicesMatcherCreatedOnManageTap() throws {
+        var matcherInits = 0
+        let view = makeSpeakers {
+            matcherInits += 1
+            return SpeakerMatcher()
+        }
+        let button = try view.inspect().find(button: "Manage\u{2026}")
+        try button.tap()
+        XCTAssertEqual(matcherInits, 1)
     }
 
     // MARK: - Output tab

@@ -12,8 +12,12 @@ struct SpeakersSettingsView: View {
     /// up-to-date chips. Optional — tests and the parent that doesn't
     /// own a PipelineQueue can omit.
     var onSpeakerMutate: (() -> Void)?
+    var matcherFactory: () -> SpeakerMatcher = { SpeakerMatcher() }
 
     @State private var showKnownVoices = false
+    /// SpeakerMatcher.init reads + decodes speakers.json — must not run
+    /// per body re-evaluation, so the matcher is created lazily on tap.
+    @State private var sheetMatcher: SpeakerMatcher?
 
     var body: some View {
         // swiftlint:disable:next closure_body_length
@@ -69,7 +73,10 @@ struct SpeakersSettingsView: View {
             }
 
             Section("Known Voices") {
-                Button("Manage\u{2026}") { showKnownVoices = true }
+                Button("Manage\u{2026}") {
+                    sheetMatcher = matcherFactory()
+                    showKnownVoices = true
+                }
                 Text("Rename, delete, or merge entries in your speaker DB.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -79,13 +86,15 @@ struct SpeakersSettingsView: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showKnownVoices) {
-            KnownVoicesView(
-                matcher: SpeakerMatcher(),
-                diarizerFactory: enrollmentDiarizerFactory,
-                namingDialogActive: namingDialogActive,
-                pipelineBusy: pipelineBusy,
-                onMutate: onSpeakerMutate,
-            )
+            if let matcher = sheetMatcher {
+                KnownVoicesView(
+                    matcher: matcher,
+                    diarizerFactory: enrollmentDiarizerFactory,
+                    namingDialogActive: namingDialogActive,
+                    pipelineBusy: pipelineBusy,
+                    onMutate: onSpeakerMutate,
+                )
+            }
         }
     }
 }
