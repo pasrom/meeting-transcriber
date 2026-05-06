@@ -19,14 +19,9 @@ struct SettingsView: View {
     @State private var selection: SettingsTab = .general
 
     var body: some View {
-        if #available(macOS 13, *) {
-            splitView
-        } else {
-            tabContent
-        }
+        splitView
     }
 
-    @available(macOS 13, *)
     private var splitView: some View {
         NavigationSplitView {
             List(SettingsTab.allCases, selection: $selection) { tab in
@@ -81,24 +76,6 @@ struct SettingsView: View {
         case .advanced:
             AdvancedSettingsView(settings: settings)
         }
-    }
-
-    private var tabContent: some View {
-        TabView(selection: $selection) {
-            ForEach(SettingsTab.allCases) { tab in
-                detailView(for: tab)
-                    .tabItem { Label(tab.label, systemImage: tab.systemImage) }
-                    .tag(tab)
-            }
-        }
-        .frame(
-            minWidth: 760,
-            idealWidth: 860,
-            maxWidth: 1000,
-            minHeight: 520,
-            idealHeight: 640,
-            maxHeight: .infinity,
-        )
     }
 }
 
