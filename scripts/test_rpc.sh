@@ -136,4 +136,36 @@ code=$(curl -s -o /dev/null -w "%{http_code}" \
 [ "$code" = "400" ] || fail "bad JSON: expected 400 got $code"
 ok "bad JSON → 400"
 
+step "Cache invalidation roundtrip (seed → rename → delete via knownSpeakerNames)"
+
+seed_name="rpc-smoketest-$$-seed"
+rename_target="rpc-smoketest-$$-renamed"
+
+"$MT_CLI_BIN" seed-speaker "$seed_name" >/dev/null
+"$MT_CLI_BIN" state | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+names = d['speakerDB']['knownSpeakerNames']
+assert '$seed_name' in names, f'seed missing from cache: {names}'
+" || fail "seed not reflected in knownSpeakerNames"
+ok "seed → cache updated"
+
+"$MT_CLI_BIN" rename-speaker "$seed_name" "$rename_target" >/dev/null
+"$MT_CLI_BIN" state | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+names = d['speakerDB']['knownSpeakerNames']
+assert '$rename_target' in names and '$seed_name' not in names, f'rename not in cache: {names}'
+" || fail "rename not reflected in knownSpeakerNames"
+ok "rename → cache updated"
+
+"$MT_CLI_BIN" delete-speaker "$rename_target" >/dev/null
+"$MT_CLI_BIN" state | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+names = d['speakerDB']['knownSpeakerNames']
+assert '$rename_target' not in names, f'delete not reflected: {names}'
+" || fail "delete not reflected in knownSpeakerNames"
+ok "delete → cache updated"
+
 step "All checks passed"

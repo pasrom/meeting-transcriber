@@ -342,6 +342,31 @@
         }
 
         @MainActor
+        func testRouteSeedSpeakerCallsActionAndReturnsOK() {
+            let stub = StubSpeakerActions()
+            stub.seedOutcome = .ok
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"name":"NewSeed"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(stub.seedCalls, ["NewSeed"])
+        }
+
+        @MainActor
+        func testRouteSeedSpeakerInvalidJSONReturns400() {
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+            )
+            let body = Data(#"{"wrong":"shape"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
+            XCTAssertEqual(response.status, 400)
+        }
+
+        @MainActor
         func testRouteStateExposesKnownSpeakerNames() throws {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: false, activeJobCount: 0, waitingJobCount: 0, pendingNamingJobCount: 0),
@@ -400,9 +425,11 @@
         private(set) var renameCalls: [(String, String)] = []
         private(set) var deleteCalls: [String] = []
         private(set) var mergeCalls: [(String, String)] = []
+        private(set) var seedCalls: [String] = []
         var renameOutcome: SpeakerActionOutcome = .ok
         var deleteOutcome: SpeakerActionOutcome = .ok
         var mergeOutcome: SpeakerActionOutcome = .ok
+        var seedOutcome: SpeakerActionOutcome = .ok
 
         func actions() -> SpeakerDBActions {
             SpeakerDBActions(
@@ -417,6 +444,10 @@
                 merge: { [weak self] from, into in
                     self?.mergeCalls.append((from, into))
                     return self?.mergeOutcome ?? .invalid
+                },
+                seed: { [weak self] name in
+                    self?.seedCalls.append(name)
+                    return self?.seedOutcome ?? .invalid
                 },
             )
         }

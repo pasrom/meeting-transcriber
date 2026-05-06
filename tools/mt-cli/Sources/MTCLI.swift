@@ -9,7 +9,7 @@ struct MTCLI: AsyncParsableCommand {
         subcommands: [
             State.self, Healthz.self, Screenshot.self,
             OpenSettings.self, CloseSettings.self,
-            RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
+            SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
         ],
     )
 }
@@ -73,6 +73,20 @@ private func postAction(_ path: String, _ payload: [String: String]) async throw
     let data = try await client.post(path, json: payload)
     FileHandle.standardOutput.write(data)
     FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+struct SeedSpeaker: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "seed-speaker",
+        abstract: "Insert a synthetic speaker with a random embedding (testing only).",
+    )
+
+    @Argument(help: "Name of the speaker to seed.")
+    var name: String
+
+    func run() async throws {
+        try await postAction("/action/seedSpeaker", ["name": name])
+    }
 }
 
 struct RenameSpeaker: AsyncParsableCommand {

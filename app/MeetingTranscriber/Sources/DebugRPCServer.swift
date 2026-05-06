@@ -179,23 +179,11 @@
                 Self.closeSettings()
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
-            case ("POST", "/action/renameSpeaker"):
-                guard let payload = try? JSONDecoder().decode(RenamePayload.self, from: request.body),
-                      !payload.from.isEmpty, !payload.to.isEmpty
-                else { return HTTPResponse.badRequest() }
-                return Self.respond(to: speakerActions.rename(payload.from, payload.to))
-
-            case ("POST", "/action/deleteSpeaker"):
-                guard let payload = try? JSONDecoder().decode(DeletePayload.self, from: request.body),
-                      !payload.name.isEmpty
-                else { return HTTPResponse.badRequest() }
-                return Self.respond(to: speakerActions.delete(payload.name))
-
-            case ("POST", "/action/mergeSpeakers"):
-                guard let payload = try? JSONDecoder().decode(MergePayload.self, from: request.body),
-                      !payload.from.isEmpty, !payload.into.isEmpty
-                else { return HTTPResponse.badRequest() }
-                return Self.respond(to: speakerActions.merge(payload.from, payload.into))
+            case ("POST", "/action/renameSpeaker"),
+                 ("POST", "/action/deleteSpeaker"),
+                 ("POST", "/action/mergeSpeakers"),
+                 ("POST", "/action/seedSpeaker"):
+                return routeSpeakerAction(path: request.path, body: request.body)
 
             case ("GET", "/screenshot"):
                 if let png = Self.captureFrontmostWindowPNG() {
@@ -213,6 +201,40 @@
 
         // MARK: - Speaker DB action helpers
 
+        /// Decode the request body for one of the four speaker-DB action paths,
+        /// run the matching closure on `speakerActions`, and return the mapped
+        /// HTTP response. 400 on missing/empty fields or undecodable JSON.
+        private func routeSpeakerAction(path: String, body: Data) -> HTTPResponse {
+            switch path {
+            case "/action/renameSpeaker":
+                guard let p = try? JSONDecoder().decode(RenamePayload.self, from: body),
+                      !p.from.isEmpty, !p.to.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.rename(p.from, p.to))
+
+            case "/action/deleteSpeaker":
+                guard let p = try? JSONDecoder().decode(DeletePayload.self, from: body),
+                      !p.name.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.delete(p.name))
+
+            case "/action/mergeSpeakers":
+                guard let p = try? JSONDecoder().decode(MergePayload.self, from: body),
+                      !p.from.isEmpty, !p.into.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.merge(p.from, p.into))
+
+            case "/action/seedSpeaker":
+                guard let p = try? JSONDecoder().decode(SeedPayload.self, from: body),
+                      !p.name.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.seed(p.name))
+
+            default:
+                return HTTPResponse.notFound()
+            }
+        }
+
         private struct RenamePayload: Decodable {
             let from: String
             let to: String
@@ -225,6 +247,10 @@
         private struct MergePayload: Decodable {
             let from: String
             let into: String
+        }
+
+        private struct SeedPayload: Decodable {
+            let name: String
         }
 
         /// Map the action outcome to an HTTP response. `notFound` → 404,
@@ -387,11 +413,15 @@
         var rename: (String, String) -> SpeakerActionOutcome
         var delete: (String) -> SpeakerActionOutcome
         var merge: (String, String) -> SpeakerActionOutcome
+        /// Insert a synthetic speaker with a random embedding. Test-only path
+        /// — production never calls this.
+        var seed: (String) -> SpeakerActionOutcome
 
         static let noop = Self(
             rename: { _, _ in .invalid },
             delete: { _ in .invalid },
             merge: { _, _ in .invalid },
+            seed: { _ in .invalid },
         )
     }
 
