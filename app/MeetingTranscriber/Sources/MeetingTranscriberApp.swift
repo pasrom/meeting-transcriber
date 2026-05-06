@@ -9,13 +9,41 @@ extension Notification.Name {
     static let closeSettings = Notification.Name("closeSettings")
 }
 
+/// Renders the menu-bar icon and ticks the animation frame in its own
+/// view body. Keeping the timer + frame @State scoped here means the
+/// surrounding `MeetingTranscriberApp` scene body never re-evaluates on
+/// each tick — only this view does. Without this isolation, animating
+/// badges (recording, transcribing, …) would cascade re-renders through
+/// every open Window.
+private struct AnimatedMenuBarIcon: View {
+    let badge: BadgeKind
+    let permissionOverlay: Bool
+    let recordOnlyOverlay: Bool
+
+    @State private var animationFrame = 0
+    private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        Image(nsImage: MenuBarIcon.image(
+            badge: badge,
+            animationFrame: animationFrame,
+            permissionOverlay: permissionOverlay,
+            recordOnlyOverlay: recordOnlyOverlay,
+        ))
+        .onReceive(iconTimer) { _ in
+            let next = MenuBarIcon.nextFrame(animationFrame, badge: badge)
+            if next != animationFrame {
+                animationFrame = next
+            }
+        }
+    }
+}
+
 @main
 struct MeetingTranscriberApp: App {
     @State private var appState = AppState(notifier: NotificationManager.shared)
-    @State private var iconAnimationFrame = 0
     @Environment(\.openWindow)
     private var openWindow
-    private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     init() {
         AppPaths.migrateIfNeeded()
@@ -59,21 +87,11 @@ struct MeetingTranscriberApp: App {
             Label {
                 Text(appState.currentStateLabel)
             } icon: {
-                Image(nsImage: MenuBarIcon.image(
+                AnimatedMenuBarIcon(
                     badge: appState.currentBadge,
-                    animationFrame: iconAnimationFrame,
                     permissionOverlay: appState.permissionHealth?.isHealthy == false,
                     recordOnlyOverlay: appState.settings.recordOnly,
-                ))
-            }
-            .onReceive(iconTimer) { _ in
-                // Skip the @State mutation when the badge is not animated —
-                // otherwise the App scene's body re-evaluates every 0.4 s
-                // and cascades through every open Window (Settings, etc).
-                let next = MenuBarIcon.nextFrame(iconAnimationFrame, badge: appState.currentBadge)
-                if next != iconAnimationFrame {
-                    iconAnimationFrame = next
-                }
+                )
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !appState.isWatching {
