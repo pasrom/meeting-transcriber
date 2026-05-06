@@ -27,16 +27,24 @@ struct KnownVoicesView: View {
         return f
     }()
 
+    /// Fires after every successful rename / delete / merge mutation so the
+    /// caller can invalidate caches that mirror the speakers DB. Without this,
+    /// `PipelineQueue.knownSpeakerNames` (issue #155) goes stale until the
+    /// next pipeline event.
+    private let onMutate: (() -> Void)?
+
     init(
         matcher: SpeakerMatcher,
         diarizerFactory: (() -> DiarizationProvider)? = nil,
         namingDialogActive: Bool = false,
         pipelineBusy: Bool = false,
+        onMutate: (() -> Void)? = nil,
     ) {
         self.matcher = matcher
         self.diarizerFactory = diarizerFactory
         self.namingDialogActive = namingDialogActive
         self.pipelineBusy = pipelineBusy
+        self.onMutate = onMutate
     }
 
     enum ActiveModal: Identifiable {
@@ -244,9 +252,14 @@ struct KnownVoicesView: View {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         modal = nil
         guard !trimmed.isEmpty else { return }
-        matcher.renameSpeaker(from: from, to: trimmed)
+        performRename(from: from, to: trimmed)
         selection = trimmed
+    }
+
+    func performRename(from: String, to: String) {
+        matcher.renameSpeaker(from: from, to: to)
         reload()
+        onMutate?()
     }
 
     private func startMerge() {
@@ -257,17 +270,27 @@ struct KnownVoicesView: View {
     private func applyMerge() {
         guard case let .merge(from, dst) = modal, !dst.isEmpty else { return }
         modal = nil
-        matcher.mergeSpeakers(from: from, into: dst)
+        performMerge(from: from, into: dst)
         selection = dst
+    }
+
+    func performMerge(from: String, into: String) {
+        matcher.mergeSpeakers(from: from, into: into)
         reload()
+        onMutate?()
     }
 
     private func applyDelete() {
         guard case let .delete(name) = modal else { return }
         modal = nil
-        matcher.deleteSpeaker(name: name)
+        performDelete(name: name)
         if selection == name { selection = nil }
+    }
+
+    func performDelete(name: String) {
+        matcher.deleteSpeaker(name: name)
         reload()
+        onMutate?()
     }
 
     private static func lastUsedLabel(_ date: Date?) -> String {

@@ -6,6 +6,12 @@ struct SpeakersSettingsView: View {
     var enrollmentDiarizerFactory: (() -> DiarizationProvider)?
     var namingDialogActive: Bool
     var pipelineBusy: Bool
+    /// Called whenever the user mutates the speakers DB from the Known
+    /// Voices sheet (rename / delete / merge). Used to refresh
+    /// `PipelineQueue.knownSpeakerNames` so the next naming dialog sees
+    /// up-to-date chips. Optional — tests and the parent that doesn't
+    /// own a PipelineQueue can omit.
+    var onSpeakerMutate: (() -> Void)?
 
     @State private var showKnownVoices = false
 
@@ -78,6 +84,7 @@ struct SpeakersSettingsView: View {
                 diarizerFactory: enrollmentDiarizerFactory,
                 namingDialogActive: namingDialogActive,
                 pipelineBusy: pipelineBusy,
+                onMutate: onSpeakerMutate,
             )
         }
     }

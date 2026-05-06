@@ -14,6 +14,7 @@ struct SettingsView: View {
     var namingDialogActive: Bool = false
     /// True when the pipeline is processing a job — soft hint only.
     var pipelineBusy: Bool = false
+    var onSpeakerMutate: (() -> Void)?
 
     @State private var selection: SettingsTab = .general
 
@@ -71,6 +72,7 @@ struct SettingsView: View {
                 enrollmentDiarizerFactory: enrollmentDiarizerFactory,
                 namingDialogActive: namingDialogActive,
                 pipelineBusy: pipelineBusy,
+                onSpeakerMutate: onSpeakerMutate,
             )
 
         case .output:

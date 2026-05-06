@@ -144,6 +144,7 @@ struct MeetingTranscriberApp: App {
                 enrollmentDiarizerFactory: { FluidDiarizer(mode: appState.settings.diarizerMode) },
                 namingDialogActive: appState.pipelineQueue.pendingSpeakerNaming != nil,
                 pipelineBusy: appState.pipelineQueue.isProcessing,
+                onSpeakerMutate: appState.pipelineQueue.refreshKnownSpeakerNames,
             )
         }
         .windowResizability(.contentSize)
