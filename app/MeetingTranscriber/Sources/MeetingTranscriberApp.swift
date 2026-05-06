@@ -67,9 +67,13 @@ struct MeetingTranscriberApp: App {
                 ))
             }
             .onReceive(iconTimer) { _ in
-                // Always tick so currentBadge is re-read every 0.4s.
-                // Non-animated badges ignore animationFrame (cached frame 0).
-                iconAnimationFrame = (iconAnimationFrame + 1) % MenuBarIcon.frameCount
+                // Skip the @State mutation when the badge is not animated —
+                // otherwise the App scene's body re-evaluates every 0.4 s
+                // and cascades through every open Window (Settings, etc).
+                let next = MenuBarIcon.nextFrame(iconAnimationFrame, badge: appState.currentBadge)
+                if next != iconAnimationFrame {
+                    iconAnimationFrame = next
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !appState.isWatching {

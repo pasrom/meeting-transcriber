@@ -36,6 +36,14 @@ enum MenuBarIcon {
     /// Number of distinct animation frames.
     static let frameCount = 6
 
+    /// Returns the next animation frame for `badge`, or `current` if `badge`
+    /// is non-animated. Static badges (idle, error, …) ignore the timer tick
+    /// so the App scene's body does not re-evaluate every 0.4 s.
+    static func nextFrame(_ current: Int, badge: BadgeKind) -> Int {
+        guard badge.isAnimated else { return current }
+        return (current + 1) % frameCount
+    }
+
     // MARK: - Shared Layout Constants
 
     private static let barWidth: CGFloat = 2.2
