@@ -59,7 +59,29 @@
                     if merged { self?.pipelineQueue.refreshKnownSpeakerNames() }
                     return merged ? .ok : .notFound
                 },
+                seed: { [weak self] name in
+                    let matcher = SpeakerMatcher()
+                    var stored = matcher.loadDB()
+                    let embedding = (0 ..< Self.seedEmbeddingDimension).map { _ in
+                        Float.random(in: -1 ... 1)
+                    }
+                    stored.append(StoredSpeaker(
+                        name: name,
+                        embeddings: [embedding],
+                        centroid: embedding,
+                        centroidSampleCount: 1,
+                        lastUsed: Date(),
+                        useCount: 1,
+                    ))
+                    matcher.saveDB(stored)
+                    self?.pipelineQueue.refreshKnownSpeakerNames()
+                    return .ok
+                },
             )
         }
+
+        /// FluidAudio's diarizer emits 192-dim embeddings; seeded speakers use
+        /// the same shape so they round-trip through `SpeakerMatcher` cleanly.
+        private static let seedEmbeddingDimension = 192
     }
 #endif
