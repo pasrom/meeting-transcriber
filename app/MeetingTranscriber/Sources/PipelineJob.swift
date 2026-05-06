@@ -32,6 +32,11 @@ struct PipelineJob: Identifiable, Codable {
     /// correlate diagnostic lines across the transcribe → diarize → protocol
     /// stages of the same job.
     var shortID: String {
+        Self.shortID(for: id)
+    }
+
+    /// Same format, callable when only the UUID is in scope.
+    static func shortID(for id: UUID) -> String {
         String(id.uuidString.prefix(8).lowercased())
     }
 
