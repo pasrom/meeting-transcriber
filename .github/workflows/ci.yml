@@ -40,6 +40,9 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v6
       - name: Install tools
@@ -58,12 +61,23 @@ jobs:
         run: swiftlint lint --strict --reporter github-actions-logging
       - name: Build script regression tests
         run: bash scripts/tests/test_build_release_signing.sh
+      # Cancels sibling jobs in this run; the workflow-level `concurrency`
+      # block only cancels superseded runs of the same ref.
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   analyze:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v6
       - name: Install SwiftLint
@@ -74,12 +88,21 @@ jobs:
           xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' build-for-testing 2>&1 | tee /tmp/xcodebuild.log
           cd "$GITHUB_WORKSPACE"
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   test:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
     timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
     strategy:
       matrix:
         variant: [homebrew, appstore]
@@ -116,3 +139,9 @@ jobs:
         run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests ${{ matrix.swift-flags }}
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
