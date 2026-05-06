@@ -187,6 +187,9 @@ struct SpeakerNamingView: View {
         completedJobID = nil
         names = Self.computeInitialNames(speakers: speakers)
         rerunCount = max(2, speakers.count + 1)
+        // Indices are speaker-position based; a different speaker count would
+        // leave stale entries pointing at no-longer-rendered rows.
+        knownExpanded.removeAll()
     }
 
     private func speakerRow(
