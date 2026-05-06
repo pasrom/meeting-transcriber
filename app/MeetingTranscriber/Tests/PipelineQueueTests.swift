@@ -1165,7 +1165,7 @@ final class PipelineQueueTests: XCTestCase {
         let protocolsDir = tmpDir.appendingPathComponent("protocols")
         try FileManager.default.createDirectory(at: protocolsDir, withIntermediateDirectories: true)
         let transcriptPath = protocolsDir.appendingPathComponent("test_transcript.txt")
-        let originalTranscript = "[00:00 - 00:05] [SPEAKER_0] Hello world\n[00:05 - 00:10] [SPEAKER_1] Hi there"
+        let originalTranscript = "[00:00] SPEAKER_0: Hello world\n[00:05] SPEAKER_1: Hi there"
         try originalTranscript.write(to: transcriptPath, atomically: true, encoding: .utf8)
 
         let queue = PipelineQueue(logDir: tmpDir)
@@ -1208,10 +1208,68 @@ final class PipelineQueueTests: XCTestCase {
 
         // Verify transcript was rewritten with user-provided names
         let rewritten = try String(contentsOf: transcriptPath, encoding: .utf8)
-        XCTAssertTrue(rewritten.contains("[Alice]"), "Transcript should contain user-provided name Alice")
-        XCTAssertTrue(rewritten.contains("[Speaker C]"), "Transcript should contain user-provided name Speaker C")
-        XCTAssertFalse(rewritten.contains("[SPEAKER_0]"), "Generic label should be replaced")
-        XCTAssertFalse(rewritten.contains("[SPEAKER_1]"), "Generic label should be replaced")
+        XCTAssertTrue(rewritten.contains("] Alice: Hello world"), "Transcript should contain user-provided name Alice in formattedLine format")
+        XCTAssertTrue(rewritten.contains("] Speaker C: Hi there"), "Transcript should contain user-provided name Speaker C in formattedLine format")
+        XCTAssertFalse(rewritten.contains("SPEAKER_0:"), "Generic label should be replaced")
+        XCTAssertFalse(rewritten.contains("SPEAKER_1:"), "Generic label should be replaced")
+    }
+
+    /// Regression test for dual-source `R_`/`M_` prefixed labels (the format
+    /// actually produced by `assignSpeakersDualTrack`). These never had
+    /// brackets around the speaker name in the saved transcript, so the
+    /// pre-fix `replacingOccurrences(of: "[\(label)]", ...)` logic silently
+    /// did nothing and Confirm appeared to do nothing in the .txt.
+    func testLateConfirmationRewritesDualSourceLabels() async throws {
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        try FileManager.default.createDirectory(at: protocolsDir, withIntermediateDirectories: true)
+        let transcriptPath = protocolsDir.appendingPathComponent("dualsource_transcript.txt")
+        let originalTranscript = "[00:00] Roman Passler: Morgen.\n[00:30] R_S2: Hallo\n[00:42] R_S3: Hi\n[09:55] M_S0: Da kenne ich mich nicht aus."
+        try originalTranscript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        var job = PipelineJob(
+            meetingTitle: "Dual Source Test",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.transcriptPath = transcriptPath
+        queue.enqueue(job)
+
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Dual Source Test",
+            mapping: ["R_S2": "R_S2", "R_S3": "R_S3", "M_S0": "Roman Passler"],
+            speakingTimes: ["R_S2": 5, "R_S3": 5, "M_S0": 5],
+            embeddings: ["R_S2": [1, 0], "R_S3": [0, 1], "M_S0": [0, 0]],
+            audioPath: nil,
+            segments: [],
+            participants: [],
+            isDualSource: true,
+        )
+        queue.speakerNamingDataByJob[job.id] = namingData
+
+        let doneExpectation = XCTestExpectation(description: "Job transitions to done")
+        queue.onJobStateChange = { _, _, newState in
+            if newState == .done {
+                doneExpectation.fulfill()
+            }
+        }
+
+        queue.completeSpeakerNaming(jobID: job.id, result: .confirmed([
+            "R_S2": "Lennart",
+            "R_S3": "Diana",
+        ]))
+
+        await fulfillment(of: [doneExpectation], timeout: 5)
+
+        let rewritten = try String(contentsOf: transcriptPath, encoding: .utf8)
+        XCTAssertTrue(rewritten.contains("] Lennart: Hallo"), "R_S2 should be renamed to Lennart")
+        XCTAssertTrue(rewritten.contains("] Diana: Hi"), "R_S3 should be renamed to Diana")
+        XCTAssertTrue(rewritten.contains("] Roman Passler: Morgen."), "Already-named speaker should be untouched")
+        XCTAssertFalse(rewritten.contains("R_S2:"), "R_S2 label should be gone")
+        XCTAssertFalse(rewritten.contains("R_S3:"), "R_S3 label should be gone")
     }
 
     func testLateConfirmationReplacesAutoMatchedNames() async throws {
@@ -1220,7 +1278,7 @@ final class PipelineQueueTests: XCTestCase {
         try FileManager.default.createDirectory(at: protocolsDir, withIntermediateDirectories: true)
         let transcriptPath = protocolsDir.appendingPathComponent("auto_match_transcript.txt")
         // Transcript already has auto-matched name "John" for SPEAKER_0
-        let originalTranscript = "[00:00 - 00:05] [John] Hello world"
+        let originalTranscript = "[00:00] John: Hello world"
         try originalTranscript.write(to: transcriptPath, atomically: true, encoding: .utf8)
 
         let queue = PipelineQueue(logDir: tmpDir)
@@ -1260,8 +1318,8 @@ final class PipelineQueueTests: XCTestCase {
         await fulfillment(of: [doneExpectation], timeout: 5)
 
         let rewritten = try String(contentsOf: transcriptPath, encoding: .utf8)
-        XCTAssertTrue(rewritten.contains("[Jonathan]"), "Auto-matched name should be replaced with user correction")
-        XCTAssertFalse(rewritten.contains("[John]"), "Old auto-matched name should be gone")
+        XCTAssertTrue(rewritten.contains("] Jonathan: Hello world"), "Auto-matched name should be replaced with user correction")
+        XCTAssertFalse(rewritten.contains("John:"), "Old auto-matched name should be gone")
     }
 
     // MARK: - Late Re-diarization

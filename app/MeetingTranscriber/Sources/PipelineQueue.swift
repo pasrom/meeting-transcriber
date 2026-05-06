@@ -895,11 +895,13 @@ class PipelineQueue {
         if let transcriptPath = jobs[jobIndex].transcriptPath {
             do {
                 var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
+                // Format from `TimestampedSegment.formattedLine`: `[MM:SS] Speaker: text`.
+                // Anchor the replace on `] ` + label + `:` so we hit the speaker
+                // slot and not a substring inside the spoken text.
                 for (label, name) in mapping where !name.isEmpty {
-                    transcript = transcript.replacingOccurrences(of: "[\(label)]", with: "[\(name)]")
-                    // Replace auto-matched name too, to cover both raw label and matched variant
+                    transcript = transcript.replacingOccurrences(of: "] \(label):", with: "] \(name):")
                     if let autoName = namingData.mapping[label], autoName != label, autoName != name {
-                        transcript = transcript.replacingOccurrences(of: "[\(autoName)]", with: "[\(name)]")
+                        transcript = transcript.replacingOccurrences(of: "] \(autoName):", with: "] \(name):")
                     }
                 }
                 try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
