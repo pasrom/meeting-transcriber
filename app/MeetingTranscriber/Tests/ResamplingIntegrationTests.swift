@@ -24,6 +24,16 @@ final class ResamplingIntegrationTests: XCTestCase {
             .appendingPathComponent(name)
     }
 
+    /// Copy a fixture into the test's tmpDir. Use for pipeline tests because
+    /// `PipelineQueue.copyAudioToOutput` moves the source file out of place —
+    /// passing the original Fixtures/ path would delete the shared asset.
+    private func copyFixtureIntoTmp(_ name: String) throws -> URL {
+        let src = fixtureURL(name)
+        let dst = tmpDir.appendingPathComponent("\(UUID().uuidString)_\(name)")
+        try FileManager.default.copyItem(at: src, to: dst)
+        return dst
+    }
+
     // MARK: - WAV resampling produces valid 16kHz output
 
     func testResampleWAVFixtureTo16kHz() async throws {
@@ -71,8 +81,9 @@ final class ResamplingIntegrationTests: XCTestCase {
 
     @MainActor
     func testResampledAudioFlowsThroughPipeline() async throws {
-        let fixture = fixtureURL("two_speakers_de.m4a")
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixture.path), "Fixture not found")
+        let fixtureSrc = fixtureURL("two_speakers_de.m4a")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixtureSrc.path), "Fixture not found")
+        let fixture = try copyFixtureIntoTmp("two_speakers_de.m4a")
 
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -97,9 +108,10 @@ final class ResamplingIntegrationTests: XCTestCase {
             micDelay: 0,
         )
         queue.enqueue(job)
-        await queue.processNext()
+        await queue.awaitProcessing()
 
-        XCTAssertEqual(queue.jobs.first?.state, .done)
+        let result = queue.jobs.first
+        XCTAssertEqual(result?.state, .done, "pipeline error: \(result?.error ?? "nil")")
         XCTAssertEqual(engine.transcribeCallCount, 1)
         XCTAssertTrue(protocolGen.generateCalled)
         XCTAssertTrue(protocolGen.capturedTranscript?.contains("Resampled audio works") ?? false)
@@ -109,8 +121,14 @@ final class ResamplingIntegrationTests: XCTestCase {
 
     @MainActor
     func testDualSourceResamplingFlowsThroughPipeline() async throws {
-        let fixture = fixtureURL("two_speakers_de.m4a")
-        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixture.path), "Fixture not found")
+        let fixtureSrc = fixtureURL("two_speakers_de.m4a")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixtureSrc.path), "Fixture not found")
+        // Each track needs its own copy because copyAudioToOutput moves the
+        // source file once per (mix/app/mic) path, even when several point at
+        // the same URL.
+        let mixPath = try copyFixtureIntoTmp("two_speakers_de.m4a")
+        let appPath = try copyFixtureIntoTmp("two_speakers_de.m4a")
+        let micPath = try copyFixtureIntoTmp("two_speakers_de.m4a")
 
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -129,15 +147,16 @@ final class ResamplingIntegrationTests: XCTestCase {
         let job = PipelineJob(
             meetingTitle: "Dual Resample",
             appName: "Test",
-            mixPath: fixture,
-            appPath: fixture,
-            micPath: fixture,
+            mixPath: mixPath,
+            appPath: appPath,
+            micPath: micPath,
             micDelay: 0,
         )
         queue.enqueue(job)
-        await queue.processNext()
+        await queue.awaitProcessing()
 
-        XCTAssertEqual(queue.jobs.first?.state, .done)
+        let result = queue.jobs.first
+        XCTAssertEqual(result?.state, .done, "pipeline error: \(result?.error ?? "nil")")
         XCTAssertEqual(engine.transcribeCallCount, 2)
     }
 }
