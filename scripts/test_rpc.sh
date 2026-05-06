@@ -109,4 +109,31 @@ out=$("$MT_CLI_BIN" screenshot /tmp/rpc-smoke-after-close.png 2>&1 || true)
 echo "$out" | grep -q "503" || fail "after-close: expected 503, got: $out"
 ok "close → 503 again"
 
+step "Speaker DB mutation routes"
+
+probe_name="rpc-smoketest-$$"
+followup_name="rpc-smoketest-$$-renamed"
+
+# rename of a non-existent speaker → 404 (mt-cli exits non-zero).
+out=$("$MT_CLI_BIN" rename-speaker "$probe_name" "$followup_name" 2>&1 || true)
+echo "$out" | grep -q "404" || fail "rename of missing speaker: expected 404, got: $out"
+ok "rename missing → 404"
+
+# delete of a non-existent speaker → 404.
+out=$("$MT_CLI_BIN" delete-speaker "$probe_name" 2>&1 || true)
+echo "$out" | grep -q "404" || fail "delete of missing speaker: expected 404, got: $out"
+ok "delete missing → 404"
+
+# merge with non-existent source → 404.
+out=$("$MT_CLI_BIN" merge-speakers "$probe_name" "$followup_name" 2>&1 || true)
+echo "$out" | grep -q "404" || fail "merge missing → expected 404, got: $out"
+ok "merge missing → 404"
+
+# Malformed payload → 400.
+code=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d 'not-json' "http://127.0.0.1:9876/action/renameSpeaker")
+[ "$code" = "400" ] || fail "bad JSON: expected 400 got $code"
+ok "bad JSON → 400"
+
 step "All checks passed"
