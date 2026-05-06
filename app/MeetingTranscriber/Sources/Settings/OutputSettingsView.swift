@@ -13,7 +13,7 @@ struct OutputSettingsView: View {
     @State private var availableModels: [String] = []
     @State private var didAttemptConnectionTest = false
     @State private var showResetPromptConfirmation = false
-    @State private var hasCustomPrompt = FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path)
+    @State private var hasCustomPrompt = false
 
     enum ConnectionTestResult {
         case success(String)
@@ -75,6 +75,7 @@ struct OutputSettingsView: View {
             #if !APPSTORE
                 claudeBinaries = ClaudeCLIProtocolGenerator.availableClaudeBinaries()
             #endif
+            refreshCustomPromptState()
         }
     }
 
