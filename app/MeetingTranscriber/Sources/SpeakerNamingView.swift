@@ -165,20 +165,28 @@ struct SpeakerNamingView: View {
         .padding()
         .frame(minWidth: 400, maxHeight: 700)
         .id(data.meetingTitle)
-        .onAppear {
-            names = Self.computeInitialNames(speakers: speakers)
-            rerunCount = max(2, speakers.count + 1)
-        }
-        // After Re-run, the dialog is re-presented for the same jobID with
-        // fresh diarization data. Without resetting `completedJobID`, the
-        // per-job guard would still match and silently kill all three buttons.
-        .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
-            completedJobID = nil
+        .onAppear { resetForCurrentPresentation() }
+        // After Re-run, lateDiarization replaces `data.mapping` for the
+        // same jobID. Without resetting per-presentation @State here, the
+        // per-job guard kept Confirm/Skip/Re-run dead AND the stepper/names
+        // still reflected the previous diarization. `.onChange` fires after
+        // SwiftUI has propagated the new `data`, so `speakers` is current.
+        .onChange(of: data.mapping) { _, _ in
+            resetForCurrentPresentation()
         }
         // No onDisappear → .skipped: in the non-blocking architecture closing
         // the window (Cmd+Q, click X, app quit) leaves the job in
         // .speakerNamingPending so the user can re-open later. Explicit Skip
         // button still calls onComplete(.skipped).
+    }
+
+    /// Re-seed all per-presentation @State from the current `data`. Called
+    /// on first appearance and again whenever `data.mapping` changes (the
+    /// signal that lateDiarization replaced the speakers for this jobID).
+    private func resetForCurrentPresentation() {
+        completedJobID = nil
+        names = Self.computeInitialNames(speakers: speakers)
+        rerunCount = max(2, speakers.count + 1)
     }
 
     private func speakerRow(
