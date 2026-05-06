@@ -3,7 +3,7 @@ import ViewInspector
 import XCTest
 
 @MainActor
-final class SettingsViewTests: XCTestCase {
+final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_length
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var defaults: UserDefaults!
     // swiftlint:disable:next implicitly_unwrapped_optional
