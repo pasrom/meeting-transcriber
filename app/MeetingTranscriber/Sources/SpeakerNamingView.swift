@@ -400,7 +400,7 @@ struct SpeakerNamingView: View {
             .accessibilityIdentifier(identifier)
     }
 
-    /// Play the longest segment of a speaker from the audio file.
+    /// Play the longest temporally-pure segment of a speaker from the audio file.
     private func playSpeakerSnippet(label: String) {
         // Stop if already playing this speaker
         if playingLabel == label {
@@ -412,15 +412,16 @@ struct SpeakerNamingView: View {
 
         guard let audioPath = data.audioPath else { return }
 
-        guard let longest = Self.longestSegment(forSpeaker: label, in: data.segments) else { return }
+        // Pick the longest pure segment to avoid cross-voice contamination.
+        guard let chosen = Self.selectSampleSegment(for: label, in: data.segments) else { return }
 
         // Perform file I/O off the main thread
-        Task.detached { [audioPath, longest] in
+        Task.detached { [audioPath, chosen] in
             do {
                 let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
                 guard let range = Self.sampleRange(
-                    start: longest.start,
-                    end: longest.end,
+                    start: chosen.start,
+                    end: chosen.end,
                     sampleRate: sampleRate,
                     totalSamples: samples.count,
                 ) else { return }
@@ -490,6 +491,29 @@ struct SpeakerNamingView: View {
         let endSample = min(totalSamples, Int(end * Double(sampleRate)))
         guard startSample < endSample else { return nil }
         return startSample ..< endSample
+    }
+
+    /// Picks the longest temporally-pure segment for `label`, falling back to
+    /// `longestSegment` when no pure segment ≥ `minDuration` exists. A segment is
+    /// "pure" when no other speaker has any segment overlapping the window
+    /// `[c.start - purityWindow, c.end + purityWindow]`. Used to avoid
+    /// cross-voice contamination in the speaker-naming dialog playback.
+    static func selectSampleSegment(
+        for label: String,
+        in segments: [PipelineQueue.SpeakerNamingData.Segment],
+        minDuration: TimeInterval = 1.5,
+        purityWindow: TimeInterval = 0.5,
+    ) -> PipelineQueue.SpeakerNamingData.Segment? {
+        let own = segments.filter { $0.speaker == label }
+        guard !own.isEmpty else { return nil }
+        let others = segments.filter { $0.speaker != label }
+        let pure = own
+            .filter { c in
+                (c.end - c.start) >= minDuration
+                    && !others.contains { $0.start < c.end + purityWindow && c.start - purityWindow < $0.end }
+            }
+            .max { ($0.end - $0.start) < ($1.end - $1.start) }
+        return pure ?? longestSegment(forSpeaker: label, in: segments)
     }
 
     /// Computes initial text field names from speaker auto-name mappings.
