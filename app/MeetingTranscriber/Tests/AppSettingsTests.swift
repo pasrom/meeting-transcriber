@@ -288,6 +288,25 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(migrated.verboseDiagnostics)
     }
 
+    func test_verboseDiagnostics_migrationRemovesLegacyKey() {
+        let suiteName = "AppSettingsTests-cleanup-\(UUID().uuidString)"
+        guard let suite = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Could not create suite")
+            return
+        }
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+
+        suite.set(true, forKey: "audioDebugLogging")
+
+        _ = AppSettings(defaults: suite)
+
+        XCTAssertNil(
+            suite.object(forKey: "audioDebugLogging"),
+            "Legacy audioDebugLogging key should be removed once migrated to verboseDiagnostics",
+        )
+        XCTAssertTrue(suite.bool(forKey: "verboseDiagnostics"))
+    }
+
     // MARK: - Keychain
 
     func testKeychainRoundTrip() {
