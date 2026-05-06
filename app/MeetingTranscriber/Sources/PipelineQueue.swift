@@ -320,6 +320,22 @@ class PipelineQueue {
         triggerProcessing()
     }
 
+    /// Wait for the queue to drain: any in-flight processing finishes and no
+    /// jobs remain in `.waiting`. Used by tests that enqueue a job and need to
+    /// observe a terminal state without racing against the spawned process task
+    /// from `enqueue` → `triggerProcessing()`.
+    func awaitProcessing() async {
+        while isProcessing || !pendingJobs.isEmpty {
+            if let task = processTask {
+                await task.value
+            } else {
+                // processTask not yet assigned — yield so the spawning Task
+                // can run.
+                await Task.yield()
+            }
+        }
+    }
+
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             markProcessed(mixPath: jobs[index].mixPath)

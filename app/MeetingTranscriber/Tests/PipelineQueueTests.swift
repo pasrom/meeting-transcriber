@@ -450,6 +450,25 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(pQueue.jobs.isEmpty)
     }
 
+    func testAwaitProcessingReturnsImmediatelyWhenIdle() async {
+        let pQueue = makeProcessingQueue()
+        await pQueue.awaitProcessing()
+        XCTAssertFalse(pQueue.isProcessing)
+        XCTAssertTrue(pQueue.pendingJobs.isEmpty)
+    }
+
+    func testAwaitProcessingDrainsSpawnedTask() async {
+        let pQueue = makeProcessingQueue()
+        let job = makeJob()
+        pQueue.enqueue(job)
+        // Spawned task is in flight (or about to be). Without awaitProcessing,
+        // observers race against the spawned Task.
+        await pQueue.awaitProcessing()
+        XCTAssertFalse(pQueue.isProcessing, "queue should be idle after awaitProcessing")
+        XCTAssertTrue(pQueue.pendingJobs.isEmpty, "no jobs should remain in waiting")
+        XCTAssertNotEqual(pQueue.jobs.first?.state, .waiting)
+    }
+
     func testIsProcessingFlag() {
         let pQueue = makeProcessingQueue()
         XCTAssertFalse(pQueue.isProcessing)
