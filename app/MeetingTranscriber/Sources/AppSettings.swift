@@ -373,6 +373,12 @@ final class AppSettings {
         } else {
             verboseDiagnostics = false
         }
+        // Drop legacy key once the new key is populated, so a future second
+        // migration pass can't resurrect a stale value.
+        if defaults.object(forKey: "audioDebugLogging") != nil,
+           defaults.object(forKey: "verboseDiagnostics") != nil {
+            defaults.removeObject(forKey: "audioDebugLogging")
+        }
         #if !APPSTORE
             debugRPCEnabled = defaults.object(forKey: "debugRPCEnabled") as? Bool ?? false
         #endif
