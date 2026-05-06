@@ -169,6 +169,12 @@ struct SpeakerNamingView: View {
             names = Self.computeInitialNames(speakers: speakers)
             rerunCount = max(2, speakers.count + 1)
         }
+        // After Re-run, the dialog is re-presented for the same jobID with
+        // fresh diarization data. Without resetting `completedJobID`, the
+        // per-job guard would still match and silently kill all three buttons.
+        .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
+            completedJobID = nil
+        }
         // No onDisappear → .skipped: in the non-blocking architecture closing
         // the window (Cmd+Q, click X, app quit) leaves the job in
         // .speakerNamingPending so the user can re-open later. Explicit Skip
