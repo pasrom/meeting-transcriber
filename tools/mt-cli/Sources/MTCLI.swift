@@ -6,7 +6,11 @@ struct MTCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mt-cli",
         abstract: "Thin client for the Meeting Transcriber debug RPC server.",
-        subcommands: [State.self, Healthz.self, Screenshot.self, OpenSettings.self, CloseSettings.self],
+        subcommands: [
+            State.self, Healthz.self, Screenshot.self,
+            OpenSettings.self, CloseSettings.self,
+            RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
+        ],
     )
 }
 
@@ -58,6 +62,64 @@ struct CloseSettings: AsyncParsableCommand {
         let client = try RPCClient.loadDefault()
         let data = try await client.post("/action/closeSettings", json: [:])
         FileHandle.standardOutput.write(data)
+    }
+}
+
+/// POST a JSON action to the RPC server and write the response body + newline
+/// to stdout. Shared by every action subcommand that returns the server's
+/// outcome JSON unchanged.
+private func postAction(_ path: String, _ payload: [String: String]) async throws {
+    let client = try RPCClient.loadDefault()
+    let data = try await client.post(path, json: payload)
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+struct RenameSpeaker: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "rename-speaker",
+        abstract: "Rename a speaker in the persisted DB. Merges if the target name exists.",
+    )
+
+    @Argument(help: "Current name of the speaker.")
+    var from: String
+
+    @Argument(help: "New name. If a speaker already has this name, the two are merged.")
+    var to: String
+
+    func run() async throws {
+        try await postAction("/action/renameSpeaker", ["from": from, "to": to])
+    }
+}
+
+struct DeleteSpeaker: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "delete-speaker",
+        abstract: "Remove a speaker from the persisted DB.",
+    )
+
+    @Argument(help: "Name of the speaker to delete.")
+    var name: String
+
+    func run() async throws {
+        try await postAction("/action/deleteSpeaker", ["name": name])
+    }
+}
+
+struct MergeSpeakers: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "merge-speakers",
+        abstract: "Merge one speaker into another. Embeddings, centroid and counts are combined.",
+    )
+
+    @Argument(help: "Source speaker — its data is merged into the target and the source is removed.")
+    var from: String
+
+    @Argument(help: "Target speaker — receives the source's embeddings and centroid.")
+    var into: String
+
+    func run() async throws {
+        try await postAction("/action/mergeSpeakers", ["from": from, "into": into])
     }
 }
 

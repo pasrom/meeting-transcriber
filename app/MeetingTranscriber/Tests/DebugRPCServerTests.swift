@@ -214,6 +214,148 @@
             XCTAssertEqual(perms, 0o600)
         }
 
+        // MARK: - Speaker DB action routes
+
+        @MainActor
+        func testRouteRenameSpeakerCallsActionAndReturnsOK() throws {
+            let stub = StubSpeakerActions()
+            stub.renameOutcome = .ok
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"Old","to":"New"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(stub.renameCalls.count, 1)
+            XCTAssertEqual(stub.renameCalls.first?.0, "Old")
+            XCTAssertEqual(stub.renameCalls.first?.1, "New")
+            let decoded = try JSONSerialization.jsonObject(with: response.body) as? [String: String]
+            XCTAssertEqual(decoded?["outcome"], "ok")
+        }
+
+        @MainActor
+        func testRouteRenameSpeakerNotFoundReturns404() {
+            let stub = StubSpeakerActions()
+            stub.renameOutcome = .notFound
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"Missing","to":"Whatever"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 404)
+        }
+
+        @MainActor
+        func testRouteRenameSpeakerCollisionReturnsMerged() throws {
+            let stub = StubSpeakerActions()
+            stub.renameOutcome = .merged
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"A","to":"B"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 200)
+            let decoded = try JSONSerialization.jsonObject(with: response.body) as? [String: String]
+            XCTAssertEqual(decoded?["outcome"], "merged")
+        }
+
+        @MainActor
+        func testRouteRenameSpeakerInvalidJSONReturns400() {
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+            )
+            let body = Data("{not json".utf8)
+            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 400)
+        }
+
+        @MainActor
+        func testRouteRenameSpeakerMissingFieldReturns400() {
+            let stub = StubSpeakerActions()
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"OnlyThis"}"#.utf8) // missing "to"
+            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            XCTAssertEqual(response.status, 400)
+            XCTAssertTrue(stub.renameCalls.isEmpty)
+        }
+
+        @MainActor
+        func testRouteDeleteSpeakerCallsActionAndReturnsOK() {
+            let stub = StubSpeakerActions()
+            stub.deleteOutcome = .ok
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"name":"Doomed"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(stub.deleteCalls, ["Doomed"])
+        }
+
+        @MainActor
+        func testRouteDeleteSpeakerNotFoundReturns404() {
+            let stub = StubSpeakerActions()
+            stub.deleteOutcome = .notFound
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"name":"Ghost"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
+            XCTAssertEqual(response.status, 404)
+        }
+
+        @MainActor
+        func testRouteMergeSpeakersCallsActionAndReturnsOK() {
+            let stub = StubSpeakerActions()
+            stub.mergeOutcome = .ok
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"A","into":"B"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(stub.mergeCalls.first?.0, "A")
+            XCTAssertEqual(stub.mergeCalls.first?.1, "B")
+        }
+
+        @MainActor
+        func testRouteMergeSpeakersNotFoundReturns404() {
+            let stub = StubSpeakerActions()
+            stub.mergeOutcome = .notFound
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: stub.actions(),
+            )
+            let body = Data(#"{"from":"X","into":"Y"}"#.utf8)
+            let response = server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
+            XCTAssertEqual(response.status, 404)
+        }
+
+        @MainActor
+        func testRouteSpeakerActionsRejectMissingAuth() {
+            let server = DebugRPCServer(
+                port: 0, token: Self.testToken,
+                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+            )
+            let body = Data(#"{"from":"A","to":"B"}"#.utf8)
+            // Missing Authorization header.
+            let request = HTTPRequest(
+                method: "POST", path: "/action/renameSpeaker",
+                headers: ["content-type": "application/json"], body: body,
+            )
+            XCTAssertEqual(server.route(request).status, 401)
+        }
+
         // MARK: - Snapshot JSON
 
         func testSnapshotEncodesPretty() throws {
@@ -230,6 +372,40 @@
 
         private func authedRequest(method: String, path: String, body: Data = Data()) -> HTTPRequest {
             HTTPRequest(method: method, path: path, headers: Self.authHeaders, body: body)
+        }
+
+        private func authedJSONRequest(path: String, body: Data) -> HTTPRequest {
+            var headers = Self.authHeaders
+            headers["content-type"] = "application/json"
+            return HTTPRequest(method: "POST", path: path, headers: headers, body: body)
+        }
+    }
+
+    /// Stub that records calls and returns canned outcomes per action.
+    /// Used by routing tests to verify the request → closure → response wiring.
+    final class StubSpeakerActions {
+        private(set) var renameCalls: [(String, String)] = []
+        private(set) var deleteCalls: [String] = []
+        private(set) var mergeCalls: [(String, String)] = []
+        var renameOutcome: SpeakerActionOutcome = .ok
+        var deleteOutcome: SpeakerActionOutcome = .ok
+        var mergeOutcome: SpeakerActionOutcome = .ok
+
+        func actions() -> SpeakerDBActions {
+            SpeakerDBActions(
+                rename: { [weak self] from, to in
+                    self?.renameCalls.append((from, to))
+                    return self?.renameOutcome ?? .invalid
+                },
+                delete: { [weak self] name in
+                    self?.deleteCalls.append(name)
+                    return self?.deleteOutcome ?? .invalid
+                },
+                merge: { [weak self] from, into in
+                    self?.mergeCalls.append((from, into))
+                    return self?.mergeOutcome ?? .invalid
+                },
+            )
         }
     }
 #endif

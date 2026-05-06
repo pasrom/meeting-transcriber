@@ -33,6 +33,7 @@
 
         private let port: NWEndpoint.Port
         private let snapshot: () -> RPCStateSnapshot
+        private let speakerActions: SpeakerDBActions
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -47,10 +48,12 @@
             port: UInt16 = DebugRPCServer.defaultPort,
             token: String = DebugRPCServer.loadOrCreateToken(),
             snapshot: @escaping () -> RPCStateSnapshot,
+            speakerActions: SpeakerDBActions = .noop,
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
             self.snapshot = snapshot
+            self.speakerActions = speakerActions
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -176,6 +179,24 @@
                 Self.closeSettings()
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
+            case ("POST", "/action/renameSpeaker"):
+                guard let payload = try? JSONDecoder().decode(RenamePayload.self, from: request.body),
+                      !payload.from.isEmpty, !payload.to.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.rename(payload.from, payload.to))
+
+            case ("POST", "/action/deleteSpeaker"):
+                guard let payload = try? JSONDecoder().decode(DeletePayload.self, from: request.body),
+                      !payload.name.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.delete(payload.name))
+
+            case ("POST", "/action/mergeSpeakers"):
+                guard let payload = try? JSONDecoder().decode(MergePayload.self, from: request.body),
+                      !payload.from.isEmpty, !payload.into.isEmpty
+                else { return HTTPResponse.badRequest() }
+                return Self.respond(to: speakerActions.merge(payload.from, payload.into))
+
             case ("GET", "/screenshot"):
                 if let png = Self.captureFrontmostWindowPNG() {
                     return HTTPResponse.ok(body: png, contentType: "image/png")
@@ -187,6 +208,38 @@
 
             default:
                 return HTTPResponse.notFound()
+            }
+        }
+
+        // MARK: - Speaker DB action helpers
+
+        private struct RenamePayload: Decodable {
+            let from: String
+            let to: String
+        }
+
+        private struct DeletePayload: Decodable {
+            let name: String
+        }
+
+        private struct MergePayload: Decodable {
+            let from: String
+            let into: String
+        }
+
+        /// Map the action outcome to an HTTP response. `notFound` → 404,
+        /// `invalid` → 400, everything else → 200 with the outcome string in the body.
+        private static func respond(to outcome: SpeakerActionOutcome) -> HTTPResponse {
+            switch outcome {
+            case .notFound:
+                return HTTPResponse.notFound()
+
+            case .invalid:
+                return HTTPResponse.badRequest()
+
+            case .ok, .noop, .merged:
+                let body = Data(#"{"outcome":"\#(outcome.rawValue)"}"#.utf8)
+                return HTTPResponse.ok(body: body, contentType: "application/json")
             }
         }
 
@@ -302,6 +355,10 @@
             Self(status: 403, reason: "Forbidden", body: Data(), contentType: "text/plain")
         }
 
+        static func badRequest() -> Self {
+            Self(status: 400, reason: "Bad Request", body: Data(), contentType: "text/plain")
+        }
+
         func serialize() -> Data {
             var response = "HTTP/1.1 \(status) \(reason)\r\n"
             response += "Content-Type: \(contentType)\r\n"
@@ -312,6 +369,30 @@
             out.append(body)
             return out
         }
+    }
+
+    // MARK: - Speaker DB action types
+
+    enum SpeakerActionOutcome: String {
+        case ok
+        case noop
+        case merged
+        case notFound
+        case invalid
+    }
+
+    /// Default `.noop` rejects every request so tests and dry-launches can't
+    /// accidentally mutate state — wire real closures explicitly when starting.
+    struct SpeakerDBActions {
+        var rename: (String, String) -> SpeakerActionOutcome
+        var delete: (String) -> SpeakerActionOutcome
+        var merge: (String, String) -> SpeakerActionOutcome
+
+        static let noop = Self(
+            rename: { _, _ in .invalid },
+            delete: { _ in .invalid },
+            merge: { _, _ in .invalid },
+        )
     }
 
     // MARK: - State snapshot
