@@ -843,7 +843,7 @@ class PipelineQueue {
         guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
             return
         }
-        let shortID = String(jobID.uuidString.prefix(8).lowercased())
+        let shortID = PipelineJob.shortID(for: jobID)
         do {
             updateJobState(id: jobID, to: .generatingProtocol)
             startElapsedTimer()

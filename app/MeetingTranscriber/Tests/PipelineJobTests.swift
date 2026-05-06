@@ -119,6 +119,18 @@ final class PipelineJobTests: XCTestCase {
         XCTAssertNotEqual(a.shortID, b.shortID)
     }
 
+    func test_shortID_staticHelperMatchesInstanceProperty() {
+        let job = PipelineJob(
+            meetingTitle: "Standup",
+            appName: "Teams",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        XCTAssertEqual(PipelineJob.shortID(for: job.id), job.shortID)
+    }
+
     func testJobStateRawValues() {
         XCTAssertEqual(JobState.waiting.rawValue, "waiting")
         XCTAssertEqual(JobState.transcribing.rawValue, "transcribing")
