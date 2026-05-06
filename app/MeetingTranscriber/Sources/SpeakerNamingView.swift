@@ -498,42 +498,65 @@ struct SpeakerNamingView: View {
 struct ChipFlowLayout: Layout {
     var spacing: CGFloat = 4
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+    /// Subview intrinsic sizes are cached so `sizeThatFits` and
+    /// `placeSubviews` don't each re-query every child per layout pass.
+    typealias Cache = [CGSize]
+
+    func makeCache(subviews: Subviews) -> Cache {
+        subviews.map { $0.sizeThatFits(.unspecified) }
+    }
+
+    func updateCache(_ cache: inout Cache, subviews: Subviews) {
+        cache = subviews.map { $0.sizeThatFits(.unspecified) }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews _: Subviews, cache: inout Cache) -> CGSize {
         let containerWidth = proposal.width ?? .infinity
+        return Self.computeLayout(
+            sizes: cache, containerWidth: containerWidth, spacing: spacing,
+        ).totalSize
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        let result = Self.computeLayout(
+            sizes: cache, containerWidth: bounds.width, spacing: spacing,
+        )
+        for (index, sv) in subviews.enumerated() {
+            let pos = result.positions[index]
+            sv.place(
+                at: CGPoint(x: bounds.minX + pos.x, y: bounds.minY + pos.y),
+                proposal: ProposedViewSize(cache[index]),
+            )
+        }
+    }
+
+    /// Pure layout calculation — extracted so the wrapping logic can be
+    /// covered by unit tests without a SwiftUI host.
+    static func computeLayout(
+        sizes: [CGSize], containerWidth: CGFloat, spacing: CGFloat,
+    ) -> (totalSize: CGSize, positions: [CGPoint]) {
         var x: CGFloat = 0
         var y: CGFloat = 0
         var rowHeight: CGFloat = 0
         var maxWidth: CGFloat = 0
-        for sv in subviews {
-            let size = sv.sizeThatFits(.unspecified)
+        var positions: [CGPoint] = []
+        positions.reserveCapacity(sizes.count)
+
+        for size in sizes {
             if x > 0, x + size.width > containerWidth {
                 y += rowHeight + spacing
                 x = 0
                 rowHeight = 0
             }
+            positions.append(CGPoint(x: x, y: y))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
             maxWidth = max(maxWidth, x - spacing)
         }
         // Report the actual content width (capped at the container) so unconstrained
         // parents (proposal == .infinity) don't get an infinite frame.
-        return CGSize(width: min(maxWidth, containerWidth), height: y + rowHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-        for sv in subviews {
-            let size = sv.sizeThatFits(.unspecified)
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                y += rowHeight + spacing
-                x = bounds.minX
-                rowHeight = 0
-            }
-            sv.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
+        let width = sizes.isEmpty ? 0 : min(maxWidth, containerWidth)
+        let height = sizes.isEmpty ? 0 : y + rowHeight
+        return (totalSize: CGSize(width: width, height: height), positions: positions)
     }
 }
