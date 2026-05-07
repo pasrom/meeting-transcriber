@@ -51,7 +51,7 @@ final class KnownVoicesViewTests: XCTestCase {
         matcher.saveDB([StoredSpeaker(name: "Old", embeddings: [[1, 0, 0]])])
 
         var calls = 0
-        let view = KnownVoicesView(matcher: matcher) { calls += 1 }
+        let view = KnownVoicesView(matcher: matcher, onMutate: { calls += 1 })
 
         view.performRename(from: "Old", to: "New")
 
@@ -63,7 +63,7 @@ final class KnownVoicesViewTests: XCTestCase {
         matcher.saveDB([StoredSpeaker(name: "Doomed", embeddings: [[1, 0, 0]])])
 
         var calls = 0
-        let view = KnownVoicesView(matcher: matcher) { calls += 1 }
+        let view = KnownVoicesView(matcher: matcher, onMutate: { calls += 1 })
 
         view.performDelete(name: "Doomed")
 
@@ -78,7 +78,7 @@ final class KnownVoicesViewTests: XCTestCase {
         ])
 
         var calls = 0
-        let view = KnownVoicesView(matcher: matcher) { calls += 1 }
+        let view = KnownVoicesView(matcher: matcher, onMutate: { calls += 1 })
 
         view.performMerge(from: "From", into: "Into")
 
