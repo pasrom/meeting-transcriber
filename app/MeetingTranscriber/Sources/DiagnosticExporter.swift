@@ -18,9 +18,10 @@ enum DiagnosticExporter {
         let settings: [String: String]
     }
 
-    /// Shared formatter — `ISO8601DateFormatter` init is non-trivial, so we
-    /// keep one instance for both the header timestamp and per-entry timestamps.
-    private static let formatter = ISO8601DateFormatter()
+    /// Shared formatter — `ISO8601DateFormatter` init is non-trivial.
+    /// `nonisolated(unsafe)`: thread-safe for read-only use since macOS 10.9
+    /// despite not being formally `Sendable`.
+    nonisolated(unsafe) private static let formatter = ISO8601DateFormatter()
 
     /// Cached `DateFormatter` for syslog-style line prefixes (`MMM d HH:mm:ss`).
     /// Reused for every line in `exportFromFile`'s filter loop — at thousands
