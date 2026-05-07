@@ -264,9 +264,10 @@
 
         @MainActor
         func testRouteRenameSpeakerInvalidJSONReturns400() {
+            let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
-                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+                snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data("{not json".utf8)
             let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
@@ -357,9 +358,10 @@
 
         @MainActor
         func testRouteSeedSpeakerInvalidJSONReturns400() {
+            let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
-                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+                snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"wrong":"shape"}"#.utf8)
             let response = server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
@@ -381,9 +383,10 @@
 
         @MainActor
         func testRouteSpeakerActionsRejectMissingAuth() {
+            let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
-                snapshot: { .empty }, speakerActions: StubSpeakerActions().actions(),
+                snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"A","to":"B"}"#.utf8)
             // Missing Authorization header.
