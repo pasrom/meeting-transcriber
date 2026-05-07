@@ -329,12 +329,29 @@
 
         // MARK: - Screenshot
 
-        /// PNG of the largest visible content window, or nil when none qualifies.
-        /// Uses ScreenCaptureKit (`SCScreenshotManager.captureImage`) — the
-        /// non-deprecated successor to `CGWindowListCreateImage`. Unlike the old
-        /// API, SCK requires Screen Recording permission even for self-capture;
-        /// the first request triggers the standard TCC prompt. Acceptable for
-        /// this debug-only path (whole file is `#if !APPSTORE`, RPC is opt-in).
+        /// SwiftUI scene identifiers we expose to `/screenshot`. SpeakerNamingView
+        /// (`speaker-naming`) is deliberately excluded because it surfaces real
+        /// participant names and meeting titles — capturing it would let any
+        /// local process with the RPC token read PII off-screen. Record-app
+        /// picker (`record-app`) is excluded by default for the same reason
+        /// (it lists the user's running apps); add to the set if a screenshot
+        /// of it becomes useful for debugging. System file pickers, AppKit
+        /// alerts, and similar transients carry no SwiftUI identifier and are
+        /// rejected by the nil/empty case.
+        nonisolated static let screenshotAllowedWindowIDs: Set<String> = ["settings"]
+
+        nonisolated static func isWindowAllowedForScreenshot(identifier: String?) -> Bool {
+            guard let identifier, !identifier.isEmpty else { return false }
+            return screenshotAllowedWindowIDs.contains(identifier)
+        }
+
+        /// PNG of the largest visible content window from the screenshot
+        /// allowlist, or nil when none qualifies. Uses ScreenCaptureKit
+        /// (`SCScreenshotManager.captureImage`) — the non-deprecated successor
+        /// to `CGWindowListCreateImage`. Unlike the old API, SCK requires
+        /// Screen Recording permission even for self-capture; the first
+        /// request triggers the standard TCC prompt. Acceptable for this
+        /// debug-only path (whole file is `#if !APPSTORE`, RPC is opt-in).
         @MainActor
         static func captureFrontmostWindowPNG() async -> Data? {
             let app = NSApplication.shared
@@ -343,7 +360,11 @@
                 return b.width * b.height
             }
             let candidate = app.windows
-                .filter { $0.isVisible && $0.contentView != nil }
+                .filter { window in
+                    isWindowAllowedForScreenshot(identifier: window.identifier?.rawValue)
+                        && window.isVisible
+                        && window.contentView != nil
+                }
                 .max { area($0) < area($1) }
             guard let window = candidate, area(window) >= minWindowAreaPx else { return nil }
             let windowID = CGWindowID(window.windowNumber)
