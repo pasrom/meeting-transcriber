@@ -21,7 +21,10 @@ let package = Package(
                 .product(name: "AudioTapLib", package: "audiotap"),
             ],
             path: "Sources",
-            exclude: ["Info.plist"]
+            // Assets.xcassets is compiled by `actool` in scripts/build_release.sh,
+            // not by SPM. Excluding silences "unhandled file" warnings without
+            // changing the runtime bundle.
+            exclude: ["Info.plist", "Assets.xcassets"]
         ),
         .testTarget(
             name: "MeetingTranscriberTests",
@@ -31,7 +34,10 @@ let package = Package(
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing"),
             ],
             path: "Tests",
-            exclude: ["Fixtures"]
+            // __Snapshots__ is the SnapshotTesting reference-image directory.
+            // Tests load these via filesystem path at runtime, not via the
+            // bundle, so SPM doesn't need to package them as resources.
+            exclude: ["Fixtures", "__Snapshots__"]
         ),
     ]
 )
