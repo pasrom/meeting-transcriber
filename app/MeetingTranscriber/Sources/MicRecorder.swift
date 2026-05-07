@@ -1,5 +1,6 @@
 // MicRecorder is currently unused (DualSourceRecorder uses AudioTapLib directly).
 // Kept for potential future standalone mic recording feature.
+import AudioTapLib
 import AVFoundation
 import CoreAudio
 import Foundation
@@ -146,27 +147,9 @@ class MicRecorder {
             }
             guard inputChannels > 0 else { continue }
 
-            // Get UID
-            var uidAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioDevicePropertyDeviceUID,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain,
-            )
-            var uid: CFString = "" as CFString
-            var uidSize = UInt32(MemoryLayout<CFString>.size)
-            guard AudioObjectGetPropertyData(deviceID, &uidAddress, 0, nil, &uidSize, &uid) == noErr else { continue }
-
-            // Get name
-            var nameAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioObjectPropertyName,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain,
-            )
-            var name: CFString = "" as CFString
-            var nameSize = UInt32(MemoryLayout<CFString>.size)
-            guard AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name) == noErr else { continue }
-
-            results.append((uid: uid as String, name: name as String, channels: inputChannels))
+            guard let uidValue = readCFStringAudioProperty(deviceID, kAudioDevicePropertyDeviceUID),
+                  let nameValue = readCFStringAudioProperty(deviceID, kAudioObjectPropertyName) else { continue }
+            results.append((uid: uidValue, name: nameValue, channels: inputChannels))
         }
         return results
     }
