@@ -24,7 +24,14 @@ let package = Package(
             // Assets.xcassets is compiled by `actool` in scripts/build_release.sh,
             // not by SPM. Excluding silences "unhandled file" warnings without
             // changing the runtime bundle.
-            exclude: ["Info.plist", "Assets.xcassets"]
+            exclude: ["Info.plist", "Assets.xcassets"],
+            // Treat any new compiler warning as a build failure so deprecations
+            // and concurrency hints are caught at PR time, not on a future
+            // dependency bump. Scoped to our targets only — does not propagate
+            // to WhisperKit/FluidAudio. `unsafeFlags` instead of the cleaner
+            // `treatAllWarnings(as:)` because the latter needs
+            // swift-tools-version 6.0; we still target 5.10 for SPM compat.
+            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
         ),
         .testTarget(
             name: "MeetingTranscriberTests",
@@ -37,7 +44,8 @@ let package = Package(
             // __Snapshots__ is the SnapshotTesting reference-image directory.
             // Tests load these via filesystem path at runtime, not via the
             // bundle, so SPM doesn't need to package them as resources.
-            exclude: ["Fixtures", "__Snapshots__"]
+            exclude: ["Fixtures", "__Snapshots__"],
+            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
         ),
     ]
 )
