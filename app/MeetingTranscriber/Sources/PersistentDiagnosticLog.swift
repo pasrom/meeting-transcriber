@@ -176,7 +176,7 @@ enum PersistentDiagnosticLog {
                 // fails (disk full, permissions), keep writing to the old
                 // file rather than silently dropping every subsequent entry.
                 guard let newHandle = try? FileHandle(forWritingTo: newURL) else { return }
-                try? newHandle.seekToEnd()
+                _ = try? newHandle.seekToEnd()
                 try? logFileHandle.close()
                 logFileHandle = newHandle
                 openedDateString = today
