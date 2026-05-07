@@ -328,6 +328,57 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertEqual(matcherInits, 1)
     }
 
+    // MARK: - Experimental Diarization Tuning
+
+    func testExperimentalDisclosureLabelExists() throws {
+        let settings = makeSettings()
+        settings.diarize = true
+        settings.diarizerMode = .offline
+        let body = try makeSpeakers(settings: settings).inspect()
+        XCTAssertNoThrow(try body.find(text: "Experimental: Diarization Tuning"))
+    }
+
+    // The disclosure starts collapsed — verified via the underlying
+    // DisclosureGroup `isExpanded` binding that ViewInspector exposes.
+    func testExperimentalDisclosureCollapsedByDefault() throws {
+        let settings = makeSettings()
+        settings.diarize = true
+        settings.diarizerMode = .offline
+        let body = try makeSpeakers(settings: settings).inspect()
+        let disclosure = try body.find(ViewType.DisclosureGroup.self)
+        XCTAssertFalse(try disclosure.isExpanded())
+    }
+
+    func testExperimentalDisclosureHiddenForSortformer() throws {
+        let settings = makeSettings()
+        settings.diarize = true
+        settings.diarizerMode = .sortformer
+        let body = try makeSpeakers(settings: settings).inspect()
+        XCTAssertThrowsError(try body.find(text: "Experimental: Diarization Tuning"))
+    }
+
+    func testResetButtonDisabledWhenAllDefaults() {
+        let settings = makeSettings()
+        XCTAssertTrue(settings.diarizerTuningIsAllDefaults)
+    }
+
+    func testResetButtonEnabledWhenAnyValueChanged() {
+        let settings = makeSettings()
+        settings.clusterThreshold = 0.42
+        XCTAssertFalse(settings.diarizerTuningIsAllDefaults)
+    }
+
+    func testResetClearsNonDefaultValues() {
+        let settings = makeSettings()
+        settings.clusterThreshold = 0.42
+        settings.warmStartFa = 0.13
+        settings.excludeOverlap = false
+        XCTAssertFalse(settings.diarizerTuningIsAllDefaults)
+
+        settings.resetDiarizerTuning()
+        XCTAssertTrue(settings.diarizerTuningIsAllDefaults)
+    }
+
     // MARK: - Output tab
 
     func testProviderPickerExists() throws {
