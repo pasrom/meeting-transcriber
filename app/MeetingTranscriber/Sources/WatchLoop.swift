@@ -375,6 +375,11 @@ class WatchLoop {
             recording.mixPath.deletingPathExtension().lastPathComponent
         }
 
+        // Track every destination URL we materialise so a mid-finalize error
+        // can roll back partial state instead of leaving orphan WAVs in the
+        // user's output dir. The sidecar is written last; without it,
+        // anything we already moved is provisional.
+        var moved: [URL] = []
         do {
             let destDir = recordOnlyOutputDir()
             // The destination may be a user-chosen folder reached via a security-scoped
@@ -388,8 +393,17 @@ class WatchLoop {
                 at: destDir, withIntermediateDirectories: true,
             )
             let movedMix = try Self.move(recording.mixPath, into: destDir)
-            let movedApp = try recording.appPath.map { try Self.move($0, into: destDir) }
-            let movedMic = try recording.micPath.map { try Self.move($0, into: destDir) }
+            moved.append(movedMix)
+            let movedApp = try recording.appPath.map { source -> URL in
+                let url = try Self.move(source, into: destDir)
+                moved.append(url)
+                return url
+            }
+            let movedMic = try recording.micPath.map { source -> URL in
+                let url = try Self.move(source, into: destDir)
+                moved.append(url)
+                return url
+            }
 
             let sidecar = RecordingSidecar(
                 title: title,
@@ -405,6 +419,12 @@ class WatchLoop {
             try sidecar.write(toDirectory: destDir, basename: basename)
             logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title)")
         } catch {
+            // Roll back any audio we moved before the failure point — without
+            // a sidecar they're indistinguishable from a successful recording
+            // to downstream consumers.
+            for url in moved {
+                try? FileManager.default.removeItem(at: url)
+            }
             logger.error("Record-only: \(error.localizedDescription)")
             lastError = "Record-only output failed: \(error.localizedDescription)"
             // Record-only skips state transitions, so `lastError` alone is

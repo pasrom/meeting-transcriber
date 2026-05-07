@@ -478,4 +478,53 @@ final class WatchLoopTests: XCTestCase {
         try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
         XCTAssertTrue(recorder.startCalled)
     }
+
+    // MARK: - H7: record-only finalize atomicity
+
+    /// When one of the audio moves fails mid-finalize (e.g. the mic source has
+    /// vanished between recorder stop and our move), already-moved files must
+    /// not be left in the destination as orphans. Without rollback, the
+    /// previous behaviour silently dropped a partially-finalized recording in
+    /// the user's output dir and required manual cleanup.
+    func test_recordOnly_partialMoveFailure_rollsBackOrphanedFiles() async throws {
+        let queue = PipelineQueue()
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("recordOnlyRollback_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let destDir = tmp.appendingPathComponent("dest", isDirectory: true)
+        let mixURL = tmp.appendingPathComponent("20260507_100000_mix.wav")
+        let appURL = tmp.appendingPathComponent("20260507_100000_app.wav")
+        // mic path is set on the recorder but the file is missing on disk —
+        // the mix + app moves succeed, the mic move throws.
+        let micURL = tmp.appendingPathComponent("20260507_100000_mic.wav")
+        try Data().write(to: mixURL)
+        try Data().write(to: appURL)
+        // intentionally do NOT create micURL
+
+        _ = try await runManualRecordOnlyRecording(
+            recorderMix: mixURL,
+            outputDir: destDir,
+            queue: queue,
+            recorderApp: appURL,
+            recorderMic: micURL,
+        )
+
+        let movedMix = destDir.appendingPathComponent("20260507_100000_mix.wav")
+        let movedApp = destDir.appendingPathComponent("20260507_100000_app.wav")
+        let sidecar = destDir.appendingPathComponent("20260507_100000_meta.json")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: movedMix.path),
+            "mix WAV must not survive a failed finalize — it would be an orphan",
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: movedApp.path),
+            "app WAV must not survive a failed finalize — it would be an orphan",
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: sidecar.path),
+            "no sidecar should be written when finalize fails partway",
+        )
+    }
 }
