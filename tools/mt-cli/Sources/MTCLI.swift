@@ -147,7 +147,7 @@ struct Screenshot: AsyncParsableCommand {
 
     func run() async throws {
         let client = try RPCClient.loadDefault()
-        let data = try await client.get("/screenshot")
+        let data = try await client.get("/screenshot", timeout: RPCClient.screenshotTimeoutSeconds)
         try data.write(to: URL(fileURLWithPath: path))
         print("wrote \(data.count) bytes to \(path)")
     }
