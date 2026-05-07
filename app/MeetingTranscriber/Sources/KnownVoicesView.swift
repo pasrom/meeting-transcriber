@@ -71,13 +71,8 @@ struct KnownVoicesView: View {
             TextField("Filter…", text: $filter)
                 .textFieldStyle(.roundedBorder)
 
-            Table(filteredSpeakers, selection: $selection) {
-                TableColumn("Name", value: \.name)
-                TableColumn("Last used") { Text(Self.lastUsedLabel($0.lastUsed)) }
-                TableColumn("Uses") { Text("\($0.useCount)") }
-                TableColumn("Samples") { Text("\($0.embeddings.count)") }
-            }
-            .frame(minHeight: 280)
+            speakerTable
+                .frame(minHeight: 280)
 
             actionButtonsRow
             if pipelineBusy, diarizerFactory != nil {
@@ -197,6 +192,35 @@ struct KnownVoicesView: View {
         }
         .padding(20)
         .frame(minWidth: 360)
+    }
+
+    private var speakerTable: some View {
+        Table(filteredSpeakers, selection: $selection) {
+            TableColumn("Name") { speaker in
+                HStack(spacing: 6) {
+                    Text(speaker.name)
+                    if speaker.isSynthetic {
+                        syntheticTag
+                    }
+                }
+            }
+            TableColumn("Last used") { Text(Self.lastUsedLabel($0.lastUsed)) }
+            TableColumn("Uses") { Text("\($0.useCount)") }
+            TableColumn("Samples") { Text("\($0.embeddings.count)") }
+        }
+    }
+
+    private var syntheticTag: some View {
+        Text("synthetic")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .overlay(Capsule().stroke(.secondary.opacity(0.5), lineWidth: 1))
+            .help(
+                "Seeded via debug RPC with a random embedding."
+                    + " Excluded from auto-naming. Delete to remove.",
+            )
     }
 
     // MARK: - Derived

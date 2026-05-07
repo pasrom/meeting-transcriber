@@ -39,12 +39,14 @@ class SpeakerMatcher {
     /// process-wide DB lock for the duration of the closure so concurrent
     /// callers can't lose updates. Use this for every mutating operation;
     /// raw `loadDB` + `saveDB` paired by hand reintroduces the race.
-    func mutateDB(_ block: (inout [StoredSpeaker]) -> Void) {
+    @discardableResult
+    func mutateDB<R>(_ block: (inout [StoredSpeaker]) -> R) -> R {
         Self.dbLock.lock()
         defer { Self.dbLock.unlock() }
         var stored = loadDB()
-        block(&stored)
+        let result = block(&stored)
         saveDB(stored)
+        return result
     }
 
     /// Reset old pyannote-format speakers.json (incompatible embeddings).
@@ -87,7 +89,10 @@ class SpeakerMatcher {
     /// with their per-anchor distances.
     func matchVerbose(embeddings: [String: [Float]], topK: Int = 3)
         -> [String: VerboseMatch] {
-        let stored = loadDB()
+        // Synthetic entries (RPC `seedSpeaker`) carry random embeddings —
+        // letting them participate in matching would let any caller with
+        // RPC access poison auto-naming. Drop them before scoring.
+        let stored = loadDB().filter { !$0.isSynthetic }
         var result: [String: VerboseMatch] = [:]
         var usedNames: Set<String> = []
 
@@ -288,42 +293,28 @@ class SpeakerMatcher {
     @discardableResult
     func renameSpeaker(from: String, to: String) -> RenameResult {
         guard from != to else { return .noop }
-        var outcome: RenameResult = .notFound
-        mutateDB { stored in
+        return mutateDB { stored in
             guard let srcIdx = stored.firstIndex(where: { $0.name == from }) else {
-                outcome = .notFound
-                return
+                return .notFound
             }
             if let dstIdx = stored.firstIndex(where: { $0.name == to }) {
                 stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
                 stored.remove(at: srcIdx)
-                outcome = .merged
-                return
+                return .merged
             }
-            let src = stored[srcIdx]
-            stored[srcIdx] = StoredSpeaker(
-                name: to,
-                embeddings: src.embeddings,
-                centroid: src.centroid,
-                centroidSampleCount: src.centroidSampleCount,
-                lastUsed: src.lastUsed,
-                useCount: src.useCount,
-            )
-            outcome = .renamed
+            stored[srcIdx] = stored[srcIdx].renamed(to: to)
+            return .renamed
         }
-        return outcome
     }
 
     /// Remove a speaker. Returns `false` if no speaker with that name was found.
     @discardableResult
     func deleteSpeaker(name: String) -> Bool {
-        var removed = false
         mutateDB { stored in
-            guard let idx = stored.firstIndex(where: { $0.name == name }) else { return }
+            guard let idx = stored.firstIndex(where: { $0.name == name }) else { return false }
             stored.remove(at: idx)
-            removed = true
+            return true
         }
-        return removed
     }
 
     /// Merge `from` into `into`. Embeddings concatenated and FIFO-trimmed,
@@ -332,17 +323,15 @@ class SpeakerMatcher {
     @discardableResult
     func mergeSpeakers(from: String, into: String) -> Bool {
         guard from != into else { return false }
-        var ok = false
-        mutateDB { stored in
+        return mutateDB { stored in
             guard let srcIdx = stored.firstIndex(where: { $0.name == from }),
                   let dstIdx = stored.firstIndex(where: { $0.name == into }) else {
-                return
+                return false
             }
             stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
             stored.removeAll { $0.name == from }
-            ok = true
+            return true
         }
-        return ok
     }
 
     /// Pure helper: combine `src` into `dst`. Used by both rename-collision
@@ -370,6 +359,9 @@ class SpeakerMatcher {
             centroidSampleCount: combined.count,
             lastUsed: lastUsed,
             useCount: dst.useCount + src.useCount,
+            // Stay synthetic only when both sides are synthetic. Merging a
+            // real entry in promotes the result back to real.
+            isSynthetic: dst.isSynthetic && src.isSynthetic,
         )
     }
 

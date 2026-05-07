@@ -964,6 +964,60 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result.count, 4)
     }
 
+    // MARK: - Synthetic speaker marker
+
+    /// Legacy entries written before the `isSynthetic` field existed must
+    /// decode as `false` so a database upgrade doesn't turn real speakers
+    /// invisible.
+    func testStoredSpeakerDecodesLegacyEntryWithIsSyntheticFalse() throws {
+        let json = Data(#"[{"name":"A","embeddings":[[1,0,0]]}]"#.utf8)
+        let decoded = try JSONDecoder().decode([StoredSpeaker].self, from: json)
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertFalse(decoded[0].isSynthetic)
+    }
+
+    func testStoredSpeakerCodableRoundTripPreservesIsSynthetic() throws {
+        let original = StoredSpeaker(
+            name: "X", embeddings: [[1, 0, 0]], isSynthetic: true,
+        )
+        let data = try JSONEncoder().encode([original])
+        let decoded = try JSONDecoder().decode([StoredSpeaker].self, from: data)
+        XCTAssertEqual(decoded.count, 1)
+        XCTAssertTrue(decoded[0].isSynthetic)
+    }
+
+    /// `seedSpeaker` (RPC) writes random embeddings. Without a synthetic
+    /// marker, these poison every future match — even the closest query
+    /// would be auto-named after the random vector. The match path must
+    /// skip synthetic anchors.
+    func testMatchExcludesSyntheticSpeakers() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let stored = [
+            StoredSpeaker(name: "Synth", embeddings: [[1, 0, 0]], isSynthetic: true),
+        ]
+        matcher.saveDB(stored)
+
+        // Query practically identical to "Synth" — without filter, "Synth" wins.
+        let result = matcher.match(embeddings: ["SPEAKER_0": [0.99, 0.01, 0]])
+        XCTAssertEqual(
+            result["SPEAKER_0"], "SPEAKER_0",
+            "Synthetic speaker leaked into match() output",
+        )
+    }
+
+    func testMatchVerboseExcludesSyntheticFromTopCandidates() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([
+            StoredSpeaker(name: "Real", embeddings: [[0, 1, 0]]),
+            StoredSpeaker(name: "Synth", embeddings: [[1, 0, 0]], isSynthetic: true),
+        ])
+        let verbose = matcher.matchVerbose(
+            embeddings: ["SPEAKER_0": [0.99, 0.01, 0]],
+        )
+        let names = verbose["SPEAKER_0"]?.topCandidates.map(\.name) ?? []
+        XCTAssertFalse(names.contains("Synth"), "Synthetic anchor in topCandidates")
+    }
+
     // MARK: - Concurrent write serialization
 
     /// Read-modify-write across concurrent callers must not lose updates.

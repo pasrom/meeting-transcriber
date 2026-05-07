@@ -1,7 +1,7 @@
 // swiftlint:disable discouraged_optional_collection
-// Optional `[Float]?` is intentional: nil signals "no centroid yet" (legacy
-// entries / dim-mismatch / empty input), which is semantically distinct from
-// an empty embedding vector.
+// `centroid: [Float]?` and `lastUsed: Date?` use nil to signal a distinct
+// "absent" state (no centroid yet / never confirmed), which an empty
+// collection cannot express.
 import Foundation
 
 struct StoredSpeaker: Codable, Identifiable {
@@ -29,6 +29,12 @@ struct StoredSpeaker: Codable, Identifiable {
     /// Number of times this speaker has been confirmed by the user across
     /// recordings. Defaults to 0 for entries that pre-date usage tracking.
     let useCount: Int
+    /// True for entries seeded by the debug RPC `seedSpeaker` action, which
+    /// writes random embeddings for testing. Synthetic entries are skipped
+    /// in `match()`/`matchVerbose()` so a poisoned random vector can never
+    /// auto-name a real speaker. Defaults to false for legacy entries and
+    /// for every user-confirmed speaker.
+    let isSynthetic: Bool
 
     // Migrate old single-embedding format automatically (legacy `embedding`
     // key); default lastUsed/useCount for entries before recency tracking;
@@ -47,6 +53,7 @@ struct StoredSpeaker: Codable, Identifiable {
         centroidSampleCount = try container.decodeIfPresent(Int.self, forKey: .centroidSampleCount) ?? 0
         lastUsed = try container.decodeIfPresent(Date.self, forKey: .lastUsed)
         useCount = try container.decodeIfPresent(Int.self, forKey: .useCount) ?? 0
+        isSynthetic = try container.decodeIfPresent(Bool.self, forKey: .isSynthetic) ?? false
     }
 
     init(
@@ -56,6 +63,7 @@ struct StoredSpeaker: Codable, Identifiable {
         centroidSampleCount: Int = 0,
         lastUsed: Date? = nil,
         useCount: Int = 0,
+        isSynthetic: Bool = false,
     ) {
         self.name = name
         self.embeddings = embeddings
@@ -63,10 +71,12 @@ struct StoredSpeaker: Codable, Identifiable {
         self.centroidSampleCount = centroidSampleCount
         self.lastUsed = lastUsed
         self.useCount = useCount
+        self.isSynthetic = isSynthetic
     }
 
     private enum CodingKeys: String, CodingKey {
-        case name, embeddings, embedding, centroid, centroidSampleCount, lastUsed, useCount
+        case name, embeddings, embedding, centroid, centroidSampleCount,
+             lastUsed, useCount, isSynthetic
     }
 
     func encode(to encoder: Encoder) throws {
@@ -83,6 +93,25 @@ struct StoredSpeaker: Codable, Identifiable {
         if useCount > 0 {
             try container.encode(useCount, forKey: .useCount)
         }
+        // Same byte-identity rule for legacy entries.
+        if isSynthetic {
+            try container.encode(isSynthetic, forKey: .isSynthetic)
+        }
+    }
+
+    /// Copy of this speaker with a new `name`, preserving all other fields.
+    /// Used by `SpeakerMatcher.renameSpeaker`; centralises the field list so
+    /// future additions don't have to be threaded through the rename site.
+    func renamed(to newName: String) -> Self {
+        Self(
+            name: newName,
+            embeddings: embeddings,
+            centroid: centroid,
+            centroidSampleCount: centroidSampleCount,
+            lastUsed: lastUsed,
+            useCount: useCount,
+            isSynthetic: isSynthetic,
+        )
     }
 }
 

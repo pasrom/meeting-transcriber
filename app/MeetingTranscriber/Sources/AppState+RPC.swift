@@ -71,6 +71,10 @@
                             centroidSampleCount: 1,
                             lastUsed: Date(),
                             useCount: 1,
+                            // Random vector — must never participate in
+                            // auto-naming a real speaker. Filtered out by
+                            // `SpeakerMatcher.matchVerbose`.
+                            isSynthetic: true,
                         ))
                     }
                     self?.pipelineQueue.refreshKnownSpeakerNames()
