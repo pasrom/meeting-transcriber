@@ -1012,6 +1012,55 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(decoded.segments.count, 2)
     }
 
+    /// Regression: each `SpeakerNamingData` instance must carry a unique
+    /// `revision` so that SwiftUI `.onChange(of: data.revision)` fires on
+    /// every late-diarization re-render — even when the resulting mapping
+    /// happens to be byte-identical to the previous run. Without this,
+    /// the SpeakerNamingView's per-presentation `@State` reset never runs
+    /// and consecutive Re-run clicks are silently swallowed.
+    func test_speakerNamingData_revisionDiffersBetweenInstancesWithIdenticalContent() {
+        let jobID = UUID()
+        let mapping = ["SPEAKER_0": "Alice"]
+        let speakingTimes: [String: TimeInterval] = ["SPEAKER_0": 60]
+        let embeddings: [String: [Float]] = ["SPEAKER_0": [0.1, 0.2]]
+
+        let first = PipelineQueue.SpeakerNamingData(
+            jobID: jobID, meetingTitle: "Standup",
+            mapping: mapping, speakingTimes: speakingTimes,
+            embeddings: embeddings, audioPath: nil,
+            segments: [], participants: [], isDualSource: false,
+        )
+        let second = PipelineQueue.SpeakerNamingData(
+            jobID: jobID, meetingTitle: "Standup",
+            mapping: mapping, speakingTimes: speakingTimes,
+            embeddings: embeddings, audioPath: nil,
+            segments: [], participants: [], isDualSource: false,
+        )
+
+        XCTAssertNotEqual(first.revision, second.revision)
+    }
+
+    /// `revision` is a presentation-only marker and must not survive the
+    /// JSON sidecar round-trip — encoding leaves it out, decoding regenerates
+    /// it. Otherwise reloading the sidecar from disk would freeze the
+    /// revision and re-introduce the stuck-button bug after app restart.
+    func test_speakerNamingData_revisionRegeneratesOnJSONRoundTrip() throws {
+        let original = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(), meetingTitle: "Standup",
+            mapping: ["S": "Alice"], speakingTimes: ["S": 60],
+            embeddings: ["S": [0.1]], audioPath: nil,
+            segments: [], participants: [], isDualSource: false,
+        )
+
+        let encoded = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(PipelineQueue.SpeakerNamingData.self, from: encoded)
+
+        XCTAssertNotEqual(original.revision, decoded.revision)
+        // JSON payload must not contain the field name.
+        let json = try XCTUnwrap(String(data: encoded, encoding: .utf8))
+        XCTAssertFalse(json.contains("revision"))
+    }
+
     func testPendingSpeakerNamingJobsReturnsNamingPendingJobs() {
         let queue = PipelineQueue(logDir: tmpDir)
         XCTAssertTrue(queue.pendingSpeakerNamingJobs.isEmpty)

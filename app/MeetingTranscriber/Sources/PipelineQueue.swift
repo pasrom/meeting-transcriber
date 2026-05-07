@@ -53,6 +53,19 @@ class PipelineQueue {
         let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
         let isDualSource: Bool
+        /// Per-instance identity for SwiftUI `.onChange` change-detection.
+        /// Late re-diarization can produce a `mapping`/`speakingTimes` set
+        /// that compares byte-equal to the previous run (same speaker count,
+        /// same matcher output) — without a fresh marker, the naming view's
+        /// per-presentation reset never fires and consecutive Re-run clicks
+        /// are silently swallowed by the `completedJobID` guard. Excluded
+        /// from CodingKeys so disk reloads regenerate it.
+        var revision: UUID = .init()
+
+        private enum CodingKeys: String, CodingKey {
+            case jobID, meetingTitle, mapping, speakingTimes, embeddings,
+                 audioPath, segments, participants, isDualSource
+        }
 
         struct Segment: Codable {
             let start: TimeInterval

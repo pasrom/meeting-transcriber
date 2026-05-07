@@ -166,12 +166,12 @@ struct SpeakerNamingView: View {
         .frame(minWidth: 400, maxHeight: 700)
         .id(data.meetingTitle)
         .onAppear { resetForCurrentPresentation() }
-        // After Re-run, lateDiarization replaces `data.mapping` for the
-        // same jobID. Without resetting per-presentation @State here, the
-        // per-job guard kept Confirm/Skip/Re-run dead AND the stepper/names
-        // still reflected the previous diarization. `.onChange` fires after
-        // SwiftUI has propagated the new `data`, so `speakers` is current.
-        .onChange(of: data.mapping) { _, _ in
+        // After Re-run, lateDiarization replaces the SpeakerNamingData for
+        // the same jobID. Watching `data.revision` (a fresh UUID per
+        // instance) fires reliably even when the new mapping happens to be
+        // byte-identical to the previous one — otherwise the per-job
+        // `completedJobID` guard kept Confirm/Skip/Re-run dead.
+        .onChange(of: data.revision) { _, _ in
             resetForCurrentPresentation()
         }
         // No onDisappear → .skipped: in the non-blocking architecture closing
