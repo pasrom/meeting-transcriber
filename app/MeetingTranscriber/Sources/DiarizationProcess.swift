@@ -15,7 +15,11 @@ struct DiarizationResult {
 }
 
 /// Abstraction for diarization, enabling mock injection in tests.
-protocol DiarizationProvider {
+/// `Sendable` because `PipelineQueue` runs two diarisations concurrently
+/// from the same instance via `async let`. Implementations must keep
+/// `run` stateless (or internally synchronised); FluidAudio's CoreML
+/// inference is thread-safe, mocks must follow the same contract.
+protocol DiarizationProvider: Sendable {
     var isAvailable: Bool { get }
     func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult
 }

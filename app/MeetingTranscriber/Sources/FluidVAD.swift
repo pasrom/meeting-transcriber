@@ -89,7 +89,13 @@ struct VadSegmentMap {
 
 /// Voice Activity Detection using FluidAudio's Silero VAD v6.
 /// Lazily creates VadManager on first use.
-class FluidVAD {
+///
+/// `@unchecked Sendable` because `PipelineQueue` caches a single instance
+/// and reuses it across jobs (`detectSpeech` may be called concurrently if
+/// future code adds parallel pre-processing). The mutable `manager` is
+/// initialised at most once via `ensureManager()`, and FluidAudio's
+/// VadManager is itself safe for concurrent inference reads.
+final class FluidVAD: @unchecked Sendable {
     private static let mergeGapSeconds: TimeInterval = 0.3
     private static let minRegionSeconds: TimeInterval = 0.15
 

@@ -10,7 +10,11 @@ protocol OfflineDiarizationProcessing {
 }
 
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
-class FluidDiarizer: DiarizationProvider {
+/// `@unchecked Sendable` because `PipelineQueue` shares one instance across
+/// two `async let` diarisation runs. The mutable `offlineProcessor` /
+/// `sortformerDiarizer` are init-once-then-read; the underlying FluidAudio
+/// CoreML inference is documented thread-safe.
+final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     let mode: DiarizerMode
     private var offlineProcessor: any OfflineDiarizationProcessing
 
