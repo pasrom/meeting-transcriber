@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.2
 
 import PackageDescription
 
@@ -28,18 +28,16 @@ let package = Package(
             // Treat any new compiler warning as a build failure so deprecations
             // and concurrency hints are caught at PR time, not on a future
             // dependency bump. Scoped to our targets only — does not propagate
-            // to WhisperKit/FluidAudio. `unsafeFlags` instead of the cleaner
-            // `treatAllWarnings(as:)` because the latter needs
-            // swift-tools-version 6.0; we still target 5.10 for SPM compat.
+            // to WhisperKit/FluidAudio.
             swiftSettings: [
+                .treatAllWarnings(as: .error),
+                // Surface accidental compile-time blowups. Type-checking a
+                // function body or expression beyond 300 ms is almost always
+                // a sign of pathological generic-overload search or deeply
+                // nested SwiftUI builders. 300 ms instead of Apple's
+                // recommended 100 ms gives headroom for cold CI runners; can
+                // be tightened later.
                 .unsafeFlags([
-                    "-warnings-as-errors",
-                    // Surface accidental compile-time blowups. Type-checking
-                    // a function body or expression beyond 300 ms is almost
-                    // always a sign of pathological generic-overload search
-                    // or deeply nested SwiftUI builders. 300 ms instead of
-                    // Apple's recommended 100 ms gives headroom for cold
-                    // CI runners; can be tightened later.
                     "-Xfrontend", "-warn-long-function-bodies=300",
                     "-Xfrontend", "-warn-long-expression-type-checking=300",
                 ]),
@@ -59,19 +57,18 @@ let package = Package(
             // bundle, so SPM doesn't need to package them as resources.
             exclude: ["Fixtures", "__Snapshots__"],
             swiftSettings: [
+                .treatAllWarnings(as: .error),
                 .unsafeFlags([
-                    "-warnings-as-errors",
-                    // Surface accidental compile-time blowups. Type-checking
-                    // a function body or expression beyond 300 ms is almost
-                    // always a sign of pathological generic-overload search
-                    // or deeply nested SwiftUI builders. 300 ms instead of
-                    // Apple's recommended 100 ms gives headroom for cold
-                    // CI runners; can be tightened later.
                     "-Xfrontend", "-warn-long-function-bodies=300",
                     "-Xfrontend", "-warn-long-expression-type-checking=300",
                 ]),
                 .enableUpcomingFeature("ExistentialAny"),
             ]
         ),
-    ]
+    ],
+    // Pin Swift 5 language mode. Tools-version 6.2 defaults to Swift 6 mode,
+    // which enables full strict-concurrency checks — that migration is
+    // tracked separately (see strict-warnings escalation plan, Stufe 5).
+    // Bumping the manifest API to 6.2 only to get `treatAllWarnings(as:)`.
+    swiftLanguageModes: [.v5]
 )
