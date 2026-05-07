@@ -32,7 +32,17 @@ let package = Package(
             // `treatAllWarnings(as:)` because the latter needs
             // swift-tools-version 6.0; we still target 5.10 for SPM compat.
             swiftSettings: [
-                .unsafeFlags(["-warnings-as-errors"]),
+                .unsafeFlags([
+                    "-warnings-as-errors",
+                    // Surface accidental compile-time blowups. Type-checking
+                    // a function body or expression beyond 300 ms is almost
+                    // always a sign of pathological generic-overload search
+                    // or deeply nested SwiftUI builders. 300 ms instead of
+                    // Apple's recommended 100 ms gives headroom for cold
+                    // CI runners; can be tightened later.
+                    "-Xfrontend", "-warn-long-function-bodies=300",
+                    "-Xfrontend", "-warn-long-expression-type-checking=300",
+                ]),
                 .enableUpcomingFeature("ExistentialAny"),
             ]
         ),
@@ -49,7 +59,17 @@ let package = Package(
             // bundle, so SPM doesn't need to package them as resources.
             exclude: ["Fixtures", "__Snapshots__"],
             swiftSettings: [
-                .unsafeFlags(["-warnings-as-errors"]),
+                .unsafeFlags([
+                    "-warnings-as-errors",
+                    // Surface accidental compile-time blowups. Type-checking
+                    // a function body or expression beyond 300 ms is almost
+                    // always a sign of pathological generic-overload search
+                    // or deeply nested SwiftUI builders. 300 ms instead of
+                    // Apple's recommended 100 ms gives headroom for cold
+                    // CI runners; can be tightened later.
+                    "-Xfrontend", "-warn-long-function-bodies=300",
+                    "-Xfrontend", "-warn-long-expression-type-checking=300",
+                ]),
                 .enableUpcomingFeature("ExistentialAny"),
             ]
         ),
