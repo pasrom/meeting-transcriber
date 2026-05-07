@@ -79,14 +79,14 @@
         // MARK: - Routing
 
         @MainActor
-        func testRouteState() {
+        func testRouteState() async {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: false, activeJobCount: 1, waitingJobCount: 0, pendingNamingJobCount: 0),
                 speakerDB: .init(count: 5, recentNames: ["Speaker A"], knownSpeakerNames: ["Speaker A"]),
                 pendingNamingJobs: [],
             )
             let server = DebugRPCServer(port: 0, token: Self.testToken) { snapshot }
-            let response = server.route(authedRequest(method: "GET", path: "/state"))
+            let response = await server.route(authedRequest(method: "GET", path: "/state"))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(response.contentType, "application/json")
             let decoded = try? JSONDecoder().decode(RPCStateSnapshot.self, from: response.body)
@@ -95,59 +95,59 @@
         }
 
         @MainActor
-        func testRouteHealthz() {
+        func testRouteHealthz() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(authedRequest(method: "GET", path: "/healthz"))
+            let response = await server.route(authedRequest(method: "GET", path: "/healthz"))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(String(data: response.body, encoding: .utf8), "ok\n")
         }
 
         @MainActor
-        func testRouteOpenSettingsReturnsOk() {
+        func testRouteOpenSettingsReturnsOk() async {
             // The actual AppKit selector is a no-op in the test harness (no
             // Settings scene declared); we only verify the route plumbs through.
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(authedRequest(method: "POST", path: "/action/openSettings"))
+            let response = await server.route(authedRequest(method: "POST", path: "/action/openSettings"))
             XCTAssertEqual(response.status, 200)
         }
 
         @MainActor
-        func testRouteCloseSettingsReturnsOk() {
+        func testRouteCloseSettingsReturnsOk() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(authedRequest(method: "POST", path: "/action/closeSettings"))
+            let response = await server.route(authedRequest(method: "POST", path: "/action/closeSettings"))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(String(data: response.body, encoding: .utf8), "ok\n")
         }
 
         @MainActor
-        func testRouteScreenshotNoWindowReturns503() {
+        func testRouteScreenshotNoWindowReturns503() async {
             // Tests run headless — NSApp has no visible window, so the
             // capture helper returns nil and the route maps to 503.
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(authedRequest(method: "GET", path: "/screenshot"))
+            let response = await server.route(authedRequest(method: "GET", path: "/screenshot"))
             XCTAssertEqual(response.status, 503)
         }
 
         @MainActor
-        func testRouteUnknown() {
+        func testRouteUnknown() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(authedRequest(method: "GET", path: "/nope"))
+            let response = await server.route(authedRequest(method: "GET", path: "/nope"))
             XCTAssertEqual(response.status, 404)
         }
 
         // MARK: - Security
 
         @MainActor
-        func testRouteRejectsMissingAuth() {
+        func testRouteRejectsMissingAuth() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(HTTPRequest(method: "GET", path: "/state"))
+            let response = await server.route(HTTPRequest(method: "GET", path: "/state"))
             XCTAssertEqual(response.status, 401)
         }
 
         @MainActor
-        func testRouteRejectsWrongToken() {
+        func testRouteRejectsWrongToken() async {
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
-            let response = server.route(HTTPRequest(
+            let response = await server.route(HTTPRequest(
                 method: "GET", path: "/state",
                 headers: ["authorization": "Bearer nope"],
             ))
@@ -155,23 +155,23 @@
         }
 
         @MainActor
-        func testRouteRejectsNonEmptyOrigin() {
+        func testRouteRejectsNonEmptyOrigin() async {
             // Browser CSRF: page on https://evil.example sends Origin.
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
             var headers = Self.authHeaders
             headers["origin"] = "http://evil.example"
-            let response = server.route(HTTPRequest(method: "GET", path: "/state", headers: headers))
+            let response = await server.route(HTTPRequest(method: "GET", path: "/state", headers: headers))
             XCTAssertEqual(response.status, 403)
         }
 
         @MainActor
-        func testRouteAcceptsNullOrigin() {
+        func testRouteAcceptsNullOrigin() async {
             // Some user agents send literal "null" for sandboxed/file:// contexts —
             // treat as absent so curl/native tools always work.
             let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
             var headers = Self.authHeaders
             headers["origin"] = "null"
-            let response = server.route(HTTPRequest(method: "GET", path: "/healthz", headers: headers))
+            let response = await server.route(HTTPRequest(method: "GET", path: "/healthz", headers: headers))
             XCTAssertEqual(response.status, 200)
         }
 
@@ -217,7 +217,7 @@
         // MARK: - Speaker DB action routes
 
         @MainActor
-        func testRouteRenameSpeakerCallsActionAndReturnsOK() throws {
+        func testRouteRenameSpeakerCallsActionAndReturnsOK() async throws {
             let stub = StubSpeakerActions()
             stub.renameOutcome = .ok
             let server = DebugRPCServer(
@@ -225,7 +225,7 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"Old","to":"New"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(stub.renameCalls.count, 1)
             XCTAssertEqual(stub.renameCalls.first?.0, "Old")
@@ -235,7 +235,7 @@
         }
 
         @MainActor
-        func testRouteRenameSpeakerNotFoundReturns404() {
+        func testRouteRenameSpeakerNotFoundReturns404() async {
             let stub = StubSpeakerActions()
             stub.renameOutcome = .notFound
             let server = DebugRPCServer(
@@ -243,12 +243,12 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"Missing","to":"Whatever"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
             XCTAssertEqual(response.status, 404)
         }
 
         @MainActor
-        func testRouteRenameSpeakerCollisionReturnsMerged() throws {
+        func testRouteRenameSpeakerCollisionReturnsMerged() async throws {
             let stub = StubSpeakerActions()
             stub.renameOutcome = .merged
             let server = DebugRPCServer(
@@ -256,39 +256,39 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"A","to":"B"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
             XCTAssertEqual(response.status, 200)
             let decoded = try JSONSerialization.jsonObject(with: response.body) as? [String: String]
             XCTAssertEqual(decoded?["outcome"], "merged")
         }
 
         @MainActor
-        func testRouteRenameSpeakerInvalidJSONReturns400() {
+        func testRouteRenameSpeakerInvalidJSONReturns400() async {
             let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data("{not json".utf8)
-            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
             XCTAssertEqual(response.status, 400)
         }
 
         @MainActor
-        func testRouteRenameSpeakerMissingFieldReturns400() {
+        func testRouteRenameSpeakerMissingFieldReturns400() async {
             let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"OnlyThis"}"#.utf8) // missing "to"
-            let response = server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/renameSpeaker", body: body))
             XCTAssertEqual(response.status, 400)
             XCTAssertTrue(stub.renameCalls.isEmpty)
         }
 
         @MainActor
-        func testRouteDeleteSpeakerCallsActionAndReturnsOK() {
+        func testRouteDeleteSpeakerCallsActionAndReturnsOK() async {
             let stub = StubSpeakerActions()
             stub.deleteOutcome = .ok
             let server = DebugRPCServer(
@@ -296,13 +296,13 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"name":"Doomed"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(stub.deleteCalls, ["Doomed"])
         }
 
         @MainActor
-        func testRouteDeleteSpeakerNotFoundReturns404() {
+        func testRouteDeleteSpeakerNotFoundReturns404() async {
             let stub = StubSpeakerActions()
             stub.deleteOutcome = .notFound
             let server = DebugRPCServer(
@@ -310,12 +310,12 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"name":"Ghost"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/deleteSpeaker", body: body))
             XCTAssertEqual(response.status, 404)
         }
 
         @MainActor
-        func testRouteMergeSpeakersCallsActionAndReturnsOK() {
+        func testRouteMergeSpeakersCallsActionAndReturnsOK() async {
             let stub = StubSpeakerActions()
             stub.mergeOutcome = .ok
             let server = DebugRPCServer(
@@ -323,14 +323,14 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"A","into":"B"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(stub.mergeCalls.first?.0, "A")
             XCTAssertEqual(stub.mergeCalls.first?.1, "B")
         }
 
         @MainActor
-        func testRouteMergeSpeakersNotFoundReturns404() {
+        func testRouteMergeSpeakersNotFoundReturns404() async {
             let stub = StubSpeakerActions()
             stub.mergeOutcome = .notFound
             let server = DebugRPCServer(
@@ -338,12 +338,12 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"from":"X","into":"Y"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/mergeSpeakers", body: body))
             XCTAssertEqual(response.status, 404)
         }
 
         @MainActor
-        func testRouteSeedSpeakerCallsActionAndReturnsOK() {
+        func testRouteSeedSpeakerCallsActionAndReturnsOK() async {
             let stub = StubSpeakerActions()
             stub.seedOutcome = .ok
             let server = DebugRPCServer(
@@ -351,38 +351,38 @@
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"name":"NewSeed"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
             XCTAssertEqual(response.status, 200)
             XCTAssertEqual(stub.seedCalls, ["NewSeed"])
         }
 
         @MainActor
-        func testRouteSeedSpeakerInvalidJSONReturns400() {
+        func testRouteSeedSpeakerInvalidJSONReturns400() async {
             let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
                 snapshot: { .empty }, speakerActions: stub.actions(),
             )
             let body = Data(#"{"wrong":"shape"}"#.utf8)
-            let response = server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
+            let response = await server.route(authedJSONRequest(path: "/action/seedSpeaker", body: body))
             XCTAssertEqual(response.status, 400)
         }
 
         @MainActor
-        func testRouteStateExposesKnownSpeakerNames() throws {
+        func testRouteStateExposesKnownSpeakerNames() async throws {
             let snapshot = RPCStateSnapshot(
                 pipeline: .init(isProcessing: false, activeJobCount: 0, waitingJobCount: 0, pendingNamingJobCount: 0),
                 speakerDB: .init(count: 2, recentNames: ["Alice", "Bob"], knownSpeakerNames: ["Alice", "Bob"]),
                 pendingNamingJobs: [],
             )
             let server = DebugRPCServer(port: 0, token: Self.testToken) { snapshot }
-            let response = server.route(authedRequest(method: "GET", path: "/state"))
+            let response = await server.route(authedRequest(method: "GET", path: "/state"))
             let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: response.body)
             XCTAssertEqual(decoded.speakerDB.knownSpeakerNames, ["Alice", "Bob"])
         }
 
         @MainActor
-        func testRouteSpeakerActionsRejectMissingAuth() {
+        func testRouteSpeakerActionsRejectMissingAuth() async {
             let stub = StubSpeakerActions()
             let server = DebugRPCServer(
                 port: 0, token: Self.testToken,
@@ -394,7 +394,8 @@
                 method: "POST", path: "/action/renameSpeaker",
                 headers: ["content-type": "application/json"], body: body,
             )
-            XCTAssertEqual(server.route(request).status, 401)
+            let response = await server.route(request)
+            XCTAssertEqual(response.status, 401)
         }
 
         // MARK: - Snapshot JSON

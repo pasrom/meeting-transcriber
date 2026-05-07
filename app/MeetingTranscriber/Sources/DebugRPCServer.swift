@@ -3,6 +3,7 @@
     import Foundation
     import Network
     import os.log
+    import ScreenCaptureKit
 
     private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DebugRPCServer")
 
@@ -176,7 +177,7 @@
                         return
                     }
                     if let request = HTTPRequest.parse(buffer) {
-                        let response = self.route(request)
+                        let response = await self.route(request)
                         connection.send(content: response.serialize(), completion: .contentProcessed { _ in
                             connection.cancel()
                         })
@@ -191,7 +192,7 @@
 
         // MARK: - Routing
 
-        func route(_ request: HTTPRequest) -> HTTPResponse {
+        func route(_ request: HTTPRequest) async -> HTTPResponse {
             if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
                 return HTTPResponse.forbidden()
             }
@@ -227,7 +228,7 @@
                 return routeSpeakerAction(path: request.path, body: request.body)
 
             case ("GET", "/screenshot"):
-                if let png = Self.captureFrontmostWindowPNG() {
+                if let png = await Self.captureFrontmostWindowPNG() {
                     return HTTPResponse.ok(body: png, contentType: "image/png")
                 }
                 return HTTPResponse(
@@ -329,9 +330,13 @@
         // MARK: - Screenshot
 
         /// PNG of the largest visible content window, or nil when none qualifies.
-        /// The app captures itself, so no Screen Recording permission is needed.
+        /// Uses ScreenCaptureKit (`SCScreenshotManager.captureImage`) — the
+        /// non-deprecated successor to `CGWindowListCreateImage`. Unlike the old
+        /// API, SCK requires Screen Recording permission even for self-capture;
+        /// the first request triggers the standard TCC prompt. Acceptable for
+        /// this debug-only path (whole file is `#if !APPSTORE`, RPC is opt-in).
         @MainActor
-        static func captureFrontmostWindowPNG() -> Data? {
+        static func captureFrontmostWindowPNG() async -> Data? {
             let app = NSApplication.shared
             let area: (NSWindow) -> CGFloat = { window in
                 let b = window.contentView?.bounds ?? .zero
@@ -341,17 +346,27 @@
                 .filter { $0.isVisible && $0.contentView != nil }
                 .max { area($0) < area($1) }
             guard let window = candidate, area(window) >= minWindowAreaPx else { return nil }
-            // CGWindowListCreateImage composites real SwiftUI/Metal content;
-            // NSView.cacheDisplay produces blank PNGs for layer-backed views.
             let windowID = CGWindowID(window.windowNumber)
-            guard let cgImage = CGWindowListCreateImage(
-                .null,
-                .optionIncludingWindow,
-                windowID,
-                [.bestResolution, .boundsIgnoreFraming],
-            ) else { return nil }
-            let rep = NSBitmapImageRep(cgImage: cgImage)
-            return rep.representation(using: .png, properties: [:])
+            do {
+                let content = try await SCShareableContent.current
+                guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else {
+                    return nil
+                }
+                let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+                let config = SCStreamConfiguration()
+                let scale = window.backingScaleFactor
+                config.width = max(Int(scWindow.frame.width * scale), 1)
+                config.height = max(Int(scWindow.frame.height * scale), 1)
+                config.showsCursor = false
+                let cgImage = try await SCScreenshotManager.captureImage(
+                    contentFilter: filter, configuration: config,
+                )
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                return rep.representation(using: .png, properties: [:])
+            } catch {
+                logger.warning("Screenshot capture failed: \(error.localizedDescription, privacy: .public)")
+                return nil
+            }
         }
     }
 
