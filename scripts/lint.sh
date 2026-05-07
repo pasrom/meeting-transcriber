@@ -26,13 +26,16 @@ else
 fi
 
 # --- SwiftLint (linter) ---
+# `--strict` promotes warning-level rules to errors so any new violation
+# fails CI rather than slowly accumulating. Pair with the swiftSettings'
+# `-warnings-as-errors` for full zero-warning enforcement.
 if command -v swiftlint &>/dev/null; then
     if [[ "${1:-}" == "--fix" ]]; then
         echo "Running swiftlint --fix..."
-        swiftlint lint --fix
+        swiftlint lint --fix --strict
     else
-        echo "Running swiftlint..."
-        swiftlint lint "$@"
+        echo "Running swiftlint --strict..."
+        swiftlint lint --strict "$@"
     fi
 else
     echo "Error: swiftlint not found. Install with: brew install swiftlint"
