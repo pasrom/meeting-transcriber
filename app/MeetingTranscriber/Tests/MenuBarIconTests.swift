@@ -1,6 +1,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
+@MainActor
 final class MenuBarIconTests: XCTestCase {
     func testImageWithNoBadgeIsTemplate() {
         let image = MenuBarIcon.image(badge: .inactive)

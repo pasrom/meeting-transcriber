@@ -79,7 +79,10 @@ class MockRecorder: RecordingProvider {
 }
 
 /// Mock diarization that returns pre-set segments.
-class MockDiarization: DiarizationProvider {
+/// `@unchecked Sendable` because tests configure mutable state (`runCount`,
+/// `shouldThrow`, etc.) before exercising the diarizer; XCTest serialises
+/// test execution per class, and mocks aren't shared across tests.
+final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     var isAvailable: Bool = true
     var runCount = 0
     var shouldThrow = false
