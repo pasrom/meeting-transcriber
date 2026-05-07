@@ -52,16 +52,11 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install tools
         run: brew install swiftformat swiftlint
+      # SwiftFormat path list lives in scripts/lint.sh; calling it keeps CI and
+      # local lint runs aligned. SwiftLint stays an explicit step to use the
+      # github-actions-logging reporter (annotations in the PR diff).
       - name: SwiftFormat
-        run: |
-          swiftformat --dryrun --lint \
-            app/MeetingTranscriber/Sources \
-            app/MeetingTranscriber/Tests \
-            tools/audiotap/Sources \
-            tools/meeting-simulator/Sources \
-            tools/mt-cli/Sources \
-            tools/mt-cli/Tests \
-            scripts/generate_menu_bar_gifs.swift
+        run: bash scripts/lint.sh --format-only
       - name: SwiftLint
         run: swiftlint lint --strict --reporter github-actions-logging
       - name: Build script regression tests

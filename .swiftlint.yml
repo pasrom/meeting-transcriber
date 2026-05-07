@@ -4,7 +4,10 @@ included:
   - app/MeetingTranscriber/Sources
   - app/MeetingTranscriber/Tests
   - tools/audiotap/Sources
+  - tools/audiotap/Tests
   - tools/meeting-simulator/Sources
+  - tools/mt-cli/Sources
+  - tools/mt-cli/Tests
   - scripts/generate_menu_bar_gifs.swift
 
 excluded:

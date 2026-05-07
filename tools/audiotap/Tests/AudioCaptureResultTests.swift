@@ -1,7 +1,6 @@
+@testable import AudioTapLib
 import Foundation
 import XCTest
-
-@testable import AudioTapLib
 
 final class AudioCaptureResultTests: XCTestCase {
     func testFieldsStored() {
@@ -12,7 +11,7 @@ final class AudioCaptureResultTests: XCTestCase {
             micAudioFileURL: micURL,
             actualSampleRate: 48000,
             actualChannels: 2,
-            micDelay: 0.123
+            micDelay: 0.123,
         )
 
         XCTAssertEqual(result.appAudioFileURL, appURL)
@@ -28,7 +27,7 @@ final class AudioCaptureResultTests: XCTestCase {
             micAudioFileURL: nil,
             actualSampleRate: 16000,
             actualChannels: 2,
-            micDelay: 0
+            micDelay: 0,
         )
 
         XCTAssertNil(result.micAudioFileURL)
@@ -41,7 +40,7 @@ final class AudioCaptureResultTests: XCTestCase {
             micAudioFileURL: nil,
             actualSampleRate: 16000,
             actualChannels: 1,
-            micDelay: 0
+            micDelay: 0,
         )
 
         XCTAssertEqual(result.actualChannels, 1)

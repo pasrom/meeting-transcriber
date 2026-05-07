@@ -7,7 +7,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testValidRatePassesThrough() {
         let result = SampleRateQuery.validateSampleRate(
             queriedRate: 48000,
-            requestedRate: 48000
+            requestedRate: 48000,
         )
         XCTAssertEqual(result.rate, 48000)
         XCTAssertEqual(result.source, .queriedMatchesRequested)
@@ -16,7 +16,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testValidRateDiffersFromRequested() {
         let result = SampleRateQuery.validateSampleRate(
             queriedRate: 44100,
-            requestedRate: 48000
+            requestedRate: 48000,
         )
         XCTAssertEqual(result.rate, 44100)
         XCTAssertEqual(result.source, .queriedDiffersFromRequested)
@@ -25,7 +25,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testZeroRateFallsBackToRequested() {
         let result = SampleRateQuery.validateSampleRate(
             queriedRate: 0,
-            requestedRate: 48000
+            requestedRate: 48000,
         )
         XCTAssertEqual(result.rate, 48000)
         XCTAssertEqual(result.source, .fallbackToRequested)
@@ -34,7 +34,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testNegativeRateFallsBackToRequested() {
         let result = SampleRateQuery.validateSampleRate(
             queriedRate: -1,
-            requestedRate: 48000
+            requestedRate: 48000,
         )
         XCTAssertEqual(result.rate, 48000)
         XCTAssertEqual(result.source, .fallbackToRequested)
@@ -44,7 +44,7 @@ final class SampleRateQueryTests: XCTestCase {
         for rate in [8000, 16000, 22050, 32000, 44100, 48000, 88200, 96000] {
             let result = SampleRateQuery.validateSampleRate(
                 queriedRate: rate,
-                requestedRate: 48000
+                requestedRate: 48000,
             )
             XCTAssertEqual(result.rate, rate, "Rate \(rate) should be accepted")
             XCTAssertNotEqual(result.source, .fallbackToRequested)
@@ -54,7 +54,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testUnreasonablyHighRateFallsBack() {
         let result = SampleRateQuery.validateSampleRate(
             queriedRate: 1_000_000,
-            requestedRate: 48000
+            requestedRate: 48000,
         )
         XCTAssertEqual(result.rate, 48000)
         XCTAssertEqual(result.source, .fallbackToRequested)
@@ -65,7 +65,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testCrossValidationMatchingRates() {
         let result = SampleRateQuery.crossValidateRate(
             nominalRate: 48000,
-            streamRate: 48000
+            streamRate: 48000,
         )
         XCTAssertEqual(result, .consistent(rate: 48000))
     }
@@ -73,7 +73,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testCrossValidationMismatch() {
         let result = SampleRateQuery.crossValidateRate(
             nominalRate: 48000,
-            streamRate: 44100
+            streamRate: 44100,
         )
         XCTAssertEqual(result, .mismatch(nominal: 48000, stream: 44100))
     }
@@ -81,7 +81,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testCrossValidationOnlyNominal() {
         let result = SampleRateQuery.crossValidateRate(
             nominalRate: 48000,
-            streamRate: 0
+            streamRate: 0,
         )
         XCTAssertEqual(result, .onlyNominal(rate: 48000))
     }
@@ -89,7 +89,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testCrossValidationOnlyStream() {
         let result = SampleRateQuery.crossValidateRate(
             nominalRate: 0,
-            streamRate: 44100
+            streamRate: 44100,
         )
         XCTAssertEqual(result, .onlyStream(rate: 44100))
     }
@@ -97,7 +97,7 @@ final class SampleRateQueryTests: XCTestCase {
     func testCrossValidationBothZero() {
         let result = SampleRateQuery.crossValidateRate(
             nominalRate: 0,
-            streamRate: 0
+            streamRate: 0,
         )
         XCTAssertEqual(result, .neitherAvailable)
     }
@@ -135,42 +135,42 @@ final class SampleRateQueryTests: XCTestCase {
 
     func testInferRate48kStereo60s() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 23_040_000, bytesPerSample: 4, channels: 2, durationSeconds: 60.0
+            rawBytes: 23_040_000, bytesPerSample: 4, channels: 2, durationSeconds: 60.0,
         )
         XCTAssertEqual(result, 48000)
     }
 
     func testInferRate44100Stereo60s() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 21_168_000, bytesPerSample: 4, channels: 2, durationSeconds: 60.0
+            rawBytes: 21_168_000, bytesPerSample: 4, channels: 2, durationSeconds: 60.0,
         )
         XCTAssertEqual(result, 44100)
     }
 
     func testInferRate24kMono30s() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 30 * 24000 * 1 * 4, bytesPerSample: 4, channels: 1, durationSeconds: 30.0
+            rawBytes: 30 * 24000 * 1 * 4, bytesPerSample: 4, channels: 1, durationSeconds: 30.0,
         )
         XCTAssertEqual(result, 24000)
     }
 
     func testInferRateZeroBytesReturnsNil() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 0, bytesPerSample: 4, channels: 2, durationSeconds: 60.0
+            rawBytes: 0, bytesPerSample: 4, channels: 2, durationSeconds: 60.0,
         )
         XCTAssertNil(result)
     }
 
     func testInferRateTooShortReturnsNil() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 48000 * 4, bytesPerSample: 4, channels: 1, durationSeconds: 0.5
+            rawBytes: 48000 * 4, bytesPerSample: 4, channels: 1, durationSeconds: 0.5,
         )
         XCTAssertNil(result)
     }
 
     func testInferRateImplausibleHighReturnsNil() {
         let result = SampleRateQuery.inferRateFromDuration(
-            rawBytes: 500_000 * 4 * 2 * 60, bytesPerSample: 4, channels: 2, durationSeconds: 60.0
+            rawBytes: 500_000 * 4 * 2 * 60, bytesPerSample: 4, channels: 2, durationSeconds: 60.0,
         )
         XCTAssertNil(result)
     }
