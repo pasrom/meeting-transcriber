@@ -32,44 +32,58 @@ enum BadgeKind: CaseIterable {
 /// - `.processing`: text lines appear sequentially (protocol being written)
 ///
 /// Rendered as template image — macOS handles light/dark mode automatically.
+/// `@MainActor` because cache initialisation, NSApp / NSAppearance reads, and
+/// `image(badge:…)` all need to run on the main actor. All known call sites
+/// (menu bar UI, `BadgeKind.compute(...)` consumers in AppState) are
+/// MainActor-bound already, so the annotation tightens the contract without
+/// breaking anyone.
+@MainActor
 enum MenuBarIcon {
-    /// Number of distinct animation frames.
-    static let frameCount = 6
+    /// Number of distinct animation frames. Pure constant.
+    nonisolated static let frameCount = 6
 
     /// Returns the next animation frame for `badge`, or `current` if `badge`
     /// is non-animated. Static badges (idle, error, …) ignore the timer tick
-    /// so the App scene's body does not re-evaluate every 0.4 s.
-    static func nextFrame(_ current: Int, badge: BadgeKind) -> Int {
+    /// so the App scene's body does not re-evaluate every 0.4 s. Pure math —
+    /// `nonisolated` so it can be called from any context (tests, off-main).
+    nonisolated static func nextFrame(_ current: Int, badge: BadgeKind) -> Int {
         guard badge.isAnimated else { return current }
         return (current + 1) % frameCount
     }
 
     // MARK: - Shared Layout Constants
 
-    private static let barWidth: CGFloat = 2.2
-    private static let barSpacing: CGFloat = 3.6
-    private static let barCount = 5
-    private static let defaultBarHeights: [CGFloat] = [0.25, 0.50, 0.75, 0.45, 0.30]
+    // All `nonisolated` because they're pure constants consumed from the
+    // rendering closure (which can be invoked off-main during composition).
 
-    private static let lineHeight: CGFloat = 1.4
-    private static let lineSpacing: CGFloat = 2.8
-    private static let lineWidths: [CGFloat] = [0.70, 0.55, 0.65, 0.50, 0.40]
-    private static let lineLeftInset: CGFloat = 0.12 // multiplied by rect width
+    nonisolated private static let barWidth: CGFloat = 2.2
+    nonisolated private static let barSpacing: CGFloat = 3.6
+    nonisolated private static let barCount = 5
+    nonisolated private static let defaultBarHeights: [CGFloat] = [0.25, 0.50, 0.75, 0.45, 0.30]
 
-    static func barsLayout(in rect: NSRect) -> (left: CGFloat, centerY: CGFloat) {
+    nonisolated private static let lineHeight: CGFloat = 1.4
+    nonisolated private static let lineSpacing: CGFloat = 2.8
+    nonisolated private static let lineWidths: [CGFloat] = [0.70, 0.55, 0.65, 0.50, 0.40]
+    nonisolated private static let lineLeftInset: CGFloat = 0.12 // multiplied by rect width
+
+    /// Pure layout math used from the rendering closure (off-main during
+    /// composition). `nonisolated` so the closure isn't forced onto MainActor.
+    nonisolated static func barsLayout(in rect: NSRect) -> (left: CGFloat, centerY: CGFloat) {
         let barsWidth = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * (barSpacing - barWidth)
         return (left: (rect.width - barsWidth) / 2, centerY: rect.height / 2)
     }
 
-    static func textLayout(in rect: NSRect) -> (top: CGFloat, left: CGFloat) {
+    nonisolated static func textLayout(in rect: NSRect) -> (top: CGFloat, left: CGFloat) {
         let linesHeight = CGFloat(barCount) * lineHeight + CGFloat(barCount - 1) * (lineSpacing - lineHeight)
         return (top: rect.height / 2 + linesHeight / 2, left: rect.width * lineLeftInset)
     }
 
     // MARK: - Cache
 
-    /// Pre-rendered frames keyed by BadgeKind. Populated lazily on first access.
-    private static var cache: [BadgeKind: [NSImage]] = {
+    /// Pre-rendered frames keyed by BadgeKind. Populated once eagerly when
+    /// the type is first referenced. The type is `@MainActor`, so the
+    /// initialiser runs on MainActor and can safely read NSApp/NSAppearance.
+    private static let cache: [BadgeKind: [NSImage]] = {
         var result: [BadgeKind: [NSImage]] = [:]
         for badge in BadgeKind.allCases {
             let count = badge.isAnimated ? frameCount : 1
@@ -119,10 +133,15 @@ enum MenuBarIcon {
         // (matching the menu bar appearance), because the image is non-template (the red mark
         // must stay red in both light and dark mode).
         let needsExplicitForeground = badge == .error || permissionOverlay || recordOnlyOverlay
+        // Snapshot the dark-mode appearance on the calling thread (the cache
+        // builder runs at type init on the main thread; ad-hoc overlay
+        // renders also originate from `image(badge:…)` on MainActor). The
+        // NSImage closure can be invoked off-main during composition, so
+        // we cannot read NSApp from inside it under Swift 6.
+        let isDark = NSApp?.effectiveAppearance
+            .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let image = NSImage(size: size, flipped: false) { rect in
             if needsExplicitForeground {
-                let isDark = NSApp?.effectiveAppearance
-                    .bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                 (isDark ? NSColor.white : NSColor.black).setFill()
             } else {
                 NSColor.black.setFill()
