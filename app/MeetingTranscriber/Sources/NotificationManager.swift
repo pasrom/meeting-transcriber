@@ -4,8 +4,15 @@ import UserNotifications
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "NotificationManager")
 
-/// Sends macOS notifications for meeting state transitions.
-final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, AppNotifying {
+/// Sends macOS notifications for meeting state transitions. Marked
+/// `@unchecked Sendable` because:
+/// - `UNUserNotificationCenter` is thread-safe per Apple's docs
+/// - `isSetUp` is written exactly once in `setUp()` (called from the
+///   `@main` scene) and read thereafter, so no real race
+/// `@MainActor` would be cleaner but conflicts with the
+/// `UNUserNotificationCenterDelegate` callbacks, which the framework
+/// invokes from arbitrary queues.
+final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, AppNotifying, @unchecked Sendable {
     static let shared = NotificationManager()
 
     private(set) var isSetUp = false
