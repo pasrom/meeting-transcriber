@@ -6,7 +6,7 @@ import WhisperKit
 struct WhisperKitTranscribe: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "whisperkit-transcribe",
-        abstract: "Transcribe audio files using WhisperKit (CoreML/ANE)"
+        abstract: "Transcribe audio files using WhisperKit (CoreML/ANE)",
     )
 
     @Argument(help: "Path to audio file (WAV, M4A, etc.)")
@@ -25,15 +25,14 @@ struct WhisperKitTranscribe: AsyncParsableCommand {
         }
 
         // Resolve model: use specified or device-recommended
-        let resolvedModel: String
-        if let model {
-            resolvedModel = model
+        let resolvedModel: String = if let model {
+            model
         } else {
-            resolvedModel = WhisperKit.recommendedModels().default
+            WhisperKit.recommendedModels().default
         }
 
         FileHandle.standardError.write(
-            Data("Loading model: \(resolvedModel)\n".utf8)
+            Data("Loading model: \(resolvedModel)\n".utf8),
         )
 
         // Download + load model
@@ -44,15 +43,15 @@ struct WhisperKitTranscribe: AsyncParsableCommand {
         let options = DecodingOptions(
             language: language,
             skipSpecialTokens: true,
-            wordTimestamps: false
+            wordTimestamps: false,
         )
         let results: [TranscriptionResult] = try await pipe.transcribe(
             audioPath: audioURL.path(),
-            decodeOptions: options
+            decodeOptions: options,
         )
 
         // Output in [MM:SS] format
-        for segment in results.flatMap({ $0.segments }) {
+        for segment in results.flatMap(\.segments) {
             let total = Int(segment.start)
             let h = total / 3600
             let m = (total % 3600) / 60

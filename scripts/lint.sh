@@ -19,6 +19,7 @@ SWIFT_DIRS=(
     tools/meeting-simulator/Sources
     tools/mt-cli/Sources
     tools/mt-cli/Tests
+    tools/whisperkit-cli/Sources
     scripts/generate_menu_bar_gifs.swift
 )
 
