@@ -99,6 +99,18 @@ class PipelineQueue {
         return speakerNamingDataByJob[firstPendingJob.id]
     }
 
+    /// Filesystem slug for a job's persisted artefacts (`<slug>_naming.json`,
+    /// `<slug>_16k.wav`, `<slug>_segments.json`, mix/app/mic WAVs). Embedding
+    /// the job's short-id keeps two back-to-back same-title meetings (e.g. a
+    /// recurring "Daily Standup") from clobbering each other on disk and
+    /// confusing snapshot rebuild — without it both jobs would resolve to the
+    /// same `<title>_naming.json` and the second save would overwrite the
+    /// first, then both UUIDs would map to the survivor.
+    static func namingSlug(title: String, jobID: UUID) -> String {
+        let titleSlug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
+        return "\(titleSlug)_\(PipelineJob.shortID(for: jobID))"
+    }
+
     /// Returns naming data for a specific job ID, or the first pending job as fallback.
     func speakerNamingData(forJobID jobID: UUID?) -> SpeakerNamingData? {
         if let jobID, let data = speakerNamingDataByJob[jobID] { return data }
@@ -480,7 +492,7 @@ class PipelineQueue {
             defer { try? FileManager.default.removeItem(at: workDir) }
 
             // Compute slug early so it's available for persisted file names
-            let slug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
+            let slug = Self.namingSlug(title: title, jobID: jobID)
 
             let transcript: String
             // Segments cached for potential diarization reuse (avoids double transcription)

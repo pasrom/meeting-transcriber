@@ -1713,4 +1713,45 @@ final class PipelineQueueTests: XCTestCase {
             "Reading knownSpeakerNames must not invoke speakerMatcherFactory",
         )
     }
+
+    // MARK: - M3: slug uniqueness
+
+    /// Two back-to-back meetings with identical titles (e.g. recurring
+    /// "Daily Standup") would otherwise share the same on-disk slug — the
+    /// second job's `_naming.json` / `_16k.wav` overwrites the first's, and
+    /// snapshot rebuild then maps the survivor's data onto both UUIDs.
+    /// Embedding the job's short-id keeps each on-disk artefact distinct.
+    func test_namingSlug_differsForSameTitleDifferentJobs() {
+        let id1 = UUID()
+        let id2 = UUID()
+        let slug1 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id1)
+        let slug2 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id2)
+        XCTAssertNotEqual(
+            slug1, slug2,
+            "Identical titles must produce distinct slugs when job IDs differ",
+        )
+    }
+
+    /// Determinism: same input → same slug. Snapshot rebuild relies on this
+    /// to find a job's persisted `_naming.json` after a relaunch.
+    func test_namingSlug_isDeterministicForSameJob() {
+        let id = UUID()
+        let first = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
+        let second = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
+        XCTAssertEqual(first, second)
+    }
+
+    func test_namingSlug_embedsTitleAndShortID() {
+        let id = UUID()
+        let slug = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
+        XCTAssertTrue(
+            slug.contains(PipelineJob.shortID(for: id)),
+            "Slug must include the job short-ID for uniqueness across same-title runs",
+        )
+        // Title-derived part should still be present (filesystem-friendly form).
+        XCTAssertTrue(
+            slug.lowercased().contains("daily") && slug.lowercased().contains("standup"),
+            "Slug should still encode the title for human-readable filenames",
+        )
+    }
 }
