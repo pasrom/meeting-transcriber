@@ -417,7 +417,7 @@ struct SpeakerNamingView: View {
     /// so fractional starts (e.g. 1.7s) preserve precision; the previous inline code
     /// did `Int(start) * sampleRate`, which discarded the sub-second offset and shifted
     /// playback by up to ~1s into a different speaker.
-    static func sampleRange(
+    nonisolated static func sampleRange(
         start: TimeInterval,
         end: TimeInterval,
         sampleRate: Int,
