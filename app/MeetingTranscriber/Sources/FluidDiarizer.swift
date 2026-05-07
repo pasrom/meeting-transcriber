@@ -9,6 +9,38 @@ protocol OfflineDiarizationProcessing {
     func process(audioPath: URL) async throws -> DiarizationResult
 }
 
+/// User-tunable subset of `OfflineDiarizerConfig` exposed via Settings.
+/// Decouples `FluidOfflineProcessor` from `AppSettings`/UserDefaults so the
+/// plumbing stays unit-testable.
+struct OfflineDiarizerTuning: Equatable {
+    var clusterThreshold: Double
+    var warmStartFa: Double
+    var warmStartFb: Double
+    var minSegmentDurationSeconds: Double
+    var excludeOverlap: Bool
+
+    /// Defaults matching FluidAudio's `Clustering.community` and `Embedding.community`.
+    static let defaults = Self(
+        clusterThreshold: 0.6,
+        warmStartFa: 0.07,
+        warmStartFb: 0.8,
+        minSegmentDurationSeconds: 1.0,
+        excludeOverlap: true,
+    )
+
+    /// Apply this tuning to an `OfflineDiarizerConfig`, preserving everything else
+    /// (segmentation, vbx, postProcessing, export, speaker count constraints).
+    func apply(to config: OfflineDiarizerConfig) -> OfflineDiarizerConfig {
+        var copy = config
+        copy.clustering.threshold = clusterThreshold
+        copy.clustering.warmStartFa = warmStartFa
+        copy.clustering.warmStartFb = warmStartFb
+        copy.embedding.minSegmentDurationSeconds = minSegmentDurationSeconds
+        copy.embedding.excludeOverlap = excludeOverlap
+        return copy
+    }
+}
+
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
 /// `@unchecked Sendable` because `PipelineQueue` shares one instance across
 /// two `async let` diarisation runs. The mutable `offlineProcessor` /
@@ -24,9 +56,13 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
         true
     }
 
-    init(mode: DiarizerMode = .offline, offlineProcessor: (any OfflineDiarizationProcessing)? = nil) {
+    init(
+        mode: DiarizerMode = .offline,
+        tuning: OfflineDiarizerTuning = .defaults,
+        offlineProcessor: (any OfflineDiarizationProcessing)? = nil,
+    ) {
         self.mode = mode
-        self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor()
+        self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor(tuning: tuning)
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
@@ -141,16 +177,29 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
 struct FluidOfflineProcessor: OfflineDiarizationProcessing {
     private var manager: OfflineDiarizerManager?
     private var currentNumSpeakers: Int?
+    private let tuning: OfflineDiarizerTuning
+
+    init(tuning: OfflineDiarizerTuning = .defaults) {
+        self.tuning = tuning
+    }
+
+    /// Build the `OfflineDiarizerConfig` from a tuning struct + optional speaker count.
+    /// Pure helper so unit tests can verify the produced config without standing up
+    /// the actual CoreML manager.
+    static func makeConfig(tuning: OfflineDiarizerTuning, numSpeakers: Int?) -> OfflineDiarizerConfig {
+        var config = tuning.apply(to: OfflineDiarizerConfig())
+        if let n = numSpeakers, n > 0 {
+            config = config.withSpeakers(min: 1, max: n)
+        }
+        return config
+    }
 
     mutating func prepare(numSpeakers: Int?) async throws {
         guard manager == nil || numSpeakers != currentNumSpeakers else { return }
 
         // Explicitly deallocate previous manager to prevent resource conflicts
         manager = nil
-        var config = OfflineDiarizerConfig()
-        if let n = numSpeakers, n > 0 {
-            config = config.withSpeakers(min: 1, max: n)
-        }
+        let config = Self.makeConfig(tuning: tuning, numSpeakers: numSpeakers)
         let newManager = OfflineDiarizerManager(config: config)
         try await newManager.prepareModels()
         manager = newManager

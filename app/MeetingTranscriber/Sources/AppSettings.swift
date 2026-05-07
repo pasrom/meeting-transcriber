@@ -246,6 +246,62 @@ final class AppSettings {
         }
     }
 
+    // MARK: - Experimental: Diarization Tuning
+
+    /// Defaults mirroring `OfflineDiarizerConfig.Clustering.community` and `Embedding.community`.
+    /// Source of truth for both `resetDiarizerTuning()` and tests.
+    enum DiarizerTuningDefaults {
+        static let clusterThreshold: Double = 0.6
+        static let warmStartFa: Double = 0.07
+        static let warmStartFb: Double = 0.8
+        static let minSegmentDurationSeconds: Double = 1.0
+        static let excludeOverlap: Bool = true
+    }
+
+    /// Euclidean distance threshold for unit-normalized embeddings (FluidAudio: clustering.threshold).
+    var clusterThreshold: Double {
+        didSet { defaults.set(clusterThreshold, forKey: "diarizerClusterThreshold") }
+    }
+
+    /// VBx warm-start Fa parameter — controls precision (FluidAudio: clustering.warmStartFa).
+    var warmStartFa: Double {
+        didSet { defaults.set(warmStartFa, forKey: "diarizerWarmStartFa") }
+    }
+
+    /// VBx warm-start Fb parameter — controls recall (FluidAudio: clustering.warmStartFb).
+    var warmStartFb: Double {
+        didSet { defaults.set(warmStartFb, forKey: "diarizerWarmStartFb") }
+    }
+
+    /// Skip embeddings for segments shorter than this duration (FluidAudio: embedding.minSegmentDurationSeconds).
+    var minSegmentDurationSeconds: Double {
+        didSet { defaults.set(minSegmentDurationSeconds, forKey: "diarizerMinSegmentDuration") }
+    }
+
+    /// Mask out frames where multiple speakers overlap during embedding extraction
+    /// (FluidAudio: embedding.excludeOverlap).
+    var excludeOverlap: Bool {
+        didSet { defaults.set(excludeOverlap, forKey: "diarizerExcludeOverlap") }
+    }
+
+    /// Reset all 5 experimental diarization tuning knobs to their FluidAudio community defaults.
+    func resetDiarizerTuning() {
+        clusterThreshold = DiarizerTuningDefaults.clusterThreshold
+        warmStartFa = DiarizerTuningDefaults.warmStartFa
+        warmStartFb = DiarizerTuningDefaults.warmStartFb
+        minSegmentDurationSeconds = DiarizerTuningDefaults.minSegmentDurationSeconds
+        excludeOverlap = DiarizerTuningDefaults.excludeOverlap
+    }
+
+    /// True when all 5 tuning knobs are at their default values.
+    var diarizerTuningIsAllDefaults: Bool {
+        clusterThreshold == DiarizerTuningDefaults.clusterThreshold
+            && warmStartFa == DiarizerTuningDefaults.warmStartFa
+            && warmStartFb == DiarizerTuningDefaults.warmStartFb
+            && minSegmentDurationSeconds == DiarizerTuningDefaults.minSegmentDurationSeconds
+            && excludeOverlap == DiarizerTuningDefaults.excludeOverlap
+    }
+
     // MARK: - Protocol Generation
 
     var protocolProvider: ProtocolProvider {
@@ -398,10 +454,7 @@ final class AppSettings {
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
         liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
-        asymmetricSilenceWarningSeconds = max(30, min(
-            300,
-            defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90,
-        ))
+        asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
@@ -417,6 +470,10 @@ final class AppSettings {
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
         numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0
+
+        let t = Self.loadDiarizerTuning(from: defaults)
+        (clusterThreshold, warmStartFa, warmStartFb, minSegmentDurationSeconds, excludeOverlap) =
+            (t.clusterThreshold, t.warmStartFa, t.warmStartFb, t.minSegmentDuration, t.excludeOverlap)
 
         let storedProvider = defaults.string(forKey: "protocolProvider")
             .flatMap(ProtocolProvider.init(rawValue:))
@@ -453,5 +510,31 @@ final class AppSettings {
         #endif
         checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
         includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
+    }
+
+    /// Bag of values used during init to read all 5 tuning knobs in one go.
+    /// Keeps the init body under the lint length budget without duplicating
+    /// the lookup pattern five times.
+    private struct LoadedDiarizerTuning {
+        let clusterThreshold: Double
+        let warmStartFa: Double
+        let warmStartFb: Double
+        let minSegmentDuration: Double
+        let excludeOverlap: Bool
+    }
+
+    private static func loadDiarizerTuning(from defaults: UserDefaults) -> LoadedDiarizerTuning {
+        LoadedDiarizerTuning(
+            clusterThreshold: defaults.object(forKey: "diarizerClusterThreshold") as? Double
+                ?? DiarizerTuningDefaults.clusterThreshold,
+            warmStartFa: defaults.object(forKey: "diarizerWarmStartFa") as? Double
+                ?? DiarizerTuningDefaults.warmStartFa,
+            warmStartFb: defaults.object(forKey: "diarizerWarmStartFb") as? Double
+                ?? DiarizerTuningDefaults.warmStartFb,
+            minSegmentDuration: defaults.object(forKey: "diarizerMinSegmentDuration") as? Double
+                ?? DiarizerTuningDefaults.minSegmentDurationSeconds,
+            excludeOverlap: defaults.object(forKey: "diarizerExcludeOverlap") as? Bool
+                ?? DiarizerTuningDefaults.excludeOverlap,
+        )
     }
 }
