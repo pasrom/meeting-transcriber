@@ -23,6 +23,42 @@
         nonisolated static let defaultPort: UInt16 = 9876
         nonisolated static let tokenFileURL = AppPaths.dataDir.appendingPathComponent(".rpc-token")
 
+        /// Constant-time byte-wise equality. Used to compare incoming bearer
+        /// tokens against the expected value so an attacker on a shared Mac
+        /// can't infer a token by measuring early-mismatch latency. Iterates
+        /// the longer of the two strings unconditionally; length differences
+        /// still return false but only after walking both fully.
+        nonisolated static func constantTimeEquals(_ provided: String, _ expected: String) -> Bool {
+            let a = Array(provided.utf8)
+            let b = Array(expected.utf8)
+            let len = max(a.count, b.count)
+            var diff: UInt8 = a.count == b.count ? 0 : 1
+            for i in 0 ..< len {
+                let av: UInt8 = i < a.count ? a[i] : 0
+                let bv: UInt8 = i < b.count ? b[i] : 0
+                diff |= (av ^ bv)
+            }
+            return diff == 0
+        }
+
+        /// Validate the request's `Host` header against `127.0.0.1` /
+        /// `localhost` (with or without our bound port). Empty Host is
+        /// accepted because old HTTP/1.0 clients and our own loopback
+        /// probes don't always set one; the bind + bearer check still
+        /// gates them. Defense-in-depth against DNS-rebinding payloads
+        /// where an attacker's site resolves a hostname to 127.0.0.1
+        /// and the browser dutifully sends `Host: evil.example`.
+        nonisolated static func isHostAllowed(_ host: String, port: UInt16) -> Bool {
+            if host.isEmpty { return true }
+            let allowedNoPort: Set = ["127.0.0.1", "localhost"]
+            if allowedNoPort.contains(host) { return true }
+            let allowedWithPort: Set = [
+                "127.0.0.1:\(port)",
+                "localhost:\(port)",
+            ]
+            return allowedWithPort.contains(host)
+        }
+
         /// Cap accumulated bytes per connection so a misbehaving client
         /// streaming bytes without `\r\n\r\n` can't OOM the app.
         private static let maxRequestBytes = 64 * 1024
@@ -159,7 +195,12 @@
             if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
                 return HTTPResponse.forbidden()
             }
-            guard request.headers["authorization"] == expectedAuth else {
+            let hostPort = boundPort ?? port.rawValue
+            guard Self.isHostAllowed(request.headers["host"] ?? "", port: hostPort) else {
+                return HTTPResponse.forbidden()
+            }
+            let provided = request.headers["authorization"] ?? ""
+            guard Self.constantTimeEquals(provided, expectedAuth) else {
                 return HTTPResponse.unauthorized()
             }
 

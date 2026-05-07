@@ -452,4 +452,95 @@
             )
         }
     }
+
+    // MARK: - M1: constant-time auth compare
+
+    extension DebugRPCServerTests {
+        /// Equal strings compare equal. Boring sanity baseline.
+        func testConstantTimeEqualsAcceptsExactMatch() {
+            XCTAssertTrue(
+                DebugRPCServer.constantTimeEquals(
+                    "Bearer abcdef1234567890",
+                    "Bearer abcdef1234567890",
+                ),
+            )
+        }
+
+        /// First-byte mismatch must still walk the full string — that's the
+        /// whole point. Correctness check: non-equal returns false regardless
+        /// of which byte differs.
+        func testConstantTimeEqualsRejectsFirstByteMismatch() {
+            XCTAssertFalse(
+                DebugRPCServer.constantTimeEquals(
+                    "X" + "earer abcdef1234567890",
+                    "Bearer abcdef1234567890",
+                ),
+            )
+        }
+
+        func testConstantTimeEqualsRejectsLastByteMismatch() {
+            XCTAssertFalse(
+                DebugRPCServer.constantTimeEquals(
+                    "Bearer abcdef123456789X",
+                    "Bearer abcdef1234567890",
+                ),
+            )
+        }
+
+        /// Different lengths are unconditionally not-equal — but the
+        /// implementation must not short-circuit at the length check (which
+        /// would reveal length via timing). We can't assert the timing
+        /// directly, only the correctness.
+        func testConstantTimeEqualsRejectsLengthMismatch() {
+            XCTAssertFalse(
+                DebugRPCServer.constantTimeEquals("Bearer abc", "Bearer abcdef"),
+            )
+            XCTAssertFalse(
+                DebugRPCServer.constantTimeEquals("Bearer abcdef", "Bearer abc"),
+            )
+        }
+
+        func testConstantTimeEqualsHandlesEmptyStrings() {
+            XCTAssertTrue(DebugRPCServer.constantTimeEquals("", ""))
+            XCTAssertFalse(DebugRPCServer.constantTimeEquals("", "a"))
+        }
+    }
+
+    // MARK: - M6: Host header allowlist
+
+    extension DebugRPCServerTests {
+        func testIsHostAllowedAcceptsLoopback() {
+            XCTAssertTrue(DebugRPCServer.isHostAllowed("127.0.0.1:9876", port: 9876))
+            XCTAssertTrue(DebugRPCServer.isHostAllowed("localhost:9876", port: 9876))
+        }
+
+        /// Missing Host header passes — old HTTP/1.0 clients and our own
+        /// server's startup probes don't always set one. Defense-in-depth on
+        /// top of the loopback bind + bearer check, not a primary gate.
+        func testIsHostAllowedAcceptsEmpty() {
+            XCTAssertTrue(DebugRPCServer.isHostAllowed("", port: 9876))
+        }
+
+        /// DNS-rebinding payload: attacker's site resolves a hostname they
+        /// control to 127.0.0.1, then the browser sends `Host: evil.example`.
+        /// Loopback bind doesn't catch this; the Host header does.
+        func testIsHostAllowedRejectsForeignHostname() {
+            XCTAssertFalse(DebugRPCServer.isHostAllowed("evil.example:9876", port: 9876))
+            XCTAssertFalse(DebugRPCServer.isHostAllowed("rebind.attacker.com", port: 9876))
+        }
+
+        /// Wrong-port spoof — the bearer is the real defense, but reject
+        /// anyway so a misconfigured proxy can't accidentally talk to us.
+        func testIsHostAllowedRejectsWrongPort() {
+            XCTAssertFalse(DebugRPCServer.isHostAllowed("127.0.0.1:8080", port: 9876))
+        }
+
+        func testIsHostAllowedAcceptsHostWithoutPort() {
+            // RFC 7230: Host MAY omit port when it's the default. Our default
+            // is 9876, never 80/443, so a bare "127.0.0.1" without port is
+            // ambiguous — accept it as loopback rather than fail-closed.
+            XCTAssertTrue(DebugRPCServer.isHostAllowed("127.0.0.1", port: 9876))
+            XCTAssertTrue(DebugRPCServer.isHostAllowed("localhost", port: 9876))
+        }
+    }
 #endif
