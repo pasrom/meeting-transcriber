@@ -67,7 +67,7 @@ func getDefaultOutputDeviceUID() -> String? {
 }
 
 /// Read a CFString-valued audio property. Returns nil if the property is unavailable.
-func readCFStringAudioProperty(
+public func readCFStringAudioProperty(
     _ id: AudioObjectID,
     _ selector: AudioObjectPropertySelector,
     scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal,
