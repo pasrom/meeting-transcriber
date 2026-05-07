@@ -1,4 +1,6 @@
-import ApplicationServices
+// `@preconcurrency`: `kAXTrustedCheckOptionPrompt` is a C `var` global
+// (process-load-immutable in practice); SDK lacks Sendable annotations.
+@preconcurrency import ApplicationServices
 import AVFoundation
 import CoreGraphics
 import Foundation
@@ -7,6 +9,12 @@ import os
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Permissions")
 
 enum Permissions {
+    /// Bridge the C global `kAXTrustedCheckOptionPrompt` once at type init.
+    /// `String` is `Sendable`, and the import is `@preconcurrency` so the
+    /// var-classified C global doesn't escape into the rest of the file.
+    static let axPromptKey: String =
+        kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+
     /// Check if Screen Recording permission is granted.
     static func checkScreenRecording() -> Bool {
         let granted = PermissionHealthCheck.checkScreenRecordingLive() == .healthy
@@ -45,7 +53,11 @@ enum Permissions {
             logger.warning("permission_denied resource=accessibility status=already_prompted")
             return false
         }
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        // `kAXTrustedCheckOptionPrompt` is a C global imported as
+        // `Unmanaged<CFString>!`, which Swift 6 treats as shared mutable
+        // state. The value is set by AppKit at process load and never
+        // mutates; bridge once via a nonisolated(unsafe) wrapper.
+        let options = [Self.axPromptKey: true] as CFDictionary
         let granted = AXIsProcessTrustedWithOptions(options)
         if !granted {
             logger.warning("permission_denied resource=accessibility status=user_denied_prompt")
