@@ -385,7 +385,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.clearCustomOutputDir()
         let body = try makeOutput(settings: settings).inspect()
         let button = try body.find(button: "Reset")
-        XCTAssertTrue(try button.isDisabled())
+        XCTAssertTrue(button.isDisabled())
     }
 
     func testEditPromptButtonExists() throws {
@@ -483,7 +483,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.recordOnly = true
         let body = try makeTranscription(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "transcriptionSection")
-        XCTAssertTrue(try section.isDisabled())
+        XCTAssertTrue(section.isDisabled())
     }
 
     func testRecordOnlyDisablesProtocolSection() throws {
@@ -491,7 +491,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.recordOnly = true
         let body = try makeOutput(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "protocolSection")
-        XCTAssertTrue(try section.isDisabled())
+        XCTAssertTrue(section.isDisabled())
     }
 
     func testRecordOnlyDoesNotDisableOutputFolderSection() throws {
@@ -501,7 +501,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.recordOnly = true
         let body = try makeOutput(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "outputFolderSection")
-        XCTAssertFalse(try section.isDisabled())
+        XCTAssertFalse(section.isDisabled())
     }
 
     func testRecordOnlyDisablesDiarizationSection() throws {
@@ -509,7 +509,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.recordOnly = true
         let body = try makeSpeakers(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "diarizationSection")
-        XCTAssertTrue(try section.isDisabled())
+        XCTAssertTrue(section.isDisabled())
     }
 
     func testRecordOnlyDisablesVadSection() throws {
@@ -517,6 +517,6 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.recordOnly = true
         let body = try makeAudio(settings: settings).inspect()
         let section = try body.find(viewWithAccessibilityIdentifier: "vadSection")
-        XCTAssertTrue(try section.isDisabled())
+        XCTAssertTrue(section.isDisabled())
     }
 }

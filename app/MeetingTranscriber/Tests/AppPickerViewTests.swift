@@ -37,7 +37,7 @@ final class AppPickerViewTests: XCTestCase {
         )
         let body = try sut.inspect()
         let button = try body.find(button: "Start Recording")
-        XCTAssertTrue(try button.isDisabled())
+        XCTAssertTrue(button.isDisabled())
     }
 
     func testCancelButtonExists() throws {

@@ -52,7 +52,7 @@ final class VoiceEnrollmentViewTests: XCTestCase {
         )
         let inspected = try view.inspect()
         let button = try inspected.find(button: "Add from Recording…")
-        XCTAssertTrue(try button.isDisabled())
+        XCTAssertTrue(button.isDisabled())
     }
 
     func testKnownVoicesViewShowsBusyHintWhenPipelineBusy() throws {
