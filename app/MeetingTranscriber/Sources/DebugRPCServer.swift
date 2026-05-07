@@ -486,13 +486,16 @@
 
     /// Default `.noop` rejects every request so tests and dry-launches can't
     /// accidentally mutate state — wire real closures explicitly when starting.
+    /// `@MainActor`-isolated closures so the struct is `Sendable` (every
+    /// invocation happens on MainActor anyway — RPC routing is itself
+    /// MainActor-bound — so the isolation doesn't change call-site semantics).
     struct SpeakerDBActions {
-        var rename: (String, String) -> SpeakerActionOutcome
-        var delete: (String) -> SpeakerActionOutcome
-        var merge: (String, String) -> SpeakerActionOutcome
+        let rename: @MainActor (String, String) -> SpeakerActionOutcome
+        let delete: @MainActor (String) -> SpeakerActionOutcome
+        let merge: @MainActor (String, String) -> SpeakerActionOutcome
         /// Insert a synthetic speaker with a random embedding. Test-only path
         /// — production never calls this.
-        var seed: (String) -> SpeakerActionOutcome
+        let seed: @MainActor (String) -> SpeakerActionOutcome
 
         static let noop = Self(
             rename: { _, _ in .invalid },
