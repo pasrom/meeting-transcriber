@@ -40,6 +40,11 @@ enum PersistentDiagnosticLog {
         "diagnostics-\(fileNameFormatter.string(from: date)).log"
     }
 
+    /// UTC date stamp used to detect day boundaries — same formatter as filenames.
+    static func dateString(for date: Date) -> String {
+        fileNameFormatter.string(from: date)
+    }
+
     /// True when the file's mtime is older than `retentionDays` ago.
     static func isExpired(modifiedAt date: Date, retentionDays: Int) -> Bool {
         let cutoff = Date().addingTimeInterval(-Double(retentionDays) * 86400)
@@ -58,8 +63,7 @@ enum PersistentDiagnosticLog {
         /// running streamer so the caller can stop it on app shutdown.
         @discardableResult
         static func startForToday() throws -> Streamer {
-            let target = logDirectory.appendingPathComponent(logFileName(for: Date()))
-            let streamer = try Streamer(targetURL: target)
+            let streamer = try Streamer()
             try streamer.start()
             return streamer
         }
@@ -92,25 +96,37 @@ enum PersistentDiagnosticLog {
     #if !APPSTORE
         /// Wraps a running `log stream` subprocess that mirrors our subsystems
         /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
-        /// `init(targetURL:)` opens the file, `start()` launches the subprocess
-        /// and pipes its stdout into the file, `stop()` terminates the process
-        /// and closes the file handle.
+        /// `init(logDirectory:now:)` opens today's file, `start()` launches the
+        /// subprocess and pipes its stdout into the file, `stop()` terminates
+        /// the process and closes the file handle. The file rotates lazily
+        /// when `append(_:)` first sees a new UTC day.
         ///
         /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
         /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
         final class Streamer {
             private let process = Process()
-            private let logFileHandle: FileHandle
             private let pipe = Pipe()
+            private let logDirectory: URL
+            private let now: () -> Date
+            private var logFileHandle: FileHandle
+            private var openedDateString: String
             private var isRunning = false
 
-            init(targetURL: URL) throws {
+            init(
+                logDirectory: URL = PersistentDiagnosticLog.logDirectory,
+                now: @escaping () -> Date = { Date() },
+            ) throws {
+                self.logDirectory = logDirectory
+                self.now = now
+                let date = now()
+                let target = logDirectory.appendingPathComponent(logFileName(for: date))
                 let fm = FileManager.default
-                if !fm.fileExists(atPath: targetURL.path) {
-                    fm.createFile(atPath: targetURL.path, contents: nil)
+                if !fm.fileExists(atPath: target.path) {
+                    fm.createFile(atPath: target.path, contents: nil)
                 }
-                self.logFileHandle = try FileHandle(forWritingTo: targetURL)
+                self.logFileHandle = try FileHandle(forWritingTo: target)
                 try self.logFileHandle.seekToEnd()
+                self.openedDateString = PersistentDiagnosticLog.dateString(for: date)
             }
 
             func start() throws {
@@ -129,7 +145,7 @@ enum PersistentDiagnosticLog {
                 handle.readabilityHandler = { [weak self] fh in
                     let data = fh.availableData
                     guard !data.isEmpty else { return }
-                    try? self?.logFileHandle.write(contentsOf: data)
+                    self?.append(data)
                 }
 
                 try process.run()
@@ -139,9 +155,41 @@ enum PersistentDiagnosticLog {
                 )
             }
 
+            /// Append `data` to the current day's file, rotating to the new
+            /// day's file first if the UTC date has changed since the handle
+            /// was opened. Test seam: also called by the readability handler.
+            func append(_ data: Data) {
+                rotateIfNeeded()
+                try? logFileHandle.write(contentsOf: data)
+            }
+
+            private func rotateIfNeeded() {
+                let date = now()
+                let today = PersistentDiagnosticLog.dateString(for: date)
+                guard today != openedDateString else { return }
+                let newURL = logDirectory.appendingPathComponent(logFileName(for: date))
+                let fm = FileManager.default
+                if !fm.fileExists(atPath: newURL.path) {
+                    fm.createFile(atPath: newURL.path, contents: nil)
+                }
+                // Open the new handle before closing the old one — if open
+                // fails (disk full, permissions), keep writing to the old
+                // file rather than silently dropping every subsequent entry.
+                guard let newHandle = try? FileHandle(forWritingTo: newURL) else { return }
+                try? newHandle.seekToEnd()
+                try? logFileHandle.close()
+                logFileHandle = newHandle
+                openedDateString = today
+                logger.info("persistent_log_streamer_rotated date=\(today, privacy: .public)")
+            }
+
             func stop() {
                 guard isRunning else { return }
                 process.terminate()
+                // Detach the readability callback before closing the file
+                // handle — otherwise a late callback could write to a
+                // recycled FD.
+                pipe.fileHandleForReading.readabilityHandler = nil
                 try? logFileHandle.close()
                 isRunning = false
                 logger.info("persistent_log_streamer_stopped")
@@ -150,6 +198,7 @@ enum PersistentDiagnosticLog {
             deinit {
                 if isRunning {
                     process.terminate()
+                    pipe.fileHandleForReading.readabilityHandler = nil
                     try? logFileHandle.close()
                 }
             }

@@ -86,4 +86,94 @@ final class PersistentDiagnosticLogTests: XCTestCase {
             .appendingPathComponent("PersistentDiagnosticLogTests-missing-\(UUID().uuidString)")
         PersistentDiagnosticLog.cleanup(in: bogus, retentionDays: 30)
     }
+
+    // MARK: - Streamer day-rotation
+
+    #if !APPSTORE
+        func test_streamer_rotatesToNewFileWhenDayChanges() throws {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+
+            var clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-04T23:59:50Z"),
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(logDirectory: tmp) { clock }
+
+            streamer.append(Data("before-midnight\n".utf8))
+
+            clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-05T00:00:10Z"),
+            )
+            streamer.append(Data("after-midnight\n".utf8))
+
+            let day1 = tmp.appendingPathComponent("diagnostics-2026-05-04.log")
+            let day2 = tmp.appendingPathComponent("diagnostics-2026-05-05.log")
+
+            XCTAssertEqual(try String(contentsOf: day1), "before-midnight\n")
+            XCTAssertEqual(try String(contentsOf: day2), "after-midnight\n")
+        }
+
+        func test_streamer_keepsSameFileWhenDayUnchanged() throws {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+
+            var clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-04T08:00:00Z"),
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(logDirectory: tmp) { clock }
+
+            streamer.append(Data("a\n".utf8))
+            clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-04T20:00:00Z"),
+            )
+            streamer.append(Data("b\n".utf8))
+
+            let day1 = tmp.appendingPathComponent("diagnostics-2026-05-04.log")
+            XCTAssertEqual(try String(contentsOf: day1), "a\nb\n")
+            // No second file should appear.
+            let entries = try FileManager.default.contentsOfDirectory(atPath: tmp.path)
+            XCTAssertEqual(entries.sorted(), ["diagnostics-2026-05-04.log"])
+        }
+
+        /// Regression guard: rotation must open the new handle BEFORE closing
+        /// the old one. If the old handle is closed eagerly and the new open
+        /// fails, every subsequent `append` would write to a closed FD and
+        /// silently drop entries.
+        func test_streamer_keepsWritingToOldFileWhenRotationOpenFails() throws {
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer {
+                // Make the directory writable again so cleanup can remove it.
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755], ofItemAtPath: tmp.path,
+                )
+                try? FileManager.default.removeItem(at: tmp)
+            }
+
+            var clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-04T23:59:50Z"),
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(logDirectory: tmp) { clock }
+            streamer.append(Data("before\n".utf8))
+
+            // Make the directory read-only so creating tomorrow's file fails.
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o555], ofItemAtPath: tmp.path,
+            )
+
+            clock = try XCTUnwrap(
+                ISO8601DateFormatter().date(from: "2026-05-05T00:00:10Z"),
+            )
+            streamer.append(Data("after\n".utf8))
+
+            // Old file kept being writable — entry landed there, not dropped.
+            let day1 = tmp.appendingPathComponent("diagnostics-2026-05-04.log")
+            XCTAssertEqual(try String(contentsOf: day1), "before\nafter\n")
+        }
+    #endif
 }
