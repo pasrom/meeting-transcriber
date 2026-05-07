@@ -1,4 +1,7 @@
-import AVFoundation
+// `@preconcurrency`: AVFoundation isn't Sendable-annotated yet; the
+// AVAudioConverter input block runs synchronously, so the captured
+// AVAudioPCMBuffer is safe in practice.
+@preconcurrency import AVFoundation
 import Foundation
 import os.log
 
@@ -195,13 +198,19 @@ enum AudioMixer {
         }
 
         var error: NSError?
-        var inputConsumed = false
+        // The converter input block is typed `@Sendable`, so a captured
+        // `var Bool` flag would trip Swift 6's concurrent-capture check —
+        // even though the block actually runs synchronously while
+        // `convert(to:error:withInputFrom:)` is on the stack. Box the flag
+        // in a reference type so the closure captures it by-reference.
+        final class InputState: @unchecked Sendable { var consumed = false }
+        let inputState = InputState()
         converter.convert(to: dstBuffer, error: &error) { _, outStatus in
-            if inputConsumed {
+            if inputState.consumed {
                 outStatus.pointee = .endOfStream
                 return nil
             }
-            inputConsumed = true
+            inputState.consumed = true
             outStatus.pointee = .haveData
             return srcBuffer
         }
