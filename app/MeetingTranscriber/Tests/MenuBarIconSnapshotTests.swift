@@ -2,6 +2,7 @@
 import SnapshotTesting
 import XCTest
 
+@MainActor
 final class MenuBarIconSnapshotTests: XCTestCase {
     private var isCI: Bool {
         ProcessInfo.processInfo.environment["CI"] != nil
