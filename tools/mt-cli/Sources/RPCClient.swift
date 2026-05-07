@@ -39,6 +39,16 @@ struct RPCClient {
 
     static let defaultBaseURL = URL(string: "http://127.0.0.1:9876")!
 
+    /// Per-request timeout. Without this the CLI hangs forever against a
+    /// wedged server (paused process, lost connection mid-stream). Short
+    /// enough that a human notices, generous enough that a slow `/state`
+    /// snapshot off a heavily loaded app doesn't trip it.
+    static let requestTimeoutSeconds: TimeInterval = 5
+
+    /// `/screenshot` renders a window image and is allowed a longer budget;
+    /// the rest of the API is fast.
+    static let screenshotTimeoutSeconds: TimeInterval = 15
+
     static func loadDefault() throws -> RPCClient {
         let url = defaultTokenURL
         guard let data = try? Data(contentsOf: url),
@@ -51,18 +61,23 @@ struct RPCClient {
         return RPCClient(baseURL: defaultBaseURL, token: token)
     }
 
-    func get(_ path: String) async throws -> Data {
-        try await request("GET", path: path, body: nil)
+    func get(_ path: String, timeout: TimeInterval = requestTimeoutSeconds) async throws -> Data {
+        try await request("GET", path: path, body: nil, timeout: timeout)
     }
 
-    func post(_ path: String, json: [String: Any]) async throws -> Data {
+    func post(
+        _ path: String, json: [String: Any], timeout: TimeInterval = requestTimeoutSeconds,
+    ) async throws -> Data {
         let body = try JSONSerialization.data(withJSONObject: json)
-        return try await request("POST", path: path, body: body)
+        return try await request("POST", path: path, body: body, timeout: timeout)
     }
 
-    private func request(_ method: String, path: String, body: Data?) async throws -> Data {
+    private func request(
+        _ method: String, path: String, body: Data?, timeout: TimeInterval,
+    ) async throws -> Data {
         var req = URLRequest(url: baseURL.appendingPathComponent(path))
         req.httpMethod = method
+        req.timeoutInterval = timeout
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if let body {
             req.httpBody = body
