@@ -1754,4 +1754,62 @@ final class PipelineQueueTests: XCTestCase {
             "Slug should still encode the title for human-readable filenames",
         )
     }
+
+    /// End-to-end: two same-title jobs save naming data to disk via the
+    /// real `saveNamingData(_:slug:)` path and produce distinct files. The
+    /// pure-function slug tests above prove the helper is collision-free;
+    /// this test proves the helper is actually wired into the persistence
+    /// path (catches a future refactor that bypasses `namingSlug`).
+    func test_sameTitleJobsWriteDistinctNamingFiles() throws {
+        let outputDir = try XCTUnwrap(tmpDir)
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let mockEngine = MockEngine()
+        let queueWithOutput = PipelineQueue(
+            engine: mockEngine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: outputDir,
+            logDir: tmpDir,
+            diarizeEnabled: false,
+        )
+
+        let title = "Daily Standup"
+        let job1ID = UUID()
+        let job2ID = UUID()
+        let slug1 = PipelineQueue.namingSlug(title: title, jobID: job1ID)
+        let slug2 = PipelineQueue.namingSlug(title: title, jobID: job2ID)
+
+        let data1 = PipelineQueue.SpeakerNamingData(
+            jobID: job1ID, meetingTitle: title,
+            mapping: ["SPEAKER_0": "Alice"], speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [], isDualSource: false,
+        )
+        let data2 = PipelineQueue.SpeakerNamingData(
+            jobID: job2ID, meetingTitle: title,
+            mapping: ["SPEAKER_0": "Bob"], speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [], isDualSource: false,
+        )
+
+        queueWithOutput.saveNamingData(data1, slug: slug1)
+        queueWithOutput.saveNamingData(data2, slug: slug2)
+
+        let path1 = recordingsDir.appendingPathComponent("\(slug1)_naming.json")
+        let path2 = recordingsDir.appendingPathComponent("\(slug2)_naming.json")
+
+        XCTAssertNotEqual(
+            path1.lastPathComponent, path2.lastPathComponent,
+            "Same-title jobs must produce distinct on-disk filenames",
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path1.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path2.path))
+
+        // Each file resolves back to its own job's mapping — survivor's
+        // data isn't shadowing the other.
+        let loaded1 = queueWithOutput.loadNamingData(slug: slug1)
+        let loaded2 = queueWithOutput.loadNamingData(slug: slug2)
+        XCTAssertEqual(loaded1?.mapping["SPEAKER_0"], "Alice")
+        XCTAssertEqual(loaded2?.mapping["SPEAKER_0"], "Bob")
+    }
 }
