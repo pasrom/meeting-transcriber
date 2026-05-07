@@ -103,7 +103,15 @@ enum PersistentDiagnosticLog {
         ///
         /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
         /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
-        final class Streamer {
+        ///
+        /// `@unchecked Sendable` because `Pipe.readabilityHandler` is invoked on
+        /// an arbitrary background queue and Swift 6 requires the captured
+        /// `[weak self]` to be Sendable. Internal mutable state (`logFileHandle`,
+        /// `openedDateString`, `isRunning`) is touched only by `start()` and
+        /// the readability handler, which the OS serialises by way of issuing
+        /// callbacks one-at-a-time per pipe — the class is externally
+        /// single-threaded by contract.
+        final class Streamer: @unchecked Sendable {
             private let process = Process()
             private let pipe = Pipe()
             private let logDirectory: URL
