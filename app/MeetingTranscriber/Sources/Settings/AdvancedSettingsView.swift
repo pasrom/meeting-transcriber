@@ -24,6 +24,10 @@ struct AdvancedSettingsView: View {
     @State private var accessibilityOK = false
     @State private var lastExportFile: String?
     @State private var lastExportError: String?
+    /// True while a `DiagnosticExporter.export` call is running off-main.
+    /// Used to dim the button and surface a spinner so a 50-200 MB persistent
+    /// log doesn't look like the app froze.
+    @State private var isExportingDiagnostics = false
 
     var body: some View {
         // swiftlint:disable:next closure_body_length
@@ -74,7 +78,14 @@ struct AdvancedSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-                Button("Export Diagnostics…") { exportDiagnostics() }
+                HStack {
+                    Button("Export Diagnostics…") { exportDiagnostics() }
+                        .disabled(isExportingDiagnostics)
+                    if isExportingDiagnostics {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
                 if let file = lastExportFile {
                     Text("Exported to: \(file)")
                         .font(.caption)
@@ -163,36 +174,51 @@ struct AdvancedSettingsView: View {
     }
 
     private func exportDiagnostics() {
+        guard !isExportingDiagnostics else { return }
         let stamp = Int(Date().timeIntervalSince1970)
         let outURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("MeetingTranscriber-diagnostics-\(stamp).log")
-        do {
-            let info = DiagnosticExporter.HeaderInfo(
-                appVersion: Bundle.main.appVersion,
-                commit: Bundle.main.gitCommitHash,
-                macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
-                settings: [
-                    "verboseDiagnostics": "\(settings.verboseDiagnostics)",
-                    "diarize": "\(settings.diarize)",
-                    "vadEnabled": "\(settings.vadEnabled)",
-                    "transcriptionEngine": settings.transcriptionEngine.rawValue,
-                    "protocolProvider": settings.protocolProvider.rawValue,
-                    "recordOnly": "\(settings.recordOnly)",
-                ],
-            )
-            let count = try DiagnosticExporter.export(to: outURL, info: info)
-            lastExportFile = outURL.lastPathComponent
-            lastExportError = nil
-            NSWorkspace.shared.activateFileViewerSelecting([outURL])
-            logger.info(
-                "diagnostics_exported lines=\(count, privacy: .public) file=\(outURL.lastPathComponent, privacy: .public)",
-            )
-        } catch {
-            lastExportFile = nil
-            lastExportError = error.localizedDescription
-            logger.error(
-                "diagnostics_export_failed error=\(error.localizedDescription, privacy: .public)",
-            )
+        let info = DiagnosticExporter.HeaderInfo(
+            appVersion: Bundle.main.appVersion,
+            commit: Bundle.main.gitCommitHash,
+            macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            settings: [
+                "verboseDiagnostics": "\(settings.verboseDiagnostics)",
+                "diarize": "\(settings.diarize)",
+                "vadEnabled": "\(settings.vadEnabled)",
+                "transcriptionEngine": settings.transcriptionEngine.rawValue,
+                "protocolProvider": settings.protocolProvider.rawValue,
+                "recordOnly": "\(settings.recordOnly)",
+            ],
+        )
+
+        isExportingDiagnostics = true
+        // The persistent-log file source can be 50-200 MB and reads via
+        // `String(contentsOf:)` + `split(separator:)` — and the OSLogStore
+        // fallback's `getEntries` is famously slow on the main actor. Detach
+        // so the Settings UI stays responsive while the export runs.
+        Task.detached(priority: .userInitiated) {
+            let result = Result { try DiagnosticExporter.export(to: outURL, info: info) }
+            await MainActor.run {
+                isExportingDiagnostics = false
+                switch result {
+                case let .success(count):
+                    lastExportFile = outURL.lastPathComponent
+                    lastExportError = nil
+                    NSWorkspace.shared.activateFileViewerSelecting([outURL])
+                    let exportedFile = outURL.lastPathComponent
+                    logger.info(
+                        "diagnostics_exported lines=\(count, privacy: .public) file=\(exportedFile, privacy: .public)",
+                    )
+
+                case let .failure(error):
+                    lastExportFile = nil
+                    lastExportError = error.localizedDescription
+                    logger.error(
+                        "diagnostics_export_failed error=\(error.localizedDescription, privacy: .public)",
+                    )
+                }
+            }
         }
     }
 }
