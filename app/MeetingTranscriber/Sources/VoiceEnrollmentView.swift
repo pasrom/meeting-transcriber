@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 /// diarization side.
 struct VoiceEnrollmentView: View {
     let matcher: SpeakerMatcher
-    let diarizerFactory: () -> DiarizationProvider
+    let diarizerFactory: () -> any DiarizationProvider
     let onClose: () -> Void
 
     @State private var stage: Stage = .pickFile

@@ -32,7 +32,7 @@ final class VoiceEnrollmentViewTests: XCTestCase {
     func testKnownVoicesViewShowsEnrollButtonWhenFactoryProvided() throws {
         let view = KnownVoicesView(
             matcher: SpeakerMatcher(dbPath: dbPath),
-            diarizerFactory: { MockDiarization() } as (() -> DiarizationProvider),
+            diarizerFactory: { MockDiarization() } as (() -> any DiarizationProvider),
         )
         let inspected = try view.inspect()
         XCTAssertNoThrow(try inspected.find(button: "Add from Recording…"))

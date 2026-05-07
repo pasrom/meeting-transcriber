@@ -30,7 +30,7 @@ class WatchLoop {
 
     // Manual recording
     private(set) var manualRecordingInfo: ManualRecordingInfo?
-    private var activeRecorder: RecordingProvider?
+    private var activeRecorder: (any RecordingProvider)?
     private var manualRecordingTask: Task<Void, Never>?
 
     var isManualRecording: Bool {
@@ -38,8 +38,8 @@ class WatchLoop {
     }
 
     // Dependencies
-    let detector: MeetingDetecting
-    let recorderFactory: @MainActor () -> RecordingProvider
+    let detector: any MeetingDetecting
+    let recorderFactory: @MainActor () -> any RecordingProvider
     var pipelineQueue: PipelineQueue?
     var permissionChecker: () async -> HealthCheckResult = { await PermissionHealthCheck.runLive() }
 
@@ -70,8 +70,8 @@ class WatchLoop {
     var onStateChange: ((State, State) -> Void)?
 
     init(
-        detector: MeetingDetecting = WatchLoop.defaultDetector(),
-        recorderFactory: @MainActor @escaping () -> RecordingProvider = { DualSourceRecorder() },
+        detector: any MeetingDetecting = WatchLoop.defaultDetector(),
+        recorderFactory: @MainActor @escaping () -> any RecordingProvider = { DualSourceRecorder() },
         pipelineQueue: PipelineQueue? = nil,
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
@@ -101,7 +101,7 @@ class WatchLoop {
         AppPaths.downloadsProtocolsDir
     }
 
-    nonisolated static func defaultDetector() -> MeetingDetecting {
+    nonisolated static func defaultDetector() -> any MeetingDetecting {
         PowerAssertionDetector()
     }
 

@@ -26,13 +26,13 @@ final class ParakeetEngineTests: XCTestCase {
     func testConformsToTranscribingEngine() {
         let engine = ParakeetEngine()
         // Assign to protocol type to verify conformance at compile time
-        let proto: TranscribingEngine = engine
+        let proto: any TranscribingEngine = engine
         XCTAssertNotNil(proto)
     }
 
     func testIsReferenceType() {
         let engine = ParakeetEngine()
-        let ref: TranscribingEngine = engine
+        let ref: any TranscribingEngine = engine
         // Mutating the reference should be visible via the original variable
         XCTAssertIdentical(engine, ref, "ParakeetEngine should be a reference type (class)")
     }

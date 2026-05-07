@@ -30,14 +30,14 @@ final class Qwen3AsrEngineTests: XCTestCase {
         guard #available(macOS 15, *) else { return }
         let engine = Qwen3AsrEngine()
         // Assign to protocol type to verify conformance at compile time
-        let proto: TranscribingEngine = engine
+        let proto: any TranscribingEngine = engine
         XCTAssertNotNil(proto)
     }
 
     func testIsReferenceType() {
         guard #available(macOS 15, *) else { return }
         let engine = Qwen3AsrEngine()
-        let ref: TranscribingEngine = engine
+        let ref: any TranscribingEngine = engine
         // Mutating the reference should be visible via the original variable
         XCTAssertIdentical(engine, ref, "Qwen3AsrEngine should be a reference type (class)")
     }

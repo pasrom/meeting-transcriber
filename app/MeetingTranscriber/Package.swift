@@ -31,7 +31,10 @@ let package = Package(
             // to WhisperKit/FluidAudio. `unsafeFlags` instead of the cleaner
             // `treatAllWarnings(as:)` because the latter needs
             // swift-tools-version 6.0; we still target 5.10 for SPM compat.
-            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
+            swiftSettings: [
+                .unsafeFlags(["-warnings-as-errors"]),
+                .enableUpcomingFeature("ExistentialAny"),
+            ]
         ),
         .testTarget(
             name: "MeetingTranscriberTests",
@@ -45,7 +48,10 @@ let package = Package(
             // Tests load these via filesystem path at runtime, not via the
             // bundle, so SPM doesn't need to package them as resources.
             exclude: ["Fixtures", "__Snapshots__"],
-            swiftSettings: [.unsafeFlags(["-warnings-as-errors"])]
+            swiftSettings: [
+                .unsafeFlags(["-warnings-as-errors"]),
+                .enableUpcomingFeature("ExistentialAny"),
+            ]
         ),
     ]
 )

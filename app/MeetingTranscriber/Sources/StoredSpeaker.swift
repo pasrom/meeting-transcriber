@@ -39,7 +39,7 @@ struct StoredSpeaker: Codable, Identifiable {
     // Migrate old single-embedding format automatically (legacy `embedding`
     // key); default lastUsed/useCount for entries before recency tracking;
     // default centroid/centroidSampleCount for entries before v3 schema.
-    init(from decoder: Decoder) throws {
+    init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decode(String.self, forKey: .name)
         if let multi = try? container.decode([[Float]].self, forKey: .embeddings) {
@@ -79,7 +79,7 @@ struct StoredSpeaker: Codable, Identifiable {
              lastUsed, useCount, isSynthetic
     }
 
-    func encode(to encoder: Encoder) throws {
+    func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(name, forKey: .name)
         try container.encode(embeddings, forKey: .embeddings)

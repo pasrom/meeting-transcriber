@@ -12,7 +12,7 @@ protocol OfflineDiarizationProcessing {
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
 class FluidDiarizer: DiarizationProvider {
     let mode: DiarizerMode
-    private var offlineProcessor: OfflineDiarizationProcessing
+    private var offlineProcessor: any OfflineDiarizationProcessing
 
     private var sortformerDiarizer: SortformerDiarizer?
 
@@ -20,7 +20,7 @@ class FluidDiarizer: DiarizationProvider {
         true
     }
 
-    init(mode: DiarizerMode = .offline, offlineProcessor: OfflineDiarizationProcessing? = nil) {
+    init(mode: DiarizerMode = .offline, offlineProcessor: (any OfflineDiarizationProcessing)? = nil) {
         self.mode = mode
         self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor()
     }

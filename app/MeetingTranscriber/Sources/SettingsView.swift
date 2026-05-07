@@ -8,7 +8,7 @@ struct SettingsView: View {
     var updateChecker: UpdateChecker?
     var recognitionStatsLog: RecognitionStatsLog = .init()
     /// Factory for the voice-enrollment diarizer. nil → enroll button hidden.
-    var enrollmentDiarizerFactory: (() -> DiarizationProvider)?
+    var enrollmentDiarizerFactory: (() -> any DiarizationProvider)?
     /// True when a meeting is currently waiting on a naming dialog. We gate
     /// the enroll button to avoid two `SpeakerNamingView` instances.
     var namingDialogActive: Bool = false

@@ -10,7 +10,7 @@ struct KnownVoicesView: View {
     @State private var showingEnrollment = false
 
     private let matcher: SpeakerMatcher
-    private let diarizerFactory: (() -> DiarizationProvider)?
+    private let diarizerFactory: (() -> any DiarizationProvider)?
     /// Set by the parent when a meeting is currently waiting on a naming
     /// dialog — we then disable the enroll button to avoid two
     /// SpeakerNamingViews fighting for the user's attention.
@@ -35,7 +35,7 @@ struct KnownVoicesView: View {
 
     init(
         matcher: SpeakerMatcher,
-        diarizerFactory: (() -> DiarizationProvider)? = nil,
+        diarizerFactory: (() -> any DiarizationProvider)? = nil,
         namingDialogActive: Bool = false,
         pipelineBusy: Bool = false,
         onMutate: (() -> Void)? = nil,

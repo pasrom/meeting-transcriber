@@ -124,7 +124,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
     /// Test connection to the API by querying available models.
     /// Returns model names on success.
-    static func testConnection(endpoint: String, model _: String, apiKey: String?, session: URLSession = .shared) async -> Result<[String], Error> {
+    static func testConnection(endpoint: String, model _: String, apiKey: String?, session: URLSession = .shared) async -> Result<[String], any Error> {
         // Derive models endpoint from chat completions endpoint
         guard let chatURL = URL(string: endpoint) else {
             return .failure(ProtocolError.connectionFailed("Invalid endpoint URL"))
