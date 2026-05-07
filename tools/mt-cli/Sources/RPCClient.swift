@@ -16,8 +16,10 @@ struct RPCClient {
             case let .appNotRunning(url):
                 "Meeting Transcriber app is not running on \(url.absoluteString) " +
                     "(or MEETINGTRANSCRIBER_DEBUG_RPC=1 was not set when it launched)"
+
             case let .http(status, body):
                 "RPC returned HTTP \(status): \(body)"
+
             case let .missingToken(url):
                 "RPC token not found at \(url.path) — start the app with " +
                     "MEETINGTRANSCRIBER_DEBUG_RPC=1 first"
@@ -37,6 +39,8 @@ struct RPCClient {
             .appendingPathComponent(".rpc-token")
     }()
 
+    // Hardcoded literal — URL(string:) cannot fail on a constant valid URL.
+    // swiftlint:disable:next force_unwrapping
     static let defaultBaseURL = URL(string: "http://127.0.0.1:9876")!
 
     /// Per-request timeout. Without this the CLI hangs forever against a
@@ -49,7 +53,7 @@ struct RPCClient {
     /// the rest of the API is fast.
     static let screenshotTimeoutSeconds: TimeInterval = 15
 
-    static func loadDefault() throws -> RPCClient {
+    static func loadDefault() throws -> Self {
         let url = defaultTokenURL
         guard let data = try? Data(contentsOf: url),
               let token = String(data: data, encoding: .utf8)?
@@ -58,7 +62,7 @@ struct RPCClient {
         else {
             throw RPCError.missingToken(url)
         }
-        return RPCClient(baseURL: defaultBaseURL, token: token)
+        return Self(baseURL: defaultBaseURL, token: token)
     }
 
     func get(_ path: String, timeout: TimeInterval = requestTimeoutSeconds) async throws -> Data {

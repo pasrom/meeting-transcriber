@@ -1,7 +1,6 @@
+@testable import AudioTapLib
 import Foundation
 import XCTest
-
-@testable import AudioTapLib
 
 final class MicCaptureErrorTests: XCTestCase {
     func testNoInputDeviceDescription() {
