@@ -1,0 +1,33 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [main]
+
+# `dependency-review-action` only inspects the diff between PR HEAD and the
+# base branch — no work to do on push/tag/dispatch. Cancel superseded runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Audit added dependencies
+        uses: actions/dependency-review-action@v4
+        with:
+          # Block GPL / AGPL / SSPL / proprietary; the project's own dependency
+          # tree is currently MIT/BSD/Apache-2.0 — keep it that way so users
+          # can ship the binary under any of those terms.
+          allow-licenses: >-
+            MIT, BSD-2-Clause, BSD-3-Clause, Apache-2.0, ISC, MPL-2.0,
+            Unlicense, CC0-1.0, Zlib, 0BSD, BlueOak-1.0.0
+          # Surface high/critical CVEs on touched dependencies as PR comments.
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
