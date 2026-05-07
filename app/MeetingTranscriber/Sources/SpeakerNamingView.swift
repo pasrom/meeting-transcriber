@@ -365,11 +365,14 @@ struct SpeakerNamingView: View {
         Task.detached { [audioPath, longest] in
             do {
                 let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: audioPath)
-                let startSample = max(0, Int(longest.start) * sampleRate)
-                let endSample = min(samples.count, Int(longest.end) * sampleRate)
-                guard startSample < endSample else { return }
+                guard let range = Self.sampleRange(
+                    start: longest.start,
+                    end: longest.end,
+                    sampleRate: sampleRate,
+                    totalSamples: samples.count,
+                ) else { return }
 
-                let snippet = Array(samples[startSample ..< endSample])
+                let snippet = Array(samples[range])
                 let tmpPath = FileManager.default.temporaryDirectory
                     .appendingPathComponent("speaker_\(label).wav")
                 try AudioMixer.saveWAV(samples: snippet, sampleRate: sampleRate, url: tmpPath)
@@ -404,6 +407,24 @@ struct SpeakerNamingView: View {
     }
 
     // MARK: - Pure Functions (testable without UI)
+
+    /// Maps a [start, end] time range (seconds) to a clamped half-open sample range,
+    /// rounding down to whole samples. Returns `nil` when the resulting range is
+    /// empty (start >= end after clamping/conversion). Multiplies before truncation
+    /// so fractional starts (e.g. 1.7s) preserve precision; the previous inline code
+    /// did `Int(start) * sampleRate`, which discarded the sub-second offset and shifted
+    /// playback by up to ~1s into a different speaker.
+    static func sampleRange(
+        start: TimeInterval,
+        end: TimeInterval,
+        sampleRate: Int,
+        totalSamples: Int,
+    ) -> Range<Int>? {
+        let startSample = max(0, Int(start * Double(sampleRate)))
+        let endSample = min(totalSamples, Int(end * Double(sampleRate)))
+        guard startSample < endSample else { return nil }
+        return startSample ..< endSample
+    }
 
     /// Computes initial text field names from speaker auto-name mappings.
     static func computeInitialNames(
