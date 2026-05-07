@@ -963,4 +963,65 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result.centroid?[1] ?? 0, 0.25, accuracy: 0.001)
         XCTAssertEqual(result.count, 4)
     }
+
+    // MARK: - Concurrent write serialization
+
+    /// Read-modify-write across concurrent callers must not lose updates.
+    /// Each task appends a uniquely-named entry; with proper locking the
+    /// final count equals the number of mutations. Without locking, two
+    /// tasks can read the same snapshot and one save overwrites the other.
+    func testMutateDBSerializesConcurrentReadModifyWrites() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "seed", embeddings: [[1]])])
+
+        let iterations = 100
+        let group = DispatchGroup()
+        for i in 0 ..< iterations {
+            group.enter()
+            DispatchQueue.global().async { [dbPath] in
+                let m = SpeakerMatcher(dbPath: dbPath)
+                m.mutateDB { stored in
+                    stored.append(StoredSpeaker(name: "x\(i)", embeddings: [[1]]))
+                }
+                group.leave()
+            }
+        }
+        group.wait()
+
+        let final = matcher.loadDB()
+        XCTAssertEqual(
+            final.count, iterations + 1,
+            "Lost updates from unsynchronized RMW: expected \(iterations + 1), got \(final.count)",
+        )
+    }
+
+    /// High-level public API must also be race-free — RPC `renameSpeaker`
+    /// can fire concurrently with a pipeline-job confirmation, both calling
+    /// the same matcher methods. Each thread renames a distinct entry; all
+    /// renames must survive.
+    func testRenameSpeakerConcurrentDoesNotLoseUpdates() {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        let count = 50
+        let initial = (0 ..< count).map { idx in
+            StoredSpeaker(name: "S\(idx)", embeddings: [[Float(idx)]])
+        }
+        matcher.saveDB(initial)
+
+        let group = DispatchGroup()
+        for i in 0 ..< count {
+            group.enter()
+            DispatchQueue.global().async { [dbPath] in
+                let m = SpeakerMatcher(dbPath: dbPath)
+                m.renameSpeaker(from: "S\(i)", to: "P\(i)")
+                group.leave()
+            }
+        }
+        group.wait()
+
+        let names = Set(matcher.loadDB().map(\.name))
+        for i in 0 ..< count {
+            XCTAssertTrue(names.contains("P\(i)"), "Lost rename for P\(i)")
+        }
+        XCTAssertEqual(names.count, count, "Final DB has wrong entry count")
+    }
 }

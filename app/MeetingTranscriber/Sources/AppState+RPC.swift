@@ -60,20 +60,19 @@
                     return merged ? .ok : .notFound
                 },
                 seed: { [weak self] name in
-                    let matcher = SpeakerMatcher()
-                    var stored = matcher.loadDB()
                     let embedding = (0 ..< Self.seedEmbeddingDimension).map { _ in
                         Float.random(in: -1 ... 1)
                     }
-                    stored.append(StoredSpeaker(
-                        name: name,
-                        embeddings: [embedding],
-                        centroid: embedding,
-                        centroidSampleCount: 1,
-                        lastUsed: Date(),
-                        useCount: 1,
-                    ))
-                    matcher.saveDB(stored)
+                    SpeakerMatcher().mutateDB { stored in
+                        stored.append(StoredSpeaker(
+                            name: name,
+                            embeddings: [embedding],
+                            centroid: embedding,
+                            centroidSampleCount: 1,
+                            lastUsed: Date(),
+                            useCount: 1,
+                        ))
+                    }
                     self?.pipelineQueue.refreshKnownSpeakerNames()
                     return .ok
                 },

@@ -7,88 +7,6 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "SpeakerMatcher")
 
-struct StoredSpeaker: Codable, Identifiable {
-    var id: String {
-        name
-    }
-
-    let name: String
-    /// Recent quality samples (FIFO, max `SpeakerMatcher.maxRecentSamples`).
-    /// Used as a fallback when the centroid match is borderline, and as the
-    /// seed for `centroid` on first confirmation after the v3 schema upgrade.
-    let embeddings: [[Float]]
-    /// Running mean of all quality-filtered embeddings ever confirmed for this
-    /// speaker. The primary match anchor in v3+. nil for legacy entries; the
-    /// matcher computes `meanEmbedding(embeddings)` lazily until the next
-    /// confirmation persists a real centroid.
-    let centroid: [Float]?
-    /// Number of embeddings folded into `centroid` so far. Drives the running-
-    /// average update math and tells us whether we trust the centroid.
-    let centroidSampleCount: Int
-    /// Wall-clock time when this speaker was last confirmed by the user via
-    /// `updateDB`. Used to rank suggestion chips by recency. nil for entries
-    /// migrated from older DB versions that didn't track usage.
-    let lastUsed: Date?
-    /// Number of times this speaker has been confirmed by the user across
-    /// recordings. Defaults to 0 for entries that pre-date usage tracking.
-    let useCount: Int
-
-    // Migrate old single-embedding format automatically (legacy `embedding`
-    // key); default lastUsed/useCount for entries before recency tracking;
-    // default centroid/centroidSampleCount for entries before v3 schema.
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        name = try container.decode(String.self, forKey: .name)
-        if let multi = try? container.decode([[Float]].self, forKey: .embeddings) {
-            embeddings = multi
-        } else if let single = try? container.decode([Float].self, forKey: .embedding) {
-            embeddings = [single]
-        } else {
-            embeddings = []
-        }
-        centroid = try container.decodeIfPresent([Float].self, forKey: .centroid)
-        centroidSampleCount = try container.decodeIfPresent(Int.self, forKey: .centroidSampleCount) ?? 0
-        lastUsed = try container.decodeIfPresent(Date.self, forKey: .lastUsed)
-        useCount = try container.decodeIfPresent(Int.self, forKey: .useCount) ?? 0
-    }
-
-    init(
-        name: String,
-        embeddings: [[Float]],
-        centroid: [Float]? = nil,
-        centroidSampleCount: Int = 0,
-        lastUsed: Date? = nil,
-        useCount: Int = 0,
-    ) {
-        self.name = name
-        self.embeddings = embeddings
-        self.centroid = centroid
-        self.centroidSampleCount = centroidSampleCount
-        self.lastUsed = lastUsed
-        self.useCount = useCount
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case name, embeddings, embedding, centroid, centroidSampleCount, lastUsed, useCount
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(name, forKey: .name)
-        try container.encode(embeddings, forKey: .embeddings)
-        try container.encodeIfPresent(centroid, forKey: .centroid)
-        if centroidSampleCount > 0 {
-            try container.encode(centroidSampleCount, forKey: .centroidSampleCount)
-        }
-        try container.encodeIfPresent(lastUsed, forKey: .lastUsed)
-        // Skip when 0 so entries that pre-date recency tracking round-trip
-        // byte-identical (no spurious useCount=0 field added on first save).
-        if useCount > 0 {
-            try container.encode(useCount, forKey: .useCount)
-        }
-    }
-}
-
 class SpeakerMatcher {
     private let dbPath: URL
     private let threshold: Float
@@ -100,12 +18,33 @@ class SpeakerMatcher {
     /// into the centroid. Short snippets are still kept as fallback samples
     /// but don't pollute the running average.
     static let minSpeakingTimeForCentroid: TimeInterval = 3.0
+    /// Process-wide lock for read-modify-write sequences against
+    /// `speakers.json`. The RPC handlers, the pipeline-job confirmation
+    /// path, the KnownVoices UI, and voice enrollment can all mutate the
+    /// DB concurrently — without serialization, two writers can both load
+    /// the same snapshot and the second `saveDB` silently overwrites the
+    /// first. Reads stay unlocked: every code path reloads after a
+    /// mutation anyway, and `replaceItemAt` already gives atomic file
+    /// replacement at the FS level.
+    private static let dbLock = NSLock()
 
     init(dbPath: URL? = nil, threshold: Float = 0.40, confidenceMargin: Float = 0.10) {
         self.dbPath = dbPath ?? AppPaths.speakersDB
         self.threshold = threshold
         self.confidenceMargin = confidenceMargin
         Self.migrateIfNeeded(dbPath: self.dbPath)
+    }
+
+    /// Atomic read-modify-write against `speakers.json`. Holds the
+    /// process-wide DB lock for the duration of the closure so concurrent
+    /// callers can't lose updates. Use this for every mutating operation;
+    /// raw `loadDB` + `saveDB` paired by hand reintroduces the race.
+    func mutateDB(_ block: (inout [StoredSpeaker]) -> Void) {
+        Self.dbLock.lock()
+        defer { Self.dbLock.unlock() }
+        var stored = loadDB()
+        block(&stored)
+        saveDB(stored)
     }
 
     /// Reset old pyannote-format speakers.json (incompatible embeddings).
@@ -257,27 +196,25 @@ class SpeakerMatcher {
         speakingTimes: [String: TimeInterval] = [:],
         now: Date = Date(),
     ) {
-        var stored = loadDB()
+        mutateDB { stored in
+            for (label, name) in mapping {
+                guard name != label, let embedding = embeddings[label] else { continue }
+                let duration = speakingTimes[label] ?? 0
 
-        for (label, name) in mapping {
-            guard name != label, let embedding = embeddings[label] else { continue }
-            let duration = speakingTimes[label] ?? 0
-
-            if let idx = stored.firstIndex(where: { $0.name == name }) {
-                stored[idx] = Self.applyConfirmation(
-                    to: stored[idx],
-                    embedding: embedding,
-                    duration: duration,
-                    now: now,
-                )
-            } else {
-                stored.append(Self.newSpeaker(
-                    name: name, embedding: embedding, duration: duration, now: now,
-                ))
+                if let idx = stored.firstIndex(where: { $0.name == name }) {
+                    stored[idx] = Self.applyConfirmation(
+                        to: stored[idx],
+                        embedding: embedding,
+                        duration: duration,
+                        now: now,
+                    )
+                } else {
+                    stored.append(Self.newSpeaker(
+                        name: name, embedding: embedding, duration: duration, now: now,
+                    ))
+                }
             }
         }
-
-        saveDB(stored)
     }
 
     /// Pure helper: fold a confirmed embedding into an existing `StoredSpeaker`.
@@ -351,37 +288,42 @@ class SpeakerMatcher {
     @discardableResult
     func renameSpeaker(from: String, to: String) -> RenameResult {
         guard from != to else { return .noop }
-        var stored = loadDB()
-        guard let srcIdx = stored.firstIndex(where: { $0.name == from }) else {
-            return .notFound
+        var outcome: RenameResult = .notFound
+        mutateDB { stored in
+            guard let srcIdx = stored.firstIndex(where: { $0.name == from }) else {
+                outcome = .notFound
+                return
+            }
+            if let dstIdx = stored.firstIndex(where: { $0.name == to }) {
+                stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
+                stored.remove(at: srcIdx)
+                outcome = .merged
+                return
+            }
+            let src = stored[srcIdx]
+            stored[srcIdx] = StoredSpeaker(
+                name: to,
+                embeddings: src.embeddings,
+                centroid: src.centroid,
+                centroidSampleCount: src.centroidSampleCount,
+                lastUsed: src.lastUsed,
+                useCount: src.useCount,
+            )
+            outcome = .renamed
         }
-        if let dstIdx = stored.firstIndex(where: { $0.name == to }) {
-            stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
-            stored.remove(at: srcIdx)
-            saveDB(stored)
-            return .merged
-        }
-        let src = stored[srcIdx]
-        stored[srcIdx] = StoredSpeaker(
-            name: to,
-            embeddings: src.embeddings,
-            centroid: src.centroid,
-            centroidSampleCount: src.centroidSampleCount,
-            lastUsed: src.lastUsed,
-            useCount: src.useCount,
-        )
-        saveDB(stored)
-        return .renamed
+        return outcome
     }
 
     /// Remove a speaker. Returns `false` if no speaker with that name was found.
     @discardableResult
     func deleteSpeaker(name: String) -> Bool {
-        var stored = loadDB()
-        guard let idx = stored.firstIndex(where: { $0.name == name }) else { return false }
-        stored.remove(at: idx)
-        saveDB(stored)
-        return true
+        var removed = false
+        mutateDB { stored in
+            guard let idx = stored.firstIndex(where: { $0.name == name }) else { return }
+            stored.remove(at: idx)
+            removed = true
+        }
+        return removed
     }
 
     /// Merge `from` into `into`. Embeddings concatenated and FIFO-trimmed,
@@ -390,15 +332,17 @@ class SpeakerMatcher {
     @discardableResult
     func mergeSpeakers(from: String, into: String) -> Bool {
         guard from != into else { return false }
-        var stored = loadDB()
-        guard let srcIdx = stored.firstIndex(where: { $0.name == from }),
-              let dstIdx = stored.firstIndex(where: { $0.name == into }) else {
-            return false
+        var ok = false
+        mutateDB { stored in
+            guard let srcIdx = stored.firstIndex(where: { $0.name == from }),
+                  let dstIdx = stored.firstIndex(where: { $0.name == into }) else {
+                return
+            }
+            stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
+            stored.removeAll { $0.name == from }
+            ok = true
         }
-        stored[dstIdx] = Self.merged(into: stored[dstIdx], from: stored[srcIdx])
-        stored.removeAll { $0.name == from }
-        saveDB(stored)
-        return true
+        return ok
     }
 
     /// Pure helper: combine `src` into `dst`. Used by both rename-collision
