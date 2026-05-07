@@ -255,7 +255,7 @@ final class AppState {
                 syncLanguageSettings()
                 pipelineQueue = makePipelineQueue()
 
-                let detector: MeetingDetecting = PowerAssertionDetector()
+                let detector: any MeetingDetecting = PowerAssertionDetector()
 
                 let loop = WatchLoop(
                     detector: detector,
@@ -452,7 +452,7 @@ final class AppState {
         return queue
     }
 
-    func makeProtocolGenerator() -> ProtocolGenerating? {
+    func makeProtocolGenerator() -> (any ProtocolGenerating)? {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:

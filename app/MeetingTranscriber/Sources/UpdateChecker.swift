@@ -111,12 +111,12 @@ final class UpdateChecker {
     var lastCheckDate: Date?
     var lastError: String?
 
-    private let provider: UpdateProviding
+    private let provider: any UpdateProviding
     private let currentVersion: (Int, Int, Int)
     private var checkTask: Task<Void, Never>?
     private var periodicTask: Task<Void, Never>?
 
-    init(provider: UpdateProviding = GitHubReleaseProvider()) {
+    init(provider: any UpdateProviding = GitHubReleaseProvider()) {
         self.provider = provider
         let version =
             Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"

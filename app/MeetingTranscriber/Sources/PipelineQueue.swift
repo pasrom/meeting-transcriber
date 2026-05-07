@@ -13,8 +13,8 @@ class PipelineQueue {
 
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
-    let diarizationFactory: (() -> DiarizationProvider)?
-    let protocolGeneratorFactory: (() -> ProtocolGenerating?)?
+    let diarizationFactory: (() -> any DiarizationProvider)?
+    let protocolGeneratorFactory: (() -> (any ProtocolGenerating)?)?
     let outputDir: URL?
     let diarizeEnabled: Bool
     let numSpeakers: Int
@@ -287,8 +287,8 @@ class PipelineQueue {
     /// Full init with all processing dependencies.
     init(
         engine: any TranscribingEngine,
-        diarizationFactory: @escaping () -> DiarizationProvider,
-        protocolGeneratorFactory: @escaping () -> ProtocolGenerating?,
+        diarizationFactory: @escaping () -> any DiarizationProvider,
+        protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
         outputDir: URL,
         logDir: URL? = nil,
         diarizeEnabled: Bool = false,

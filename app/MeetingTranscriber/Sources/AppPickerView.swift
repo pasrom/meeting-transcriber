@@ -37,7 +37,7 @@ struct SystemRunningAppsProvider: RunningAppsProvider {
 /// View that lets the user pick a running app and start recording it.
 @MainActor
 struct AppPickerView: View {
-    let appsProvider: RunningAppsProvider
+    let appsProvider: any RunningAppsProvider
     let onStartRecording: (pid_t, String, String) -> Void
     let onCancel: () -> Void
 
@@ -46,7 +46,7 @@ struct AppPickerView: View {
     @State private var meetingTitle: String = ""
 
     init(
-        appsProvider: RunningAppsProvider = SystemRunningAppsProvider(),
+        appsProvider: any RunningAppsProvider = SystemRunningAppsProvider(),
         onStartRecording: @escaping (pid_t, String, String) -> Void,
         onCancel: @escaping () -> Void,
     ) {

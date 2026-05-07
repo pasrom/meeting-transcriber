@@ -4,8 +4,8 @@ import XCTest
 // MARK: - Mock Provider
 
 final class MockUpdateProvider: UpdateProviding, @unchecked Sendable {
-    var latestReleaseResult: Result<ReleaseInfo, Error> = .failure(UpdateCheckerError.networkError("not configured"))
-    var allReleasesResult: Result<[ReleaseInfo], Error> = .failure(UpdateCheckerError.networkError("not configured"))
+    var latestReleaseResult: Result<ReleaseInfo, any Error> = .failure(UpdateCheckerError.networkError("not configured"))
+    var allReleasesResult: Result<[ReleaseInfo], any Error> = .failure(UpdateCheckerError.networkError("not configured"))
     var latestReleaseCalled = false
     var allReleasesCalled = false
     var delay: Duration?

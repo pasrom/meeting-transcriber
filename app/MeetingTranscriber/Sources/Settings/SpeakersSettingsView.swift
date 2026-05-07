@@ -3,7 +3,7 @@ import SwiftUI
 struct SpeakersSettingsView: View {
     @Bindable var settings: AppSettings
     var recognitionStatsLog: RecognitionStatsLog
-    var enrollmentDiarizerFactory: (() -> DiarizationProvider)?
+    var enrollmentDiarizerFactory: (() -> any DiarizationProvider)?
     var namingDialogActive: Bool
     var pipelineBusy: Bool
     /// Called whenever the user mutates the speakers DB from the Known

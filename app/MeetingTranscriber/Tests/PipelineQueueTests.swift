@@ -501,7 +501,7 @@ final class PipelineQueueTests: XCTestCase {
 
     private func makeMockProcessingQueue(
         engine: MockEngine? = nil,
-        diarizationFactory: @escaping () -> DiarizationProvider = { MockDiarization() },
+        diarizationFactory: @escaping () -> any DiarizationProvider = { MockDiarization() },
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
     ) -> (PipelineQueue, MockEngine) {
