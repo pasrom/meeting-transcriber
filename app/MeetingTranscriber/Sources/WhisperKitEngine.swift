@@ -62,7 +62,7 @@ final class WhisperKitEngine: TranscribingEngine {
                 let modelFolder = try await WhisperKit.download(
                     variant: modelVariant,
                 ) { progress in
-                    Task {
+                    Task { @MainActor in
                         self.downloadProgress = progress.fractionCompleted
                     }
                 }
