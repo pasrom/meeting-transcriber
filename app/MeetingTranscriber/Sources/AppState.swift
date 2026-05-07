@@ -871,7 +871,18 @@ final class AppState { // swiftlint:disable:this type_body_length
     func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
             engine: activeTranscriptionEngine,
-            diarizationFactory: { [self] in FluidDiarizer(mode: settings.diarizerMode) },
+            diarizationFactory: { [self] in
+                FluidDiarizer(
+                    mode: settings.diarizerMode,
+                    tuning: OfflineDiarizerTuning(
+                        clusterThreshold: settings.clusterThreshold,
+                        warmStartFa: settings.warmStartFa,
+                        warmStartFb: settings.warmStartFb,
+                        minSegmentDurationSeconds: settings.minSegmentDurationSeconds,
+                        excludeOverlap: settings.excludeOverlap,
+                    ),
+                )
+            },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,

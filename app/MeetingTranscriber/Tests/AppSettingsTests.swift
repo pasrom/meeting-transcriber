@@ -337,6 +337,60 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(suite.bool(forKey: "verboseDiagnostics"))
     }
 
+    // MARK: - Diarizer Tuning (Experimental)
+
+    func testDiarizerTuningDefaults() {
+        XCTAssertEqual(settings.clusterThreshold, 0.6)
+        XCTAssertEqual(settings.warmStartFa, 0.07)
+        XCTAssertEqual(settings.warmStartFb, 0.8)
+        XCTAssertEqual(settings.minSegmentDurationSeconds, 1.0)
+        XCTAssertTrue(settings.excludeOverlap)
+        XCTAssertTrue(settings.diarizerTuningIsAllDefaults)
+    }
+
+    func testDiarizerTuningRoundTrip() {
+        settings.clusterThreshold = 0.42
+        settings.warmStartFa = 0.13
+        settings.warmStartFb = 1.25
+        settings.minSegmentDurationSeconds = 2.5
+        settings.excludeOverlap = false
+
+        // Persisted under the documented keys.
+        XCTAssertEqual(defaults.double(forKey: "diarizerClusterThreshold"), 0.42)
+        XCTAssertEqual(defaults.double(forKey: "diarizerWarmStartFa"), 0.13)
+        XCTAssertEqual(defaults.double(forKey: "diarizerWarmStartFb"), 1.25)
+        XCTAssertEqual(defaults.double(forKey: "diarizerMinSegmentDuration"), 2.5)
+        XCTAssertFalse(defaults.bool(forKey: "diarizerExcludeOverlap"))
+
+        // Fresh instance reads the same suite back.
+        let fresh = AppSettings(defaults: defaults)
+        XCTAssertEqual(fresh.clusterThreshold, 0.42)
+        XCTAssertEqual(fresh.warmStartFa, 0.13)
+        XCTAssertEqual(fresh.warmStartFb, 1.25)
+        XCTAssertEqual(fresh.minSegmentDurationSeconds, 2.5)
+        XCTAssertFalse(fresh.excludeOverlap)
+        XCTAssertFalse(fresh.diarizerTuningIsAllDefaults)
+    }
+
+    func testResetDiarizerTuningRestoresDefaults() {
+        settings.clusterThreshold = 0.42
+        settings.warmStartFa = 0.13
+        settings.warmStartFb = 1.25
+        settings.minSegmentDurationSeconds = 2.5
+        settings.excludeOverlap = false
+
+        XCTAssertFalse(settings.diarizerTuningIsAllDefaults)
+
+        settings.resetDiarizerTuning()
+
+        XCTAssertEqual(settings.clusterThreshold, 0.6)
+        XCTAssertEqual(settings.warmStartFa, 0.07)
+        XCTAssertEqual(settings.warmStartFb, 0.8)
+        XCTAssertEqual(settings.minSegmentDurationSeconds, 1.0)
+        XCTAssertTrue(settings.excludeOverlap)
+        XCTAssertTrue(settings.diarizerTuningIsAllDefaults)
+    }
+
     // MARK: - Keychain
 
     func testKeychainRoundTrip() {
