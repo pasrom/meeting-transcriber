@@ -1,9 +1,11 @@
+// `@preconcurrency import ScreenCaptureKit`: SCShareableContent isn't
+// Sendable on macos-26 SDK; call sites are @MainActor so it's safe.
 #if !APPSTORE
     import AppKit
     import Foundation
     import Network
     import os.log
-    import ScreenCaptureKit
+    @preconcurrency import ScreenCaptureKit
 
     private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "DebugRPCServer")
 
