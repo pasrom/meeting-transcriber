@@ -547,4 +547,41 @@
             XCTAssertTrue(DebugRPCServer.isHostAllowed("localhost", port: 9876))
         }
     }
+
+    // MARK: - Screenshot window allowlist
+
+    extension DebugRPCServerTests {
+        /// Settings is the explicitly-supported screenshot target — debug
+        /// inspection of the app's configuration UI.
+        func testIsWindowAllowedForScreenshotAcceptsSettings() {
+            XCTAssertTrue(DebugRPCServer.isWindowAllowedForScreenshot(identifier: "settings"))
+        }
+
+        /// SpeakerNamingView surfaces real participant names and meeting
+        /// titles. /screenshot must not capture it — local processes with
+        /// the RPC token would otherwise read PII off-screen.
+        func testIsWindowAllowedForScreenshotRejectsSpeakerNaming() {
+            XCTAssertFalse(DebugRPCServer.isWindowAllowedForScreenshot(identifier: "speaker-naming"))
+        }
+
+        /// Record-app picker shows the user's running-app list — sensitive
+        /// enough to keep off the wire by default. Add to the allowlist if
+        /// a screenshot becomes useful for debugging.
+        func testIsWindowAllowedForScreenshotRejectsRecordApp() {
+            XCTAssertFalse(DebugRPCServer.isWindowAllowedForScreenshot(identifier: "record-app"))
+        }
+
+        /// Anonymous windows (no identifier set) are rejected — system file
+        /// pickers, AppKit alerts, and similar transients shouldn't be
+        /// targetable.
+        func testIsWindowAllowedForScreenshotRejectsAnonymous() {
+            XCTAssertFalse(DebugRPCServer.isWindowAllowedForScreenshot(identifier: nil))
+            XCTAssertFalse(DebugRPCServer.isWindowAllowedForScreenshot(identifier: ""))
+        }
+
+        /// Future scenes default to closed unless explicitly allowed.
+        func testIsWindowAllowedForScreenshotRejectsUnknown() {
+            XCTAssertFalse(DebugRPCServer.isWindowAllowedForScreenshot(identifier: "future-debug-window"))
+        }
+    }
 #endif
