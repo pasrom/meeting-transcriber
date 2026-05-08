@@ -203,6 +203,60 @@ final class WhisperKitE2ETests: XCTestCase {
         }
     }
 
+    /// End-to-end wiring check: when `customVocabularyPath` points at a real
+    /// file, `transcribeSegments` must populate `cachedPromptTokens` from the
+    /// loaded model's tokenizer before invoking `pipe.transcribe`. The model
+    /// download is shared with the fixture test above, so this is cheap on
+    /// any machine that already ran the suite once.
+    func testTranscribeSegmentsAppliesCustomVocabularyAsPrompt() async throws {
+        let isCI = ProcessInfo.processInfo.environment["CI"] != nil
+        try XCTSkipIf(isCI, "Skipping in CI: requires WhisperKit model download")
+
+        let fixture = fixtureURL()
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: fixture.path),
+            "Test fixture not found at \(fixture.path)",
+        )
+
+        let vocabFile = makeTempFile(suffix: ".txt")
+        try """
+        Klaus-Dieter
+        CATapDescription
+        Sortformer
+        FluidAudio
+        WhisperKit
+        pasrom
+        """.write(to: vocabFile, atomically: true, encoding: .utf8)
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "de"
+        engine.customVocabularyPath = vocabFile.path
+
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded, "Model should be loaded")
+
+        // Prompt tokens are populated lazily inside transcribeSegments — empty
+        // until the first transcribe call wires them up.
+        XCTAssertTrue(engine.cachedPromptTokens.isEmpty, "Should be empty before transcribe")
+
+        _ = try await engine.transcribeSegments(audioPath: fixture)
+
+        XCTAssertFalse(
+            engine.cachedPromptTokens.isEmpty,
+            "Vocabulary should have been tokenised and cached",
+        )
+        XCTAssertLessThanOrEqual(
+            engine.cachedPromptTokens.count, WhisperKitEngine.maxPromptTokens,
+            "Tokens must respect the prompt budget",
+        )
+        // A six-term glossary tokenises to a small handful — well under cap.
+        XCTAssertGreaterThan(
+            engine.cachedPromptTokens.count, 5,
+            "6 terms should produce more than 5 tokens",
+        )
+    }
+
     func testTranscribeSegmentsHallucinationFilter() async throws {
         // This test downloads a WhisperKit model (~1GB) - skip in CI
         let isCI = ProcessInfo.processInfo.environment["CI"] != nil

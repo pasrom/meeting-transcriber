@@ -55,7 +55,7 @@ final class WhisperKitEngine: TranscribingEngine {
     /// Cached prompt tokens for `DecodingOptions.promptTokens`. Refreshed
     /// when `customVocabularyPath` changes since last transcription. Empty
     /// means "no biasing" — translated to `nil` at the `DecodingOptions` call.
-    private var cachedPromptTokens: [Int] = []
+    private(set) var cachedPromptTokens: [Int] = []
     private var lastTokenizedVocabularyPath: String = ""
 
     /// Whisper's prompt context is bounded; 224 leaves headroom under the
