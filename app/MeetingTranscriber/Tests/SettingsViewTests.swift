@@ -50,6 +50,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
             parakeetEngine: ParakeetEngine(),
             qwen3Engine: qwen3,
             updateChecker: updateChecker,
+            recognitionStatsLog: RecognitionStatsLog(),
         )
     }
 
