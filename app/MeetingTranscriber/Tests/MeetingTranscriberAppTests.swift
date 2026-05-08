@@ -1,6 +1,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
+@MainActor
 final class MeetingTranscriberAppTests: XCTestCase {
     // MARK: - shouldAutoWatch
 
