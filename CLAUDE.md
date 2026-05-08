@@ -156,6 +156,15 @@ Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fa
 # Swift tests (parallel — ~1.4× faster than sequential)
 cd app/MeetingTranscriber && swift test --parallel
 
+# Swift tests under sanitizers (slow — TSan ~7.5 min, ASan ~4.5 min on M-series)
+# CI runs these nightly via cron + on push to main; locally use ad-hoc
+# before pushing concurrency-heavy or C-bridging changes.
+cd app/MeetingTranscriber && swift test --parallel --sanitize=thread --skip MenuBarIconSnapshotTests
+cd app/MeetingTranscriber && swift test --parallel --sanitize=address --skip MenuBarIconSnapshotTests
+
+# Trigger sanitizer matrix on a specific PR/branch via CI
+gh workflow run ci.yml -f run-sanitizer=true
+
 # Lint & format check (dry-run, no changes)
 ./scripts/lint.sh
 
