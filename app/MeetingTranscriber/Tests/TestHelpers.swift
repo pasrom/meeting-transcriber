@@ -1,6 +1,24 @@
 import Foundation
 @testable import MeetingTranscriber
 import WhisperKit
+import XCTest
+
+// MARK: - Temp-Directory Helper
+
+extension XCTestCase {
+    /// Create a unique temp directory under `FileManager.default.temporaryDirectory`
+    /// and register an automatic cleanup with `addTeardownBlock`. The dir is
+    /// removed regardless of whether tearDown is async, sync, or absent.
+    func makeTempDirectory(prefix: String) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
+    }
+}
 
 // MARK: - WatchLoop / AppState Helpers
 
