@@ -65,18 +65,8 @@ let package = Package(
                     "-Xfrontend", "-warn-long-expression-type-checking=500",
                 ]),
                 .enableUpcomingFeature("ExistentialAny"),
-                // Tests stay in Swift 5 mode for now: 200+ XCTest setup
-                // patterns (`tmpDir!` mutated from setUp, MainActor
-                // properties touched from sync test bodies) would surface
-                // as concurrency errors, none of which are real races —
-                // XCTest serialises test execution per class. Migrating
-                // tests is its own dedicated effort.
-                .swiftLanguageMode(.v5),
             ]
         ),
     ],
-    // Sources run under Swift 6 strict concurrency. The test target opts
-    // back to v5 via per-target `swiftLanguageMode` — see the test
-    // swiftSettings above for the rationale.
     swiftLanguageModes: [.v6]
 )
