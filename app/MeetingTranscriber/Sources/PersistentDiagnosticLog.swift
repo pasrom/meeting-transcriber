@@ -5,6 +5,43 @@ private let logger = Logger(
     subsystem: AppPaths.logSubsystem, category: "PersistentDiagnosticLog",
 )
 
+/// Sliding-window restart policy for the `log stream` subprocess. Pure value
+/// type so it can be exhaustively unit-tested without spawning processes.
+/// `Streamer` keeps a list of recent failure timestamps and asks the policy
+/// after each unexpected exit whether to relaunch (and how long to wait).
+struct RestartPolicy: Equatable {
+    /// Maximum failures allowed within `window` before `decide` returns `.giveUp`.
+    let maxFailuresInWindow: Int
+    /// Sliding window over which failures are counted, in seconds.
+    let window: TimeInterval
+    /// Cap on the exponential backoff (`2^count` seconds) between restarts.
+    let maxBackoff: TimeInterval
+
+    static let `default` = Self(
+        maxFailuresInWindow: 5,
+        window: 60,
+        maxBackoff: 30,
+    )
+
+    enum Decision: Equatable {
+        case restart(after: TimeInterval)
+        case giveUp
+    }
+
+    /// Filters `recentFailures` to entries newer than `now - window`, then
+    /// returns `.giveUp` if too many remain or `.restart` with exponential
+    /// backoff (1 s, 2 s, 4 s, …, clamped to `maxBackoff`).
+    func decide(now: Date, recentFailures: [Date]) -> Decision {
+        let cutoff = now.addingTimeInterval(-window)
+        let inWindow = recentFailures.filter { $0 >= cutoff }
+        if inWindow.count >= maxFailuresInWindow {
+            return .giveUp
+        }
+        let delay = min(pow(2.0, Double(inWindow.count)), maxBackoff)
+        return .restart(after: delay)
+    }
+}
+
 /// Manages a rolling on-disk mirror of `os.Logger` output for the
 /// `com.meetingtranscriber*` subsystems. Files are written by a background
 /// `log stream` subprocess (see `Streamer`) and rotated daily.
@@ -96,36 +133,60 @@ enum PersistentDiagnosticLog {
     #if !APPSTORE
         /// Wraps a running `log stream` subprocess that mirrors our subsystems
         /// to a local file. Lifetime is owned by `AppState`. Lifecycle:
-        /// `init(logDirectory:now:)` opens today's file, `start()` launches the
-        /// subprocess and pipes its stdout into the file, `stop()` terminates
-        /// the process and closes the file handle. The file rotates lazily
-        /// when `append(_:)` first sees a new UTC day.
+        /// `init(...)` opens today's file, `start()` launches the subprocess
+        /// and pipes its stdout into the file, `stop()` terminates the process
+        /// and closes the file handle. The file rotates lazily when
+        /// `append(_:)` first sees a new UTC day. If the subprocess exits
+        /// unexpectedly, the streamer relaunches it according to
+        /// `restartPolicy`; once the policy gives up, `isRunning` flips to
+        /// false and no further data is collected until the next `start()`.
         ///
         /// Gated `#if !APPSTORE` because `Process` is forbidden under sandbox.
         /// The App Store variant falls back to `OSLogStore` in `DiagnosticExporter`.
         ///
-        /// `@unchecked Sendable` because `Pipe.readabilityHandler` is invoked on
-        /// an arbitrary background queue and Swift 6 requires the captured
-        /// `[weak self]` to be Sendable. Internal mutable state (`logFileHandle`,
-        /// `openedDateString`, `isRunning`) is touched only by `start()` and
-        /// the readability handler, which the OS serialises by way of issuing
-        /// callbacks one-at-a-time per pipe — the class is externally
-        /// single-threaded by contract.
+        /// `@unchecked Sendable` because `Pipe.readabilityHandler` is invoked
+        /// on an arbitrary background queue and the `terminationHandler`
+        /// fires on Foundation's private Process queue. All state mutations
+        /// (`isRunning`, `recentFailures`, `process`, `pipe`) go through
+        /// `restartQueue` to serialise start, stop, unexpected-exit, and the
+        /// delayed relaunch with respect to each other. `append`'s file-handle
+        /// writes stay outside the queue — the OS serialises readability
+        /// callbacks per pipe and the day-rotation tests exercise that path
+        /// directly without spawning a real subprocess.
         final class Streamer: @unchecked Sendable {
-            private let process = Process()
-            private let pipe = Pipe()
+            private var process = Process()
+            private var pipe = Pipe()
             private let logDirectory: URL
             private let now: () -> Date
             private var logFileHandle: FileHandle
             private var openedDateString: String
-            private var isRunning = false
+            private(set) var isRunning = false
+
+            private let logExecutable: URL
+            private let logArguments: [String]
+            private let restartPolicy: RestartPolicy
+            private var recentFailures: [Date] = []
+            private let restartQueue = DispatchQueue(
+                label: "com.meetingtranscriber.persistent-log-streamer.restart",
+            )
 
             init(
                 logDirectory: URL = PersistentDiagnosticLog.logDirectory,
                 now: @escaping () -> Date = { Date() },
+                restartPolicy: RestartPolicy = .default,
+                logExecutable: URL = URL(fileURLWithPath: "/usr/bin/log"),
+                logArguments: [String] = [
+                    "stream",
+                    "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
+                    "--style", "syslog",
+                    "--info",
+                ],
             ) throws {
                 self.logDirectory = logDirectory
                 self.now = now
+                self.restartPolicy = restartPolicy
+                self.logExecutable = logExecutable
+                self.logArguments = logArguments
                 let date = now()
                 let target = logDirectory.appendingPathComponent(logFileName(for: date))
                 let fm = FileManager.default
@@ -138,16 +199,29 @@ enum PersistentDiagnosticLog {
             }
 
             func start() throws {
-                guard !isRunning else { return }
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-                process.arguments = [
-                    "stream",
-                    "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
-                    "--style", "syslog",
-                    "--info",
-                ]
+                try restartQueue.sync {
+                    guard !isRunning else { return }
+                    recentFailures.removeAll()
+                    try launchProcess()
+                    isRunning = true
+                }
+            }
+
+            /// Must be called on `restartQueue`. Recreates `process`/`pipe`
+            /// (Process is single-shot — once exited, can't be relaunched).
+            private func launchProcess() throws {
+                process = Process()
+                pipe = Pipe()
+                process.executableURL = logExecutable
+                process.arguments = logArguments
                 process.standardOutput = pipe
                 process.standardError = pipe
+                process.terminationHandler = { [weak self] proc in
+                    self?.handleProcessExit(
+                        reason: proc.terminationReason,
+                        status: proc.terminationStatus,
+                    )
+                }
 
                 let handle = pipe.fileHandleForReading
                 handle.readabilityHandler = { [weak self] fh in
@@ -157,10 +231,52 @@ enum PersistentDiagnosticLog {
                 }
 
                 try process.run()
-                isRunning = true
                 logger.info(
                     "persistent_log_streamer_started pid=\(self.process.processIdentifier, privacy: .public)",
                 )
+            }
+
+            private func handleProcessExit(
+                reason: Process.TerminationReason, status: Int32,
+            ) {
+                restartQueue.async { [weak self] in
+                    guard let self else { return }
+                    // User-initiated stop already flipped `isRunning` and
+                    // detached the handler, so any straggling callback is a
+                    // no-op.
+                    guard self.isRunning else { return }
+
+                    let now = self.now()
+                    let cutoff = now.addingTimeInterval(-self.restartPolicy.window)
+                    self.recentFailures = self.recentFailures.filter { $0 >= cutoff }
+
+                    switch self.restartPolicy.decide(
+                        now: now, recentFailures: self.recentFailures,
+                    ) {
+                    case .giveUp:
+                        logger.error(
+                            "persistent_log_streamer_gave_up failures=\(self.recentFailures.count, privacy: .public)",
+                        )
+                        self.isRunning = false
+
+                    case let .restart(delay):
+                        logger.warning(
+                            "persistent_log_streamer_restarting reason=\(reason.rawValue, privacy: .public) status=\(status, privacy: .public) delay=\(delay, privacy: .public)",
+                        )
+                        self.recentFailures.append(now)
+                        self.restartQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                            guard let self, self.isRunning else { return }
+                            do {
+                                try self.launchProcess()
+                            } catch {
+                                logger.error(
+                                    "persistent_log_streamer_relaunch_failed error=\(error.localizedDescription, privacy: .public)",
+                                )
+                                self.isRunning = false
+                            }
+                        }
+                    }
+                }
             }
 
             /// Append `data` to the current day's file, rotating to the new
@@ -192,19 +308,27 @@ enum PersistentDiagnosticLog {
             }
 
             func stop() {
-                guard isRunning else { return }
-                process.terminate()
-                // Detach the readability callback before closing the file
-                // handle — otherwise a late callback could write to a
-                // recycled FD.
-                pipe.fileHandleForReading.readabilityHandler = nil
-                try? logFileHandle.close()
-                isRunning = false
-                logger.info("persistent_log_streamer_stopped")
+                restartQueue.sync {
+                    guard isRunning else { return }
+                    isRunning = false
+                    // Drop the termination handler before terminate so the
+                    // resulting exit isn't mistaken for an unexpected crash —
+                    // belt-and-suspenders alongside the `isRunning` check in
+                    // `handleProcessExit`.
+                    process.terminationHandler = nil
+                    process.terminate()
+                    // Detach the readability callback before closing the file
+                    // handle — otherwise a late callback could write to a
+                    // recycled FD.
+                    pipe.fileHandleForReading.readabilityHandler = nil
+                    try? logFileHandle.close()
+                    logger.info("persistent_log_streamer_stopped")
+                }
             }
 
             deinit {
                 if isRunning {
+                    process.terminationHandler = nil
                     process.terminate()
                     pipe.fileHandleForReading.readabilityHandler = nil
                     try? logFileHandle.close()
