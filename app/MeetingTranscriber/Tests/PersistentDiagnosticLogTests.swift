@@ -2,6 +2,51 @@
 import XCTest
 
 final class PersistentDiagnosticLogTests: XCTestCase {
+    // MARK: - RestartPolicy
+
+    func test_restartPolicy_emptyHistory_restartsImmediately() {
+        let policy = RestartPolicy(maxFailuresInWindow: 5, window: 60, maxBackoff: 30)
+        let now = Date()
+        XCTAssertEqual(policy.decide(now: now, recentFailures: []), .restart(after: 1))
+    }
+
+    func test_restartPolicy_oneRecentFailure_doublesBackoff() {
+        let policy = RestartPolicy(maxFailuresInWindow: 5, window: 60, maxBackoff: 30)
+        let now = Date()
+        let recent = [now.addingTimeInterval(-5)]
+        XCTAssertEqual(policy.decide(now: now, recentFailures: recent), .restart(after: 2))
+    }
+
+    func test_restartPolicy_fourFailures_uses16sBackoff() {
+        let policy = RestartPolicy(maxFailuresInWindow: 5, window: 60, maxBackoff: 30)
+        let now = Date()
+        let recent = (1 ... 4).map { now.addingTimeInterval(-Double($0)) }
+        XCTAssertEqual(policy.decide(now: now, recentFailures: recent), .restart(after: 16))
+    }
+
+    func test_restartPolicy_atMaxFailures_givesUp() {
+        let policy = RestartPolicy(maxFailuresInWindow: 5, window: 60, maxBackoff: 30)
+        let now = Date()
+        let recent = (1 ... 5).map { now.addingTimeInterval(-Double($0)) }
+        XCTAssertEqual(policy.decide(now: now, recentFailures: recent), .giveUp)
+    }
+
+    func test_restartPolicy_failuresOutsideWindow_areIgnored() {
+        let policy = RestartPolicy(maxFailuresInWindow: 5, window: 60, maxBackoff: 30)
+        let now = Date()
+        let stale = (1 ... 10).map { now.addingTimeInterval(-Double($0) - 60) }
+        XCTAssertEqual(policy.decide(now: now, recentFailures: stale), .restart(after: 1))
+    }
+
+    func test_restartPolicy_backoffCappedAtMaxBackoff() {
+        let policy = RestartPolicy(maxFailuresInWindow: 100, window: 60, maxBackoff: 5)
+        let now = Date()
+        let recent = (1 ... 10).map { now.addingTimeInterval(-Double($0)) }
+        XCTAssertEqual(policy.decide(now: now, recentFailures: recent), .restart(after: 5))
+    }
+
+    // MARK: - Static helpers
+
     func test_logFileName_isYYYYMMDD() {
         let date = ISO8601DateFormatter().date(from: "2026-05-04T12:00:00Z") ?? Date()
         XCTAssertEqual(
@@ -160,6 +205,73 @@ final class PersistentDiagnosticLogTests: XCTestCase {
             // Old file kept being writable — entry landed there, not dropped.
             let day1 = tmp.appendingPathComponent("diagnostics-2026-05-04.log")
             XCTAssertEqual(try String(contentsOf: day1), "before\nafter\n")
+        }
+
+        // MARK: - Streamer auto-restart
+
+        /// Wait for `condition` to become true, polling every 20 ms, up to
+        /// `timeout` seconds. Returns the final value. Used instead of a
+        /// fixed `Thread.sleep` so the test exits as soon as the streamer's
+        /// state settles instead of always paying the worst-case wait.
+        private func waitForCondition(
+            timeout: TimeInterval,
+            _ condition: () -> Bool,
+        ) -> Bool {
+            let deadline = Date().addingTimeInterval(timeout)
+            while Date() < deadline {
+                if condition() { return true }
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            return condition()
+        }
+
+        /// `/usr/bin/false` exits immediately with status 1 — a reliable
+        /// crash-stub for the auto-restart path that doesn't need a real
+        /// `log` daemon. Combined with `maxBackoff = 0.01` the whole loop
+        /// completes in well under a second.
+        func test_streamer_givesUpAfterRepeatedUnexpectedExits() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerRestart")
+            let policy = RestartPolicy(
+                maxFailuresInWindow: 3, window: 60, maxBackoff: 0.01,
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                restartPolicy: policy,
+                logExecutable: URL(fileURLWithPath: "/usr/bin/false"),
+                logArguments: [],
+            )
+            try streamer.start()
+            XCTAssertTrue(streamer.isRunning)
+
+            XCTAssertTrue(
+                waitForCondition(timeout: 2.0) { !streamer.isRunning },
+                "Streamer should have given up after 3 failures",
+            )
+        }
+
+        /// `stop()` must short-circuit any pending relaunch; otherwise an
+        /// `asyncAfter` enqueued during the restart loop could fire after
+        /// the test (and the `Streamer`) is gone, writing to a freed FD.
+        func test_streamer_stopDuringRestartLoopIsCleanlyTerminated() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerStopMidRestart")
+            let policy = RestartPolicy(
+                maxFailuresInWindow: 100, window: 60, maxBackoff: 0.05,
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                restartPolicy: policy,
+                logExecutable: URL(fileURLWithPath: "/usr/bin/false"),
+                logArguments: [],
+            )
+            try streamer.start()
+            // Let the restart loop iterate at least once before pulling the rug.
+            Thread.sleep(forTimeInterval: 0.1)
+            streamer.stop()
+            XCTAssertFalse(streamer.isRunning)
+            // Give any in-flight `asyncAfter` a chance to fire — it must
+            // observe `isRunning == false` and bail.
+            Thread.sleep(forTimeInterval: 0.2)
+            XCTAssertFalse(streamer.isRunning)
         }
     #endif
 }
