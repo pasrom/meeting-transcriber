@@ -70,22 +70,25 @@ struct RecognitionStatsView: View {
     }
 
     private func statRow(_ action: RecognitionAction, count: Int, total: Int) -> some View {
-        LabeledContent(action.rawValue.capitalized) {
-            statRowDetail(count: count, total: total)
+        let pct = Int((Double(count) / Double(total) * 100).rounded())
+        return LabeledContent(action.rawValue.capitalized) {
+            HStack(spacing: 8) {
+                Text("\(count)")
+                pctLabel(pct)
+                progressBar(count: count, total: total)
+            }
         }
     }
 
-    @ViewBuilder
-    private func statRowDetail(count: Int, total: Int) -> some View {
-        let pct = Int((Double(count) / Double(total) * 100).rounded())
-        HStack(spacing: 8) {
-            Text("\(count)")
-            Text("(\(pct)%)")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            ProgressView(value: Double(count), total: Double(total))
-                .frame(width: 80)
-        }
+    private func pctLabel(_ pct: Int) -> some View {
+        Text("(\(pct)%)")
+            .foregroundStyle(.secondary)
+            .font(.caption)
+    }
+
+    private func progressBar(count: Int, total: Int) -> some View {
+        ProgressView(value: Double(count), total: Double(total))
+            .frame(width: 80)
     }
 
     private func reload() async {
