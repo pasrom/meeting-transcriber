@@ -13,8 +13,8 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     /// Avoids `swift test --parallel` plist races AND prevents test pollution
     /// from leaking into the dev app's `.standard` plist when a test process
     /// is killed before tearDown runs.
-    override func setUp() {
-        super.setUp()
+    override func setUp() async throws {
+        try await super.setUp()
         testSuiteName = "SettingsViewTests-\(getpid())-\(UUID().uuidString)"
         guard let suite = UserDefaults(suiteName: testSuiteName) else {
             XCTFail("Could not create test UserDefaults suite")
@@ -23,11 +23,11 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         defaults = suite
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         defaults?.removePersistentDomain(forName: testSuiteName)
         defaults = nil
         testSuiteName = nil
-        super.tearDown()
+        try await super.tearDown()
     }
 
     // MARK: - Helpers
