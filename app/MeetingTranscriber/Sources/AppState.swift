@@ -425,6 +425,7 @@ final class AppState {
     private func syncLanguageSettings() {
         if settings.transcriptionEngine == .whisperKit {
             whisperKit.language = settings.whisperLanguageOrNil
+            whisperKit.customVocabularyPath = settings.customVocabularyPath
         }
         if settings.transcriptionEngine == .parakeet {
             parakeetEngine.customVocabularyPath = settings.customVocabularyPath

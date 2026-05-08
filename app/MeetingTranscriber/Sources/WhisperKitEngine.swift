@@ -42,12 +42,25 @@ extension TimestampedSegment {
 final class WhisperKitEngine: TranscribingEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
     var language: String?
+    /// Path to a newline-separated vocabulary file. Empty disables biasing.
+    /// Read in `transcribeSegments` to build `DecodingOptions.promptTokens`.
+    var customVocabularyPath: String = ""
     private(set) var modelState: ModelState = .unloaded
     private(set) var downloadProgress: Double = 0
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
     private var loadingTask: Task<Void, Never>?
+
+    /// Cached prompt tokens for `DecodingOptions.promptTokens`. Refreshed
+    /// when `customVocabularyPath` changes since last transcription. Empty
+    /// means "no biasing" — translated to `nil` at the `DecodingOptions` call.
+    private var cachedPromptTokens: [Int] = []
+    private var lastTokenizedVocabularyPath: String = ""
+
+    /// Whisper's prompt context is bounded; 224 leaves headroom under the
+    /// 448-token total context for prefix + audio. Matches OpenAI guidance.
+    static let maxPromptTokens = 224
 
     func loadModel() async {
         // Deduplicate concurrent loads
@@ -120,9 +133,12 @@ final class WhisperKitEngine: TranscribingEngine {
         // Estimate total 30s windows from audio duration
         let totalWindows = max(1, Self.estimateWindowCount(audioPath: audioPath))
 
+        refreshVocabularyTokensIfNeeded(tokenizer: pipe.tokenizer)
+
         let options = DecodingOptions(
             language: language,
             wordTimestamps: false,
+            promptTokens: cachedPromptTokens.isEmpty ? nil : cachedPromptTokens,
         )
 
         let results = await pipe.transcribe(
@@ -170,6 +186,52 @@ final class WhisperKitEngine: TranscribingEngine {
     /// Remove Whisper special tokens like <|startoftranscript|>, <|en|>, <|0.00|>, etc.
     static func stripWhisperTokens(_ text: String) -> String {
         text.replacingOccurrences(of: #"<\|[^|]*\|>"#, with: "", options: .regularExpression)
+    }
+
+    /// Read a newline-separated vocabulary file into trimmed, non-empty terms.
+    /// Returns `[]` for empty/missing paths (no biasing — silently skipped).
+    nonisolated static func parseVocabulary(from path: String) -> [String] {
+        guard !path.isEmpty,
+              let content = try? String(contentsOfFile: path, encoding: .utf8)
+        else { return [] }
+        return content.split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Compose a Whisper prompt phrase from `terms`. Whisper uses the prompt
+    /// as transcript-style context, so framing it as "Glossary: …" gives the
+    /// decoder a stable hint without hijacking the output language.
+    nonisolated static func makeVocabularyPrompt(terms: [String]) -> String? {
+        guard !terms.isEmpty else { return nil }
+        return "Glossary: " + terms.joined(separator: ", ")
+    }
+
+    /// Truncate `tokens` to `maxLength`, keeping the head. Whisper's prompt
+    /// context is bounded; if the vocab tokenises past the cap we drop the
+    /// tail rather than refusing to set any prompt at all.
+    nonisolated static func clampTokens(_ tokens: [Int], maxLength: Int) -> [Int] {
+        guard tokens.count > maxLength else { return tokens }
+        return Array(tokens.prefix(maxLength))
+    }
+
+    private func refreshVocabularyTokensIfNeeded(tokenizer: (any WhisperTokenizer)?) {
+        guard customVocabularyPath != lastTokenizedVocabularyPath else { return }
+        lastTokenizedVocabularyPath = customVocabularyPath
+
+        let terms = Self.parseVocabulary(from: customVocabularyPath)
+        guard let prompt = Self.makeVocabularyPrompt(terms: terms),
+              let tokenizer
+        else {
+            cachedPromptTokens = []
+            return
+        }
+        // Leading space matches Whisper's BPE expectations for prompt text.
+        let raw = tokenizer.encode(text: " " + prompt)
+        cachedPromptTokens = Self.clampTokens(raw, maxLength: Self.maxPromptTokens)
+        logger.info(
+            "WhisperKit: vocabulary loaded terms=\(terms.count, privacy: .public) tokens=\(self.cachedPromptTokens.count, privacy: .public)",
+        )
     }
 }
 

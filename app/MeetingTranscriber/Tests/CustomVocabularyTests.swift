@@ -80,4 +80,62 @@ final class CustomVocabularyTests: XCTestCase {
         // Should not throw for missing file — just logs a warning
         try await engine.configureVocabulary(from: "/nonexistent/vocab.txt")
     }
+
+    // MARK: - WhisperKitEngine vocabulary parsing
+
+    @MainActor
+    func testWhisperKitEngineHasCustomVocabularyPath() {
+        let engine = WhisperKitEngine()
+        XCTAssertEqual(engine.customVocabularyPath, "")
+    }
+
+    func testParseVocabulary_returnsEmptyForEmptyPath() {
+        XCTAssertEqual(WhisperKitEngine.parseVocabulary(from: ""), [])
+    }
+
+    func testParseVocabulary_returnsEmptyForMissingFile() {
+        XCTAssertEqual(
+            WhisperKitEngine.parseVocabulary(from: "/nonexistent/vocab.txt"),
+            [],
+        )
+    }
+
+    func testParseVocabulary_splitsLinesAndTrimsWhitespace() throws {
+        let url = makeTempFile(suffix: ".txt")
+        try "  Klaus-Dieter\n CATapDescription \n\n  pasrom \n".write(
+            to: url, atomically: true, encoding: .utf8,
+        )
+        XCTAssertEqual(
+            WhisperKitEngine.parseVocabulary(from: url.path),
+            ["Klaus-Dieter", "CATapDescription", "pasrom"],
+        )
+    }
+
+    func testMakeVocabularyPrompt_isNilForEmptyTerms() {
+        XCTAssertNil(WhisperKitEngine.makeVocabularyPrompt(terms: []))
+    }
+
+    func testMakeVocabularyPrompt_joinsTermsWithCommaPrefix() {
+        XCTAssertEqual(
+            WhisperKitEngine.makeVocabularyPrompt(
+                terms: ["Klaus-Dieter", "CATapDescription"],
+            ),
+            "Glossary: Klaus-Dieter, CATapDescription",
+        )
+    }
+
+    func testClampTokens_returnsArrayUnchangedWhenUnderLimit() {
+        XCTAssertEqual(
+            WhisperKitEngine.clampTokens([1, 2, 3], maxLength: 224),
+            [1, 2, 3],
+        )
+    }
+
+    func testClampTokens_truncatesToMaxLength() {
+        let tokens = Array(0 ..< 300)
+        let clamped = WhisperKitEngine.clampTokens(tokens, maxLength: 224)
+        XCTAssertEqual(clamped.count, 224)
+        XCTAssertEqual(clamped.first, 0)
+        XCTAssertEqual(clamped.last, 223)
+    }
 }
