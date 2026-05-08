@@ -160,7 +160,13 @@ enum PersistentDiagnosticLog {
             private let now: () -> Date
             private var logFileHandle: FileHandle
             private var openedDateString: String
-            private(set) var isRunning = false
+            private var _isRunning = false
+            /// Thread-safe view of the running flag. External readers (tests,
+            /// `AppState`) hit the queue-synchronised accessor; internal code
+            /// already runs on `restartQueue` and uses `_isRunning` directly.
+            var isRunning: Bool {
+                restartQueue.sync { _isRunning }
+            }
 
             private let logExecutable: URL
             private let logArguments: [String]
@@ -200,10 +206,10 @@ enum PersistentDiagnosticLog {
 
             func start() throws {
                 try restartQueue.sync {
-                    guard !isRunning else { return }
+                    guard !_isRunning else { return }
                     recentFailures.removeAll()
                     try launchProcess()
-                    isRunning = true
+                    _isRunning = true
                 }
             }
 
@@ -241,10 +247,10 @@ enum PersistentDiagnosticLog {
             ) {
                 restartQueue.async { [weak self] in
                     guard let self else { return }
-                    // User-initiated stop already flipped `isRunning` and
+                    // User-initiated stop already flipped `_isRunning` and
                     // detached the handler, so any straggling callback is a
                     // no-op.
-                    guard self.isRunning else { return }
+                    guard self._isRunning else { return }
 
                     let now = self.now()
                     let cutoff = now.addingTimeInterval(-self.restartPolicy.window)
@@ -257,7 +263,7 @@ enum PersistentDiagnosticLog {
                         logger.error(
                             "persistent_log_streamer_gave_up failures=\(self.recentFailures.count, privacy: .public)",
                         )
-                        self.isRunning = false
+                        self._isRunning = false
 
                     case let .restart(delay):
                         logger.warning(
@@ -265,14 +271,14 @@ enum PersistentDiagnosticLog {
                         )
                         self.recentFailures.append(now)
                         self.restartQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                            guard let self, self.isRunning else { return }
+                            guard let self, self._isRunning else { return }
                             do {
                                 try self.launchProcess()
                             } catch {
                                 logger.error(
                                     "persistent_log_streamer_relaunch_failed error=\(error.localizedDescription, privacy: .public)",
                                 )
-                                self.isRunning = false
+                                self._isRunning = false
                             }
                         }
                     }
@@ -309,8 +315,8 @@ enum PersistentDiagnosticLog {
 
             func stop() {
                 restartQueue.sync {
-                    guard isRunning else { return }
-                    isRunning = false
+                    guard _isRunning else { return }
+                    _isRunning = false
                     // Drop the termination handler before terminate so the
                     // resulting exit isn't mistaken for an unexpected crash —
                     // belt-and-suspenders alongside the `isRunning` check in
@@ -327,7 +333,9 @@ enum PersistentDiagnosticLog {
             }
 
             deinit {
-                if isRunning {
+                // ARC guarantees no other method is executing against `self`
+                // once deinit starts, so `_isRunning` is race-free here.
+                if _isRunning {
                     process.terminationHandler = nil
                     process.terminate()
                     pipe.fileHandleForReading.readabilityHandler = nil
