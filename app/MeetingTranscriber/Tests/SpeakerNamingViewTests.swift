@@ -2,6 +2,7 @@
 import ViewInspector
 import XCTest
 
+@MainActor
 final class SpeakerNamingViewTests: XCTestCase {
     // MARK: - Helpers
 
