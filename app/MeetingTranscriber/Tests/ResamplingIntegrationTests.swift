@@ -2,19 +2,13 @@ import AVFoundation
 @testable import MeetingTranscriber
 import XCTest
 
-final class ResamplingIntegrationTests: XCTestCase {
+final class ResamplingIntegrationTests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var tmpDir: URL!
 
     override func setUp() async throws {
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("resample_integ_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-    }
-
-    // swiftlint:disable:next unneeded_throws_rethrows
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: tmpDir)
+        try await super.setUp()
+        tmpDir = try makeTempDirectory(prefix: "resample_integ")
     }
 
     private func fixtureURL(_ name: String) -> URL {

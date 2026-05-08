@@ -5,28 +5,19 @@ import XCTest
 // MARK: - Tests
 
 @MainActor
-final class WatchLoopE2ETests: XCTestCase {
+final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var tmpDir: URL!
 
     override func setUp() async throws {
         try await super.setUp()
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("watchloop_e2e_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        tmpDir = try makeTempDirectory(prefix: "watchloop_e2e")
 
         // Ensure recordingsDir exists (handleMeeting writes intermediate 16kHz files there)
         try FileManager.default.createDirectory(
             at: DualSourceRecorder.recordingsDir,
             withIntermediateDirectories: true,
         )
-    }
-
-    override func tearDown() async throws {
-        if let tmpDir, FileManager.default.fileExists(atPath: tmpDir.path) {
-            try? FileManager.default.removeItem(at: tmpDir)
-        }
-        try await super.tearDown()
     }
 
     // MARK: - Helpers

@@ -3,7 +3,7 @@
 import XCTest
 
 @MainActor
-// swiftlint:disable:next attributes type_body_length
+// swiftlint:disable:next attributes type_body_length balanced_xctest_lifecycle
 final class PipelineQueueTests: XCTestCase {
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
@@ -11,15 +11,9 @@ final class PipelineQueueTests: XCTestCase {
     // swiftlint:enable implicitly_unwrapped_optional
 
     override func setUp() async throws {
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pipeline_queue_test_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        try await super.setUp()
+        tmpDir = try makeTempDirectory(prefix: "pipeline_queue_test")
         queue = PipelineQueue(logDir: tmpDir)
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: tmpDir)
-        try await super.tearDown()
     }
 
     private func makeJob(title: String = "Test Meeting") -> PipelineJob {

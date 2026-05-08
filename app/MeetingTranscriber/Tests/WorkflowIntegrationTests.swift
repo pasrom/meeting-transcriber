@@ -2,19 +2,13 @@
 import XCTest
 
 @MainActor
-final class WorkflowIntegrationTests: XCTestCase {
+final class WorkflowIntegrationTests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var tmpDir: URL!
 
     override func setUp() async throws {
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("workflow_test_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-    }
-
-    // swiftlint:disable:next unneeded_throws_rethrows
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: tmpDir)
+        try await super.setUp()
+        tmpDir = try makeTempDirectory(prefix: "workflow_test")
     }
 
     // MARK: - Harness

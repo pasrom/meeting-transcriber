@@ -2,7 +2,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
-// swiftlint:disable:next type_body_length
+// swiftlint:disable:next type_body_length balanced_xctest_lifecycle
 final class SpeakerMatcherTests: XCTestCase {
     /// Fixed reference timestamp used by recency-tracking tests so assertions
     /// don't depend on wall-clock time.
@@ -13,15 +13,9 @@ final class SpeakerMatcherTests: XCTestCase {
     private var dbPath: URL!
     // swiftlint:enable implicitly_unwrapped_optional
 
-    override func setUp() {
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("SpeakerMatcherTests-\(UUID().uuidString)")
-        try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true) // swiftlint:disable:this force_try
+    override func setUpWithError() throws {
+        tmpDir = try makeTempDirectory(prefix: "SpeakerMatcherTests")
         dbPath = tmpDir.appendingPathComponent("speakers.json")
-    }
-
-    override func tearDown() {
-        try? FileManager.default.removeItem(at: tmpDir)
     }
 
     // MARK: - Cosine distance
