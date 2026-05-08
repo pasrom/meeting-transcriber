@@ -5,6 +5,17 @@ on:
     branches: [main, mac]
   pull_request:
     branches: [main]
+  # Nightly sanitizer sweep on main — TSan/ASan are too expensive to run on
+  # every PR, so we run them once a day instead. Catches regressions within
+  # ~24 h, which is acceptable for a solo project.
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC = 05:00 CEST
+  workflow_dispatch:
+    inputs:
+      run-sanitizer:
+        description: "Run TSan/ASan matrix variants for this run"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -139,6 +150,68 @@ jobs:
         run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests ${{ matrix.swift-flags }}
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # Sanitizers are expensive (TSan ~10-15 min, ASan ~7-10 min on macos-26).
+  # Skip on PRs to keep review fast; cover via push to main, nightly cron,
+  # and explicit manual dispatch (`gh workflow run ci.yml -f run-sanitizer=true`).
+  # ASan + TSan can't run in the same process, so they live as separate legs.
+  test-sanitizer:
+    needs: changes
+    if: |
+      needs.changes.outputs.code == 'true' && (
+        github.event_name == 'push' ||
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
+      )
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      matrix:
+        variant: [tsan, asan]
+        include:
+          # ThreadSanitizer catches races the static @Sendable checker can't
+          # see — C-pointer shared state, GCD-callback closures over class
+          # properties.
+          - variant: tsan
+            sanitizer-flag: "--sanitize=thread"
+          # AddressSanitizer covers the Pointer-heavy code paths Swift's ARC
+          # can't help with — AudioTapLib's CATapDescription / IOProc, the
+          # `withUnsafePointer` slabs in audio mixing, and any C-imported
+          # framework boundary.
+          - variant: asan
+            sanitizer-flag: "--sanitize=address"
+    name: test (${{ matrix.variant }})
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache SPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: app/MeetingTranscriber/.build
+          key: spm-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
+      - name: Cache ML models
+        id: model-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Documents/huggingface
+            ~/Library/Application Support/FluidAudio
+          key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
+          restore-keys: ml-models-${{ runner.os }}-
+      - name: Pre-warm model cache (cache miss only)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests
+      - name: Swift tests
+        run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
         if: failure()
         continue-on-error: true
