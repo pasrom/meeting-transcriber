@@ -3,7 +3,7 @@ import Foundation
 import WhisperKit
 import XCTest
 
-// MARK: - Temp-Directory Helper
+// MARK: - Temp-Directory / Temp-File Helpers
 
 extension XCTestCase {
     /// Create a unique temp directory under `FileManager.default.temporaryDirectory`
@@ -17,6 +17,33 @@ extension XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         return url
+    }
+
+    /// Reserve a unique temp file URL under `FileManager.default.temporaryDirectory`
+    /// and register an automatic cleanup with `addTeardownBlock`. The file is
+    /// NOT pre-created — only the URL is reserved.
+    /// `suffix` typically includes the extension, e.g. `".wav"`.
+    func makeTempFile(suffix: String) -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(UUID().uuidString)\(suffix)")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
+    }
+}
+
+// MARK: - Fixture URL Helper
+
+extension XCTestCase {
+    /// Resolve a fixture file in `Tests/Fixtures/` relative to TestHelpers.swift.
+    /// All callers share the same Fixtures dir. The default `two_speakers_de.wav`
+    /// is the canonical German two-speaker fixture used by ASR-engine E2E tests.
+    func fixtureURL(_ name: String = "two_speakers_de.wav") -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures")
+            .appendingPathComponent(name)
     }
 }
 

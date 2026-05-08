@@ -367,13 +367,4 @@ final class WhisperKitE2ETests: XCTestCase {
         assertTranscriptContent(m4aTranscript, format: "M4A")
         assertTranscriptContent(mp4Transcript, format: "MP4")
     }
-
-    // MARK: - Helpers
-
-    private func fixtureURL(_ name: String = "two_speakers_de.wav") -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Tests/
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent(name)
-    }
 }

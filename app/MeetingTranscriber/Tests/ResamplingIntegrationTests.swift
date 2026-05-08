@@ -11,13 +11,6 @@ final class ResamplingIntegrationTests: XCTestCase { // swiftlint:disable:this b
         tmpDir = try makeTempDirectory(prefix: "resample_integ")
     }
 
-    private func fixtureURL(_ name: String) -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent(name)
-    }
-
     /// Copy a fixture into the test's tmpDir. Use for pipeline tests because
     /// `PipelineQueue.copyAudioToOutput` moves the source file out of place —
     /// passing the original Fixtures/ path would delete the shared asset.

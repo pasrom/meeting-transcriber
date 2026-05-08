@@ -22,13 +22,6 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
 
     // MARK: - Helpers
 
-    private func fixtureURL() -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Tests/
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent("two_speakers_de.wav")
-    }
-
     /// Upsample the fixture to 48kHz to simulate DualSourceRecorder output, save to tmpDir.
     private func prepare48kHzFixture(name: String = "mix.wav") throws -> URL {
         let fixture = fixtureURL()

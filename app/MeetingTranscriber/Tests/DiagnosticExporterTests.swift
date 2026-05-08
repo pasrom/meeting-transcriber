@@ -108,14 +108,8 @@ final class DiagnosticExporterTests: XCTestCase {
     // MARK: - exportFromFile
 
     func test_exportFromFile_writesHeaderPlusBody_withinWindow() throws {
-        let tmpSrc = FileManager.default.temporaryDirectory
-            .appendingPathComponent("src-\(UUID().uuidString).log")
-        let tmpDst = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dst-\(UUID().uuidString).log")
-        defer {
-            try? FileManager.default.removeItem(at: tmpSrc)
-            try? FileManager.default.removeItem(at: tmpDst)
-        }
+        let tmpSrc = makeTempFile(suffix: ".log")
+        let tmpDst = makeTempFile(suffix: ".log")
         let now = Date()
         let fmt = DateFormatter()
         fmt.dateFormat = "MMM d HH:mm:ss"
@@ -140,14 +134,8 @@ final class DiagnosticExporterTests: XCTestCase {
     }
 
     func test_exportFromFile_filtersOutEntriesOlderThanWindow() throws {
-        let tmpSrc = FileManager.default.temporaryDirectory
-            .appendingPathComponent("src-\(UUID().uuidString).log")
-        let tmpDst = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dst-\(UUID().uuidString).log")
-        defer {
-            try? FileManager.default.removeItem(at: tmpSrc)
-            try? FileManager.default.removeItem(at: tmpDst)
-        }
+        let tmpSrc = makeTempFile(suffix: ".log")
+        let tmpDst = makeTempFile(suffix: ".log")
         let fmt = DateFormatter()
         fmt.dateFormat = "MMM d HH:mm:ss"
         fmt.locale = Locale(identifier: "en_US_POSIX")
@@ -177,11 +165,8 @@ final class DiagnosticExporterTests: XCTestCase {
     }
 
     func test_exportFromFile_missingSource_writesHeaderOnly() throws {
-        let bogusSrc = FileManager.default.temporaryDirectory
-            .appendingPathComponent("missing-\(UUID().uuidString).log")
-        let tmpDst = FileManager.default.temporaryDirectory
-            .appendingPathComponent("dst-\(UUID().uuidString).log")
-        defer { try? FileManager.default.removeItem(at: tmpDst) }
+        let bogusSrc = makeTempFile(suffix: ".log")
+        let tmpDst = makeTempFile(suffix: ".log")
 
         let info = DiagnosticExporter.HeaderInfo(
             appVersion: "1.0", commit: "abc", macOSVersion: "14.5", settings: [:],

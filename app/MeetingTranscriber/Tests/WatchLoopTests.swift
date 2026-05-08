@@ -365,10 +365,7 @@ final class WatchLoopTests: XCTestCase {
 
     func test_recordOnly_writesSidecarAndDoesNotEnqueue() async throws {
         let queue = PipelineQueue()
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recordOnly_\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = try makeTempDirectory(prefix: "recordOnly")
 
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
         let appURL = tmp.appendingPathComponent("20260503_120000_app.wav")
@@ -423,10 +420,8 @@ final class WatchLoopTests: XCTestCase {
         // `/dev/null` is not a directory — createDirectory(at:) will throw,
         // exercising the failure path.
         let unwritable = URL(fileURLWithPath: "/dev/null/cannot-write")
-        let mixURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(UUID().uuidString)_mix.wav")
+        let mixURL = makeTempFile(suffix: "_mix.wav")
         try Data().write(to: mixURL)
-        defer { try? FileManager.default.removeItem(at: mixURL) }
         let notifier = RecordingNotifier()
 
         let queue = PipelineQueue()
@@ -445,10 +440,7 @@ final class WatchLoopTests: XCTestCase {
 
     func test_normalMode_enqueuesAndWritesNoSidecar() async throws {
         let queue = PipelineQueue()
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("normalMode_\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = try makeTempDirectory(prefix: "normalMode")
 
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
         try Data().write(to: mixURL)
