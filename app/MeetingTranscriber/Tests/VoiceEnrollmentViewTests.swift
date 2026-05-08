@@ -3,7 +3,7 @@ import ViewInspector
 import XCTest
 
 @MainActor
-final class VoiceEnrollmentViewTests: XCTestCase {
+final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle
     // swiftlint:disable implicitly_unwrapped_optional
     private var tmpDir: URL!
     private var dbPath: URL!
@@ -11,15 +11,8 @@ final class VoiceEnrollmentViewTests: XCTestCase {
 
     override func setUp() async throws {
         try await super.setUp()
-        tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VoiceEnrollmentViewTests-\(UUID().uuidString)")
-        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        tmpDir = try makeTempDirectory(prefix: "VoiceEnrollmentViewTests")
         dbPath = tmpDir.appendingPathComponent("speakers.json")
-    }
-
-    override func tearDown() async throws {
-        try? FileManager.default.removeItem(at: tmpDir)
-        try await super.tearDown()
     }
 
     func testRendersInPickFileStage() throws {
