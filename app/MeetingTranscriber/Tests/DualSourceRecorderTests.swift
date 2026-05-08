@@ -13,10 +13,7 @@ final class DualSourceRecorderTests: XCTestCase {
     // MARK: - Cleanup Temp Files
 
     func testCleanupRemovesTmpButNotWav() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("cleanup_test_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "cleanup_test")
 
         let tmpFile = tmpDir.appendingPathComponent("20260311_100000_app_raw.tmp")
         let wavFile = tmpDir.appendingPathComponent("20260311_100000_mix.wav")
@@ -151,9 +148,7 @@ final class DualSourceRecorderTests: XCTestCase {
     // MARK: - Cleanup Edge Cases
 
     func testCleanupMultipleTmpFiles() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup_multi_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "cleanup_multi")
 
         let tmp1 = tmpDir.appendingPathComponent("20260311_100000_app_raw.tmp")
         let tmp2 = tmpDir.appendingPathComponent("20260311_110000_app_raw.tmp")
@@ -175,9 +170,7 @@ final class DualSourceRecorderTests: XCTestCase {
     }
 
     func testCleanupEmptyDirectory() throws {
-        let tmpDir = FileManager.default.temporaryDirectory.appendingPathComponent("cleanup_empty_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "cleanup_empty")
         DualSourceRecorder.cleanupTempFiles(recordingsDir: tmpDir)
     }
 
@@ -187,10 +180,7 @@ final class DualSourceRecorderTests: XCTestCase {
     /// instead of raw device-rate samples. Regression test for the bug where 48kHz samples
     /// were saved with a 16kHz header, producing a file 3× too long.
     func testMixFallbackWithoutMicUsesResampledSamples() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mix_fallback_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "mix_fallback")
 
         // Simulate 1 second of 48kHz mono app audio (captured by CATapDescription)
         let deviceRate = 48000

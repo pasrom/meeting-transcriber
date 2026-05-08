@@ -391,10 +391,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     // MARK: - configurePipelineCallbacks
 
     func testConfigurePipelineCallbacksDoneFiresNotification() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("appstate_callbacks_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
         state.configurePipelineCallbacks()
@@ -409,10 +406,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     }
 
     func testConfigurePipelineCallbacksErrorFiresNotification() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("appstate_callbacks_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
         state.configurePipelineCallbacks()
@@ -436,10 +430,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     }
 
     func testConfigurePipelineCallbacksTranscribingNoNotification() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("appstate_callbacks_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
         state.configurePipelineCallbacks()

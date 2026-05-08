@@ -262,10 +262,7 @@ final class WhisperKitE2ETests: XCTestCase {
         }
 
         // Save resampled audio to temp file
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("whisperkit_e2e_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "whisperkit_e2e")
 
         let tmpWAV = tmpDir.appendingPathComponent("resampled_16k.wav")
         try AudioMixer.saveWAV(samples: resampled, sampleRate: targetRate, url: tmpWAV)
@@ -309,10 +306,7 @@ final class WhisperKitE2ETests: XCTestCase {
             "Fixture \(filename) not found",
         )
 
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("multiformat_e2e_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "multiformat_e2e")
 
         // resampleFile uses loadAudioAsFloat32 → AVAudioFile or AVAsset fallback
         let resampled16k = tmpDir.appendingPathComponent("resampled_16k.wav")
