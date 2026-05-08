@@ -1,0 +1,33 @@
+{
+  "fixture": "two_speakers_de",
+  "audio": "two_speakers_de.wav",
+  "duration": 17.02725,
+  "sampleRate": 16000,
+  "text": "Guten Tag, willkommen zum Projekt Meeting. Danke. Ich möchte den aktuellen Status berichten. Sehr gut. Wie läuft die Entwicklung? Die Entwicklung läuft nach Plan. Wir sind im Zeitplan.",
+  "turns": [
+    {
+      "speaker": "A",
+      "start": 0.0,
+      "end": 2.85625,
+      "text": "Guten Tag, willkommen zum Projekt Meeting."
+    },
+    {
+      "speaker": "B",
+      "start": 3.85625,
+      "end": 8.061625,
+      "text": "Danke. Ich möchte den aktuellen Status berichten."
+    },
+    {
+      "speaker": "A",
+      "start": 9.061625,
+      "end": 11.24575,
+      "text": "Sehr gut. Wie läuft die Entwicklung?"
+    },
+    {
+      "speaker": "B",
+      "start": 12.24575,
+      "end": 17.02725,
+      "text": "Die Entwicklung läuft nach Plan. Wir sind im Zeitplan."
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "fixture": "three_speakers_de",
+  "audio": "three_speakers_de.wav",
+  "duration": 29.804938,
+  "sampleRate": 16000,
+  "text": "Guten Tag zusammen. Willkommen zum Sprint Review. Danke Anna. Ich berichte über den Backend Status. Und ich habe ein Update zum Frontend Design. Sehr gut. Flo, bitte fang an mit dem Backend. Die API Entwicklung ist abgeschlossen. Alle Tests sind grün. Das Frontend ist zu achtzig Prozent fertig. Nächste Woche sind wir bereit.",
+  "turns": [
+    {
+      "speaker": "A",
+      "start": 0.0,
+      "end": 3.214625,
+      "text": "Guten Tag zusammen. Willkommen zum Sprint Review."
+    },
+    {
+      "speaker": "B",
+      "start": 4.214625,
+      "end": 8.372063,
+      "text": "Danke Anna. Ich berichte über den Backend Status."
+    },
+    {
+      "speaker": "C",
+      "start": 9.372063,
+      "end": 12.826626,
+      "text": "Und ich habe ein Update zum Frontend Design."
+    },
+    {
+      "speaker": "A",
+      "start": 13.826626,
+      "end": 16.753814,
+      "text": "Sehr gut. Flo, bitte fang an mit dem Backend."
+    },
+    {
+      "speaker": "B",
+      "start": 17.753814,
+      "end": 22.919314,
+      "text": "Die API Entwicklung ist abgeschlossen. Alle Tests sind grün."
+    },
+    {
+      "speaker": "C",
+      "start": 23.919314,
+      "end": 29.804939,
+      "text": "Das Frontend ist zu achtzig Prozent fertig. Nächste Woche sind wir bereit."
+    }
+  ]
+}
