@@ -109,6 +109,7 @@ scripts/
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   test_rpc.sh               # Live smoketest for DebugRPCServer (build + launch + drive via mt-cli + assert)
+  pre-push.sh               # Pre-push parity check: swift build -c release (catches Sendable diagnostics that debug-mode builds tolerate)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
   tests/
     test_build_release_signing.sh  # Regression test for build_release.sh codesign-identity detection
@@ -160,6 +161,10 @@ cd app/MeetingTranscriber && swift test --parallel
 
 # Lint & format auto-fix (SwiftFormat + SwiftLint --fix)
 ./scripts/lint.sh --fix
+
+# Pre-push parity check (release build — catches Sendable diagnostics
+# that debug-mode tolerates; flags App Store variant when --with-appstore)
+./scripts/pre-push.sh
 
 # Build self-contained .app + DMG for distribution (Homebrew)
 ./scripts/build_release.sh
