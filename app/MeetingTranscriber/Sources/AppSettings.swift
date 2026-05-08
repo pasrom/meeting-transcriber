@@ -1,6 +1,11 @@
 import SwiftUI
 
-enum TranscriptionEngineSetting: String, CaseIterable {
+// SwiftFormat strips redundant raw values matching their case name, which then
+// trips SwiftLint's `raw_value_for_camel_cased_codable_enum`; the rawValues
+// already match (the rule is a stability hint, not a behavioral requirement),
+// so disable the lint here rather than fight the formatter.
+enum TranscriptionEngineSetting: String, CaseIterable, Codable {
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case whisperKit
     case parakeet
     case qwen3

@@ -29,6 +29,26 @@
                     knownSpeakerNames: pipelineQueue.knownSpeakerNames,
                 ),
                 pendingNamingJobs: pendingJobs,
+                engines: enginesSnapshot(),
+            )
+        }
+
+        /// Read live engine state. Lets `mt-cli state` (and tests) observe
+        /// settings → engine propagation without running a transcription.
+        private func enginesSnapshot() -> RPCStateSnapshot.Engines {
+            let qwen3State: RPCStateSnapshot.Engines.Qwen3? = if #available(macOS 15, *) {
+                .init(language: qwen3Engine.language)
+            } else {
+                nil
+            }
+            return RPCStateSnapshot.Engines(
+                active: settings.transcriptionEngine,
+                whisperKit: .init(
+                    modelVariant: whisperKit.modelVariant,
+                    language: whisperKit.language,
+                ),
+                parakeet: .init(customVocabularyPath: parakeetEngine.customVocabularyPath),
+                qwen3: qwen3State,
             )
         }
 
