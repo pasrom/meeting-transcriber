@@ -41,10 +41,7 @@ final class PersistentDiagnosticLogTests: XCTestCase {
     // MARK: - cleanup
 
     func test_cleanup_removesExpiredFiles_keepsRecentOnes_doesNotTouchOthers() throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PersistentDiagnosticLogTests-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = try makeTempDirectory(prefix: "PersistentDiagnosticLogTests")
 
         let expiredFile = tmp.appendingPathComponent("diagnostics-2026-04-01.log")
         let recentFile = tmp.appendingPathComponent("diagnostics-2026-05-01.log")
@@ -74,10 +71,7 @@ final class PersistentDiagnosticLogTests: XCTestCase {
     }
 
     func test_cleanup_emptyDirectory_doesNotCrash() throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PersistentDiagnosticLogTests-empty-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = try makeTempDirectory(prefix: "PersistentDiagnosticLogTests-empty")
         PersistentDiagnosticLog.cleanup(in: tmp, retentionDays: 30)
     }
 
@@ -91,10 +85,7 @@ final class PersistentDiagnosticLogTests: XCTestCase {
 
     #if !APPSTORE
         func test_streamer_rotatesToNewFileWhenDayChanges() throws {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: tmp) }
+            let tmp = try makeTempDirectory(prefix: "StreamerRotation")
 
             var clock = try XCTUnwrap(
                 ISO8601DateFormatter().date(from: "2026-05-04T23:59:50Z"),
@@ -116,10 +107,7 @@ final class PersistentDiagnosticLogTests: XCTestCase {
         }
 
         func test_streamer_keepsSameFileWhenDayUnchanged() throws {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: tmp) }
+            let tmp = try makeTempDirectory(prefix: "StreamerRotation")
 
             var clock = try XCTUnwrap(
                 ISO8601DateFormatter().date(from: "2026-05-04T08:00:00Z"),
@@ -144,15 +132,13 @@ final class PersistentDiagnosticLogTests: XCTestCase {
         /// fails, every subsequent `append` would write to a closed FD and
         /// silently drop entries.
         func test_streamer_keepsWritingToOldFileWhenRotationOpenFails() throws {
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("StreamerRotation-\(UUID().uuidString)")
-            try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-            defer {
-                // Make the directory writable again so cleanup can remove it.
+            let tmp = try makeTempDirectory(prefix: "StreamerRotation")
+            // Restore writable perms BEFORE makeTempDirectory's removal teardown
+            // runs. addTeardownBlock is LIFO, so this fires first.
+            addTeardownBlock {
                 try? FileManager.default.setAttributes(
                     [.posixPermissions: 0o755], ofItemAtPath: tmp.path,
                 )
-                try? FileManager.default.removeItem(at: tmp)
             }
 
             var clock = try XCTUnwrap(

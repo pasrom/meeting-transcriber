@@ -5,18 +5,14 @@ import XCTest
 @MainActor
 final class RecognitionStatsViewTests: XCTestCase {
     func testViewRendersEmpty() throws {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recognition_log_\(UUID().uuidString).jsonl")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = makeTempFile(suffix: ".jsonl")
 
         let view = RecognitionStatsView(log: RecognitionStatsLog(path: tmp))
         XCTAssertNoThrow(try view.inspect())
     }
 
     func testViewLoadsAggregateFromLog() async {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("recognition_log_\(UUID().uuidString).jsonl")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let tmp = makeTempFile(suffix: ".jsonl")
 
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()

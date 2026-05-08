@@ -156,13 +156,6 @@ final class ParakeetE2ETests: XCTestCase {
         )
     }
 
-    private func fixtureURL(_ name: String = "two_speakers_de.wav") -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent() // Tests/
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent(name)
-    }
-
     /// Resample the 48kHz fixture to a 16kHz temp WAV file for Parakeet.
     private func resampleFixtureToTemp(_ fixture: URL) throws -> URL {
         let tmpDir = try makeTempDirectory(prefix: "parakeet_e2e")

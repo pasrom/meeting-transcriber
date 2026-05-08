@@ -254,22 +254,14 @@ final class ProtocolGeneratorTests: XCTestCase {
 
     // MARK: - Custom Prompt Loading
 
-    /// Unique-per-test prompt file path. Avoids racing on the shared
-    /// `AppPaths.customPromptFile` location under `swift test --parallel`.
-    private func makeTempPromptFile() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("test-prompt-\(UUID().uuidString).md")
-    }
-
     func testLoadPromptReturnsDefaultWhenNoFile() {
-        let url = makeTempPromptFile()
+        let url = makeTempFile(suffix: ".md")
         // File doesn't exist → loadPrompt falls back to the built-in default.
         XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)
     }
 
     func testLoadPromptReadsCustomFile() throws {
-        let url = makeTempPromptFile()
-        defer { try? FileManager.default.removeItem(at: url) }
+        let url = makeTempFile(suffix: ".md")
         let custom = "Custom prompt for testing"
         try custom.write(to: url, atomically: true, encoding: .utf8)
 
@@ -277,16 +269,14 @@ final class ProtocolGeneratorTests: XCTestCase {
     }
 
     func testLoadPromptIgnoresEmptyFile() throws {
-        let url = makeTempPromptFile()
-        defer { try? FileManager.default.removeItem(at: url) }
+        let url = makeTempFile(suffix: ".md")
         try "".write(to: url, atomically: true, encoding: .utf8)
 
         XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)
     }
 
     func testLoadPromptIgnoresWhitespaceOnlyFile() throws {
-        let url = makeTempPromptFile()
-        defer { try? FileManager.default.removeItem(at: url) }
+        let url = makeTempFile(suffix: ".md")
         try "   \n  \n  ".write(to: url, atomically: true, encoding: .utf8)
 
         XCTAssertEqual(ProtocolGenerator.loadPrompt(from: url), ProtocolGenerator.protocolPrompt)

@@ -30,13 +30,6 @@ final class FFmpegHelperTests: XCTestCase {
 
     // MARK: - Audio Loading from Fixtures (requires ffmpeg)
 
-    private func fixtureURL(_ name: String) -> URL {
-        URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures")
-            .appendingPathComponent(name)
-    }
-
     func testLoadAudioFromMKV() async throws {
         try XCTSkipUnless(FFmpegHelper.isAvailable, "ffmpeg not installed")
 

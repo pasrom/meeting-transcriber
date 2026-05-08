@@ -79,7 +79,7 @@ final class RecognitionStatsTests: XCTestCase {
     // MARK: - JSONL round-trip via RecognitionStatsLog
 
     func testAppendAndLoadRoundTrip() async {
-        let tmp = uniqueTempPath()
+        let tmp = makeTempFile(suffix: ".jsonl")
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
         let events: [RecognitionEvent] = [
@@ -91,12 +91,10 @@ final class RecognitionStatsTests: XCTestCase {
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 2)
         XCTAssertEqual(loaded.map(\.userName).sorted { ($0 ?? "") < ($1 ?? "") }, ["Speaker A", "Speaker B"])
-
-        try? FileManager.default.removeItem(at: tmp)
     }
 
     func testAppendMultipleBatches() async {
-        let tmp = uniqueTempPath()
+        let tmp = makeTempFile(suffix: ".jsonl")
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
         await log.append([event(name: "A", action: .accepted, ts: now)])
@@ -104,12 +102,10 @@ final class RecognitionStatsTests: XCTestCase {
 
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 2)
-
-        try? FileManager.default.removeItem(at: tmp)
     }
 
     func testLoadRecentSkipsCorruptLines() async throws {
-        let tmp = uniqueTempPath()
+        let tmp = makeTempFile(suffix: ".jsonl")
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
         await log.append([event(name: "Speaker A", action: .accepted, ts: now)])
@@ -123,12 +119,10 @@ final class RecognitionStatsTests: XCTestCase {
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 1)
         XCTAssertEqual(loaded.first?.userName, "Speaker A")
-
-        try? FileManager.default.removeItem(at: tmp)
     }
 
     func testLoadRecentFiltersByCutoff() async {
-        let tmp = uniqueTempPath()
+        let tmp = makeTempFile(suffix: ".jsonl")
         let log = RecognitionStatsLog(path: tmp)
         let now = Date()
         await log.append([
@@ -139,8 +133,6 @@ final class RecognitionStatsTests: XCTestCase {
         let loaded = await log.loadRecent(within: 60, now: now)
         XCTAssertEqual(loaded.count, 1)
         XCTAssertEqual(loaded.first?.userName, "new")
-
-        try? FileManager.default.removeItem(at: tmp)
     }
 
     // MARK: - buildEvents
@@ -222,10 +214,5 @@ final class RecognitionStatsTests: XCTestCase {
         XCTAssertEqual(events.first?.topCandidates?.first?.name, "Speaker A")
         let lastCentroid: Float? = events.first?.topCandidates?.last?.centroid
         XCTAssertNil(lastCentroid)
-    }
-
-    private func uniqueTempPath() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("recognition_log_\(UUID().uuidString).jsonl")
     }
 }

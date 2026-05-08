@@ -63,10 +63,7 @@ final class RecordingSidecarTests: XCTestCase {
     }
 
     func test_write_createsFileNextToBasename() throws {
-        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("rs-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
+        let dir = try makeTempDirectory(prefix: "rs")
 
         let basename = "20260503_083000"
         let sidecar = makeFullSidecar()
