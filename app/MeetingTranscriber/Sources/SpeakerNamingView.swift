@@ -1,4 +1,6 @@
-import AVFoundation
+// `@preconcurrency`: AVFoundation types lack Sendable annotations —
+// same gap as AudioMixer.swift; preemptively guarded.
+@preconcurrency import AVFoundation
 import SwiftUI
 
 /// NSTextField subclass that forwards accessibility `set value` (AppleScript)

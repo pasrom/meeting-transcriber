@@ -1,4 +1,6 @@
-import ApplicationServices
+// `@preconcurrency`: ApplicationServices AX globals lack Sendable
+// annotations — same gap as Permissions.swift; preemptively guarded.
+@preconcurrency import ApplicationServices
 import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AXHelper")

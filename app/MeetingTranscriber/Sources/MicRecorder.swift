@@ -1,7 +1,10 @@
 // MicRecorder is currently unused (DualSourceRecorder uses AudioTapLib directly).
 // Kept for potential future standalone mic recording feature.
 import AudioTapLib
-import AVFoundation
+
+// `@preconcurrency`: AVFoundation types lack Sendable annotations —
+// same gap as AudioMixer.swift; preemptively guarded.
+@preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
 import os.log

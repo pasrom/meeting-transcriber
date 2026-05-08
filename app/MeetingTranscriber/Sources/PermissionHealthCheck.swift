@@ -1,5 +1,8 @@
-import ApplicationServices
-import AVFoundation
+// `@preconcurrency`: ApplicationServices AX globals + AVFoundation
+// types lack Sendable annotations — same gaps as Permissions.swift /
+// AudioMixer.swift; preemptively guarded.
+@preconcurrency import ApplicationServices
+@preconcurrency import AVFoundation
 import CoreGraphics
 import os.log
 
