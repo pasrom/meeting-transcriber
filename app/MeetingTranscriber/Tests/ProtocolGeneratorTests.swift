@@ -175,9 +175,7 @@ final class ProtocolGeneratorTests: XCTestCase {
     // MARK: - File Save Operations
 
     func testSaveTranscript() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("proto_test_\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "proto_test")
 
         let text = "[00:00] Hello\n[00:05] World"
         let url = try ProtocolGenerator.saveTranscript(text, title: "Test", dir: tmpDir)
@@ -190,9 +188,7 @@ final class ProtocolGeneratorTests: XCTestCase {
     }
 
     func testSaveProtocol() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("proto_test_\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: tmpDir) }
+        let tmpDir = try makeTempDirectory(prefix: "proto_test")
 
         let markdown = "# Meeting Protocol\n\n## Summary\nTest meeting."
         let url = try ProtocolGenerator.saveProtocol(markdown, title: "Standup", dir: tmpDir)
@@ -205,14 +201,8 @@ final class ProtocolGeneratorTests: XCTestCase {
     }
 
     func testSaveCreatesDirectory() throws {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("proto_test_\(UUID().uuidString)")
-            .appendingPathComponent("nested")
-        defer {
-            try? FileManager.default.removeItem(
-                at: tmpDir.deletingLastPathComponent(),
-            )
-        }
+        let parent = try makeTempDirectory(prefix: "proto_test")
+        let tmpDir = parent.appendingPathComponent("nested")
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmpDir.path))
 

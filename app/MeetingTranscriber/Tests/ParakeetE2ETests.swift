@@ -33,7 +33,6 @@ final class ParakeetE2ETests: XCTestCase {
 
         // Resample 48kHz fixture to 16kHz for Parakeet
         let resampled16k = try resampleFixtureToTemp(fixture)
-        defer { try? FileManager.default.removeItem(at: resampled16k.deletingLastPathComponent()) }
 
         let segments = try await engine.transcribeSegments(audioPath: resampled16k)
 
@@ -67,7 +66,6 @@ final class ParakeetE2ETests: XCTestCase {
 
         // Resample 48kHz fixture to 16kHz for Parakeet
         let resampled16k = try resampleFixtureToTemp(fixture)
-        defer { try? FileManager.default.removeItem(at: resampled16k.deletingLastPathComponent()) }
 
         let segments = try await engine.transcribeSegments(audioPath: resampled16k)
         XCTAssertFalse(segments.isEmpty, "Should produce at least one segment")
@@ -92,7 +90,6 @@ final class ParakeetE2ETests: XCTestCase {
 
         // Resample 48kHz fixture to 16kHz for Parakeet
         let resampled16k = try resampleFixtureToTemp(fixture)
-        defer { try? FileManager.default.removeItem(at: resampled16k.deletingLastPathComponent()) }
 
         let segments = try await engine.transcribeSegments(audioPath: resampled16k)
 
@@ -131,7 +128,6 @@ final class ParakeetE2ETests: XCTestCase {
 
         // Resample 48kHz fixture to 16kHz for Parakeet
         let resampled16k = try resampleFixtureToTemp(fixture)
-        defer { try? FileManager.default.removeItem(at: resampled16k.deletingLastPathComponent()) }
 
         _ = try await engine.transcribeSegments(audioPath: resampled16k)
         XCTAssertEqual(
@@ -169,10 +165,7 @@ final class ParakeetE2ETests: XCTestCase {
 
     /// Resample the 48kHz fixture to a 16kHz temp WAV file for Parakeet.
     private func resampleFixtureToTemp(_ fixture: URL) throws -> URL {
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("parakeet_e2e_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-
+        let tmpDir = try makeTempDirectory(prefix: "parakeet_e2e")
         let resampled16k = tmpDir.appendingPathComponent("resampled_16k.wav")
 
         let samples = try AudioMixer.loadAudioFileAsFloat32(url: fixture)
