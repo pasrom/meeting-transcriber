@@ -377,14 +377,16 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
 // MARK: - MockURLProtocol
 
-private class MockURLProtocol: URLProtocol {
-    static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
+private final class MockURLProtocol: URLProtocol {
+    // URLSession serialises protocol callbacks per task; the handler is set
+    // before the request is started and cleared in tearDown. No real race.
+    nonisolated(unsafe) static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
 
-    override class func canInit(with _: URLRequest) -> Bool {
+    override static func canInit(with _: URLRequest) -> Bool {
         true
     }
 
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
         request
     }
 
