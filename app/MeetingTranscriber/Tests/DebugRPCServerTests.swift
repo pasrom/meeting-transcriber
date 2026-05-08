@@ -425,6 +425,7 @@
 
     /// Stub that records calls and returns canned outcomes per action.
     /// Used by routing tests to verify the request → closure → response wiring.
+    @MainActor
     final class StubSpeakerActions {
         private(set) var renameCalls: [(String, String)] = []
         private(set) var deleteCalls: [String] = []
