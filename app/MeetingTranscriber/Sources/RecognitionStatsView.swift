@@ -69,16 +69,22 @@ struct RecognitionStatsView: View {
         statRow(.dismissed, count: agg.counts[.dismissed] ?? 0, total: agg.total)
     }
 
-    @ViewBuilder
     private func statRow(_ action: RecognitionAction, count: Int, total: Int) -> some View {
-        let pct = Int((Double(count) / Double(total) * 100).rounded())
         LabeledContent(action.rawValue.capitalized) {
-            HStack(spacing: 8) {
-                Text("\(count)")
-                Text("(\(pct)%)").foregroundStyle(.secondary).font(.caption)
-                ProgressView(value: Double(count), total: Double(total))
-                    .frame(width: 80)
-            }
+            statRowDetail(count: count, total: total)
+        }
+    }
+
+    @ViewBuilder
+    private func statRowDetail(count: Int, total: Int) -> some View {
+        let pct = Int((Double(count) / Double(total) * 100).rounded())
+        HStack(spacing: 8) {
+            Text("\(count)")
+            Text("(\(pct)%)")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            ProgressView(value: Double(count), total: Double(total))
+                .frame(width: 80)
         }
     }
 
