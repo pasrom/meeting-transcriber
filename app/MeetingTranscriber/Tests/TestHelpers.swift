@@ -73,7 +73,7 @@ func makeTestWatchLoop(
         pollInterval: 0.05,
         endGracePeriod: 0.1,
         recordOnly: recordOnly,
-        recordOnlyOutputDir: recordOnlyOutputDir,
+        recordOnlyDestination: { .unscoped(recordOnlyOutputDir()) },
         notifier: notifier,
     )
     loop.permissionChecker = {

@@ -266,8 +266,8 @@ final class AppState {
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
                     recordOnly: { [settings] in settings.recordOnly },
-                    recordOnlyOutputDir: { [settings] in
-                        settings.effectiveOutputDir.appendingPathComponent("recordings")
+                    recordOnlyDestination: { [settings] in
+                        .production(parent: settings.effectiveOutputDir)
                     },
                     notifier: notifier,
                 )
@@ -324,8 +324,8 @@ final class AppState {
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                 verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
                 recordOnly: { [settings] in settings.recordOnly },
-                recordOnlyOutputDir: { [settings] in
-                    settings.effectiveOutputDir.appendingPathComponent("recordings")
+                recordOnlyDestination: { [settings] in
+                    .production(parent: settings.effectiveOutputDir)
                 },
                 notifier: notifier,
             )

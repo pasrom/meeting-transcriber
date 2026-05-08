@@ -334,6 +334,26 @@ final class WatchLoopTests: XCTestCase {
         }
     }
 
+    // MARK: - RecordOnlyDestination
+
+    func test_production_destinationSplitsScopeAndWriteDir() {
+        let parent = URL(fileURLWithPath: "/tmp/picked")
+        let dest = RecordOnlyDestination.production(parent: parent)
+        // Scope is the bookmark-resolved parent — start-access target.
+        XCTAssertEqual(dest.scope, parent)
+        // Files land in the `recordings/` subfolder of that scope.
+        XCTAssertEqual(dest.writeDir.lastPathComponent, "recordings")
+        XCTAssertEqual(dest.writeDir.deletingLastPathComponent().path, parent.path)
+    }
+
+    func test_unscoped_destinationCollapsesScopeAndWriteDir() {
+        let url = URL(fileURLWithPath: "/tmp/local")
+        let dest = RecordOnlyDestination.unscoped(url)
+        // Identical so start-access on `scope` is harmless and writes hit `url`.
+        XCTAssertEqual(dest.scope, url)
+        XCTAssertEqual(dest.writeDir, url)
+    }
+
     // MARK: - Record-Only Mode
 
     /// Drives a complete `start → stop` manual recording cycle so the test
