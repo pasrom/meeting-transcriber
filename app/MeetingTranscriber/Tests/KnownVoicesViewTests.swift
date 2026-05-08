@@ -9,15 +9,17 @@ final class KnownVoicesViewTests: XCTestCase {
     private var dbPath: URL!
     // swiftlint:enable implicitly_unwrapped_optional
 
-    override func setUp() {
+    override func setUp() async throws {
+        try await super.setUp()
         tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("KnownVoicesViewTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
         dbPath = tmpDir.appendingPathComponent("speakers.json")
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         try? FileManager.default.removeItem(at: tmpDir)
+        try await super.tearDown()
     }
 
     func testViewRendersWithEmptyDB() throws {
