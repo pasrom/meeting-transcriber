@@ -80,9 +80,16 @@ step "mt-cli roundtrips"
 "$MT_CLI_BIN" healthz | grep -q "^ok$" || fail "healthz output unexpected"
 ok "healthz"
 
-"$MT_CLI_BIN" state | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'pipeline' in d and 'speakerDB' in d" \
-    || fail "state JSON malformed"
-ok "state JSON parses"
+"$MT_CLI_BIN" state | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+assert 'pipeline' in d and 'speakerDB' in d
+e = d['engines']
+assert e['active'] in ('whisperKit', 'parakeet', 'qwen3'), f'bad active: {e[\"active\"]!r}'
+assert 'modelVariant' in e['whisperKit']
+assert 'customVocabularyPath' in e['parakeet']
+" || fail "state JSON malformed"
+ok "state JSON parses (incl. engines block)"
 
 step "Action + screenshot loop"
 "$MT_CLI_BIN" close-settings >/dev/null  # ensure clean idle
