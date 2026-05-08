@@ -79,6 +79,13 @@ final class AppState {
         self.notifier = notifier
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
+
+        // Bring engines in line with the current settings up front so the
+        // first transcription doesn't run against stale defaults, then
+        // start observing for runtime changes.
+        syncLanguageSettings()
+        observeEngineSettings()
+
         #if !APPSTORE
             // Env var force-enables at launch only — preserves back-compat with
             // scripts/test_rpc.sh and CI. After init, settings.debugRPCEnabled
@@ -421,22 +428,49 @@ final class AppState {
 
     // MARK: - Pipeline
 
-    /// Apply language settings to the active engine before creating a pipeline.
+    /// Push current language/vocabulary settings into the active engine.
+    /// Idempotent — each branch only writes when the value actually differs,
+    /// so unchanged settings don't churn the engine's `@Observable` watchers.
     private func syncLanguageSettings() {
-        if settings.transcriptionEngine == .whisperKit {
-            whisperKit.language = settings.whisperLanguageOrNil
+        switch settings.transcriptionEngine {
+        case .whisperKit:
+            let next = settings.whisperLanguageOrNil
+            if whisperKit.language != next { whisperKit.language = next }
+
+        case .parakeet:
+            let next = settings.customVocabularyPath
+            if parakeetEngine.customVocabularyPath != next {
+                parakeetEngine.customVocabularyPath = next
+            }
+
+        case .qwen3:
+            if #available(macOS 15, *) {
+                let next = settings.qwen3LanguageOrNil
+                if qwen3Engine.language != next { qwen3Engine.language = next }
+            }
         }
-        if settings.transcriptionEngine == .parakeet {
-            parakeetEngine.customVocabularyPath = settings.customVocabularyPath
-        }
-        if #available(macOS 15, *), settings.transcriptionEngine == .qwen3 {
-            qwen3Engine.language = settings.qwen3LanguageOrNil
+    }
+
+    /// `withObservationTracking` is one-shot — re-arm after each fire so the
+    /// AppState reacts to every settings change, not just the first one.
+    /// Mirrors the `observeDebugRPCSetting` pattern.
+    private func observeEngineSettings() {
+        withObservationTracking {
+            _ = settings.transcriptionEngine
+            _ = settings.whisperLanguage
+            _ = settings.customVocabularyPath
+            _ = settings.qwen3Language
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.syncLanguageSettings()
+                self.observeEngineSettings()
+            }
         }
     }
 
     func ensurePipelineQueue() {
         guard pipelineQueue.engine == nil else { return }
-        syncLanguageSettings()
         pipelineQueue = makePipelineQueue()
         configurePipelineCallbacks()
     }

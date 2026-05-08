@@ -94,6 +94,31 @@
             XCTAssertNil(snapshot.engines.whisperKit.language)
         }
 
+        // MARK: - Live propagation through the snapshot
+
+        /// End-to-end smoketest: the snapshot is the supported way to observe
+        /// runtime settings → engine propagation from outside the process.
+        /// Same flow `mt-cli state | jq .engines` exercises against the live app.
+        func test_snapshot_reflectsRuntimeSettingChange() async {
+            settings.transcriptionEngine = .parakeet
+            let state = AppState(settings: settings)
+
+            XCTAssertEqual(
+                state.rpcStateSnapshot().engines.parakeet.customVocabularyPath, "",
+            )
+
+            settings.customVocabularyPath = "/tmp/runtime.txt"
+            await waitFor(
+                state.rpcStateSnapshot().engines.parakeet.customVocabularyPath
+                    == "/tmp/runtime.txt",
+            )
+
+            XCTAssertEqual(
+                state.rpcStateSnapshot().engines.parakeet.customVocabularyPath,
+                "/tmp/runtime.txt",
+            )
+        }
+
         // MARK: - JSON shape
 
         func test_snapshot_jsonContainsEnginesBlock() throws {

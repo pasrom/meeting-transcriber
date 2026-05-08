@@ -33,6 +33,26 @@ extension XCTestCase {
     }
 }
 
+// MARK: - Async Polling Helper
+
+extension XCTestCase {
+    /// Yields repeatedly until `condition()` is true or `timeout` elapses.
+    /// Needed for tests that await operations spawning a `Task { @MainActor in … }`
+    /// (e.g. AppState's `withObservationTracking` re-arm, AVCaptureDevice
+    /// permission prompts) — a single `Task.yield()` isn't always enough to
+    /// drain the runloop before the assertion fires.
+    @MainActor
+    func waitFor(
+        _ condition: @autoclosure () -> Bool,
+        timeout: Duration = .milliseconds(500),
+    ) async {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+    }
+}
+
 // MARK: - Fixture URL Helper
 
 extension XCTestCase {

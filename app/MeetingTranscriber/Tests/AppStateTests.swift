@@ -6,20 +6,6 @@ import XCTest
 final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_length
     // MARK: - Helpers
 
-    /// Yields repeatedly until `condition()` is true or the timeout elapses.
-    /// Needed for tests that await toggleWatching()/startManualRecording() which
-    /// internally spawn a Task containing AVCaptureDevice.requestAccess — a real
-    /// async suspension point that requires more than one yield to resolve.
-    private func waitFor(
-        _ condition: @autoclosure () -> Bool,
-        timeout: Duration = .milliseconds(500),
-    ) async {
-        let deadline = ContinuousClock.now + timeout
-        while !condition(), ContinuousClock.now < deadline {
-            await Task.yield()
-        }
-    }
-
     private func makeState() -> (AppState, RecordingNotifier) {
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
