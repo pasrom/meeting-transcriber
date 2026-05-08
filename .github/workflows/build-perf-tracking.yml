@@ -1,0 +1,33 @@
+name: Build Performance Tracking
+
+on:
+  schedule:
+    # Mondays 06:00 UTC — gives the rest of the week to react before the
+    # next weekly snapshot rolls in.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Number of recent successful CI runs to analyze'
+        default: '50'
+      alert_pct:
+        description: 'Slowdown threshold (percent)'
+        default: '20'
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Generate report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LIMIT: ${{ inputs.limit || '50' }}
+          ALERT_PCT: ${{ inputs.alert_pct || '20' }}
+          WORKFLOW: ci.yml
+          BRANCH: main
+        run: bash scripts/build_perf_report.sh | tee -a "$GITHUB_STEP_SUMMARY"
