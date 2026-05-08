@@ -32,16 +32,14 @@ let package = Package(
             swiftSettings: [
                 .treatAllWarnings(as: .error),
                 // Surface accidental compile-time blowups. Type-checking a
-                // function body or expression beyond 500 ms is almost always
+                // function body or expression beyond 300 ms is almost always
                 // a sign of pathological generic-overload search or deeply
-                // nested SwiftUI builders. Apple recommends 100 ms; 500 ms
-                // gives headroom for cold CI runners and the extra
-                // concurrency-analysis overhead Swift 6 mode adds (which
-                // otherwise pushes existing SwiftUI bodies over a 300 ms
-                // threshold intermittently).
+                // nested SwiftUI builders. Apple recommends 100 ms; 300 ms
+                // is the historical pre-Swift-6 setting that turned out to
+                // be sustainable once strict-concurrency analysis settled.
                 .unsafeFlags([
-                    "-Xfrontend", "-warn-long-function-bodies=500",
-                    "-Xfrontend", "-warn-long-expression-type-checking=500",
+                    "-Xfrontend", "-warn-long-function-bodies=300",
+                    "-Xfrontend", "-warn-long-expression-type-checking=300",
                 ]),
                 .enableUpcomingFeature("ExistentialAny"),
             ]
@@ -61,8 +59,8 @@ let package = Package(
             swiftSettings: [
                 .treatAllWarnings(as: .error),
                 .unsafeFlags([
-                    "-Xfrontend", "-warn-long-function-bodies=500",
-                    "-Xfrontend", "-warn-long-expression-type-checking=500",
+                    "-Xfrontend", "-warn-long-function-bodies=300",
+                    "-Xfrontend", "-warn-long-expression-type-checking=300",
                 ]),
                 .enableUpcomingFeature("ExistentialAny"),
             ]
