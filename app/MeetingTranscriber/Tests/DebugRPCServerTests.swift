@@ -1,4 +1,5 @@
 #if !APPSTORE
+    // swiftlint:disable file_length
     @testable import MeetingTranscriber
     import XCTest
 
@@ -212,6 +213,38 @@
             let attrs = try FileManager.default.attributesOfItem(atPath: DebugRPCServer.tokenFileURL.path)
             let perms = (attrs[.posixPermissions] as? Int) ?? -1
             XCTAssertEqual(perms, 0o600)
+        }
+
+        func testRotateTokenGeneratesNewValueAndPersistsAtomically() throws {
+            let url = makeTempFile(suffix: "-rpc-token")
+            // Seed an existing token to ensure rotate doesn't reuse it.
+            let seed = "seed-token-1234"
+            FileManager.default.createFile(
+                atPath: url.path, contents: Data(seed.utf8),
+                attributes: [.posixPermissions: 0o600],
+            )
+
+            let rotated = DebugRPCServer.rotateToken(at: url)
+            XCTAssertNotEqual(rotated, seed)
+            XCTAssertEqual(rotated.count, 64)
+            XCTAssertTrue(rotated.allSatisfy(\.isHexDigit))
+
+            // File now contains the rotated value.
+            let onDisk = try String(contentsOf: url, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            XCTAssertEqual(onDisk, rotated)
+
+            // Mode preserved at 0600 across the rewrite.
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            let perms = (attrs[.posixPermissions] as? Int) ?? -1
+            XCTAssertEqual(perms, 0o600)
+        }
+
+        func testRotateTokenProducesDistinctValuesAcrossCalls() {
+            let url = makeTempFile(suffix: "-rpc-token")
+            let a = DebugRPCServer.rotateToken(at: url)
+            let b = DebugRPCServer.rotateToken(at: url)
+            XCTAssertNotEqual(a, b, "Two consecutive rotations must yield different tokens")
         }
 
         // MARK: - Speaker DB action routes

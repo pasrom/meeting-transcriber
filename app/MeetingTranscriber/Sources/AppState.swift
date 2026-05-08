@@ -128,8 +128,16 @@ final class AppState {
 
     #if !APPSTORE
         /// Reconcile the debug RPC server with the current setting.
+        ///
+        /// Called only from the settings-driven `observeDebugRPCSetting` path
+        /// (init has its own gate). On a toggle off → on we rotate the bearer
+        /// token before starting the listener: that way any token an attacker
+        /// scraped while the server was previously running is invalidated by
+        /// the act of turning it off and on again — the same gesture a user
+        /// already performs to "reset" the feature.
         func applyDebugRPCSetting() {
             if settings.debugRPCEnabled, debugRPCServer == nil {
+                DebugRPCServer.rotateToken()
                 startDebugRPCServer()
             } else if !settings.debugRPCEnabled, let server = debugRPCServer {
                 server.stop()

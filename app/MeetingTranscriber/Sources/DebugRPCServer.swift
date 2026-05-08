@@ -105,6 +105,15 @@
                !existing.isEmpty {
                 return existing
             }
+            return rotateToken(at: url)
+        }
+
+        /// Unconditionally write a fresh 32-byte hex token to `url`. Used by the
+        /// settings toggle so that flipping the server off → on invalidates any
+        /// previously-leaked token. Mode 0600 is set at create time to avoid
+        /// the brief 0644 window a write-then-chmod sequence would have.
+        @discardableResult
+        nonisolated static func rotateToken(at url: URL = tokenFileURL) -> String {
             var bytes = [UInt8](repeating: 0, count: 32)
             // SecRandomCopyBytes returning non-zero means the buffer is
             // unmodified (all zeros) — refuse to write that as a token.
@@ -116,8 +125,9 @@
             try? FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true,
             )
-            // createFile with .posixPermissions sets mode at creation time —
-            // avoids the brief 0644 window that a write-then-chmod sequence has.
+            // Remove any prior file so createFile re-applies the 0600 attribute
+            // even if the existing inode had drifted to a looser mode.
+            try? FileManager.default.removeItem(at: url)
             FileManager.default.createFile(
                 atPath: url.path,
                 contents: Data(token.utf8),
