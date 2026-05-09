@@ -27,11 +27,13 @@ set -euo pipefail
 KEEP_APP=false           # leave the app running after assertions
 QUIT_APP=false           # quit the app on exit (overrides KEEP_APP)
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
+NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --keep-app)   KEEP_APP=true ;;
         --quit-app)   QUIT_APP=true ;;
+        --no-build)   NO_BUILD=true ;;
         --fixture)    shift; SIMULATOR_FIXTURE="$1" ;;
         -h|--help)
             sed -n '2,/^$/p' "$0" | sed 's/^# //;s/^#//'
@@ -112,10 +114,61 @@ if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | gr
     fail "no default audio input device — install BlackHole 2ch (brew install blackhole-2ch + reboot/coreaudiod restart) and set it as the default Input in System Settings → Sound"
 fi
 
-# --- 1. build dev bundle --------------------------------------------------
+if [ "$NO_BUILD" = true ]; then
+    [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
+    log "Skipping build/deploy/re-sign — using existing $DEV_BUNDLE_DEPLOY"
+else
+    # --- 1. build dev bundle ----------------------------------------------
 
-log "Building dev .app bundle"
-"$SCRIPT_DIR/run_app.sh" --build-only
+    log "Building dev .app bundle"
+    "$SCRIPT_DIR/run_app.sh" --build-only
+
+    # --- 3. deploy to stable path (preserve bundle dir → preserve TCC) ----
+
+    log "Deploying to $DEV_BUNDLE_DEPLOY"
+    mkdir -p "$(dirname "$DEV_BUNDLE_DEPLOY")"
+    if [ -d "$DEV_BUNDLE_DEPLOY" ]; then
+        # cp -R into the existing bundle (NOT delete + copy) — TCC keys off
+        # the bundle path; a fresh dir would invalidate granted permissions.
+        rsync -a --delete "$DEV_BUNDLE_BUILD/" "$DEV_BUNDLE_DEPLOY/"
+    else
+        cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
+    fi
+
+    # Re-sign so TCC sees the same designated requirement across rebuilds.
+    # rsync above brought in whatever run_app.sh signed with (typically
+    # ad-hoc — run_app.sh's `find-identity -v` doesn't pick up our
+    # identities), which would invalidate the TCC grant tied to the cert
+    # SHA.
+    #
+    # Two paths:
+    #   - CI / Apple Developer ID — `DEVELOPER_ID` env var set (provided
+    #     by e2e-app.yml after importing the cert from secrets). Apple
+    #     roots are system-trusted; this just works.
+    #   - Local dev — `DEVELOPER_ID` empty; fall back to the self-signed
+    #     cert installed by setup-self-hosted-runner.sh.
+    if [ -n "${DEVELOPER_ID:-}" ]; then
+        log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
+        SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
+        [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
+        codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+            || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
+    else
+        DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
+        DEV_CERT_PATH="/tmp/meetingtranscriber-setup/dev-cert.crt"
+        if [ ! -f "$DEV_KEYCHAIN" ] || [ ! -f "$DEV_CERT_PATH" ]; then
+            fail "no Developer ID and dev keychain missing ($DEV_KEYCHAIN / $DEV_CERT_PATH) — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
+        fi
+        DEV_CERT_HASH="$(openssl x509 -in "$DEV_CERT_PATH" -noout -fingerprint -sha1 \
+            | sed 's/^.*=//' | tr -d ':')"
+        log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
+        security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
+        codesign --force --sign "$DEV_CERT_HASH" \
+            --keychain "$DEV_KEYCHAIN" \
+            "$DEV_BUNDLE_DEPLOY" >/dev/null \
+            || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
+    fi
+fi
 
 # --- 2. build meeting-simulator (cached after first run) ------------------
 
@@ -124,60 +177,16 @@ if [ ! -x "$SIMULATOR_BIN" ]; then
     (cd "$SIMULATOR_PKG" && swift build -c release)
 fi
 
-# --- 3. deploy to stable path (preserve bundle dir → preserve TCC) --------
+# --- 4. ensure debug RPC + auto-watch will be on -------------------------
 
-log "Deploying to $DEV_BUNDLE_DEPLOY"
-mkdir -p "$(dirname "$DEV_BUNDLE_DEPLOY")"
-if [ -d "$DEV_BUNDLE_DEPLOY" ]; then
-    # cp -R into the existing bundle (NOT delete + copy) — TCC keys off the
-    # bundle path; a fresh dir would invalidate granted permissions.
-    rsync -a --delete "$DEV_BUNDLE_BUILD/" "$DEV_BUNDLE_DEPLOY/"
-else
-    cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
-fi
-
-# Re-sign so TCC sees the same designated requirement across rebuilds
-# and keeps the granted permissions. The rsync above brought in whatever
-# run_app.sh signed with (typically ad-hoc — run_app.sh's `find-identity
-# -v` doesn't pick up our identities), which would invalidate the TCC
-# grant tied to the cert SHA.
-#
-# Two paths:
-#   - CI / Apple Developer ID — `DEVELOPER_ID` env var set (provided by
-#     e2e-app.yml after importing the cert from secrets). Apple roots are
-#     in the system trust store, so this just works.
-#   - Local dev — `DEVELOPER_ID` empty; fall back to the self-signed cert
-#     + dedicated keychain installed by setup-self-hosted-runner.sh.
-
-if [ -n "${DEVELOPER_ID:-}" ]; then
-    log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
-    SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
-    [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
-    codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
-        || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
-else
-    DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
-    DEV_CERT_PATH="/tmp/meetingtranscriber-setup/dev-cert.crt"
-    if [ ! -f "$DEV_KEYCHAIN" ] || [ ! -f "$DEV_CERT_PATH" ]; then
-        fail "no Developer ID and dev keychain missing ($DEV_KEYCHAIN / $DEV_CERT_PATH) — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
-    fi
-    DEV_CERT_HASH="$(openssl x509 -in "$DEV_CERT_PATH" -noout -fingerprint -sha1 \
-        | sed 's/^.*=//' | tr -d ':')"
-    log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
-    security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
-    codesign --force --sign "$DEV_CERT_HASH" \
-        --keychain "$DEV_KEYCHAIN" \
-        "$DEV_BUNDLE_DEPLOY" >/dev/null \
-        || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
-fi
-
-# --- 4. ensure debug RPC will be on -------------------------------------
-
-# Persistent debugRPCEnabled toggle survives across launches. Set it before
-# launching so the server comes up immediately. Env-var alternative
-# (MEETINGTRANSCRIBER_DEBUG_RPC=1) requires re-launching after defaults
-# changes anyway, so the toggle is simpler here.
+# Persistent toggles survive across launches. Set them before launching so
+# the server comes up immediately and the WatchLoop auto-starts 3 s after
+# init (without an explicit click on "Start Watching" in the menu, which
+# isn't reachable over SSH). The autoWatch path is already wired in
+# MeetingTranscriberApp via the `.autoWatchStart` notification; we just
+# flip the persistent flag it checks.
 defaults write com.meetingtranscriber.dev debugRPCEnabled -bool true
+defaults write com.meetingtranscriber.dev autoWatch -bool true
 
 # --- 5. launch app --------------------------------------------------------
 
