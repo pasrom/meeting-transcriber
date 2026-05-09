@@ -104,7 +104,9 @@ scripts/
   build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
-  run_app.sh               # Build + sign + launch menu bar app bundle
+  run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)
+  e2e-app.sh               # Pattern-C E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
+  setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + PPPC profile (needed before e2e-app.sh works)
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
@@ -119,7 +121,8 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
-  e2e.yml                  # E2E tests on self-hosted macOS runner (workflow_dispatch + v* tags)
+  e2e.yml                  # E2E (Pattern A) — fixture-based xctest on self-hosted Mac (dispatch + v* tags)
+  e2e-app.yml              # E2E (Pattern C) — deployed dev .app + RPC-driven assertion (dispatch + push to main + nightly)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
 docs/
   architecture-macos.md        # High-level architecture quick-reference
@@ -316,6 +319,69 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
 - Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)
+
+## E2E Architecture
+
+Two complementary E2E approaches, run by different workflows. Pick by what
+you're validating:
+
+**Pattern A — fixture-based xctest (`e2e.yml`)**
+- Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
+  (Parakeet, WhisperKit, Qwen3, WatchLoop) feed pre-recorded `two_speakers_de.wav`
+  into the components and assert on transcripts.
+- Triggered on `workflow_dispatch` and `v*` tag pushes.
+- No live recording — `DualSourceRecorder` is bypassed; tests substitute
+  fixture WAVs at the same point the recorder would emit them.
+- Strengths: fast, deterministic, isolates engine logic; runs in xctest's
+  sandboxed harness without TCC concerns.
+- Limitations: can't catch regressions in the recording stack, the audio
+  routing path, TCC interactions, or detector → recorder handoff.
+
+**Pattern C — deployed app + RPC (`e2e-app.yml`, `scripts/e2e-app.sh`)**
+- Builds the dev `.app`, deploys to `~/Applications/MeetingTranscriber-Dev.app`
+  (stable path → TCC permissions persist), launches it, triggers a meeting
+  via `meeting-simulator`, polls `DebugRPCServer`'s `/state` for
+  `lastJob.state == .done`, asserts on the resulting transcript file.
+- Triggered on `workflow_dispatch`, `push` to main on relevant paths,
+  and a nightly cron at 04:30 UTC.
+- Exercises the production code path end-to-end including TCC, audio
+  routing, CATapDescription tap, and the dual-track recorder/diarizer
+  handoff.
+- Limitations: needs one-time runner setup (see below); can't run on
+  GitHub-hosted runners — only on a self-hosted Mac with an interactive
+  GUI session and a stable code-signing identity.
+
+**Why Pattern C exists** (history that's easy to lose):
+- An earlier attempt at "pattern A but with live recording" (PR #100,
+  `E2EFullPipelineTests`) crashed reproducibly with
+  `freed pointer was not the last allocation` on the self-hosted Mac mini.
+  Root cause: ad-hoc-signed xctest binaries get a fresh cdhash on every
+  build, never inherit stable TCC permissions, and AVAudioEngine on a
+  no-input host hits a libmalloc abort.
+- The production `.app` doesn't have any of those problems because it has
+  a stable bundle ID + (with `setup-self-hosted-runner.sh`) a stable
+  signing identity that PPPC profiles can grant permissions to.
+
+**One-time self-hosted runner setup**:
+1. `brew install blackhole-2ch` then reboot (or `sudo killall coreaudiod`),
+   set BlackHole 2ch as the default Input in System Settings → Sound.
+   Mac mini hosts have no built-in mic; without a virtual input device
+   the dual-source recorder hits the libmalloc abort path.
+2. Configure auto-login for the runner user so loginwindow brings up an
+   Aqua session at boot. CATapDescription captures silence in non-GUI
+   contexts even when API calls return `noErr`.
+3. Run `scripts/setup-self-hosted-runner.sh` once. Creates a self-signed
+   code-signing cert in the login keychain, signs and deploys the dev
+   `.app` to `~/Applications/`, generates and installs a PPPC mobileconfig
+   that grants Microphone + Screen & System Audio Recording to the bundle
+   gated on the cert SHA-1.
+4. Open System Settings → Profiles, click "Install" once on the
+   downloaded "MeetingTranscriber-Dev TCC Permissions" profile.
+5. Verify Microphone + Screen & System Audio Recording show the dev `.app`
+   with the toggle on.
+
+After setup, every CI run rebuilds the `.app`; cdhash differs per build but
+the cert SHA-1 doesn't, so PPPC keeps granting permissions automatically.
 
 ## Diagnostics
 
