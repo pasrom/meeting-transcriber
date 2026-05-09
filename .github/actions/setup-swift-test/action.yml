@@ -1,0 +1,56 @@
+name: "Setup Swift test environment"
+description: >
+  Checks out the repo, restores SPM and ML-model caches keyed off
+  `Package.resolved`, and pre-warms the ML model cache on a cache miss.
+  Used by every job that runs `swift test` against engines that load
+  WhisperKit / FluidAudio / Qwen3 weights, so the boilerplate lives in
+  one place instead of being copy-pasted per job.
+
+inputs:
+  cache-key-suffix:
+    description: >
+      Distinguishes parallel SPM caches by compile-flag set. Pick a stable
+      string like `homebrew`, `appstore`, `tsan`, `asan`, or `quality`.
+      Different suffixes get independent caches; same suffix can share.
+    required: true
+  swift-flags:
+    description: >
+      Extra arguments forwarded to the pre-warm `swift test` invocation
+      (e.g. `-Xswiftc -DAPPSTORE`). Sanitizer flags are intentionally NOT
+      applied to the pre-warm — the model loader doesn't need them, and
+      sanitized builds are slower to warm.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    # Caller is responsible for `actions/checkout` before invoking this
+    # action — GitHub loads `./.github/actions/...` from the workspace, so
+    # the repo must already be present.
+    - name: Cache SPM dependencies
+      uses: actions/cache@v5
+      with:
+        path: app/MeetingTranscriber/.build
+        key: spm-${{ runner.os }}-${{ inputs.cache-key-suffix }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+        restore-keys: spm-${{ runner.os }}-${{ inputs.cache-key-suffix }}-
+
+    # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
+    # HuggingFace download client races on cold-cache concurrent loads of
+    # the same variant; pre-warming sequentially populates the cache so
+    # the parallel run can hit it. After the first successful CI run the
+    # cache is populated and the preload step is skipped.
+    - name: Cache ML models
+      id: model-cache
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/Documents/huggingface
+          ~/Library/Application Support/FluidAudio
+        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
+        restore-keys: ml-models-${{ runner.os }}-
+
+    - name: Pre-warm model cache (cache miss only)
+      if: steps.model-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests ${{ inputs.swift-flags }}

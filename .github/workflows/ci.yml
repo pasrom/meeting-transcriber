@@ -129,29 +129,10 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
+      - uses: ./.github/actions/setup-swift-test
         with:
-          path: app/MeetingTranscriber/.build
-          key: spm-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
-      # Cache the WhisperKit (HuggingFace) + FluidAudio model files. The
-      # HuggingFace download client races on cold-cache concurrent loads of
-      # the same variant; pre-warming sequentially populates the cache so
-      # the parallel run can hit it. After the first successful CI run the
-      # cache is populated and the preload step is skipped.
-      - name: Cache ML models
-        id: model-cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/Documents/huggingface
-            ~/Library/Application Support/FluidAudio
-          key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
-          restore-keys: ml-models-${{ runner.os }}-
-      - name: Pre-warm model cache (cache miss only)
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests ${{ matrix.swift-flags }}
+          cache-key-suffix: ${{ matrix.variant }}
+          swift-flags: ${{ matrix.swift-flags }}
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
       - name: Cancel run on failure
@@ -196,24 +177,9 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
+      - uses: ./.github/actions/setup-swift-test
         with:
-          path: app/MeetingTranscriber/.build
-          key: spm-${{ runner.os }}-${{ matrix.variant }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
-      - name: Cache ML models
-        id: model-cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/Documents/huggingface
-            ~/Library/Application Support/FluidAudio
-          key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
-          restore-keys: ml-models-${{ runner.os }}-
-      - name: Pre-warm model cache (cache miss only)
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests
+          cache-key-suffix: ${{ matrix.variant }}
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
@@ -245,24 +211,9 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v6
-      - name: Cache SPM dependencies
-        uses: actions/cache@v5
+      - uses: ./.github/actions/setup-swift-test
         with:
-          path: app/MeetingTranscriber/.build
-          key: spm-${{ runner.os }}-quality-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
-          restore-keys: spm-${{ runner.os }}-quality-
-      - name: Cache ML models
-        id: model-cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/Documents/huggingface
-            ~/Library/Application Support/FluidAudio
-          key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
-          restore-keys: ml-models-${{ runner.os }}-
-      - name: Pre-warm model cache (cache miss only)
-        if: steps.model-cache.outputs.cache-hit != 'true'
-        run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests
+          cache-key-suffix: quality
       # Filter explicitly to engine-quality test classes — `--filter Quality`
       # would also pull in `QualityResultsTests`, which exercises the writer
       # via fake rows and would pollute the shared singleton's row buffer.
