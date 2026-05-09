@@ -249,6 +249,32 @@ final class PersistentDiagnosticLogTests: XCTestCase {
             )
         }
 
+        /// macOS 26 made `log stream` admin-only — the spawn → exit-1
+        /// cycle ran up to maxFailuresInWindow times and pegged 2 cores
+        /// on dev builds. With the guard, an exit inside `failFastWindow`
+        /// triggers an immediate give-up.
+        ///
+        /// Falsifiability: `maxBackoff: 60` means the un-guarded slow
+        /// path would need ~60 s for the first relaunch alone — well past
+        /// the 2 s assertion. Without the guard, this test fails.
+        func test_streamer_failsFastOnInstantExit() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerFailFast")
+            let policy = RestartPolicy(
+                maxFailuresInWindow: 100, window: 60, maxBackoff: 60,
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                restartPolicy: policy,
+                logExecutable: URL(fileURLWithPath: "/usr/bin/false"),
+                logArguments: [],
+            )
+            try streamer.start()
+            XCTAssertTrue(
+                waitForCondition(timeout: 2.0) { !streamer.isRunning },
+                "Streamer should fail fast on instant exit, not wait for the slow-path backoff",
+            )
+        }
+
         /// `stop()` must short-circuit any pending relaunch; otherwise an
         /// `asyncAfter` enqueued during the restart loop could fire after
         /// the test (and the `Streamer`) is gone, writing to a freed FD.

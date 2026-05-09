@@ -161,6 +161,7 @@ enum PersistentDiagnosticLog {
             private var logFileHandle: FileHandle
             private var openedDateString: String
             private var _isRunning = false
+            private var lastLaunchAt = Date.distantPast
             /// Thread-safe view of the running flag. External readers (tests,
             /// `AppState`) hit the queue-synchronised accessor; internal code
             /// already runs on `restartQueue` and uses `_isRunning` directly.
@@ -237,49 +238,71 @@ enum PersistentDiagnosticLog {
                 }
 
                 try process.run()
+                lastLaunchAt = now()
                 logger.info(
                     "persistent_log_streamer_started pid=\(self.process.processIdentifier, privacy: .public)",
                 )
             }
 
+            /// `log stream` started OK if it stays alive longer than this.
+            /// Anything quicker is the spawn-and-die loop we're guarding
+            /// against (admin-required, bad args, etc.).
+            private static let failFastWindow: TimeInterval = 1.0
+
             private func handleProcessExit(
                 reason: Process.TerminationReason, status: Int32,
             ) {
                 restartQueue.async { [weak self] in
-                    guard let self else { return }
-                    // User-initiated stop already flipped `_isRunning` and
-                    // detached the handler, so any straggling callback is a
-                    // no-op.
-                    guard self._isRunning else { return }
+                    self?.processExitOnQueue(reason: reason, status: status)
+                }
+            }
 
-                    let now = self.now()
-                    let cutoff = now.addingTimeInterval(-self.restartPolicy.window)
-                    self.recentFailures = self.recentFailures.filter { $0 >= cutoff }
+            /// Body of `handleProcessExit` after the queue hop.
+            private func processExitOnQueue(
+                reason: Process.TerminationReason, status: Int32,
+            ) {
+                // User-initiated stop already flipped `_isRunning` and
+                // detached the handler, so any straggling callback is a
+                // no-op.
+                guard _isRunning else { return }
 
-                    switch self.restartPolicy.decide(
-                        now: now, recentFailures: self.recentFailures,
-                    ) {
-                    case .giveUp:
-                        logger.error(
-                            "persistent_log_streamer_gave_up failures=\(self.recentFailures.count, privacy: .public)",
-                        )
-                        self._isRunning = false
+                let now = self.now()
+                // `log stream` is supposed to run forever. ANY exit inside
+                // the fail-fast window — clean or not — means the binary
+                // rejected its arguments or our privileges. Retrying would
+                // burn CPU on the same failure.
+                if now.timeIntervalSince(lastLaunchAt) < Self.failFastWindow {
+                    logger.error(
+                        "persistent_log_streamer_fatal_launch status=\(status, privacy: .public) reason=\(reason.rawValue, privacy: .public)",
+                    )
+                    _isRunning = false
+                    return
+                }
 
-                    case let .restart(delay):
-                        logger.warning(
-                            "persistent_log_streamer_restarting reason=\(reason.rawValue, privacy: .public) status=\(status, privacy: .public) delay=\(delay, privacy: .public)",
-                        )
-                        self.recentFailures.append(now)
-                        self.restartQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
-                            guard let self, self._isRunning else { return }
-                            do {
-                                try self.launchProcess()
-                            } catch {
-                                logger.error(
-                                    "persistent_log_streamer_relaunch_failed error=\(error.localizedDescription, privacy: .public)",
-                                )
-                                self._isRunning = false
-                            }
+                let cutoff = now.addingTimeInterval(-restartPolicy.window)
+                recentFailures = recentFailures.filter { $0 >= cutoff }
+
+                switch restartPolicy.decide(now: now, recentFailures: recentFailures) {
+                case .giveUp:
+                    logger.error(
+                        "persistent_log_streamer_gave_up failures=\(self.recentFailures.count, privacy: .public)",
+                    )
+                    _isRunning = false
+
+                case let .restart(delay):
+                    logger.warning(
+                        "persistent_log_streamer_restarting reason=\(reason.rawValue, privacy: .public) status=\(status, privacy: .public) delay=\(delay, privacy: .public)",
+                    )
+                    recentFailures.append(now)
+                    restartQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                        guard let self, self._isRunning else { return }
+                        do {
+                            try self.launchProcess()
+                        } catch {
+                            logger.error(
+                                "persistent_log_streamer_relaunch_failed error=\(error.localizedDescription, privacy: .public)",
+                            )
+                            self._isRunning = false
                         }
                     }
                 }
