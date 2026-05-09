@@ -8,6 +8,11 @@
         let speakerDB: SpeakerDB
         let pendingNamingJobs: [PendingNaming]
         let engines: Engines
+        /// The most recent pipeline job that finished — `.done` or `.error`.
+        /// Surfaced so a driver script can poll `/state` (or hit `/jobs/last`)
+        /// and assert on the outcome of a triggered meeting without needing
+        /// to scrape disk paths from logs.
+        let lastJob: LastJob?
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -32,6 +37,20 @@
             let meetingTitle: String
             let speakerCount: Int
             let namingSlug: String?
+        }
+
+        struct LastJob: Codable {
+            let jobID: String
+            let state: JobState
+            let meetingTitle: String
+            let appName: String
+            /// Wall-clock seconds from `enqueuedAt` to snapshot time.
+            let durationSec: Double
+            let transcriptPath: String?
+            let protocolPath: String?
+            let error: String?
+            let warnings: [String]
+            let participants: [String]
         }
 
         struct Engines: Codable {
@@ -68,11 +87,13 @@
             speakerDB: SpeakerDB,
             pendingNamingJobs: [PendingNaming],
             engines: Engines = .empty,
+            lastJob: LastJob? = nil,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
             self.pendingNamingJobs = pendingNamingJobs
             self.engines = engines
+            self.lastJob = lastJob
         }
 
         func jsonData() throws -> Data {
