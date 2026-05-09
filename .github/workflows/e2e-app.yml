@@ -1,0 +1,73 @@
+name: E2E (Production App)
+
+# Pattern-C E2E: builds the dev .app, deploys to a stable path on the
+# self-hosted Mac mini runner, triggers a synthetic meeting via the
+# meeting-simulator tool, polls the DebugRPCServer for the resulting
+# pipeline job, and asserts on the transcript output.
+#
+# Distinct from `e2e.yml` (Pattern A — fixture-based component tests in
+# xctest) because the live recording path needs a stable code identity
+# and granted TCC permissions, neither of which xctest provides.
+#
+# Triggers:
+#   - workflow_dispatch — manual smoketest after PRs merge to main
+#   - push to main — light cadence as a backstop for regressions
+#   - nightly cron — catch flake / drift in the runner host environment
+#
+# Runner prerequisites are documented in scripts/setup-self-hosted-runner.sh
+# and CLAUDE.md > E2E architecture. Without that one-time setup the job
+# will fail on the input-device pre-check inside e2e-app.sh.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/MeetingTranscriber/Sources/**'
+      - 'tools/audiotap/**'
+      - 'tools/meeting-simulator/**'
+      - 'scripts/run_app.sh'
+      - 'scripts/e2e-app.sh'
+      - '.github/workflows/e2e-app.yml'
+  schedule:
+    # 04:30 UTC = 06:30 CEST. Stays clear of the 03:00 quality-and-safety
+    # cron; the dev .app rebuild takes ~70 s and the full pipeline ~60 s,
+    # so a small offset keeps both visible in `gh run list` if both fail.
+    - cron: '30 4 * * *'
+
+# Live-recording E2E mutates host state (deploys the bundle, runs the
+# meeting-simulator which plays audio through the speakers). Two parallel
+# runs would race for the recorder; serialise.
+concurrency:
+  group: e2e-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-app:
+    runs-on: [self-hosted, macOS, ARM64]
+    timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+
+    steps:
+      - uses: actions/checkout@v6
+
+      # Sanity — fail fast with a clear message if Xcode isn't pointed at
+      # the right toolchain. e2e.yml does the same dance.
+      - name: Verify toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      - name: Run Pattern-C E2E driver
+        run: bash scripts/e2e-app.sh
+
+      # Best-effort: capture the simulator's stdout for post-mortem if
+      # the driver failed before tearing it down.
+      - name: Upload simulator log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: meeting-simulator.log
+          path: /tmp/e2e-app-sim.log
+          if-no-files-found: ignore
