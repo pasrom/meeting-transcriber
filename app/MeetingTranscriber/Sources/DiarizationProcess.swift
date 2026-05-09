@@ -133,6 +133,16 @@ enum DiarizationProcess {
         )
     }
 
+    /// Strip a track prefix (e.g. `"R_"` or `"M_"`) from a `[speakerID: name]`
+    /// dictionary, dropping entries whose key doesn't carry the prefix.
+    /// Inverse of the prefixing done in `mergeDualTrackDiarization`.
+    static func unprefixNames(_ autoNames: [String: String], prefix: String) -> [String: String] {
+        autoNames.reduce(into: [:]) { acc, kv in
+            guard kv.key.hasPrefix(prefix) else { return }
+            acc[String(kv.key.dropFirst(prefix.count))] = kv.value
+        }
+    }
+
     /// Maximum silence gap (seconds) before breaking a same-speaker block.
     /// Pauses longer than this start a new paragraph even for the same speaker.
     static let mergeGapThreshold: TimeInterval = 2.0

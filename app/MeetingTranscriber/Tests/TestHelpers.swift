@@ -143,21 +143,24 @@ class MockRecorder: RecordingProvider {
     }
 }
 
-/// Mock diarization that returns pre-set segments.
-/// `@unchecked Sendable` because tests configure mutable state (`runCount`,
-/// `shouldThrow`, etc.) before exercising the diarizer; XCTest serialises
-/// test execution per class, and mocks aren't shared across tests.
+/// Mock diarization that returns pre-set segments. Set `throwOnPathSuffix`
+/// to simulate per-track failure (e.g. silent mic on a Mac mini host) —
+/// the run() call throws when the audio path ends with that string.
+/// `@unchecked Sendable` because tests configure mutable state before
+/// exercising the diarizer; XCTest serialises per class.
 final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     var isAvailable: Bool = true
     var runCount = 0
-    var shouldThrow = false
+    var throwOnPathSuffix: String?
     var resultToReturn: DiarizationResult?
 
-    func run(audioPath _: URL, numSpeakers _: Int?, meetingTitle _: String) -> DiarizationResult {
+    func run(audioPath: URL, numSpeakers _: Int?, meetingTitle _: String) throws -> DiarizationResult {
         runCount += 1
-        if shouldThrow {
-            // Return empty result to simulate failure path
-            return DiarizationResult(segments: [], speakingTimes: [:], autoNames: [:], embeddings: nil)
+        if let suffix = throwOnPathSuffix, audioPath.lastPathComponent.hasSuffix(suffix) {
+            throw NSError(
+                domain: "MockDiarization", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "mock diarizer threw on \(audioPath.lastPathComponent)"],
+            )
         }
         if let result = resultToReturn {
             return result

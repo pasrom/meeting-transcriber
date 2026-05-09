@@ -247,6 +247,37 @@ final class WorkflowIntegrationTests: XCTestCase { // swiftlint:disable:this bal
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
     }
 
+    /// Regression: dual-source recording where the mic track produces no
+    /// detectable speakers (silent BlackHole input on a mic-less Mac mini,
+    /// noisy office without anyone speaking close to the mic, etc.).
+    /// The mic-track diarizer throws; the pipeline must fall back to
+    /// app-only diarization, complete with `.done`, save the transcript,
+    /// and warn with the new "Mic track diarization failed" message —
+    /// not the old all-or-nothing "speakers not identified".
+    func testWorkflowDualSourceMicDiarizationFailsFallsBackToAppOnly() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+        h.diarization.throwOnPathSuffix = "mic_16k.wav"
+        h.queue.speakerNamingHandler = { _ in .skipped }
+
+        let job = try makeDualSourceJob(audioPath: h.audioPath)
+        h.queue.enqueue(job)
+        await h.queue.processNext()
+
+        let finalJob = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(finalJob.state, .done, "Pipeline must complete when only mic diarization fails")
+        XCTAssertNotNil(finalJob.transcriptPath)
+
+        let warnings = finalJob.warnings.joined(separator: " | ")
+        XCTAssertTrue(
+            warnings.contains("Mic track diarization failed"),
+            "Expected the new fallback warning, got: \(warnings)",
+        )
+        XCTAssertFalse(
+            warnings.contains("speakers not identified"),
+            "The old all-or-nothing warning should not fire for the mic-only fallback path",
+        )
+    }
+
     func testWorkflowDiarizationNoEmbeddingsFallsBack() async throws {
         let (h, _) = try makeHarness(diarizeEnabled: true)
         h.diarization.resultToReturn = DiarizationResult(

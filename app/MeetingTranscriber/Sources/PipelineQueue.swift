@@ -606,7 +606,10 @@ class PipelineQueue {
 
                         diarizationLoop: while true {
                             if useDualTrack {
-                                // Diarize app and mic tracks separately
+                                // Diarize app and mic tracks separately. Mic
+                                // failures (silent track on Mac mini hosts
+                                // without a real input device, etc.) are
+                                // tolerated — fall back to app-only.
                                 let app16k = workDir.appendingPathComponent("app_16k.wav")
                                 let mic16k = workDir.appendingPathComponent("mic_16k.wav")
 
@@ -615,19 +618,36 @@ class PipelineQueue {
                                     numSpeakers: speakerCount,
                                     meetingTitle: title,
                                 )
-                                micDiarization = try await diarizeProcess.run(
-                                    audioPath: mic16k,
-                                    numSpeakers: nil, // auto-detect local speakers
-                                    meetingTitle: title,
-                                )
+                                do {
+                                    micDiarization = try await diarizeProcess.run(
+                                        audioPath: mic16k,
+                                        numSpeakers: nil, // auto-detect local speakers
+                                        meetingTitle: title,
+                                    )
+                                } catch {
+                                    logger.warning(
+                                        "[\(shortID, privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
+                                    )
+                                    addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+                                    micDiarization = nil
+                                }
 
-                                // Merge for speaker naming (prefixed IDs: R_, M_)
-                                // swiftlint:disable force_unwrapping
-                                diarization = DiarizationProcess.mergeDualTrackDiarization(
-                                    appDiarization: appDiarization!,
-                                    micDiarization: micDiarization!,
-                                    // swiftlint:enable force_unwrapping
-                                )
+                                if let micDiar = micDiarization {
+                                    // Merge for speaker naming (prefixed IDs: R_, M_)
+                                    // swiftlint:disable force_unwrapping
+                                    diarization = DiarizationProcess.mergeDualTrackDiarization(
+                                        appDiarization: appDiarization!,
+                                        micDiarization: micDiar,
+                                        // swiftlint:enable force_unwrapping
+                                    )
+                                } else {
+                                    // App-only fallback. Feeds the speaker-naming
+                                    // loop below; the dual-track-app-only branch in
+                                    // the assignment block then keeps mic segments
+                                    // with their raw `micLabel` instead of forcing
+                                    // them through speaker matching.
+                                    diarization = appDiarization
+                                }
                             } else {
                                 diarization = try await diarizeProcess.run(
                                     audioPath: mix16k,
@@ -746,15 +766,13 @@ class PipelineQueue {
                             let namedAppDiar = DiarizationResult(
                                 segments: appDiar.segments,
                                 speakingTimes: appDiar.speakingTimes,
-                                autoNames: autoNames.filter { $0.key.hasPrefix("R_") }
-                                    .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
+                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
                                 embeddings: appDiar.embeddings,
                             )
                             let namedMicDiar = DiarizationResult(
                                 segments: micDiar.segments,
                                 speakingTimes: micDiar.speakingTimes,
-                                autoNames: autoNames.filter { $0.key.hasPrefix("M_") }
-                                    .reduce(into: [:]) { $0[String($1.key.dropFirst(2))] = $1.value },
+                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "M_"),
                                 embeddings: micDiar.embeddings,
                             )
 
@@ -767,6 +785,28 @@ class PipelineQueue {
                                 micDiarization: namedMicDiar,
                             )
                             let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
+                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+                        } else if useDualTrack, let appDiar = appDiarization, let cached = cachedSegments {
+                            // Mic diarization failed (silent track / no input
+                            // device). Diarize the app track normally and keep
+                            // the mic transcript with its raw `micLabel` —
+                            // better than emitting "speakers not identified"
+                            // on a recording that has perfectly good remote
+                            // audio.
+                            let namedAppDiar = DiarizationResult(
+                                segments: appDiar.segments,
+                                speakingTimes: appDiar.speakingTimes,
+                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
+                                embeddings: appDiar.embeddings,
+                            )
+                            let appSegs = cached.filter { $0.speaker == "Remote" }
+                            let micSegs = cached.filter { $0.speaker == micLabel }
+                            let labeledApp = DiarizationProcess.assignSpeakers(
+                                transcript: appSegs, diarization: namedAppDiar,
+                            )
+                            // micSegs keep their original micLabel speaker tag.
+                            let combined = (labeledApp + micSegs).sorted { $0.start < $1.start }
+                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(combined)
                             finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
                         } else if let currentDiarization = diarization {
                             // Single-source: standard assignment
