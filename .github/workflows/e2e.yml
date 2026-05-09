@@ -28,9 +28,21 @@ jobs:
     timeout-minutes: 30
     env:
       E2E_ENABLED: "1"
+      # Pin the toolchain to a full Xcode install. Without this the runner
+      # may default to the Command Line Tools, whose Swift toolchain ships
+      # without XCTest — `import XCTest` then fails when SwiftPM compiles
+      # test-only dependencies (swift-snapshot-testing, ViewInspector, …).
+      # GitHub-hosted runners point at Xcode out of the box; self-hosted
+      # runners need this hint until `xcode-select -s` is run on the host.
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Verify Xcode toolchain
+        run: |
+          xcode-select -p
+          swift --version
 
       - name: Resolve test filter
         id: filter
