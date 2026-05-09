@@ -163,7 +163,7 @@ cd app/MeetingTranscriber && swift test --parallel --sanitize=thread --skip Menu
 cd app/MeetingTranscriber && swift test --parallel --sanitize=address --skip MenuBarIconSnapshotTests
 
 # Trigger sanitizer matrix on a specific PR/branch via CI
-gh workflow run ci.yml -f run-sanitizer=true
+gh workflow run quality-and-safety.yml -f run-sanitizer=true -f run-quality=false
 
 # Lint & format check (dry-run, no changes)
 ./scripts/lint.sh

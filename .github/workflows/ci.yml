@@ -5,21 +5,10 @@ on:
     branches: [main, mac]
   pull_request:
     branches: [main]
-  # Nightly sanitizer sweep on main — TSan/ASan are too expensive to run on
-  # every PR, so we run them once a day instead. Catches regressions within
-  # ~24 h, which is acceptable for a solo project.
-  schedule:
-    - cron: "0 3 * * *"  # 03:00 UTC = 05:00 CEST
+  # Manual re-run knob (e.g. to re-trigger lint after a SwiftFormat config
+  # bump). Background-QA jobs (sanitizer, quality) live in
+  # `quality-and-safety.yml` with their own dispatch UI.
   workflow_dispatch:
-    inputs:
-      run-sanitizer:
-        description: "Run TSan/ASan matrix variants for this run"
-        type: boolean
-        default: false
-      run-quality:
-        description: "Run WER/DER quality regression suite for this run"
-        type: boolean
-        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -135,101 +124,6 @@ jobs:
           swift-flags: ${{ matrix.swift-flags }}
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
-      - name: Cancel run on failure
-        if: failure()
-        continue-on-error: true
-        run: gh run cancel ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # Sanitizers are expensive (TSan ~10-15 min, ASan ~7-10 min on macos-26).
-  # Skip on PRs to keep review fast; cover via push to main, nightly cron,
-  # and explicit manual dispatch (`gh workflow run ci.yml -f run-sanitizer=true`).
-  # ASan + TSan can't run in the same process, so they live as separate legs.
-  test-sanitizer:
-    needs: changes
-    if: |
-      needs.changes.outputs.code == 'true' && (
-        github.event_name == 'push' ||
-        github.event_name == 'schedule' ||
-        (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
-      )
-    runs-on: macos-26
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      actions: write
-    strategy:
-      matrix:
-        variant: [tsan, asan]
-        include:
-          # ThreadSanitizer catches races the static @Sendable checker can't
-          # see — C-pointer shared state, GCD-callback closures over class
-          # properties.
-          - variant: tsan
-            sanitizer-flag: "--sanitize=thread"
-          # AddressSanitizer covers the Pointer-heavy code paths Swift's ARC
-          # can't help with — AudioTapLib's CATapDescription / IOProc, the
-          # `withUnsafePointer` slabs in audio mixing, and any C-imported
-          # framework boundary.
-          - variant: asan
-            sanitizer-flag: "--sanitize=address"
-    name: test (${{ matrix.variant }})
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-swift-test
-        with:
-          cache-key-suffix: ${{ matrix.variant }}
-      - name: Swift tests
-        run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
-      - name: Cancel run on failure
-        if: failure()
-        continue-on-error: true
-        run: gh run cancel ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  # WER/DER quality regression suite. Runs the production WhisperKit
-  # variant against curated ground-truth fixtures and writes a JSON row
-  # per fixture/engine into the uploaded artifact, so future PRs can diff
-  # against the main-branch baseline. Skip-default on PRs (loads ~1 GB of
-  # model weights and runs real ASR); cover via push to main, nightly
-  # cron, and explicit manual dispatch (`gh workflow run ci.yml -f
-  # run-quality=true`).
-  quality-baseline:
-    needs: changes
-    if: |
-      needs.changes.outputs.code == 'true' && (
-        github.event_name == 'push' ||
-        github.event_name == 'schedule' ||
-        (github.event_name == 'workflow_dispatch' && inputs.run-quality)
-      )
-    runs-on: macos-26
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/setup-swift-test
-        with:
-          cache-key-suffix: quality
-      # Filter explicitly to engine-quality test classes — `--filter Quality`
-      # would also pull in `QualityResultsTests`, which exercises the writer
-      # via fake rows and would pollute the shared singleton's row buffer.
-      # When adding a new engine quality class, append it to the alternation.
-      - name: Run quality regression suite
-        env:
-          RUN_QUALITY_TESTS: "1"
-          QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
-        run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests"
-      - name: Upload quality results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: quality-results
-          path: ${{ github.workspace }}/quality-results.json
-          if-no-files-found: warn
       - name: Cancel run on failure
         if: failure()
         continue-on-error: true

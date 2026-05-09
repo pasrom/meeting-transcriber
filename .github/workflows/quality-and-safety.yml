@@ -1,0 +1,115 @@
+name: Quality & Safety
+
+# Background QA workflow — runs the expensive Swift checks that don't
+# block PRs:
+#   - TSan/ASan sanitizer sweeps (catches races/UB the static checker
+#     can't see; ~10–15 min per leg).
+#   - WER/DER quality regression (downloads ~1 GB of model weights and
+#     runs real ASR; produces the baseline artifact future PRs diff
+#     against).
+#
+# Triggers: push to main, nightly cron, and explicit manual dispatch.
+# Never runs on pull requests — review iteration stays fast.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC = 05:00 CEST
+  workflow_dispatch:
+    inputs:
+      run-sanitizer:
+        description: "Run TSan/ASan matrix"
+        type: boolean
+        default: true
+      run-quality:
+        description: "Run WER/DER quality regression"
+        type: boolean
+        default: true
+
+# Main-branch and nightly runs produce baselines (sanitizer reports,
+# quality-results.json artifact). Cancelling them on a fresh push would
+# lose those baselines, so we don't cancel — let runs accumulate. Manual
+# back-to-back dispatches are rare enough that the wasted time isn't
+# worth a more complex carve-out.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test-sanitizer:
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      matrix:
+        variant: [tsan, asan]
+        include:
+          # ThreadSanitizer catches races the static @Sendable checker can't
+          # see — C-pointer shared state, GCD-callback closures over class
+          # properties.
+          - variant: tsan
+            sanitizer-flag: "--sanitize=thread"
+          # AddressSanitizer covers the Pointer-heavy code paths Swift's ARC
+          # can't help with — AudioTapLib's CATapDescription / IOProc, the
+          # `withUnsafePointer` slabs in audio mixing, and any C-imported
+          # framework boundary.
+          - variant: asan
+            sanitizer-flag: "--sanitize=address"
+    name: test (${{ matrix.variant }})
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-swift-test
+        with:
+          cache-key-suffix: ${{ matrix.variant }}
+      - name: Swift tests
+        run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  quality-baseline:
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run-quality)
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-swift-test
+        with:
+          cache-key-suffix: quality
+      # Filter explicitly to engine-quality test classes — `--filter Quality`
+      # would also pull in `QualityResultsTests`, which exercises the writer
+      # via fake rows and would pollute the shared singleton's row buffer.
+      # When adding a new engine quality class, append it to the alternation.
+      - name: Run quality regression suite
+        env:
+          RUN_QUALITY_TESTS: "1"
+          QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
+        run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests"
+      - name: Upload quality results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-results
+          path: ${{ github.workspace }}/quality-results.json
+          if-no-files-found: warn
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
