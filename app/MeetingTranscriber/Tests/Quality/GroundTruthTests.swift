@@ -13,9 +13,9 @@ final class GroundTruthTests: XCTestCase {
         XCTAssertEqual(truth.turns[1].speaker, "B")
         XCTAssertEqual(truth.turns[2].speaker, "A")
         XCTAssertEqual(truth.turns[3].speaker, "B")
-        // Each turn should have positive duration and start before its end.
         for turn in truth.turns {
             XCTAssertLessThan(turn.start, turn.end, "turn \(turn.speaker) start>=end")
+            XCTAssertFalse(turn.text.isEmpty, "turn \(turn.speaker) has empty text")
         }
         // Concatenated text should be non-empty and contain at least one
         // expected German keyword from the script.
