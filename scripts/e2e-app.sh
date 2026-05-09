@@ -136,6 +136,41 @@ else
     cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
 fi
 
+# Re-sign so TCC sees the same designated requirement across rebuilds
+# and keeps the granted permissions. The rsync above brought in whatever
+# run_app.sh signed with (typically ad-hoc — run_app.sh's `find-identity
+# -v` doesn't pick up our identities), which would invalidate the TCC
+# grant tied to the cert SHA.
+#
+# Two paths:
+#   - CI / Apple Developer ID — `DEVELOPER_ID` env var set (provided by
+#     e2e-app.yml after importing the cert from secrets). Apple roots are
+#     in the system trust store, so this just works.
+#   - Local dev — `DEVELOPER_ID` empty; fall back to the self-signed cert
+#     + dedicated keychain installed by setup-self-hosted-runner.sh.
+
+if [ -n "${DEVELOPER_ID:-}" ]; then
+    log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
+    SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
+    [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
+    codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
+else
+    DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
+    DEV_CERT_PATH="/tmp/meetingtranscriber-setup/dev-cert.crt"
+    if [ ! -f "$DEV_KEYCHAIN" ] || [ ! -f "$DEV_CERT_PATH" ]; then
+        fail "no Developer ID and dev keychain missing ($DEV_KEYCHAIN / $DEV_CERT_PATH) — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
+    fi
+    DEV_CERT_HASH="$(openssl x509 -in "$DEV_CERT_PATH" -noout -fingerprint -sha1 \
+        | sed 's/^.*=//' | tr -d ':')"
+    log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
+    security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
+    codesign --force --sign "$DEV_CERT_HASH" \
+        --keychain "$DEV_KEYCHAIN" \
+        "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
+fi
+
 # --- 4. ensure debug RPC will be on -------------------------------------
 
 # Persistent debugRPCEnabled toggle survives across launches. Set it before
