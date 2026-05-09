@@ -16,6 +16,10 @@ on:
         description: "Run TSan/ASan matrix variants for this run"
         type: boolean
         default: false
+      run-quality:
+        description: "Run WER/DER quality regression suite for this run"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -212,6 +216,69 @@ jobs:
         run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
+      - name: Cancel run on failure
+        if: failure()
+        continue-on-error: true
+        run: gh run cancel ${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # WER/DER quality regression suite. Runs the production WhisperKit
+  # variant against curated ground-truth fixtures and writes a JSON row
+  # per fixture/engine into the uploaded artifact, so future PRs can diff
+  # against the main-branch baseline. Skip-default on PRs (loads ~1 GB of
+  # model weights and runs real ASR); cover via push to main, nightly
+  # cron, and explicit manual dispatch (`gh workflow run ci.yml -f
+  # run-quality=true`).
+  quality-baseline:
+    needs: changes
+    if: |
+      needs.changes.outputs.code == 'true' && (
+        github.event_name == 'push' ||
+        github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.run-quality)
+      )
+    runs-on: macos-26
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Cache SPM dependencies
+        uses: actions/cache@v5
+        with:
+          path: app/MeetingTranscriber/.build
+          key: spm-${{ runner.os }}-quality-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-quality-
+      - name: Cache ML models
+        id: model-cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Documents/huggingface
+            ~/Library/Application Support/FluidAudio
+          key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
+          restore-keys: ml-models-${{ runner.os }}-
+      - name: Pre-warm model cache (cache miss only)
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests
+      # Filter explicitly to engine-quality test classes — `--filter Quality`
+      # would also pull in `QualityResultsTests`, which exercises the writer
+      # via fake rows and would pollute the shared singleton's row buffer.
+      # When adding a new engine quality class, append it to the alternation.
+      - name: Run quality regression suite
+        env:
+          RUN_QUALITY_TESTS: "1"
+          QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
+        run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests"
+      - name: Upload quality results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-results
+          path: ${{ github.workspace }}/quality-results.json
+          if-no-files-found: warn
       - name: Cancel run on failure
         if: failure()
         continue-on-error: true
