@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 # Launch the Meeting Transcriber menu bar app.
 # Builds an .app bundle so macOS APIs (notifications, etc.) work correctly.
+#
+# --build-only: Build the bundle but skip `open -W`. Used by the Pattern-C
+#   E2E driver (scripts/e2e-app.sh) which deploys the bundle to a stable
+#   path and launches it itself; opening the in-tree bundle there would
+#   confuse macOS LaunchServices about which one to use for TCC.
 
 set -euo pipefail
+
+BUILD_ONLY=false
+for arg in "$@"; do
+    case "$arg" in
+        --build-only) BUILD_ONLY=true ;;
+        *) echo "Unknown argument: $arg" >&2; exit 2 ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TRANSCRIBER_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -44,6 +57,11 @@ SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}
 if [ -n "$SIGN_HASH" ]; then
     codesign --force --sign "$SIGN_HASH" "$APP_BUNDLE" 2>/dev/null && \
         echo "  Signed with: $SIGN_HASH"
+fi
+
+if [ "$BUILD_ONLY" = true ]; then
+    echo "Bundle ready: $APP_BUNDLE"
+    exit 0
 fi
 
 echo "Starting Meeting Transcriber..."
