@@ -24,19 +24,24 @@ set -euo pipefail
 
 # --- args -----------------------------------------------------------------
 
-KEEP_APP=false           # leave the app running after assertions
-QUIT_APP=false           # quit the app on exit (overrides KEEP_APP)
+APP_AFTER=leave          # leave | quit
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --keep-app)   KEEP_APP=true ;;
-        --quit-app)   QUIT_APP=true ;;
+        --quit-app)   APP_AFTER=quit ;;
+        --keep-app)   APP_AFTER=leave ;;     # explicit alias for the default
         --no-build)   NO_BUILD=true ;;
         --fixture)    shift; SIMULATOR_FIXTURE="$1" ;;
         -h|--help)
-            sed -n '2,/^$/p' "$0" | sed 's/^# //;s/^#//'
+            cat <<'HELP'
+Usage: e2e-app.sh [--no-build] [--quit-app] [--fixture path/to.wav]
+
+  --no-build   Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
+  --quit-app   Send Quit to the dev app on exit. Default: leave it running.
+  --fixture    Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
+HELP
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -74,27 +79,16 @@ require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
 }
 
-# Read the RPC bearer token written by the running app at start-up.
-read_token() {
-    [ -f "$RPC_TOKEN_FILE" ] || fail "RPC token file not found: $RPC_TOKEN_FILE (is the app running with debugRPC enabled?)"
-    cat "$RPC_TOKEN_FILE"
-}
+RPC_TOKEN=""  # populated once when the token file appears
 
-# Curl the RPC with bearer auth. Returns empty string + exit 0 on
-# transient failure (timeout, connection refused) so callers in `set -e`
-# poll loops can keep trying. The 15 s timeout is generous because the
-# app's main thread can briefly block during model load + audio teardown.
+# Returns empty string + exit 0 on transient curl failure so callers in
+# `set -e` poll loops keep going. 15 s timeout covers brief main-thread
+# blocks during model load + audio teardown.
 rpc() {
     local path="$1"
-    local token; token="$(read_token)"
-    local response
-    if response=$(curl --silent --show-error --max-time 15 \
-            --header "Authorization: Bearer $token" \
-            "$RPC_BASE$path" 2>/dev/null); then
-        printf '%s' "$response"
-    else
-        printf ''
-    fi
+    curl --silent --show-error --max-time 15 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE$path" 2>/dev/null || true
 }
 
 # --- preflight ------------------------------------------------------------
@@ -118,35 +112,25 @@ if [ "$NO_BUILD" = true ]; then
     [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
     log "Skipping build/deploy/re-sign — using existing $DEV_BUNDLE_DEPLOY"
 else
-    # --- 1. build dev bundle ----------------------------------------------
-
     log "Building dev .app bundle"
     "$SCRIPT_DIR/run_app.sh" --build-only
 
-    # --- 3. deploy to stable path (preserve bundle dir → preserve TCC) ----
-
     log "Deploying to $DEV_BUNDLE_DEPLOY"
     mkdir -p "$(dirname "$DEV_BUNDLE_DEPLOY")"
+    # rsync into the existing bundle dir — TCC keys off the bundle path,
+    # so a delete+copy would invalidate granted permissions.
     if [ -d "$DEV_BUNDLE_DEPLOY" ]; then
-        # cp -R into the existing bundle (NOT delete + copy) — TCC keys off
-        # the bundle path; a fresh dir would invalidate granted permissions.
         rsync -a --delete "$DEV_BUNDLE_BUILD/" "$DEV_BUNDLE_DEPLOY/"
     else
         cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
     fi
 
-    # Re-sign so TCC sees the same designated requirement across rebuilds.
-    # rsync above brought in whatever run_app.sh signed with (typically
-    # ad-hoc — run_app.sh's `find-identity -v` doesn't pick up our
-    # identities), which would invalidate the TCC grant tied to the cert
-    # SHA.
-    #
-    # Two paths:
-    #   - CI / Apple Developer ID — `DEVELOPER_ID` env var set (provided
-    #     by e2e-app.yml after importing the cert from secrets). Apple
-    #     roots are system-trusted; this just works.
-    #   - Local dev — `DEVELOPER_ID` empty; fall back to the self-signed
-    #     cert installed by setup-self-hosted-runner.sh.
+    # Re-sign with our stable identity. run_app.sh signs with whatever
+    # `find-identity -v | head -1` returns (often ad-hoc on CI hosts), so
+    # without re-signing TCC would see a different cert SHA on every
+    # rebuild and lose the grant. CI path uses the imported Developer ID;
+    # local-dev path falls back to the self-signed cert from
+    # setup-self-hosted-runner.sh.
     if [ -n "${DEVELOPER_ID:-}" ]; then
         log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
         SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
@@ -170,66 +154,51 @@ else
     fi
 fi
 
-# --- 2. build meeting-simulator (cached after first run) ------------------
-
 if [ ! -x "$SIMULATOR_BIN" ]; then
     log "Building meeting-simulator"
     (cd "$SIMULATOR_PKG" && swift build -c release)
 fi
 
-# --- 4. ensure debug RPC + auto-watch will be on -------------------------
-
-# Persistent toggles survive across launches. Set them before launching so
-# the server comes up immediately and the WatchLoop auto-starts 3 s after
-# init (without an explicit click on "Start Watching" in the menu, which
-# isn't reachable over SSH). The autoWatch path is already wired in
-# MeetingTranscriberApp via the `.autoWatchStart` notification; we just
-# flip the persistent flag it checks.
+# `autoWatch` triggers the same `.autoWatchStart` notification an
+# explicit "Start Watching" menu click would — necessary because that
+# menu isn't reachable over SSH. `debugRPCEnabled` brings the RPC up at
+# launch instead of after a Settings toggle.
 defaults write com.meetingtranscriber.dev debugRPCEnabled -bool true
 defaults write com.meetingtranscriber.dev autoWatch -bool true
 
-# --- 5. launch app --------------------------------------------------------
-
-# If a previous instance is still around, leave it — `open` brings the
-# existing PID to the front rather than re-launching with the new bundle.
-# That's fine: the deploy step above overwrote the bundle in-place.
 log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
-# --- 6. wait for RPC ------------------------------------------------------
-
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
 deadline=$(( $(date +%s) + RPC_READY_TIMEOUT_S ))
-until [ -f "$RPC_TOKEN_FILE" ] && rpc /healthz >/dev/null 2>&1; do
+while [ ! -f "$RPC_TOKEN_FILE" ] || ! { RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null; }; do
     [ "$(date +%s)" -lt "$deadline" ] || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
     sleep 1
 done
 log "RPC up"
 
-# --- 7. snapshot pre-trigger state ---------------------------------------
-
 PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
 log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 
-# --- 8. trigger meeting-simulator ----------------------------------------
+# Single trap covers the simulator process for any exit path (success,
+# fail, signal). Set before the `&` line so a kill between fork and the
+# trap line doesn't orphan the subprocess.
+SIM_PID=""
+trap '[ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true' EXIT INT TERM
 
 log "Starting meeting-simulator → $SIMULATOR_FIXTURE"
 "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
 SIM_PID=$!
-trap '[ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true' EXIT
-
-# --- 9. poll for new lastJob ---------------------------------------------
 
 log "Polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
 deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
 last_state=""
 new_job_id=""
 while true; do
-    snap="$(rpc /state)"
-    lj_id="$(jq -r '.lastJob.jobID // empty' <<<"$snap")"
-    lj_state="$(jq -r '.lastJob.state // empty' <<<"$snap")"
-    pipe_active="$(jq -r '.pipeline.activeJobCount' <<<"$snap")"
-    pipe_processing="$(jq -r '.pipeline.isProcessing' <<<"$snap")"
+    # One jq invocation, four fields out via TSV — saves 3 forks per poll.
+    IFS=$'\t' read -r lj_id lj_state pipe_active pipe_processing < <(
+        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing] | @tsv'
+    )
 
     if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$new_job_id" ]; then
         log "  pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state"
@@ -237,7 +206,6 @@ while true; do
         new_job_id="$lj_id"
     fi
 
-    # Done when a NEW lastJob has terminal state.
     if [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
         && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }; then
         break
@@ -246,8 +214,6 @@ while true; do
     [ "$(date +%s)" -lt "$deadline" ] || fail "no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
     sleep 5
 done
-
-# --- 10. assertions ------------------------------------------------------
 
 log "Final state: $lj_state"
 final_snapshot="$(rpc /state)"
@@ -267,16 +233,9 @@ log "Preview:"
 head -c 500 "$transcript_path" | sed 's/^/    /'
 echo
 
-# --- 11. cleanup ---------------------------------------------------------
-
-[ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-trap - EXIT
-
-if [ "$QUIT_APP" = true ]; then
+if [ "$APP_AFTER" = quit ]; then
     log "Quitting app"
     osascript -e 'tell application "MeetingTranscriber-Dev" to quit' 2>/dev/null || true
-elif [ "$KEEP_APP" = false ]; then
-    log "App still running (use --quit-app to quit)"
 fi
 
 log "PASS"

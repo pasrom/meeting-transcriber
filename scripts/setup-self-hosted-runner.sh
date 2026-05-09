@@ -51,14 +51,23 @@ fail() { printf '[setup] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # --- 1. cert ----------------------------------------------------------
 
-# Skip recreation only if BOTH the dev keychain has the cert AND the
-# .crt file is still on disk — otherwise downstream steps that read
-# `$CERT_PATH` would fail. /tmp is volatile so partial state is common
-# after a reboot.
-if [ -f "$DEV_KEYCHAIN" ] && [ -f "$CERT_PATH" ] \
+# Three states: keychain+cert exist (skip), only keychain exists (re-export
+# cert from it without nuking other identities the operator may have added),
+# neither (full create). /tmp is volatile so the cert-only-missing case
+# is common after a reboot.
+if [ -f "$DEV_KEYCHAIN" ] \
     && security find-identity -p codesigning "$DEV_KEYCHAIN" 2>/dev/null \
         | grep -q "$CERT_NAME"; then
-    log "Code-signing cert '$CERT_NAME' already in dev keychain + $CERT_PATH present — skipping creation"
+    if [ ! -f "$CERT_PATH" ]; then
+        log "Re-exporting cert from dev keychain → $CERT_PATH"
+        mkdir -p "$ARTIFACTS_DIR"
+        chmod 0755 "$ARTIFACTS_DIR"
+        security find-certificate -c "$CERT_NAME" -p "$DEV_KEYCHAIN" > "$CERT_PATH" \
+            || fail "could not export cert from $DEV_KEYCHAIN"
+        chmod 0644 "$CERT_PATH"
+    else
+        log "Code-signing cert '$CERT_NAME' already in dev keychain + $CERT_PATH present — skipping creation"
+    fi
 else
     log "Creating self-signed code-signing cert '$CERT_NAME'"
     TMPD="$(mktemp -d)"
