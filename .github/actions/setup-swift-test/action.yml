@@ -50,6 +50,10 @@ runs:
         key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
         restore-keys: ml-models-${{ runner.os }}-
 
+    # Pre-warm step has no per-step `timeout-minutes` — composite actions
+    # don't support it. Callers should set `timeout-minutes` on the
+    # outer `uses: ./.github/actions/setup-swift-test` step to bound the
+    # cold-cache HuggingFace + FluidAudio download.
     - name: Pre-warm model cache (cache miss only)
       if: steps.model-cache.outputs.cache-hit != 'true'
       shell: bash

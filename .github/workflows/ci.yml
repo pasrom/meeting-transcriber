@@ -108,6 +108,9 @@ jobs:
       contents: read
       actions: write
     strategy:
+      # Both Homebrew and AppStore variants must pass; one failing leg
+      # shouldn't kill the other's diagnostic output.
+      fail-fast: false
       matrix:
         variant: [homebrew, appstore]
         include:
@@ -118,7 +121,11 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
+      # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
+      # download; well below the 30 min job timeout so a hung download
+      # surfaces as a step failure, not a job-timeout.
       - uses: ./.github/actions/setup-swift-test
+        timeout-minutes: 20
         with:
           cache-key-suffix: ${{ matrix.variant }}
           swift-flags: ${{ matrix.swift-flags }}

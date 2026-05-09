@@ -47,6 +47,9 @@ jobs:
       contents: read
       actions: write
     strategy:
+      # TSan and ASan find different classes of bugs; one failing leg
+      # shouldn't kill the other's diagnostic output.
+      fail-fast: false
       matrix:
         variant: [tsan, asan]
         include:
@@ -64,7 +67,11 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
+      # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
+      # download; well below the 60 min job timeout so a hung download
+      # surfaces as a step failure, not a job-timeout.
       - uses: ./.github/actions/setup-swift-test
+        timeout-minutes: 20
         with:
           cache-key-suffix: ${{ matrix.variant }}
       - name: Swift tests
@@ -88,17 +95,26 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v6
+      # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
+      # download; well below the 45 min job timeout so a hung download
+      # surfaces as a step failure, not a job-timeout.
       - uses: ./.github/actions/setup-swift-test
+        timeout-minutes: 20
         with:
           cache-key-suffix: quality
       # Filter explicitly to engine-quality test classes — `--filter Quality`
       # would also pull in `QualityResultsTests`, which exercises the writer
       # via fake rows and would pollute the shared singleton's row buffer.
       # When adding a new engine quality class, append it to the alternation.
+      # Pin the model variant explicitly so changes to the in-code default
+      # in `WhisperKitEngine.modelVariant` don't silently shift the
+      # baseline. When this needs to change, change it here and document
+      # the new baseline in the same PR.
       - name: Run quality regression suite
         env:
           RUN_QUALITY_TESTS: "1"
           QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
+          WHISPERKIT_MODEL: openai_whisper-large-v3-v20240930_turbo
         run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests"
       - name: Upload quality results
         if: always()
