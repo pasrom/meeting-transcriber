@@ -345,6 +345,14 @@ class PipelineQueue {
         triggerProcessing()
     }
 
+    /// Test-only: insert a fully-formed job at any state, bypassing
+    /// `enqueue()` and the processing trigger. Lets snapshot/observer tests
+    /// exercise terminal states (`.done`, `.error`) without spinning real
+    /// engines. Production code MUST go through `enqueue()`.
+    func insertJobForTesting(_ job: PipelineJob) {
+        jobs.append(job)
+    }
+
     /// Wait for the queue to drain: any in-flight processing finishes and no
     /// jobs remain in `.waiting`. Used by tests that enqueue a job and need to
     /// observe a terminal state without racing against the spawned process task

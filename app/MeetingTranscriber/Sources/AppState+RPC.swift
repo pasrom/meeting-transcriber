@@ -30,6 +30,30 @@
                 ),
                 pendingNamingJobs: pendingJobs,
                 engines: enginesSnapshot(),
+                lastJob: lastFinishedJobSnapshot(),
+            )
+        }
+
+        /// Most recent `.done`-or-`.error` job from the queue, mapped to the
+        /// snapshot shape. Used by E2E driver scripts to assert on outcome
+        /// after triggering a meeting.
+        private func lastFinishedJobSnapshot() -> RPCStateSnapshot.LastJob? {
+            guard let job = pipelineQueue.jobs.last(where: { job in
+                job.state == .done || job.state == .error
+            }) else {
+                return nil
+            }
+            return RPCStateSnapshot.LastJob(
+                jobID: job.id.uuidString,
+                state: job.state,
+                meetingTitle: job.meetingTitle,
+                appName: job.appName,
+                durationSec: Date().timeIntervalSince(job.enqueuedAt),
+                transcriptPath: job.transcriptPath?.path,
+                protocolPath: job.protocolPath?.path,
+                error: job.error,
+                warnings: job.warnings,
+                participants: job.participants,
             )
         }
 

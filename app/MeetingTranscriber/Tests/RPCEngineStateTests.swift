@@ -133,5 +133,80 @@
             XCTAssertTrue(s.contains("\"whisperKit\""))
             XCTAssertTrue(s.contains("\"parakeet\""))
         }
+
+        // MARK: - LastJob
+
+        func test_snapshot_lastJob_isNilWhenQueueEmpty() {
+            let state = AppState(settings: settings)
+            XCTAssertNil(state.rpcStateSnapshot().lastJob)
+        }
+
+        func test_snapshot_lastJob_skipsWaitingAndInFlightJobs() {
+            let state = AppState(settings: settings)
+            let waiting = makeJob(title: "in-flight")
+            state.pipelineQueue.insertJobForTesting(waiting)
+            // .waiting is the default state on init; not finished yet.
+            XCTAssertNil(state.rpcStateSnapshot().lastJob)
+        }
+
+        func test_snapshot_lastJob_returnsMostRecentFinishedJob() throws {
+            let state = AppState(settings: settings)
+            var done = makeJob(title: "earlier-done")
+            done.state = .done
+            done.transcriptPath = URL(fileURLWithPath: "/tmp/transcript-earlier.md")
+            var errored = makeJob(title: "later-error")
+            errored.state = .error
+            errored.error = "Empty transcript"
+            errored.warnings = ["mic silent"]
+            // Order in the array determines "last" — `last(where:)` walks
+            // back-to-front. Append done first, then errored, so the latter
+            // is returned.
+            state.pipelineQueue.insertJobForTesting(done)
+            state.pipelineQueue.insertJobForTesting(errored)
+
+            let snapshot = state.rpcStateSnapshot()
+            let last = try XCTUnwrap(snapshot.lastJob)
+            XCTAssertEqual(last.meetingTitle, "later-error")
+            XCTAssertEqual(last.state, .error)
+            XCTAssertEqual(last.error, "Empty transcript")
+            XCTAssertEqual(last.warnings, ["mic silent"])
+            XCTAssertNil(last.transcriptPath)
+            XCTAssertGreaterThanOrEqual(last.durationSec, 0)
+        }
+
+        func test_snapshot_lastJob_jsonRoundtripsAllFields() throws {
+            let state = AppState(settings: settings)
+            var done = makeJob(title: "Acme · Standup", participants: ["Alice", "Bob"])
+            done.state = .done
+            done.transcriptPath = URL(fileURLWithPath: "/tmp/transcript.md")
+            done.protocolPath = URL(fileURLWithPath: "/tmp/protocol.md")
+            done.warnings = ["diarization fell back to single track"]
+            state.pipelineQueue.insertJobForTesting(done)
+
+            let json = try state.rpcStateSnapshot().jsonData()
+            let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: json)
+            let last = try XCTUnwrap(decoded.lastJob)
+
+            XCTAssertEqual(last.meetingTitle, "Acme · Standup")
+            XCTAssertEqual(last.state, .done)
+            XCTAssertEqual(last.transcriptPath, "/tmp/transcript.md")
+            XCTAssertEqual(last.protocolPath, "/tmp/protocol.md")
+            XCTAssertEqual(last.participants, ["Alice", "Bob"])
+            XCTAssertEqual(last.warnings, ["diarization fell back to single track"])
+        }
+
+        // MARK: - Helpers
+
+        private func makeJob(title: String, participants: [String] = []) -> PipelineJob {
+            PipelineJob(
+                meetingTitle: title,
+                appName: "MeetingSimulator",
+                mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+                appPath: nil,
+                micPath: nil,
+                micDelay: 0,
+                participants: participants,
+            )
+        }
     }
 #endif
