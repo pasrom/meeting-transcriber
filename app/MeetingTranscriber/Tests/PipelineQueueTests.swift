@@ -1220,6 +1220,65 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertNil(queue.speakerNamingDataByJob[job.id])
     }
 
+    func testSkipTransitionsToDoneWhenProtocolFactoryReturnsNil() async throws {
+        // Regression: when AppSettings.protocolProvider == .none, the
+        // factory closure exists but returns nil. Earlier acceptAutoNames
+        // checked closure-existence (always true here), took the Task
+        // path, and that Task fizzled in generateProtocol's guard —
+        // leaving the job stuck in .speakerNamingPending. The fix
+        // probes the closure's output, so skip falls through to .done.
+        let outputDir = tmpDir.appendingPathComponent("output")
+        try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+        let transcriptPath = tmpDir.appendingPathComponent("transcript.txt")
+        try "[00:00] SPEAKER_0: Hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let queue = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: outputDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+        )
+
+        var job = PipelineJob(
+            meetingTitle: "Provider None Skip",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.transcriptPath = transcriptPath
+        queue.enqueue(job)
+
+        queue.speakerNamingDataByJob[job.id] = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Provider None Skip",
+            mapping: [:], speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [],
+            isDualSource: false,
+        )
+
+        let doneExpectation = XCTestExpectation(description: "Job transitions to done after skip")
+        queue.onJobStateChange = { _, _, newState in
+            if newState == .done {
+                doneExpectation.fulfill()
+            }
+        }
+
+        queue.completeSpeakerNaming(jobID: job.id, result: .skipped)
+
+        await fulfillment(of: [doneExpectation], timeout: 2)
+
+        XCTAssertEqual(
+            queue.jobs.first?.state, .done,
+            "Skip with provider=.none must transition to .done, not stay in .speakerNamingPending",
+        )
+        XCTAssertNil(queue.speakerNamingDataByJob[job.id])
+    }
+
     // MARK: - Late Re-apply Speaker Names
 
     func testLateConfirmationRewritesTranscript() async throws {
