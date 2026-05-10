@@ -159,12 +159,16 @@ final class AppState {
             let skipNaming: () -> Void = { [weak self] in
                 Task { @MainActor in
                     guard let self else { return }
-                    // Drain all currently-pending naming jobs. Each
-                    // completeSpeakerNaming call transitions the first
-                    // pending job out of .speakerNamingPending
-                    // synchronously, so the loop terminates.
-                    while !self.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
-                        self.pipelineQueue.completeSpeakerNaming(result: .skipped)
+                    // Snapshot the pending job IDs and iterate the snapshot.
+                    // Avoids infinite-loop hazard if completeSpeakerNaming
+                    // ever short-circuits without transitioning state (e.g.
+                    // missing speakerNamingDataByJob entry → early return,
+                    // pending list unchanged) — observed live during E2E
+                    // when the data dictionary was already cleared by an
+                    // earlier skip race.
+                    let pendingIDs = self.pipelineQueue.pendingSpeakerNamingJobs.map(\.id)
+                    for jobID in pendingIDs {
+                        self.pipelineQueue.completeSpeakerNaming(jobID: jobID, result: .skipped)
                     }
                 }
             }

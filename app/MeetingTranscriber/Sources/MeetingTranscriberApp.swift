@@ -148,6 +148,14 @@ struct MeetingTranscriberApp: App {
                         closeWindow(id: "speaker-naming")
                     }
                 }
+                // Auto-close when the pending list drains. Covers RPC-driven
+                // skip (`POST /action/skipNaming`), where the data layer
+                // transitions but the UI callback never fires.
+                .onChange(of: appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty) { _, isEmpty in
+                    if isEmpty {
+                        closeWindow(id: "speaker-naming")
+                    }
+                }
         }
         .windowResizability(.contentSize)
 
