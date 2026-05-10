@@ -24,22 +24,22 @@ set -euo pipefail
 
 # --- args -----------------------------------------------------------------
 
-APP_AFTER=leave          # leave | quit
+APP_AFTER=quit           # quit | leave
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --quit-app)   APP_AFTER=quit ;;
-        --keep-app)   APP_AFTER=leave ;;     # explicit alias for the default
+        --quit-app)   APP_AFTER=quit ;;     # explicit alias for the default
+        --keep-app)   APP_AFTER=leave ;;
         --no-build)   NO_BUILD=true ;;
         --fixture)    shift; SIMULATOR_FIXTURE="$1" ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-app.sh [--no-build] [--quit-app] [--fixture path/to.wav]
+Usage: e2e-app.sh [--no-build] [--keep-app] [--fixture path/to.wav]
 
   --no-build   Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
-  --quit-app   Send Quit to the dev app on exit. Default: leave it running.
+  --keep-app   Leave the dev app running on exit. Default: quit it.
   --fixture    Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -91,6 +91,33 @@ rpc() {
         "$RPC_BASE$path" 2>/dev/null || true
 }
 
+# Stop any previous dev-app instance before we touch the bundle on disk
+# or open a new one. rsync would otherwise overwrite mmap'd mach-o pages,
+# and a still-running process holds the RPC port so the next `open` is a
+# no-op. Graceful AppleScript quit first, SIGTERM after 3 s, SIGKILL last.
+quit_running_app() {
+    local bundle_id="com.meetingtranscriber.dev"
+    if ! pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null; then
+        return 0
+    fi
+    log "Stopping previous MeetingTranscriber-Dev instance"
+    osascript -e "tell application id \"$bundle_id\" to quit" 2>/dev/null || true
+    for _ in 1 2 3; do
+        pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null || return 0
+        sleep 1
+    done
+    pkill -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
+    for _ in 1 2 3; do
+        pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null || return 0
+        sleep 1
+    done
+    pkill -KILL -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
+    sleep 1
+    if pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null; then
+        fail "could not stop running MeetingTranscriber-Dev — kill it manually and retry"
+    fi
+}
+
 # --- preflight ------------------------------------------------------------
 
 require_command curl
@@ -107,6 +134,10 @@ require_command codesign
 if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | grep -q "Input Channels"; then
     fail "no default audio input device — install BlackHole 2ch (brew install blackhole-2ch + reboot/coreaudiod restart) and set it as the default Input in System Settings → Sound"
 fi
+
+# Always — even with --no-build, since UserDefaults below take effect
+# only on launch and the running RPC server would shadow the new one.
+quit_running_app
 
 if [ "$NO_BUILD" = true ]; then
     [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
@@ -234,8 +265,7 @@ head -c 500 "$transcript_path" | sed 's/^/    /'
 echo
 
 if [ "$APP_AFTER" = quit ]; then
-    log "Quitting app"
-    osascript -e 'tell application "MeetingTranscriber-Dev" to quit' 2>/dev/null || true
+    quit_running_app
 fi
 
 log "PASS"
