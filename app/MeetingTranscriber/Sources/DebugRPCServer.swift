@@ -73,6 +73,7 @@
         private let port: NWEndpoint.Port
         private let snapshot: () -> RPCStateSnapshot
         private let speakerActions: SpeakerDBActions
+        private let skipNaming: () -> Void
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -88,11 +89,13 @@
             token: String = DebugRPCServer.loadOrCreateToken(),
             snapshot: @escaping () -> RPCStateSnapshot,
             speakerActions: SpeakerDBActions = .noop,
+            skipNaming: @escaping () -> Void = {},
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
             self.snapshot = snapshot
             self.speakerActions = speakerActions
+            self.skipNaming = skipNaming
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -231,6 +234,14 @@
 
             case ("POST", "/action/closeSettings"):
                 Self.closeSettings()
+                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+
+            case ("POST", "/action/skipNaming"):
+                // Skips ALL pending speaker-naming jobs in one shot — driver
+                // scripts (e2e-app.sh) just want to drain the queue without
+                // blocking on a UI dialog. Fire-and-forget; returns 200 even
+                // if there's nothing pending.
+                skipNaming()
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
             case ("POST", "/action/renameSpeaker"),

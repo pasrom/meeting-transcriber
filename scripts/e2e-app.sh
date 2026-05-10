@@ -237,13 +237,24 @@ while true; do
     # (transient curl --max-time hit during model load / GC pause):
     # jq emits no output → read hits EOF → returns 1 → `set -e` would
     # otherwise kill the script silently. We just retry next tick.
-    lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""
-    IFS='|' read -r lj_id lj_state pipe_active pipe_processing < <(
-        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing] | join("|")'
+    lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
+    IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
+        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
     ) || true
 
+    # Auto-skip the speaker-naming dialog so headless runs don't deadlock
+    # waiting for a UI click. The endpoint drains all pending in one shot
+    # and is a no-op when nothing is pending. Fire-and-forget; next tick
+    # picks up the resulting state change.
+    if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
+        log "  Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
+        curl --silent --show-error --max-time 5 -X POST \
+            --header "Authorization: Bearer $RPC_TOKEN" \
+            "$RPC_BASE/action/skipNaming" >/dev/null 2>&1 || true
+    fi
+
     if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$new_job_id" ]; then
-        log "  pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state"
+        log "  pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state pending_naming=$pending_naming"
         last_state="$lj_state"
         new_job_id="$lj_id"
     fi

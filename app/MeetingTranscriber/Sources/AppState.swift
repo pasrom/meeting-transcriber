@@ -153,11 +153,25 @@ final class AppState {
         }
 
         private func startDebugRPCServer() {
+            let snapshot: () -> RPCStateSnapshot = { [weak self] in
+                self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
+            }
+            let skipNaming: () -> Void = { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    // Drain all currently-pending naming jobs. Each
+                    // completeSpeakerNaming call transitions the first
+                    // pending job out of .speakerNamingPending
+                    // synchronously, so the loop terminates.
+                    while !self.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
+                        self.pipelineQueue.completeSpeakerNaming(result: .skipped)
+                    }
+                }
+            }
             let server = DebugRPCServer(
-                snapshot: { [weak self] in
-                    self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
-                },
+                snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
+                skipNaming: skipNaming,
             )
             server.start()
             debugRPCServer = server
