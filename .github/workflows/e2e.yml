@@ -25,7 +25,10 @@ concurrency:
 jobs:
   e2e:
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 30
+    # 60 min headroom: cold runs download three multi-GB models
+    # (WhisperKit ~1 GB, Parakeet ~50 MB, Qwen3 ~1.75 GB). Subsequent
+    # runs hit the SPM cache + on-disk model cache and finish in <10 min.
+    timeout-minutes: 60
     env:
       E2E_ENABLED: "1"
       # Pin the toolchain to a full Xcode install. Without this the runner
