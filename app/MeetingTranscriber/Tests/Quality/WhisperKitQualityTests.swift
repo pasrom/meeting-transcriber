@@ -16,66 +16,30 @@ final class WhisperKitQualityTests: XCTestCase {
 
     func test_whisperKit_twoSpeakers_de_wer() async throws {
         try skipUnlessQualityRun()
-        try await runWERFixture(named: "two_speakers_de")
+        try await runFixture(named: "two_speakers_de")
     }
 
     func test_whisperKit_threeSpeakers_de_wer() async throws {
         try skipUnlessQualityRun()
-        try await runWERFixture(named: "three_speakers_de")
+        try await runFixture(named: "three_speakers_de")
     }
 
-    // MARK: - Helpers
-
-    private func runWERFixture(named name: String) async throws {
-        let truth = try GroundTruth.load(named: name)
-        try XCTSkipUnless(
-            FileManager.default.fileExists(atPath: truth.audioURL.path),
-            "Audio fixture missing: \(truth.audioURL.path)",
-        )
-
+    // Soft threshold of 0.5 catches catastrophic breakage (corrupted model,
+    // audio not loaded, biasing prompt destroying decoding) but stays well
+    // above the production baseline (~0.23-0.29 with explicit `language=de`).
+    private func runFixture(named name: String) async throws {
         let engine = WhisperKitEngine()
         engine.modelVariant = modelVariant
         engine.language = "de"
-
-        let started = Date()
         await engine.loadModel()
         XCTAssertEqual(engine.modelState, .loaded, "WhisperKit model failed to load")
 
-        let segments = try await engine.transcribeSegments(audioPath: truth.audioURL)
-        let hypothesis = segments.map(\.text).joined(separator: " ")
-        let breakdown = WERCalculator.werBreakdown(
-            reference: truth.text,
-            hypothesis: hypothesis,
+        try await runWERAgainstFixture(
+            named: name,
+            engine: engine,
+            engineLabel: "whisperKit",
+            modelVariant: modelVariant,
+            threshold: 0.5,
         )
-
-        let elapsed = Date().timeIntervalSince(started)
-        QualityResultsWriter.shared.append(
-            QualityResult(
-                engine: "whisperKit",
-                fixture: name,
-                modelVariant: modelVariant,
-                wer: breakdown.wer,
-                der: nil,
-                werBreakdown: .init(breakdown),
-                derBreakdown: nil,
-                appVersion: qualityAppVersion,
-                timestamp: ISO8601DateFormatter().string(from: started),
-                durationSeconds: elapsed,
-            ),
-        )
-
-        // Soft sanity bound — the production model on clean German audio
-        // should be well under 30 % WER on these fixtures. This is not a
-        // strict pass/fail threshold, just an early warning that something
-        // is catastrophically broken (e.g. model download corrupted, audio
-        // not loaded, biasing prompt destroying decoding).
-        XCTAssertLessThan(
-            breakdown.wer,
-            0.5,
-            "WER too high: \(breakdown.wer) — hypothesis was: \(hypothesis)",
-        )
-
-        // Flush eagerly so even a later test crash doesn't lose this row.
-        _ = try? QualityResultsWriter.shared.flush()
     }
 }

@@ -106,6 +106,61 @@ extension XCTestCase {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
             ?? "dev"
     }
+
+    /// Standard WER quality flow against a ground-truth fixture using an
+    /// already-loaded engine. Computes WER, appends a `QualityResult` row to
+    /// the shared writer, flushes eagerly so a later test crash doesn't lose
+    /// data, then soft-asserts the WER is below `threshold`.
+    ///
+    /// Engine instantiation, model load, and `modelState` verification stay
+    /// in the calling test method because each engine has different load
+    /// semantics and configuration knobs (WhisperKit needs `modelVariant +
+    /// language`; Parakeet auto-detects; Qwen3 is `@available(macOS 15+)`).
+    @MainActor
+    func runWERAgainstFixture(
+        named fixture: String,
+        engine: any TranscribingEngine,
+        engineLabel: String,
+        modelVariant: String?,
+        threshold: Double,
+    ) async throws {
+        let truth = try GroundTruth.load(named: fixture)
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: truth.audioURL.path),
+            "Audio fixture missing: \(truth.audioURL.path)",
+        )
+
+        let started = Date()
+        let segments = try await engine.transcribeSegments(audioPath: truth.audioURL)
+        let hypothesis = segments.map(\.text).joined(separator: " ")
+        let breakdown = WERCalculator.werBreakdown(
+            reference: truth.text,
+            hypothesis: hypothesis,
+        )
+
+        let elapsed = Date().timeIntervalSince(started)
+        QualityResultsWriter.shared.append(
+            QualityResult(
+                engine: engineLabel,
+                fixture: fixture,
+                modelVariant: modelVariant,
+                wer: breakdown.wer,
+                der: nil,
+                werBreakdown: .init(breakdown),
+                derBreakdown: nil,
+                appVersion: qualityAppVersion,
+                timestamp: ISO8601DateFormatter().string(from: started),
+                durationSeconds: elapsed,
+            ),
+        )
+        _ = try? QualityResultsWriter.shared.flush()
+
+        XCTAssertLessThan(
+            breakdown.wer,
+            threshold,
+            "\(engineLabel) WER too high: \(breakdown.wer) — hypothesis was: \(hypothesis)",
+        )
+    }
 }
 
 // MARK: - WatchLoop / AppState Helpers
