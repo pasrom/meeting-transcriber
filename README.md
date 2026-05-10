@@ -247,6 +247,12 @@ The toggle persists in `UserDefaults` and takes effect on the next recording wit
 
 ---
 
+## Testing & CI
+
+Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows/ci.yml). Two complementary E2E layers run on a self-hosted Apple Silicon Mac mini against the real production models (no mocks): [`e2e.yml`](.github/workflows/e2e.yml) feeds fixture audio through each ASR engine + the WatchLoop pipeline, and [`e2e-app.yml`](.github/workflows/e2e-app.yml) builds and signs the actual `.app`, drives a simulated meeting via [`tools/meeting-simulator`](tools/meeting-simulator), and asserts on the resulting transcript over the embedded debug RPC server.
+
+---
+
 ## License
 
 [MIT](LICENSE)
