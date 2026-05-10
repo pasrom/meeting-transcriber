@@ -46,39 +46,31 @@ jobs:
           xcode-select -p
           swift --version
 
-      # Same dance as release.yml: import the Developer ID Application
-      # cert into a temporary keychain so codesign can find it. Apple
-      # roots are in the system trust store already, so the resulting
-      # signature satisfies the dev .app's PPPC code requirement out of
-      # the box — no add-trusted-cert ceremony needed. If the secret
-      # isn't set, fall through to the self-signed path that
-      # setup-self-hosted-runner.sh installed (env var stays empty,
-      # e2e-app.sh detects this and signs with the local dev cert).
+      # Import the Developer ID Application cert into a temporary keychain
+      # so codesign can find it. Apple roots are in the system trust store
+      # already, so the resulting signature satisfies the dev .app's PPPC
+      # code requirement out of the box — no add-trusted-cert ceremony
+      # needed. If the secret isn't set, the action becomes a no-op and
+      # e2e-app.sh falls back to the self-signed path that
+      # setup-self-hosted-runner.sh installed.
       - name: Install Developer ID certificate
-        env:
-          DEVELOPER_ID_CERT: ${{ secrets.DEVELOPER_ID_CERT }}
-          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
-        if: env.DEVELOPER_ID_CERT != ''
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/e2e-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-signing.keychain-db
+          # e2e-app.sh shells out to `codesign` directly to re-sign the
+          # deployed bundle; release.yml builds via xcodebuild and doesn't
+          # need this extra role.
+          extra-partition-roles: "codesign:"
 
-          CERT_PATH=$RUNNER_TEMP/e2e-cert.p12
-          echo -n "$DEVELOPER_ID_CERT" | base64 --decode -o "$CERT_PATH"
-          security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
-
-          # Hand the keychain path to e2e-app.sh so it can re-sign the
-          # deployed bundle with this cert too. Stable across runs because
-          # Apple Developer ID cert SHA doesn't change — TCC keeps the
-          # grant.
-          echo "E2E_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+      # Hand the keychain path to e2e-app.sh so it can re-sign the
+      # deployed bundle with this cert too. Stable across runs because
+      # Apple Developer ID cert SHA doesn't change — TCC keeps the grant.
+      - name: Export keychain path for e2e-app.sh
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
 
       - name: Run live-recording E2E driver
         env:
