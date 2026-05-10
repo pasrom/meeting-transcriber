@@ -1,6 +1,6 @@
 name: E2E (Production App)
 
-# Pattern-C E2E. Background and rationale: CLAUDE.md > E2E Architecture.
+# Live-recording E2E. Background and rationale: CLAUDE.md > E2E Architecture.
 # Runner prerequisites: scripts/setup-self-hosted-runner.sh.
 
 on:
@@ -80,7 +80,7 @@ jobs:
           # grant.
           echo "E2E_SIGNING_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
-      - name: Run Pattern-C E2E driver
+      - name: Run live-recording E2E driver
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         run: bash scripts/e2e-app.sh
