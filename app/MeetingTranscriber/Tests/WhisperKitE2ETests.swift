@@ -352,15 +352,22 @@ final class WhisperKitE2ETests: XCTestCase {
         await engine.loadModel()
         XCTAssertEqual(engine.modelState, .loaded)
 
-        let wavTranscript = try await transcribeFixture("two_speakers_de.wav", engine: engine)
-        let mp3Transcript = try await transcribeFixture("two_speakers_de.mp3", engine: engine)
-        let m4aTranscript = try await transcribeFixture("two_speakers_de.m4a", engine: engine)
-        let mp4Transcript = try await transcribeFixture("two_speakers_de.mp4", engine: engine)
+        // Each entry covers one ingestion path:
+        //   - WAV/MP3/M4A/MP4 ride the AVAudioFile/AVAsset tier of `AudioMixer`
+        //   - MKV/WebM/OGG only decode through the FFmpegHelper fallback,
+        //     so they're skipped on hosts without ffmpeg installed.
+        let stem = "two_speakers_de"
+        let formats: [(ext: String, label: String)] = [
+            ("wav", "WAV"), ("mp3", "MP3"), ("m4a", "M4A"), ("mp4", "MP4"),
+            ("mkv", "MKV"), ("webm", "WebM"), ("ogg", "OGG"),
+        ]
 
-        // Verify each format produces the expected German content
-        assertTranscriptContent(wavTranscript, format: "WAV")
-        assertTranscriptContent(mp3Transcript, format: "MP3")
-        assertTranscriptContent(m4aTranscript, format: "M4A")
-        assertTranscriptContent(mp4Transcript, format: "MP4")
+        for entry in formats {
+            if FFmpegHelper.ffmpegOnlyExtensions.contains(entry.ext), !FFmpegHelper.isAvailable {
+                continue
+            }
+            let transcript = try await transcribeFixture("\(stem).\(entry.ext)", engine: engine)
+            assertTranscriptContent(transcript, format: entry.label)
+        }
     }
 }
