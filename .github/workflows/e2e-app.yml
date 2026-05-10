@@ -83,7 +83,12 @@ jobs:
       - name: Run live-recording E2E driver
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
-        run: bash scripts/e2e-app.sh
+        # `--two-meetings` always: meeting 1 covers fresh-state single-run,
+        # meeting 2 covers cooldown + state reset. ~3 min total wall on Mini
+        # vs ~1 min for single-meeting; signal latency is fine on nightly +
+        # post-merge push triggers. Local dev runs (`bash scripts/e2e-app.sh`)
+        # default to single for fast iteration.
+        run: bash scripts/e2e-app.sh --two-meetings
 
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
