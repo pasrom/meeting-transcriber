@@ -169,6 +169,15 @@ enum PersistentDiagnosticLog {
                 restartQueue.sync { _isRunning }
             }
 
+            /// Test-only probe — true while the readabilityHandler is still
+            /// subscribed to the pipe. Used to verify that EOF self-detach
+            /// fires after the subprocess exits. Queue-synced for symmetry
+            /// with `isRunning` and TSan-cleanliness; the readabilityHandler
+            /// itself is mutated on Foundation's pipe queue, not ours.
+            var hasReadabilityHandlerForTesting: Bool {
+                restartQueue.sync { pipe.fileHandleForReading.readabilityHandler != nil }
+            }
+
             private let logExecutable: URL
             private let logArguments: [String]
             private let restartPolicy: RestartPolicy
@@ -233,7 +242,17 @@ enum PersistentDiagnosticLog {
                 let handle = pipe.fileHandleForReading
                 handle.readabilityHandler = { [weak self] fh in
                     let data = fh.availableData
-                    guard !data.isEmpty else { return }
+                    if data.isEmpty {
+                        // Pipe writer closed (subprocess exited). Without
+                        // self-detaching, Foundation reschedules this handler
+                        // in a tight loop on persistent EOF — observed as
+                        // ~100 % CPU on macOS 26 dev builds where `log stream`
+                        // exits immediately because it now requires admin.
+                        // PR #218's fail-fast stops the relaunch; this stops
+                        // the pipe spin that survived it.
+                        fh.readabilityHandler = nil
+                        return
+                    }
                     self?.append(data)
                 }
 
