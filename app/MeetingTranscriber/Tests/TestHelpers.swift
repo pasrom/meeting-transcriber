@@ -67,6 +67,25 @@ extension XCTestCase {
     }
 }
 
+// MARK: - E2E Opt-In Gate
+
+/// Skip in CI unless the dedicated `e2e.yml` workflow opted in via `E2E_ENABLED=1`.
+/// Free function so the gate is unit-testable without an XCTestCase context.
+func shouldSkipForE2EGate(env: [String: String]) -> Bool {
+    let isCI = env["CI"] != nil
+    let optedIn = env["E2E_ENABLED"] == "1"
+    return isCI && !optedIn
+}
+
+extension XCTestCase {
+    func skipIfCIWithoutE2EOptIn(_ reason: String) throws {
+        try XCTSkipIf(
+            shouldSkipForE2EGate(env: ProcessInfo.processInfo.environment),
+            "Skipping in CI: \(reason)",
+        )
+    }
+}
+
 // MARK: - WatchLoop / AppState Helpers
 
 /// Returns a MeetingDetector with no patterns — never matches any window.
