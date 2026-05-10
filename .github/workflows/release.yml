@@ -71,28 +71,11 @@ jobs:
           restore-keys: spm-${{ runner.os }}-${{ matrix.variant }}-
 
       - name: Install Developer ID certificate
-        env:
-          DEVELOPER_ID_CERT: ${{ secrets.DEVELOPER_ID_CERT }}
-          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
-        if: env.DEVELOPER_ID_CERT != ''
-        run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate
-          CERT_PATH=$RUNNER_TEMP/certificate.p12
-          echo -n "$DEVELOPER_ID_CERT" | base64 --decode -o "$CERT_PATH"
-          security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
-            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add to search list
-          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
 
       - name: Build .app and DMG
         env:
@@ -239,7 +222,5 @@ jobs:
           git push
 
       - name: Cleanup keychain
-        if: always()
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
+        if: always() && steps.dev-id.outputs.keychain-path != ''
+        run: security delete-keychain "${{ steps.dev-id.outputs.keychain-path }}" 2>/dev/null || true

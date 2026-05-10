@@ -1,0 +1,77 @@
+name: "Install Developer ID certificate"
+description: >
+  Imports a base64-encoded Developer ID Application (.p12) certificate into
+  a fresh per-job keychain so `codesign` can find it. Used by release.yml
+  for signing the distributable .app and by e2e-app.yml for re-signing the
+  deployed dev bundle. Caller is responsible for cleanup via
+  `security delete-keychain "$KEYCHAIN_PATH"` in an `if: always()` step.
+
+inputs:
+  cert:
+    description: "Base64-encoded .p12 certificate. If empty, the action is a no-op."
+    required: false
+    default: ""
+  cert-password:
+    description: "Password for the .p12 certificate."
+    required: false
+    default: ""
+  keychain-name:
+    description: >
+      Filename for the temporary keychain inside RUNNER_TEMP. Distinguish
+      callers when more than one keychain might co-exist on the runner
+      (relevant on self-hosted hosts).
+    required: false
+    default: "app-signing.keychain-db"
+  extra-partition-roles:
+    description: >
+      Extra partition-list roles appended to `apple-tool:,apple:`, joined
+      by a comma. Pass without leading or trailing commas (e.g.
+      `codesign:`). e2e-app needs `codesign:` because it shells out to
+      `codesign` directly; the release path doesn't because
+      xcodebuild/build_release.sh uses the `apple-tool:` role.
+    required: false
+    default: ""
+
+outputs:
+  keychain-path:
+    description: "Absolute path to the created keychain. Empty when cert input was empty."
+    value: ${{ steps.create.outputs.keychain-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: create
+      if: inputs.cert != ''
+      shell: bash
+      env:
+        DEVELOPER_ID_CERT: ${{ inputs.cert }}
+        DEVELOPER_ID_CERT_PASSWORD: ${{ inputs.cert-password }}
+        KEYCHAIN_NAME: ${{ inputs.keychain-name }}
+        EXTRA_PARTITION_ROLES: ${{ inputs.extra-partition-roles }}
+      run: |
+        set -euo pipefail
+        KEYCHAIN_PATH="$RUNNER_TEMP/$KEYCHAIN_NAME"
+        KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        CERT_PATH="$RUNNER_TEMP/${KEYCHAIN_NAME%.keychain-db}.p12"
+        echo -n "$DEVELOPER_ID_CERT" | base64 --decode -o "$CERT_PATH"
+        security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
+          -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+        PARTITION_LIST="apple-tool:,apple:"
+        if [ -n "$EXTRA_PARTITION_ROLES" ]; then
+          # Strip stray leading/trailing commas so callers don't have to
+          # know the separator convention.
+          TRIMMED="${EXTRA_PARTITION_ROLES#,}"
+          TRIMMED="${TRIMMED%,}"
+          PARTITION_LIST="${PARTITION_LIST},${TRIMMED}"
+        fi
+        security set-key-partition-list -S "$PARTITION_LIST" \
+          -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+        security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+        echo "keychain-path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
