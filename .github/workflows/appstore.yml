@@ -45,15 +45,10 @@ jobs:
   smoke:
     runs-on: macos-26
     timeout-minutes: 25
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     steps:
       - uses: actions/checkout@v6
 
-      - name: Verify toolchain
-        run: |
-          xcode-select -p
-          swift --version
+      - uses: ./.github/actions/verify-xcode
 
       # `--no-notarize` keeps the signing path on the ad-hoc fallback so we
       # don't need a Developer ID secret for a smoke run. `build_release.sh`

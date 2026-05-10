@@ -1,0 +1,31 @@
+name: "Verify Xcode toolchain"
+description: >
+  Echoes the active developer dir + Swift version so failures from
+  pointing at the wrong toolchain (typically Command Line Tools instead
+  of a full Xcode install — XCTest then can't be imported) surface as a
+  clear early step rather than buried in a SwiftPM compile error half
+  the job later.
+
+  Also exports `DEVELOPER_DIR` to subsequent steps via $GITHUB_ENV so
+  callers don't have to repeat the job-level env block. Self-hosted
+  runners need the hint until `xcode-select -s` is run on the host;
+  GitHub-hosted runners point at Xcode out of the box but accept the
+  override harmlessly.
+
+inputs:
+  developer-dir:
+    description: "Value to export as DEVELOPER_DIR for subsequent steps."
+    required: false
+    default: "/Applications/Xcode.app/Contents/Developer"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Verify Xcode toolchain
+      shell: bash
+      env:
+        DEVELOPER_DIR: ${{ inputs.developer-dir }}
+      run: |
+        echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+        xcode-select -p
+        swift --version
