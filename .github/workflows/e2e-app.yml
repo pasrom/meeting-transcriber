@@ -33,18 +33,11 @@ jobs:
   e2e-app:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 15
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
     steps:
       - uses: actions/checkout@v6
 
-      # Sanity — fail fast with a clear message if Xcode isn't pointed at
-      # the right toolchain. e2e.yml does the same dance.
-      - name: Verify toolchain
-        run: |
-          xcode-select -p
-          swift --version
+      - uses: ./.github/actions/verify-xcode
 
       # Import the Developer ID Application cert into a temporary keychain
       # so codesign can find it. Apple roots are in the system trust store
