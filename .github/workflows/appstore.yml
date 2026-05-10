@@ -1,0 +1,99 @@
+name: App Store Smoke
+
+# Builds the App Store variant of the .app (sandbox + restricted entitlements,
+# `#if APPSTORE` source branches active) and verifies the resulting bundle
+# launches without crashing within the first 5 s.
+#
+# Why this exists: the `--appstore` build path has zero automated coverage
+# beyond compilation. Sandbox-rejected operations, `#if APPSTORE` regressions
+# in record-only output paths, broken dynamic linking, or wrong deployment
+# target all surface only at launch — and previously only when a human
+# happened to test the App Store variant. This workflow catches that class
+# of breakage on every push to main and nightly.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Self-validate any PR that touches this workflow or the build script.
+    # Other PRs are NOT burdened — keeps the macos-26 runner budget for the
+    # cases where it actually matters.
+    paths:
+      - '.github/workflows/appstore.yml'
+      - 'scripts/build_release.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'app/MeetingTranscriber/Sources/**'
+      - 'app/MeetingTranscriber/Package.swift'
+      - 'app/MeetingTranscriber/Package.resolved'
+      - 'app/MeetingTranscriber/Entitlements/AppStore.entitlements'
+      - 'app/MeetingTranscriber/Sources/Info.plist'
+      - 'tools/audiotap/**'
+      - 'scripts/build_release.sh'
+      - '.github/workflows/appstore.yml'
+  schedule:
+    # 03:30 UTC sits between quality-and-safety (03:00) and e2e-app (04:30) so
+    # concurrent failures are easy to disambiguate in `gh run list`.
+    - cron: '30 3 * * *'
+
+# Two parallel runs would race on the build dir and the launched app process.
+concurrency:
+  group: appstore-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify toolchain
+        run: |
+          xcode-select -p
+          swift --version
+
+      # `--no-notarize` keeps the signing path on the ad-hoc fallback so we
+      # don't need a Developer ID secret for a smoke run. `build_release.sh`
+      # detects an empty DEVELOPER_ID and falls back automatically.
+      - name: Build App Store variant
+        run: ./scripts/build_release.sh --appstore --no-notarize
+
+      # Launch the bundle non-modally and verify it survives 5 s. A regression
+      # that breaks `#if APPSTORE`, sandbox entitlements, or dynamic linking
+      # crashes within the first second; the 5 s window gives enough margin
+      # without being so long that a stuck-on-startup launch loops forever.
+      - name: Smoke-launch the .app
+        run: |
+          set -euo pipefail
+          # `open` requires an absolute path (or a bundle ID / registered
+          # name); a relative path resolves to "Unable to find application".
+          APP="$GITHUB_WORKSPACE/.build/release/MeetingTranscriber.app"
+          if [ ! -d "$APP" ]; then
+            echo "Build artifact missing at $APP. Contents of .build/release/:"
+            ls -la "$GITHUB_WORKSPACE/.build/release/" || true
+            exit 1
+          fi
+          # `open -na` launches a fresh instance even if a stale one happens
+          # to be running. The runner is fresh per job, but cheap insurance.
+          open -na "$APP"
+          sleep 5
+          if ! pgrep -x MeetingTranscriber >/dev/null; then
+            echo "MeetingTranscriber died within 5 s of launch."
+            echo "--- Recent crash report (if any): ---"
+            ls -t ~/Library/Logs/DiagnosticReports/MeetingTranscriber-*.ips 2>/dev/null \
+              | head -1 | xargs cat 2>/dev/null || echo "no crash report found"
+            exit 1
+          fi
+          pkill -x MeetingTranscriber || true
+          echo "App Store smoke: bundle launched and survived 5 s"
+
+      - name: Upload crash reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-reports
+          path: ~/Library/Logs/DiagnosticReports/MeetingTranscriber-*.ips
+          if-no-files-found: ignore
