@@ -178,7 +178,12 @@ class PipelineQueue {
     /// exists, fires off protocol generation in the background; the job
     /// transitions through .generatingProtocol → .done as that completes.
     private func acceptAutoNames(jobID: UUID, slug: String?) {
-        let canGenerateProtocol = protocolGeneratorFactory != nil
+        // Probe the factory's actual output, not just its existence — the
+        // closure is wired even when protocolProvider is `.none`, but
+        // returns nil. Without this, the Task path below fizzles silently
+        // (generateProtocol guards on factory()) and the job sits in
+        // .speakerNamingPending forever.
+        let canGenerateProtocol = (protocolGeneratorFactory?() != nil)
             && outputDir != nil
             && jobs.first { $0.id == jobID }?.transcriptPath != nil
 
