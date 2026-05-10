@@ -49,14 +49,12 @@ jobs:
           echo "filter=$FILTER" >> "$GITHUB_OUTPUT"
           echo "Running E2E tests with filter: $FILTER"
 
-      # Pre-warm covers the SPM cache + ~2.8 GB of WhisperKit + Parakeet
-      # + Qwen3 weights that the engine E2E tests would otherwise
-      # sequentially download on a cold run.
-      - uses: ./.github/actions/setup-swift-test
-        timeout-minutes: 30
-        with:
-          cache-key-suffix: e2e
-
+      # No actions/cache here: the self-hosted Mini has persistent disk
+      # between runs, so the SPM `.build` directory and the on-disk model
+      # caches (~/Documents/huggingface, ~/Library/Application Support/
+      # FluidAudio) are already populated. actions/cache would re-download
+      # via HTTPS on hit and waste the multi-GB upload on miss — the
+      # latter timed out the post-action on a real run (5.6 GB → GitHub).
       - name: Run E2E tests
         run: |
           cd app/MeetingTranscriber
