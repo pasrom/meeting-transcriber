@@ -226,14 +226,20 @@ deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
 last_state=""
 new_job_id=""
 while true; do
-    # One jq invocation, four fields out via TSV — saves 3 forks per poll.
+    # One jq invocation, four fields out via `|`-joined output — saves
+    # 3 forks per poll vs separate jq calls.
+    #
+    # Why `|` and not `@tsv`: bash `IFS=$'\t' read` treats consecutive
+    # whitespace separators as ONE (and skips leading empties), so an
+    # all-null lastJob (`\t\t0\tfalse`) gets misparsed as `0\tfalse\t\t`.
+    # `|` is non-whitespace, so each separator stays a field boundary.
     # Trailing `|| true` keeps the loop alive when rpc() returns empty
-    # (transient curl failure during model load / GC pause): jq emits no
-    # output → read hits EOF → returns 1 → `set -e` would otherwise kill
-    # the script silently after polling once. We just want to retry next tick.
+    # (transient curl --max-time hit during model load / GC pause):
+    # jq emits no output → read hits EOF → returns 1 → `set -e` would
+    # otherwise kill the script silently. We just retry next tick.
     lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""
-    IFS=$'\t' read -r lj_id lj_state pipe_active pipe_processing < <(
-        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing] | @tsv'
+    IFS='|' read -r lj_id lj_state pipe_active pipe_processing < <(
+        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing] | join("|")'
     ) || true
 
     if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$new_job_id" ]; then
