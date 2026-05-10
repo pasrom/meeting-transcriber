@@ -1,0 +1,22 @@
+name: "Cancel run on failure"
+description: >
+  Cancels sibling jobs in the current workflow run when the calling job
+  has failed. The workflow-level `concurrency` block only cancels
+  superseded runs of the same ref — it doesn't react to a single job
+  failing inside a run, so this composite fills the gap.
+
+  Caller must wrap the step in `if: failure()` so the cancellation is
+  scoped to actual failure (composite actions cannot have a top-level
+  step-level `if`). The inner step swallows errors via continue-on-error
+  so a transient gh CLI hiccup doesn't mask the original failure.
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cancel current workflow run
+      shell: bash
+      continue-on-error: true
+      run: gh run cancel "$RUN_ID"
+      env:
+        RUN_ID: ${{ github.run_id }}
+        GH_TOKEN: ${{ github.token }}

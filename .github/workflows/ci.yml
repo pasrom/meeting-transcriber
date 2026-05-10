@@ -64,14 +64,9 @@ jobs:
         run: swiftlint lint --strict --reporter github-actions-logging
       - name: Build script regression tests
         run: bash scripts/tests/test_build_release_signing.sh
-      # Cancels sibling jobs in this run; the workflow-level `concurrency`
-      # block only cancels superseded runs of the same ref.
       - name: Cancel run on failure
         if: failure()
-        continue-on-error: true
-        run: gh run cancel ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/cancel-on-failure
 
   analyze:
     needs: changes
@@ -93,10 +88,7 @@ jobs:
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
       - name: Cancel run on failure
         if: failure()
-        continue-on-error: true
-        run: gh run cancel ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/cancel-on-failure
 
   test:
     needs: changes
@@ -132,7 +124,4 @@ jobs:
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
       - name: Cancel run on failure
         if: failure()
-        continue-on-error: true
-        run: gh run cancel ${{ github.run_id }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/cancel-on-failure
