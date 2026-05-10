@@ -227,9 +227,14 @@ last_state=""
 new_job_id=""
 while true; do
     # One jq invocation, four fields out via TSV — saves 3 forks per poll.
+    # Trailing `|| true` keeps the loop alive when rpc() returns empty
+    # (transient curl failure during model load / GC pause): jq emits no
+    # output → read hits EOF → returns 1 → `set -e` would otherwise kill
+    # the script silently after polling once. We just want to retry next tick.
+    lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""
     IFS=$'\t' read -r lj_id lj_state pipe_active pipe_processing < <(
         rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing] | @tsv'
-    )
+    ) || true
 
     if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$new_job_id" ]; then
         log "  pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state"
