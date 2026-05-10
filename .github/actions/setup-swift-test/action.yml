@@ -21,6 +21,13 @@ inputs:
       sanitized builds are slower to warm.
     required: false
     default: ""
+  cache-models:
+    description: >
+      Cache the ML model directories and pre-warm them on cache miss.
+      Set to `false` for build-only jobs (release.yml) that don't load
+      models — skips both the cache restore and the prewarm step.
+    required: false
+    default: "true"
 
 runs:
   using: "composite"
@@ -42,6 +49,7 @@ runs:
     # cache is populated and the preload step is skipped.
     - name: Cache ML models
       id: model-cache
+      if: inputs.cache-models == 'true'
       uses: actions/cache@v5
       with:
         path: |
@@ -55,6 +63,6 @@ runs:
     # outer `uses: ./.github/actions/setup-swift-test` step to bound the
     # cold-cache HuggingFace + FluidAudio download.
     - name: Pre-warm model cache (cache miss only)
-      if: steps.model-cache.outputs.cache-hit != 'true'
+      if: inputs.cache-models == 'true' && steps.model-cache.outputs.cache-hit != 'true'
       shell: bash
       run: cd app/MeetingTranscriber && swift test --filter ModelPreloadTests ${{ inputs.swift-flags }}
