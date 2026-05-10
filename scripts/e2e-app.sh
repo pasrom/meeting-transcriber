@@ -27,20 +27,23 @@ set -euo pipefail
 APP_AFTER=quit           # quit | leave
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
+TWO_MEETINGS=false       # trigger two back-to-back meetings to validate cooldown + state reset
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --quit-app)   APP_AFTER=quit ;;     # explicit alias for the default
-        --keep-app)   APP_AFTER=leave ;;
-        --no-build)   NO_BUILD=true ;;
-        --fixture)    shift; SIMULATOR_FIXTURE="$1" ;;
+        --quit-app)     APP_AFTER=quit ;;     # explicit alias for the default
+        --keep-app)     APP_AFTER=leave ;;
+        --no-build)     NO_BUILD=true ;;
+        --fixture)      shift; SIMULATOR_FIXTURE="$1" ;;
+        --two-meetings) TWO_MEETINGS=true ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-app.sh [--no-build] [--keep-app] [--fixture path/to.wav]
+Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--fixture path/to.wav]
 
-  --no-build   Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
-  --keep-app   Leave the dev app running on exit. Default: quit it.
-  --fixture    Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
+  --no-build       Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
+  --keep-app       Leave the dev app running on exit. Default: quit it.
+  --two-meetings   Run two meetings back-to-back (cooldown + state-reset coverage).
+  --fixture        Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
             ;;
@@ -69,6 +72,11 @@ RPC_BASE="http://127.0.0.1:9876"
 # under 10 s easily.
 RPC_READY_TIMEOUT_S=30
 PIPELINE_TIMEOUT_S=240
+
+# WatchLoop's per-app cooldown (`MeetingDetector.swift` cooldownDuration
+# = 5 s) plus a 3 s buffer so the second meeting isn't suppressed as a
+# re-detection. Bump if MeetingDetector.cooldownDuration grows.
+INTER_MEETING_COOLDOWN_S=8
 
 # --- helpers --------------------------------------------------------------
 
@@ -208,83 +216,107 @@ while [ ! -f "$RPC_TOKEN_FILE" ] || ! { RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && 
 done
 log "RPC up"
 
-PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
-log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
-
 # Single trap covers the simulator process for any exit path (success,
-# fail, signal). Set before the `&` line so a kill between fork and the
-# trap line doesn't orphan the subprocess.
+# fail, signal). Set before the first `&` line so a kill between fork
+# and the trap line doesn't orphan the subprocess.
 SIM_PID=""
 trap '[ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true' EXIT INT TERM
 
-log "Starting meeting-simulator → $SIMULATOR_FIXTURE"
-"$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
-SIM_PID=$!
+# Trigger one meeting, poll until a new pipeline job reaches a terminal
+# state, assert it landed in `done` with a non-trivial transcript. Reads
+# `$1` as a human label for log lines ("meeting 1 of 2", etc.). Mutates
+# `PRE_LAST_JOB_ID` so the next call recognises the next job as new.
+PRE_LAST_JOB_ID=""
+PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
+log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 
-log "Polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
-deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
-last_state=""
-new_job_id=""
-while true; do
-    # One jq invocation, four fields out via `|`-joined output — saves
-    # 3 forks per poll vs separate jq calls.
-    #
-    # Why `|` and not `@tsv`: bash `IFS=$'\t' read` treats consecutive
-    # whitespace separators as ONE (and skips leading empties), so an
-    # all-null lastJob (`\t\t0\tfalse`) gets misparsed as `0\tfalse\t\t`.
-    # `|` is non-whitespace, so each separator stays a field boundary.
-    # Trailing `|| true` keeps the loop alive when rpc() returns empty
-    # (transient curl --max-time hit during model load / GC pause):
-    # jq emits no output → read hits EOF → returns 1 → `set -e` would
-    # otherwise kill the script silently. We just retry next tick.
-    lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
-    IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
-        rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
-    ) || true
+run_one_meeting() {
+    local label="$1"
+    log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
 
-    # Auto-skip the speaker-naming dialog so headless runs don't deadlock
-    # waiting for a UI click. The endpoint drains all pending in one shot
-    # and is a no-op when nothing is pending. Fire-and-forget; next tick
-    # picks up the resulting state change.
-    if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
-        log "  Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
-        curl --silent --show-error --max-time 5 -X POST \
-            --header "Authorization: Bearer $RPC_TOKEN" \
-            "$RPC_BASE/action/skipNaming" >/dev/null 2>&1 || true
-    fi
+    log "$label: polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
+    local deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
+    local last_state="" last_id=""
+    local lj_id="" lj_state="" pipe_active="" pipe_processing="" pending_naming=""
 
-    if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$new_job_id" ]; then
-        log "  pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state pending_naming=$pending_naming"
-        last_state="$lj_state"
-        new_job_id="$lj_id"
-    fi
+    while true; do
+        # One jq invocation, four fields out via `|`-joined output — saves
+        # 3 forks per poll vs separate jq calls.
+        #
+        # Why `|` and not `@tsv`: bash `IFS=$'\t' read` treats consecutive
+        # whitespace separators as ONE (and skips leading empties), so an
+        # all-null lastJob (`\t\t0\tfalse`) gets misparsed as `0\tfalse\t\t`.
+        # `|` is non-whitespace, so each separator stays a field boundary.
+        # Trailing `|| true` keeps the loop alive when rpc() returns empty
+        # (transient curl --max-time hit during model load / GC pause):
+        # jq emits no output → read hits EOF → returns 1 → `set -e` would
+        # otherwise kill the script silently. We just retry next tick.
+        lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
+        IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
+            rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
+        ) || true
 
-    if [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
-        && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }; then
-        break
-    fi
+        # Auto-skip the speaker-naming dialog so headless runs don't deadlock
+        # waiting for a UI click. The endpoint drains all pending in one shot
+        # and is a no-op when nothing is pending. Fire-and-forget; next tick
+        # picks up the resulting state change.
+        if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
+            log "$label:   Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
+            curl --silent --show-error --max-time 5 -X POST \
+                --header "Authorization: Bearer $RPC_TOKEN" \
+                "$RPC_BASE/action/skipNaming" >/dev/null 2>&1 || true
+        fi
 
-    [ "$(date +%s)" -lt "$deadline" ] || fail "no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
-    sleep 5
-done
+        if [ "$lj_state" != "$last_state" ] || [ "$lj_id" != "$last_id" ]; then
+            log "$label:   pipeline.active=$pipe_active processing=$pipe_processing lastJob=$lj_id state=$lj_state pending_naming=$pending_naming"
+            last_state="$lj_state"
+            last_id="$lj_id"
+        fi
 
-log "Final state: $lj_state"
-final_snapshot="$(rpc /state)"
-echo "$final_snapshot" | jq '.lastJob'
+        if [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
+            && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }; then
+            break
+        fi
 
-[ "$lj_state" = "done" ] || fail "lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
+        [ "$(date +%s)" -lt "$deadline" ] || fail "no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
+        sleep 5
+    done
 
-transcript_path="$(jq -r '.lastJob.transcriptPath // empty' <<<"$final_snapshot")"
-[ -n "$transcript_path" ] || fail "lastJob.transcriptPath is empty"
-[ -f "$transcript_path" ] || fail "transcript file does not exist: $transcript_path"
+    log "$label: final state: $lj_state"
+    local final_snapshot
+    final_snapshot="$(rpc /state)"
+    echo "$final_snapshot" | jq '.lastJob'
 
-transcript_size="$(wc -c <"$transcript_path" | tr -d ' ')"
-[ "$transcript_size" -gt 100 ] || fail "transcript suspiciously short: $transcript_size bytes (expected > 100)"
+    [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
 
-log "Transcript: $transcript_path ($transcript_size bytes)"
-log "Preview:"
-head -c 500 "$transcript_path" | sed 's/^/    /'
-echo
+    local transcript_path
+    transcript_path="$(jq -r '.lastJob.transcriptPath // empty' <<<"$final_snapshot")"
+    [ -n "$transcript_path" ] || fail "$label: lastJob.transcriptPath is empty"
+    [ -f "$transcript_path" ] || fail "$label: transcript file does not exist: $transcript_path"
+
+    local transcript_size
+    transcript_size="$(wc -c <"$transcript_path" | tr -d ' ')"
+    [ "$transcript_size" -gt 100 ] || fail "$label: transcript suspiciously short: $transcript_size bytes (expected > 100)"
+
+    log "$label: transcript $transcript_path ($transcript_size bytes)"
+    log "$label: preview:"
+    head -c 500 "$transcript_path" | sed 's/^/    /'
+    echo
+
+    PRE_LAST_JOB_ID="$lj_id"
+    SIM_PID=""
+}
+
+if [ "$TWO_MEETINGS" = true ]; then
+    run_one_meeting "[1/2]"
+    log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
+    sleep "$INTER_MEETING_COOLDOWN_S"
+    run_one_meeting "[2/2]"
+else
+    run_one_meeting "meeting"
+fi
 
 if [ "$APP_AFTER" = quit ]; then
     quit_running_app
