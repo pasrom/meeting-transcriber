@@ -93,10 +93,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
     // MARK: - 1. Full Pipeline: detect → record → enqueue → transcribe → protocol
 
     func testFullPipelineDetectRecordTranscribeProtocol() async throws {
-        try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
-        )
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -150,10 +147,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
     // MARK: - 2. Dual Source Transcription Path
 
     func testDualSourceTranscriptionPath() async throws {
-        try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
-        )
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -245,10 +239,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
     // MARK: - 4. Diarization Skipped When Not Available
 
     func testDiarizationSkippedWhenNotAvailable() async throws {
-        try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
-        )
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -318,10 +309,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
     // MARK: - 6. Resample Path Produces 16kHz for WhisperKit
 
     func testResamplePathProduces16kHzForWhisperKit() async throws {
-        try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model download",
-        )
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
@@ -364,10 +352,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
     // MARK: - 7. Full Pipeline With Real Diarization (slow)
 
     func testFullPipelineWithRealDiarization() async throws {
-        try XCTSkipIf(
-            ProcessInfo.processInfo.environment["CI"] != nil,
-            "Skipping in CI: requires WhisperKit model + FluidAudio diarization",
-        )
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model + FluidAudio diarization")
 
         let fixture = fixtureURL()
         try XCTSkipUnless(
