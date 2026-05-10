@@ -275,6 +275,33 @@ final class PersistentDiagnosticLogTests: XCTestCase {
             )
         }
 
+        /// PR #218 fail-fast stops relaunching but the pipe's readabilityHandler
+        /// stays subscribed to the dead subprocess's pipe. Foundation reschedules
+        /// the handler on persistent EOF — observed as ~100 % CPU on macOS 26.
+        /// The handler must self-detach on first empty `availableData`.
+        func test_streamer_pipeReadabilityHandlerDetachesOnSubprocessEOF() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerEOFDetach")
+            let policy = RestartPolicy(
+                maxFailuresInWindow: 100, window: 60, maxBackoff: 60,
+            )
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                restartPolicy: policy,
+                logExecutable: URL(fileURLWithPath: "/usr/bin/false"),
+                logArguments: [],
+            )
+            try streamer.start()
+            // Wait for fail-fast to fire AND the readabilityHandler to
+            // self-detach. Without the fix, isRunning flips false but the
+            // handler stays attached and fires forever.
+            XCTAssertTrue(
+                waitForCondition(timeout: 2.0) {
+                    !streamer.isRunning && !streamer.hasReadabilityHandlerForTesting
+                },
+                "Pipe readabilityHandler must detach on EOF — otherwise it spins on an empty Data forever",
+            )
+        }
+
         /// `stop()` must short-circuit any pending relaunch; otherwise an
         /// `asyncAfter` enqueued during the restart loop could fire after
         /// the test (and the `Streamer`) is gone, writing to a freed FD.
