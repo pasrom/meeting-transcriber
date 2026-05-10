@@ -105,7 +105,7 @@ scripts/
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)
-  e2e-app.sh               # Pattern-C E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
+  e2e-app.sh               # Live-recording E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
   setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + PPPC profile (needed before e2e-app.sh works)
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
@@ -121,8 +121,8 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
-  e2e.yml                  # E2E (Pattern A) — fixture-based xctest on self-hosted Mac (dispatch + v* tags)
-  e2e-app.yml              # E2E (Pattern C) — deployed dev .app + RPC-driven assertion (dispatch + push to main + nightly)
+  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + v* tags)
+  e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
 docs/
   architecture-macos.md        # High-level architecture quick-reference
@@ -325,7 +325,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 Two complementary E2E approaches, run by different workflows. Pick by what
 you're validating:
 
-**Pattern A — fixture-based xctest (`e2e.yml`)**
+**Fixture-based xctest E2E (`e2e.yml`)**
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
   (Parakeet, WhisperKit, Qwen3, WatchLoop) feed pre-recorded `two_speakers_de.wav`
   into the components and assert on transcripts.
@@ -337,7 +337,7 @@ you're validating:
 - Limitations: can't catch regressions in the recording stack, the audio
   routing path, TCC interactions, or detector → recorder handoff.
 
-**Pattern C — deployed app + RPC (`e2e-app.yml`, `scripts/e2e-app.sh`)**
+**Live-recording E2E (`e2e-app.yml`, `scripts/e2e-app.sh`)**
 - Builds the dev `.app`, deploys to `~/Applications/MeetingTranscriber-Dev.app`
   (stable path → TCC permissions persist), launches it, triggers a meeting
   via `meeting-simulator`, polls `DebugRPCServer`'s `/state` for
@@ -351,8 +351,8 @@ you're validating:
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
 
-**Why Pattern C exists** (history that's easy to lose):
-- An earlier attempt at "pattern A but with live recording" (PR #100,
+**Why the live-recording variant exists** (history that's easy to lose):
+- An earlier attempt at xctest-framed live recording (PR #100,
   `E2EFullPipelineTests`) crashed reproducibly with
   `freed pointer was not the last allocation` on the self-hosted Mac mini.
   Root cause: ad-hoc-signed xctest binaries get a fresh cdhash on every

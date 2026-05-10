@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One-time setup for a self-hosted runner host that will run the Pattern-C
-# E2E driver (scripts/e2e-app.sh).
+# One-time setup for a self-hosted runner host that will run the
+# live-recording E2E driver (scripts/e2e-app.sh).
 #
 # What this does:
 #   1. Creates a self-signed code-signing cert in a dedicated dev keychain.

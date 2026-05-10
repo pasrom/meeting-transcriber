@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pattern-C E2E driver for the Meeting Transcriber dev app.
+# Live-recording E2E driver for the Meeting Transcriber dev app.
 #
 # Builds the dev .app, deploys it to a stable path so its TCC permissions
 # persist across runs, launches it, triggers a synthetic meeting via the
