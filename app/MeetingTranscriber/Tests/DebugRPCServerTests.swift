@@ -121,6 +121,43 @@
         }
 
         @MainActor
+        func testRouteSkipNamingInvokesClosureAndReturnsOk() async {
+            let invoked = XCTestExpectation(description: "skipNaming closure fires")
+            let server = DebugRPCServer(
+                port: 0,
+                token: Self.testToken,
+                snapshot: { .empty },
+                skipNaming: { invoked.fulfill() },
+            )
+
+            let response = await server.route(authedRequest(method: "POST", path: "/action/skipNaming"))
+
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(String(data: response.body, encoding: .utf8), "ok\n")
+            await fulfillment(of: [invoked], timeout: 2)
+        }
+
+        @MainActor
+        func testRouteSkipNamingDefaultClosureDoesNotCrash() async {
+            // The init parameter has a `{}` default so existing call sites
+            // don't have to change. Hitting the endpoint without wiring a
+            // closure must still return 200 with the standard ok body.
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let response = await server.route(authedRequest(method: "POST", path: "/action/skipNaming"))
+            XCTAssertEqual(response.status, 200)
+            XCTAssertEqual(String(data: response.body, encoding: .utf8), "ok\n")
+        }
+
+        @MainActor
+        func testRouteSkipNamingRequiresAuth() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            // Token value irrelevant — request omits the Authorization header.
+            let unauthed = HTTPRequest(method: "POST", path: "/action/skipNaming")
+            let response = await server.route(unauthed)
+            XCTAssertEqual(response.status, 401)
+        }
+
+        @MainActor
         func testRouteScreenshotNoWindowReturns503() async {
             // Tests run headless — NSApp has no visible window, so the
             // capture helper returns nil and the route maps to 503.
