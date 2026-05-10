@@ -1,0 +1,13 @@
+# Shared dorny/paths-filter definitions. Referenced by ci.yml and release.yml
+# so docs-only PRs reliably skip both the test matrix and the DMG build.
+#
+# Use with `predicate-quantifier: every` — with the v4 default `some`, the
+# `**` catch-all alone marks every file as matched and the `!…` negations
+# never actually exclude anything.
+code:
+  - '**'
+  - '!*.md'
+  - '!**/*.md'
+  - '!docs/**'
+  - '!LICENSE'
+  - '!.gitignore'

@@ -25,18 +25,19 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
     steps:
+      # Needed so dorny/paths-filter can read .github/filters.yml from the
+      # workspace; see ci.yml for the same dance.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
       - if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         id: filter
         with:
-          filters: |
-            code:
-              - '**'
-              - '!*.md'
-              - '!**/*.md'
-              - '!docs/**'
-              - '!LICENSE'
-              - '!.gitignore'
+          # `every` is required for the exclusion-style filter — without it,
+          # the v4 default `some` makes `**` match every file and the `!…`
+          # negations never apply, silently building DMGs for docs-only PRs.
+          predicate-quantifier: every
+          filters: .github/filters.yml
 
   build:
     needs: changes

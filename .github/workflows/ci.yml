@@ -26,23 +26,22 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
     steps:
+      # Needed so dorny/paths-filter can read .github/filters.yml from the
+      # workspace; the action otherwise hits the GitHub API for the file
+      # list but still needs the filter definition locally.
+      - if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
       - if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         id: filter
         with:
-          # `every` is required for the exclusion-style filter below: with the
-          # v4 default `some`, the `**` catch-all alone marks every file as
-          # matched and the `!…` negations never actually exclude anything,
-          # so docs-only PRs still trigger the full build/test suite.
+          # `every` is required for the exclusion-style filter in
+          # .github/filters.yml: with the v4 default `some`, the `**`
+          # catch-all alone marks every file as matched and the `!…`
+          # negations never actually exclude anything, so docs-only PRs
+          # still trigger the full build/test suite.
           predicate-quantifier: every
-          filters: |
-            code:
-              - '**'
-              - '!*.md'
-              - '!**/*.md'
-              - '!docs/**'
-              - '!LICENSE'
-              - '!.gitignore'
+          filters: .github/filters.yml
 
   lint:
     needs: changes
