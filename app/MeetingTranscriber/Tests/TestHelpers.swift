@@ -123,6 +123,7 @@ extension XCTestCase {
         engineLabel: String,
         modelVariant: String?,
         threshold: Double,
+        audioPathOverride: URL? = nil,
     ) async throws {
         let truth = try GroundTruth.load(named: fixture)
         try XCTSkipUnless(
@@ -130,8 +131,9 @@ extension XCTestCase {
             "Audio fixture missing: \(truth.audioURL.path)",
         )
 
+        let audioPath = audioPathOverride ?? truth.audioURL
         let started = Date()
-        let segments = try await engine.transcribeSegments(audioPath: truth.audioURL)
+        let segments = try await engine.transcribeSegments(audioPath: audioPath)
         let hypothesis = segments.map(\.text).joined(separator: " ")
         let breakdown = WERCalculator.werBreakdown(
             reference: truth.text,

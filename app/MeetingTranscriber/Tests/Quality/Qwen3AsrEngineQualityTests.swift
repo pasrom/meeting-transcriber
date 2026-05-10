@@ -36,7 +36,31 @@ final class Qwen3AsrEngineQualityTests: XCTestCase {
     // auto-detect-only contract), but the model still misrecognises proper
     // nouns + tech jargon on the three-speaker fixture, lifting WER above
     // WhisperKit's level.
+    //
+    // Round-trips the fixture through `AudioMixer.loadAudioFileAsFloat32`
+    // → `AudioMixer.saveWAV` before transcription. Without this, the Mini
+    // CI run produced garbage tokens (single Cyrillic chars / punctuation)
+    // even though the fixture is already 16 kHz mono PCM. The same
+    // round-trip is what `Qwen3E2ETests` does, and that test runs green
+    // on Mini against the top-level fixture. Cause not yet root-caused,
+    // but mirroring the working test's ingestion path normalises whatever
+    // Qwen3's loader is choking on.
     private func runFixture(named name: String) async throws {
+        let truth = try GroundTruth.load(named: name)
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: truth.audioURL.path),
+            "Audio fixture missing: \(truth.audioURL.path)",
+        )
+
+        let tmpDir = try makeTempDirectory(prefix: "qwen3_quality")
+        let resampled16k = tmpDir.appendingPathComponent("resampled_16k.wav")
+        let samples = try AudioMixer.loadAudioFileAsFloat32(url: truth.audioURL)
+        try AudioMixer.saveWAV(
+            samples: samples,
+            sampleRate: AudioConstants.targetSampleRate,
+            url: resampled16k,
+        )
+
         let engine = Qwen3AsrEngine()
         engine.language = "de"
         await engine.loadModel()
@@ -48,6 +72,7 @@ final class Qwen3AsrEngineQualityTests: XCTestCase {
             engineLabel: "qwen3",
             modelVariant: nil,
             threshold: 0.6,
+            audioPathOverride: resampled16k,
         )
     }
 }
