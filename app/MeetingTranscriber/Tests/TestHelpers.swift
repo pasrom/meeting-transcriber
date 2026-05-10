@@ -86,6 +86,28 @@ extension XCTestCase {
     }
 }
 
+// MARK: - Quality-Suite Helpers
+
+extension XCTestCase {
+    /// Skip unless the dedicated quality job opted in via `RUN_QUALITY_TESTS=1`.
+    /// Quality tests pull production-size models (~1 GB) and are gated so a
+    /// normal `swift test` on a dev machine doesn't pay that cost.
+    func skipUnlessQualityRun() throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_QUALITY_TESTS"] == "1",
+            "Set RUN_QUALITY_TESTS=1 to run quality regression tests",
+        )
+    }
+
+    /// App version recorded in `QualityResult` rows. Bundle's
+    /// `CFBundleShortVersionString` when hosted in the app, "dev" under raw
+    /// `swift test`.
+    var qualityAppVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+            ?? "dev"
+    }
+}
+
 // MARK: - WatchLoop / AppState Helpers
 
 /// Returns a MeetingDetector with no patterns — never matches any window.
