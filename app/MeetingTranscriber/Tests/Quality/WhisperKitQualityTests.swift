@@ -15,12 +15,12 @@ final class WhisperKitQualityTests: XCTestCase {
     }
 
     func test_whisperKit_twoSpeakers_de_wer() async throws {
-        try requireQualityRun()
+        try skipUnlessQualityRun()
         try await runWERFixture(named: "two_speakers_de")
     }
 
     func test_whisperKit_threeSpeakers_de_wer() async throws {
-        try requireQualityRun()
+        try skipUnlessQualityRun()
         try await runWERFixture(named: "three_speakers_de")
     }
 
@@ -58,7 +58,7 @@ final class WhisperKitQualityTests: XCTestCase {
                 der: nil,
                 werBreakdown: .init(breakdown),
                 derBreakdown: nil,
-                appVersion: appVersion,
+                appVersion: qualityAppVersion,
                 timestamp: ISO8601DateFormatter().string(from: started),
                 durationSeconds: elapsed,
             ),
@@ -77,17 +77,5 @@ final class WhisperKitQualityTests: XCTestCase {
 
         // Flush eagerly so even a later test crash doesn't lose this row.
         _ = try? QualityResultsWriter.shared.flush()
-    }
-
-    private func requireQualityRun() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["RUN_QUALITY_TESTS"] == "1",
-            "Set RUN_QUALITY_TESTS=1 to run quality regression tests",
-        )
-    }
-
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            ?? "dev"
     }
 }
