@@ -28,7 +28,10 @@ on:
       - "v*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Key by SHA, not ref: merge-to-main + the `v*` tag push share one
+  # commit but differ in `github.ref`, so ref-keyed grouping would rerun
+  # the suite on identical code.
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
