@@ -206,6 +206,26 @@ codesign --force --sign "$CERT_HASH" \
 
 log "Signed: $(codesign -dv "$APP_BUNDLE_PATH" 2>&1 | grep -E 'Identifier|Authority' | head -2 | tr '\n' ' ')"
 
+# CI keychain for Security.framework-touching tests (KeychainHelper et al.)
+# under the runner's user-level launchd context. The runner spawns xctest
+# in a non-interactive context where the login.keychain returns
+# errSecInteractionNotAllowed even when auto-login + Aqua session are
+# active. A pre-staged unlocked keychain set as the user default sidesteps
+# both the lock state and per-user search-list mutation races between
+# parallel matrix jobs.
+CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+if [[ -f "$CI_KEYCHAIN" ]]; then
+    log "CI keychain already at $CI_KEYCHAIN — re-unlocking + asserting default"
+    security unlock-keychain -p "" "$CI_KEYCHAIN"
+else
+    log "Creating CI keychain at $CI_KEYCHAIN (empty password, default)"
+    security create-keychain -p "" "$CI_KEYCHAIN"
+    security unlock-keychain -p "" "$CI_KEYCHAIN"
+fi
+security list-keychains -d user -s "$CI_KEYCHAIN" "$LOGIN_KEYCHAIN"
+security default-keychain -s "$CI_KEYCHAIN"
+
 cat <<MSG
 
 [setup] DONE. ✓

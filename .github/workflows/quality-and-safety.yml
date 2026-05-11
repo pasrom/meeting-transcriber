@@ -41,8 +41,15 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
-    runs-on: macos-26
-    timeout-minutes: 60
+    # Self-hosted Mini absorbs sanitizer instrumentation 4× better than
+    # macos-26 GH-hosted (TSan ~6:41 vs ~25 min) and avoids the CoreML
+    # model-load assertion race that flaked WhisperKitEngineTests on
+    # macos-26. Sanitizer doesn't need the `audio` label, so either Mini
+    # runner picks up.
+    runs-on: [self-hosted, macOS, ARM64]
+    # ~7 min wall-clock observed; 20 min leaves room for cold-build
+    # variance while still surfacing runaways before they cost an hour.
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: write
@@ -67,13 +74,14 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
-      # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
-      # download; well below the 60 min job timeout so a hung download
-      # surfaces as a step failure, not a job-timeout.
-      - uses: ./.github/actions/setup-swift-test
-        timeout-minutes: 20
-        with:
-          cache-key-suffix: ${{ matrix.variant }}
+      - uses: ./.github/actions/verify-xcode
+      # No actions/cache: Mini has persistent disk (see e2e.yml).
+      # `mt-ci.keychain-db` is provisioned by scripts/setup-self-hosted-runner.sh
+      # and set as the runner user's default keychain so
+      # `KeychainHelper`-touching tests don't hit the locked login.keychain.
+      # Defensive re-unlock in case it auto-locked between runs.
+      - name: Ensure CI keychain unlocked
+        run: security unlock-keychain -p "" ~/Library/Keychains/mt-ci.keychain-db
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
