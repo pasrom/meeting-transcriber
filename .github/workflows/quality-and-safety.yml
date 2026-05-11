@@ -75,13 +75,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/verify-xcode
-      # No actions/cache: Mini has persistent disk (see e2e.yml).
-      # `mt-ci.keychain-db` is provisioned by scripts/setup-self-hosted-runner.sh
-      # and set as the runner user's default keychain so
-      # `KeychainHelper`-touching tests don't hit the locked login.keychain.
-      # Defensive re-unlock in case it auto-locked between runs.
-      - name: Ensure CI keychain unlocked
-        run: security unlock-keychain -p "" ~/Library/Keychains/mt-ci.keychain-db
+      # `mt-ci.keychain-db` is pre-staged by setup-self-hosted-runner.sh, but
+      # macOS occasionally drops it from the per-user search list (seen after
+      # a second runner's `config.sh` ran as the same OS user). When that
+      # happens `SecItemAdd` writes to the default keychain while
+      # `SecItemCopyMatching` searches login.keychain only — KeychainHelper
+      # tests silent-fail. Re-assert per job; safe under matrix parallelism
+      # because every job writes the same value.
+      - name: Ensure CI keychain is default + in search list + unlocked
+        run: |
+          security default-keychain -s ~/Library/Keychains/mt-ci.keychain-db
+          security list-keychains -d user -s \
+            ~/Library/Keychains/mt-ci.keychain-db \
+            ~/Library/Keychains/login.keychain-db
+          security unlock-keychain -p "" ~/Library/Keychains/mt-ci.keychain-db
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
