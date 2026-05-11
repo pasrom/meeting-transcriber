@@ -2,8 +2,16 @@ import Foundation
 import os.log
 import Security
 
-/// macOS Keychain-based secret storage using Security.framework.
-/// Same API surface as the previous file-based implementation.
+/// Legacy macOS Keychain wrapper, kept for a single read-only purpose:
+/// migrating the OpenAI API key out of the Keychain into file-based
+/// storage on first launch after upgrade (`AppSettings.loadOpenAIKey`).
+///
+/// Don't add new callers. New secrets follow the file pattern at
+/// `AppPaths.dataDir/.<secret-name>` with `chmod 0600` (see
+/// `DebugRPCServer.tokenFileURL` for the canonical example). Keychain
+/// requires UI prompts under non-interactive launchd contexts (e.g.
+/// self-hosted CI on macOS), which makes it a footgun for anything we
+/// also want to exercise from xctest.
 enum KeychainHelper {
     private static let service = AppPaths.logSubsystem
     private static let logger = Logger(subsystem: AppPaths.logSubsystem, category: "KeychainHelper")

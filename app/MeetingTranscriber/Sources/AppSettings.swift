@@ -221,15 +221,19 @@ final class AppSettings {
         didSet { defaults.set(openAIModel, forKey: "openAIModel") }
     }
 
+    /// File-based storage at `secretsDir/.openai-key` (chmod 0600). Same pattern
+    /// as `DebugRPCServer`'s `.rpc-token`. Replaces the previous Keychain backing
+    /// because xctest in a non-interactive launchd subprocess (self-hosted CI on
+    /// macOS) gets `errSecInteractionNotAllowed` from `SecItemAdd`/`SecItemUpdate`,
+    /// and the released signed-build storage works the same way under file as
+    /// under Keychain for a Bearer token that's only kept locally.
     var openAIAPIKey: String {
-        get { KeychainHelper.read(key: "openAIAPIKey") ?? "" }
-        set {
-            if newValue.isEmpty {
-                KeychainHelper.delete(key: "openAIAPIKey")
-            } else {
-                KeychainHelper.save(key: "openAIAPIKey", value: newValue)
-            }
-        }
+        didSet { Self.writeOpenAIKey(openAIAPIKey, to: openAIKeyFile) }
+    }
+
+    @ObservationIgnored private let secretsDir: URL
+    private var openAIKeyFile: URL {
+        secretsDir.appendingPathComponent(".openai-key")
     }
 
     // MARK: - Output Directory
@@ -325,8 +329,9 @@ final class AppSettings {
 
     // MARK: - Init
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, secretsDir: URL = AppPaths.dataDir) {
         self.defaults = defaults
+        self.secretsDir = secretsDir
 
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
@@ -367,6 +372,7 @@ final class AppSettings {
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? "http://localhost:11434/v1/chat/completions"
         openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
+        openAIAPIKey = Self.loadOpenAIKey(from: secretsDir.appendingPathComponent(".openai-key"))
 
         // Migrate legacy "audioDebugLogging" key (renamed to "verboseDiagnostics" 2026-05-04).
         // New key wins if both are set; legacy value seeds the new key on first launch.
@@ -389,5 +395,43 @@ final class AppSettings {
         #endif
         checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
         includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
+    }
+
+    // MARK: - OpenAI API Key file storage
+
+    private static func loadOpenAIKey(from url: URL) -> String {
+        if let data = try? Data(contentsOf: url),
+           let value = String(data: data, encoding: .utf8),
+           !value.isEmpty {
+            return value
+        }
+        // One-shot migration from the previous Keychain backing. Runs on the
+        // first launch after upgrade; succeeds in signed/installed builds and
+        // is a silent no-op anywhere Keychain isn't accessible (dev builds,
+        // self-hosted CI). After a successful migration the Keychain entry
+        // is deleted so subsequent launches don't re-migrate.
+        if let migrated = KeychainHelper.read(key: "openAIAPIKey"), !migrated.isEmpty {
+            writeOpenAIKey(migrated, to: url)
+            KeychainHelper.delete(key: "openAIAPIKey")
+            return migrated
+        }
+        return ""
+    }
+
+    private static func writeOpenAIKey(_ value: String, to url: URL) {
+        let fm = FileManager.default
+        if value.isEmpty {
+            try? fm.removeItem(at: url)
+            return
+        }
+        try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // Remove + recreate so the 0600 attribute applies even when the file
+        // pre-existed with a wider mode.
+        try? fm.removeItem(at: url)
+        fm.createFile(
+            atPath: url.path,
+            contents: Data(value.utf8),
+            attributes: [.posixPermissions: 0o600],
+        )
     }
 }

@@ -9,10 +9,12 @@ final class AppSettingsTests: XCTestCase {
     private var defaults: UserDefaults!
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var testSuiteName: String!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var secretsDir: URL!
 
-    /// Each test gets its own volatile `UserDefaults(suiteName:)` so
-    /// `swift test --parallel` doesn't race on the shared on-disk plist.
-    /// AppSettings receives the suite via constructor injection.
+    /// Each test gets its own volatile `UserDefaults(suiteName:)` plus a
+    /// dedicated temp `secretsDir`, so `swift test --parallel` doesn't race
+    /// on the shared on-disk plist or the file-based API-key storage.
     override func setUp() {
         super.setUp()
         testSuiteName = "AppSettingsTests-\(getpid())-\(UUID().uuidString)"
@@ -21,8 +23,10 @@ final class AppSettingsTests: XCTestCase {
             return
         }
         defaults = suite
-        KeychainHelper.delete(key: "openAIAPIKey")
-        settings = AppSettings(defaults: defaults)
+        secretsDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppSettingsTests-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: secretsDir, withIntermediateDirectories: true)
+        settings = AppSettings(defaults: defaults, secretsDir: secretsDir)
     }
 
     override func tearDown() {
@@ -30,6 +34,8 @@ final class AppSettingsTests: XCTestCase {
         defaults.removePersistentDomain(forName: testSuiteName)
         defaults = nil
         testSuiteName = nil
+        try? FileManager.default.removeItem(at: secretsDir)
+        secretsDir = nil
         super.tearDown()
     }
 
@@ -191,16 +197,30 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.openAIModel, "llama3.1")
     }
 
-    func testOpenAIAPIKeyViaKeychainHelper() {
+    func testOpenAIAPIKeyRoundTripsThroughFile() {
         XCTAssertEqual(settings.openAIAPIKey, "")
+        let keyFile = secretsDir.appendingPathComponent(".openai-key")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: keyFile.path))
 
         settings.openAIAPIKey = "sk-test-key"
-        XCTAssertEqual(KeychainHelper.read(key: "openAIAPIKey"), "sk-test-key")
         XCTAssertEqual(settings.openAIAPIKey, "sk-test-key")
+        XCTAssertEqual(try String(contentsOf: keyFile, encoding: .utf8), "sk-test-key")
+
+        // Confirm file mode is 0600 — secret must not be world- or group-readable.
+        let attrs = try? FileManager.default.attributesOfItem(atPath: keyFile.path)
+        XCTAssertEqual(attrs?[.posixPermissions] as? Int, 0o600)
 
         settings.openAIAPIKey = ""
-        XCTAssertNil(KeychainHelper.read(key: "openAIAPIKey"))
         XCTAssertEqual(settings.openAIAPIKey, "")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: keyFile.path))
+    }
+
+    func testOpenAIAPIKeyPersistsAcrossInstances() {
+        settings.openAIAPIKey = "sk-persistent"
+        // New AppSettings against the same secretsDir should read the file
+        // back — the round-trip is what the user sees after relaunch.
+        let reloaded = AppSettings(defaults: defaults, secretsDir: secretsDir)
+        XCTAssertEqual(reloaded.openAIAPIKey, "sk-persistent")
     }
 
     func testOpenAIEndpointSavedToDefaults() {
@@ -305,25 +325,5 @@ final class AppSettingsTests: XCTestCase {
             "Legacy audioDebugLogging key should be removed once migrated to verboseDiagnostics",
         )
         XCTAssertTrue(suite.bool(forKey: "verboseDiagnostics"))
-    }
-
-    // MARK: - Keychain
-
-    func testKeychainRoundTrip() {
-        KeychainHelper.delete(key: "HF_TOKEN_TEST")
-
-        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
-
-        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_abc123")
-        XCTAssertTrue(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_abc123")
-
-        KeychainHelper.save(key: "HF_TOKEN_TEST", value: "hf_xyz789")
-        XCTAssertEqual(KeychainHelper.read(key: "HF_TOKEN_TEST"), "hf_xyz789")
-
-        KeychainHelper.delete(key: "HF_TOKEN_TEST")
-        XCTAssertFalse(KeychainHelper.exists(key: "HF_TOKEN_TEST"))
-        XCTAssertNil(KeychainHelper.read(key: "HF_TOKEN_TEST"))
     }
 }
