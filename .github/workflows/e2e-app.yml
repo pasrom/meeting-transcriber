@@ -79,7 +79,7 @@ jobs:
       # the driver failed before tearing it down.
       - name: Upload simulator log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: meeting-simulator.log
           path: /tmp/e2e-app-sim.log
