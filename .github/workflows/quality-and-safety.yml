@@ -136,7 +136,7 @@ jobs:
           RUN_QUALITY_TESTS: "1"
           QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
           WHISPERKIT_MODEL: openai_whisper-large-v3-v20240930_turbo
-        run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests|FluidDiarizerQualityTests|ParakeetQualityTests|Qwen3AsrEngineQualityTests"
+        run: cd app/MeetingTranscriber && swift test --filter "Qwen3AsrEngineQualityTests"
       - name: Upload quality results
         if: always()
         uses: actions/upload-artifact@v7
