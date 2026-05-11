@@ -115,7 +115,7 @@ jobs:
         run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests|FluidDiarizerQualityTests|ParakeetQualityTests"
       - name: Upload quality results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: quality-results
           path: ${{ github.workspace }}/quality-results.json
