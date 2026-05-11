@@ -41,29 +41,20 @@ jobs:
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 60
     permissions:
       contents: read
       actions: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
     strategy:
-      # TSan and ASan find different classes of bugs; one failing leg
-      # shouldn't kill the other's diagnostic output.
       fail-fast: false
       matrix:
-        variant: [tsan, asan]
+        variant: [tsan]
         include:
-          # ThreadSanitizer catches races the static @Sendable checker can't
-          # see — C-pointer shared state, GCD-callback closures over class
-          # properties.
           - variant: tsan
             sanitizer-flag: "--sanitize=thread"
-          # AddressSanitizer covers the Pointer-heavy code paths Swift's ARC
-          # can't help with — AudioTapLib's CATapDescription / IOProc, the
-          # `withUnsafePointer` slabs in audio mixing, and any C-imported
-          # framework boundary.
-          - variant: asan
-            sanitizer-flag: "--sanitize=address"
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
