@@ -15,6 +15,15 @@ on:
           - Qwen3
           - WatchLoop
   push:
+    # Trigger on every main push so the engine E2E run produces a status
+    # check on the same SHA that a future `v*` tag will point at. Tag
+    # rulesets can then gate on this check without falling into the
+    # chicken-and-egg of "tag fires e2e.yml, tag rejected because e2e.yml
+    # hasn't run yet." No paths-filter: the test is cheap on the Mini
+    # (~2-3 min, generic-label runner), so the few wasted runs on
+    # docs-only commits are not worth the complexity of keeping the
+    # filter in sync across workflows.
+    branches: [main]
     tags:
       - "v*"
 
