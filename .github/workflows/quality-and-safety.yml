@@ -65,8 +65,40 @@ jobs:
         timeout-minutes: 20
         with:
           cache-key-suffix: ${{ matrix.variant }}
+      # Self-hosted Mini runs xctest in a non-interactive launchd context
+      # where the user's login keychain returns errSecInteractionNotAllowed.
+      # Provision an empty, unlocked, ephemeral keychain and make it the
+      # default — KeychainHelper-backed tests (`KeychainHelperTests`,
+      # `AppSettingsTests`) write/read here without UI prompts. Cleaned up
+      # in the always-run teardown step.
+      - name: Provision isolated test keychain
+        run: |
+          set -euo pipefail
+          TEST_KC="$RUNNER_TEMP/mt-test.keychain-db"
+          rm -f "$TEST_KC"
+          security create-keychain -p "" "$TEST_KC"
+          security set-keychain-settings -lut 21600 "$TEST_KC"
+          security unlock-keychain -p "" "$TEST_KC"
+          ORIG=$(security list-keychains -d user | sed -e 's/^[[:space:]]*//' -e 's/"//g' | tr '\n' ' ')
+          security list-keychains -d user -s "$TEST_KC" $ORIG
+          security default-keychain -s "$TEST_KC"
+          echo "TEST_KEYCHAIN_PATH=$TEST_KC" >> "$GITHUB_ENV"
+          echo "TEST_KEYCHAIN_ORIG_LIST=$ORIG" >> "$GITHUB_ENV"
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
+      - name: Tear down test keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${TEST_KEYCHAIN_ORIG_LIST:-}" ]]; then
+            security list-keychains -d user -s $TEST_KEYCHAIN_ORIG_LIST
+            FIRST=$(echo "$TEST_KEYCHAIN_ORIG_LIST" | awk '{print $1}')
+            [[ -n "$FIRST" ]] && security default-keychain -s "$FIRST"
+          fi
+          if [[ -n "${TEST_KEYCHAIN_PATH:-}" ]]; then
+            security delete-keychain "$TEST_KEYCHAIN_PATH" 2>/dev/null || true
+            rm -f "$TEST_KEYCHAIN_PATH"
+          fi
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
