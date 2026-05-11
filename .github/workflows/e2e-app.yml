@@ -31,7 +31,12 @@ concurrency:
 
 jobs:
   e2e-app:
-    runs-on: [self-hosted, macOS, ARM64]
+    # `audio` label pins the job to the runner that has exclusive access
+    # to the BlackHole virtual input device. A second runner on the same
+    # Mini handles other self-hosted workloads in parallel without
+    # racing for the audio stack — see runner labels via
+    # `gh api /repos/{owner}/{repo}/actions/runners`.
+    runs-on: [self-hosted, macOS, ARM64, audio]
     timeout-minutes: 15
 
     steps:
