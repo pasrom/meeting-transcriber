@@ -216,6 +216,15 @@ brew install --cask meeting-transcriber@beta
 builds the DMG on a macOS runner and creates a GitHub Release. Stable tags update the
 `meeting-transcriber` cask, pre-release tags (containing `-`) update `meeting-transcriber@beta`.
 
+**Stable tag gate:** A GitHub Tag Ruleset (`Stable tag protection`) rejects any
+`git push` of a tag matching `v*` *without* a `-` suffix unless the tagged SHA
+has green status checks for every context listed in
+`.github/tag-ruleset.json` (`required_status_checks`). Apply or update the
+ruleset via `./scripts/configure-tag-ruleset.sh` (idempotent, needs repo-admin
+`gh` auth). RC tags (`v*-rc*`) stay unrestricted. If the last commit before a
+stable tag was docs-only and didn't trigger `e2e-app`, fire it manually with
+`gh workflow run e2e-app.yml --ref main` before tagging.
+
 ## Git Workflow
 
 Use the `/git-workflow` skill. Commit proactively after every logical unit of work — don't wait for user permission.
