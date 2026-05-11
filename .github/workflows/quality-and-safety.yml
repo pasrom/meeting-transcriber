@@ -58,13 +58,12 @@ jobs:
     name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v6
-      # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
-      # download; well below the 60 min job timeout so a hung download
-      # surfaces as a step failure, not a job-timeout.
-      - uses: ./.github/actions/setup-swift-test
-        timeout-minutes: 20
-        with:
-          cache-key-suffix: ${{ matrix.variant }}
+      # No actions/cache here: the self-hosted Mini has persistent disk
+      # between runs, so the SPM `.build` directory and the on-disk model
+      # caches (~/Documents/huggingface, ~/Library/Application Support/
+      # FluidAudio) are already populated. actions/cache would waste the
+      # multi-GB upload on a save (~5.6 GB timed out the post-action on a
+      # prior real run). Same rationale as e2e.yml — see 721eed0.
       # Self-hosted Mini runs xctest in a non-interactive launchd context
       # where the user's login keychain returns errSecInteractionNotAllowed.
       # Provision an empty, unlocked, ephemeral keychain and make it the
