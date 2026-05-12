@@ -60,6 +60,11 @@ runs:
         echo -n "$DEVELOPER_ID_CERT" | base64 --decode -o "$CERT_PATH"
         security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" \
           -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        # Wipe the .p12 immediately — it's already absorbed into the
+        # keychain. On self-hosted Mini $RUNNER_TEMP persists across runs;
+        # leaving the .p12 (encrypted, but still cert+key on disk) is an
+        # unnecessary attack surface.
+        rm -f "$CERT_PATH"
 
         PARTITION_LIST="apple-tool:,apple:"
         if [ -n "$EXTRA_PARTITION_ROLES" ]; then
