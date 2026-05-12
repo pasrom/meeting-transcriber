@@ -23,9 +23,13 @@ on:
     # (~2-3 min, generic-label runner), so the few wasted runs on
     # docs-only commits are not worth the complexity of keeping the
     # filter in sync across workflows.
+    #
+    # No `tags: ["v*"]` here either: a tag push on the same SHA as a prior
+    # main push would NOT be cancelled by the concurrency group (different
+    # `github.ref` between `refs/heads/main` and `refs/tags/v…`), so it
+    # would fire a duplicate engine E2E run that the tag ruleset already
+    # has covered via the main-push check-run.
     branches: [main]
-    tags:
-      - "v*"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
