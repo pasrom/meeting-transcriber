@@ -5,6 +5,7 @@
 [![E2E (App)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml)
 [![Quality & Safety](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml)
 [![App Store Smoke](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml)
+[![codecov](https://codecov.io/gh/pasrom/meeting-transcriber/branch/main/graph/badge.svg)](https://codecov.io/gh/pasrom/meeting-transcriber)
 
 A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
 

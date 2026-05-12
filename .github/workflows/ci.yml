@@ -128,9 +128,47 @@ jobs:
       # 18 min step-timeout on the actual tests: typical hot-cache run is
       # 5–7 min, so this is ~3× margin while still failing fast as
       # `timed_out` (not `cancelled`) when a single test hangs.
+      # `--enable-code-coverage` adds ~10–15 % runtime and writes a
+      # `default.profdata` next to the xctest bundle.
       - name: Swift tests
         timeout-minutes: 18
-        run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
+        run: cd app/MeetingTranscriber && swift test --parallel --enable-code-coverage --skip ModelPreloadTests ${{ matrix.swift-flags }}
+      # Export LCOV from `default.profdata` for codecov upload. `swift
+      # build --show-bin-path` is a no-op query (no recompile) that
+      # returns the directory holding both the xctest bundle and the
+      # `codecov/default.profdata` SPM emits. Skipping the step on test
+      # failure is intentional — we never want a stale coverage snapshot
+      # uploaded as if it were green.
+      - name: Export LCOV
+        if: success()
+        run: |
+          set -euo pipefail
+          cd app/MeetingTranscriber
+          BIN_PATH=$(swift build --show-bin-path)
+          PROFDATA="$BIN_PATH/codecov/default.profdata"
+          XCTEST_DIR=$(find "$BIN_PATH" -name '*.xctest' -type d | head -n1)
+          [[ -n "$XCTEST_DIR" ]] || { echo "::error::no .xctest bundle in $BIN_PATH"; exit 1; }
+          XCTEST_BIN="$XCTEST_DIR/Contents/MacOS/$(basename "$XCTEST_DIR" .xctest)"
+          xcrun llvm-cov export \
+            -format=lcov \
+            -instr-profile="$PROFDATA" \
+            -ignore-filename-regex='\.build/|Tests/|/usr/' \
+            "$XCTEST_BIN" \
+            > "$GITHUB_WORKSPACE/coverage-${{ matrix.variant }}.lcov"
+          wc -l "$GITHUB_WORKSPACE/coverage-${{ matrix.variant }}.lcov"
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
+        with:
+          # Token-based upload (vs. tokenless OIDC) — more reliable and
+          # avoids the tokenless-upload rate limit. The token is safe to
+          # treat as a normal Actions secret; Codecov docs explicitly
+          # state public-repo upload tokens are not sensitive.
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-${{ matrix.variant }}.lcov
+          flags: ${{ matrix.variant }}
+          fail_ci_if_error: false
+          verbose: true
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
