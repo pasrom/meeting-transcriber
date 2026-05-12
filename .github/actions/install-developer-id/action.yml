@@ -72,6 +72,16 @@ runs:
         security set-key-partition-list -S "$PARTITION_LIST" \
           -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-        security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+        # `-s` REPLACES the user-domain search list (see `man security`),
+        # so a naive `-s "$KEYCHAIN_PATH" login.keychain-db` would drop any
+        # other keychains a parallel job depends on. On the self-hosted Mini
+        # both runners share an OS user, so quality-and-safety.yml's
+        # mt-ci.keychain-db has been observed to vanish from the search list
+        # mid-flight, silent-failing KeychainHelper tests. Prepend our
+        # keychain to whatever is already there instead, deduping on our
+        # own path so re-invocation in the same job is idempotent.
+        EXISTING=$(security list-keychains -d user | tr -d '"' | xargs)
+        FILTERED=$(printf '%s\n' $EXISTING | grep -vxF "$KEYCHAIN_PATH" | xargs || true)
+        security list-keychains -d user -s "$KEYCHAIN_PATH" $FILTERED
 
         echo "keychain-path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
