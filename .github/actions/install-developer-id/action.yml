@@ -84,4 +84,15 @@ runs:
         FILTERED=$(printf '%s\n' $EXISTING | grep -vxF "$KEYCHAIN_PATH" | xargs || true)
         security list-keychains -d user -s "$KEYCHAIN_PATH" $FILTERED
 
+        # Fail fast on cert/key import mismatch or missing trust chain.
+        # Callers (release.yml + e2e-app.yml) otherwise burn a multi-minute
+        # build before codesign reports `no identity found`; this surfaces
+        # the same condition in <1 s right at the install boundary.
+        IDENTITY_LIST=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH")
+        echo "$IDENTITY_LIST"
+        if echo "$IDENTITY_LIST" | grep -q "0 valid identities found"; then
+          echo "::error::install-developer-id imported cert/key but no valid codesigning identity in $KEYCHAIN_PATH. Check cert/key match or trust chain."
+          exit 1
+        fi
+
         echo "keychain-path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
