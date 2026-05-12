@@ -6,17 +6,13 @@ name: E2E (Production App)
 on:
   workflow_dispatch:
   push:
+    # No paths-filter. Stable-tag ruleset requires a *push*-event check-run
+    # on the SHA; `workflow_dispatch`-created check-runs don't satisfy the
+    # gate (GitHub quirk — same name + success, still not counted). So
+    # every main push fires e2e-app to guarantee the check exists on every
+    # SHA a stable tag might point at. Mini Runner #1 is dedicated and
+    # otherwise idle — extra runs on docs-only commits are essentially free.
     branches: [main]
-    paths:
-      - 'app/MeetingTranscriber/Sources/**'
-      - 'app/MeetingTranscriber/Package.swift'
-      - 'app/MeetingTranscriber/Package.resolved'
-      - 'app/MeetingTranscriber/Tests/Fixtures/**'
-      - 'tools/audiotap/**'
-      - 'tools/meeting-simulator/**'
-      - 'scripts/run_app.sh'
-      - 'scripts/e2e-app.sh'
-      - '.github/workflows/e2e-app.yml'
   schedule:
     # 04:30 UTC = 06:30 CEST. Offset from the 03:00 quality-and-safety
     # cron so concurrent failures are easy to tell apart in `gh run list`.

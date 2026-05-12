@@ -221,9 +221,10 @@ builds the DMG on a macOS runner and creates a GitHub Release. Stable tags updat
 has green status checks for every context listed in
 `.github/tag-ruleset.json` (`required_status_checks`). Apply or update the
 ruleset via `./scripts/configure-tag-ruleset.sh` (idempotent, needs repo-admin
-`gh` auth). RC tags (`v*-rc*`) stay unrestricted. If the last commit before a
-stable tag was docs-only and didn't trigger `e2e-app`, fire it manually with
-`gh workflow run e2e-app.yml --ref main` before tagging.
+`gh` auth). RC tags (`v*-rc*`) stay unrestricted. `e2e.yml` and `e2e-app.yml`
+both fire on every main push (no paths-filter) so every SHA a stable tag might
+point at already has the required check-runs — no manual `gh workflow run`
+ceremony before tagging.
 
 ## Git Workflow
 
@@ -351,8 +352,9 @@ you're validating:
   (stable path → TCC permissions persist), launches it, triggers a meeting
   via `meeting-simulator`, polls `DebugRPCServer`'s `/state` for
   `lastJob.state == .done`, asserts on the resulting transcript file.
-- Triggered on `workflow_dispatch`, `push` to main on relevant paths,
-  and a nightly cron at 04:30 UTC.
+- Triggered on `workflow_dispatch`, every `push` to main (no paths-filter
+  — so the stable-tag ruleset always has a push-event check-run on the
+  SHA), and a nightly cron at 04:30 UTC.
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.
