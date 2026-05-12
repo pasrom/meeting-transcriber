@@ -27,8 +27,16 @@
 
         // MARK: - Setup
 
-        private func startServer(snapshot: RPCStateSnapshot = .empty) async throws -> URL {
-            let server = DebugRPCServer(port: 0, token: Self.testToken) { snapshot }
+        private func startServer(
+            snapshot: RPCStateSnapshot = .empty,
+            enqueueFile: @escaping (URL) -> Bool = { _ in false },
+        ) async throws -> URL {
+            let server = DebugRPCServer(
+                port: 0,
+                token: Self.testToken,
+                snapshot: { snapshot },
+                enqueueFile: enqueueFile,
+            )
             self.server = server
             server.start()
             // Wait for the listener's stateUpdateHandler to populate boundPort.
@@ -127,6 +135,63 @@
                 for: request("GET", base.appendingPathComponent("screenshot"), headers: authHeader),
             )
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+        }
+
+        // MARK: - /action/enqueueFile
+
+        func testEnqueueFileMissingPathReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("action/enqueueFile"), headers: authHeader)
+            req.httpBody = Data("{}".utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testEnqueueFileNonexistentPathReturns400() async throws {
+            // Closure returns false → RPC layer translates to 400.
+            let base = try await startServer { _ in false }
+            var req = request("POST", base.appendingPathComponent("action/enqueueFile"), headers: authHeader)
+            req.httpBody = Data(#"{"path":"/tmp/definitely-does-not-exist-\#(UUID().uuidString).wav"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testEnqueueFileValidPathReturns200AndInvokesClosure() async throws {
+            // Temp file the closure can `fileExists`-check if it chooses to.
+            let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("rpc-enqueue-\(UUID().uuidString).wav")
+            FileManager.default.createFile(atPath: tmp.path, contents: Data("RIFF".utf8))
+            defer { try? FileManager.default.removeItem(at: tmp) }
+
+            // Use an actor-isolated box so we can observe from the test body
+            // without sharing mutable state across the closure boundary.
+            actor InvocationBox {
+                var receivedPath: String?
+                func record(_ p: String) {
+                    receivedPath = p
+                }
+            }
+            let box = InvocationBox()
+            let base = try await startServer { url in
+                Task { await box.record(url.path) }
+                return true
+            }
+
+            var req = request("POST", base.appendingPathComponent("action/enqueueFile"), headers: authHeader)
+            req.httpBody = Data(#"{"path":"\#(tmp.path)"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+
+            // Closure dispatches into a Task — poll instead of a fixed sleep
+            // so a slow lane (sanitizers ~7.5 min) doesn't flake on a tight
+            // 50 ms budget. Worst-case wall is still 500 ms.
+            var received: String?
+            for _ in 0 ..< 20 {
+                received = await box.receivedPath
+                if received != nil { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertEqual(received, tmp.path)
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)

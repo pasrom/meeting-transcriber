@@ -172,10 +172,20 @@ final class AppState {
                     }
                 }
             }
+            // RPC counterpart to the NSOpenPanel "Open from Recording" flow.
+            // Validates the file exists (RPC layer returns 400 on `false`),
+            // then routes through the same `enqueueFiles` entry point the
+            // menu uses, so the import code path is identical.
+            let enqueueFile: (URL) -> Bool = { [weak self] url in
+                guard let self, FileManager.default.fileExists(atPath: url.path) else { return false }
+                Task { @MainActor in self.enqueueFiles([url]) }
+                return true
+            }
             let server = DebugRPCServer(
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
+                enqueueFile: enqueueFile,
             )
             server.start()
             debugRPCServer = server
