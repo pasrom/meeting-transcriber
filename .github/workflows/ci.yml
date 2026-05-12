@@ -94,7 +94,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-26
-    timeout-minutes: 30
+    # 25 min job-timeout = 20 min setup (cold cache) + ~5 min margin. The
+    # `Swift tests` step below has its own 18 min step-timeout so a hang
+    # surfaces as `timed_out` (clearly distinguishable from cancellation),
+    # not the opaque `cancelled` a bare job-timeout produces. See
+    # docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
+    timeout-minutes: 25
     permissions:
       contents: read
       actions: write
@@ -113,14 +118,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
-      # download; well below the 30 min job timeout so a hung download
+      # download; well below the 25 min job timeout so a hung download
       # surfaces as a step failure, not a job-timeout.
       - uses: ./.github/actions/setup-swift-test
         timeout-minutes: 20
         with:
           cache-key-suffix: ${{ matrix.variant }}
           swift-flags: ${{ matrix.swift-flags }}
+      # 18 min step-timeout on the actual tests: typical hot-cache run is
+      # 5–7 min, so this is ~3× margin while still failing fast as
+      # `timed_out` (not `cancelled`) when a single test hangs.
       - name: Swift tests
+        timeout-minutes: 18
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.swift-flags }}
       - name: Cancel run on failure
         if: failure()

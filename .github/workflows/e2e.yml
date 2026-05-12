@@ -38,10 +38,12 @@ concurrency:
 jobs:
   e2e:
     runs-on: [self-hosted, macOS, ARM64]
-    # 60 min headroom: cold runs download three multi-GB models
-    # (WhisperKit ~1 GB, Parakeet ~50 MB, Qwen3 ~1.75 GB). Subsequent
-    # runs hit the SPM cache + on-disk model cache and finish in <10 min.
-    timeout-minutes: 60
+    # Cold-cache runs download three multi-GB models (WhisperKit ~1 GB,
+    # Parakeet ~50 MB, Qwen3 ~1.75 GB); hot runs <10 min. 30 min job
+    # budget covers worst-case cold download. The `Run E2E tests` step
+    # below has a 25 min step-timeout so a hang surfaces as `timed_out`
+    # — see docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
+    timeout-minutes: 30
     env:
       E2E_ENABLED: "1"
 
@@ -69,6 +71,7 @@ jobs:
       # via HTTPS on hit and waste the multi-GB upload on miss — the
       # latter timed out the post-action on a real run (5.6 GB → GitHub).
       - name: Run E2E tests
+        timeout-minutes: 25
         run: |
           cd app/MeetingTranscriber
           swift test --filter '${{ steps.filter.outputs.filter }}'

@@ -33,7 +33,12 @@ jobs:
     # racing for the audio stack — see runner labels via
     # `gh api /repos/{owner}/{repo}/actions/runners`.
     runs-on: [self-hosted, macOS, ARM64, audio]
-    timeout-minutes: 15
+    # Three lanes (transcript, record-only, reimport) at ~4–6 min each
+    # → ~14 min observed total. 20 min job budget gives honest margin;
+    # each lane has its own 10 min step-timeout below so a hang in lane
+    # N surfaces as `timed_out` on that step (not as an opaque job-level
+    # `cancelled`). See docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -69,6 +74,7 @@ jobs:
       - name: Run live-recording E2E driver
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
         # `--two-meetings` always: meeting 1 covers fresh-state single-run,
         # meeting 2 covers cooldown + state reset. ~3 min total wall on Mini
         # vs ~1 min for single-meeting; signal latency is fine on nightly +
@@ -86,6 +92,7 @@ jobs:
       - name: Run live-recording E2E driver (record-only)
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --record-only
 
       # Re-import lane: chains a record-only meeting with a POST
@@ -101,6 +108,7 @@ jobs:
       - name: Run live-recording E2E driver (re-import recorded WAV)
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --reimport-recorded
 
       # Best-effort: capture the simulator's stdout for post-mortem if
