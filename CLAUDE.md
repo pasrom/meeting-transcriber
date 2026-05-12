@@ -9,6 +9,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
   Sources/
     MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
     AppState.swift         # @Observable @MainActor ViewModel (business state, badge logic, pipeline wiring)
+    AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
     AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
     MenuBarView.swift      # Menu bar dropdown UI
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
@@ -39,7 +40,10 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
     FluidVAD.swift         # VAD preprocessing via FluidAudio Silero v6 (silence trimming + timeline remapping)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
+    SpeakerMatcher+Logging.swift # Forensic match-decision logging (pseudonymized speaker names)
+    StoredSpeaker.swift    # Codable speaker DB entry model (centroid + FIFO embeddings + metadata)
     RecognitionStats.swift # Recognition event logging + aggregate stats model (recognition_log.jsonl)
+    RecordingSidecar.swift # Metadata sidecar written next to dual-source recordings in record-only mode
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     PipelineJob.swift      # Pipeline job model
@@ -60,7 +64,12 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MeetingPatterns.swift  # App-specific window title patterns
     PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
     UpdateChecker.swift    # GitHub release update checker
+    Bundle+AppVersion.swift # Bundle extension: appVersion + gitCommitHash from Info.plist
+    DiagnosticExporter.swift # Reads log entries → shareable .log file (Settings → Advanced → Export Diagnostics)
+    PersistentDiagnosticLog.swift # Persistent log stream subprocess with sliding-window restart policy
+    String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
     DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
+    RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
   Entitlements/
@@ -109,6 +118,10 @@ scripts/
   setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + PPPC profile (needed before e2e-app.sh works)
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
+  generate_test_audio_with_silence.sh # Generate 2-speaker fixture with engineered silence block for VAD E2E tests
+  generate_quality_fixtures.sh # Generate WER/DER quality ground-truth fixtures (WAV + truth JSON, requires sox)
+  build_perf_report.sh     # Build performance analysis: CI run history → job duration trends + slowdown alerts
+  configure-tag-ruleset.sh  # Configure/update GitHub Tag Ruleset for stable-tag protection (idempotent)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   test_rpc.sh               # Live smoketest for DebugRPCServer (build + launch + drive via mt-cli + assert)
   pre-push.sh               # Pre-push parity check: swift build -c release (catches Sendable diagnostics that debug-mode builds tolerate)
@@ -123,6 +136,9 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + v* tags)
   e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly)
+  appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
+  build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
+  quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
 docs/
   architecture-macos.md        # High-level architecture quick-reference
