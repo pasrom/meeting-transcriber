@@ -74,6 +74,11 @@
         private let snapshot: () -> RPCStateSnapshot
         private let speakerActions: SpeakerDBActions
         private let skipNaming: () -> Void
+        /// Enqueues a previously-recorded file into the pipeline — same path
+        /// `processAudioFiles` (NSOpenPanel) takes. Returns `false` if the
+        /// caller's path is missing or doesn't exist on disk; the RPC layer
+        /// translates that to 400.
+        private let enqueueFile: (URL) -> Bool
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -90,12 +95,14 @@
             snapshot: @escaping () -> RPCStateSnapshot,
             speakerActions: SpeakerDBActions = .noop,
             skipNaming: @escaping () -> Void = {},
+            enqueueFile: @escaping (URL) -> Bool = { _ in false },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
             self.snapshot = snapshot
             self.speakerActions = speakerActions
             self.skipNaming = skipNaming
+            self.enqueueFile = enqueueFile
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -244,6 +251,19 @@
                 skipNaming()
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
+            case ("POST", "/action/enqueueFile"):
+                // Enqueues a previously-recorded audio file into the pipeline
+                // — the same code path NSOpenPanel hits via "Open from
+                // Recording". Used by `scripts/e2e-app.sh` to chain a
+                // record-only run with a re-import + transcript assertion.
+                // 400 on missing/empty path or undecodable JSON.
+                guard let p = try? JSONDecoder().decode(EnqueueFilePayload.self, from: request.body),
+                      !p.path.isEmpty
+                else { return HTTPResponse.badRequest() }
+                let url = URL(fileURLWithPath: p.path)
+                guard enqueueFile(url) else { return HTTPResponse.badRequest() }
+                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+
             case ("POST", "/action/renameSpeaker"),
                  ("POST", "/action/deleteSpeaker"),
                  ("POST", "/action/mergeSpeakers"),
@@ -316,6 +336,10 @@
 
         private struct SeedPayload: Decodable {
             let name: String
+        }
+
+        private struct EnqueueFilePayload: Decodable {
+            let path: String
         }
 
         /// Map the action outcome to an HTTP response. `notFound` → 404,
