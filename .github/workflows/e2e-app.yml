@@ -76,6 +76,18 @@ jobs:
         # default to single for fast iteration.
         run: bash scripts/e2e-app.sh --two-meetings
 
+      # Record-only lane: same recorder path, but WatchLoop short-circuits
+      # before VAD/transcription/diarization/protocol and writes a sidecar
+      # JSON + WAVs to <output>/recordings/ instead. Catches regressions in
+      # the WatchLoop record-only branch, sidecar schema, and partial-move
+      # behavior that the transcript-asserting lane (above) doesn't exercise.
+      # `--no-build` reuses the bundle from the previous step to skip ~30 s
+      # of rebuild/re-sign.
+      - name: Run live-recording E2E driver (record-only)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        run: bash scripts/e2e-app.sh --no-build --record-only
+
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
       - name: Upload simulator log

@@ -28,6 +28,7 @@ APP_AFTER=quit           # quit | leave
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 TWO_MEETINGS=false       # trigger two back-to-back meetings to validate cooldown + state reset
+RECORD_ONLY=false        # validate record-only mode (sidecar+WAV instead of transcript)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -36,13 +37,17 @@ while [ $# -gt 0 ]; do
         --no-build)     NO_BUILD=true ;;
         --fixture)      shift; SIMULATOR_FIXTURE="$1" ;;
         --two-meetings) TWO_MEETINGS=true ;;
+        --record-only)  RECORD_ONLY=true ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--fixture path/to.wav]
+Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only] [--fixture path/to.wav]
 
   --no-build       Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app       Leave the dev app running on exit. Default: quit it.
   --two-meetings   Run two meetings back-to-back (cooldown + state-reset coverage).
+  --record-only    Enable record-only mode: assert on sidecar JSON + mix WAV instead
+                   of transcript/protocol. Exercises the WatchLoop branch that
+                   skips VAD/transcription/diarization/protocol generation.
   --fixture        Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -64,6 +69,14 @@ DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 
+# Record-only output lands here — `AppPaths.downloadsProtocolsDir` +
+# `/recordings`. Unsandboxed (Homebrew variant) so this is a real path,
+# not a container-mapped one.
+RECORDINGS_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
+# `find -newer` marker so cleanup only touches THIS run's files — never
+# pre-existing user data (see CLAUDE.md feedback on destructive FS scans).
+RECORD_ONLY_MARKER="/tmp/e2e-app-record-only-marker.$$"
+
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 
 # --- timing budgets -------------------------------------------------------
@@ -72,6 +85,11 @@ RPC_BASE="http://127.0.0.1:9876"
 # under 10 s easily.
 RPC_READY_TIMEOUT_S=30
 PIPELINE_TIMEOUT_S=240
+
+# Record-only skips the whole pipeline, so the budget is just: detector
+# notices the simulator stopped (~1 s poll) + endGrace (≥1 s) + recorder
+# finalize (~3 s) + sidecar write (instant). 60 s gives ample buffer.
+RECORD_ONLY_DEADLINE_S=60
 
 # WatchLoop's per-app cooldown (`MeetingDetector.swift` cooldownDuration
 # = 5 s) plus a 3 s buffer so the second meeting isn't suppressed as a
@@ -205,6 +223,17 @@ fi
 defaults write com.meetingtranscriber.dev debugRPCEnabled -bool true
 defaults write com.meetingtranscriber.dev autoWatch -bool true
 
+if [ "$RECORD_ONLY" = true ]; then
+    log "Enabling record-only mode (no transcript/protocol generation)"
+    defaults write com.meetingtranscriber.dev recordOnly -bool true
+    mkdir -p "$RECORDINGS_DIR"
+    touch "$RECORD_ONLY_MARKER"
+else
+    # Reset stale toggle from a previous --record-only run on the same host
+    # so a plain `--two-meetings` invocation isn't silently still in record-only.
+    defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
+fi
+
 log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
@@ -216,11 +245,24 @@ while [ ! -f "$RPC_TOKEN_FILE" ] || ! { RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && 
 done
 log "RPC up"
 
-# Single trap covers the simulator process for any exit path (success,
-# fail, signal). Set before the first `&` line so a kill between fork
-# and the trap line doesn't orphan the subprocess.
+# Single trap covers the simulator process + record-only side-effects for
+# any exit path (success, fail, signal). Set before the first `&` line so
+# a kill between fork and the trap line doesn't orphan the subprocess.
 SIM_PID=""
-trap '[ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true' EXIT INT TERM
+on_exit() {
+    [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
+    if [ "$RECORD_ONLY" = true ]; then
+        defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
+        # Marker-bounded cleanup: only files created since `touch $MARKER`
+        # at launch — never touches pre-existing user data. See feedback
+        # memory `no_destructive_fs_on_real_dirs`.
+        if [ -f "$RECORD_ONLY_MARKER" ]; then
+            find "$RECORDINGS_DIR" -type f -newer "$RECORD_ONLY_MARKER" -delete 2>/dev/null || true
+            rm -f "$RECORD_ONLY_MARKER"
+        fi
+    fi
+}
+trap on_exit EXIT INT TERM
 
 # Trigger one meeting, poll until a new pipeline job reaches a terminal
 # state, assert it landed in `done` with a non-trivial transcript. Reads
@@ -309,7 +351,96 @@ run_one_meeting() {
     SIM_PID=""
 }
 
-if [ "$TWO_MEETINGS" = true ]; then
+# Record-only counterpart: trigger one meeting, wait for sidecar+WAV to
+# land in `recordings/`, assert schema/files, negative-assert that no
+# transcript/protocol got written and `lastJob` didn't advance.
+run_one_record_only_meeting() {
+    local label="$1"
+
+    # Per-meeting marker so iteration 2 of --two-meetings doesn't see the
+    # iteration-1 sidecar as "new". Outer $RECORD_ONLY_MARKER still bounds
+    # the cleanup sweep on exit.
+    local meeting_marker="/tmp/e2e-app-record-only-meeting-marker.$$"
+    rm -f "$meeting_marker"
+    touch "$meeting_marker"
+
+    log "$label: starting meeting-simulator (record-only) → $SIMULATOR_FIXTURE"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
+
+    # Block until the simulator finishes playing the fixture. Exit code is
+    # irrelevant; we assert on filesystem state below.
+    wait "$SIM_PID" || true
+    SIM_PID=""
+
+    log "$label: simulator done; polling $RECORDINGS_DIR for sidecar (timeout ${RECORD_ONLY_DEADLINE_S}s)"
+    local deadline=$(( $(date +%s) + RECORD_ONLY_DEADLINE_S ))
+    local sidecar=""
+    while true; do
+        sidecar="$(find "$RECORDINGS_DIR" -type f -name '*_meta.json' -newer "$meeting_marker" -print 2>/dev/null | head -1)"
+        [ -n "$sidecar" ] && break
+        [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no *_meta.json appeared in $RECORDINGS_DIR within ${RECORD_ONLY_DEADLINE_S}s"
+        sleep 2
+    done
+
+    log "$label: found sidecar $sidecar"
+    jq -C . "$sidecar" | sed 's/^/    /'
+
+    # Schema check in one jq invocation — emits "ok" or a human-readable reason.
+    local schema_check
+    schema_check="$(jq -r '
+        if .version != 1 then "version != 1 (got: \(.version))"
+        elif (.startedAt | type) != "string" then "startedAt not string"
+        elif (.stoppedAt | type) != "string" then "stoppedAt not string"
+        elif (.startedAt | fromdateiso8601? // -1) < 0 then "startedAt not ISO8601"
+        elif (.stoppedAt | fromdateiso8601? // -1) < 0 then "stoppedAt not ISO8601"
+        elif (.stoppedAt | fromdateiso8601) <= (.startedAt | fromdateiso8601) then "stoppedAt <= startedAt"
+        elif (.files.mix // "") == "" then "files.mix missing"
+        elif (.files.mix | endswith("_mix.wav") | not) then "files.mix doesn'\''t end with _mix.wav (got: \(.files.mix))"
+        else "ok"
+        end
+    ' "$sidecar")"
+    [ "$schema_check" = "ok" ] || fail "$label: sidecar schema invalid: $schema_check"
+
+    # Mix WAV must live next to the sidecar and be non-trivial.
+    local sidecar_dir mix_filename mix_path mix_size
+    sidecar_dir="$(dirname "$sidecar")"
+    mix_filename="$(jq -r '.files.mix' "$sidecar")"
+    mix_path="$sidecar_dir/$mix_filename"
+    [ -f "$mix_path" ] || fail "$label: mix WAV not found: $mix_path"
+    mix_size="$(wc -c <"$mix_path" | tr -d ' ')"
+    # 16 kHz mono Float32 = 64 KB/sec. Fixture two_speakers_de.wav is ~10 s
+    # → expect > 64 KB even after worst-case truncation.
+    [ "$mix_size" -gt 65536 ] || fail "$label: mix WAV suspiciously small: $mix_size bytes (expected > 64 KB)"
+    log "$label: mix WAV $mix_path ($mix_size bytes)"
+
+    # Negative: record-only short-circuits before VAD/transcription/protocol.
+    # No `.txt`/`.md` files from THIS meeting should exist in recordings/.
+    local unexpected
+    unexpected="$(find "$RECORDINGS_DIR" -maxdepth 1 -type f -newer "$meeting_marker" \
+        \( -name '*.txt' -o -name '*.md' \) 2>/dev/null | head -5)"
+    [ -z "$unexpected" ] || fail "$label: record-only should not produce transcript/protocol; found: $unexpected"
+
+    # Negative: PipelineQueue.enqueue() was skipped, so `lastJob.jobID`
+    # must still equal whatever it was before this meeting fired.
+    local snapshot lj_id
+    snapshot="$(rpc /state)"
+    lj_id="$(jq -r '.lastJob.jobID // empty' <<<"$snapshot")"
+    [ "$lj_id" = "$PRE_LAST_JOB_ID" ] || fail "$label: lastJob.jobID changed to '$lj_id' (was '$PRE_LAST_JOB_ID') — pipeline should have been skipped in record-only mode"
+
+    rm -f "$meeting_marker"
+}
+
+if [ "$RECORD_ONLY" = true ]; then
+    if [ "$TWO_MEETINGS" = true ]; then
+        run_one_record_only_meeting "[1/2]"
+        log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
+        sleep "$INTER_MEETING_COOLDOWN_S"
+        run_one_record_only_meeting "[2/2]"
+    else
+        run_one_record_only_meeting "meeting"
+    fi
+elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
     sleep "$INTER_MEETING_COOLDOWN_S"
