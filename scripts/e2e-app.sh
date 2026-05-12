@@ -29,26 +29,34 @@ SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 TWO_MEETINGS=false       # trigger two back-to-back meetings to validate cooldown + state reset
 RECORD_ONLY=false        # validate record-only mode (sidecar+WAV instead of transcript)
+REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /action/enqueueFile
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --quit-app)     APP_AFTER=quit ;;     # explicit alias for the default
-        --keep-app)     APP_AFTER=leave ;;
-        --no-build)     NO_BUILD=true ;;
-        --fixture)      shift; SIMULATOR_FIXTURE="$1" ;;
-        --two-meetings) TWO_MEETINGS=true ;;
-        --record-only)  RECORD_ONLY=true ;;
+        --quit-app)         APP_AFTER=quit ;;     # explicit alias for the default
+        --keep-app)         APP_AFTER=leave ;;
+        --no-build)         NO_BUILD=true ;;
+        --fixture)          shift; SIMULATOR_FIXTURE="$1" ;;
+        --two-meetings)     TWO_MEETINGS=true ;;
+        --record-only)      RECORD_ONLY=true ;;
+        --reimport-recorded) REIMPORT_RECORDED=true ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only] [--fixture path/to.wav]
+Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only] [--reimport-recorded] [--fixture path/to.wav]
 
-  --no-build       Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
-  --keep-app       Leave the dev app running on exit. Default: quit it.
-  --two-meetings   Run two meetings back-to-back (cooldown + state-reset coverage).
-  --record-only    Enable record-only mode: assert on sidecar JSON + mix WAV instead
-                   of transcript/protocol. Exercises the WatchLoop branch that
-                   skips VAD/transcription/diarization/protocol generation.
-  --fixture        Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
+  --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
+  --keep-app           Leave the dev app running on exit. Default: quit it.
+  --two-meetings       Run two meetings back-to-back (cooldown + state-reset coverage).
+  --record-only        Enable record-only mode: assert on sidecar JSON + mix WAV instead
+                       of transcript/protocol. Exercises the WatchLoop branch that
+                       skips VAD/transcription/diarization/protocol generation.
+  --reimport-recorded  Chain a record-only meeting with a re-import via the
+                       POST /action/enqueueFile RPC: capture audio live, write
+                       a WAV, then feed that WAV back in through the "Open from
+                       Recording" pipeline and assert the transcript. Covers
+                       both the recorder's WAV-encoding correctness and the
+                       AudioMixer 3-tier file-load fallback in one pass.
+  --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
             ;;
@@ -56,6 +64,14 @@ HELP
     esac
     shift
 done
+
+# --reimport-recorded chains a record-only meeting with a follow-up
+# enqueueFile RPC. Phase 1 needs the recordOnly toggle on so WatchLoop
+# writes a WAV instead of running the pipeline — flip it on implicitly
+# rather than requiring callers to pass both flags.
+if [ "$REIMPORT_RECORDED" = true ]; then
+    RECORD_ONLY=true
+fi
 
 # --- paths ----------------------------------------------------------------
 
@@ -90,6 +106,11 @@ PIPELINE_TIMEOUT_S=240
 # notices the simulator stopped (~1 s poll) + endGrace (≥1 s) + recorder
 # finalize (~3 s) + sidecar write (instant). 60 s gives ample buffer.
 RECORD_ONLY_DEADLINE_S=60
+
+# Sidecar write completes before the recorder's async tail bytes do — give
+# the WAV's AVAudioFile close a moment before re-feeding it to the engine.
+# Observed worst case on Mini is ~1 s; 2 s is honest margin.
+RECORDER_FINALIZE_WAIT_S=2
 
 # WatchLoop's per-app cooldown (`MeetingDetector.swift` cooldownDuration
 # = 5 s) plus a 3 s buffer so the second meeting isn't suppressed as a
@@ -272,38 +293,38 @@ PRE_LAST_JOB_ID=""
 PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
 log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 
-run_one_meeting() {
+# Shared poll loop used by every flow that triggers a pipeline job
+# (`run_one_meeting`, `run_one_reimport`). Polls /state every 5 s, drains
+# speaker-naming dialogs along the way, breaks when a NEW lastJob (id
+# different from $PRE_LAST_JOB_ID) reaches `.done` or `.error`.
+#
+# On success: sets globals POLL_LJ_ID, POLL_LJ_STATE for the caller's
+# post-poll assertions. On PIPELINE_TIMEOUT_S elapsed: calls `fail()`.
+#
+# One jq invocation, four fields out via `|`-joined output saves 3 forks
+# per poll. `|` (not `@tsv`) keeps consecutive empty fields as boundaries
+# — bash `IFS=$'\t' read` collapses them and misparses a fully-null
+# lastJob. Trailing `|| true` survives transient curl --max-time hits
+# during model load: jq emits no output → read hits EOF → returns 1 →
+# `set -e` would otherwise kill the script silently.
+POLL_LJ_ID=""
+POLL_LJ_STATE=""
+_poll_for_new_lastjob_terminal() {
     local label="$1"
-    log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE"
-    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
-    SIM_PID=$!
-
     log "$label: polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
     local deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
     local last_state="" last_id=""
     local lj_id="" lj_state="" pipe_active="" pipe_processing="" pending_naming=""
 
     while true; do
-        # One jq invocation, four fields out via `|`-joined output — saves
-        # 3 forks per poll vs separate jq calls.
-        #
-        # Why `|` and not `@tsv`: bash `IFS=$'\t' read` treats consecutive
-        # whitespace separators as ONE (and skips leading empties), so an
-        # all-null lastJob (`\t\t0\tfalse`) gets misparsed as `0\tfalse\t\t`.
-        # `|` is non-whitespace, so each separator stays a field boundary.
-        # Trailing `|| true` keeps the loop alive when rpc() returns empty
-        # (transient curl --max-time hit during model load / GC pause):
-        # jq emits no output → read hits EOF → returns 1 → `set -e` would
-        # otherwise kill the script silently. We just retry next tick.
         lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
         IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
             rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
         ) || true
 
-        # Auto-skip the speaker-naming dialog so headless runs don't deadlock
-        # waiting for a UI click. The endpoint drains all pending in one shot
-        # and is a no-op when nothing is pending. Fire-and-forget; next tick
-        # picks up the resulting state change.
+        # Drain speaker-naming dialogs so headless runs don't deadlock on a
+        # UI click. Fire-and-forget; the endpoint is a no-op when nothing
+        # is pending and the next tick picks up the state change.
         if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
             log "$label:   Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
             curl --silent --show-error --max-time 5 -X POST \
@@ -322,9 +343,22 @@ run_one_meeting() {
             break
         fi
 
-        [ "$(date +%s)" -lt "$deadline" ] || fail "no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
+        [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no new pipeline job reached terminal state within ${PIPELINE_TIMEOUT_S}s (active=$pipe_active processing=$pipe_processing)"
         sleep 5
     done
+
+    POLL_LJ_ID="$lj_id"
+    POLL_LJ_STATE="$lj_state"
+}
+
+run_one_meeting() {
+    local label="$1"
+    log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
+
+    _poll_for_new_lastjob_terminal "$label"
+    local lj_id="$POLL_LJ_ID" lj_state="$POLL_LJ_STATE"
 
     log "$label: final state: $lj_state"
     local final_snapshot
@@ -428,10 +462,85 @@ run_one_record_only_meeting() {
     lj_id="$(jq -r '.lastJob.jobID // empty' <<<"$snapshot")"
     [ "$lj_id" = "$PRE_LAST_JOB_ID" ] || fail "$label: lastJob.jobID changed to '$lj_id' (was '$PRE_LAST_JOB_ID') — pipeline should have been skipped in record-only mode"
 
+    # Surface the produced mix path so the optional reimport chain picks
+    # it up without re-globbing. Reset by each caller's `local` line.
+    LAST_RECORDED_MIX_PATH="$mix_path"
+
     rm -f "$meeting_marker"
 }
 
-if [ "$RECORD_ONLY" = true ]; then
+# Re-import a previously-recorded WAV via POST /action/enqueueFile — same
+# code path the menu's "Open from Recording" entry takes. Polls /state for
+# a new lastJob in `done`, asserts transcript exists, is non-trivial, and
+# contains the expected fixture keyword. Confirms the round-trip:
+# recorder-produced WAV is loadable + transcribable.
+run_one_reimport() {
+    local label="$1"
+    local audio_path="$2"
+    local expected_phrase="${3:-meeting}"  # case-insensitive substring
+
+    [ -f "$audio_path" ] || fail "$label: re-import source not found: $audio_path"
+
+    log "$label: POST /action/enqueueFile path=$audio_path"
+    local enq_status
+    enq_status="$(curl --silent --show-error --max-time 10 -o /dev/null -w "%{http_code}" \
+        -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -nc --arg p "$audio_path" '{path: $p}')" \
+        "$RPC_BASE/action/enqueueFile" 2>/dev/null || echo "000")"
+    [ "$enq_status" = "200" ] || fail "$label: enqueueFile returned HTTP $enq_status (expected 200)"
+
+    _poll_for_new_lastjob_terminal "$label"
+    local lj_id="$POLL_LJ_ID" lj_state="$POLL_LJ_STATE"
+
+    log "$label: final state: $lj_state"
+    local final_snapshot
+    final_snapshot="$(rpc /state)"
+    echo "$final_snapshot" | jq '.lastJob'
+
+    [ "$lj_state" = "done" ] || fail "$label: lastJob.state == \"$lj_state\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final_snapshot")"
+
+    local transcript_path
+    transcript_path="$(jq -r '.lastJob.transcriptPath // empty' <<<"$final_snapshot")"
+    [ -n "$transcript_path" ] || fail "$label: lastJob.transcriptPath is empty"
+    [ -f "$transcript_path" ] || fail "$label: transcript file does not exist: $transcript_path"
+
+    local transcript_size
+    transcript_size="$(wc -c <"$transcript_path" | tr -d ' ')"
+    [ "$transcript_size" -gt 100 ] || fail "$label: transcript suspiciously short: $transcript_size bytes (expected > 100)"
+
+    # Content assertion: re-imported WAV came from the live recording stack,
+    # so a successful round-trip means the engine actually recognised the
+    # fixture's spoken content — not just emitted any non-empty file.
+    # `meeting` is case-insensitive-robust (Parakeet may capitalise/translate;
+    # WhisperKit may emit "Meeting" or "meeting" depending on punctuation).
+    grep -qi "$expected_phrase" "$transcript_path" \
+        || fail "$label: transcript does not contain '$expected_phrase' (case-insensitive). Preview:$(printf '\n')$(head -c 500 "$transcript_path")"
+
+    log "$label: transcript $transcript_path ($transcript_size bytes, contains '$expected_phrase')"
+    log "$label: preview:"
+    head -c 500 "$transcript_path" | sed 's/^/    /'
+    echo
+
+    PRE_LAST_JOB_ID="$lj_id"
+}
+
+LAST_RECORDED_MIX_PATH=""
+
+if [ "$REIMPORT_RECORDED" = true ]; then
+    # Phase 1: record-only meeting → produces a WAV via the live capture stack.
+    run_one_record_only_meeting "[record]"
+    [ -n "$LAST_RECORDED_MIX_PATH" ] || fail "record-phase did not surface a mix path; cannot continue"
+
+    # Phase 2: re-import that WAV through the menu's "Open from Recording"
+    # entry — same code path NSOpenPanel uses, exposed via RPC. recordOnly
+    # is still toggled on but only affects WatchLoop.enqueueRecording, not
+    # AppState.enqueueFiles, so the pipeline runs end-to-end.
+    log "Sleeping ${RECORDER_FINALIZE_WAIT_S}s before re-import to let recorder finalize tail bytes"
+    sleep "$RECORDER_FINALIZE_WAIT_S"
+    run_one_reimport "[reimport]" "$LAST_RECORDED_MIX_PATH"
+elif [ "$RECORD_ONLY" = true ]; then
     if [ "$TWO_MEETINGS" = true ]; then
         run_one_record_only_meeting "[1/2]"
         log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
