@@ -1,0 +1,75 @@
+# Codecov configuration — see https://docs.codecov.com/docs/codecov-yaml
+#
+# Coverage is soft-gated: we report numbers per PR but don't block merge.
+# Once a stable baseline emerges (~2–4 weeks), tighten `target` / `threshold`.
+# Until then, "auto" + a generous threshold avoids false-positive PR breakage.
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # Wait for both matrix legs before commenting on a PR. Avoids flapping
+    # status while the second leg is still uploading.
+    after_n_builds: 2
+
+coverage:
+  precision: 1
+  round: down
+  range: "60...85"
+  status:
+    project:
+      default:
+        target: auto
+        # PRs may not drop project coverage by more than 2 percentage points
+        # vs. the base commit. Generous on purpose — many hardware-boundary
+        # paths (AudioTapLib, CATapDescription, AVAudioEngine) are not
+        # unit-testable, so legitimate changes there will dilute the number.
+        threshold: 2%
+        # `informational: true` would make status purely advisory. Keeping
+        # it strict so the codecov check shows up red on a real regression,
+        # but the threshold is wide enough that day-to-day work isn't hit.
+    patch:
+      default:
+        # New / changed code in a PR must be ≥50% covered. Hardware paths
+        # are excluded via `ignore` below, so this targets logic only.
+        target: 50%
+        threshold: 10%
+
+comment:
+  layout: "reach, diff, flags, files"
+  # `once`: post a single comment per PR and edit it in place on re-runs.
+  # `default` would post a new comment on every push and force-push, which
+  # is noisy with a 2-leg matrix (two uploads per push → two comments).
+  behavior: once
+  require_changes: true   # only comment when coverage actually moved
+
+flags:
+  homebrew:
+    paths:
+      - app/MeetingTranscriber/Sources/
+      - tools/audiotap/Sources/
+    # `carryforward: true` keeps the last known coverage for a flag when
+    # one matrix leg fails to upload — prevents a transient upload error
+    # from showing as a 100 % coverage drop.
+    carryforward: true
+  appstore:
+    paths:
+      - app/MeetingTranscriber/Sources/
+      - tools/audiotap/Sources/
+    carryforward: true
+
+# Files that are not unit-testable in xctest (hardware, generated, tests,
+# tooling) or that would distort the coverage signal. Reviewed line-by-line.
+ignore:
+  - "app/MeetingTranscriber/Tests/**/*"
+  - "app/MeetingTranscriber/Sources/Info.plist"
+  - "app/MeetingTranscriber/Sources/Assets.xcassets/**/*"
+  # Live-only audio capture path — exercised by e2e-app.yml, not xctest.
+  - "tools/audiotap/Sources/AppAudioCapture.swift"
+  - "tools/audiotap/Sources/MicCaptureHandler.swift"
+  - "tools/audiotap/Sources/AudioCaptureSession.swift"
+  - "tools/audiotap/Sources/OutputDeviceChangeCoordinator.swift"
+  # CLI-only / tools targets — separate test suites, not part of the app.
+  - "tools/whisperkit-cli/**/*"
+  - "tools/meeting-simulator/**/*"
+  - "tools/mt-cli/**/*"
+  - "scripts/**/*"
