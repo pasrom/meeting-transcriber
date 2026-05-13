@@ -255,6 +255,18 @@ else
     defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
 fi
 
+# LaunchServices' `open` routes to the WindowServer of the *foreground* Aqua
+# session, not just any session with our UID loaded. If a second user is
+# signed in via Fast User Switching and currently has the foreground, our
+# LaunchAgent's `open` lands in an inactive session and LaunchServices
+# returns the misleading `procNotFound (-600)`. Catch this before the call
+# so the failure is actionable instead of cryptic.
+fg_user=$(stat -f "%Su" /dev/console)
+my_user=$(id -un)
+if [ "$fg_user" != "$my_user" ]; then
+    fail "Aqua foreground user is '$fg_user', not '$my_user' — Fast User Switching is active. On the Mac mini, log '$fg_user' out completely (Apple menu → Log Out '$fg_user'…), then re-trigger this workflow."
+fi
+
 log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
