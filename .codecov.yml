@@ -7,9 +7,9 @@
 codecov:
   require_ci_to_pass: true
   notify:
-    # Wait for both matrix legs before commenting on a PR. Avoids flapping
-    # status while the second leg is still uploading.
-    after_n_builds: 2
+    # Wait for all uploads (homebrew + appstore + audiotap) before
+    # commenting on a PR. Avoids flapping status while uploads stagger.
+    after_n_builds: 3
 
 coverage:
   precision: 1
@@ -46,7 +46,6 @@ flags:
   homebrew:
     paths:
       - app/MeetingTranscriber/Sources/
-      - tools/audiotap/Sources/
     # `carryforward: true` keeps the last known coverage for a flag when
     # one matrix leg fails to upload — prevents a transient upload error
     # from showing as a 100 % coverage drop.
@@ -54,6 +53,14 @@ flags:
   appstore:
     paths:
       - app/MeetingTranscriber/Sources/
+    carryforward: true
+  # AudioTapLib SPM library uploaded by the audiotap CI step. Lives in
+  # its own flag because the test suite is in `tools/audiotap/Tests/`,
+  # not the app's xctest bundle. Same library binary regardless of the
+  # homebrew/appstore variant, so we upload it once (homebrew leg only)
+  # and rely on `carryforward` for non-CI events.
+  audiotap:
+    paths:
       - tools/audiotap/Sources/
     carryforward: true
 
@@ -63,11 +70,17 @@ ignore:
   - "app/MeetingTranscriber/Tests/**/*"
   - "app/MeetingTranscriber/Sources/Info.plist"
   - "app/MeetingTranscriber/Sources/Assets.xcassets/**/*"
-  # Live-only audio capture path — exercised by e2e-app.yml, not xctest.
+  # @main SwiftUI scene shell — NSOpenPanel / NSWorkspace bindings, no
+  # mock-point, exercised end-to-end by e2e-app.yml (live recording).
+  - "app/MeetingTranscriber/Sources/MeetingTranscriberApp.swift"
+  # Pure AVAudioEngine wrapper — hardware-bound, exercised by e2e-app.yml.
+  - "app/MeetingTranscriber/Sources/MicRecorder.swift"
+  # AudioTapLib hardware-bound paths — exercised by e2e-app.yml (live
+  # recording with BlackHole), not by xctest. The rest of `tools/audiotap/`
+  # is covered by its own test suite and uploaded under the `audiotap` flag.
   - "tools/audiotap/Sources/AppAudioCapture.swift"
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
-  - "tools/audiotap/Sources/OutputDeviceChangeCoordinator.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
   - "tools/whisperkit-cli/**/*"
   - "tools/meeting-simulator/**/*"
