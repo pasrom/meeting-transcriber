@@ -169,6 +169,42 @@ jobs:
           flags: ${{ matrix.variant }}
           fail_ci_if_error: false
           verbose: true
+      # AudioTapLib SPM library has its own test suite in
+      # `tools/audiotap/Tests/`. Run + upload its coverage only from the
+      # homebrew leg — the library is variant-agnostic (no -DAPPSTORE
+      # path), so the appstore leg would just produce an identical second
+      # copy. Single upload + `carryforward` in `.codecov.yml` keeps the
+      # number stable on non-CI events.
+      - name: Audiotap tests with coverage
+        if: success() && matrix.variant == 'homebrew'
+        timeout-minutes: 5
+        run: cd tools/audiotap && swift test --parallel --enable-code-coverage
+      - name: Export audiotap LCOV
+        if: success() && matrix.variant == 'homebrew'
+        run: |
+          set -euo pipefail
+          cd tools/audiotap
+          BIN_PATH=$(swift build --show-bin-path)
+          PROFDATA="$BIN_PATH/codecov/default.profdata"
+          XCTEST_DIR=$(find "$BIN_PATH" -name '*.xctest' -type d | head -n1)
+          [[ -n "$XCTEST_DIR" ]] || { echo "::error::no audiotap .xctest bundle in $BIN_PATH"; exit 1; }
+          XCTEST_BIN="$XCTEST_DIR/Contents/MacOS/$(basename "$XCTEST_DIR" .xctest)"
+          xcrun llvm-cov export \
+            -format=lcov \
+            -instr-profile="$PROFDATA" \
+            -ignore-filename-regex='\.build/|Tests/|/usr/' \
+            "$XCTEST_BIN" \
+            > "$GITHUB_WORKSPACE/coverage-audiotap.lcov"
+          wc -l "$GITHUB_WORKSPACE/coverage-audiotap.lcov"
+      - name: Upload audiotap coverage to Codecov
+        if: success() && matrix.variant == 'homebrew'
+        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage-audiotap.lcov
+          flags: audiotap
+          fail_ci_if_error: false
+          verbose: true
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
