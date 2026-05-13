@@ -38,7 +38,7 @@ comment:
   layout: "reach, diff, flags, files"
   # `once`: post a single comment per PR and edit it in place on re-runs.
   # `default` would post a new comment on every push and force-push, which
-  # is noisy with a 2-leg matrix (two uploads per push → two comments).
+  # is noisy with a 3-upload fan-in (one comment per upload otherwise).
   behavior: once
   require_changes: true   # only comment when coverage actually moved
 

@@ -133,78 +133,50 @@ jobs:
       - name: Swift tests
         timeout-minutes: 18
         run: cd app/MeetingTranscriber && swift test --parallel --enable-code-coverage --skip ModelPreloadTests ${{ matrix.swift-flags }}
-      # Export LCOV from `default.profdata` for codecov upload. `swift
-      # build --show-bin-path` is a no-op query (no recompile) that
-      # returns the directory holding both the xctest bundle and the
-      # `codecov/default.profdata` SPM emits. Skipping the step on test
-      # failure is intentional — we never want a stale coverage snapshot
-      # uploaded as if it were green.
-      - name: Export LCOV
+      # Skipping on test failure is intentional — we never want a stale
+      # coverage snapshot uploaded as if it were green.
+      - uses: ./.github/actions/export-lcov
         if: success()
-        run: |
-          set -euo pipefail
-          cd app/MeetingTranscriber
-          BIN_PATH=$(swift build --show-bin-path)
-          PROFDATA="$BIN_PATH/codecov/default.profdata"
-          XCTEST_DIR=$(find "$BIN_PATH" -name '*.xctest' -type d | head -n1)
-          [[ -n "$XCTEST_DIR" ]] || { echo "::error::no .xctest bundle in $BIN_PATH"; exit 1; }
-          XCTEST_BIN="$XCTEST_DIR/Contents/MacOS/$(basename "$XCTEST_DIR" .xctest)"
-          xcrun llvm-cov export \
-            -format=lcov \
-            -instr-profile="$PROFDATA" \
-            -ignore-filename-regex='\.build/|Tests/|/usr/' \
-            "$XCTEST_BIN" \
-            > "$GITHUB_WORKSPACE/coverage-${{ matrix.variant }}.lcov"
-          wc -l "$GITHUB_WORKSPACE/coverage-${{ matrix.variant }}.lcov"
-      - name: Upload coverage to Codecov
-        if: success()
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
         with:
-          # Token-based upload (vs. tokenless OIDC) — more reliable and
-          # avoids the tokenless-upload rate limit. The token is safe to
-          # treat as a normal Actions secret; Codecov docs explicitly
-          # state public-repo upload tokens are not sensitive.
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-${{ matrix.variant }}.lcov
-          flags: ${{ matrix.variant }}
-          fail_ci_if_error: false
-          verbose: true
-      # AudioTapLib SPM library has its own test suite in
-      # `tools/audiotap/Tests/`. Run + upload its coverage only from the
-      # homebrew leg — the library is variant-agnostic (no -DAPPSTORE
-      # path), so the appstore leg would just produce an identical second
-      # copy. Single upload + `carryforward` in `.codecov.yml` keeps the
-      # number stable on non-CI events.
-      - name: Audiotap tests with coverage
-        if: success() && matrix.variant == 'homebrew'
+          package-dir: app/MeetingTranscriber
+          flag: ${{ matrix.variant }}
+          codecov-token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Cancel run on failure
+        if: failure()
+        uses: ./.github/actions/cancel-on-failure
+
+  # AudioTapLib SPM library lives in `tools/audiotap/` and has its own
+  # test suite (`tools/audiotap/Tests/`). Runs as its own top-level job
+  # in parallel with `test` so wall-clock isn't gated by the app suite.
+  # No matrix — the library is variant-agnostic (no -DAPPSTORE path),
+  # so a single upload + `carryforward` in `.codecov.yml` is sufficient.
+  audiotap-coverage:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-26
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      # No ML model dependencies — a plain SPM cache keyed off the
+      # manifest is enough to drop cold-compile cost on repeat runs.
+      - uses: actions/cache@v5
+        with:
+          path: tools/audiotap/.build
+          key: audiotap-spm-${{ runner.os }}-${{ hashFiles('tools/audiotap/Package.swift') }}
+          restore-keys: |
+            audiotap-spm-${{ runner.os }}-
+      - name: Swift tests
         timeout-minutes: 5
         run: cd tools/audiotap && swift test --parallel --enable-code-coverage
-      - name: Export audiotap LCOV
-        if: success() && matrix.variant == 'homebrew'
-        run: |
-          set -euo pipefail
-          cd tools/audiotap
-          BIN_PATH=$(swift build --show-bin-path)
-          PROFDATA="$BIN_PATH/codecov/default.profdata"
-          XCTEST_DIR=$(find "$BIN_PATH" -name '*.xctest' -type d | head -n1)
-          [[ -n "$XCTEST_DIR" ]] || { echo "::error::no audiotap .xctest bundle in $BIN_PATH"; exit 1; }
-          XCTEST_BIN="$XCTEST_DIR/Contents/MacOS/$(basename "$XCTEST_DIR" .xctest)"
-          xcrun llvm-cov export \
-            -format=lcov \
-            -instr-profile="$PROFDATA" \
-            -ignore-filename-regex='\.build/|Tests/|/usr/' \
-            "$XCTEST_BIN" \
-            > "$GITHUB_WORKSPACE/coverage-audiotap.lcov"
-          wc -l "$GITHUB_WORKSPACE/coverage-audiotap.lcov"
-      - name: Upload audiotap coverage to Codecov
-        if: success() && matrix.variant == 'homebrew'
-        uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
+      - uses: ./.github/actions/export-lcov
+        if: success()
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage-audiotap.lcov
-          flags: audiotap
-          fail_ci_if_error: false
-          verbose: true
+          package-dir: tools/audiotap
+          flag: audiotap
+          codecov-token: ${{ secrets.CODECOV_TOKEN }}
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure

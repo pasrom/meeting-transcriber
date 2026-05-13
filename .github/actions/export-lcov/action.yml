@@ -1,0 +1,51 @@
+name: "Export LCOV + upload to Codecov"
+description: >
+  Locates the most recently built `.xctest` bundle and `default.profdata`
+  in the given SPM package, exports an LCOV report via `xcrun llvm-cov
+  export`, then uploads it to codecov under the given flag. Caller must
+  have already run `swift test --enable-code-coverage` in `package-dir`.
+
+  Two callers today: the homebrew/appstore matrix legs of the `test`
+  job (app sources) and the standalone `audiotap-coverage` job. The
+  composite collapses ~30 lines of byte-identical shell per call site
+  to a single `uses:` block.
+
+inputs:
+  package-dir:
+    description: SPM package directory containing the test build output (relative to repo root).
+    required: true
+  flag:
+    description: codecov flag to upload under (e.g. homebrew, appstore, audiotap).
+    required: true
+  codecov-token:
+    description: codecov upload token.
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Export LCOV
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${{ inputs.package-dir }}"
+        BIN_PATH=$(swift build --show-bin-path)
+        PROFDATA="$BIN_PATH/codecov/default.profdata"
+        XCTEST_DIR=$(find "$BIN_PATH" -name '*.xctest' -type d | head -n1)
+        [[ -n "$XCTEST_DIR" ]] || { echo "::error::no .xctest bundle in $BIN_PATH"; exit 1; }
+        XCTEST_BIN="$XCTEST_DIR/Contents/MacOS/$(basename "$XCTEST_DIR" .xctest)"
+        xcrun llvm-cov export \
+          -format=lcov \
+          -instr-profile="$PROFDATA" \
+          -ignore-filename-regex='\.build/|Tests/|/usr/' \
+          "$XCTEST_BIN" \
+          > "$GITHUB_WORKSPACE/coverage-${{ inputs.flag }}.lcov"
+        wc -l "$GITHUB_WORKSPACE/coverage-${{ inputs.flag }}.lcov"
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@18283e04ce6e62d37312384ff67231eb8fd56d24 # v5.4.3
+      with:
+        token: ${{ inputs.codecov-token }}
+        files: coverage-${{ inputs.flag }}.lcov
+        flags: ${{ inputs.flag }}
+        fail_ci_if_error: false
+        verbose: true
