@@ -123,7 +123,7 @@ jobs:
       - uses: ./.github/actions/setup-swift-test
         timeout-minutes: 20
         with:
-          cache-key-suffix: quality
+          cache-key-suffix: quality-v2
       # Filter explicitly to engine-quality test classes — `--filter Quality`
       # would also pull in `QualityResultsTests`, which exercises the writer
       # via fake rows and would pollute the shared singleton's row buffer.
