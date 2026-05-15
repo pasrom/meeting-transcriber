@@ -211,6 +211,14 @@ else
     # setup-self-hosted-runner.sh.
     if [ -n "${DEVELOPER_ID:-}" ]; then
         log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
+        # Re-assert the signing keychain right before codesign — a parallel
+        # job on the Mini's other runner (shared OS user) may have mutated
+        # the user search list during our 60–90 s build. codesign honours
+        # `--keychain` for the signing identity but still consults the
+        # search list for trust-chain resolution.
+        if [ -n "${E2E_SIGNING_KEYCHAIN:-}" ]; then
+            "$SCRIPT_DIR/keychain-prepend.sh" "$E2E_SIGNING_KEYCHAIN"
+        fi
         SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
         [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
         codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \

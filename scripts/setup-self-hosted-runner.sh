@@ -104,10 +104,8 @@ else
     security unlock-keychain -p "$DEV_KEYCHAIN_PASS" "$DEV_KEYCHAIN"
 
     # Add to the user keychain search list so codesign and find-identity
-    # actually look there. Preserves the existing list.
-    EXISTING_LIST="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
-    # shellcheck disable=SC2086
-    security list-keychains -d user -s "$DEV_KEYCHAIN" $EXISTING_LIST
+    # actually look there. Idempotent on re-run — see helper.
+    "$(dirname "$0")/keychain-prepend.sh" "$DEV_KEYCHAIN"
 
     log "Importing cert into dev keychain"
     security import "$TMPD/cert.p12" \
@@ -214,7 +212,6 @@ log "Signed: $(codesign -dv "$APP_BUNDLE_PATH" 2>&1 | grep -E 'Identifier|Author
 # both the lock state and per-user search-list mutation races between
 # parallel matrix jobs.
 CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
-LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 if [[ -f "$CI_KEYCHAIN" ]]; then
     log "CI keychain already at $CI_KEYCHAIN — re-unlocking + asserting default"
     security unlock-keychain -p "" "$CI_KEYCHAIN"
@@ -223,7 +220,7 @@ else
     security create-keychain -p "" "$CI_KEYCHAIN"
     security unlock-keychain -p "" "$CI_KEYCHAIN"
 fi
-security list-keychains -d user -s "$CI_KEYCHAIN" "$LOGIN_KEYCHAIN"
+"$(dirname "$0")/keychain-prepend.sh" "$CI_KEYCHAIN"
 security default-keychain -s "$CI_KEYCHAIN"
 
 cat <<MSG
