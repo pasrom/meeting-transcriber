@@ -15,6 +15,29 @@ enum KnownVoicesFormatting {
         guard let date else { return "—" }
         return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
+
+    /// Filters `speakers` by case-insensitive substring match on `name`.
+    /// Empty filter returns the input unchanged so callers don't have to
+    /// branch on it. Extracted for unit-testability.
+    static func filterSpeakers(_ speakers: [StoredSpeaker], by filter: String) -> [StoredSpeaker] {
+        guard !filter.isEmpty else { return speakers }
+        return speakers.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+    }
+
+    /// Names of speakers that are valid merge destinations from `source` —
+    /// every known speaker except `source` itself. Preserves input order
+    /// so the picker's natural ordering survives.
+    static func mergeCandidateNames(in speakers: [StoredSpeaker], excluding source: String) -> [String] {
+        speakers.map(\.name).filter { $0 != source }
+    }
+
+    /// Trims the user-entered rename value. Returns `nil` when the result
+    /// would be empty — the view treats that as a no-op (dismiss the modal
+    /// without performing the rename).
+    static func trimmedRenameValue(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 /// Manage the persisted speaker DB: rename, delete, merge entries. Backs onto
@@ -240,13 +263,11 @@ struct KnownVoicesView: View {
     // MARK: - Derived
 
     private var filteredSpeakers: [StoredSpeaker] {
-        guard !filter.isEmpty else { return speakers }
-        return speakers.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+        KnownVoicesFormatting.filterSpeakers(speakers, by: filter)
     }
 
     private var mergeCandidates: [String] {
-        let from = mergingFrom
-        return speakers.map(\.name).filter { $0 != from }
+        KnownVoicesFormatting.mergeCandidateNames(in: speakers, excluding: mergingFrom)
     }
 
     // MARK: - Actions
@@ -287,9 +308,8 @@ struct KnownVoicesView: View {
 
     private func applyRename() {
         guard case let .rename(from, value) = modal else { return }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         modal = nil
-        guard !trimmed.isEmpty else { return }
+        guard let trimmed = KnownVoicesFormatting.trimmedRenameValue(value) else { return }
         performRename(from: from, to: trimmed)
         selection = trimmed
     }

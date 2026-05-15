@@ -193,4 +193,62 @@ final class KnownVoicesViewTests: XCTestCase { // swiftlint:disable:this balance
         let modal = KnownVoicesView.ActiveModal.merge(from: "Charlie", destination: "Dave")
         XCTAssertEqual(modal.id, "merge:Charlie")
     }
+
+    // MARK: - KnownVoicesFormatting.filterSpeakers (pure)
+
+    private func speaker(_ name: String) -> StoredSpeaker {
+        StoredSpeaker(name: name, embeddings: [[1, 0, 0]])
+    }
+
+    func testFilterSpeakersEmptyFilterReturnsAllUnchanged() {
+        let speakers = [speaker("Alice"), speaker("Bob"), speaker("Charlie")]
+        let result = KnownVoicesFormatting.filterSpeakers(speakers, by: "")
+        XCTAssertEqual(result.map(\.name), ["Alice", "Bob", "Charlie"])
+    }
+
+    func testFilterSpeakersMatchesCaseInsensitiveSubstring() {
+        let speakers = [speaker("Alice"), speaker("alex"), speaker("Bob")]
+        let result = KnownVoicesFormatting.filterSpeakers(speakers, by: "AL")
+        XCTAssertEqual(result.map(\.name), ["Alice", "alex"])
+    }
+
+    func testFilterSpeakersReturnsEmptyOnNoMatch() {
+        let speakers = [speaker("Alice"), speaker("Bob")]
+        let result = KnownVoicesFormatting.filterSpeakers(speakers, by: "xyz")
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    // MARK: - KnownVoicesFormatting.mergeCandidateNames (pure)
+
+    func testMergeCandidateNamesExcludesSource() {
+        let speakers = [speaker("Alice"), speaker("Bob"), speaker("Charlie")]
+        let result = KnownVoicesFormatting.mergeCandidateNames(in: speakers, excluding: "Bob")
+        XCTAssertEqual(result, ["Alice", "Charlie"])
+    }
+
+    func testMergeCandidateNamesPreservesOrder() {
+        let speakers = [speaker("Z"), speaker("A"), speaker("M")]
+        let result = KnownVoicesFormatting.mergeCandidateNames(in: speakers, excluding: "A")
+        XCTAssertEqual(result, ["Z", "M"])
+    }
+
+    func testMergeCandidateNamesUnknownSourceReturnsAll() {
+        let speakers = [speaker("Alice"), speaker("Bob")]
+        let result = KnownVoicesFormatting.mergeCandidateNames(in: speakers, excluding: "NotInList")
+        XCTAssertEqual(result, ["Alice", "Bob"])
+    }
+
+    // MARK: - KnownVoicesFormatting.trimmedRenameValue (pure)
+
+    func testTrimmedRenameValueReturnsTrimmedString() {
+        XCTAssertEqual(KnownVoicesFormatting.trimmedRenameValue("  New Name  "), "New Name")
+    }
+
+    func testTrimmedRenameValueReturnsNilForEmpty() {
+        XCTAssertNil(KnownVoicesFormatting.trimmedRenameValue(""))
+    }
+
+    func testTrimmedRenameValueReturnsNilForWhitespaceOnly() {
+        XCTAssertNil(KnownVoicesFormatting.trimmedRenameValue("   \t\n  "))
+    }
 }
