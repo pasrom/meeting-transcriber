@@ -93,12 +93,11 @@ jobs:
       # but defensive.
       - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
         run: |
-          security default-keychain -s ~/Library/Keychains/mt-ci.keychain-db
-          security list-keychains -d user -s \
-            ~/Library/Keychains/mt-ci.keychain-db \
-            ~/Library/Keychains/login.keychain-db
-          security unlock-keychain -p "" ~/Library/Keychains/mt-ci.keychain-db
-          security set-keychain-settings -lut 36000 ~/Library/Keychains/mt-ci.keychain-db
+          MT_CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
+          security default-keychain -s "$MT_CI_KEYCHAIN"
+          ./scripts/keychain-prepend.sh "$MT_CI_KEYCHAIN"
+          security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
+          security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
