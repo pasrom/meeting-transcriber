@@ -99,4 +99,98 @@ final class KnownVoicesViewTests: XCTestCase { // swiftlint:disable:this balance
         // Mutations without a callback must not crash.
         view.performRename(from: "X", to: "Y")
     }
+
+    // MARK: - Render
+
+    func testRendersHeaderShowsTotalCount() throws {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([
+            StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Bob", embeddings: [[0, 1, 0]]),
+        ])
+        let view = KnownVoicesView(matcher: matcher)
+        let body = try view.inspect()
+        XCTAssertNoThrow(try body.find(text: "Known Voices"))
+        XCTAssertNoThrow(try body.find(text: "2 total"))
+    }
+
+    func testRendersZeroTotalForEmptyDB() throws {
+        let view = KnownVoicesView(matcher: SpeakerMatcher(dbPath: dbPath))
+        let body = try view.inspect()
+        XCTAssertNoThrow(try body.find(text: "0 total"))
+    }
+
+    func testRendersActionButtonsDisabledWhenNoSelection() throws {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])])
+        let view = KnownVoicesView(matcher: matcher)
+        let body = try view.inspect()
+        // Without a selection, the per-row action buttons are disabled. We
+        // don't drive the Table selection from a test, so all three should
+        // be disabled here.
+        XCTAssertTrue(try body.find(button: "Rename").isDisabled())
+        XCTAssertTrue(try body.find(button: "Merge into…").isDisabled())
+        XCTAssertTrue(try body.find(button: "Delete").isDisabled())
+    }
+
+    func testRendersDoneButton() throws {
+        let view = KnownVoicesView(matcher: SpeakerMatcher(dbPath: dbPath))
+        let body = try view.inspect()
+        XCTAssertNoThrow(try body.find(button: "Done"))
+    }
+
+    func testRendersAddFromRecordingButtonWhenFactoryProvided() throws {
+        let view = KnownVoicesView(matcher: SpeakerMatcher(dbPath: dbPath)) {
+            MockDiarization()
+        }
+        let body = try view.inspect()
+        XCTAssertNoThrow(try body.find(button: "Add from Recording…"))
+    }
+
+    func testHidesAddFromRecordingButtonWhenFactoryNil() throws {
+        let view = KnownVoicesView(matcher: SpeakerMatcher(dbPath: dbPath))
+        let body = try view.inspect()
+        XCTAssertThrowsError(try body.find(button: "Add from Recording…"))
+    }
+
+    func testPipelineBusyHintHiddenWhenFactoryNil() throws {
+        let view = KnownVoicesView(
+            matcher: SpeakerMatcher(dbPath: dbPath),
+            pipelineBusy: true,
+        )
+        let body = try view.inspect()
+        // Hint only shows when an enrollment factory is wired — without one
+        // the user can't act on the hint anyway.
+        XCTAssertThrowsError(try body.find(text: "Pipeline busy — diarization may be slower."))
+    }
+
+    // MARK: - KnownVoicesFormatting.lastUsedLabel (pure helper, extracted from view)
+
+    func testLastUsedLabelReturnsDashForNil() {
+        XCTAssertEqual(KnownVoicesFormatting.lastUsedLabel(nil), "—")
+    }
+
+    func testLastUsedLabelReturnsRelativeStringForDate() {
+        let oneHourAgo = Date().addingTimeInterval(-3600)
+        let label = KnownVoicesFormatting.lastUsedLabel(oneHourAgo)
+        XCTAssertNotEqual(label, "—")
+        XCTAssertFalse(label.isEmpty)
+    }
+
+    // MARK: - ActiveModal.id
+
+    func testActiveModalRenameIdEmbedsName() {
+        let modal = KnownVoicesView.ActiveModal.rename(name: "Alice", value: "Alice")
+        XCTAssertEqual(modal.id, "rename:Alice")
+    }
+
+    func testActiveModalDeleteIdEmbedsName() {
+        let modal = KnownVoicesView.ActiveModal.delete(name: "Bob")
+        XCTAssertEqual(modal.id, "delete:Bob")
+    }
+
+    func testActiveModalMergeIdEmbedsFromName() {
+        let modal = KnownVoicesView.ActiveModal.merge(from: "Charlie", destination: "Dave")
+        XCTAssertEqual(modal.id, "merge:Charlie")
+    }
 }

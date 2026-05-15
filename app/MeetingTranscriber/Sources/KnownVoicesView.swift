@@ -1,5 +1,22 @@
 import SwiftUI
 
+/// Date / display formatters for the Known-Voices Table columns. Owns its
+/// own `RelativeDateTimeFormatter` instance and lives outside the view so
+/// the formatting concern stays orthogonal to view state and lifecycle.
+@MainActor
+enum KnownVoicesFormatting {
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
+
+    static func lastUsedLabel(_ date: Date?) -> String {
+        guard let date else { return "—" }
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
 /// Manage the persisted speaker DB: rename, delete, merge entries. Backs onto
 /// `SpeakerMatcher` mutators; saves on every action.
 struct KnownVoicesView: View {
@@ -21,12 +38,6 @@ struct KnownVoicesView: View {
     @Environment(\.dismiss)
     private var dismiss
 
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f
-    }()
-
     /// Fires after every successful rename / delete / merge mutation so the
     /// caller can invalidate caches that mirror the speakers DB. Without this,
     /// `PipelineQueue.knownSpeakerNames` (issue #155) goes stale until the
@@ -45,6 +56,10 @@ struct KnownVoicesView: View {
         self.namingDialogActive = namingDialogActive
         self.pipelineBusy = pipelineBusy
         self.onMutate = onMutate
+        // Seed `speakers` synchronously from the matcher so the Table renders
+        // its rows on first body evaluation. `.onAppear → reload()` re-runs
+        // the same query for in-place refresh after mutations.
+        _speakers = State(initialValue: SpeakerMatcher.rankByRecency(speakers: matcher.loadDB()))
     }
 
     enum ActiveModal: Identifiable {
@@ -83,7 +98,6 @@ struct KnownVoicesView: View {
         }
         .padding(20)
         .frame(minWidth: 540, minHeight: 420)
-        .onAppear { reload() }
         .alert("Rename speaker", isPresented: isRename) {
             TextField("Name", text: renameText)
             Button("Cancel", role: .cancel) { modal = nil }
@@ -204,7 +218,7 @@ struct KnownVoicesView: View {
                     }
                 }
             }
-            TableColumn("Last used") { Text(Self.lastUsedLabel($0.lastUsed)) }
+            TableColumn("Last used") { Text(KnownVoicesFormatting.lastUsedLabel($0.lastUsed)) }
             TableColumn("Uses") { Text("\($0.useCount)") }
             TableColumn("Samples") { Text("\($0.embeddings.count)") }
         }
@@ -315,10 +329,5 @@ struct KnownVoicesView: View {
         matcher.deleteSpeaker(name: name)
         reload()
         onMutate?()
-    }
-
-    private static func lastUsedLabel(_ date: Date?) -> String {
-        guard let date else { return "—" }
-        return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 }
