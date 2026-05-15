@@ -75,6 +75,24 @@ ignore:
   - "app/MeetingTranscriber/Sources/MeetingTranscriberApp.swift"
   # Pure AVAudioEngine wrapper — hardware-bound, exercised by e2e-app.yml.
   - "app/MeetingTranscriber/Sources/MicRecorder.swift"
+  # Thin wrappers around FluidAudio CoreML models. The interesting
+  # behaviours (VAD speech-window detection, speaker diarization +
+  # embedding extraction) live inside the models themselves; our wrappers
+  # are config + a single async invocation. Covered indirectly by E2E
+  # tests in WhisperKit*/VAD*/Parakeet*E2ETests against real audio
+  # fixtures. No unit-testable surface left after extracting plausible
+  # pure helpers.
+  - "app/MeetingTranscriber/Sources/FluidVAD.swift"
+  - "app/MeetingTranscriber/Sources/FluidDiarizer.swift"
+  # Process()-bound subprocess driver. Pure helpers (parseStreamJSONLine,
+  # resolveClaudePath, availableClaudeBinaries, searchPaths) are tested
+  # in ClaudeCLIProtocolGeneratorTests. The remaining lines — generate()
+  # and readStreamJSON() — spawn an actual `claude` CLI subprocess,
+  # stream stdin/stdout pipes, and parse stream-json as it arrives.
+  # Reaching these requires either a real `claude` binary on the test
+  # host or a Process-mock DI layer; both are integration territory
+  # rather than unit. Live coverage comes from manual end-to-end runs.
+  - "app/MeetingTranscriber/Sources/ClaudeCLIProtocolGenerator.swift"
   # AudioTapLib hardware-bound paths — exercised by e2e-app.yml (live
   # recording with BlackHole), not by xctest. The rest of `tools/audiotap/`
   # is covered by its own test suite and uploaded under the `audiotap` flag.
