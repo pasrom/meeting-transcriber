@@ -7,10 +7,9 @@ import XCTest
 /// unlisted language is forced onto Auto-detect — which large-v3 is
 /// documented to drift away from on under-represented languages,
 /// producing the reported English output.
-@MainActor
 final class TranscriptionSettingsLanguagePickerTests: XCTestCase {
     private func codes() -> [String] {
-        TranscriptionSettingsView.whisperLanguages.map(\.code)
+        PickerLanguages.whisperKit.map(\.code)
     }
 
     func testIncludesAutoDetect() {
