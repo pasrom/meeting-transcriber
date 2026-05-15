@@ -80,10 +80,17 @@
         /// Same wiring as `KnownVoicesView.onMutate`: mutate the DB, then refresh
         /// the cached `knownSpeakerNames` only when the mutation actually changed
         /// state — `.notFound` paths skip the redundant disk read.
-        func makeSpeakerDBActions() -> SpeakerDBActions {
+        ///
+        /// The `speakerMatcherFactory` parameter exists so tests can route
+        /// mutations to a temp-path `SpeakerMatcher` instead of the real
+        /// `~/Library/Application Support/.../speakers.json`. Production uses
+        /// the default and is unaffected.
+        func makeSpeakerDBActions(
+            speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
+        ) -> SpeakerDBActions {
             SpeakerDBActions(
                 rename: { [weak self] from, to in
-                    let result = SpeakerMatcher().renameSpeaker(from: from, to: to)
+                    let result = speakerMatcherFactory().renameSpeaker(from: from, to: to)
                     let outcome: SpeakerActionOutcome = switch result {
                     case .renamed: .ok
                     case .merged: .merged
@@ -94,12 +101,12 @@
                     return outcome
                 },
                 delete: { [weak self] name in
-                    let removed = SpeakerMatcher().deleteSpeaker(name: name)
+                    let removed = speakerMatcherFactory().deleteSpeaker(name: name)
                     if removed { self?.pipelineQueue.refreshKnownSpeakerNames() }
                     return removed ? .ok : .notFound
                 },
                 merge: { [weak self] from, into in
-                    let merged = SpeakerMatcher().mergeSpeakers(from: from, into: into)
+                    let merged = speakerMatcherFactory().mergeSpeakers(from: from, into: into)
                     if merged { self?.pipelineQueue.refreshKnownSpeakerNames() }
                     return merged ? .ok : .notFound
                 },
@@ -107,7 +114,7 @@
                     let embedding = (0 ..< Self.seedEmbeddingDimension).map { _ in
                         Float.random(in: -1 ... 1)
                     }
-                    SpeakerMatcher().mutateDB { stored in
+                    speakerMatcherFactory().mutateDB { stored in
                         stored.append(StoredSpeaker(
                             name: name,
                             embeddings: [embedding],
@@ -129,6 +136,8 @@
 
         /// FluidAudio's diarizer emits 192-dim embeddings; seeded speakers use
         /// the same shape so they round-trip through `SpeakerMatcher` cleanly.
-        private static let seedEmbeddingDimension = 192
+        /// Exposed (module-internal) so tests can assert on the shape without
+        /// hardcoding the literal alongside the production source.
+        static let seedEmbeddingDimension = 192
     }
 #endif
