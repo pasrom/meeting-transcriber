@@ -2,6 +2,33 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Pure derivations used by `OutputSettingsView`. Extracted so the wrapping
+/// logic can be unit-tested without instantiating a SwiftUI host.
+enum OutputSettingsLogic {
+    /// Abbreviate `url` for display by replacing the home-directory prefix
+    /// with `~` so paths inside the user's home stay compact. Falls back to
+    /// the full path when `url` is outside `home`. Matches at the path-
+    /// component boundary so `home="/Users/alice"` doesn't abbreviate
+    /// `/Users/alicebob/...` to `~bob/...`.
+    static func displayPath(for url: URL, home: URL) -> String {
+        let path = url.path
+        let homePath = home.path
+        if path == homePath { return "~" }
+        let prefixed = homePath.hasSuffix("/") ? homePath : homePath + "/"
+        guard path.hasPrefix(prefixed) else { return path }
+        return "~/" + path.dropFirst(prefixed.count)
+    }
+
+    /// Merge the currently-selected model into a fetched picker list so the
+    /// user's choice survives even when `/models` doesn't echo it back
+    /// (custom Ollama tags, in-flight rename, offline cache). Returns
+    /// `available` unchanged when `selected` is empty or already present.
+    static func mergePickerOptions(available: [String], selected: String) -> [String] {
+        guard !selected.isEmpty, !available.contains(selected) else { return available }
+        return [selected] + available
+    }
+}
+
 struct OutputSettingsView: View {
     @Bindable var settings: AppSettings
 
@@ -253,11 +280,7 @@ struct OutputSettingsView: View {
     }
 
     private var modelPickerOptions: [String] {
-        var options = availableModels
-        if !settings.openAIModel.isEmpty && !options.contains(settings.openAIModel) {
-            options.insert(settings.openAIModel, at: 0)
-        }
-        return options
+        OutputSettingsLogic.mergePickerOptions(available: availableModels, selected: settings.openAIModel)
     }
 
     private func ensurePromptDirectory() {
@@ -293,13 +316,10 @@ struct OutputSettingsView: View {
     }
 
     private var outputDirDisplay: String {
-        let url = settings.effectiveOutputDir
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = url.path
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
-        }
-        return path
+        OutputSettingsLogic.displayPath(
+            for: settings.effectiveOutputDir,
+            home: FileManager.default.homeDirectoryForCurrentUser,
+        )
     }
 
     private func chooseOutputFolder() {

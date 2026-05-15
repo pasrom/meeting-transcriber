@@ -54,9 +54,10 @@ struct GeneralSettingsView: View {
     }
 
     private var recordOnlyBanner: some View {
-        let path = settings.effectiveOutputDir.appendingPathComponent("recordings").path
-        let home = NSHomeDirectory()
-        let display = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+        let display = OutputSettingsLogic.displayPath(
+            for: settings.effectiveOutputDir.appendingPathComponent("recordings"),
+            home: FileManager.default.homeDirectoryForCurrentUser,
+        )
         return Label {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Record-only mode is active.")
