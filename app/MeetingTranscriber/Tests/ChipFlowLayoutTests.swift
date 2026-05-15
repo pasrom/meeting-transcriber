@@ -74,4 +74,17 @@ final class ChipFlowLayoutTests: XCTestCase {
             XCTAssertEqual(pos.y, 0)
         }
     }
+
+    func testInfiniteContainerKeepsContentWidthFinite() {
+        // SwiftUI proposal.width == nil propagates as .infinity upstream. The
+        // layout must still report a finite content width — an infinite frame
+        // would break unconstrained parents (e.g. ScrollView, VStack).
+        let chip = CGSize(width: 40, height: 20)
+        let result = ChipFlowLayout.computeLayout(
+            sizes: [chip, chip], containerWidth: .infinity, spacing: 4,
+        )
+        XCTAssertFalse(result.totalSize.width.isInfinite)
+        // Both 40-wide chips with 4 spacing → exactly 84.
+        XCTAssertEqual(result.totalSize.width, 84)
+    }
 }

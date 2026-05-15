@@ -377,9 +377,7 @@ struct SpeakerNamingView: View {
 
         guard let audioPath = data.audioPath else { return }
 
-        // Find the longest segment for this speaker
-        let speakerSegments = data.segments.filter { $0.speaker == label }
-        guard let longest = speakerSegments.max(by: { ($0.end - $0.start) < ($1.end - $1.start) }) else { return }
+        guard let longest = Self.longestSegment(forSpeaker: label, in: data.segments) else { return }
 
         // Perform file I/O off the main thread
         Task.detached { [audioPath, longest] in
@@ -418,6 +416,19 @@ struct SpeakerNamingView: View {
                 // Silently fail — playback is best-effort
             }
         }
+    }
+
+    /// Picks the longest-duration segment attributed to `label` so the
+    /// playback snippet is the speaker's most representative sample.
+    /// Returns nil when the speaker has no segments. Pure for testability —
+    /// `playSpeakerSnippet`'s detached I/O path stays unchanged.
+    static func longestSegment(
+        forSpeaker label: String,
+        in segments: [PipelineQueue.SpeakerNamingData.Segment],
+    ) -> PipelineQueue.SpeakerNamingData.Segment? {
+        segments
+            .filter { $0.speaker == label }
+            .max { ($0.end - $0.start) < ($1.end - $1.start) }
     }
 
     private func confirm() {

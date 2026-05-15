@@ -630,4 +630,35 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         )
         XCTAssertEqual(captured, "Grace")
     }
+
+    // MARK: - longestSegment (pure)
+
+    /// `playSpeakerSnippet` plays the longest segment per speaker so the
+    /// preview is the speaker's most representative utterance. Extracted as
+    /// a static helper; the detached audio-load path is integration-only.
+    private func segment(speaker: String, start: Double, end: Double)
+        -> PipelineQueue.SpeakerNamingData.Segment {
+        PipelineQueue.SpeakerNamingData.Segment(start: start, end: end, speaker: speaker)
+    }
+
+    func testLongestSegmentPicksLongestForLabel() throws {
+        let segs = [
+            segment(speaker: "A", start: 0, end: 1),
+            segment(speaker: "A", start: 5, end: 10), // 5s — longest A
+            segment(speaker: "A", start: 12, end: 13),
+            segment(speaker: "B", start: 0, end: 100), // huge B, must be ignored
+        ]
+        let picked = try XCTUnwrap(SpeakerNamingView.longestSegment(forSpeaker: "A", in: segs))
+        XCTAssertEqual(picked.start, 5)
+        XCTAssertEqual(picked.end, 10)
+    }
+
+    func testLongestSegmentReturnsNilForUnknownSpeaker() {
+        let segs = [segment(speaker: "A", start: 0, end: 1)]
+        XCTAssertNil(SpeakerNamingView.longestSegment(forSpeaker: "C", in: segs))
+    }
+
+    func testLongestSegmentReturnsNilForEmptyInput() {
+        XCTAssertNil(SpeakerNamingView.longestSegment(forSpeaker: "A", in: []))
+    }
 }
