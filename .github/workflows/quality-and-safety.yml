@@ -82,13 +82,23 @@ jobs:
       # `SecItemCopyMatching` searches login.keychain only — KeychainHelper
       # tests silent-fail. Re-assert per job; safe under matrix parallelism
       # because every job writes the same value.
-      - name: Ensure CI keychain is default + in search list + unlocked
+      #
+      # `set-keychain-settings -lut 36000` raises the auto-lock-on-idle
+      # timeout to 10 h. The default ~5 min fired mid-run on the Mini
+      # (sanitizer compile ~4 min + slower tests pushed read calls past
+      # the threshold), causing `SecItemCopyMatching` to silent-fail with
+      # `errSecAuthFailed` between two consecutive reads in
+      # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
+      # also doesn't lock on system sleep — irrelevant inside a CI job
+      # but defensive.
+      - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
         run: |
           security default-keychain -s ~/Library/Keychains/mt-ci.keychain-db
           security list-keychains -d user -s \
             ~/Library/Keychains/mt-ci.keychain-db \
             ~/Library/Keychains/login.keychain-db
           security unlock-keychain -p "" ~/Library/Keychains/mt-ci.keychain-db
+          security set-keychain-settings -lut 36000 ~/Library/Keychains/mt-ci.keychain-db
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
