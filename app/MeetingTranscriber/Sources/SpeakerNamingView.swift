@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 // `@preconcurrency`: AVFoundation types lack Sendable annotations —
 // same gap as AudioMixer.swift; preemptively guarded.
 @preconcurrency import AVFoundation
@@ -79,6 +80,14 @@ struct SpeakerNamingView: View {
         self.data = data
         self.knownSpeakerNames = knownSpeakerNames
         self.onComplete = onComplete
+        // Seed `names` and `rerunCount` synchronously so the view renders
+        // its chip rows on first body evaluation (the chips depend on
+        // `index < names.count`). `.onAppear` re-runs the same logic for
+        // belt-and-braces, but this lets ViewInspector tests + tests that
+        // never trigger SwiftUI lifecycle still see the correct surface.
+        let speakerList = Self.computeSpeakers(from: data)
+        _names = State(initialValue: Self.computeInitialNames(speakers: speakerList))
+        _rerunCount = State(initialValue: max(2, speakerList.count + 1))
     }
 
     @State private var names: [String] = []
@@ -98,6 +107,12 @@ struct SpeakerNamingView: View {
     private static let knownChipsCollapsedLimit = 8
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
+        Self.computeSpeakers(from: data)
+    }
+
+    static func computeSpeakers(
+        from data: PipelineQueue.SpeakerNamingData,
+    ) -> [(label: String, autoName: String?, speakingTime: Double)] {
         data.mapping.keys.sorted().map { label in
             let autoName = data.mapping[label]
             let isAutoNamed = autoName != nil && autoName != label

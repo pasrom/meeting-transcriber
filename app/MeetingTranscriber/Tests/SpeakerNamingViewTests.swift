@@ -1,9 +1,12 @@
+// swiftlint:disable file_length
+import AppKit
 @testable import MeetingTranscriber
+import SwiftUI
 import ViewInspector
 import XCTest
 
 @MainActor
-final class SpeakerNamingViewTests: XCTestCase {
+final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_body_length
     // MARK: - Helpers
 
     private func makeData(
@@ -439,5 +442,192 @@ final class SpeakerNamingViewTests: XCTestCase {
         let images = body.findAll(ViewType.Image.self)
         let hasPlayIcon = images.contains { (try? $0.actualImage().name()) == "play.circle.fill" }
         XCTAssertTrue(hasPlayIcon, "Play button should be shown when audioPath is present")
+    }
+
+    // MARK: - knownChips render branch (requires non-empty knownSpeakerNames)
+
+    func testRendersKnownLabelWhenKnownSpeakerNamesProvided() throws {
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            knownSpeakerNames: ["Alice", "Bob"],
+        ) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Known:"))
+    }
+
+    func testRendersKnownChipForEachKnownSpeakerName() throws {
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            knownSpeakerNames: ["Alice", "Bob", "Charlie"],
+        ) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Alice"))
+        XCTAssertNoThrow(try body.find(button: "Bob"))
+        XCTAssertNoThrow(try body.find(button: "Charlie"))
+    }
+
+    func testKnownChipTapInvokesActionClosureAndConfirmFires() throws {
+        // Tap the known chip (covers the chipButton action closure inside
+        // `knownChips`), then Confirm. We don't assert on the mapping content
+        // because @State assignment from a ViewInspector tap doesn't
+        // reliably propagate to subsequent .inspect() calls; the goal here
+        // is exercising the chip's action path.
+        var result: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            knownSpeakerNames: ["Alice"],
+        ) { result = $0 }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Alice").tap())
+        try body.find(button: "Confirm").tap()
+        if case .confirmed = result {} else {
+            XCTFail("Expected .confirmed, got \(String(describing: result))")
+        }
+    }
+
+    // MARK: - More button (collapsed → expanded chip list)
+
+    func testMoreChipAppearsWhenKnownNamesExceedCollapsedLimit() throws {
+        // Limit is 8; provide 10 to force a "More (2)…" chip to render.
+        let manyNames = (0 ..< 10).map { "Speaker\($0)" }
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            knownSpeakerNames: manyNames,
+        ) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "More (2)…"))
+    }
+
+    func testMoreChipHiddenWhenKnownNamesAtOrBelowCollapsedLimit() throws {
+        let eightNames = (0 ..< 8).map { "Speaker\($0)" }
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            knownSpeakerNames: eightNames,
+        ) { _ in }
+        let body = try sut.inspect()
+        // Any chip whose label starts with "More" would indicate the
+        // collapse/expand control is showing — there shouldn't be one.
+        let buttons = body.findAll(ViewType.Button.self)
+        let hasMore = buttons.contains { btn in
+            (try? btn.labelView().text().string().hasPrefix("More")) == true
+        }
+        XCTAssertFalse(hasMore)
+    }
+
+    // MARK: - Participant chips
+
+    func testRendersParticipantChipsWhenParticipantsProvided() throws {
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(),
+            meetingTitle: "Standup",
+            mapping: ["SPEAKER_00": "SPEAKER_00"],
+            speakingTimes: ["SPEAKER_00": 60],
+            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
+            audioPath: nil,
+            segments: [],
+            participants: ["Dave", "Eve"],
+            isDualSource: false,
+        )
+        let sut = SpeakerNamingView(data: data) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Dave"))
+        XCTAssertNoThrow(try body.find(button: "Eve"))
+    }
+
+    func testParticipantChipTapInvokesActionClosureAndConfirmFires() throws {
+        // Same coverage goal as the known-chip test — tap the participant
+        // chip to exercise the chipButton action closure inside
+        // `participantChips`, then Confirm. State propagation through
+        // ViewInspector taps is unreliable, so we don't assert mapping content.
+        var result: PipelineQueue.SpeakerNamingResult?
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(),
+            meetingTitle: "Standup",
+            mapping: ["SPEAKER_00": "SPEAKER_00"],
+            speakingTimes: ["SPEAKER_00": 60],
+            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
+            audioPath: nil,
+            segments: [],
+            participants: ["Dave"],
+            isDualSource: false,
+        )
+        let sut = SpeakerNamingView(data: data) { result = $0 }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Dave").tap())
+        try body.find(button: "Confirm").tap()
+        if case .confirmed = result {} else {
+            XCTFail("Expected .confirmed, got \(String(describing: result))")
+        }
+    }
+
+    // MARK: - Known speakers also in participants are de-duplicated
+
+    func testKnownNameAlreadyInParticipantsIsNotShownTwice() throws {
+        // "Dave" is both a participant AND a known speaker. The Known: row
+        // must skip him — chipping the same name twice would let the user
+        // tap the "wrong" one and surfaces no extra information.
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(),
+            meetingTitle: "Standup",
+            mapping: ["SPEAKER_00": "SPEAKER_00"],
+            speakingTimes: ["SPEAKER_00": 60],
+            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
+            audioPath: nil,
+            segments: [],
+            participants: ["Dave"],
+            isDualSource: false,
+        )
+        let sut = SpeakerNamingView(
+            data: data,
+            knownSpeakerNames: ["Dave", "Eve"],
+        ) { _ in }
+        let body = try sut.inspect()
+        // "Eve" should still show up under Known:
+        XCTAssertNoThrow(try body.find(button: "Eve"))
+        // "Dave" only shows once (participant chip), not in Known: row.
+        let daveButtons = body.findAll(ViewType.Button.self).filter { btn in
+            (try? btn.labelView().text().string()) == "Dave"
+        }
+        XCTAssertEqual(daveButtons.count, 1)
+    }
+
+    // MARK: - AccessibleTextField NSViewRepresentable bridge
+
+    func testAccessibleTextFieldCoordinatorWritesBackToBinding() {
+        var current = ""
+        let binding = Binding<String>(get: { current }, set: { current = $0 })
+        let coord = AccessibleTextField.Coordinator(text: binding)
+        let field = NSTextField()
+        field.stringValue = "Frank"
+        let notif = Notification(name: NSControl.textDidChangeNotification, object: field)
+        coord.controlTextDidChange(notif)
+        XCTAssertEqual(current, "Frank")
+    }
+
+    func testAccessibleTextFieldCoordinatorIgnoresNonTextFieldNotification() {
+        var current = "unchanged"
+        let binding = Binding<String>(get: { current }, set: { current = $0 })
+        let coord = AccessibleTextField.Coordinator(text: binding)
+        // Notification.object is not an NSTextField → guard fires, binding stays.
+        let notif = Notification(name: NSControl.textDidChangeNotification, object: NSObject())
+        coord.controlTextDidChange(notif)
+        XCTAssertEqual(current, "unchanged")
+    }
+
+    func testAccessibleTextFieldMakeCoordinatorReturnsCoordinatorBoundToText() {
+        var captured = ""
+        let field = AccessibleTextField(
+            text: Binding(get: { captured }, set: { captured = $0 }),
+            placeholder: "Name",
+            identifier: "speaker-name-test",
+        )
+        let coord = field.makeCoordinator()
+        // Drive the coordinator to verify the binding is wired through.
+        let nsField = NSTextField()
+        nsField.stringValue = "Grace"
+        coord.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: nsField),
+        )
+        XCTAssertEqual(captured, "Grace")
     }
 }
