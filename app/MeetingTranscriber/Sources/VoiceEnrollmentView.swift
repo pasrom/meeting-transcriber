@@ -13,11 +13,23 @@ struct VoiceEnrollmentView: View {
     let diarizerFactory: () -> any DiarizationProvider
     let onClose: () -> Void
 
-    @State private var stage: Stage = .pickFile
+    @State private var stage: Stage
     @State private var diarizeStart: Date?
     @State private var elapsed: TimeInterval = 0
     @State private var elapsedTimer: Task<Void, Never>?
     @State private var diarizationTask: Task<Void, Never>?
+
+    init(
+        matcher: SpeakerMatcher,
+        diarizerFactory: @escaping () -> any DiarizationProvider,
+        onClose: @escaping () -> Void,
+        initialStage: Stage = .pickFile,
+    ) {
+        self.matcher = matcher
+        self.diarizerFactory = diarizerFactory
+        self.onClose = onClose
+        _stage = State(initialValue: initialStage)
+    }
 
     enum Stage {
         case pickFile
@@ -108,7 +120,12 @@ struct VoiceEnrollmentView: View {
                 data: payload.namingData,
                 knownSpeakerNames: payload.knownNames,
             ) { result in
-                handleNamingResult(result, payload: payload)
+                switch VoiceEnrollmentLogic.handleNamingResult(
+                    result, payload: payload, matcher: matcher,
+                ) {
+                case let .stage(next): stage = next
+                case let .rerun(url, count): startDiarization(url: url, numSpeakers: count)
+                }
             }
             .frame(minHeight: 320)
         }
@@ -174,7 +191,9 @@ struct VoiceEnrollmentView: View {
                 if result.segments.isEmpty {
                     stage = .error("No speakers detected in this recording.")
                 } else {
-                    stage = .naming(buildNamingPayload(url: url, diarization: result))
+                    stage = .naming(VoiceEnrollmentLogic.buildNamingPayload(
+                        url: url, diarization: result, matcher: matcher,
+                    ))
                 }
             } catch is CancellationError {
                 // sheet dismissed mid-diarization; nothing to do
@@ -186,15 +205,50 @@ struct VoiceEnrollmentView: View {
         }
     }
 
-    private func handleNamingResult(
+    // MARK: - Elapsed timer
+
+    private func startElapsedTimer() {
+        elapsedTimer?.cancel()
+        elapsedTimer = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                if let start = diarizeStart {
+                    elapsed = Date().timeIntervalSince(start)
+                }
+            }
+        }
+    }
+
+    private func stopElapsedTimer() {
+        elapsedTimer?.cancel()
+        elapsedTimer = nil
+    }
+}
+
+// MARK: - Pure logic (testable without SwiftUI)
+
+/// Pure functions backing `VoiceEnrollmentView`. Separating them out keeps
+/// the view's mutating helpers `private` and lets tests assert on the
+/// computed outcome instead of poking at `@State`.
+enum VoiceEnrollmentLogic {
+    /// Outcome of consuming a `SpeakerNamingResult`: either a direct stage
+    /// transition, or a request to re-run diarization with N speakers.
+    /// The view turns the `.rerun` case into an async Task; the logic itself
+    /// stays synchronous and side-effect-free apart from `matcher.updateDB`.
+    enum Outcome {
+        case stage(VoiceEnrollmentView.Stage)
+        case rerun(url: URL, numSpeakers: Int)
+    }
+
+    static func handleNamingResult(
         _ result: PipelineQueue.SpeakerNamingResult,
-        payload: NamingPayload,
-    ) {
+        payload: VoiceEnrollmentView.NamingPayload,
+        matcher: SpeakerMatcher,
+    ) -> Outcome {
         switch result {
         case let .confirmed(mapping):
             guard let embeddings = payload.diarization.embeddings else {
-                stage = .error("Diarization produced no embeddings; cannot enroll.")
-                return
+                return .stage(.error("Diarization produced no embeddings; cannot enroll."))
             }
             matcher.updateDB(
                 mapping: mapping,
@@ -202,19 +256,21 @@ struct VoiceEnrollmentView: View {
                 speakingTimes: payload.diarization.speakingTimes,
             )
             let saved = Set(mapping.values.filter { !$0.isEmpty }).sorted()
-            stage = .done(savedNames: saved)
+            return .stage(.done(savedNames: saved))
 
         case .skipped:
-            stage = .done(savedNames: [])
+            return .stage(.done(savedNames: []))
 
         case let .rerun(count):
-            startDiarization(url: payload.url, numSpeakers: count)
+            return .rerun(url: payload.url, numSpeakers: count)
         }
     }
 
-    private func buildNamingPayload(
-        url: URL, diarization: DiarizationResult,
-    ) -> NamingPayload {
+    static func buildNamingPayload(
+        url: URL,
+        diarization: DiarizationResult,
+        matcher: SpeakerMatcher,
+    ) -> VoiceEnrollmentView.NamingPayload {
         let knownNames = matcher.allSpeakerNames()
         // Pre-fill auto-name suggestions by running a match against the
         // existing DB. Same flow as a real meeting.
@@ -238,31 +294,12 @@ struct VoiceEnrollmentView: View {
             isDualSource: false,
         )
         let speakerCount = Set(diarization.segments.map(\.speaker)).count
-        return NamingPayload(
+        return VoiceEnrollmentView.NamingPayload(
             url: url,
             diarization: diarization,
             namingData: data,
             knownNames: knownNames,
             speakerCount: speakerCount,
         )
-    }
-
-    // MARK: - Elapsed timer
-
-    private func startElapsedTimer() {
-        elapsedTimer?.cancel()
-        elapsedTimer = Task { @MainActor in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
-                if let start = diarizeStart {
-                    elapsed = Date().timeIntervalSince(start)
-                }
-            }
-        }
-    }
-
-    private func stopElapsedTimer() {
-        elapsedTimer?.cancel()
-        elapsedTimer = nil
     }
 }
