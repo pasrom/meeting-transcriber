@@ -17,7 +17,7 @@ struct TranscriptionSettingsView: View {
         ("openai_whisper-tiny", "Tiny"),
     ]
 
-    private static let whisperLanguages: [(code: String, label: String)] = [
+    static let whisperLanguages: [(code: String, label: String)] = [
         ("", "Auto-detect"),
         ("de", "Deutsch"),
         ("en", "English"),

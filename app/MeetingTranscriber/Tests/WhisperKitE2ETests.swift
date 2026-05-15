@@ -343,6 +343,81 @@ final class WhisperKitE2ETests: XCTestCase {
         )
     }
 
+    // MARK: - Issue #256: Polish audio must transcribe as Polish, not English
+
+    /// E2E reproduction of issue #256. The bug reporter (Polish speaker) saw
+    /// most of their meeting "translated to English" because:
+    ///   1. `AppSettings.whisperLanguage` defaults to `"de"`, so a fresh-install
+    ///      Polish user gets German forced as language hint on Polish audio.
+    ///   2. The escape is to pick a different language — but `whisperLanguages`
+    ///      did not include `pl`, so the only option was empty/Auto-detect,
+    ///      which large-v3 drifts to English on Polish.
+    ///
+    /// This test exercises the "explicit Polish" path that becomes available
+    /// once Polish is added to the picker: with `engine.language = "pl"` and
+    /// a Polish-language fixture, the transcript should contain Polish-
+    /// specific characters and recognisable Polish words rather than English.
+    func testPolishAudioTranscribesAsPolishWithExplicitLanguage() async throws {
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
+
+        let fixture = fixtureURL("polish_sample.wav")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: fixture.path),
+            "Polish fixture not found at \(fixture.path)",
+        )
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "pl"
+
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded, "Model should be loaded")
+
+        let transcript = try await engine.transcribe(audioPath: fixture)
+        XCTAssertFalse(transcript.isEmpty, "Polish transcript should not be empty")
+
+        let lower = transcript.lowercased()
+
+        // Polish letters that don't occur in English at all. `ó` is shared with
+        // other Romance/Slavic languages but never with English. Threshold ≥ 2:
+        // the 13s TTS fixture utters multiple words containing distinct
+        // diacritics, so any honest Polish transcript hits at least two; ≥ 3
+        // would be brittle against the small model dropping one diacritic.
+        let polishDiacritics: [Character] = ["\u{0105}", "\u{0107}", "\u{0119}", "\u{0142}", "\u{0144}", "\u{00F3}", "\u{015B}", "\u{017A}", "\u{017C}"]
+        let diacriticsFound = polishDiacritics.filter { lower.contains($0) }
+        XCTAssertGreaterThanOrEqual(
+            diacriticsFound.count, 2,
+            "Polish transcript should contain Polish-specific diacritics " +
+                "(found: \(diacriticsFound)). Transcript:\n\(transcript)",
+        )
+
+        // Words from the fixture's TTS content (substrings tolerant of TTS variations).
+        // Threshold ≥ 2 same rationale as diacritics — small model may drop
+        // one word but not most.
+        let polishWordRoots = ["dzi\u{0119}kuj", "witam", "projekt", "spotkaniu", "pytania", "plan"]
+        let matchedRoots = polishWordRoots.filter { lower.contains($0) }
+        XCTAssertGreaterThanOrEqual(
+            matchedRoots.count, 2,
+            "Polish transcript should contain at least 2 Polish word stems from " +
+                "\(polishWordRoots). Found \(matchedRoots). Transcript:\n\(transcript)",
+        )
+
+        // Negative guard: transcript must not be predominantly English.
+        // If WhisperKit drifted to translate-as-English, common English filler
+        // words would dominate. Two or more strict matches → likely English.
+        // The fixture script is pure Polish with no English brand names or
+        // loanwords, so the leading-space-bounded filler check has no false-
+        // positive vector here. If a future fixture mixes languages, this
+        // threshold needs revisiting.
+        let englishFillers = [" the ", " and ", " this ", " our ", " thank "]
+        let englishHits = englishFillers.filter { lower.contains($0) }
+        XCTAssertLessThanOrEqual(
+            englishHits.count, 1,
+            "Polish transcript looks like English (matches: \(englishHits)). " +
+                "Transcript:\n\(transcript)",
+        )
+    }
+
     func testTranscribeMultiFormatContent() async throws {
         try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
 
