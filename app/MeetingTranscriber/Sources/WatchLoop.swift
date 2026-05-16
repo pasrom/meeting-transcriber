@@ -298,28 +298,30 @@ class WatchLoop {
     func waitForMeetingEnd(_ meeting: DetectedMeeting) async throws {
         var graceStart: Date?
         let startTime = Date()
+        let config = WatchLoopEndConfig(
+            maxDuration: maxDuration,
+            endGracePeriod: endGracePeriod,
+        )
 
         while !Task.isCancelled {
-            // Enforce max duration
-            if Date().timeIntervalSince(startTime) > maxDuration {
+            let decision = WatchLoopEndPolicy.step(
+                config: config,
+                now: Date(),
+                startTime: startTime,
+                graceStart: graceStart,
+                meetingActive: detector.isMeetingActive(meeting),
+            )
+            switch decision {
+            case .stopMaxDurationExceeded:
                 logger.info("Max recording duration reached (\(Int(self.maxDuration))s)")
                 return
+
+            case .stopGraceExpired:
+                return
+
+            case let .continuePolling(newGraceStart):
+                graceStart = newGraceStart
             }
-
-            let active = detector.isMeetingActive(meeting)
-
-            if active {
-                if graceStart != nil {
-                    graceStart = nil
-                }
-            } else {
-                if graceStart == nil {
-                    graceStart = Date()
-                } else if let start = graceStart, Date().timeIntervalSince(start) >= endGracePeriod {
-                    return
-                }
-            }
-
             try await Task.sleep(for: .seconds(pollInterval))
         }
     }
