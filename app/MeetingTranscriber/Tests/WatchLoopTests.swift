@@ -155,6 +155,57 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertLessThan(elapsed, 1.0, "Should not wait too long")
     }
 
+    /// Characterization test pinning the grace-reset behaviour: when the
+    /// meeting becomes inactive, then resumes, then ends again, the
+    /// grace-period timer must restart from scratch — i.e. the second
+    /// grace window has to run its full duration independent of the
+    /// first, partially elapsed one.
+    ///
+    /// Timings are intentionally generous (grace ≫ pollInterval × CI
+    /// sleep-jitter) so that the grace window cannot expire between
+    /// the first inactive poll and the active-resume poll on slow
+    /// hosted runners where `Task.sleep(for:)` typically overshoots
+    /// the requested interval by 2–4×.
+    func testWaitForMeetingEndResetsGraceWhenMeetingResumes() async throws {
+        let detector = PowerAssertionDetector()
+        let activeAssertions: [Int32: [[String: Any]]] = [
+            1234: [["Process Name": "MSTeams", "AssertName": "Microsoft Teams Call in progress"]],
+        ]
+        // Sequence: inactive, ACTIVE, inactive, inactive, …
+        // Without grace-reset the loop returns at poll 3 (graceStart from
+        // poll 1 has had >grace elapsed by then). With grace-reset the
+        // loop returns no earlier than poll 4 because poll 2 clears
+        // graceStart and poll 3 sets a fresh one that hasn't expired yet.
+        let callCount = ManagedCounter()
+        detector.assertionProvider = {
+            let n = callCount.increment()
+            return n == 2 ? activeAssertions : [:]
+        }
+
+        let loop = WatchLoop(
+            detector: detector,
+            pollInterval: 0.1,
+            endGracePeriod: 0.5,
+            maxDuration: 30,
+        )
+
+        let meeting = DetectedMeeting(
+            pattern: .teams,
+            windowTitle: "Test | Microsoft Teams",
+            ownerName: "Microsoft Teams",
+            windowPID: 1234,
+        )
+
+        try await loop.waitForMeetingEnd(meeting)
+
+        XCTAssertGreaterThanOrEqual(
+            callCount.value, 4,
+            "Grace must reset on resume; observed only \(callCount.value) polls — "
+                + "without reset the loop would return at poll 3 once the original "
+                + "grace window had elapsed.",
+        )
+    }
+
     // MARK: - NoMic Configuration
 
     func testNoMicDefault() {
@@ -489,5 +540,16 @@ final class WatchLoopTests: XCTestCase {
 
         try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
         XCTAssertTrue(recorder.startCalled)
+    }
+}
+
+/// Tiny counter for tests that need to observe how many times a captured
+/// closure was invoked. Class reference lets a non-Sendable closure mutate
+/// the count without an `inout`/escaping-capture dance.
+private final class ManagedCounter {
+    private(set) var value = 0
+    func increment() -> Int {
+        value += 1
+        return value
     }
 }
