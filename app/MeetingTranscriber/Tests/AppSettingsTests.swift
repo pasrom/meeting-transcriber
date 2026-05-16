@@ -13,6 +13,14 @@ final class AppSettingsTests: XCTestCase {
     /// Each test gets its own volatile `UserDefaults(suiteName:)` so
     /// `swift test --parallel` doesn't race on the shared on-disk plist.
     /// AppSettings receives the suite via constructor injection.
+    ///
+    /// Keychain state is per-user (not per-process), so we deliberately do
+    /// NOT touch any production keychain accounts here — `swift test
+    /// --parallel` spawns a fresh `xctest` process per test method, and an
+    /// unconditional delete in setUp would race with the write performed
+    /// by `testOpenAIAPIKeyViaKeychainHelper` running in a sibling process.
+    /// The one test that needs a clean keychain slot manages the slot
+    /// itself.
     override func setUp() {
         super.setUp()
         testSuiteName = "AppSettingsTests-\(getpid())-\(UUID().uuidString)"
@@ -21,7 +29,6 @@ final class AppSettingsTests: XCTestCase {
             return
         }
         defaults = suite
-        KeychainHelper.delete(key: "openAIAPIKey")
         settings = AppSettings(defaults: defaults)
     }
 
@@ -192,6 +199,12 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testOpenAIAPIKeyViaKeychainHelper() {
+        // Reset the keychain slot before + after so a crashed prior run
+        // can't seed `"sk-test-key"` and a failure here doesn't leak it
+        // to the next invocation.
+        KeychainHelper.delete(key: "openAIAPIKey")
+        defer { KeychainHelper.delete(key: "openAIAPIKey") }
+
         XCTAssertEqual(settings.openAIAPIKey, "")
 
         settings.openAIAPIKey = "sk-test-key"
