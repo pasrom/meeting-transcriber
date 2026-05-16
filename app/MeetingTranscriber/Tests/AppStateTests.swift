@@ -5,17 +5,17 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_length
     // swiftlint:disable:previous balanced_xctest_lifecycle
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var testLogDir: URL!
 
     override func setUp() async throws {
         try await super.setUp()
-        // AppState.makePipelineQueue (triggered by ensurePipelineQueue from
-        // enqueueFiles) loads/saves a snapshot at
-        // `AppPaths.ipcDir/pipeline_queue.json`. Tests that enqueue real or
-        // fake URLs persist that snapshot, leaking jobs into the next test in
-        // the same process. Wipe before every test.
-        try? FileManager.default.removeItem(
-            at: AppPaths.ipcDir.appendingPathComponent("pipeline_queue.json"),
-        )
+        // Per-test isolated logDir for the PipelineQueue snapshot file.
+        // Without it, concurrent test methods (xctest spawns a subprocess
+        // per method under `--parallel`) race on the production
+        // `AppPaths.ipcDir/pipeline_queue.json`, leaking jobs across
+        // tests as `count == 2` where `count == 1` is expected.
+        testLogDir = try makeTempDirectory(prefix: "AppStateTests")
     }
 
     // MARK: - Helpers
@@ -23,10 +23,23 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     private func makeState() -> (AppState, RecordingNotifier) {
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
+        // Inject a PipelineQueue with mocks + the per-test isolated logDir.
+        // The engine != nil arm short-circuits `ensurePipelineQueue()` so
+        // it doesn't replace our queue with one wired to the production
+        // `AppPaths.ipcDir` path on the first `enqueueFiles` call.
+        state.pipelineQueue = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: testLogDir,
+            logDir: testLogDir,
+        )
         return (state, notifier)
     }
 
-    /// AppState whose pipelineQueue writes to a temp dir (no real filesystem side effects).
+    /// AppState with a caller-provided logDir. Use when a test wants to
+    /// inspect snapshot contents at a known path; otherwise prefer
+    /// `makeState()` which uses the per-test isolated `testLogDir`.
     private func makeIsolatedState(logDir: URL) -> (AppState, RecordingNotifier) {
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
@@ -458,7 +471,11 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     // MARK: - ensurePipelineQueue
 
     func testEnsurePipelineQueueReplacesBareQueue() {
-        let (state, _) = makeState()
+        // Bare queue (no engine) — uses the no-engine init; logDir is the
+        // production path but this test never enqueues so no I/O hits it.
+        let notifier = RecordingNotifier()
+        let state = AppState(notifier: notifier)
+        state.pipelineQueue = PipelineQueue(logDir: testLogDir)
         XCTAssertNil(state.pipelineQueue.engine, "Precondition: fresh queue has no engine")
 
         state.ensurePipelineQueue()
