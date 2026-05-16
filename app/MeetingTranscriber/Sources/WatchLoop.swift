@@ -145,8 +145,10 @@ class WatchLoop {
     func start() {
         guard watchTask == nil else { return }
 
-        transition(to: .watching)
-        detail = "Polling for meetings..."
+        update { next in
+            next.phase = .watching
+            next.detail = "Polling for meetings..."
+        }
         logger.info("Watch mode started (poll: \(self.pollInterval)s, grace: \(self.endGracePeriod)s)")
 
         watchTask = Task { [weak self] in
@@ -158,10 +160,12 @@ class WatchLoop {
     func stop() {
         watchTask?.cancel()
         watchTask = nil
-        currentMeeting = nil
         cleanupManualRecording()
-        transition(to: .idle)
-        detail = ""
+        update { next in
+            next.phase = .idle
+            next.currentMeeting = nil
+            next.detail = ""
+        }
         logger.info("Watch mode stopped")
     }
 
@@ -189,9 +193,11 @@ class WatchLoop {
         )
 
         activeRecorder = recorder
-        manualRecordingInfo = ManualRecordingInfo(pid: pid, appName: appName, title: title)
-        transition(to: .recording)
-        detail = "Recording: \(title)"
+        update { next in
+            next.phase = .recording
+            next.manualRecordingInfo = ManualRecordingInfo(pid: pid, appName: appName, title: title)
+            next.detail = "Recording: \(title)"
+        }
 
         manualRecordingTask = Task { [weak self] in
             guard let self else { return }
@@ -207,18 +213,22 @@ class WatchLoop {
         manualRecordingTask?.cancel()
         manualRecordingTask = nil
 
+        var failureMessage: String?
         do {
             let recording = try recorder.stop()
             enqueueRecording(title: info.title, appName: info.appName, recording: recording)
         } catch {
             logger.error("Failed to stop manual recording: \(error)")
-            lastError = error.localizedDescription
+            failureMessage = error.localizedDescription
         }
 
         activeRecorder = nil
-        manualRecordingInfo = nil
-        transition(to: .idle)
-        detail = ""
+        update { next in
+            next.phase = .idle
+            next.manualRecordingInfo = nil
+            next.detail = ""
+            if let failureMessage { next.lastError = failureMessage }
+        }
     }
 
     private func monitorManualRecording(pid: pid_t) async {
@@ -246,7 +256,7 @@ class WatchLoop {
         manualRecordingTask?.cancel()
         manualRecordingTask = nil
         activeRecorder = nil
-        manualRecordingInfo = nil
+        update { next in next.manualRecordingInfo = nil }
     }
 
     // MARK: - Watch Loop
@@ -260,17 +270,21 @@ class WatchLoop {
                     if error is CancellationError { return }
                     let msg = "Recording error: \(error)"
                     logger.error("\(msg)")
-                    lastError = error.localizedDescription
-                    transition(to: .error)
-                    detail = "Recording error: \(error.localizedDescription)"
+                    update { next in
+                        next.phase = .error
+                        next.lastError = error.localizedDescription
+                        next.detail = "Recording error: \(error.localizedDescription)"
+                    }
                     try? await sleepProvider(10)
                 }
 
                 detector.reset(appName: meeting.pattern.appName)
 
                 if !Task.isCancelled {
-                    transition(to: .watching)
-                    detail = "Polling for meetings..."
+                    update { next in
+                        next.phase = .watching
+                        next.detail = "Polling for meetings..."
+                    }
                 }
             }
 
@@ -281,12 +295,14 @@ class WatchLoop {
     // MARK: - Meeting Handling
 
     func handleMeeting(_ meeting: DetectedMeeting) async throws {
-        currentMeeting = meeting
         let title = Self.cleanTitle(meeting.windowTitle)
 
         // --- Recording ---
-        transition(to: .recording)
-        detail = "Recording: \(title)"
+        update { next in
+            next.phase = .recording
+            next.currentMeeting = meeting
+            next.detail = "Recording: \(title)"
+        }
 
         let recorder = recorderFactory()
         try recorder.start(
@@ -441,7 +457,9 @@ class WatchLoop {
             logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title)")
         } catch {
             logger.error("Record-only: \(error.localizedDescription)")
-            lastError = "Record-only output failed: \(error.localizedDescription)"
+            update { next in
+                next.lastError = "Record-only output failed: \(error.localizedDescription)"
+            }
             // Record-only skips state transitions, so `lastError` alone is
             // never surfaced. Notify directly so the user learns about the
             // silent data-loss for downstream pipelines.
@@ -461,11 +479,32 @@ class WatchLoop {
         return dest
     }
 
-    private func transition(to newState: State) {
-        let old = state
-        state = newState
-        if old != newState {
-            onStateChange?(old, newState)
+    /// Single funnel through which every observable-field mutation flows.
+    /// Build the next snapshot, hand it to `apply` to commit only the
+    /// fields that actually changed, and let `apply` fire `onStateChange`
+    /// on a phase transition. Co-located mutations stay coherent
+    /// (a phase-change-plus-detail-update is one funnel call, not two
+    /// separate property writes that consumers could observe mid-flight).
+    private func update(_ transform: (inout WatchLoopState) -> Void) {
+        var next = snapshot
+        transform(&next)
+        apply(next)
+    }
+
+    /// Commit a new snapshot field-wise. Each `if old != new { old = new }`
+    /// guard avoids gratuitous `@Observable` invalidations for fields the
+    /// transform left alone; emit `onStateChange` if the phase moved.
+    private func apply(_ next: WatchLoopState) {
+        let oldPhase = state
+        if state != next.phase { state = next.phase }
+        if currentMeeting != next.currentMeeting { currentMeeting = next.currentMeeting }
+        if lastError != next.lastError { lastError = next.lastError }
+        if detail != next.detail { detail = next.detail }
+        if manualRecordingInfo != next.manualRecordingInfo {
+            manualRecordingInfo = next.manualRecordingInfo
+        }
+        if oldPhase != next.phase {
+            onStateChange?(oldPhase, next.phase)
         }
     }
 
