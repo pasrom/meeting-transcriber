@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Pattern definition for detecting active meetings via window titles.
-struct AppMeetingPattern {
+struct AppMeetingPattern: Equatable {
     let appName: String
     let ownerNames: [String]
     let meetingPatterns: [String]

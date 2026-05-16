@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 
 /// Represents a detected active meeting.
-struct DetectedMeeting {
+struct DetectedMeeting: Equatable {
     let pattern: AppMeetingPattern
     let windowTitle: String
     let ownerName: String

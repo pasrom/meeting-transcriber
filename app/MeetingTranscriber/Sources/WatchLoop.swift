@@ -4,7 +4,7 @@ import os.log
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLoop")
 
 /// Info about a manually started recording session.
-struct ManualRecordingInfo {
+struct ManualRecordingInfo: Equatable {
     let pid: pid_t
     let appName: String
     let title: String
@@ -125,6 +125,19 @@ class WatchLoop {
 
     var isActive: Bool {
         state != .idle
+    }
+
+    /// Value-type view of the five observable fields. Useful for tests,
+    /// `AppState+RPC` snapshots, and as the input/output shape for the
+    /// upcoming pure-function reducer slice.
+    var snapshot: WatchLoopState {
+        WatchLoopState(
+            phase: state,
+            currentMeeting: currentMeeting,
+            lastError: lastError,
+            detail: detail,
+            manualRecordingInfo: manualRecordingInfo,
+        )
     }
 
     // MARK: - Start / Stop
