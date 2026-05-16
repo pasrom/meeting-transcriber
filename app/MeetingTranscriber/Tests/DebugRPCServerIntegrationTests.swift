@@ -30,12 +30,14 @@
         private func startServer(
             snapshot: RPCStateSnapshot = .empty,
             enqueueFile: @escaping (URL) -> Bool = { _ in false },
+            enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
                 token: Self.testToken,
                 snapshot: { snapshot },
                 enqueueFile: enqueueFile,
+                enqueueFiles: enqueueFiles,
             )
             self.server = server
             server.start()
@@ -192,6 +194,68 @@
                 try await Task.sleep(for: .milliseconds(25))
             }
             XCTAssertEqual(received, tmp.path)
+        }
+
+        // MARK: - /action/enqueueFiles (paired import)
+
+        func testEnqueueFilesMissingPathsReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("action/enqueueFiles"), headers: authHeader)
+            req.httpBody = Data("{}".utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testEnqueueFilesEmptyArrayReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("action/enqueueFiles"), headers: authHeader)
+            req.httpBody = Data(#"{"paths":[]}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testEnqueueFilesValidPathsReturns200WithCount() async throws {
+            let tmpA = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("rpc-files-a-\(UUID().uuidString).wav")
+            let tmpB = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("rpc-files-b-\(UUID().uuidString).wav")
+            FileManager.default.createFile(atPath: tmpA.path, contents: Data("RIFF".utf8))
+            FileManager.default.createFile(atPath: tmpB.path, contents: Data("RIFF".utf8))
+            defer {
+                try? FileManager.default.removeItem(at: tmpA)
+                try? FileManager.default.removeItem(at: tmpB)
+            }
+
+            actor CountBox {
+                var receivedCount: Int = 0
+                func record(_ n: Int) {
+                    receivedCount = n
+                }
+            }
+            let box = CountBox()
+            // Explicit param to disambiguate from `enqueueFile: (URL) -> Bool`
+            // (trailing-closure would bind to the wrong overload).
+            let multi: ([URL]) -> Int = { urls in
+                Task { await box.record(urls.count) }
+                return urls.count
+            }
+            let base = try await startServer(enqueueFiles: multi)
+
+            var req = request("POST", base.appendingPathComponent("action/enqueueFiles"), headers: authHeader)
+            req.httpBody = Data(#"{"paths":["\#(tmpA.path)","\#(tmpB.path)"]}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+
+            let body = try XCTUnwrap(String(data: data, encoding: .utf8))
+            XCTAssertEqual(body, #"{"enqueued":2}"#)
+
+            var received = 0
+            for _ in 0 ..< 20 {
+                received = await box.receivedCount
+                if received > 0 { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertEqual(received, 2)
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)

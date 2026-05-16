@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_length
+    // swiftlint:disable:previous balanced_xctest_lifecycle
+
+    override func setUp() async throws {
+        try await super.setUp()
+        // AppState.makePipelineQueue (triggered by ensurePipelineQueue from
+        // enqueueFiles) loads/saves a snapshot at
+        // `AppPaths.ipcDir/pipeline_queue.json`. Tests that enqueue real or
+        // fake URLs persist that snapshot, leaking jobs into the next test in
+        // the same process. Wipe before every test.
+        try? FileManager.default.removeItem(
+            at: AppPaths.ipcDir.appendingPathComponent("pipeline_queue.json"),
+        )
+    }
+
     // MARK: - Helpers
 
     private func makeState() -> (AppState, RecordingNotifier) {
@@ -328,6 +342,36 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(job.mixPath?.lastPathComponent, "standup_mix.wav")
         XCTAssertEqual(job.appPath?.lastPathComponent, "standup_app.wav")
         XCTAssertEqual(job.micPath?.lastPathComponent, "standup_mic.wav")
+    }
+
+    func testEnqueueExistingFilesEmptyArrayReturnsZero() {
+        let (state, _) = makeState()
+        XCTAssertEqual(state.enqueueExistingFiles([]), 0)
+        XCTAssertTrue(state.pipelineQueue.jobs.isEmpty)
+    }
+
+    func testEnqueueExistingFilesAllMissingReturnsZeroAndDoesNotEnqueue() {
+        let (state, _) = makeState()
+        let urls = [
+            URL(fileURLWithPath: "/tmp/never-exists-\(UUID().uuidString).wav"),
+            URL(fileURLWithPath: "/tmp/also-missing-\(UUID().uuidString).wav"),
+        ]
+        XCTAssertEqual(state.enqueueExistingFiles(urls), 0)
+        XCTAssertTrue(state.pipelineQueue.jobs.isEmpty)
+    }
+
+    func testEnqueueExistingFilesPartialExistenceForwardsOnlyExisting() throws {
+        let (state, _) = makeState()
+        let tmpDir = try makeTempDirectory(prefix: "enqueue-existing")
+        let existing = tmpDir.appendingPathComponent("present.wav")
+        let missing = tmpDir.appendingPathComponent("absent.wav")
+        try Data("RIFF".utf8).write(to: existing)
+
+        let count = state.enqueueExistingFiles([existing, missing])
+
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        XCTAssertEqual(state.pipelineQueue.jobs[0].mixPath?.lastPathComponent, "present.wav")
     }
 
     func testEnqueueFilesAppPlusMicWithoutMixHasNilMixPath() {
