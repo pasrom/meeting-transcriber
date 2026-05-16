@@ -1,7 +1,8 @@
-/// Picker entries for the WhisperKit and Qwen3 language selectors. Whisper
-/// includes a leading `("", "Auto-detect")` sentinel; Qwen3 has no auto-detect
-/// mode. The two lists overlap by 30 codes but are kept separate because
-/// WhisperKit supports 99+ languages vs Qwen3's 30 and is expected to diverge.
+/// Picker entries for the WhisperKit, Parakeet, and Qwen3 language selectors.
+/// All three include a leading `("", "Auto-detect")` sentinel when the engine
+/// supports nil-language inference. The lists are kept separate because the
+/// engines support different language sets (WhisperKit 99+, Parakeet 18,
+/// Qwen3 30) and are expected to diverge.
 
 enum PickerLanguages {
     static let whisperKit: [(code: String, label: String)] = [
@@ -38,6 +39,12 @@ enum PickerLanguages {
         ("mk", "\u{041C}\u{0430}\u{043A}\u{0435}\u{0434}\u{043E}\u{043D}\u{0441}\u{043A}\u{0438}"),
         ("yue", "\u{7CB5}\u{8A9E}"),
     ]
+
+    /// Parakeet TDT v3 supports 18 languages for script-aware token filtering
+    /// (FluidAudio.Language enum). `("", "Auto-detect")` maps to nil at the
+    /// engine call site and lets the decoder pick the script freely — which
+    /// can drift on multi-script audio. Explicit selection prevents that.
+    static let parakeet: [(code: String, label: String)] = []
 
     static let qwen3: [(code: String, label: String)] = [
         ("de", "Deutsch"),
