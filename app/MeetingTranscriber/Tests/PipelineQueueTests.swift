@@ -274,7 +274,7 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.count, 1)
         XCTAssertEqual(freshQueue.jobs[0].meetingTitle, "Recovered Recording (20260311_100000)")
         XCTAssertEqual(
-            freshQueue.jobs[0].mixPath.standardizedFileURL,
+            freshQueue.jobs[0].mixPath?.standardizedFileURL,
             mixFile.standardizedFileURL,
         )
     }

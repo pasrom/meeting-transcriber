@@ -42,7 +42,10 @@ struct PipelineJob: Identifiable, Codable {
 
     let meetingTitle: String
     let appName: String
-    let mixPath: URL
+    /// nil when the job is a paired-import without a `_mix.wav` source — the
+    /// pipeline mixes `appPath`+`micPath` directly to the workdir `mix_16k.wav`
+    /// in that case, so no persistent mix file is written.
+    let mixPath: URL?
     let appPath: URL?
     let micPath: URL?
     let micDelay: TimeInterval
@@ -58,7 +61,7 @@ struct PipelineJob: Identifiable, Codable {
     init(
         meetingTitle: String,
         appName: String,
-        mixPath: URL,
+        mixPath: URL?,
         appPath: URL?,
         micPath: URL?,
         micDelay: TimeInterval,

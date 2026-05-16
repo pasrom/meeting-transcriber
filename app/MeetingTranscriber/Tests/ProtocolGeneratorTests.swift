@@ -356,4 +356,63 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertNotNil(error.errorDescription)
         XCTAssertEqual(error.errorDescription?.contains("14.2"), true)
     }
+
+    // MARK: - filename timestamp-prefix compounding regression
+
+    func testStripExistingTimestampPrefix_HHmm() {
+        // The exact failure mode from PR #274: re-importing a previously-
+        // slug-renamed `<today1>_<original_stem>_app.wav` would feed the
+        // slug back as title, and filename would prepend ANOTHER today's
+        // timestamp → compounding.
+        XCTAssertEqual(
+            ProtocolGenerator.stripExistingTimestampPrefix("20260516_1319_20260503_174538"),
+            "20260503_174538",
+        )
+    }
+
+    func testStripExistingTimestampPrefix_HHmmss() {
+        // DualSourceRecorder's native format is `yyyyMMdd_HHmmss_<suffix>.wav`.
+        XCTAssertEqual(
+            ProtocolGenerator.stripExistingTimestampPrefix("20260503_174538_daily_standup"),
+            "daily_standup",
+        )
+    }
+
+    func testStripExistingTimestampPrefix_doubleCompound() {
+        // Multi-layer compound left over from earlier buggy runs — strip all layers.
+        XCTAssertEqual(
+            ProtocolGenerator.stripExistingTimestampPrefix("20260516_1601_20260516_1319_meeting"),
+            "meeting",
+        )
+    }
+
+    func testStripExistingTimestampPrefix_noPrefix() {
+        XCTAssertEqual(
+            ProtocolGenerator.stripExistingTimestampPrefix("Daily standup"),
+            "Daily standup",
+        )
+    }
+
+    func testStripExistingTimestampPrefix_titleIsOnlyTimestamp() {
+        // No trailing `_`, no suffix to keep — return original to avoid an empty slug.
+        XCTAssertEqual(
+            ProtocolGenerator.stripExistingTimestampPrefix("20260503_174538"),
+            "20260503_174538",
+        )
+    }
+
+    func testFilenameDoesNotCompoundOnReimport() {
+        // The actual regression: re-importing a previously-processed file with
+        // a slug stem should produce a single-prefixed filename, not stack
+        // today's prefix on top of yesterday's.
+        let result = ProtocolGenerator.filename(
+            title: "20260516_1319_20260503_174538", ext: "md",
+        )
+        // Today's timestamp + the original recording timestamp, NOT today's twice.
+        XCTAssertTrue(result.hasSuffix("_20260503_174538.md"), "got: \(result)")
+        XCTAssertFalse(
+            result.contains("_20260516_1319_"),
+            "yesterday's prefix should have been stripped: \(result)",
+        )
+    }
 }

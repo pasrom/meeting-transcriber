@@ -79,6 +79,9 @@
         /// caller's path is missing or doesn't exist on disk; the RPC layer
         /// translates that to 400.
         private let enqueueFile: (URL) -> Bool
+        /// Multi-file counterpart for paired-import testing. Returns the number
+        /// of URLs that existed on disk and were forwarded to `enqueueFiles`.
+        private let enqueueFiles: ([URL]) -> Int
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -96,6 +99,7 @@
             speakerActions: SpeakerDBActions = .noop,
             skipNaming: @escaping () -> Void = {},
             enqueueFile: @escaping (URL) -> Bool = { _ in false },
+            enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -103,6 +107,7 @@
             self.speakerActions = speakerActions
             self.skipNaming = skipNaming
             self.enqueueFile = enqueueFile
+            self.enqueueFiles = enqueueFiles
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -214,6 +219,7 @@
 
         // MARK: - Routing
 
+        // swiftlint:disable:next cyclomatic_complexity
         func route(_ request: HTTPRequest) async -> HTTPResponse {
             if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
                 return HTTPResponse.forbidden()
@@ -263,6 +269,20 @@
                 let url = URL(fileURLWithPath: p.path)
                 guard enqueueFile(url) else { return HTTPResponse.badRequest() }
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+
+            case ("POST", "/action/enqueueFiles"):
+                // Multi-file variant — drives the same paired-pairing resolver
+                // the file picker uses. Lets driver scripts exercise the
+                // paired-import path (`_app + _mic + _mix` selection) without
+                // touching NSOpenPanel. Returns `{"enqueued": N}` for the
+                // count of URLs that existed on disk.
+                guard let p = try? JSONDecoder().decode(EnqueueFilesPayload.self, from: request.body),
+                      !p.paths.isEmpty
+                else { return HTTPResponse.badRequest() }
+                let urls = p.paths.map { URL(fileURLWithPath: $0) }
+                let count = enqueueFiles(urls)
+                let body = Data(#"{"enqueued":\#(count)}"#.utf8)
+                return HTTPResponse.ok(body: body, contentType: "application/json")
 
             case ("POST", "/action/renameSpeaker"),
                  ("POST", "/action/deleteSpeaker"),
@@ -340,6 +360,10 @@
 
         private struct EnqueueFilePayload: Decodable {
             let path: String
+        }
+
+        private struct EnqueueFilesPayload: Decodable {
+            let paths: [String]
         }
 
         /// Map the action outcome to an HTTP response. `notFound` → 404,

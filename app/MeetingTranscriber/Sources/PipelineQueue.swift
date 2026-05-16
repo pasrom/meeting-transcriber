@@ -535,6 +535,12 @@ class PipelineQueue {
                 transcript = segments.map(\.formattedLine).joined(separator: "\n")
             } else {
                 // Single-source: resample mix to 16kHz
+                guard let mixPath else {
+                    throw NSError(
+                        domain: "PipelineQueue", code: -1,
+                        userInfo: [NSLocalizedDescriptionKey: "Single-source job missing mixPath"],
+                    )
+                }
                 let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                 try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
 
@@ -571,8 +577,9 @@ class PipelineQueue {
             guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 // Compute input RMS only on the failure path — loading the whole
                 // mix file is expensive (~MB-per-minute) and we only need it when
-                // diagnosing why transcription produced nothing.
-                let inputRMS = AudioMixer.rmsDecibels(forFileAt: mixPath) ?? .nan
+                // diagnosing why transcription produced nothing. Paired imports
+                // without a real mix file report NaN (RMS unavailable).
+                let inputRMS = mixPath.flatMap { AudioMixer.rmsDecibels(forFileAt: $0) } ?? .nan
                 logger.warning(
                     "[\(shortID, privacy: .public)] transcription_empty inputRMSdBFS=\(inputRMS, privacy: .public). Likely silent input or ASR misconfiguration — check microphone level and engine settings.",
                 )
@@ -590,10 +597,25 @@ class PipelineQueue {
                     updateJobState(id: jobID, to: .diarizing)
                     startElapsedTimer()
 
-                    // Use mix audio for diarization (already resampled in single-source path)
+                    // Use mix audio for diarization (already resampled in single-source path).
+                    // Paired imports without a real `_mix.wav` source mix `app + mic`
+                    // directly into the workdir cache — no persistent mix file written.
                     let mix16k = workDir.appendingPathComponent("mix_16k.wav")
                     if !FileManager.default.fileExists(atPath: mix16k.path) {
-                        try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+                        if let mixPath, FileManager.default.fileExists(atPath: mixPath.path) {
+                            try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+                        } else if let appAudioPath = appPath, let micAudioPath = micPath {
+                            try AudioMixer.mix(
+                                appAudioPath: appAudioPath, micAudioPath: micAudioPath,
+                                outputPath: mix16k, micDelay: micDelay,
+                                sampleRate: AudioConstants.targetSampleRate,
+                            )
+                        } else {
+                            throw NSError(
+                                domain: "PipelineQueue", code: -1,
+                                userInfo: [NSLocalizedDescriptionKey: "No mix audio available for diarization"],
+                            )
+                        }
                     }
 
                     do {
@@ -1272,9 +1294,12 @@ class PipelineQueue {
             // Discard jobs whose audio file no longer exists, EXCEPT
             // .speakerNamingPending — those have their own slug-based
             // `_16k.wav` sidecar and don't need the original mix.wav.
+            // Paired imports with nil mixPath: keep them — `appPath` is the
+            // ground-truth source and it's checked at processNext time.
             loaded.removeAll { job in
-                job.state != .speakerNamingPending
-                    && !FileManager.default.fileExists(atPath: job.mixPath.path)
+                guard let mixPath = job.mixPath else { return false }
+                return job.state != .speakerNamingPending
+                    && !FileManager.default.fileExists(atPath: mixPath.path)
             }
 
             guard !loaded.isEmpty else {
@@ -1314,11 +1339,27 @@ class PipelineQueue {
 
     // MARK: - Audio File Copy
 
-    /// Copy recording audio files to the protocol output directory.
+    /// Copy recording audio files to the protocol output directory. Nil
+    /// `mixPath` (paired imports without a `_mix.wav` source) → mix slot
+    /// is skipped, no persistent mix is written.
     private static func copyAudioToOutput(
-        mixPath: URL, appPath: URL?, micPath: URL?,
+        mixPath: URL?, appPath: URL?, micPath: URL?,
         title: String, outputDir: URL,
     ) {
+        // Each move below renames-in-place — if two of the three URLs point at
+        // the same file, the first move destroys the source for the next one.
+        // Loud failure in dev/CI > silent data destruction.
+        if let mixStd = mixPath?.standardizedFileURL {
+            precondition(
+                appPath.map { mixStd != $0.standardizedFileURL } ?? true,
+                "copyAudioToOutput: mixPath aliases appPath — would destroy source",
+            )
+            precondition(
+                micPath.map { mixStd != $0.standardizedFileURL } ?? true,
+                "copyAudioToOutput: mixPath aliases micPath — would destroy source",
+            )
+        }
+
         let accessing = outputDir.startAccessingSecurityScopedResource()
         defer { if accessing { outputDir.stopAccessingSecurityScopedResource() } }
 
@@ -1326,13 +1367,23 @@ class PipelineQueue {
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let slug = ProtocolGenerator.filename(title: title, ext: "").dropLast() // remove trailing "."
         let audioPaths: [(URL, String)] = [
-            (mixPath, "\(slug)\(RecordingFileSuffix.mix)"),
+            mixPath.map { ($0, "\(slug)\(RecordingFileSuffix.mix)") },
             appPath.map { ($0, "\(slug)\(RecordingFileSuffix.app)") },
             micPath.map { ($0, "\(slug)\(RecordingFileSuffix.mic)") },
         ].compactMap(\.self)
 
+        let outputDirStd = outputDir.standardizedFileURL
         for (src, name) in audioPaths {
             let dst = outputDir.appendingPathComponent(name)
+            // Source already in the target dir → move would just rename in place
+            // with a fresh `<today_timestamp>_<title>` prefix, which produces an
+            // endless compounding-rename loop on every re-import (orphan recovery
+            // re-picks the new name on next launch). The file is already at its
+            // final home; keep it put.
+            if src.deletingLastPathComponent().standardizedFileURL == outputDirStd {
+                logger.info("Audio already in output dir, skipping rename: \(src.lastPathComponent)")
+                continue
+            }
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: src, to: dst)
@@ -1388,48 +1439,40 @@ class PipelineQueue {
             includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
         ) else { return }
 
-        let trackedPaths = Set(jobs.map(\.mixPath.standardizedFileURL.path))
+        let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
         let processedPaths = loadProcessedPaths()
         let now = Date()
         var recovered = 0
 
-        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
-            let stdPath = file.standardizedFileURL.path
+        // Orphan recovery requires a `_mix.wav` anchor — pair with companion
+        // `_app.wav`/`_mic.wav` tracks when they exist (same stem).
+        for group in PairedRecordingResolver.resolve(urls: entries).paired {
+            // Orphan recovery requires an on-disk `_mix.wav` anchor — paired
+            // groups produced by app+mic synthesis aren't recoverable from the
+            // dir scan alone (the synthesized mix lives elsewhere or hasn't
+            // been written yet). Skip groups without a real mix file here.
+            guard let mixURL = group.mix else { continue }
+            let stdPath = mixURL.standardizedFileURL.path
 
-            // Skip already tracked by active jobs
             guard !trackedPaths.contains(stdPath) else { continue }
-
-            // Skip already successfully processed
             guard !processedPaths.contains(stdPath) else { continue }
 
-            // Skip files older than maxAge
-            if let attrs = try? fm.attributesOfItem(atPath: file.path),
-               let created = attrs[.creationDate] as? Date,
+            let attrs = try? fm.attributesOfItem(atPath: mixURL.path)
+            if let created = attrs?[.creationDate] as? Date,
                now.timeIntervalSince(created) > maxAge {
                 continue
             }
-
-            // Skip empty WAVs (header only = 44 bytes)
-            if let attrs = try? fm.attributesOfItem(atPath: file.path),
-               let size = attrs[.size] as? Int, size <= 44 {
+            // Header-only WAVs are 44 bytes.
+            if let size = attrs?[.size] as? Int, size <= 44 {
                 continue
             }
 
-            // Derive timestamp prefix (e.g. "20260311_143000" from "20260311_143000_mix.wav")
-            let prefix = String(file.lastPathComponent.dropLast(RecordingFileSuffix.mix.count))
-
-            // Look for companion tracks
-            let appFile = recordingsDir.appendingPathComponent("\(prefix)\(RecordingFileSuffix.app)")
-            let micFile = recordingsDir.appendingPathComponent("\(prefix)\(RecordingFileSuffix.mic)")
-            let appPath = fm.fileExists(atPath: appFile.path) ? appFile : nil
-            let micPath = fm.fileExists(atPath: micFile.path) ? micFile : nil
-
             let job = PipelineJob(
-                meetingTitle: "Recovered Recording (\(prefix))",
+                meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
-                mixPath: file,
-                appPath: appPath,
-                micPath: micPath,
+                mixPath: mixURL,
+                appPath: group.app,
+                micPath: group.mic,
                 micDelay: 0,
             )
             jobs.append(job)
@@ -1459,8 +1502,11 @@ class PipelineQueue {
         return Set(paths)
     }
 
-    /// Record that a job's mix file was successfully processed.
-    func markProcessed(mixPath: URL) {
+    /// Record that a job's mix file was successfully processed. Nil mixPath
+    /// (paired imports without a `_mix.wav` source) is a no-op — there's no
+    /// path to track for orphan recovery.
+    func markProcessed(mixPath: URL?) {
+        guard let mixPath else { return }
         var paths = loadProcessedPaths()
         paths.insert(mixPath.standardizedFileURL.path)
         do {

@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import AppKit
 import Foundation
 import Observation
@@ -22,7 +23,7 @@ protocol AppNotifying {
 /// - `BadgeKind.compute(...)` can be called directly in tests.
 @Observable
 @MainActor
-final class AppState {
+final class AppState { // swiftlint:disable:this type_body_length
     // MARK: - Dependencies
 
     let settings: AppSettings
@@ -181,11 +182,19 @@ final class AppState {
                 Task { @MainActor in self.enqueueFiles([url]) }
                 return true
             }
+            let enqueueFilesRPC: ([URL]) -> Int = { [weak self] urls in
+                guard let self else { return 0 }
+                let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+                guard !existing.isEmpty else { return 0 }
+                Task { @MainActor in self.enqueueFiles(existing) }
+                return existing.count
+            }
             let server = DebugRPCServer(
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
                 enqueueFile: enqueueFile,
+                enqueueFiles: enqueueFilesRPC,
             )
             server.start()
             debugRPCServer = server
@@ -400,7 +409,31 @@ final class AppState {
     func enqueueFiles(_ urls: [URL]) {
         ensurePipelineQueue()
 
-        for url in urls {
+        let resolution = PairedRecordingResolver.resolve(urls: urls)
+
+        for group in resolution.paired {
+            let sidecar = RecordingSidecar.read(
+                fromDirectory: group.directory,
+                basename: group.stem,
+            )
+            let title = sidecar?.title ?? group.stem
+            let appName = sidecar?.appName ?? "File"
+            let micDelay = sidecar?.micDelaySeconds ?? 0
+            let participants = sidecar?.participants ?? []
+
+            // For paired groups: pass `group.mix` directly (nil when only app+mic
+            // were selected — the pipeline mixes app+mic into the workdir cache
+            // on the fly, no persistent `_mix.wav` is written to the user's
+            // recordings dir).
+            let job = PipelineJob(
+                meetingTitle: title, appName: appName,
+                mixPath: group.mix, appPath: group.app, micPath: group.mic,
+                micDelay: micDelay, participants: participants,
+            )
+            pipelineQueue.enqueue(job)
+        }
+
+        for url in resolution.singletons {
             let title = url.deletingPathExtension().lastPathComponent
             let job = PipelineJob(
                 meetingTitle: title,
