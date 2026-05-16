@@ -198,6 +198,47 @@ func makeTestWatchLoop(
     return (loop, recorder)
 }
 
+// MARK: - TestClock for WatchLoop timing
+
+/// Deterministic virtual clock for `WatchLoop` async timing tests. Inject
+/// the `now`/`sleep` closures into `WatchLoop(..., now:, sleep:)` and the
+/// timing-sensitive paths (`waitForMeetingEnd`, `monitorManualRecording`,
+/// `watchLoop`) run instantly: every `sleep(_:)` resolves after a single
+/// `Task.yield()` while advancing the virtual clock by the requested
+/// interval. Tests assert on poll counts and `clock.now`'s elapsed delta
+/// rather than wall-clock time.
+///
+/// Not thread-safe by design — designed for `@MainActor` callers (which
+/// `WatchLoop` already is). Cross-actor use would need a lock.
+@MainActor
+final class TestClock {
+    private(set) var now: Date
+
+    init(start: Date = Date(timeIntervalSince1970: 1_000_000)) {
+        self.now = start
+    }
+
+    /// Advance the virtual clock and yield once so any awaiting task gets
+    /// a chance to resume. Doesn't throw, but the injection closure into
+    /// `WatchLoop(..., sleep:)` (which is `async throws`) wraps the call
+    /// — Swift accepts a non-throwing call inside a throwing closure body.
+    func sleep(for interval: TimeInterval) async {
+        now = now.addingTimeInterval(interval)
+        await Task.yield()
+    }
+}
+
+/// Tiny counter for tests that need to observe how many times a captured
+/// closure was invoked. Class reference lets a non-Sendable closure mutate
+/// the count without an `inout`/escaping-capture dance.
+final class ManagedCounter {
+    private(set) var value = 0
+    func increment() -> Int {
+        value += 1
+        return value
+    }
+}
+
 // MARK: - AppNotifying spy
 
 /// Records all notify() calls for assertions.

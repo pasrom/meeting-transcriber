@@ -66,6 +66,14 @@ class WatchLoop {
     /// transition state to `.error`. Defaults to a silent no-op for tests.
     let notifier: any AppNotifying
 
+    /// Wall-clock source. Defaults to `Date()`; tests inject a `TestClock`
+    /// so timing-sensitive paths become deterministic instead of racing
+    /// against `Task.sleep`'s actual jitter on loaded CI runners.
+    let nowProvider: () -> Date
+    /// Sleep primitive. Defaults to `Task.sleep`; tests inject the
+    /// matching `TestClock.sleep` so virtual time advances synchronously.
+    let sleepProvider: (TimeInterval) async throws -> Void
+
     private var watchTask: Task<Void, Never>?
 
     /// Hook called when state changes (for UI updates, notifications, etc.)
@@ -86,6 +94,10 @@ class WatchLoop {
             .unscoped(AppPaths.recordingsDir)
         },
         notifier: any AppNotifying = SilentNotifier(),
+        nowProvider: @escaping () -> Date = Date.init,
+        sleepProvider: @escaping (TimeInterval) async throws -> Void = { interval in
+            try await Task.sleep(for: .seconds(interval))
+        },
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -99,6 +111,8 @@ class WatchLoop {
         self.recordOnly = recordOnly
         self.recordOnlyDestination = recordOnlyDestination
         self.notifier = notifier
+        self.nowProvider = nowProvider
+        self.sleepProvider = sleepProvider
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -195,7 +209,7 @@ class WatchLoop {
     }
 
     private func monitorManualRecording(pid: pid_t) async {
-        let startTime = Date()
+        let startTime = nowProvider()
         while !Task.isCancelled {
             // Check if process is still alive
             if kill(pid, 0) != 0 {
@@ -205,13 +219,13 @@ class WatchLoop {
             }
 
             // Enforce max duration
-            if Date().timeIntervalSince(startTime) > maxDuration {
+            if nowProvider().timeIntervalSince(startTime) > maxDuration {
                 logger.info("Max recording duration reached — stopping manual recording")
                 stopManualRecording()
                 return
             }
 
-            try? await Task.sleep(for: .seconds(pollInterval))
+            try? await sleepProvider(pollInterval)
         }
     }
 
@@ -236,7 +250,7 @@ class WatchLoop {
                     lastError = error.localizedDescription
                     transition(to: .error)
                     detail = "Recording error: \(error.localizedDescription)"
-                    try? await Task.sleep(for: .seconds(10))
+                    try? await sleepProvider(10)
                 }
 
                 detector.reset(appName: meeting.pattern.appName)
@@ -247,7 +261,7 @@ class WatchLoop {
                 }
             }
 
-            try? await Task.sleep(for: .seconds(pollInterval))
+            try? await sleepProvider(pollInterval)
         }
     }
 
@@ -297,7 +311,7 @@ class WatchLoop {
 
     func waitForMeetingEnd(_ meeting: DetectedMeeting) async throws {
         var graceStart: Date?
-        let startTime = Date()
+        let startTime = nowProvider()
         let config = WatchLoopEndConfig(
             maxDuration: maxDuration,
             endGracePeriod: endGracePeriod,
@@ -306,7 +320,7 @@ class WatchLoop {
         while !Task.isCancelled {
             let decision = WatchLoopEndPolicy.step(
                 config: config,
-                now: Date(),
+                now: nowProvider(),
                 startTime: startTime,
                 graceStart: graceStart,
                 meetingActive: detector.isMeetingActive(meeting),
@@ -322,7 +336,7 @@ class WatchLoop {
             case let .continuePolling(newGraceStart):
                 graceStart = newGraceStart
             }
-            try await Task.sleep(for: .seconds(pollInterval))
+            try await sleepProvider(pollInterval)
         }
     }
 
