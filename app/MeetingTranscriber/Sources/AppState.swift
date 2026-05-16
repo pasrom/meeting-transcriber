@@ -183,11 +183,7 @@ final class AppState { // swiftlint:disable:this type_body_length
                 return true
             }
             let enqueueFilesRPC: ([URL]) -> Int = { [weak self] urls in
-                guard let self else { return 0 }
-                let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
-                guard !existing.isEmpty else { return 0 }
-                Task { @MainActor in self.enqueueFiles(existing) }
-                return existing.count
+                self?.enqueueExistingFiles(urls) ?? 0
             }
             let server = DebugRPCServer(
                 snapshot: snapshot,
@@ -404,6 +400,17 @@ final class AppState { // swiftlint:disable:this type_body_length
     func stopManualRecording() {
         watchLoop?.stopManualRecording()
         watchLoop = nil
+    }
+
+    /// Filters `urls` to files that currently exist on disk, forwards them to
+    /// `enqueueFiles`, and returns the existing count. RPC-friendly entry
+    /// point; nil-callers (weak self) treat absent app as 0-enqueued.
+    @discardableResult
+    func enqueueExistingFiles(_ urls: [URL]) -> Int {
+        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !existing.isEmpty else { return 0 }
+        enqueueFiles(existing)
+        return existing.count
     }
 
     func enqueueFiles(_ urls: [URL]) {
