@@ -223,6 +223,30 @@ fi
 "$(dirname "$0")/keychain-prepend.sh" "$CI_KEYCHAIN"
 security default-keychain -s "$CI_KEYCHAIN"
 
+# Spotlight must not index ~/Library/Keychains. Without this exclusion,
+# the first time `mds_stores` walks the directory macOS raises a modal
+# ("Spotlight wants to use the X keychain. Please enter the keychain
+# password.") that blocks until a human clicks Cancel. Until that
+# happens, mds_stores stays in a wait state and every concurrent
+# `renamex_np` on the same volume blocks behind it — meaning a CI run
+# doing codesign / pipeline-queue snapshot / atomic-file-rename hangs
+# indefinitely with no log signal.
+#
+# Apple's documented per-directory exclusion: drop a `.metadata_never_index`
+# marker file in the directory. mds_stores skips the containing tree on
+# its next scan. No sudo (system Spotlight-prefs are admin-only and the
+# self-hosted runner user is intentionally non-sudo), no `mds` restart,
+# survives reboots. Same effect as adding the path to System Settings
+# → Spotlight → Privacy by hand.
+KEYCHAIN_DIR="$HOME/Library/Keychains"
+NEVER_INDEX_MARKER="$KEYCHAIN_DIR/.metadata_never_index"
+if [[ -f "$NEVER_INDEX_MARKER" ]]; then
+    log "Spotlight already excludes $KEYCHAIN_DIR via marker — skipping"
+else
+    touch "$NEVER_INDEX_MARKER"
+    log "Created $NEVER_INDEX_MARKER — Spotlight will skip $KEYCHAIN_DIR on next scan"
+fi
+
 cat <<MSG
 
 [setup] DONE. ✓
