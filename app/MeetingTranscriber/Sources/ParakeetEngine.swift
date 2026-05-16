@@ -20,6 +20,20 @@ final class ParakeetEngine: TranscribingEngine {
     /// Path to a custom vocabulary file for CTC boosting. Set from AppSettings before loadModel().
     var customVocabularyPath: String = ""
 
+    /// Optional ISO 639-1 language hint. Empty/nil = auto-detect (FluidAudio's
+    /// v3 TDT decoder picks the script freely, which can drift Cyrillic ↔ Latin
+    /// on multi-script audio). Codes that don't match `FluidAudio.Language`
+    /// fall back to nil. Set from `AppSettings.parakeetLanguageOrNil`.
+    var language: String?
+
+    /// Maps `language` to the FluidAudio enum at call time. Kept private so
+    /// the public surface stays `String?` and AppState doesn't need to import
+    /// FluidAudio.
+    private var fluidLanguageHint: Language? {
+        guard let language, !language.isEmpty else { return nil }
+        return Language(rawValue: language)
+    }
+
     private var asrManager: AsrManager?
     private var loadingTask: Task<Void, Never>?
 
@@ -91,7 +105,7 @@ final class ParakeetEngine: TranscribingEngine {
 
         transcriptionProgress = 0
         var decoderState = await TdtDecoderState.make(decoderLayers: manager.decoderLayerCount)
-        var result = try await manager.transcribe(audioPath, decoderState: &decoderState)
+        var result = try await manager.transcribe(audioPath, decoderState: &decoderState, language: fluidLanguageHint)
         transcriptionProgress = 1.0
 
         // Apply CTC vocabulary rescoring if configured

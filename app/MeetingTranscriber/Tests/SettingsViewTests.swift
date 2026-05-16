@@ -228,12 +228,15 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertThrowsError(try body.find(text: "Custom vocabulary file"))
     }
 
-    func testWhisperKitPickersHiddenForParakeet() throws {
+    func testWhisperKitModelPickerHiddenForParakeet() throws {
+        // Parakeet section now shows its own Language picker + Custom-vocab
+        // field, but the WhisperKit-specific Model picker must not leak through.
         let settings = makeSettings()
         settings.transcriptionEngine = .parakeet
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
-        XCTAssertThrowsError(try body.find(text: "Language"))
+        XCTAssertNoThrow(try body.find(text: "Language"))
+        XCTAssertThrowsError(try body.find(text: "Model"))
     }
 
     func testQwen3LanguagePickerShownWhenQwen3Selected() throws {

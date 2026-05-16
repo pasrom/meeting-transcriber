@@ -43,6 +43,12 @@ struct TranscriptionSettingsView: View {
                 }
 
                 if settings.transcriptionEngine == .parakeet {
+                    Picker("Language", selection: $settings.parakeetLanguage) {
+                        ForEach(PickerLanguages.parakeet, id: \.code) { lang in
+                            Text(lang.label).tag(lang.code)
+                        }
+                    }
+
                     HStack {
                         TextField("Custom vocabulary file", text: $settings.customVocabularyPath)
                             .textFieldStyle(.roundedBorder)

@@ -160,6 +160,21 @@ final class AppSettings {
         qwen3Language.isEmpty ? nil : qwen3Language
     }
 
+    /// Parakeet language hint (ISO 639-1 code). Empty string = auto-detect.
+    /// FluidAudio's v3 TDT decoder uses this for script-aware token filtering;
+    /// auto-detect can drift Cyrillic ↔ Latin on multi-script audio.
+    /// Default is empty (auto-detect): FluidAudio's auto-ID works well on
+    /// monolingual audio, unlike `whisperLanguage="de"` which had to be a
+    /// concrete default for historical reasons (and hurt non-DE users in #256).
+    var parakeetLanguage: String {
+        didSet { defaults.set(parakeetLanguage, forKey: "parakeetLanguage") }
+    }
+
+    /// Language as Optional for Parakeet. Empty string → nil (auto-detect).
+    var parakeetLanguageOrNil: String? {
+        parakeetLanguage.isEmpty ? nil : parakeetLanguage
+    }
+
     /// Path to a custom vocabulary file for Parakeet CTC boosting (one term per line).
     var customVocabularyPath: String {
         didSet { defaults.set(customVocabularyPath, forKey: "customVocabularyPath") }
@@ -346,6 +361,7 @@ final class AppSettings {
             ?? "openai_whisper-large-v3-v20240930_turbo"
         whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
         qwen3Language = defaults.object(forKey: "qwen3Language") as? String ?? ""
+        parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false

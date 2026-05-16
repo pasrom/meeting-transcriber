@@ -466,10 +466,10 @@ final class AppState {
             if whisperKit.language != next { whisperKit.language = next }
 
         case .parakeet:
-            let next = settings.customVocabularyPath
-            if parakeetEngine.customVocabularyPath != next {
-                parakeetEngine.customVocabularyPath = next
-            }
+            let nextVocab = settings.customVocabularyPath
+            if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
+            let nextLang = settings.parakeetLanguageOrNil
+            if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
 
         case .qwen3:
             if #available(macOS 15, *) {
@@ -487,6 +487,7 @@ final class AppState {
             _ = settings.transcriptionEngine
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
+            _ = settings.parakeetLanguage
             _ = settings.qwen3Language
         } onChange: { [weak self] in
             Task { @MainActor in

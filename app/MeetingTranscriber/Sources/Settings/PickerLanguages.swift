@@ -44,7 +44,27 @@ enum PickerLanguages {
     /// (FluidAudio.Language enum). `("", "Auto-detect")` maps to nil at the
     /// engine call site and lets the decoder pick the script freely — which
     /// can drift on multi-script audio. Explicit selection prevents that.
-    static let parakeet: [(code: String, label: String)] = []
+    static let parakeet: [(code: String, label: String)] = [
+        ("", "Auto-detect"),
+        ("de", "Deutsch"),
+        ("en", "English"),
+        ("fr", "Fran\u{00E7}ais"),
+        ("es", "Espa\u{00F1}ol"),
+        ("it", "Italiano"),
+        ("pt", "Portugu\u{00EA}s"),
+        ("ro", "Rom\u{00E2}n\u{0103}"),
+        ("pl", "Polski"),
+        ("cs", "\u{010C}e\u{0161}tina"),
+        ("sk", "Sloven\u{010D}ina"),
+        ("sl", "Sloven\u{0161}\u{010D}ina"),
+        ("hr", "Hrvatski"),
+        ("bs", "Bosanski"),
+        ("ru", "\u{0420}\u{0443}\u{0441}\u{0441}\u{043A}\u{0438}\u{0439}"),
+        ("uk", "\u{0423}\u{043A}\u{0440}\u{0430}\u{0457}\u{043D}\u{0441}\u{044C}\u{043A}\u{0430}"),
+        ("be", "\u{0411}\u{0435}\u{043B}\u{0430}\u{0440}\u{0443}\u{0441}\u{043A}\u{0430}\u{044F}"),
+        ("bg", "\u{0411}\u{044A}\u{043B}\u{0433}\u{0430}\u{0440}\u{0441}\u{043A}\u{0438}"),
+        ("sr", "\u{0421}\u{0440}\u{043F}\u{0441}\u{043A}\u{0438}"),
+    ]
 
     static let qwen3: [(code: String, label: String)] = [
         ("de", "Deutsch"),
