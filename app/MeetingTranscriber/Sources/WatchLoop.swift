@@ -234,20 +234,25 @@ class WatchLoop {
     private func monitorManualRecording(pid: pid_t) async {
         let startTime = nowProvider()
         while !Task.isCancelled {
-            // Check if process is still alive
-            if kill(pid, 0) != 0 {
+            let decision = ManualRecordingMonitorPolicy.step(
+                pidAlive: kill(pid, 0) == 0,
+                elapsed: nowProvider().timeIntervalSince(startTime),
+                maxDuration: maxDuration,
+            )
+            switch decision {
+            case .continuePolling:
+                break
+
+            case .stopPidExited:
                 logger.info("Monitored app (PID \(pid)) exited — stopping manual recording")
                 stopManualRecording()
                 return
-            }
 
-            // Enforce max duration
-            if nowProvider().timeIntervalSince(startTime) > maxDuration {
+            case .stopMaxDurationExceeded:
                 logger.info("Max recording duration reached — stopping manual recording")
                 stopManualRecording()
                 return
             }
-
             try? await sleepProvider(pollInterval)
         }
     }
