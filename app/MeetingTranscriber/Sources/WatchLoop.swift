@@ -73,6 +73,11 @@ class WatchLoop {
     /// Sleep primitive. Defaults to `Task.sleep`; tests inject the
     /// matching `TestClock.sleep` so virtual time advances synchronously.
     let sleepProvider: (TimeInterval) async throws -> Void
+    /// Process-alive probe. Defaults to `kill(pid, 0) == 0`; tests inject
+    /// a closure with a deterministic answer so the
+    /// `monitorManualRecording` switch arms can be exercised without
+    /// spawning a real subprocess.
+    let pidAliveCheck: (pid_t) -> Bool
 
     private var watchTask: Task<Void, Never>?
 
@@ -98,6 +103,7 @@ class WatchLoop {
         sleepProvider: @escaping (TimeInterval) async throws -> Void = { interval in
             try await Task.sleep(for: .seconds(interval))
         },
+        pidAliveCheck: @escaping (pid_t) -> Bool = { kill($0, 0) == 0 },
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -113,6 +119,7 @@ class WatchLoop {
         self.notifier = notifier
         self.nowProvider = nowProvider
         self.sleepProvider = sleepProvider
+        self.pidAliveCheck = pidAliveCheck
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -235,7 +242,7 @@ class WatchLoop {
         let startTime = nowProvider()
         while !Task.isCancelled {
             let decision = ManualRecordingMonitorPolicy.step(
-                pidAlive: kill(pid, 0) == 0,
+                pidAlive: pidAliveCheck(pid),
                 elapsed: nowProvider().timeIntervalSince(startTime),
                 maxDuration: maxDuration,
             )
