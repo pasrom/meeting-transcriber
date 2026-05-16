@@ -30,6 +30,8 @@ NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/App
 TWO_MEETINGS=false       # trigger two back-to-back meetings to validate cooldown + state reset
 RECORD_ONLY=false        # validate record-only mode (sidecar+WAV instead of transcript)
 REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /action/enqueueFile
+REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.wav already on disk
+KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --reimport-latest run
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -40,9 +42,13 @@ while [ $# -gt 0 ]; do
         --two-meetings)     TWO_MEETINGS=true ;;
         --record-only)      RECORD_ONLY=true ;;
         --reimport-recorded) REIMPORT_RECORDED=true ;;
+        --reimport-latest)  REIMPORT_LATEST=true ;;
+        --keep-recordings)  KEEP_RECORDINGS=true ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only] [--reimport-recorded] [--fixture path/to.wav]
+Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
+                  [--reimport-recorded | --reimport-latest] [--keep-recordings]
+                  [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -56,6 +62,16 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only] [--
                        Recording" pipeline and assert the transcript. Covers
                        both the recorder's WAV-encoding correctness and the
                        AudioMixer 3-tier file-load fallback in one pass.
+                       Self-contained — no prior run required.
+  --reimport-latest    Skip the live-record phase and re-import the freshest
+                       *_mix.wav already in ~/Downloads/MeetingTranscriber/recordings/.
+                       Pair with a previous `--record-only --keep-recordings`
+                       run (CI uses this to chain steps without re-recording;
+                       locally also useful for silent fast iteration on the
+                       import pipeline).
+  --keep-recordings    Suppress the on-exit cleanup of record-only output, so
+                       a follow-up --reimport-latest can pick the WAV up.
+                       Only meaningful with --record-only.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -64,6 +80,14 @@ HELP
     esac
     shift
 done
+
+# --reimport-recorded and --reimport-latest are advertised as alternatives
+# in the help text — enforce that here so a typo can't silently fall
+# through to whichever branch the dispatch chain checks first.
+if [ "$REIMPORT_RECORDED" = true ] && [ "$REIMPORT_LATEST" = true ]; then
+    echo "Error: --reimport-recorded and --reimport-latest are mutually exclusive" >&2
+    exit 2
+fi
 
 # --reimport-recorded chains a record-only meeting with a follow-up
 # enqueueFile RPC. Phase 1 needs the recordOnly toggle on so WatchLoop
@@ -296,8 +320,10 @@ on_exit() {
         defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
         # Marker-bounded cleanup: only files created since `touch $MARKER`
         # at launch — never touches pre-existing user data. See feedback
-        # memory `no_destructive_fs_on_real_dirs`.
-        if [ -f "$RECORD_ONLY_MARKER" ]; then
+        # memory `no_destructive_fs_on_real_dirs`. Skipped under
+        # --keep-recordings so a follow-up --reimport-latest run can pick
+        # the WAV up.
+        if [ "$KEEP_RECORDINGS" = false ] && [ -f "$RECORD_ONLY_MARKER" ]; then
             find "$RECORDINGS_DIR" -type f -newer "$RECORD_ONLY_MARKER" -delete 2>/dev/null || true
             rm -f "$RECORD_ONLY_MARKER"
         fi
@@ -548,7 +574,26 @@ run_one_reimport() {
 
 LAST_RECORDED_MIX_PATH=""
 
-if [ "$REIMPORT_RECORDED" = true ]; then
+if [ "$REIMPORT_LATEST" = true ]; then
+    # Skip the live-record phase and reuse a WAV produced by an earlier
+    # `--record-only --keep-recordings` run on this host. Picks the
+    # freshest `*_mix.wav` in $RECORDINGS_DIR — eliminates the audible
+    # ~30 s playback + capture round and the meeting-detector cooldown
+    # that --reimport-recorded incurs.
+    latest_mix="$(find "$RECORDINGS_DIR" -maxdepth 1 -name '*_mix.wav' -type f \
+        -exec stat -f '%m %N' {} + 2>/dev/null \
+        | sort -rn \
+        | head -1 \
+        | cut -d' ' -f2-)"
+    [ -n "$latest_mix" ] && [ -f "$latest_mix" ] \
+        || fail "--reimport-latest: no *_mix.wav found in $RECORDINGS_DIR — run \`e2e-app.sh --record-only --keep-recordings\` first to produce one"
+    log "Reusing latest record-only WAV: $latest_mix"
+    # No `sleep $RECORDER_FINALIZE_WAIT_S` here, unlike --reimport-recorded:
+    # the WAV was produced by a prior script invocation that already exited,
+    # so its AVAudioFile close + tail-byte flush happened on process exit
+    # — nothing left to wait for.
+    run_one_reimport "[reimport-latest]" "$latest_mix"
+elif [ "$REIMPORT_RECORDED" = true ]; then
     # Phase 1: record-only meeting → produces a WAV via the live capture stack.
     run_one_record_only_meeting "[record]"
     [ -n "$LAST_RECORDED_MIX_PATH" ] || fail "record-phase did not surface a mix path; cannot continue"
