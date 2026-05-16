@@ -72,4 +72,25 @@ final class RecordingSidecarTests: XCTestCase {
         XCTAssertEqual(url.lastPathComponent, "\(basename)_meta.json")
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
+
+    func test_read_roundTripsTitleAndParticipants() throws {
+        let dir = try makeTempDirectory(prefix: "rs")
+        let basename = "20260503_083000"
+        try makeFullSidecar().write(toDirectory: dir, basename: basename)
+
+        let decoded = try XCTUnwrap(
+            RecordingSidecar.read(fromDirectory: dir, basename: basename),
+        )
+
+        XCTAssertEqual(decoded.title, "Standup")
+        XCTAssertEqual(decoded.appName, "Microsoft Teams")
+        XCTAssertEqual(decoded.participants, ["Alice", "Bob"])
+        XCTAssertEqual(decoded.micDelaySeconds, 0.12, accuracy: 0.0001)
+        XCTAssertEqual(decoded.files.mix, "20260503_083000_mix.wav")
+    }
+
+    func test_read_returnsNilWhenMissing() throws {
+        let dir = try makeTempDirectory(prefix: "rs")
+        XCTAssertNil(RecordingSidecar.read(fromDirectory: dir, basename: "absent"))
+    }
 }

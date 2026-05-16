@@ -263,6 +263,11 @@ struct MeetingTranscriberApp: App {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
 
+        let pairingDelegate = PairedImportPanelDelegate()
+        panel.delegate = pairingDelegate
+        panel.accessoryView = pairingDelegate.accessoryView
+        panel.isAccessoryViewDisclosed = true
+
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         appState.enqueueFiles(panel.urls)
     }

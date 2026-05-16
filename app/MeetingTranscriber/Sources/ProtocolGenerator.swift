@@ -131,13 +131,36 @@ enum ProtocolGenerator {
         .union(CharacterSet(charactersIn: "-_"))
 
     static func sanitizeSlug(_ title: String) -> String {
-        let slug = String(title
+        let slug = String(stripExistingTimestampPrefix(title)
             .lowercased()
             .replacingOccurrences(of: " ", with: "_")
             .unicodeScalars
             .filter { slugAllowed.contains($0) }
             .map(Character.init))
         return slug.isEmpty ? "meeting" : slug
+    }
+
+    /// Re-importing a previously-processed recording feeds its slug-based stem
+    /// back as a title (e.g. `20260516_1319_20260503_174538`). `filename` would
+    /// then prepend ANOTHER `yyyyMMdd_HHmm_` → compounding-prefix loop on every
+    /// reprocess. Strip a leading `yyyyMMdd_HHmm[ss]_` so the slug stays
+    /// idempotent across reprocesses.
+    static func stripExistingTimestampPrefix(_ title: String) -> String {
+        let patterns = [#"^\d{8}_\d{6}_"#, #"^\d{8}_\d{4}_"#]
+        var result = title
+        // Apply repeatedly — input may already contain multiple compounded layers
+        // from earlier buggy runs; one call should normalize the worst case.
+        var changed = true
+        while changed {
+            changed = false
+            for pattern in patterns {
+                if let range = result.range(of: pattern, options: .regularExpression) {
+                    result.removeSubrange(range)
+                    changed = true
+                }
+            }
+        }
+        return result.isEmpty ? title : result
     }
 
     /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`

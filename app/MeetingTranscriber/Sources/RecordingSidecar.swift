@@ -61,4 +61,13 @@ struct RecordingSidecar: Codable {
         try data.write(to: url, options: .atomic)
         return url
     }
+
+    /// Decode `<directory>/<basename>\(filenameSuffix)`, or nil when missing/malformed.
+    static func read(fromDirectory directory: URL, basename: String) -> Self? {
+        let url = directory.appendingPathComponent("\(basename)\(Self.filenameSuffix)")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(Self.self, from: data)
+    }
 }

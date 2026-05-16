@@ -313,6 +313,104 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertNil(state.pipelineQueue.jobs[0].micPath)
     }
 
+    func testEnqueueFilesPairsTripletAsOneDualTrackJob() {
+        let (state, _) = makeState()
+        let urls = [
+            URL(fileURLWithPath: "/tmp/standup_app.wav"),
+            URL(fileURLWithPath: "/tmp/standup_mic.wav"),
+            URL(fileURLWithPath: "/tmp/standup_mix.wav"),
+        ]
+
+        state.enqueueFiles(urls)
+
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(job.mixPath?.lastPathComponent, "standup_mix.wav")
+        XCTAssertEqual(job.appPath?.lastPathComponent, "standup_app.wav")
+        XCTAssertEqual(job.micPath?.lastPathComponent, "standup_mic.wav")
+    }
+
+    func testEnqueueFilesAppPlusMicWithoutMixHasNilMixPath() {
+        // No `_mix.wav` in selection — job carries nil mixPath; the pipeline
+        // mixes app+mic into the workdir cache on the fly, no persistent mix
+        // is written to recordings/.
+        let (state, _) = makeState()
+        let urls = [
+            URL(fileURLWithPath: "/tmp/20260311_143000_app.wav"),
+            URL(fileURLWithPath: "/tmp/20260311_143000_mic.wav"),
+        ]
+
+        state.enqueueFiles(urls)
+
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        let job = state.pipelineQueue.jobs[0]
+        XCTAssertNil(job.mixPath, "paired without mix → nil mixPath")
+        XCTAssertEqual(job.appPath?.lastPathComponent, "20260311_143000_app.wav")
+        XCTAssertEqual(job.micPath?.lastPathComponent, "20260311_143000_mic.wav")
+    }
+
+    func testEnqueueFilesLoneAppFallsBackToSingleton() {
+        let (state, _) = makeState()
+        let urls = [URL(fileURLWithPath: "/tmp/orphan_app.wav")]
+
+        state.enqueueFiles(urls)
+
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(job.mixPath?.lastPathComponent, "orphan_app.wav")
+        XCTAssertNil(job.appPath)
+        XCTAssertNil(job.micPath)
+    }
+
+    func testEnqueueFilesMixedPairAndSingleton() {
+        let (state, _) = makeState()
+        let urls = [
+            URL(fileURLWithPath: "/tmp/meeting_app.wav"),
+            URL(fileURLWithPath: "/tmp/meeting_mic.wav"),
+            URL(fileURLWithPath: "/tmp/meeting_mix.wav"),
+            URL(fileURLWithPath: "/tmp/podcast.mp3"),
+        ]
+
+        state.enqueueFiles(urls)
+
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 2)
+        let paired = state.pipelineQueue.jobs.first { $0.appPath != nil }
+        let single = state.pipelineQueue.jobs.first { $0.appPath == nil }
+        XCTAssertEqual(paired?.meetingTitle, "meeting")
+        XCTAssertEqual(single?.meetingTitle, "podcast")
+    }
+
+    func testEnqueueFilesUsesSidecarMetadataWhenPresent() throws {
+        let (state, _) = makeState()
+        let tmpDir = try makeTempDirectory(prefix: "enqueue-sidecar")
+        let basename = "20260311_143000"
+
+        try RecordingSidecar(
+            title: "Sprint Review",
+            appName: "Microsoft Teams",
+            startedAt: Date(timeIntervalSince1970: 1_777_000_000),
+            stoppedAt: Date(timeIntervalSince1970: 1_777_001_800),
+            participants: ["Speaker A", "Speaker B"],
+            micDelaySeconds: 0.25,
+            mixFilename: "\(basename)_mix.wav",
+            appFilename: "\(basename)_app.wav",
+            micFilename: "\(basename)_mic.wav",
+        ).write(toDirectory: tmpDir, basename: basename)
+
+        state.enqueueFiles([
+            tmpDir.appendingPathComponent("\(basename)_app.wav"),
+            tmpDir.appendingPathComponent("\(basename)_mic.wav"),
+            tmpDir.appendingPathComponent("\(basename)_mix.wav"),
+        ])
+
+        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(job.meetingTitle, "Sprint Review")
+        XCTAssertEqual(job.appName, "Microsoft Teams")
+        XCTAssertEqual(job.participants, ["Speaker A", "Speaker B"])
+        XCTAssertEqual(job.micDelay, 0.25, accuracy: 0.0001)
+    }
+
     // MARK: - ensurePipelineQueue
 
     func testEnsurePipelineQueueReplacesBareQueue() {
