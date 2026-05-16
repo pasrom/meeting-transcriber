@@ -429,12 +429,8 @@ class WatchLoop {
         let startedAt = wallClockDate(forUptime: recording.recordingStart, now: stoppedAt)
 
         let mixName = recording.mixPath.lastPathComponent
-        let mixSuffix = DualSourceRecorder.mixFilenameSuffix
-        let basename: String = if mixName.hasSuffix(mixSuffix) {
-            String(mixName.dropLast(mixSuffix.count))
-        } else {
-            recording.mixPath.deletingPathExtension().lastPathComponent
-        }
+        let basename = RecordingFileSuffix.stripSuffix(from: mixName)?.stem
+            ?? recording.mixPath.deletingPathExtension().lastPathComponent
 
         do {
             let destination = recordOnlyDestination()

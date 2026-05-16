@@ -1326,9 +1326,9 @@ class PipelineQueue {
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
         let slug = ProtocolGenerator.filename(title: title, ext: "").dropLast() // remove trailing "."
         let audioPaths: [(URL, String)] = [
-            (mixPath, "\(slug)_mix.wav"),
-            appPath.map { ($0, "\(slug)_app.wav") },
-            micPath.map { ($0, "\(slug)_mic.wav") },
+            (mixPath, "\(slug)\(RecordingFileSuffix.mix)"),
+            appPath.map { ($0, "\(slug)\(RecordingFileSuffix.app)") },
+            micPath.map { ($0, "\(slug)\(RecordingFileSuffix.mic)") },
         ].compactMap(\.self)
 
         for (src, name) in audioPaths {
@@ -1355,7 +1355,7 @@ class PipelineQueue {
         ) else { return }
 
         var paths = Set<String>()
-        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav") {
+        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
             paths.insert(file.standardizedFileURL.path)
         }
         guard !paths.isEmpty else { return }
@@ -1393,7 +1393,7 @@ class PipelineQueue {
         let now = Date()
         var recovered = 0
 
-        for file in entries where file.lastPathComponent.hasSuffix("_mix.wav") {
+        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
             let stdPath = file.standardizedFileURL.path
 
             // Skip already tracked by active jobs
@@ -1416,12 +1416,11 @@ class PipelineQueue {
             }
 
             // Derive timestamp prefix (e.g. "20260311_143000" from "20260311_143000_mix.wav")
-            let name = file.deletingPathExtension().lastPathComponent
-            let prefix = String(name.dropLast("_mix".count))
+            let prefix = String(file.lastPathComponent.dropLast(RecordingFileSuffix.mix.count))
 
             // Look for companion tracks
-            let appFile = recordingsDir.appendingPathComponent("\(prefix)_app.wav")
-            let micFile = recordingsDir.appendingPathComponent("\(prefix)_mic.wav")
+            let appFile = recordingsDir.appendingPathComponent("\(prefix)\(RecordingFileSuffix.app)")
+            let micFile = recordingsDir.appendingPathComponent("\(prefix)\(RecordingFileSuffix.mic)")
             let appPath = fm.fileExists(atPath: appFile.path) ? appFile : nil
             let micPath = fm.fileExists(atPath: micFile.path) ? micFile : nil
 
