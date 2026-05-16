@@ -51,7 +51,7 @@ class DualSourceRecorder: RecordingProvider {
 
     /// Suffix on the merged-output WAV file, used by downstream code (the
     /// record-only sidecar writer) to recover the recording basename.
-    static let mixFilenameSuffix = "_mix.wav"
+    static let mixFilenameSuffix = RecordingFileSuffix.mix
 
     /// Remove leftover `*_app_raw.tmp` files from a previous crash.
     static func cleanupTempFiles(recordingsDir: URL = AppPaths.recordingsDir) {
@@ -87,7 +87,7 @@ class DualSourceRecorder: RecordingProvider {
 
         // ── AudioTapLib capture session ──
         let appTempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
-        let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)_mic.wav")
+        let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
 
         let session = AudioCaptureSession(
             pid: appPID,
@@ -191,7 +191,7 @@ class DualSourceRecorder: RecordingProvider {
 
             // Resample to 16kHz and save app track
             appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
-            let appFile = recDir.appendingPathComponent("\(ts)_app.wav")
+            let appFile = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.app)")
             try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: appFile)
             appPath = appFile
             logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate)→\(self.targetRate) Hz)")
