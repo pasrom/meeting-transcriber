@@ -1268,72 +1268,72 @@ class PipelineQueue {
     /// Resets in-progress jobs to `.waiting`, discards `.done` jobs, and drops
     /// jobs whose `mixPath` no longer exists on disk.
     func loadSnapshot() {
-        let snapshotPath = logDir.appendingPathComponent("pipeline_queue.json")
-        guard FileManager.default.fileExists(atPath: snapshotPath.path) else {
-            logger.info("No pipeline snapshot to restore")
-            return
-        }
+        var loaded: [PipelineJob]
         do {
-            let data = try Data(contentsOf: snapshotPath)
-            var loaded = try JSONDecoder().decode([PipelineJob].self, from: data)
-
-            // Reset active states back to waiting
-            for i in loaded.indices {
-                switch loaded[i].state {
-                case .transcribing, .diarizing, .generatingProtocol:
-                    loaded[i].state = .waiting
-
-                default:
-                    break
-                }
-            }
-
-            // Discard done jobs
-            loaded.removeAll { $0.state == .done }
-
-            // Discard jobs whose audio file no longer exists, EXCEPT
-            // .speakerNamingPending — those have their own slug-based
-            // `_16k.wav` sidecar and don't need the original mix.wav.
-            // Paired imports with nil mixPath: keep them — `appPath` is the
-            // ground-truth source and it's checked at processNext time.
-            loaded.removeAll { job in
-                guard let mixPath = job.mixPath else { return false }
-                return job.state != .speakerNamingPending
-                    && !FileManager.default.fileExists(atPath: mixPath.path)
-            }
-
-            guard !loaded.isEmpty else {
-                logger.info("Snapshot loaded but no recoverable jobs")
+            guard let decoded = try PipelineSnapshot.load(from: logDir) else {
+                logger.info("No pipeline snapshot to restore")
                 return
             }
-
-            jobs = loaded
-
-            // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
-            for job in jobs where job.state == .speakerNamingPending {
-                if let slug = job.namingSlug, let data = loadNamingData(slug: slug) {
-                    speakerNamingDataByJob[job.id] = data
-                } else {
-                    // Naming data lost — transition to done
-                    logger.warning("Naming data not found for job \(job.id), marking as done")
-                    if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
-                        jobs[idx].state = .done
-                    }
-                }
-            }
-
-            saveSnapshot()
-            cleanupStalePending()
-            logger.info("Restored \(loaded.count) jobs from snapshot")
-            triggerProcessing()
-            // Auto-popup the naming dialog if any restored job is still
-            // waiting for confirmation. Same notification as the in-pipeline
-            // pop, so MeetingTranscriberApp brings the window forward.
-            if !pendingSpeakerNamingJobs.isEmpty {
-                NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
-            }
+            loaded = decoded
         } catch {
             logger.error("Failed to load pipeline snapshot: \(error)")
+            return
+        }
+
+        // Reset active states back to waiting
+        for i in loaded.indices {
+            switch loaded[i].state {
+            case .transcribing, .diarizing, .generatingProtocol:
+                loaded[i].state = .waiting
+
+            default:
+                break
+            }
+        }
+
+        // Discard done jobs
+        loaded.removeAll { $0.state == .done }
+
+        // Discard jobs whose audio file no longer exists, EXCEPT
+        // .speakerNamingPending — those have their own slug-based
+        // `_16k.wav` sidecar and don't need the original mix.wav.
+        // Paired imports with nil mixPath: keep them — `appPath` is the
+        // ground-truth source and it's checked at processNext time.
+        loaded.removeAll { job in
+            guard let mixPath = job.mixPath else { return false }
+            return job.state != .speakerNamingPending
+                && !FileManager.default.fileExists(atPath: mixPath.path)
+        }
+
+        guard !loaded.isEmpty else {
+            logger.info("Snapshot loaded but no recoverable jobs")
+            return
+        }
+
+        jobs = loaded
+
+        // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
+        for job in jobs where job.state == .speakerNamingPending {
+            if let slug = job.namingSlug, let data = loadNamingData(slug: slug) {
+                speakerNamingDataByJob[job.id] = data
+            } else {
+                // Naming data lost — transition to done
+                logger.warning("Naming data not found for job \(job.id), marking as done")
+                if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                    jobs[idx].state = .done
+                }
+            }
+        }
+
+        saveSnapshot()
+        cleanupStalePending()
+        logger.info("Restored \(loaded.count) jobs from snapshot")
+        triggerProcessing()
+        // Auto-popup the naming dialog if any restored job is still
+        // waiting for confirmation. Same notification as the in-pipeline
+        // pop, so MeetingTranscriberApp brings the window forward.
+        if !pendingSpeakerNamingJobs.isEmpty {
+            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
         }
     }
 
@@ -1532,11 +1532,7 @@ class PipelineQueue {
     func saveSnapshot() {
         do {
             ensureLogDir()
-            let data = try JSONEncoder().encode(jobs)
-            let tmpPath = logDir.appendingPathComponent("pipeline_queue.tmp")
-            try data.write(to: tmpPath)
-            let snapshotPath = logDir.appendingPathComponent("pipeline_queue.json")
-            _ = try FileManager.default.replaceItemAt(snapshotPath, withItemAt: tmpPath)
+            try PipelineSnapshot.save(jobs, to: logDir)
         } catch {
             logger.error("Failed to write queue snapshot: \(error)")
         }

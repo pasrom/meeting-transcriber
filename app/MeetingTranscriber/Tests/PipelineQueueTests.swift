@@ -42,13 +42,13 @@ final class PipelineQueueTests: XCTestCase {
 
     func testSnapshotWrittenOnEnqueue() {
         queue.enqueue(makeJob())
-        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath.path))
     }
 
     func testSnapshotIsValidJSON() throws {
         queue.enqueue(makeJob(title: "Standup"))
-        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         let data = try Data(contentsOf: snapshotPath)
         let jobs = try JSONDecoder().decode([PipelineJob].self, from: data)
         XCTAssertEqual(jobs.count, 1)
@@ -185,7 +185,7 @@ final class PipelineQueueTests: XCTestCase {
             appPath: nil, micPath: nil, micDelay: 0,
         )
         let data = try JSONEncoder().encode([job])
-        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         try data.write(to: snapshotPath)
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
@@ -208,7 +208,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         job.state = .transcribing
         let data = try JSONEncoder().encode([job])
-        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
@@ -229,7 +229,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         job.state = .done
         let data = try JSONEncoder().encode([job])
-        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
@@ -245,7 +245,7 @@ final class PipelineQueueTests: XCTestCase {
             appPath: nil, micPath: nil, micDelay: 0,
         )
         let data = try JSONEncoder().encode([job])
-        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
@@ -727,7 +727,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         job.state = .diarizing
         let data = try JSONEncoder().encode([job])
-        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
@@ -748,7 +748,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         job.state = .generatingProtocol
         let data = try JSONEncoder().encode([job])
-        try data.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
@@ -845,7 +845,7 @@ final class PipelineQueueTests: XCTestCase {
     }
 
     func testLoadSnapshotCorruptJSONIsNoOp() throws {
-        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         try Data("{{not valid json".utf8).write(to: snapshotPath)
 
         let freshQueue = PipelineQueue(logDir: tmpDir)
@@ -884,7 +884,7 @@ final class PipelineQueueTests: XCTestCase {
         queue1.updateJobState(id: job.id, to: .transcribing)
         queue1.saveSnapshot()
 
-        let snapshotPath = tmpDir.appendingPathComponent("pipeline_queue.json")
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath.path))
 
         // "Crash" — create fresh queue from snapshot
@@ -1550,7 +1550,7 @@ final class PipelineQueueTests: XCTestCase {
         job.state = .speakerNamingPending
         job.namingSlug = "snapshot_test"
         let snapshotData = try JSONEncoder().encode([job])
-        try snapshotData.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try snapshotData.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         // Save naming data as sidecar JSON
         let namingData = PipelineQueue.SpeakerNamingData(
@@ -1603,7 +1603,7 @@ final class PipelineQueueTests: XCTestCase {
         job.state = .speakerNamingPending
         job.namingSlug = "missing_data_test"
         let snapshotData = try JSONEncoder().encode([job])
-        try snapshotData.write(to: tmpDir.appendingPathComponent("pipeline_queue.json"))
+        try snapshotData.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
         // Load without saving naming JSON — should fall back to .done
         let freshQueue = PipelineQueue(logDir: tmpDir)
