@@ -261,6 +261,12 @@ class MockRecorder: RecordingProvider {
     var startCalled = false
     var stopCalled = false
 
+    /// Per-channel level overrides for asymmetric-silence tests. Both default to -120
+    /// (silence) so existing tests that don't touch these see the same behavior as
+    /// the protocol's default implementations.
+    var micLevelDBFS: Double = -120
+    var appLevelDBFS: Double = -120
+
     func start(appPID _: pid_t, noMic _: Bool, micDeviceUID _: String?, debugLogging _: Bool) {
         startCalled = true
     }

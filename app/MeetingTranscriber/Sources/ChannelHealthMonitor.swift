@@ -54,8 +54,17 @@ struct ChannelHealthMonitor {
         }
 
         if episode?.channel != channel {
+            // Channel switch. If the outgoing episode was latched (`.started`
+            // already fired), surface its recovery before tracking the new
+            // channel — otherwise downstream consumers (UI flags, notifier)
+            // never learn the old channel came back online.
+            let recoveryEvent: ChannelHealthEvent? = if let old = episode, old.started {
+                .recovered(channel: old.channel)
+            } else {
+                nil
+            }
             episode = Episode(channel: channel, quietSince: now, started: false)
-            return nil
+            return recoveryEvent
         }
 
         guard var current = episode, !current.started else { return nil }

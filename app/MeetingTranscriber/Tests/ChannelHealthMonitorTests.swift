@@ -98,6 +98,17 @@ final class ChannelHealthMonitorTests: XCTestCase {
 
     // MARK: - Channel switch (rare but real: e.g. mic disconnects after app dies)
 
+    func testChannelSwitchAfterStartedFiresRecoveredForOldChannel() {
+        // mic episode latches first, then mic recovers + app dies in the same tick.
+        // The monitor must surface `.recovered(channel: .mic)` so AppState can
+        // clear the stale flag before app eventually debounces out on its own.
+        var monitor = makeMonitor(debounce: 5)
+        _ = monitor.update(micDBFS: -80, appDBFS: -25, now: t0)
+        _ = monitor.update(micDBFS: -80, appDBFS: -25, now: t0.addingTimeInterval(5)) // mic .started
+        let event = monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(7))
+        XCTAssertEqual(event, .recovered(channel: .mic))
+    }
+
     func testChannelSwitchMidEpisodeResetsTracking() {
         var monitor = makeMonitor(debounce: 5)
         _ = monitor.update(micDBFS: -30, appDBFS: -80, now: t0) // start tracking app
