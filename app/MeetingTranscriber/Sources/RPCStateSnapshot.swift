@@ -13,6 +13,11 @@
         /// and assert on the outcome of a triggered meeting without needing
         /// to scrape disk paths from logs.
         let lastJob: LastJob?
+        /// Per-channel capture-health flags. True while the channel has been
+        /// silent (vs the other side carrying audio) longer than
+        /// `asymmetricSilenceWarningSeconds`. E2E drivers poll these to assert
+        /// the menu-bar red-tint indicator wiring without screenshot OCR.
+        let channelHealth: ChannelHealth
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -37,6 +42,13 @@
             let meetingTitle: String
             let speakerCount: Int
             let namingSlug: String?
+        }
+
+        struct ChannelHealth: Codable {
+            let micSilent: Bool
+            let appSilent: Bool
+
+            static let inactive = Self(micSilent: false, appSilent: false)
         }
 
         struct LastJob: Codable {
@@ -88,12 +100,14 @@
             pendingNamingJobs: [PendingNaming],
             engines: Engines = .empty,
             lastJob: LastJob? = nil,
+            channelHealth: ChannelHealth = .inactive,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
             self.pendingNamingJobs = pendingNamingJobs
             self.engines = engines
             self.lastJob = lastJob
+            self.channelHealth = channelHealth
         }
 
         func jsonData() throws -> Data {

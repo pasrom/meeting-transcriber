@@ -104,6 +104,23 @@ final class AppState { // swiftlint:disable:this type_body_length
             debounceSeconds: settings.asymmetricSilenceWarningSeconds,
         )
 
+        #if !APPSTORE
+            // E2E hook: force a per-channel flag on at launch so a driver
+            // script can assert the menu-bar red-tint pipeline end-to-end
+            // without orchestrating real audio. Only honoured in non-AppStore
+            // builds and only when explicitly enabled via env var. The driver
+            // is also expected to set `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1`
+            // so an auto-watch state transition doesn't clear the flag at +3 s
+            // through the regular `stopChannelHealthMonitoring()` path.
+            let env = ProcessInfo.processInfo.environment
+            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT"] == "1" {
+                micSilentActive = true
+            }
+            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1" {
+                appSilentActive = true
+            }
+        #endif
+
         // Bring engines in line with the current settings up front so the
         // first transcription doesn't run against stale defaults, then
         // start observing for runtime changes.

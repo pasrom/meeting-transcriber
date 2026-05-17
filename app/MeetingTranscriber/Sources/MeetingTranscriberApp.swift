@@ -53,9 +53,15 @@ struct MeetingTranscriberApp: App {
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
         DualSourceRecorder.cleanupTempFiles()
-        // Auto-watch: schedule on main run loop after app finishes launching
-        if CommandLine.arguments.contains("--auto-watch")
-            || UserDefaults.standard.bool(forKey: "autoWatch") {
+        let suppressAutoWatch = ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH"] == "1"
+        // Auto-watch: schedule on main run loop after app finishes launching.
+        // E2E drivers that force channel-health flags via env var also set
+        // `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1` so a +3 s
+        // `toggleWatching` doesn't reset the forced flag through the
+        // normal `stopChannelHealthMonitoring()` path.
+        if (CommandLine.arguments.contains("--auto-watch")
+            || UserDefaults.standard.bool(forKey: "autoWatch"))
+            && !suppressAutoWatch {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 NotificationCenter.default.post(name: .autoWatchStart, object: nil)
             }

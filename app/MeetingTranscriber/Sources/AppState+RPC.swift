@@ -31,6 +31,10 @@
                 pendingNamingJobs: pendingJobs,
                 engines: enginesSnapshot(),
                 lastJob: lastFinishedJobSnapshot(),
+                channelHealth: .init(
+                    micSilent: micSilentActive,
+                    appSilent: appSilentActive,
+                ),
             )
         }
 
