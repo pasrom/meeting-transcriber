@@ -327,6 +327,8 @@ class WatchLoop {
             micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )
+        activeRecorder = recorder
+        defer { activeRecorder = nil }
 
         // Read participants (Teams)
         var participants: [String] = []

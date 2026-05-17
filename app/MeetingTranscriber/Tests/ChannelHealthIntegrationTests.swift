@@ -168,4 +168,36 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(state.appSilentActive)
         XCTAssertEqual(notifier.calls.count, 0)
     }
+
+    // MARK: - Settings re-init across recordings
+
+    func testThresholdChangeBetweenRecordingsTakesEffectOnNextStart() {
+        let (state, recorder, _, settings) = makeState()
+        // First recording uses the initial 30 s debounce; warm-up tick.
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -25
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0)
+        XCTAssertNil(
+            state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(20)),
+            "20s under initial 30s debounce should not fire yet",
+        )
+
+        // User stops watching → would normally call stopChannelHealthMonitoring,
+        // then bumps the threshold up to 60s before starting again.
+        settings.asymmetricSilenceWarningSeconds = 60
+        state.simulateStartChannelHealthMonitoringForTests()
+
+        // Replay the same asymmetric levels — but now 30s should NOT be enough.
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(100))
+        XCTAssertNil(
+            state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(140)),
+            "40s under new 60s debounce should not fire — proves the monitor picked up the new threshold",
+        )
+        let event = state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(160))
+        XCTAssertEqual(
+            event,
+            .started(channel: .mic, quietSince: t0.addingTimeInterval(100)),
+            "60s under new threshold should fire — confirms threshold = 60",
+        )
+    }
 }
