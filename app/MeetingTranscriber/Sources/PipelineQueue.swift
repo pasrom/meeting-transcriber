@@ -237,10 +237,16 @@ class PipelineQueue {
         return { SpeakerMatcher(dbPath: path) }
     }
 
+    /// Performs the actual disk write for the snapshot worker. Defaults to
+    /// `PipelineSnapshot.save`; tests inject substitutes to count writes or
+    /// simulate a stalled `replaceItemAt`.
+    let snapshotWriter: @Sendable ([PipelineJob], URL) throws -> Void
+
     /// Simple init for skeleton tests and basic queue usage.
     init(
         logDir: URL? = nil,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
+        snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -252,6 +258,7 @@ class PipelineQueue {
         self.numSpeakers = 0
         self.micLabel = "Me"
         self.speakerMatcherFactory = speakerMatcherFactory
+        self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
         self.recognitionStatsLog = nil
         self.completedJobLifetime = completedJobLifetime
@@ -312,6 +319,7 @@ class PipelineQueue {
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
+        snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
         recognitionStatsLog: RecognitionStatsLog? = nil,
         completedJobLifetime: TimeInterval = 60,
@@ -325,6 +333,7 @@ class PipelineQueue {
         self.numSpeakers = numSpeakers
         self.micLabel = micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
+        self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
         self.recognitionStatsLog = recognitionStatsLog
         self.completedJobLifetime = completedJobLifetime
@@ -1547,10 +1556,11 @@ class PipelineQueue {
         pendingSnapshotJobs = jobs
         guard snapshotWorker == nil else { return }
         let dir = logDir
+        let writer = snapshotWriter
         snapshotWorker = Task.detached(priority: .utility) { [weak self] in
             while let next = await self?.takeNextSnapshotBatch() {
                 do {
-                    try PipelineSnapshot.save(next, to: dir)
+                    try writer(next, dir)
                 } catch {
                     logger.error("Failed to write queue snapshot: \(error)")
                 }
@@ -1571,8 +1581,10 @@ class PipelineQueue {
 
     // swiftlint:enable discouraged_optional_collection
 
-    /// Wait for any queued snapshot writes to land on disk. Mostly used by
-    /// tests; production code does not need to call this.
+    /// Wait for any queued snapshot writes to land on disk. Used by tests
+    /// asserting on the file; production code may call this before quit if
+    /// it needs the last snapshot durable, but the recovery path doesn't
+    /// require it (orphans are re-scanned at next launch).
     func awaitSnapshotFlush() async {
         await snapshotWorker?.value
     }

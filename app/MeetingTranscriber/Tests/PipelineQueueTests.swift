@@ -1,5 +1,6 @@
 // swiftlint:disable file_length
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 @MainActor
@@ -97,6 +98,54 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(queue.isSnapshotWorkerActive)
         await queue.awaitSnapshotFlush()
         XCTAssertFalse(queue.isSnapshotWorkerActive)
+    }
+
+    func testCoalescingReducesActualWriteCount() async {
+        // Inject a counting writer to verify the worker collapses many
+        // rapid saves into fewer disk writes. testConsecutive... only
+        // asserts final state matches — this proves coalescing is real.
+        let count = OSAllocatedUnfairLock<Int>(initialState: 0)
+        // swiftlint:disable trailing_closure
+        let testQueue = PipelineQueue(
+            logDir: tmpDir,
+            snapshotWriter: { _, _ in count.withLock { $0 += 1 } },
+        )
+        // swiftlint:enable trailing_closure
+        for i in 1 ... 20 {
+            testQueue.enqueue(makeJob(title: "Job \(i)"))
+        }
+        await testQueue.awaitSnapshotFlush()
+
+        let writes = count.withLock { $0 }
+        XCTAssertGreaterThan(writes, 0, "writer must be called at least once")
+        XCTAssertLessThan(writes, 20, "coalescing should collapse 20 saves to fewer writes (got \(writes))")
+    }
+
+    func testSaveSnapshotReturnsImmediatelyWhileWriterIsWedged() async {
+        // Direct regression test for the original bug: a stalled writer
+        // (modelling `renamex_np` deadlock) must NOT block follow-up
+        // saveSnapshot calls on the main actor. With the synchronous-on-
+        // main implementation, the second call would hang waiting on the
+        // first; with the off-main worker, it returns instantly.
+        let gate = DispatchSemaphore(value: 0)
+        // swiftlint:disable trailing_closure
+        let testQueue = PipelineQueue(
+            logDir: tmpDir,
+            snapshotWriter: { _, _ in
+                gate.wait()
+                gate.signal() // re-arm so subsequent callers fall through
+            },
+        )
+        // swiftlint:enable trailing_closure
+        testQueue.enqueue(makeJob()) // triggers worker → blocks in writer
+
+        let start = Date()
+        testQueue.saveSnapshot() // would deadlock if main-actor were waiting
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.05, "saveSnapshot blocked while writer was wedged (\(elapsed)s)")
+
+        gate.signal() // release the wedged write so the worker can drain
+        await testQueue.awaitSnapshotFlush()
     }
 
     func testSnapshotMatchesInMemoryStateAfterStateTransitionBurst() async throws {
