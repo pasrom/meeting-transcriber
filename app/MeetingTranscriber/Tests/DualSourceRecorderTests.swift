@@ -10,6 +10,14 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertFalse(recorder.isRecording)
     }
 
+    // MARK: - Level Forwarding
+
+    func testLevelsDefaultToSilenceWithoutSession() {
+        let recorder = DualSourceRecorder()
+        XCTAssertEqual(recorder.appLevelDBFS, -120, accuracy: 0.001)
+        XCTAssertEqual(recorder.micLevelDBFS, -120, accuracy: 0.001)
+    }
+
     // MARK: - Cleanup Temp Files
 
     func testCleanupRemovesTmpButNotWav() throws {
