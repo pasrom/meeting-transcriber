@@ -48,21 +48,15 @@ final class AppState { // swiftlint:disable:this type_body_length
     var selectedNamingJobID: UUID?
     var permissionHealth: HealthCheckResult?
 
-    /// True while the **mic** channel is silent and the app channel is carrying
-    /// speech continuously for `settings.asymmetricSilenceWarningSeconds`. Drives
-    /// the menu-bar **top-half** red tint. Latches until the dead channel recovers
-    /// (or recording stops). At most one of `micSilentActive` / `appSilentActive`
-    /// is true at a time — the monitor's channel-switch path resets when roles flip.
-    var micSilentActive: Bool = false
-
-    /// True while the **app-audio** channel is silent and the mic is carrying
-    /// speech continuously for `settings.asymmetricSilenceWarningSeconds`. Drives
-    /// the menu-bar **bottom-half** red tint.
-    var appSilentActive: Bool = false
+    /// True while one capture channel is silent and the other is carrying speech
+    /// continuously for `settings.asymmetricSilenceWarningSeconds`. Drives the
+    /// menu-bar red-tint overlay. Latches until the dead channel recovers (or
+    /// recording stops).
+    var asymmetricSilenceActive: Bool = false
 
     /// Pure state machine driven by the 10-Hz level poll while recording. Lives
     /// here (not on WatchLoop) so its lifecycle outlasts a single recording —
-    /// observers of `micSilentActive` / `appSilentActive` keep their identity across the
+    /// observers of `asymmetricSilenceActive` keep their identity across the
     /// detect → record → process state churn.
     @ObservationIgnored private var channelHealthMonitor = ChannelHealthMonitor()
 
@@ -479,8 +473,8 @@ final class AppState { // swiftlint:disable:this type_body_length
     // MARK: - Channel Health Monitor
 
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
-    /// levels into `channelHealthMonitor` and flips `micSilentActive` /
-    /// `appSilentActive` based on the resulting events. Idempotent: calling while already running
+    /// levels into `channelHealthMonitor` and flips `asymmetricSilenceActive`
+    /// based on the resulting events. Idempotent: calling while already running
     /// is a no-op. Skips entirely when the master toggle is off.
     private func startChannelHealthMonitoring() {
         guard settings.perChannelIndicatorEnabled else { return }
@@ -491,41 +485,29 @@ final class AppState { // swiftlint:disable:this type_body_length
         levelMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                self.tickChannelHealth()
+                if let recorder = self.watchLoop?.activeRecorder {
+                    let event = self.channelHealthMonitor.update(
+                        micDBFS: recorder.micLevelDBFS,
+                        appDBFS: recorder.appLevelDBFS,
+                        now: Date(),
+                    )
+                    switch event {
+                    case let .started(channel, _):
+                        self.asymmetricSilenceActive = true
+                        self.notifier.notify(
+                            title: "Capture Channel Silent",
+                            body: Self.asymmetricSilenceMessage(for: channel),
+                        )
+
+                    case .recovered:
+                        self.asymmetricSilenceActive = false
+
+                    case .none:
+                        break
+                    }
+                }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-        }
-    }
-
-    private func tickChannelHealth() {
-        guard let recorder = watchLoop?.activeRecorder else { return }
-        let event = channelHealthMonitor.update(
-            micDBFS: recorder.micLevelDBFS,
-            appDBFS: recorder.appLevelDBFS,
-            now: Date(),
-        )
-        switch event {
-        case let .started(channel, _):
-            switch channel {
-            case .mic:
-                micSilentActive = true
-                appSilentActive = false
-
-            case .app:
-                appSilentActive = true
-                micSilentActive = false
-            }
-            notifier.notify(
-                title: "Capture Channel Silent",
-                body: Self.asymmetricSilenceMessage(for: channel),
-            )
-
-        case .recovered:
-            micSilentActive = false
-            appSilentActive = false
-
-        case .none:
-            break
         }
     }
 
@@ -547,8 +529,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         levelMonitorTask?.cancel()
         levelMonitorTask = nil
         channelHealthMonitor.reset()
-        micSilentActive = false
-        appSilentActive = false
+        asymmetricSilenceActive = false
     }
 
     // MARK: - Permission Health

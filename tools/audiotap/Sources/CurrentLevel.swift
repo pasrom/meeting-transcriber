@@ -1,13 +1,5 @@
 import Foundation
 
-/// Lock-protected slot holding the most recent per-buffer level reading and the
-/// mach tick at which it was written. Stored inside `OSAllocatedUnfairLock` in
-/// the capture handlers so reads (UI thread) and writes (audio thread) coordinate.
-struct LevelSlot: Sendable {
-    var levelDBFS: Double = -120
-    var lastUpdateTicks: UInt64 = 0
-}
-
 /// Returns the most recent dBFS reading, falling back to silence (-120 dBFS) if no
 /// update has happened within `stalenessSec`. Used to make per-channel level readings
 /// self-decay to silence when the audio callback stops delivering buffers (e.g. tap

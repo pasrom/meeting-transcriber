@@ -86,6 +86,14 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertFalse(state.appSilentActive)
     }
 
+    func testAsymmetricSilenceMessageDistinguishesChannel() {
+        let appMessage = AppState.asymmetricSilenceMessage(for: .app)
+        let micMessage = AppState.asymmetricSilenceMessage(for: .mic)
+        XCTAssertNotEqual(appMessage, micMessage)
+        XCTAssertTrue(appMessage.lowercased().contains("app-audio"))
+        XCTAssertTrue(micMessage.lowercased().contains("microphone"))
+    }
+
     // MARK: - isWatching
 
     func testIsWatchingTrueWhenLoopActiveNotManual() {
