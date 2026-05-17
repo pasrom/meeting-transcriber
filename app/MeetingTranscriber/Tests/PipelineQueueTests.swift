@@ -40,19 +40,46 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.jobs.count, 2)
     }
 
-    func testSnapshotWrittenOnEnqueue() {
+    func testSnapshotWrittenOnEnqueue() async {
         queue.enqueue(makeJob())
+        await queue.awaitSnapshotFlush()
         let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath.path))
     }
 
-    func testSnapshotIsValidJSON() throws {
+    func testSnapshotIsValidJSON() async throws {
         queue.enqueue(makeJob(title: "Standup"))
+        await queue.awaitSnapshotFlush()
         let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         let data = try Data(contentsOf: snapshotPath)
         let jobs = try JSONDecoder().decode([PipelineJob].self, from: data)
         XCTAssertEqual(jobs.count, 1)
         XCTAssertEqual(jobs[0].meetingTitle, "Standup")
+    }
+
+    func testSaveSnapshotDoesNotBlockMainActor() {
+        // Regression guard — if saveSnapshot ever goes synchronous again,
+        // a stalled `replaceItemAt` would freeze the UI / RPC / watch loop.
+        queue.enqueue(makeJob())
+        let start = Date()
+        queue.saveSnapshot()
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertLessThan(elapsed, 0.05, "saveSnapshot returned in \(elapsed)s — should be near-instant")
+    }
+
+    func testConsecutiveSnapshotsPersistLastStateOnDisk() async throws {
+        // Coalescing: a burst of saves must collapse to a single write of
+        // the final state, never an interleaved earlier snapshot.
+        for i in 1 ... 5 {
+            queue.enqueue(makeJob(title: "Job \(i)"))
+        }
+        await queue.awaitSnapshotFlush()
+
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
+        let data = try Data(contentsOf: snapshotPath)
+        let jobs = try JSONDecoder().decode([PipelineJob].self, from: data)
+        XCTAssertEqual(jobs.count, 5)
+        XCTAssertEqual(jobs.map(\.meetingTitle), ["Job 1", "Job 2", "Job 3", "Job 4", "Job 5"])
     }
 
     func testLogAppendedOnEnqueue() throws {
@@ -883,6 +910,7 @@ final class PipelineQueueTests: XCTestCase {
         queue1.enqueue(job)
         queue1.updateJobState(id: job.id, to: .transcribing)
         queue1.saveSnapshot()
+        await queue1.awaitSnapshotFlush()
 
         let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshotPath.path))
@@ -942,6 +970,7 @@ final class PipelineQueueTests: XCTestCase {
         queue1.enqueue(job)
         queue1.updateJobState(id: job.id, to: .diarizing)
         queue1.saveSnapshot()
+        await queue1.awaitSnapshotFlush()
 
         let engine2 = MockEngine()
         engine2.segmentsToReturn = [

@@ -1529,13 +1529,52 @@ class PipelineQueue {
         logDirCreated = true
     }
 
+    // Latest jobs array queued for the snapshot worker. Overwritten on
+    // each `saveSnapshot()` so a burst of state changes collapses into a
+    // single write of the final state instead of N sequential writes.
+    // nil ≠ `[]`: nil means "nothing to write", `[]` would mean "write
+    // the empty-jobs state" (valid when the last job was removed).
+    // swiftlint:disable:next discouraged_optional_collection
+    private var pendingSnapshotJobs: [PipelineJob]?
+    private var snapshotWorker: Task<Void, Never>?
+
+    /// Persist the current `jobs` array to disk. The write runs on a
+    /// detached task — a stalled `replaceItemAt` (macOS 26 `mds_stores`
+    /// rename deadlock) can't freeze the UI / RPC / watch loop. Rapid
+    /// successive calls coalesce: only the last state is actually written.
     func saveSnapshot() {
-        do {
-            ensureLogDir()
-            try PipelineSnapshot.save(jobs, to: logDir)
-        } catch {
-            logger.error("Failed to write queue snapshot: \(error)")
+        ensureLogDir()
+        pendingSnapshotJobs = jobs
+        guard snapshotWorker == nil else { return }
+        let dir = logDir
+        snapshotWorker = Task.detached(priority: .utility) { [weak self] in
+            while let next = await self?.takeNextSnapshotBatch() {
+                do {
+                    try PipelineSnapshot.save(next, to: dir)
+                } catch {
+                    logger.error("Failed to write queue snapshot: \(error)")
+                }
+            }
         }
+    }
+
+    // swiftlint:disable discouraged_optional_collection
+    @MainActor
+    private func takeNextSnapshotBatch() -> [PipelineJob]? {
+        guard let next = pendingSnapshotJobs else {
+            snapshotWorker = nil
+            return nil
+        }
+        pendingSnapshotJobs = nil
+        return next
+    }
+
+    // swiftlint:enable discouraged_optional_collection
+
+    /// Wait for any queued snapshot writes to land on disk. Mostly used by
+    /// tests; production code does not need to call this.
+    func awaitSnapshotFlush() async {
+        await snapshotWorker?.value
     }
 
     private func appendLog(jobID: UUID, event: String, from: JobState?, to: JobState) {
