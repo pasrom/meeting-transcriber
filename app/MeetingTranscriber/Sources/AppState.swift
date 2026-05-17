@@ -336,7 +336,6 @@ final class AppState { // swiftlint:disable:this type_body_length
             loop.stop()
             watchLoop = nil
         } else {
-            // swiftlint:disable:next closure_body_length
             Task { @MainActor in
                 _ = await Permissions.ensureMicrophoneAccess()
 
@@ -360,27 +359,7 @@ final class AppState { // swiftlint:disable:this type_body_length
                     notifier: notifier,
                 )
 
-                loop.onStateChange = { [weak self, weak loop, notifier] _, newState in
-                    switch newState {
-                    case .recording:
-                        if let meeting = loop?.currentMeeting {
-                            notifier.notify(
-                                title: "Meeting Detected",
-                                body: "Recording: \(meeting.windowTitle)",
-                            )
-                        }
-                        self?.startChannelHealthMonitoring()
-
-                    case .error:
-                        if let err = loop?.lastError {
-                            notifier.notify(title: "Error", body: err)
-                        }
-                        self?.stopChannelHealthMonitoring()
-
-                    default:
-                        self?.stopChannelHealthMonitoring()
-                    }
-                }
+                attachStateChangeHandler(to: loop, notifyOnRecording: true)
 
                 if let health = permissionHealth {
                     loop.permissionChecker = { health }
@@ -420,6 +399,12 @@ final class AppState { // swiftlint:disable:this type_body_length
                 notifier: notifier,
             )
             watchLoop = loop
+
+            // Wire channel-health monitoring + error notification on state
+            // transitions — same hook the auto-detect path installs, so the
+            // red-tint indicator and asymmetric-silence notification work
+            // for manual recordings too.
+            attachStateChangeHandler(to: loop, notifyOnRecording: false)
 
             // Use cached health check result instead of live probe
             if let health = permissionHealth {
@@ -498,6 +483,50 @@ final class AppState { // swiftlint:disable:this type_body_length
 
     // MARK: - Channel Health Monitor
 
+    /// Attaches the state-change callback that drives channel-health monitoring
+    /// and post-`.error` notifications. Shared between the auto-detect path
+    /// (`toggleWatching`) and the manual-recording path (`startManualRecording`)
+    /// so the red-tint indicator + asymmetric-silence notification fire in both.
+    /// `notifyOnRecording` only fires "Meeting Detected" notifications for the
+    /// auto-detect path; manual recording emits its own start notification.
+    private func attachStateChangeHandler(to loop: WatchLoop, notifyOnRecording: Bool) {
+        loop.onStateChange = { [weak self, weak loop, notifier] _, newState in
+            switch newState {
+            case .recording:
+                if notifyOnRecording, let meeting = loop?.currentMeeting {
+                    notifier.notify(
+                        title: "Meeting Detected",
+                        body: "Recording: \(meeting.windowTitle)",
+                    )
+                }
+                self?.startChannelHealthMonitoring()
+
+            case .error:
+                if let err = loop?.lastError {
+                    notifier.notify(title: "Error", body: err)
+                }
+                self?.stopChannelHealthMonitoring()
+
+            default:
+                self?.stopChannelHealthMonitoring()
+            }
+        }
+    }
+
+    /// Rebuilds `channelHealthMonitor` with the current settings-driven debounce.
+    /// Called from `startChannelHealthMonitoring` and exposed as a test seam so
+    /// `ChannelHealthIntegrationTests` can simulate the "user changed threshold
+    /// between recordings" path without spinning up the polling Task.
+    func simulateStartChannelHealthMonitoringForTests() {
+        rebuildChannelHealthMonitor()
+    }
+
+    private func rebuildChannelHealthMonitor() {
+        channelHealthMonitor = ChannelHealthMonitor(
+            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
+        )
+    }
+
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
     /// levels into `channelHealthMonitor` and flips `micSilentActive` /
     /// `appSilentActive` based on the resulting events. Idempotent: calling while already running
@@ -505,9 +534,7 @@ final class AppState { // swiftlint:disable:this type_body_length
     private func startChannelHealthMonitoring() {
         guard settings.perChannelIndicatorEnabled else { return }
         guard levelMonitorTask == nil else { return }
-        channelHealthMonitor = ChannelHealthMonitor(
-            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
-        )
+        rebuildChannelHealthMonitor()
         levelMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
