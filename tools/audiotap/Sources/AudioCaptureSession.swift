@@ -78,6 +78,18 @@ public class AudioCaptureSession {
         logger.info("Capture session started (PID \(self.pid), rate: \(self.sampleRate), channels: \(self.channels))")
     }
 
+    /// Instantaneous app-audio level in dBFS, decayed to -120 when no buffer has
+    /// arrived in the last 0.5 s. Drives the menu-bar asymmetric-silence indicator.
+    public var appLevelDBFS: Double {
+        appCapture?.currentLevelDBFS ?? -120
+    }
+
+    /// Instantaneous mic level in dBFS, decayed to -120 when no buffer has arrived
+    /// in the last 0.5 s. Drives the menu-bar asymmetric-silence indicator.
+    public var micLevelDBFS: Double {
+        micCapture?.currentLevelDBFS ?? -120
+    }
+
     /// Stop all capture and return the result.
     public func stop() -> AudioCaptureResult {
         appCapture?.stop()
