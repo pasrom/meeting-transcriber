@@ -71,6 +71,27 @@ jobs:
         if: steps.dev-id.outputs.keychain-path != ''
         run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
 
+      # Smoke test codesign before kicking off the ~70 s build. The
+      # find-identity probe in install-developer-id catches missing/
+      # mismatched certs, but `codesign` delegates to trustd for
+      # trust-chain validation — a separate code path that can fail
+      # (partition-list ACL reset, trustd not respawned for this user)
+      # while find-identity still reports "1 valid". Without this,
+      # such drift surfaces only after the build burns ~70 s.
+      - name: Pre-flight codesign smoke test
+        if: env.E2E_SIGNING_KEYCHAIN != ''
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        run: |
+          TEST_BIN=$(mktemp)
+          trap 'rm -f "$TEST_BIN"' EXIT
+          cp /usr/bin/true "$TEST_BIN"
+          if ! codesign --force --sign "$DEVELOPER_ID" --keychain "$E2E_SIGNING_KEYCHAIN" "$TEST_BIN"; then
+              echo "::error::codesign smoke test failed — likely trustd or partition-list drift on the Mini"
+              echo "::error::Recovery: unlock keychain, respawn trustd for this user, re-apply partition-list ACL, then re-run setup-self-hosted-runner.sh"
+              exit 1
+          fi
+
       - name: Run live-recording E2E driver
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
