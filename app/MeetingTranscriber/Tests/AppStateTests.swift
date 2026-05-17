@@ -533,6 +533,13 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         }
     #endif
 
+    func testMakeProtocolGeneratorReturnsNilForNoneProvider() {
+        let settings = AppSettings()
+        settings.protocolProvider = .none
+        let state = AppState(settings: settings)
+        XCTAssertNil(state.makeProtocolGenerator())
+    }
+
     // MARK: - configurePipelineCallbacks
 
     func testConfigurePipelineCallbacksDoneFiresNotification() throws {
