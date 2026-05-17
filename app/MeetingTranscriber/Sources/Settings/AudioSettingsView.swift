@@ -37,6 +37,8 @@ struct AudioSettingsView: View {
             }
             .accessibilityIdentifier("vadSection")
             .recordOnlyDisabled(settings.recordOnly)
+
+            PerChannelIndicatorSection(settings: settings)
         }
         .formStyle(.grouped)
     }
@@ -48,5 +50,40 @@ struct AudioSettingsView: View {
             position: .unspecified,
         )
         audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+}
+
+private struct PerChannelIndicatorSection: View {
+    @Bindable var settings: AppSettings
+
+    private static let toggleHelp =
+        "Turn the menu bar red when one capture channel goes silent while the other still carries audio. " +
+        "Catches asymmetric capture failures (muted mic, dropped app-audio tap) in real time."
+
+    private static let sliderHelp =
+        "Continuous asymmetric silence required before the indicator and notification fire. " +
+        "Short enough to surface a dead channel during a meeting, long enough to ignore speaking pauses."
+
+    var body: some View {
+        Section("Per-Channel Indicator") {
+            Toggle("Detect Silent Capture Channel", isOn: $settings.perChannelIndicatorEnabled)
+                .help(Self.toggleHelp)
+
+            if settings.perChannelIndicatorEnabled {
+                HStack {
+                    Text("Warn after:")
+                    Slider(
+                        value: $settings.asymmetricSilenceWarningSeconds,
+                        in: 30 ... 300,
+                        step: 10,
+                    )
+                    Text("\(Int(settings.asymmetricSilenceWarningSeconds))s")
+                        .monospacedDigit()
+                        .frame(width: 40)
+                }
+                .help(Self.sliderHelp)
+            }
+        }
+        .accessibilityIdentifier("channelIndicatorSection")
     }
 }

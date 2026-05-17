@@ -124,6 +124,28 @@ final class AppSettings {
         didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
     }
 
+    /// Master switch for the per-channel signal indicator. When on, AppState runs a
+    /// ~10 Hz level poller while recording and flips the menu-bar red when one
+    /// channel goes silent while the other carries audio. Default: on.
+    var perChannelIndicatorEnabled: Bool {
+        didSet { defaults.set(perChannelIndicatorEnabled, forKey: "perChannelIndicatorEnabled") }
+    }
+
+    /// Seconds of continuous asymmetric silence before the indicator + notification
+    /// fire. Clamped to [30, 300] on write — short enough to surface a dead channel
+    /// inside a meeting, long enough not to trigger on normal speaking pauses.
+    var asymmetricSilenceWarningSeconds: Double {
+        didSet {
+            // Conditional reassignment to avoid infinite didSet recursion under @Observable.
+            if asymmetricSilenceWarningSeconds < 30 {
+                asymmetricSilenceWarningSeconds = 30
+            } else if asymmetricSilenceWarningSeconds > 300 {
+                asymmetricSilenceWarningSeconds = 300
+            }
+            defaults.set(asymmetricSilenceWarningSeconds, forKey: "asymmetricSilenceWarningSeconds")
+        }
+    }
+
     /// Label for the local mic speaker in dual-source mode.
     /// Default "Me". Empty string = diarize mic track (multi-person room).
     var micName: String {
@@ -354,6 +376,11 @@ final class AppSettings {
         recordOnly = defaults.object(forKey: "recordOnly") as? Bool ?? false
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
+        perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
+        asymmetricSilenceWarningSeconds = max(30, min(
+            300,
+            defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90,
+        ))
 
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit

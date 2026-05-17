@@ -1,7 +1,7 @@
 import Foundation
 
 /// Which audio capture channel a `ChannelHealthMonitor` event refers to.
-enum AudioChannel: Equatable, Sendable {
+enum AudioChannel: Equatable {
     case mic
     case app
 }
@@ -12,7 +12,7 @@ enum AudioChannel: Equatable, Sendable {
 /// the other has been carrying speech (≥ speechThreshold) continuously for at least
 /// `debounceSeconds`. `.recovered` fires once when the dead channel returns above
 /// the speech threshold.
-enum ChannelHealthEvent: Equatable, Sendable {
+enum ChannelHealthEvent: Equatable {
     case started(channel: AudioChannel, quietSince: Date)
     case recovered(channel: AudioChannel)
 }

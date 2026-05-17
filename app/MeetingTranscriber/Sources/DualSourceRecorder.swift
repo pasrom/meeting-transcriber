@@ -35,8 +35,13 @@ protocol RecordingProvider {
 }
 
 extension RecordingProvider {
-    var appLevelDBFS: Double { -120 }
-    var micLevelDBFS: Double { -120 }
+    var appLevelDBFS: Double {
+        -120
+    }
+
+    var micLevelDBFS: Double {
+        -120
+    }
 }
 
 /// Orchestrates app audio capture (via AudioTapLib) + mic recording, then mixes.

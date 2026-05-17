@@ -53,6 +53,8 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.micName, "Me")
         XCTAssertTrue(settings.diarize)
         XCTAssertEqual(settings.whisperKitModel, "openai_whisper-large-v3-v20240930_turbo")
+        XCTAssertTrue(settings.perChannelIndicatorEnabled)
+        XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 90.0)
     }
 
     // MARK: - Clamping
@@ -90,6 +92,21 @@ final class AppSettingsTests: XCTestCase {
     func testNumSpeakersClampedToMinimum() {
         settings.numSpeakers = -1
         XCTAssertEqual(settings.numSpeakers, 0)
+    }
+
+    func testAsymmetricSilenceWarningSecondsClampedToMinimum() {
+        settings.asymmetricSilenceWarningSeconds = 10
+        XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 30)
+    }
+
+    func testAsymmetricSilenceWarningSecondsClampedToMaximum() {
+        settings.asymmetricSilenceWarningSeconds = 600
+        XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 300)
+    }
+
+    func testAsymmetricSilenceWarningSecondsAcceptsValidValue() {
+        settings.asymmetricSilenceWarningSeconds = 120
+        XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 120)
     }
 
     func testNumSpeakersClampedToMinimumZero() {

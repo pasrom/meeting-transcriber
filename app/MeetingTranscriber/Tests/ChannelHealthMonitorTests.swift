@@ -1,5 +1,5 @@
-import XCTest
 @testable import MeetingTranscriber
+import XCTest
 
 final class ChannelHealthMonitorTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
