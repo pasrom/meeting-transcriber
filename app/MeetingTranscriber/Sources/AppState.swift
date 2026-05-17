@@ -558,7 +558,11 @@ final class AppState { // swiftlint:disable:this type_body_length
             recognitionStatsLog: RecognitionStatsLog(),
         )
         queue.loadSnapshot()
-        queue.recoverOrphanedRecordings()
+        // Fire-and-forget: dir scan + per-file attr probes run off-main so
+        // app startup (and the first call to `enqueueFiles`) isn't blocked
+        // by a slow filesystem. Recovered jobs appear in `queue.jobs` once
+        // the scan returns.
+        Task { await queue.recoverOrphanedRecordings() }
         queue.refreshKnownSpeakerNames()
         return queue
     }
