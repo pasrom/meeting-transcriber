@@ -114,5 +114,99 @@
             XCTAssertTrue(paths.contains("\(NSHomeDirectory())/.local/bin"))
             XCTAssertTrue(paths.contains("\(NSHomeDirectory())/.npm-global/bin"))
         }
+
+        // MARK: - buildPrompt
+
+        func testBuildPromptAppendsTranscript() {
+            let prompt = ClaudeCLIProtocolGenerator.buildPrompt(
+                transcript: "MARKER_TRANSCRIPT",
+                diarized: false,
+                language: "German",
+            )
+            XCTAssertTrue(prompt.hasSuffix("MARKER_TRANSCRIPT"))
+        }
+
+        func testBuildPromptIncludesDiarizationNoteWhenDiarized() {
+            let plain = ClaudeCLIProtocolGenerator.buildPrompt(
+                transcript: "x", diarized: false, language: "German",
+            )
+            let diarized = ClaudeCLIProtocolGenerator.buildPrompt(
+                transcript: "x", diarized: true, language: "German",
+            )
+            XCTAssertGreaterThan(diarized.count, plain.count)
+            XCTAssertTrue(diarized.contains(ProtocolGenerator.diarizationNote))
+            XCTAssertFalse(plain.contains(ProtocolGenerator.diarizationNote))
+        }
+
+        func testBuildPromptSubstitutesLanguage() {
+            // ProtocolGenerator.loadPrompt has a `{LANGUAGE}` placeholder
+            // that applyLanguage swaps in; verify the chosen language
+            // appears in the final prompt.
+            let prompt = ClaudeCLIProtocolGenerator.buildPrompt(
+                transcript: "x", diarized: false, language: "Polish",
+            )
+            XCTAssertTrue(prompt.contains("Polish"))
+        }
+
+        // MARK: - buildSubprocessArgs
+
+        func testBuildSubprocessArgsForAbsolutePathDoesNotPrependBinary() {
+            let args = ClaudeCLIProtocolGenerator.buildSubprocessArgs(
+                claudeBin: "claude",
+                resolvedBin: "/opt/homebrew/bin/claude",
+            )
+            XCTAssertEqual(
+                args,
+                ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"],
+            )
+        }
+
+        func testBuildSubprocessArgsForEnvFallbackPrependsBinaryName() {
+            // /usr/bin/env fallback: the bare name is prepended so env can
+            // resolve it via PATH (set in buildEnvironment).
+            let args = ClaudeCLIProtocolGenerator.buildSubprocessArgs(
+                claudeBin: "claude-work",
+                resolvedBin: "/usr/bin/env",
+            )
+            XCTAssertEqual(
+                args,
+                ["claude-work", "-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"],
+            )
+        }
+
+        // MARK: - buildEnvironment
+
+        func testBuildEnvironmentRemovesClaudeCodeMarker() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["CLAUDECODE": "1", "PATH": "/usr/bin"],
+                searchPaths: [],
+            )
+            XCTAssertNil(env["CLAUDECODE"], "CLAUDECODE must be stripped so the nested CLI doesn't see itself as embedded")
+        }
+
+        func testBuildEnvironmentPrependsSearchPathsToPATH() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["PATH": "/usr/bin:/bin"],
+                searchPaths: ["/opt/homebrew/bin", "/Users/x/.local/bin"],
+            )
+            XCTAssertEqual(env["PATH"], "/opt/homebrew/bin:/Users/x/.local/bin:/usr/bin:/bin")
+        }
+
+        func testBuildEnvironmentFallsBackToSystemPathWhenNoPATHInBase() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: [:],
+                searchPaths: ["/opt/homebrew/bin"],
+            )
+            XCTAssertEqual(env["PATH"], "/opt/homebrew/bin:/usr/bin:/bin")
+        }
+
+        func testBuildEnvironmentPreservesOtherKeys() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["HOME": "/Users/x", "USER": "x", "PATH": "/usr/bin"],
+                searchPaths: [],
+            )
+            XCTAssertEqual(env["HOME"], "/Users/x")
+            XCTAssertEqual(env["USER"], "x")
+        }
     }
 #endif

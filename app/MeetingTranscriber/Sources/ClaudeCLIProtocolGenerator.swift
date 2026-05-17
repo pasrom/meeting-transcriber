@@ -22,32 +22,17 @@
 
         // MARK: - ProtocolGenerating
 
-        // swiftlint:disable:next function_body_length
         func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-            var prompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
-            if diarized {
-                prompt += ProtocolGenerator.diarizationNote
-            }
-            prompt += transcript
+            let prompt = Self.buildPrompt(transcript: transcript, diarized: diarized, language: language)
 
             let process = Process()
             let resolvedBin = Self.resolveClaudePath(claudeBin)
             process.executableURL = URL(fileURLWithPath: resolvedBin)
-            var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
-            // If using /usr/bin/env fallback, prepend the binary name
-            if resolvedBin == "/usr/bin/env" {
-                args.insert(claudeBin, at: 0)
-            }
-            process.arguments = args
-
-            // Remove CLAUDECODE env var to allow nested Claude CLI invocation
-            var env = ProcessInfo.processInfo.environment
-            env.removeValue(forKey: "CLAUDECODE")
-            // App bundles have a minimal PATH — ensure common bin dirs are included
-            // so wrapper scripts (e.g. claude-work-wrapper calling `exec claude`) work
-            let extraPaths = Self.searchPaths.joined(separator: ":")
-            env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "/usr/bin:/bin")"
-            process.environment = env
+            process.arguments = Self.buildSubprocessArgs(claudeBin: claudeBin, resolvedBin: resolvedBin)
+            process.environment = Self.buildEnvironment(
+                baseEnvironment: ProcessInfo.processInfo.environment,
+                searchPaths: Self.searchPaths,
+            )
 
             let stdinPipe = Pipe()
             let stdoutPipe = Pipe()
@@ -236,6 +221,43 @@
             }
             // Fallback: hope it's in PATH
             return "/usr/bin/env"
+        }
+
+        // MARK: - Pure subprocess builders
+
+        /// Build the prompt: localized base + optional diarization note + transcript.
+        static func buildPrompt(transcript: String, diarized: Bool, language: String) -> String {
+            var prompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
+            if diarized {
+                prompt += ProtocolGenerator.diarizationNote
+            }
+            prompt += transcript
+            return prompt
+        }
+
+        /// Build the CLI argument vector. When `resolvedBin` is the
+        /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve
+        /// it from PATH.
+        static func buildSubprocessArgs(claudeBin: String, resolvedBin: String) -> [String] {
+            var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
+            if resolvedBin == "/usr/bin/env" {
+                args.insert(claudeBin, at: 0)
+            }
+            return args
+        }
+
+        /// Strip `CLAUDECODE` (avoid nested-session detection by the child
+        /// CLI) and prepend `searchPaths` to `PATH` (app bundles inherit
+        /// a minimal `PATH`).
+        static func buildEnvironment(
+            baseEnvironment: [String: String],
+            searchPaths: [String],
+        ) -> [String: String] {
+            var env = baseEnvironment
+            env.removeValue(forKey: "CLAUDECODE")
+            let extraPaths = searchPaths.joined(separator: ":")
+            env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "/usr/bin:/bin")"
+            return env
         }
     }
 
