@@ -27,6 +27,14 @@ public class AppAudioCapture {
 
     private var debugRMS = DebugRMSReporter()
     private var debugTotalBytes: UInt64 = 0
+    private let levelPublisher = LevelPublisher()
+
+    /// Returns the instantaneous app-audio level in dBFS, decayed to -120 if
+    /// no buffer arrived in the last 0.5 seconds (e.g. tap died, device
+    /// unplugged) — without that, a stale reading would look like live audio.
+    public var currentLevelDBFS: Double {
+        levelPublisher.currentLevelDBFS
+    }
 
     /// CoreAudio property address for default output device changes.
     private var defaultOutputAddress = AudioObjectPropertyAddress(
@@ -361,10 +369,9 @@ public class AppAudioCapture {
             let byteCount = Int(abl.mBuffers.mDataByteSize)
             writeAllToFileHandle(fd, data, count: byteCount)
 
-            if self.debugLogging {
-                self.accumulateDebugRMS(data: data, byteCount: byteCount)
-                self.maybeReportDebugRMS()
-            }
+            self.accumulateDebugRMS(data: data, byteCount: byteCount)
+            self.publishCurrentLevel()
+            self.maybeReportDebugRMS()
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
@@ -548,12 +555,19 @@ extension AppAudioCapture {
     }
 }
 
-// MARK: - Debug logging helpers
+// MARK: - Level + debug logging helpers
 
 @available(macOS 14.2, *)
-extension AppAudioCapture {
-    /// Called from the IOProc (serial writeQueue) only when debugLogging=true.
+private extension AppAudioCapture {
+    /// Publish the most recent per-buffer dBFS reading so UI consumers
+    /// (menu bar level indicator) can poll it. Called from the IOProc
+    /// after `accumulateDebugRMS`.
+    func publishCurrentLevel() {
+        levelPublisher.publish(level: debugRMS.lastLevelDBFS)
+    }
+
     /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
+    /// Called unconditionally from the IOProc; the dBFS log line is gated separately.
     func accumulateDebugRMS(data: UnsafeMutableRawPointer, byteCount: Int) {
         let count = byteCount / MemoryLayout<Float>.size
         guard count > 0 else { return }
@@ -568,10 +582,12 @@ extension AppAudioCapture {
         debugTotalBytes += UInt64(byteCount)
     }
 
-    /// Emit a single RMS-energy log line every ~5 s of capture.
-    /// Live signal whether the tap is delivering real audio or zero/noise.
+    /// Drain the 5-s throttle and emit one RMS-energy log line per tick, but
+    /// only when `debugLogging` is on. The drain itself runs unconditionally
+    /// so the reporter's accumulators stay bounded for long sessions.
     func maybeReportDebugRMS() {
         guard let report = debugRMS.tick() else { return }
+        guard debugLogging else { return }
         let dBStr = String(format: "%.1f", report.dBFS)
         logger.info(
             "[debug] App audio RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public), totalBytes=\(self.debugTotalBytes, privacy: .public)",

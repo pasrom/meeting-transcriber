@@ -27,6 +27,14 @@ public class MicCaptureHandler {
     public private(set) var firstFrameTime: UInt64 = 0
 
     private var debugRMS = DebugRMSReporter()
+    private let levelPublisher = LevelPublisher()
+
+    /// Returns the instantaneous mic level in dBFS, decayed to -120 if no buffer
+    /// arrived in the last 0.5 seconds (e.g. device muted or unplugged) — without
+    /// that, a stale reading would look like live audio.
+    public var currentLevelDBFS: Double {
+        levelPublisher.currentLevelDBFS
+    }
 
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
@@ -149,10 +157,9 @@ public class MicCaptureHandler {
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = mach_absolute_time()
             }
-            if self.debugLogging {
-                self.accumulateDebugRMS(buffer: buffer)
-                self.maybeReportDebugRMS()
-            }
+            self.accumulateDebugRMS(buffer: buffer)
+            self.publishCurrentLevel()
+            self.maybeReportDebugRMS()
             do {
                 if let converter = self.converter {
                     let outputFrames = AVAudioFrameCount(
@@ -314,6 +321,13 @@ public class MicCaptureHandler {
 // MARK: - Debug logging helpers
 
 extension MicCaptureHandler {
+    /// Publish the most recent per-buffer dBFS reading so UI consumers
+    /// (menu bar level indicator) can poll it. Called from the
+    /// AVAudioEngine tap callback after `accumulateDebugRMS`.
+    func publishCurrentLevel() {
+        levelPublisher.publish(level: debugRMS.lastLevelDBFS)
+    }
+
     /// Sum squares across all channels of an AVAudioPCMBuffer into the shared
     /// reporter. AVAudioEngine taps deliver float buffers in practice; the int16
     /// branch is a safety net.
@@ -332,8 +346,12 @@ extension MicCaptureHandler {
         debugRMS.add(sumSq: sumSq, samples: frames * channelCount)
     }
 
+    /// Drain the 5-s throttle and emit one RMS-energy log line per tick, but
+    /// only when `debugLogging` is on. The drain itself runs unconditionally
+    /// so the reporter's accumulators stay bounded for long sessions.
     func maybeReportDebugRMS() {
         guard let report = debugRMS.tick() else { return }
+        guard debugLogging else { return }
         let dBStr = String(format: "%.1f", report.dBFS)
         logger.info(
             "[debug] Mic RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public)",
