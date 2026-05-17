@@ -1407,26 +1407,33 @@ class PipelineQueue {
 
     /// One-time migration: if no processed_recordings.json exists yet, seed it with
     /// all existing `_mix.wav` files so they don't get recovered on first launch after update.
-    private func migrateProcessedRecordings(recordingsDir: URL) {
+    ///
+    /// Dir scan + JSON encode + atomic write run on a detached task. The
+    /// guard + `ensureLogDir` stay on the main actor so the migration is a
+    /// no-op (no detached task spawned) when the processed file already
+    /// exists — which is the steady-state case.
+    func migrateProcessedRecordings(recordingsDir: URL) async {
         guard !FileManager.default.fileExists(atPath: processedRecordingsPath.path) else { return }
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(
-            at: recordingsDir, includingPropertiesForKeys: nil,
-        ) else { return }
-
-        var paths = Set<String>()
-        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
-            paths.insert(file.standardizedFileURL.path)
-        }
-        guard !paths.isEmpty else { return }
-        do {
-            ensureLogDir()
-            let data = try JSONEncoder().encode(Array(paths))
-            try data.write(to: processedRecordingsPath, options: .atomic)
-            logger.info("Migration: seeded \(paths.count) existing recordings as processed")
-        } catch {
-            logger.error("Migration failed: \(error)")
-        }
+        ensureLogDir()
+        let processedRecordingsPath = self.processedRecordingsPath
+        await Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            guard let entries = try? fm.contentsOfDirectory(
+                at: recordingsDir, includingPropertiesForKeys: nil,
+            ) else { return }
+            var paths = Set<String>()
+            for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
+                paths.insert(file.standardizedFileURL.path)
+            }
+            guard !paths.isEmpty else { return }
+            do {
+                let data = try JSONEncoder().encode(Array(paths))
+                try data.write(to: processedRecordingsPath, options: .atomic)
+                logger.info("Migration: seeded \(paths.count) existing recordings as processed")
+            } catch {
+                logger.error("Migration failed: \(error)")
+            }
+        }.value
     }
 
     /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
@@ -1444,7 +1451,7 @@ class PipelineQueue {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
-            migrateProcessedRecordings(recordingsDir: recordingsDir)
+            await migrateProcessedRecordings(recordingsDir: recordingsDir)
         }
 
         let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
