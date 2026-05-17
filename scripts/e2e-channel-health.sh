@@ -8,14 +8,17 @@
 #
 # What this covers:
 #   - Env-hook propagation into AppState init
-#   - @Observable property → SwiftUI scene body
-#   - AnimatedMenuBarIcon → MenuBarIcon.image render path (visual proof)
+#   - @Observable property → SwiftUI scene body wiring
 #   - DebugRPCServer state snapshot exposes the channel-health flags
+#   - Pixel-level visual regression: with --screenshot, asserts the
+#     menubar actually renders red-tinted pixels via assert-red-pixels.swift
 #
 # What this does NOT cover (see docs/plans/.local/open/2026-05-17-channel-health-live-e2e.md):
 #   - Real CATapDescription tap → LevelPublisher → polling task → flag flip
-#   - Real-world false-positive resistance during legitimate recordings
+#   - The polling task lifecycle (start/cancel on `.recording` transitions)
+#   - `.recovered` event path (flag clears back to false on channel unmute)
 #   - macOS Notification delivery on `.started` events
+#   - Real-world false-positive resistance during legitimate recordings
 #
 # Runs on:
 #   - Any macOS host with Xcode + zsh + jq
@@ -145,15 +148,20 @@ fi
 
 if [ "$TAKE_SCREENSHOT" = true ]; then
     OUT="/tmp/e2e-channel-health-menubar.png"
-    # `screencapture` can fail on headless GUI sessions (Mac mini CI runner
-    # with no attached display can't resolve a screen rect). The assertion
-    # above is the actual pass/fail signal; the screenshot is a visual aid.
+    # `screencapture` can fail on headless GUI sessions (rare; Mac mini CI
+    # runner has an Aqua session via auto-login so it works there). When it
+    # does succeed, run the pixel-level assertion so a SwiftUI/MenuBarIcon
+    # render regression that keeps the AppState flag true but doesn't show
+    # the red tint is caught here.
     if screencapture -R 0,0,3000,30 "$OUT" 2>/dev/null && [ -s "$OUT" ]; then
         echo "▸ Menubar screenshot saved to $OUT"
+        "$ROOT/scripts/assert-red-pixels.swift" "$OUT"
     else
-        echo "▸ Menubar screenshot skipped (no display rect available)"
+        echo "▸ Menubar screenshot skipped (no display rect available — pixel assertion skipped)"
         rm -f "$OUT"
     fi
 fi
 
-echo "OK — channel-health indicator wiring verified end-to-end"
+echo "OK — env-hook + RPC observability verified"
+echo "Notes: real audio path, polling-task lifecycle, and notification delivery are"
+echo "       covered by unit tests; live-audio e2e is a separate follow-up."
