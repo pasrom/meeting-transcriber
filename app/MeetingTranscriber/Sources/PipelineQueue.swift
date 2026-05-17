@@ -1577,6 +1577,12 @@ class PipelineQueue {
         await snapshotWorker?.value
     }
 
+    /// Test-only: true while a background snapshot worker is running.
+    /// Lets tests assert the worker drains and clears itself.
+    var isSnapshotWorkerActive: Bool {
+        snapshotWorker != nil
+    }
+
     private func appendLog(jobID: UUID, event: String, from: JobState?, to: JobState) {
         let entry: [String: String] = [
             "timestamp": Self.isoFormatter.string(from: Date()),

@@ -82,6 +82,49 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(jobs.map(\.meetingTitle), ["Job 1", "Job 2", "Job 3", "Job 4", "Job 5"])
     }
 
+    func testSnapshotWorkerClearsItselfAfterFlush() async {
+        // Lifecycle guard: a drained worker must set `snapshotWorker = nil`
+        // so the next saveSnapshot starts a fresh task. Without this, a
+        // leak-then-skip bug would silently drop later writes.
+        queue.enqueue(makeJob())
+        XCTAssertTrue(queue.isSnapshotWorkerActive)
+        await queue.awaitSnapshotFlush()
+        XCTAssertFalse(queue.isSnapshotWorkerActive, "worker should clear itself after the queue drains")
+
+        // Second burst spawns a fresh worker — verifies the first didn't
+        // get stuck in a way that prevents re-spawn.
+        queue.enqueue(makeJob(title: "Second"))
+        XCTAssertTrue(queue.isSnapshotWorkerActive)
+        await queue.awaitSnapshotFlush()
+        XCTAssertFalse(queue.isSnapshotWorkerActive)
+    }
+
+    func testSnapshotMatchesInMemoryStateAfterStateTransitionBurst() async throws {
+        // Pipeline-shaped load: enqueue several jobs, then drive each
+        // through transcribing → diarizing → generatingProtocol → done.
+        // 12 updateJobState calls + 3 enqueues = 15 saveSnapshot triggers
+        // in rapid succession. The on-disk state must match in-memory at
+        // the end regardless of how many coalesced batches actually ran.
+        let jobs = (1 ... 3).map { makeJob(title: "Job \($0)") }
+        for job in jobs {
+            queue.enqueue(job)
+        }
+        let transitions: [JobState] = [.transcribing, .diarizing, .generatingProtocol, .done]
+        for job in jobs {
+            for next in transitions {
+                queue.updateJobState(id: job.id, to: next)
+            }
+        }
+        await queue.awaitSnapshotFlush()
+
+        let snapshotPath = tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename)
+        let data = try Data(contentsOf: snapshotPath)
+        let onDisk = try JSONDecoder().decode([PipelineJob].self, from: data)
+        XCTAssertEqual(onDisk.count, queue.jobs.count)
+        XCTAssertEqual(onDisk.map(\.id), queue.jobs.map(\.id))
+        XCTAssertEqual(onDisk.map(\.state), queue.jobs.map(\.state))
+    }
+
     func testLogAppendedOnEnqueue() throws {
         queue.enqueue(makeJob())
         let logPath = tmpDir.appendingPathComponent("pipeline_log.jsonl")
