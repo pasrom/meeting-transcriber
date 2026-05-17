@@ -145,8 +145,15 @@ fi
 
 if [ "$TAKE_SCREENSHOT" = true ]; then
     OUT="/tmp/e2e-channel-health-menubar.png"
-    screencapture -R 0,0,3000,30 "$OUT"
-    echo "▸ Menubar screenshot saved to $OUT"
+    # `screencapture` can fail on headless GUI sessions (Mac mini CI runner
+    # with no attached display can't resolve a screen rect). The assertion
+    # above is the actual pass/fail signal; the screenshot is a visual aid.
+    if screencapture -R 0,0,3000,30 "$OUT" 2>/dev/null && [ -s "$OUT" ]; then
+        echo "▸ Menubar screenshot saved to $OUT"
+    else
+        echo "▸ Menubar screenshot skipped (no display rect available)"
+        rm -f "$OUT"
+    fi
 fi
 
 echo "OK — channel-health indicator wiring verified end-to-end"
