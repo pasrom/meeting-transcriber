@@ -1432,50 +1432,63 @@ class PipelineQueue {
     /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
     /// Creates recovery jobs for untracked recordings younger than `maxAge`.
     /// Skips files that were already successfully processed (tracked in processed_recordings.json).
+    ///
+    /// The directory scan + per-file `attributesOfItem` calls run on a
+    /// detached task — startup callers don't block the UI on a potentially
+    /// slow filesystem (e.g. iCloud-backed recordings dir). Mutations to
+    /// `jobs` and the snapshot still happen on the main actor.
     func recoverOrphanedRecordings(
         recordingsDir: URL = AppPaths.recordingsDir,
         maxAge: TimeInterval = 86400,
-    ) {
+    ) async {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
             migrateProcessedRecordings(recordingsDir: recordingsDir)
         }
 
-        let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(
-            at: recordingsDir,
-            includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
-        ) else { return }
-
         let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
-        let processedPaths = loadProcessedPaths()
-        let now = Date()
-        var recovered = 0
+        let processedRecordingsPath = self.processedRecordingsPath
 
-        // Orphan recovery requires a `_mix.wav` anchor — pair with companion
-        // `_app.wav`/`_mic.wav` tracks when they exist (same stem).
-        for group in PairedRecordingResolver.resolve(urls: entries).paired {
-            // Orphan recovery requires an on-disk `_mix.wav` anchor — paired
-            // groups produced by app+mic synthesis aren't recoverable from the
-            // dir scan alone (the synthesized mix lives elsewhere or hasn't
-            // been written yet). Skip groups without a real mix file here.
+        // Off-main: directory scan + processed-list read + per-file
+        // attributesOfItem probes + filtering all happen here.
+        let candidates: [PairedRecordingResolver.Group] = await Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            guard let entries = try? fm.contentsOfDirectory(
+                at: recordingsDir,
+                includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
+            ) else { return [] }
+            let processedPaths: Set<String> = {
+                guard let data = try? Data(contentsOf: processedRecordingsPath),
+                      let paths = try? JSONDecoder().decode([String].self, from: data)
+                else { return [] }
+                return Set(paths)
+            }()
+            let now = Date()
+            return PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
+                // Groups without a real mix file (app+mic-only paired imports)
+                // aren't recoverable from the dir scan alone.
+                guard let mixURL = group.mix else { return false }
+                let stdPath = mixURL.standardizedFileURL.path
+                guard !trackedPaths.contains(stdPath) else { return false }
+                guard !processedPaths.contains(stdPath) else { return false }
+                let attrs = try? fm.attributesOfItem(atPath: mixURL.path)
+                if let created = attrs?[.creationDate] as? Date,
+                   now.timeIntervalSince(created) > maxAge {
+                    return false
+                }
+                // Header-only WAVs are 44 bytes.
+                if let size = attrs?[.size] as? Int, size <= 44 {
+                    return false
+                }
+                return true
+            }
+        }.value
+
+        guard !candidates.isEmpty else { return }
+
+        for group in candidates {
             guard let mixURL = group.mix else { continue }
-            let stdPath = mixURL.standardizedFileURL.path
-
-            guard !trackedPaths.contains(stdPath) else { continue }
-            guard !processedPaths.contains(stdPath) else { continue }
-
-            let attrs = try? fm.attributesOfItem(atPath: mixURL.path)
-            if let created = attrs?[.creationDate] as? Date,
-               now.timeIntervalSince(created) > maxAge {
-                continue
-            }
-            // Header-only WAVs are 44 bytes.
-            if let size = attrs?[.size] as? Int, size <= 44 {
-                continue
-            }
-
             let job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
@@ -1486,14 +1499,10 @@ class PipelineQueue {
             )
             jobs.append(job)
             appendLog(jobID: job.id, event: "recovered", from: nil, to: .waiting)
-            recovered += 1
         }
-
-        if recovered > 0 {
-            saveSnapshot()
-            logger.info("Recovered \(recovered) orphaned recording(s)")
-            triggerProcessing()
-        }
+        saveSnapshot()
+        logger.info("Recovered \(candidates.count) orphaned recording(s)")
+        triggerProcessing()
     }
 
     // MARK: - Processed Recordings Tracking
