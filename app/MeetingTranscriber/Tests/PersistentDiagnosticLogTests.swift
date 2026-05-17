@@ -241,7 +241,11 @@ final class PersistentDiagnosticLogTests: XCTestCase {
                 logArguments: [],
             )
             try streamer.start()
-            XCTAssertTrue(streamer.isRunning)
+            // Don't assert `isRunning == true` here: `/usr/bin/false` exits in
+            // microseconds and the terminationHandler's `restartQueue.async`
+            // hop can flip `_isRunning = false` (via failFastWindow) before
+            // the test thread's `restartQueue.sync { _isRunning }` read lands.
+            // The give-up behavior is the real claim — asserted below.
 
             XCTAssertTrue(
                 waitForCondition(timeout: 2.0) { !streamer.isRunning },
