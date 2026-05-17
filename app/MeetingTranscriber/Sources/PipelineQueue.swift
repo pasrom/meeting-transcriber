@@ -1563,23 +1563,32 @@ class PipelineQueue {
     private var pendingSnapshotJobs: [PipelineJob]?
     private var snapshotWorker: Task<Void, Never>?
 
+    /// Dedicated actor that owns the `replaceItemAt` syscall. Calling
+    /// `await snapshotWriterActor.write(...)` from inside the detached task
+    /// is a genuine cross-actor hop — guaranteed to leave the caller's
+    /// executor (in particular MainActor) and run on the actor's own
+    /// executor. This sidesteps Swift Concurrency's synchronous-start
+    /// optimization that would otherwise keep `Task.detached`'s body on
+    /// the caller's thread until the first real suspension. A stalled
+    /// `renamex_np` (Spotlight indexer race on macOS 26) now blocks only
+    /// this actor — never the UI, RPC, or watch loop.
+    private let snapshotWriterActor = SnapshotWriterActor()
+
     /// Persist the current `jobs` array to disk. The write runs on a
-    /// detached task — a stalled `replaceItemAt` (macOS 26 `mds_stores`
-    /// rename deadlock) can't freeze the UI / RPC / watch loop. Rapid
-    /// successive calls coalesce: only the last state is actually written.
+    /// detached task and hops to `snapshotWriterActor` for the actual I/O —
+    /// a stalled `replaceItemAt` (macOS 26 `mds_stores` rename deadlock)
+    /// can't freeze the UI / RPC / watch loop. Rapid successive calls
+    /// coalesce: only the last state is actually written.
     func saveSnapshot() {
         ensureLogDir()
         pendingSnapshotJobs = jobs
         guard snapshotWorker == nil else { return }
         let dir = logDir
         let writer = snapshotWriter
+        let writeActor = snapshotWriterActor
         snapshotWorker = Task.detached(priority: .utility) { [weak self] in
             while let next = await self?.takeNextSnapshotBatch() {
-                do {
-                    try writer(next, dir)
-                } catch {
-                    logger.error("Failed to write queue snapshot: \(error)")
-                }
+                await writeActor.write(jobs: next, to: dir, using: writer)
             }
         }
     }
