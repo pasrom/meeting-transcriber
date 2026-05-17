@@ -29,10 +29,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     }
 
     func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-        var systemPrompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
-        if diarized {
-            systemPrompt += ProtocolGenerator.diarizationNote
-        }
+        let systemPrompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language)
 
         let messages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],

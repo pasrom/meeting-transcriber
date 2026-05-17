@@ -115,39 +115,6 @@
             XCTAssertTrue(paths.contains("\(NSHomeDirectory())/.npm-global/bin"))
         }
 
-        // MARK: - buildPrompt
-
-        func testBuildPromptAppendsTranscript() {
-            let prompt = ClaudeCLIProtocolGenerator.buildPrompt(
-                transcript: "MARKER_TRANSCRIPT",
-                diarized: false,
-                language: "German",
-            )
-            XCTAssertTrue(prompt.hasSuffix("MARKER_TRANSCRIPT"))
-        }
-
-        func testBuildPromptIncludesDiarizationNoteWhenDiarized() {
-            let plain = ClaudeCLIProtocolGenerator.buildPrompt(
-                transcript: "x", diarized: false, language: "German",
-            )
-            let diarized = ClaudeCLIProtocolGenerator.buildPrompt(
-                transcript: "x", diarized: true, language: "German",
-            )
-            XCTAssertGreaterThan(diarized.count, plain.count)
-            XCTAssertTrue(diarized.contains(ProtocolGenerator.diarizationNote))
-            XCTAssertFalse(plain.contains(ProtocolGenerator.diarizationNote))
-        }
-
-        func testBuildPromptSubstitutesLanguage() {
-            // ProtocolGenerator.loadPrompt has a `{LANGUAGE}` placeholder
-            // that applyLanguage swaps in; verify the chosen language
-            // appears in the final prompt.
-            let prompt = ClaudeCLIProtocolGenerator.buildPrompt(
-                transcript: "x", diarized: false, language: "Polish",
-            )
-            XCTAssertTrue(prompt.contains("Polish"))
-        }
-
         // MARK: - buildSubprocessArgs
 
         func testBuildSubprocessArgsForAbsolutePathDoesNotPrependBinary() {

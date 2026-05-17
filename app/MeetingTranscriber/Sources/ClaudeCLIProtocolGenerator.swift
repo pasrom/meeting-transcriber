@@ -23,7 +23,7 @@
         // MARK: - ProtocolGenerating
 
         func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-            let prompt = Self.buildPrompt(transcript: transcript, diarized: diarized, language: language)
+            let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language) + transcript
 
             let process = Process()
             let resolvedBin = Self.resolveClaudePath(claudeBin)
@@ -224,16 +224,6 @@
         }
 
         // MARK: - Pure subprocess builders
-
-        /// Build the prompt: localized base + optional diarization note + transcript.
-        static func buildPrompt(transcript: String, diarized: Bool, language: String) -> String {
-            var prompt = ProtocolGenerator.applyLanguage(ProtocolGenerator.loadPrompt(), language: language)
-            if diarized {
-                prompt += ProtocolGenerator.diarizationNote
-            }
-            prompt += transcript
-            return prompt
-        }
 
         /// Build the CLI argument vector. When `resolvedBin` is the
         /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve

@@ -91,6 +91,15 @@ enum ProtocolGenerator {
         return protocolPrompt
     }
 
+    /// Build the localized system prompt: `loadPrompt` + `applyLanguage`
+    /// + optional `diarizationNote`. Excludes the transcript itself —
+    /// callers append or attach it as they see fit.
+    static func buildSystemPrompt(diarized: Bool, language: String) -> String {
+        var prompt = applyLanguage(loadPrompt(), language: language)
+        if diarized { prompt += diarizationNote }
+        return prompt
+    }
+
     // MARK: - File Operations
 
     /// Save a transcript to a text file.

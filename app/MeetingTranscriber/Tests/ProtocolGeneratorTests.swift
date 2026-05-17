@@ -172,6 +172,22 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{LANGUAGE}"))
     }
 
+    // MARK: - System Prompt Construction
+
+    func testBuildSystemPromptSubstitutesLanguage() {
+        let prompt = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "Polish")
+        XCTAssertTrue(prompt.contains("Polish"))
+        XCTAssertFalse(prompt.contains("{LANGUAGE}"))
+    }
+
+    func testBuildSystemPromptAppendsDiarizationNoteWhenDiarized() {
+        let plain = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "German")
+        let diarized = ProtocolGenerator.buildSystemPrompt(diarized: true, language: "German")
+        XCTAssertGreaterThan(diarized.count, plain.count)
+        XCTAssertTrue(diarized.contains(ProtocolGenerator.diarizationNote))
+        XCTAssertFalse(plain.contains(ProtocolGenerator.diarizationNote))
+    }
+
     // MARK: - File Save Operations
 
     func testSaveTranscript() throws {
