@@ -158,6 +158,11 @@
             do {
                 let params = NWParameters.tcp
                 params.acceptLocalOnly = true
+                // SO_REUSEADDR equivalent: lets a fresh launch re-bind the
+                // port before the kernel's TIME_WAIT on the previous owner
+                // has expired. Important for back-to-back e2e cycles where
+                // the dev app is killed and restarted within seconds.
+                params.allowLocalEndpointReuse = true
                 let listener = try NWListener(using: params, on: port)
                 listener.newConnectionHandler = { [weak self] connection in
                     Task { @MainActor in self?.handle(connection) }

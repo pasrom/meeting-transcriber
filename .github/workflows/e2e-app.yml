@@ -140,6 +140,26 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --reimport-latest
 
+      # Channel-health indicator e2e (issue #258): launches the dev
+      # app with `MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT=1` so
+      # `AppState.micSilentActive` is set at init, then asserts the
+      # flag surfaces in `/state.channelHealth` via the RPC server.
+      # Validates the env-hook → AppState → SwiftUI scene body →
+      # MenuBarIcon render → RPC observability chain. Does NOT touch
+      # the real audio path (CATapDescription → LevelPublisher →
+      # polling task) — that's tracked as a follow-up live-audio e2e.
+      - name: Run channel-health indicator E2E
+        timeout-minutes: 3
+        run: bash scripts/e2e-channel-health.sh --no-build --screenshot
+
+      - name: Upload channel-health menubar screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: channel-health-menubar
+          path: /tmp/e2e-channel-health-menubar.png
+          if-no-files-found: ignore
+
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
       - name: Upload simulator log
