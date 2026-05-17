@@ -80,6 +80,12 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertNil(state.currentStatus)
     }
 
+    func testAsymmetricSilenceInactiveByDefault() {
+        let (state, _) = makeState()
+        XCTAssertFalse(state.micSilentActive)
+        XCTAssertFalse(state.appSilentActive)
+    }
+
     // MARK: - isWatching
 
     func testIsWatchingTrueWhenLoopActiveNotManual() {

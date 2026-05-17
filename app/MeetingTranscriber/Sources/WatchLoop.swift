@@ -30,7 +30,11 @@ class WatchLoop {
 
     // Manual recording
     private(set) var manualRecordingInfo: ManualRecordingInfo?
-    private var activeRecorder: (any RecordingProvider)?
+    /// Exposed for read-only access — AppState's per-channel level monitor polls
+    /// `appLevelDBFS` / `micLevelDBFS` here at ~10 Hz to drive the asymmetric-silence
+    /// indicator. Setter stays private so the recording lifecycle flows through
+    /// this class only.
+    private(set) var activeRecorder: (any RecordingProvider)?
     private var manualRecordingTask: Task<Void, Never>?
 
     var isManualRecording: Bool {

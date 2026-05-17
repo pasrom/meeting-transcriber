@@ -19,6 +19,8 @@ private struct AnimatedMenuBarIcon: View {
     let badge: BadgeKind
     let permissionOverlay: Bool
     let recordOnlyOverlay: Bool
+    let micSilentOverlay: Bool
+    let appSilentOverlay: Bool
 
     @State private var animationFrame = 0
     private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
@@ -29,6 +31,8 @@ private struct AnimatedMenuBarIcon: View {
             animationFrame: animationFrame,
             permissionOverlay: permissionOverlay,
             recordOnlyOverlay: recordOnlyOverlay,
+            micSilentOverlay: micSilentOverlay,
+            appSilentOverlay: appSilentOverlay,
         ))
         .onReceive(iconTimer) { _ in
             let next = MenuBarIcon.nextFrame(animationFrame, badge: badge)
@@ -91,6 +95,8 @@ struct MeetingTranscriberApp: App {
                     badge: appState.currentBadge,
                     permissionOverlay: appState.permissionHealth?.isHealthy == false,
                     recordOnlyOverlay: appState.settings.recordOnly,
+                    micSilentOverlay: appState.micSilentActive,
+                    appSilentOverlay: appState.appSilentActive,
                 )
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in

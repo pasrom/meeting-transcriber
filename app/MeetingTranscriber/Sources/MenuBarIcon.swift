@@ -96,16 +96,22 @@ enum MenuBarIcon {
 
     /// Returns a pre-rendered 18x18pt template `NSImage` for the given badge and animation frame.
     ///
-    /// If `permissionOverlay` or `recordOnlyOverlay` is true, a red badge is composited over the
-    /// base icon — this bypasses the pre-rendered cache and forces a non-template image, because
-    /// the overlay is red (template rendering is monochrome).
+    /// If `permissionOverlay` or `recordOnlyOverlay` is true, a red badge is composited over
+    /// the base icon. If `micSilentOverlay` is true, the **top half** of the waveform bars is
+    /// filled in red — signalling the mic channel went silent. If `appSilentOverlay` is true,
+    /// the **bottom half** is red — signalling the app-audio channel went silent. The two are
+    /// independent; if both are true, both halves are red (effectively all-red bars).
+    /// Any of these bypass the pre-rendered cache and force a non-template image, because red
+    /// would not survive template rendering.
     static func image(
         badge: BadgeKind,
         animationFrame: Int = 0,
         permissionOverlay: Bool = false,
         recordOnlyOverlay: Bool = false,
+        micSilentOverlay: Bool = false,
+        appSilentOverlay: Bool = false,
     ) -> NSImage {
-        if permissionOverlay || recordOnlyOverlay {
+        if permissionOverlay || recordOnlyOverlay || micSilentOverlay || appSilentOverlay {
             // Honour the cache's frame discipline: animated badges advance, static ones
             // stay on frame 0. Without this, the live animationFrame leaks through and
             // makes `.inactive` (idle waveform) bounce as if recording.
@@ -114,6 +120,8 @@ enum MenuBarIcon {
                 badge: badge, frame: frame,
                 permissionOverlay: permissionOverlay,
                 recordOnlyOverlay: recordOnlyOverlay,
+                micSilentOverlay: micSilentOverlay,
+                appSilentOverlay: appSilentOverlay,
             )
         }
         guard let frames = cache[badge] else { return renderImage(badge: badge, frame: animationFrame) }
@@ -127,12 +135,18 @@ enum MenuBarIcon {
         frame: Int,
         permissionOverlay: Bool = false,
         recordOnlyOverlay: Bool = false,
+        micSilentOverlay: Bool = false,
+        appSilentOverlay: Bool = false,
     ) -> NSImage {
         let size = NSSize(width: 18, height: 18)
-        // The `.error` badge and either red-dot overlay all need an explicit foreground color
-        // (matching the menu bar appearance), because the image is non-template (the red mark
+        // The `.error` badge and any red overlay all need an explicit foreground color
+        // (matching the menu bar appearance), because the image is non-template (red marks
         // must stay red in both light and dark mode).
-        let needsExplicitForeground = badge == .error || permissionOverlay || recordOnlyOverlay
+        let needsExplicitForeground = badge == .error
+            || permissionOverlay
+            || recordOnlyOverlay
+            || micSilentOverlay
+            || appSilentOverlay
         // Snapshot the dark-mode appearance on the calling thread (the cache
         // builder runs at type init on the main thread; ad-hoc overlay
         // renders also originate from `image(badge:…)` on MainActor). The
@@ -147,25 +161,20 @@ enum MenuBarIcon {
                 NSColor.black.setFill()
             }
 
-            switch badge {
-            case .transcribing:
-                drawTranscribingAnimation(in: rect, frame: frame)
+            drawBadgeBody(badge: badge, in: rect, frame: frame)
 
-            case .diarizing:
-                drawDiarizingAnimation(in: rect, frame: frame)
-
-            case .processing:
-                drawProtocolAnimation(in: rect, frame: frame)
-
-            case .error:
-                drawRecordingAnimation(in: rect, frame: 0)
-
-            case .updateAvailable:
-                drawRecordingAnimation(in: rect, frame: 0)
-                drawUpdateArrow(in: rect)
-
-            default:
-                drawRecordingAnimation(in: rect, frame: frame)
+            // Tint halves AFTER the base body is drawn. Clipping to the upper /
+            // lower half + repainting the same body with red fill overlays the
+            // tint without altering bar geometry — clean per-channel signal.
+            if micSilentOverlay {
+                drawTintedHalf(in: rect, half: .top) {
+                    drawBadgeBody(badge: badge, in: rect, frame: frame)
+                }
+            }
+            if appSilentOverlay {
+                drawTintedHalf(in: rect, half: .bottom) {
+                    drawBadgeBody(badge: badge, in: rect, frame: frame)
+                }
             }
 
             // Overlay precedence: permission errors win over record-only because a permission
@@ -180,6 +189,50 @@ enum MenuBarIcon {
         }
         image.isTemplate = !needsExplicitForeground
         return image
+    }
+
+    /// Single dispatch for the badge's main body shape. Extracted so the
+    /// per-half tint pass can re-draw the same body under a clip rect.
+    private static func drawBadgeBody(badge: BadgeKind, in rect: NSRect, frame: Int) {
+        switch badge {
+        case .transcribing:
+            drawTranscribingAnimation(in: rect, frame: frame)
+
+        case .diarizing:
+            drawDiarizingAnimation(in: rect, frame: frame)
+
+        case .processing:
+            drawProtocolAnimation(in: rect, frame: frame)
+
+        case .error:
+            drawRecordingAnimation(in: rect, frame: 0)
+
+        case .updateAvailable:
+            drawRecordingAnimation(in: rect, frame: 0)
+            drawUpdateArrow(in: rect)
+
+        default:
+            drawRecordingAnimation(in: rect, frame: frame)
+        }
+    }
+
+    private enum Half { case top, bottom }
+
+    /// Save graphics state, clip to the top or bottom half of `rect`, set red
+    /// fill, run `body`, restore. The +0.5 fudge factor closes the antialiasing
+    /// seam at the exact center line.
+    private static func drawTintedHalf(in rect: NSRect, half: Half, body: () -> Void) {
+        guard let ctx = NSGraphicsContext.current else { return }
+        ctx.saveGraphicsState()
+        defer { ctx.restoreGraphicsState() }
+        let centerY = rect.height / 2
+        let clip = switch half {
+        case .top: NSRect(x: 0, y: centerY - 0.5, width: rect.width, height: rect.height - centerY + 0.5)
+        case .bottom: NSRect(x: 0, y: 0, width: rect.width, height: centerY + 0.5)
+        }
+        NSBezierPath(rect: clip).setClip()
+        NSColor.systemRed.setFill()
+        body()
     }
 
     // MARK: - Recording Animation (bouncing waveform)

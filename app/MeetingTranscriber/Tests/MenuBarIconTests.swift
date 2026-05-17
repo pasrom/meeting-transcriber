@@ -2,7 +2,7 @@
 import XCTest
 
 @MainActor
-final class MenuBarIconTests: XCTestCase {
+final class MenuBarIconTests: XCTestCase { // swiftlint:disable:this type_body_length
     func testImageWithNoBadgeIsTemplate() {
         let image = MenuBarIcon.image(badge: .inactive)
         XCTAssertTrue(image.isTemplate)
@@ -58,6 +58,39 @@ final class MenuBarIconTests: XCTestCase {
                 "Animated badge \(badge) should advance under recordOnlyOverlay",
             )
         }
+    }
+
+    // MARK: - Per-channel silence overlay
+
+    func testMicSilentOverlayProducesNonTemplateImage() {
+        for badge in BadgeKind.allCases {
+            let image = MenuBarIcon.image(badge: badge, micSilentOverlay: true)
+            XCTAssertFalse(image.isTemplate, "mic-silent overlay must be non-template for \(badge)")
+        }
+    }
+
+    func testAppSilentOverlayProducesNonTemplateImage() {
+        for badge in BadgeKind.allCases {
+            let image = MenuBarIcon.image(badge: badge, appSilentOverlay: true)
+            XCTAssertFalse(image.isTemplate, "app-silent overlay must be non-template for \(badge)")
+        }
+    }
+
+    func testChannelOverlaysDefaultOff() {
+        let image = MenuBarIcon.image(badge: .recording)
+        XCTAssertTrue(image.isTemplate, "without overlay flag, recording stays template")
+    }
+
+    func testMicAndAppSilentRenderDistinctImages() {
+        let micRed = MenuBarIcon.image(badge: .recording, animationFrame: 0, micSilentOverlay: true)
+        let appRed = MenuBarIcon.image(badge: .recording, animationFrame: 0, appSilentOverlay: true)
+        let bothRed = MenuBarIcon.image(badge: .recording, animationFrame: 0, micSilentOverlay: true, appSilentOverlay: true)
+        let normal = MenuBarIcon.image(badge: .recording, animationFrame: 0)
+        XCTAssertNotEqual(micRed.tiffRepresentation, normal.tiffRepresentation)
+        XCTAssertNotEqual(appRed.tiffRepresentation, normal.tiffRepresentation)
+        XCTAssertNotEqual(micRed.tiffRepresentation, appRed.tiffRepresentation, "top-half and bottom-half tint must differ")
+        XCTAssertNotEqual(bothRed.tiffRepresentation, micRed.tiffRepresentation)
+        XCTAssertNotEqual(bothRed.tiffRepresentation, appRed.tiffRepresentation)
     }
 
     func testAllBadgeKindsProduceValidImages() {
