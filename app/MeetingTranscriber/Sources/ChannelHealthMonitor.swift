@@ -50,7 +50,7 @@ struct ChannelHealthMonitor {
         let asymmetric = asymmetricChannel(micDBFS: micDBFS, appDBFS: appDBFS)
 
         guard let channel = asymmetric else {
-            return clearEpisode(micDBFS: micDBFS, appDBFS: appDBFS)
+            return handleNonAsymmetricTick(micDBFS: micDBFS, appDBFS: appDBFS)
         }
 
         if episode?.channel != channel {
@@ -93,16 +93,22 @@ struct ChannelHealthMonitor {
         return nil
     }
 
-    private mutating func clearEpisode(micDBFS: Double, appDBFS: Double) -> ChannelHealthEvent? {
-        guard let current = episode, current.started else {
-            episode = nil
-            return nil
-        }
-        let recovered: Bool = switch current.channel {
+    /// Called when neither side is unambiguously asymmetric (e.g. a level
+    /// fell into the dead zone between `silenceThresholdDBFS` and
+    /// `speechThresholdDBFS`). Hysteresis: an active episode only resolves
+    /// when the channel believed to be silent crosses back above
+    /// `speechThresholdDBFS`. Transient dips (natural speech pauses on the
+    /// active side, or borderline noise on the silent side) keep the
+    /// debounce timer running instead of resetting it on every wobble.
+    private mutating func handleNonAsymmetricTick(micDBFS: Double, appDBFS: Double) -> ChannelHealthEvent? {
+        guard let current = episode else { return nil }
+        let silentSideRecovered: Bool = switch current.channel {
         case .mic: micDBFS >= speechThresholdDBFS
         case .app: appDBFS >= speechThresholdDBFS
         }
+        guard silentSideRecovered else { return nil }
+        let wasStarted = current.started
         episode = nil
-        return recovered ? .recovered(channel: current.channel) : nil
+        return wasStarted ? .recovered(channel: current.channel) : nil
     }
 }

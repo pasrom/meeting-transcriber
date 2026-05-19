@@ -146,6 +146,64 @@ final class ChannelHealthMonitorTests: XCTestCase {
         XCTAssertEqual(event, .started(channel: .app, quietSince: t0.addingTimeInterval(6)))
     }
 
+    // MARK: - Hysteresis (active-side dips don't reset the debounce timer)
+
+    func testActiveSideDipsToAmbiguousDoesNotResetTimer() {
+        // Real speech naturally dips between syllables. The active side
+        // momentarily landing in the dead zone (-50..-60) must not erase
+        // the in-flight debounce — otherwise the trigger never fires in
+        // real meetings where pauses are normal.
+        var monitor = makeMonitor(debounce: 30)
+        // app silent throughout, mic dips into dead zone mid-debounce
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0)
+        _ = monitor.update(micDBFS: -55, appDBFS: -80, now: t0.addingTimeInterval(10))
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(20))
+        // Despite the mid-debounce dip, the timer kept counting from t0.
+        let event = monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(event, .started(channel: .app, quietSince: t0))
+    }
+
+    func testSilentSideToAmbiguousDoesNotResetTimer() {
+        // Borderline background noise on the supposedly-silent side
+        // (e.g. -55 dBFS comfort noise from a codec) must not falsify
+        // the hypothesis. Only crossing back above the speech threshold
+        // counts as positive recovery.
+        var monitor = makeMonitor(debounce: 30)
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0)
+        _ = monitor.update(micDBFS: -25, appDBFS: -55, now: t0.addingTimeInterval(15))
+        let event = monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(event, .started(channel: .app, quietSince: t0))
+    }
+
+    func testSilentSideCrossingSpeechClearsUnstartedEpisode() {
+        // Positive recovery: the channel we were tracking as silent comes
+        // back above the speech threshold. Episode must be discarded so
+        // the next .started — if it happens later — re-debounces fresh.
+        var monitor = makeMonitor(debounce: 30)
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0)
+        // App jumps back to speech — would-be episode is dropped.
+        _ = monitor.update(micDBFS: -25, appDBFS: -25, now: t0.addingTimeInterval(10))
+        // Even at the original debounce deadline (+30s of original quietSince),
+        // no .started — episode was cleared.
+        XCTAssertNil(monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(30)))
+    }
+
+    func testLatchedEpisodeSurvivesActiveSideAmbiguousDip() {
+        // After .started has fired, a transient ambiguous read on the
+        // active side must not silently clear internal state — that would
+        // strand the UI flag with no recovery event to clear it.
+        var monitor = makeMonitor(debounce: 5)
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0)
+        _ = monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(5)) // .started
+        // Mic dips into ambiguous zone briefly — must NOT fire recovery.
+        XCTAssertNil(monitor.update(micDBFS: -55, appDBFS: -80, now: t0.addingTimeInterval(8)))
+        // Subsequent .started must NOT re-fire (still latched).
+        XCTAssertNil(monitor.update(micDBFS: -25, appDBFS: -80, now: t0.addingTimeInterval(10)))
+        // Real recovery still works.
+        let event = monitor.update(micDBFS: -25, appDBFS: -25, now: t0.addingTimeInterval(15))
+        XCTAssertEqual(event, .recovered(channel: .app))
+    }
+
     // MARK: - Custom thresholds
 
     func testCustomThresholdsAreHonored() {
