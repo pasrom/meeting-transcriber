@@ -3,13 +3,58 @@ import AVFoundation
 import Foundation
 import IOKit.pwr_mgt
 
-// --- Configuration ---
-let fixturePath = CommandLine.arguments.count > 1
-    ? CommandLine.arguments[1]
-    : findFixture()
+// --- CLI parsing ---
+// Backwards-compatible: positional args [audio.wav] [window-title] still work.
+// Flag args (any position): --silent, --duration=<seconds>.
 
-let windowTitle = CommandLine.arguments.count > 2
-    ? CommandLine.arguments[2]
+var silentMode = false
+var durationOverride: TimeInterval?
+var positionals: [String] = []
+
+for arg in CommandLine.arguments.dropFirst() {
+    if arg == "--silent" {
+        silentMode = true
+    } else if arg.hasPrefix("--duration=") {
+        let raw = String(arg.dropFirst("--duration=".count))
+        guard let sec = TimeInterval(raw), sec > 0 else {
+            print("ERROR: --duration expects a positive number of seconds, got '\(raw)'")
+            exit(2)
+        }
+        durationOverride = sec
+    } else if arg == "-h" || arg == "--help" {
+        print("""
+        Usage: meeting-simulator [audio.wav] [window-title] [--silent] [--duration=<seconds>]
+
+          audio.wav       Path to a fixture WAV played through the system output.
+                          Ignored when --silent is set.
+          window-title    Window title (must match a MeetingDetector pattern for
+                          the app to auto-detect this as a meeting).
+          --silent        Skip audio playback entirely. The window + power
+                          assertion still fire so detection triggers, but the
+                          CATapDescription tap sees only zero buffers — exercises
+                          the silent-recording detection path end-to-end.
+          --duration=N    Auto-terminate after N seconds. Default: audio duration
+                          + 2s when playing, or 60s when --silent.
+        """)
+        exit(0)
+    } else {
+        positionals.append(arg)
+    }
+}
+
+// Fixture is needed even in --silent mode: AVAudioPlayer needs SOME
+// PCM source to pump zero-content frames through the audio device
+// so CATapDescription's IOProc fires and the recorder produces full
+// silent buffers (rather than the no-producer case where the device
+// goes idle and the recording is zero bytes).
+let fixturePath: String = if let arg = positionals.first {
+    arg
+} else {
+    findFixture()
+}
+
+let windowTitle = positionals.count > 1
+    ? positionals[1]
     : "Simulator Meeting | MeetingSimulator"
 
 // --- Find fixture audio ---
@@ -108,15 +153,8 @@ if assertionResult == kIOReturnSuccess {
 
 print("Window: \"\(windowTitle)\"")
 print("PID: \(ProcessInfo.processInfo.processIdentifier)")
-print("Audio: \(fixturePath)")
+print(silentMode ? "Audio: <silent mode — no playback>" : "Audio: \(fixturePath)")
 print("Leave button visible for AX verification")
-
-// --- Play audio ---
-let audioURL = URL(fileURLWithPath: fixturePath)
-guard FileManager.default.fileExists(atPath: fixturePath) else {
-    print("ERROR: Audio file not found: \(fixturePath)")
-    exit(1)
-}
 
 // --- App delegate to handle window close + audio end ---
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAudioPlayerDelegate {
@@ -148,18 +186,70 @@ app.delegate = delegate
 window.delegate = delegate
 
 var audioPlayer: AVAudioPlayer?
-do {
-    audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
-    audioPlayer?.delegate = delegate
-    audioPlayer?.prepareToPlay()
-    audioPlayer?.play()
-    let duration = audioPlayer?.duration ?? 0
-    label.stringValue = "Playing \(URL(fileURLWithPath: fixturePath).lastPathComponent)\n(\(String(format: "%.0f", duration))s)"
-    print("Playing audio (\(String(format: "%.1f", duration))s)...")
-    print("Window closes automatically after playback.")
-} catch {
-    print("ERROR: Could not play audio: \(error)")
-    label.stringValue = "Audio error: \(error.localizedDescription)"
+
+if silentMode {
+    let duration = durationOverride ?? 60
+    // Play the fixture at volume=0. AVAudioPlayer still pumps PCM
+    // frames through the system audio chain — the default output
+    // device stays active, CATapDescription's IOProc fires, the
+    // tap captures buffers (all zeros after the volume scaling).
+    // Without playing anything at all the tap stays subscribed but
+    // gets no callbacks because the device has no producer, so
+    // the recording file ends up zero bytes — wrong failure mode
+    // for the symmetric-silence detector under test.
+    let audioURL = URL(fileURLWithPath: fixturePath)
+    if FileManager.default.fileExists(atPath: fixturePath) {
+        do {
+            audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
+            audioPlayer?.delegate = delegate
+            audioPlayer?.volume = 0
+            audioPlayer?.numberOfLoops = -1 // loop until the duration timer fires
+            audioPlayer?.prepareToPlay()
+            audioPlayer?.play()
+            label.stringValue = "SILENT MODE\n(zero-volume playback, \(Int(duration))s)"
+            print("Silent mode: playing fixture at volume=0 for \(duration)s.")
+        } catch {
+            print("ERROR: Could not play fixture at volume 0: \(error)")
+            label.stringValue = "Silent mode (audio error — tap may be inactive)"
+        }
+    } else {
+        // Fallback for environments without the fixture: still pop
+        // the window + power assertion, but warn that the recorder
+        // path may produce zero-byte files because nothing drives
+        // the audio device.
+        label.stringValue = "SILENT MODE\n(no fixture — tap will be inactive)"
+        print("Silent mode: fixture not found, no audio device producer.")
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+        print("Duration elapsed — closing.")
+        NSApplication.shared.terminate(nil)
+    }
+} else {
+    // --- Play audio ---
+    let audioURL = URL(fileURLWithPath: fixturePath)
+    guard FileManager.default.fileExists(atPath: fixturePath) else {
+        print("ERROR: Audio file not found: \(fixturePath)")
+        exit(1)
+    }
+    do {
+        audioPlayer = try AVAudioPlayer(contentsOf: audioURL)
+        audioPlayer?.delegate = delegate
+        audioPlayer?.prepareToPlay()
+        audioPlayer?.play()
+        let duration = audioPlayer?.duration ?? 0
+        label.stringValue = "Playing \(URL(fileURLWithPath: fixturePath).lastPathComponent)\n(\(String(format: "%.0f", duration))s)"
+        print("Playing audio (\(String(format: "%.1f", duration))s)...")
+        print("Window closes automatically after playback.")
+    } catch {
+        print("ERROR: Could not play audio: \(error)")
+        label.stringValue = "Audio error: \(error.localizedDescription)"
+    }
+    if let override = durationOverride {
+        DispatchQueue.main.asyncAfter(deadline: .now() + override) {
+            print("Duration elapsed — closing.")
+            NSApplication.shared.terminate(nil)
+        }
+    }
 }
 
 // Run
