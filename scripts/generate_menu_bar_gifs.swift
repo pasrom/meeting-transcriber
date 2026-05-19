@@ -160,6 +160,27 @@ func drawExclamationBadge(in rect: NSRect) {
     NSBezierPath(ovalIn: NSRect(x: cx - dotSize / 2, y: dotY, width: dotSize, height: dotSize)).fill()
 }
 
+// Tint the top or bottom half of the icon red — mirrors
+// `MenuBarIcon.drawTintedHalf`. Caller passes the body draw closure;
+// we save graphics state, clip to the requested half, set red fill,
+// run the body, restore. The +0.5 fudge closes the AA seam on the
+// center line, matching the production implementation.
+enum Half { case top, bottom }
+
+func drawTintedHalf(in rect: NSRect, half: Half, body: () -> Void) {
+    guard let ctx = NSGraphicsContext.current else { return }
+    ctx.saveGraphicsState()
+    defer { ctx.restoreGraphicsState() }
+    let centerY = rect.height / 2
+    let clip = switch half {
+    case .top: NSRect(x: 0, y: centerY - 0.5, width: rect.width, height: rect.height - centerY + 0.5)
+    case .bottom: NSRect(x: 0, y: 0, width: rect.width, height: centerY + 0.5)
+    }
+    NSBezierPath(rect: clip).setClip()
+    NSColor.systemRed.setFill()
+    body()
+}
+
 // Plain red dot in the bottom-right corner (no exclamation glyph).
 // Mirrors MenuBarIcon.drawRecordOnlyBadge — used for the record-only overlay.
 func drawRecordOnlyBadge(in rect: NSRect) {
@@ -287,5 +308,27 @@ let recordOnlyFrame = renderFrame { rect in
 }
 
 writeGIF(name: "menu-bar-record-only.gif", frames: [recordOnlyFrame, recordOnlyFrame], delay: 1.0)
+
+// Channel-silent (app-audio dead): recording animation with the bottom
+// half of the waveform tinted red — same overlay path
+// `MenuBarIcon.image(..., appSilentOverlay:)` uses in production.
+let appSilentFrames = (0 ..< frameCount).map { i in
+    renderFrame { rect in
+        drawRecording(in: rect, frame: i)
+        drawTintedHalf(in: rect, half: .bottom) { drawRecording(in: rect, frame: i) }
+    }
+}
+
+writeGIF(name: "menu-bar-channel-silent-app.gif", frames: appSilentFrames)
+
+// Channel-silent (mic dead): same animation, top half tinted red.
+let micSilentFrames = (0 ..< frameCount).map { i in
+    renderFrame { rect in
+        drawRecording(in: rect, frame: i)
+        drawTintedHalf(in: rect, half: .top) { drawRecording(in: rect, frame: i) }
+    }
+}
+
+writeGIF(name: "menu-bar-channel-silent-mic.gif", frames: micSilentFrames)
 
 print("Done!")
