@@ -181,6 +181,23 @@ The health check distinguishes *denied* from *broken*. "Broken" usually means th
 
 A small red dot in the bottom-right corner is overlaid on top of the current icon (idle, recording, transcribing, …) whenever **Record-only mode** is enabled (Settings → General → "Record-only mode"). In this mode the app keeps detecting meetings and producing dual-source recordings, but skips the entire post-recording pipeline (VAD, transcription, diarization, protocol generation). Recordings + a per-meeting `<timestamp>_meta.json` sidecar are dropped into your configured Output Folder for an external pipeline (e.g. a Linux GPU host via Syncthing) to pick up. The dot stays visible across all states so the mode is always clearly indicated; if a permission problem coexists, the red exclamation badge takes precedence.
 
+### Per-channel asymmetric-silence indicator
+
+<p>
+<img src="docs/menu-bar-channel-silent-app.gif" width="80" alt="App-audio channel silent — bottom half red">&nbsp;&nbsp;
+<img src="docs/menu-bar-channel-silent-mic.gif" width="80" alt="Mic channel silent — top half red">
+</p>
+
+When one capture channel goes silent while the other is still carrying audio for longer than the configured debounce window, the waveform bars are tinted red to surface the half-broken capture at a glance:
+
+- **Bottom half red** — app-audio channel is dead (you're speaking but nothing from the meeting app is being captured — bad tap, broken routing, system output muted)
+- **Top half red** — mic channel is dead (the meeting is audible but your voice isn't being captured — wrong input device, mic muted at system level)
+- **Both halves red** — both channels are silent while in recording state
+
+A "Capture Channel Silent" notification fires once per episode at the moment the tint kicks in. Configurable in **Settings → Audio → Per-Channel Indicator** (default: on, 90 s debounce, range 30–300 s). Designed to surface real routing failures without false-positiving during normal speech pauses: the detector uses dual dBFS thresholds with hysteresis so transient dips between syllables don't reset the debounce timer.
+
+If a permission problem coexists, the red exclamation badge takes precedence over the channel-silent tint.
+
 ---
 
 ## Usage
