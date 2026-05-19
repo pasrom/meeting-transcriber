@@ -135,6 +135,9 @@ final class AppState { // swiftlint:disable:this type_body_length
             if env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1" {
                 appSilentActive = true
             }
+            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_RECORDING_SILENT"] == "1" {
+                recordingSilentActive = true
+            }
         #endif
 
         // Bring engines in line with the current settings up front so the
