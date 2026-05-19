@@ -34,6 +34,7 @@
                 channelHealth: .init(
                     micSilent: micSilentActive,
                     appSilent: appSilentActive,
+                    recordingSilent: recordingSilentActive,
                 ),
             )
         }

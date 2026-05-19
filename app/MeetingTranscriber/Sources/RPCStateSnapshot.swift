@@ -47,8 +47,19 @@
         struct ChannelHealth: Codable {
             let micSilent: Bool
             let appSilent: Bool
+            /// True while *both* channels have been below silence threshold
+            /// continuously past the debounce window — the failure mode
+            /// `ChannelHealthMonitor` intentionally ignores (symmetric
+            /// silence). Surfaced separately so e2e drivers can assert on
+            /// the polling chain wired up to `SilentRecordingMonitor`
+            /// without screenshot OCR.
+            let recordingSilent: Bool
 
-            static let inactive = Self(micSilent: false, appSilent: false)
+            static let inactive = Self(
+                micSilent: false,
+                appSilent: false,
+                recordingSilent: false,
+            )
         }
 
         struct LastJob: Codable {

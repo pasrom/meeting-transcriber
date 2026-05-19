@@ -155,10 +155,12 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls.count, 0)
     }
 
-    func testBothChannelsSilentDoesNotFire() {
-        // Legitimate pause: both quiet. The monitor must NOT treat this as
-        // asymmetric — it's symmetric silence, the entire meeting is paused.
-        let (state, recorder, notifier, _) = makeState()
+    func testBothChannelsSilentDoesNotFireAsymmetricFlags() {
+        // Asymmetric monitor must NOT treat symmetric silence as an event
+        // (its job is one-side-dead detection). The sibling
+        // `SilentRecordingMonitor` *does* fire on this case — see
+        // `testBothChannelsSilentFiresRecordingSilentAfterDebounce`.
+        let (state, recorder, _, _) = makeState()
         recorder.micLevelDBFS = -80
         recorder.appLevelDBFS = -80
         for offset in stride(from: 0.0, through: 30.0, by: 1.0) {
@@ -166,7 +168,43 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         }
         XCTAssertFalse(state.micSilentActive)
         XCTAssertFalse(state.appSilentActive)
-        XCTAssertEqual(notifier.calls.count, 0)
+    }
+
+    // MARK: - Silent-recording (symmetric silence) detection
+
+    func testBothChannelsSilentFiresRecordingSilentAfterDebounce() {
+        // Sibling-monitor coverage of the 40-minute zero-audio failure
+        // mode that shipped past PR #286: both channels at the noise
+        // floor for the entire recording, no in-app warning. The new
+        // `SilentRecordingMonitor` shares the same debounce as
+        // `ChannelHealthMonitor` and fires `recordingSilentActive` plus
+        // a notification.
+        let (state, recorder, notifier, _) = makeState()
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -80
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0)
+        XCTAssertFalse(state.recordingSilentActive)
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertTrue(state.recordingSilentActive)
+        // Asymmetric flags stay clear — semantics distinct from the
+        // mic/app-silent path.
+        XCTAssertFalse(state.micSilentActive)
+        XCTAssertFalse(state.appSilentActive)
+        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertEqual(notifier.calls[0].title, "Recording Appears Silent")
+    }
+
+    func testRecordingSilentRecoversWhenAnyChannelReturnsToSpeech() {
+        let (state, recorder, _, _) = makeState()
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -80
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0)
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertTrue(state.recordingSilentActive)
+
+        recorder.micLevelDBFS = -25
+        _ = state.applyChannelHealthTick(recorder: recorder, now: t0.addingTimeInterval(35))
+        XCTAssertFalse(state.recordingSilentActive)
     }
 
     // MARK: - Settings re-init across recordings

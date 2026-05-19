@@ -60,11 +60,24 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// the menu-bar **bottom-half** red tint.
     var appSilentActive: Bool = false
 
+    /// True while **both** capture channels have been below the silence
+    /// threshold continuously for `settings.asymmetricSilenceWarningSeconds`
+    /// — the failure mode `ChannelHealthMonitor` intentionally ignores
+    /// (symmetric silence). Drives the menu-bar **full red** waveform
+    /// (both halves tinted simultaneously).
+    var recordingSilentActive: Bool = false
+
     /// Pure state machine driven by the 10-Hz level poll while recording. Lives
     /// here (not on WatchLoop) so its lifecycle outlasts a single recording —
     /// observers of `micSilentActive` / `appSilentActive` keep their identity across the
     /// detect → record → process state churn.
     @ObservationIgnored private var channelHealthMonitor = ChannelHealthMonitor()
+
+    /// Sibling monitor that catches the symmetric-silence case
+    /// `ChannelHealthMonitor` intentionally skips. Shares the same
+    /// debounce threshold; lifecycle managed alongside the channel-health
+    /// monitor in `startChannelHealthMonitoring` / `stopChannelHealthMonitoring`.
+    @ObservationIgnored private var silentRecordingMonitor = SilentRecordingMonitor()
 
     @ObservationIgnored private var levelMonitorTask: Task<Void, Never>?
 
@@ -101,6 +114,9 @@ final class AppState { // swiftlint:disable:this type_body_length
         self.updateChecker = updateChecker ?? UpdateChecker()
         self.pipelineQueue = PipelineQueue()
         self.channelHealthMonitor = ChannelHealthMonitor(
+            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
+        )
+        self.silentRecordingMonitor = SilentRecordingMonitor(
             debounceSeconds: settings.asymmetricSilenceWarningSeconds,
         )
 
@@ -525,6 +541,9 @@ final class AppState { // swiftlint:disable:this type_body_length
         channelHealthMonitor = ChannelHealthMonitor(
             debounceSeconds: settings.asymmetricSilenceWarningSeconds,
         )
+        silentRecordingMonitor = SilentRecordingMonitor(
+            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
+        )
     }
 
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
@@ -557,11 +576,10 @@ final class AppState { // swiftlint:disable:this type_body_length
         recorder: any RecordingProvider,
         now: Date,
     ) -> ChannelHealthEvent? {
-        let event = channelHealthMonitor.update(
-            micDBFS: recorder.micLevelDBFS,
-            appDBFS: recorder.appLevelDBFS,
-            now: now,
-        )
+        let mic = recorder.micLevelDBFS
+        let app = recorder.appLevelDBFS
+
+        let event = channelHealthMonitor.update(micDBFS: mic, appDBFS: app, now: now)
         switch event {
         case let .started(channel, _):
             switch channel {
@@ -585,6 +603,23 @@ final class AppState { // swiftlint:disable:this type_body_length
         case .none:
             break
         }
+
+        let silentEvent = silentRecordingMonitor.update(micDBFS: mic, appDBFS: app, now: now)
+        switch silentEvent {
+        case .started:
+            recordingSilentActive = true
+            notifier.notify(
+                title: "Recording Appears Silent",
+                body: Self.silentRecordingMessage,
+            )
+
+        case .recovered:
+            recordingSilentActive = false
+
+        case .none:
+            break
+        }
+
         return event
     }
 
@@ -600,14 +635,21 @@ final class AppState { // swiftlint:disable:this type_body_length
         }
     }
 
+    nonisolated static let silentRecordingMessage: String =
+        "Both capture channels have been silent since the recording started. "
+            + "Check the audio routing — the meeting app may have claimed the mic "
+            + "in exclusive mode (e.g. AirPods HFP), or the system input device may be muted."
+
     /// Stops the polling task and resets the monitor + UI flag. Called when
     /// recording ends or an error transition happens.
     private func stopChannelHealthMonitoring() {
         levelMonitorTask?.cancel()
         levelMonitorTask = nil
         channelHealthMonitor.reset()
+        silentRecordingMonitor.reset()
         micSilentActive = false
         appSilentActive = false
+        recordingSilentActive = false
     }
 
     // MARK: - Permission Health

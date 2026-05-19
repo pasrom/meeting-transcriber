@@ -101,8 +101,10 @@ struct MeetingTranscriberApp: App {
                     badge: appState.currentBadge,
                     permissionOverlay: appState.permissionHealth?.isHealthy == false,
                     recordOnlyOverlay: appState.settings.recordOnly,
-                    micSilentOverlay: appState.micSilentActive,
-                    appSilentOverlay: appState.appSilentActive,
+                    // `recordingSilentActive` paints both halves; OR'd in here so
+                    // MenuBarIcon only needs the two per-channel overlay inputs.
+                    micSilentOverlay: appState.micSilentActive || appState.recordingSilentActive,
+                    appSilentOverlay: appState.appSilentActive || appState.recordingSilentActive,
                 )
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
