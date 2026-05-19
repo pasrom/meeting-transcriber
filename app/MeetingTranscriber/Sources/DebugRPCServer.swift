@@ -163,7 +163,20 @@
                 // has expired. Important for back-to-back e2e cycles where
                 // the dev app is killed and restarted within seconds.
                 params.allowLocalEndpointReuse = true
-                let listener = try NWListener(using: params, on: port)
+                // Pin to IPv4 loopback. `acceptLocalOnly` alone leaves
+                // NWListener free to bind both `127.0.0.1` and `[::1]`
+                // (dual-stack `tcp46`). An orphan IPv6 listener from a
+                // crashed predecessor then breaks the next dual-stack
+                // bind with "Address already in use" even when IPv4 is
+                // free. `requiredLocalEndpoint` matches the documented
+                // contract and sidesteps the IPv6 orphan failure mode.
+                // `on:` is omitted because the port is already in the
+                // endpoint and NWListener traps if both are specified.
+                params.requiredLocalEndpoint = NWEndpoint.hostPort(
+                    host: "127.0.0.1",
+                    port: port,
+                )
+                let listener = try NWListener(using: params)
                 listener.newConnectionHandler = { [weak self] connection in
                     Task { @MainActor in self?.handle(connection) }
                 }
