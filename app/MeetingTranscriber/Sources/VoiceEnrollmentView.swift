@@ -119,6 +119,11 @@ struct VoiceEnrollmentView: View {
             SpeakerNamingView(
                 data: payload.namingData,
                 knownSpeakerNames: payload.knownNames,
+                // Enrollment flow is user-initiated from Settings — no focus-steal
+                // mid-keystroke from another app, so the keyboard-grace gate (which
+                // protects the post-meeting dialog) isn't needed here and would just
+                // feel sluggish.
+                gracePeriod: 0,
             ) { result in
                 switch VoiceEnrollmentLogic.handleNamingResult(
                     result, payload: payload, matcher: matcher,
