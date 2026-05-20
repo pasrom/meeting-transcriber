@@ -94,6 +94,24 @@ wait_for_rpc() {
     "$mtcli" healthz >/dev/null 2>&1
 }
 
+# Assert that a process matching `$pattern` is running. Exits 1 with a
+# clear error if not. Intended for polling loops that would otherwise
+# burn their full timeout if the app crashed mid-poll — the loop just
+# sees `{}` (or no /state response) and surfaces a misleading
+# "expected X never happened" error.
+#
+# Pattern-based (via `pgrep -f`) rather than PID-based so it works for
+# both `&`-launched scripts (e2e-silent-recording.sh) and
+# `open`-launched scripts (e2e-app.sh) without two APIs. The default
+# matches the deployed dev .app — same string as `quit_running_app`.
+assert_app_alive() {
+    local pattern="${1:-MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber}"
+    if ! pgrep -f "$pattern" >/dev/null 2>&1; then
+        echo "FAIL: app process matching '$pattern' is not running" >&2
+        exit 1
+    fi
+}
+
 # Restore a defaults boolean from a snapshotted value as returned by
 # `defaults read`. That command returns "0"/"1" but `-bool` only
 # accepts the literal tokens `true`/`false`/`yes`/`no`; without this
