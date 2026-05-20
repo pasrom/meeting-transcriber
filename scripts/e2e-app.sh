@@ -340,6 +340,12 @@ _poll_for_new_lastjob_terminal() {
     local lj_id="" lj_state="" pipe_active="" pipe_processing="" pending_naming=""
 
     while true; do
+        # Fail fast if the dev .app died — otherwise the loop just sees
+        # the `|| true` swallow rpc/state errors and we'd burn the full
+        # ${PIPELINE_TIMEOUT_S}s before surfacing as "no new pipeline
+        # job reached terminal state", masking the real crash.
+        assert_app_alive
+
         lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
         IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
             rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
