@@ -72,13 +72,26 @@ struct SpeakerNamingView: View {
     let knownSpeakerNames: [String]
     let onComplete: (PipelineQueue.SpeakerNamingResult) -> Void
 
+    /// Window after the dialog appears (or after Re-run produces a fresh `data.revision`)
+    /// during which Confirm and Skip remain disabled. Prevents accidental confirms from
+    /// stray Enter/Escape keystrokes that leak from another app's focus when
+    /// `bringWindowToFront` steals focus mid-keystroke. Historical pipeline_log data
+    /// shows ~19% of speaker-naming sessions exiting within 2-3 s — an isolated cluster
+    /// outside the log-normal human-confirm distribution. See
+    /// `docs/plans/.local/research/2026-05-19-late-speaker-renaming-after-done.md`.
+    static let defaultKeyboardGracePeriod: TimeInterval = 0.75
+
+    let gracePeriod: TimeInterval
+
     init(
         data: PipelineQueue.SpeakerNamingData,
         knownSpeakerNames: [String] = [],
+        gracePeriod: TimeInterval = Self.defaultKeyboardGracePeriod,
         onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void,
     ) {
         self.data = data
         self.knownSpeakerNames = knownSpeakerNames
+        self.gracePeriod = gracePeriod
         self.onComplete = onComplete
         // Seed `names` and `rerunCount` synchronously so the view renders
         // its chip rows on first body evaluation (the chips depend on
@@ -88,8 +101,13 @@ struct SpeakerNamingView: View {
         let speakerList = Self.computeSpeakers(from: data)
         _names = State(initialValue: Self.computeInitialNames(speakers: speakerList))
         _rerunCount = State(initialValue: max(2, speakerList.count + 1))
+        // Initialize the grace-period gate to "active" when the period is positive
+        // so the buttons start disabled. When tests pass gracePeriod = 0 the gate
+        // starts open (no grace) and the unlock task is a no-op.
+        _keyboardGracePeriodActive = State(initialValue: gracePeriod > 0)
     }
 
+    @State private var keyboardGracePeriodActive: Bool = true
     @State private var names: [String] = []
     /// Job-ID for which this view has already fired `onComplete`. Tracked
     /// per-job (not just a Bool) so that when the window switches to a
@@ -166,6 +184,7 @@ struct SpeakerNamingView: View {
                     onComplete(.skipped)
                 }
                 .keyboardShortcut(.escape)
+                .disabled(keyboardGracePeriodActive)
                 .accessibilityIdentifier("skip-button")
 
                 Button("Confirm") {
@@ -175,6 +194,7 @@ struct SpeakerNamingView: View {
                 }
                 .keyboardShortcut(.return)
                 .buttonStyle(.borderedProminent)
+                .disabled(keyboardGracePeriodActive)
                 .accessibilityIdentifier("confirm-button")
             }
             .padding(.bottom, 8)
@@ -190,6 +210,21 @@ struct SpeakerNamingView: View {
         // `completedJobID` guard kept Confirm/Skip/Re-run dead.
         .onChange(of: data.revision) { _, _ in
             resetForCurrentPresentation()
+        }
+        // Keyboard-grace gate: keep Confirm + Skip disabled for `gracePeriod`
+        // seconds after the dialog appears AND after each Re-run produces a
+        // fresh `data.revision`. The `task(id:)` cancels + restarts when
+        // `data.revision` changes, re-locking the buttons each time.
+        .task(id: data.revision) {
+            guard gracePeriod > 0 else {
+                keyboardGracePeriodActive = false
+                return
+            }
+            keyboardGracePeriodActive = true
+            try? await Task.sleep(for: .seconds(gracePeriod))
+            if !Task.isCancelled {
+                keyboardGracePeriodActive = false
+            }
         }
         // No onDisappear → .skipped: in the non-blocking architecture closing
         // the window (Cmd+Q, click X, app quit) leaves the job in
