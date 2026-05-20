@@ -48,6 +48,8 @@ while [ $# -gt 0 ]; do
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/e2e-helpers.sh
+source "$ROOT/scripts/lib/e2e-helpers.sh"
 DEV_BUNDLE_BUILD="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app"
 # Deploy to a stable path so the dev .app's TCC permissions (granted via
 # the self-hosted runner's PPPC profile, keyed on bundle path + cert SHA)
@@ -66,20 +68,6 @@ SAVED_AUTOWATCH=""
 SAVED_THRESHOLD=""
 SAVED_INDICATOR=""
 
-restore_bool() {
-    # `defaults read` returns bools as 0/1 but `-bool` only accepts the
-    # literal token (true/false/yes/no). Translate before writing back so
-    # the cleanup doesn't print the defaults usage screen and bail out on
-    # the first restore call.
-    local key="$1"
-    local saved="$2"
-    case "$saved" in
-        1) /usr/bin/defaults write "$BUNDLE_ID" "$key" -bool true ;;
-        0) /usr/bin/defaults write "$BUNDLE_ID" "$key" -bool false ;;
-        *) /usr/bin/defaults delete "$BUNDLE_ID" "$key" 2>/dev/null || true ;;
-    esac
-}
-
 cleanup() {
     if [ -n "${SIM_PID:-}" ] && kill -0 "$SIM_PID" 2>/dev/null; then
         kill -TERM "$SIM_PID" 2>/dev/null || true
@@ -89,18 +77,14 @@ cleanup() {
     fi
     # Restore defaults to whatever they were before we ran (or delete the
     # keys if they didn't exist).
-    restore_bool autoWatch "$SAVED_AUTOWATCH"
+    restore_bool_default "$BUNDLE_ID" autoWatch "$SAVED_AUTOWATCH"
     if [ -n "$SAVED_THRESHOLD" ]; then
         /usr/bin/defaults write "$BUNDLE_ID" asymmetricSilenceWarningSeconds -float "$SAVED_THRESHOLD"
     else
         /usr/bin/defaults delete "$BUNDLE_ID" asymmetricSilenceWarningSeconds 2>/dev/null || true
     fi
-    restore_bool perChannelIndicatorEnabled "$SAVED_INDICATOR"
-    launchctl list 2>/dev/null \
-        | awk '$3 ~ /com\.meetingtranscriber\.dev/ {print $3}' \
-        | while read -r srv; do
-            launchctl bootout "gui/$(id -u)/$srv" 2>/dev/null || true
-        done
+    restore_bool_default "$BUNDLE_ID" perChannelIndicatorEnabled "$SAVED_INDICATOR"
+    bootout_stale_launchctl
 }
 trap cleanup EXIT
 
@@ -189,15 +173,7 @@ SAVED_INDICATOR="$(/usr/bin/defaults read "$BUNDLE_ID" perChannelIndicatorEnable
 
 # --- 3. Kill any running instance -------------------------------------------
 
-if pgrep -f "MeetingTranscriber-Dev" >/dev/null 2>&1; then
-    osascript -e "tell application id \"$BUNDLE_ID\" to quit" 2>/dev/null || true
-    pkill -TERM -f "MeetingTranscriber-Dev" 2>/dev/null || true
-    for _ in $(seq 1 10); do
-        pgrep -f "MeetingTranscriber-Dev" >/dev/null 2>&1 || break
-        sleep 0.5
-    done
-    pkill -9 -f "MeetingTranscriber-Dev" 2>/dev/null || true
-fi
+quit_running_app "$BUNDLE_ID"
 
 # --- 4. Launch app with RPC enabled -----------------------------------------
 
@@ -205,17 +181,11 @@ env MEETINGTRANSCRIBER_DEBUG_RPC=1 "$BIN" &
 APP_PID=$!
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
-for i in $(seq 1 30); do
-    if "$MTCLI" healthz >/dev/null 2>&1; then
-        echo "  RPC up after ${i}s"
-        break
-    fi
-    sleep 1
-done
-if ! "$MTCLI" healthz >/dev/null 2>&1; then
+if ! wait_for_rpc "$MTCLI" 30; then
     echo "FAIL: RPC server did not start within 30 s" >&2
     exit 1
 fi
+echo "  RPC up"
 
 # --- 5. Trigger a "silent meeting" via meeting-simulator --------------------
 

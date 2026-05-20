@@ -46,6 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=lib/e2e-helpers.sh
+source "$ROOT/scripts/lib/e2e-helpers.sh"
 APP="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app"
 BIN="$APP/Contents/MacOS/MeetingTranscriber"
 MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
@@ -54,12 +56,7 @@ cleanup() {
     if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
         kill -9 "$APP_PID" 2>/dev/null || true
     fi
-    # Best-effort clear of any stale launchctl registration left by a previous run
-    launchctl list 2>/dev/null \
-        | awk '$3 ~ /com\.meetingtranscriber\.dev/ {print $3}' \
-        | while read -r srv; do
-            launchctl bootout "gui/$(id -u)/$srv" 2>/dev/null || true
-        done
+    bootout_stale_launchctl
 }
 trap cleanup EXIT
 
@@ -82,19 +79,8 @@ fi
 
 # --- 2. Kill any running instance + clear launchctl ----------------------
 
-if pgrep -f "MeetingTranscriber-Dev" >/dev/null 2>&1; then
-    # Graceful first, SIGKILL only as fallback — matches scripts/e2e-app.sh
-    # `quit_running_app` ladder so we don't risk corrupting UserDefaults or
-    # the pipeline-queue snapshot mid-write.
-    osascript -e 'tell application id "com.meetingtranscriber.dev" to quit' 2>/dev/null || true
-    pkill -TERM -f "MeetingTranscriber-Dev" 2>/dev/null || true
-    for _ in $(seq 1 10); do
-        pgrep -f "MeetingTranscriber-Dev" >/dev/null 2>&1 || break
-        sleep 0.5
-    done
-    pkill -9 -f "MeetingTranscriber-Dev" 2>/dev/null || true
-fi
-cleanup  # boots out stale launchctl entries
+quit_running_app
+bootout_stale_launchctl
 
 # --- 3. Launch with debug env hooks --------------------------------------
 
@@ -110,18 +96,11 @@ APP_PID=$!
 # --- 4. Wait for RPC server to come up (max 30 s) ------------------------
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
-for i in $(seq 1 30); do
-    if "$MTCLI" healthz >/dev/null 2>&1; then
-        echo "  RPC up after ${i}s"
-        break
-    fi
-    sleep 1
-done
-
-if ! "$MTCLI" healthz >/dev/null 2>&1; then
+if ! wait_for_rpc "$MTCLI" 30; then
     echo "FAIL: RPC server did not start within 30 s" >&2
     exit 1
 fi
+echo "  RPC up"
 
 # --- 5. Assert channelHealth state ---------------------------------------
 
