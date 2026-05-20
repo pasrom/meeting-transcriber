@@ -160,6 +160,24 @@ jobs:
           path: /tmp/e2e-channel-health-menubar.png
           if-no-files-found: ignore
 
+      # Silent-recording detector e2e (PR #295): drives the real
+      # production polling chain — meeting-simulator plays the fixture
+      # at volume=0 so the CATapDescription tap captures buffers of
+      # all-zero content, AppState's 10 Hz polling task accumulates
+      # both-silent ticks, and after 30 s of sustained silence
+      # `SilentRecordingMonitor` fires `.started` which the script
+      # asserts via `/state.channelHealth.recordingSilent`. Unlike
+      # `e2e-channel-health.sh` above, this does NOT use a
+      # FORCE-flag env hook — reverting `activeRecorder = recorder`
+      # in `WatchLoop.handleMeeting` or removing the monitor wiring
+      # in AppState makes this step fail. Closes the polling-chain
+      # bypass gap from #286.
+      # `--no-build` reuses the already-deployed bundle + the
+      # meeting-simulator + mt-cli built during the earlier lanes.
+      - name: Run silent-recording detector E2E
+        timeout-minutes: 3
+        run: bash scripts/e2e-silent-recording.sh --no-build
+
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
       - name: Upload simulator log
