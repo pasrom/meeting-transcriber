@@ -73,7 +73,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
 
     func testSkipButtonCallsOnCompleteWithSkipped() throws {
         var result: PipelineQueue.SpeakerNamingResult?
-        let sut = SpeakerNamingView(data: makeData()) { result = $0 }
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result = $0 }
         let body = try sut.inspect()
         try body.find(button: "Skip").tap()
         if case .skipped = result {
@@ -85,7 +85,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
 
     func testConfirmButtonCallsOnComplete() throws {
         var result: PipelineQueue.SpeakerNamingResult?
-        let sut = SpeakerNamingView(data: makeData()) { result = $0 }
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result = $0 }
         let body = try sut.inspect()
         try body.find(button: "Confirm").tap()
         if case .confirmed = result {
@@ -103,13 +103,13 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         var jobIDsConfirmed: [UUID] = []
 
         let dataA = makeData(title: "Meeting A")
-        let viewA = SpeakerNamingView(data: dataA) { result in
+        let viewA = SpeakerNamingView(data: dataA, gracePeriod: 0) { result in
             if case .confirmed = result { jobIDsConfirmed.append(dataA.jobID) }
         }
         try viewA.inspect().find(button: "Confirm").tap()
 
         let dataB = makeData(title: "Meeting B")
-        let viewB = SpeakerNamingView(data: dataB) { result in
+        let viewB = SpeakerNamingView(data: dataB, gracePeriod: 0) { result in
             if case .confirmed = result { jobIDsConfirmed.append(dataB.jobID) }
         }
         try viewB.inspect().find(button: "Confirm").tap()
@@ -128,13 +128,13 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         var jobIDsSkipped: [UUID] = []
 
         let dataA = makeData(title: "Meeting A")
-        let viewA = SpeakerNamingView(data: dataA) { result in
+        let viewA = SpeakerNamingView(data: dataA, gracePeriod: 0) { result in
             if case .skipped = result { jobIDsSkipped.append(dataA.jobID) }
         }
         try viewA.inspect().find(button: "Skip").tap()
 
         let dataB = makeData(title: "Meeting B")
-        let viewB = SpeakerNamingView(data: dataB) { result in
+        let viewB = SpeakerNamingView(data: dataB, gracePeriod: 0) { result in
             if case .skipped = result { jobIDsSkipped.append(dataB.jobID) }
         }
         try viewB.inspect().find(button: "Skip").tap()
@@ -214,7 +214,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
 
     func testRerunButtonCallsOnCompleteWithRerun() throws {
         var result: PipelineQueue.SpeakerNamingResult?
-        let sut = SpeakerNamingView(data: makeData()) { result = $0 }
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result = $0 }
         let body = try sut.inspect()
         try body.find(button: "Re-run").tap()
         if case .rerun = result {
@@ -476,6 +476,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         let sut = SpeakerNamingView(
             data: makeData(),
             knownSpeakerNames: ["Alice"],
+            gracePeriod: 0,
         ) { result = $0 }
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Alice").tap())
@@ -551,7 +552,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             participants: ["Dave"],
             isDualSource: false,
         )
-        let sut = SpeakerNamingView(data: data) { result = $0 }
+        let sut = SpeakerNamingView(data: data, gracePeriod: 0) { result = $0 }
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(button: "Dave").tap())
         try body.find(button: "Confirm").tap()
@@ -660,5 +661,57 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
 
     func testLongestSegmentReturnsNilForEmptyInput() {
         XCTAssertNil(SpeakerNamingView.longestSegment(forSpeaker: "A", in: []))
+    }
+
+    // MARK: - Keyboard grace period
+
+    /// Regression test for the ~19% auto-confirm bug surfaced in
+    /// `pipeline_log.jsonl` analysis on 2026-05-20: stray Enter from the
+    /// previous-focused app fires Confirm within 2-3 s of the dialog
+    /// appearing. With a positive `gracePeriod`, the Confirm button must
+    /// start disabled so the stray keystroke is dropped.
+    func testConfirmDisabledDuringGracePeriod() throws {
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 1.0) { _ in }
+        let body = try sut.inspect()
+        let confirm = try body.find(button: "Confirm")
+        XCTAssertTrue(
+            confirm.isDisabled(),
+            "Confirm must be disabled during the keyboard-grace period",
+        )
+    }
+
+    func testSkipDisabledDuringGracePeriod() throws {
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 1.0) { _ in }
+        let body = try sut.inspect()
+        let skip = try body.find(button: "Skip")
+        XCTAssertTrue(
+            skip.isDisabled(),
+            "Skip must be disabled during the keyboard-grace period",
+        )
+    }
+
+    /// Re-run is a deliberate click-only action (no `.keyboardShortcut`) so
+    /// the grace period doesn't need to gate it. Pinning this here also
+    /// guards against a future refactor that adds a keyboard shortcut to
+    /// Re-run without restoring the grace gate.
+    func testRerunNotDisabledDuringGracePeriod() throws {
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 1.0) { _ in }
+        let body = try sut.inspect()
+        let rerun = try body.find(button: "Re-run")
+        XCTAssertFalse(
+            rerun.isDisabled(),
+            "Re-run must remain clickable during the keyboard-grace period",
+        )
+    }
+
+    /// When `gracePeriod = 0` (test-only shortcut, also a safety hatch),
+    /// buttons must be active immediately so existing tap-based tests work.
+    func testConfirmAndSkipEnabledWhenGracePeriodIsZero() throws {
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { _ in }
+        let body = try sut.inspect()
+        let confirm = try body.find(button: "Confirm")
+        let skip = try body.find(button: "Skip")
+        XCTAssertFalse(confirm.isDisabled())
+        XCTAssertFalse(skip.isDisabled())
     }
 }
