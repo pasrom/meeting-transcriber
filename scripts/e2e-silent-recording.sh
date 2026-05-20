@@ -60,7 +60,10 @@ DEV_BUNDLE_BUILD="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app
 DEV_BUNDLE_DEPLOY="$HOME/Applications/MeetingTranscriber-Dev.app"
 BIN="$DEV_BUNDLE_DEPLOY/Contents/MacOS/MeetingTranscriber"
 MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
-SIM="$ROOT/tools/meeting-simulator/.build/debug/meeting-simulator"
+# `release/` to align with `scripts/e2e-app.sh` — when both scripts run
+# in the same CI workflow, e2e-app.sh's release build is reused via
+# `--no-build` rather than rebuilt in debug mode.
+SIM="$ROOT/tools/meeting-simulator/.build/release/meeting-simulator"
 BUNDLE_ID="com.meetingtranscriber.dev"
 
 # Defaults to restore after the test — empty string means "key wasn't set".
@@ -95,9 +98,12 @@ if [ "$NO_BUILD" = false ]; then
     "$ROOT/scripts/run_app.sh" --build-only >/dev/null
     # meeting-simulator and mt-cli live under separate `.build/` dirs and
     # share no targets, so they can compile in parallel. Cuts ~5–15 s off
-    # the cold-cache path.
+    # the cold-cache path. meeting-simulator is built in release to match
+    # scripts/e2e-app.sh's `SIMULATOR_BIN` path — re-using its
+    # pre-existing build under `--no-build` instead of producing a second
+    # debug copy.
     echo "▸ Building meeting-simulator + mt-cli (parallel)…"
-    (cd "$ROOT/tools/meeting-simulator" && swift build >/dev/null) &
+    (cd "$ROOT/tools/meeting-simulator" && swift build -c release >/dev/null) &
     SIM_BUILD_PID=$!
     (cd "$ROOT/tools/mt-cli" && swift build >/dev/null) &
     CLI_BUILD_PID=$!
