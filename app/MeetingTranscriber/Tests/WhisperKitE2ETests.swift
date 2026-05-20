@@ -142,9 +142,15 @@ final class WhisperKitE2ETests: XCTestCase {
 
         let resampled = AudioMixer.resample(samples, from: sourceRate, to: targetRate)
 
-        // Compute RMS of both
-        let sourceRMS = sqrt(samples.map { $0 * $0 }.reduce(0, +) / Float(samples.count))
-        let targetRMS = sqrt(resampled.map { $0 * $0 }.reduce(0, +) / Float(resampled.count))
+        // Typed-binding split — the single-expression `sqrt(map.reduce / Float(...))`
+        // trips `-warn-long-expression-type-checking` on the CI mini under load.
+        let sourceSquared: [Float] = samples.map { $0 * $0 }
+        let sourceSum: Float = sourceSquared.reduce(0, +)
+        let sourceRMS: Float = sqrt(sourceSum / Float(samples.count))
+
+        let targetSquared: [Float] = resampled.map { $0 * $0 }
+        let targetSum: Float = targetSquared.reduce(0, +)
+        let targetRMS: Float = sqrt(targetSum / Float(resampled.count))
 
         // RMS should be similar (within 10%)
         XCTAssertEqual(

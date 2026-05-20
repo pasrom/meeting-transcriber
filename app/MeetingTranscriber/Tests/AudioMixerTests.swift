@@ -327,8 +327,12 @@ final class AudioMixerTests: XCTestCase {
         try await AudioMixer.resampleFile(from: src, to: dst, targetRate: 16000)
 
         let loaded = try AudioMixer.loadAudioFileAsFloat32(url: dst)
-        // Sine wave should have significant energy (not silence)
-        let rms = sqrt(loaded.map { $0 * $0 }.reduce(0, +) / Float(loaded.count))
+        // Sine wave should have significant energy (not silence). Typed-binding
+        // split — see WhisperKitE2ETests.testResamplePreservesSignalEnergy for the
+        // type-check-time rationale.
+        let loadedSquared: [Float] = loaded.map { $0 * $0 }
+        let loadedSum: Float = loadedSquared.reduce(0, +)
+        let rms: Float = sqrt(loadedSum / Float(loaded.count))
         // AAC encoding + 16-bit quantization reduce amplitude; 0.05 confirms it's not silence
         XCTAssertGreaterThan(rms, 0.05, "Resampled audio should not be silent")
     }
