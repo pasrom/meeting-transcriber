@@ -58,23 +58,37 @@ let windowTitle = positionals.count > 1
     : "Simulator Meeting | MeetingSimulator"
 
 // --- Find fixture audio ---
+//
+// The fixture lives at `app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav`
+// in the repo. `#filePath` resolves to the absolute path of this source
+// file at compile time, so walking up from it lands at the repo root
+// regardless of where the binary is later executed — works for both
+// `swift run` in the package dir and a built binary copied elsewhere,
+// as long as the source was compiled from the repo checkout.
+private let fixtureRepoRelativePath = "app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
+
 func findFixture() -> String {
-    // Walk up from executable to find project root
-    let dir = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent() // Sources/
-        .deletingLastPathComponent() // meeting-simulator/
-        .deletingLastPathComponent() // tools/
-    let fixture = dir.appendingPathComponent("tests/fixtures/two_speakers_de.wav")
-    if FileManager.default.fileExists(atPath: fixture.path) {
-        return fixture.path
+    // Walk Sources/ → meeting-simulator/ → tools/ → repo root. Four
+    // deletions: the fourth is the one that actually lands at the repo
+    // root; without it we'd end up at `tools/` and append a path that
+    // has never existed.
+    let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let fromSource = repoRoot.appendingPathComponent(fixtureRepoRelativePath)
+    if FileManager.default.fileExists(atPath: fromSource.path) {
+        return fromSource.path
     }
-    // Try relative
-    let relative = "tests/fixtures/two_speakers_de.wav"
-    if FileManager.default.fileExists(atPath: relative) {
-        return relative
+    // Fallback: a CWD-relative lookup so a user running the binary from
+    // the repo root (e.g. `tools/meeting-simulator/.build/.../meeting-simulator`)
+    // still works even if `#filePath` resolved to a stale clone path.
+    if FileManager.default.fileExists(atPath: fixtureRepoRelativePath) {
+        return fixtureRepoRelativePath
     }
-    print("ERROR: Fixture not found. Pass audio path as first argument.")
-    print("Usage: meeting-simulator [audio.wav] [window-title]")
+    print("ERROR: Fixture not found at \(fromSource.path) or \(fixtureRepoRelativePath)")
+    print("Usage: meeting-simulator [audio.wav] [window-title] [--silent] [--duration=<seconds>]")
     exit(1)
 }
 
