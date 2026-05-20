@@ -214,15 +214,24 @@ public class AppAudioCapture {
 
     // swiftlint:disable:next function_body_length
     private func startCapture() throws {
-        let processObjectIDs = try translatePIDs()
-        logger.info("Process audio object IDs: \(processObjectIDs) (from \(self.pids.count) PIDs)")
+        let translated = try translatePIDs()
+        let processObjectIDs = translated.map(\.audioObjectID)
+
+        // Always log at info level with exe names so a "silent _app.wav"
+        // report can be triaged without the user toggling Verbose Audio
+        // Logging first — process names like "MSTeams Helper (Renderer)"
+        // make issue-#84-style failures actionable.
+        let tapSummary = translated.map { "\(getExecutableName(pid: $0.pid))(\($0.pid))" }.joined(separator: ", ")
+        logger.info(
+            "App audio tap: \(translated.count) PID(s) [\(tapSummary, privacy: .public)]",
+        )
 
         if debugLogging {
-            for (pid, objectID) in zip(pids, processObjectIDs) {
-                let bundleID = getProcessBundleID(objectID) ?? "?"
-                let exeName = getExecutableName(pid: pid)
+            for entry in translated {
+                let bundleID = getProcessBundleID(entry.audioObjectID) ?? "?"
+                let exeName = getExecutableName(pid: entry.pid)
                 logger.info(
-                    "[debug] Tap target: pid=\(pid, privacy: .public) exe=\(exeName, privacy: .public) bundle=\(bundleID, privacy: .public) audioObjectID=\(objectID, privacy: .public)",
+                    "[debug] Tap target: pid=\(entry.pid, privacy: .public) exe=\(exeName, privacy: .public) bundle=\(bundleID, privacy: .public) audioObjectID=\(entry.audioObjectID, privacy: .public)",
                 )
             }
         }
