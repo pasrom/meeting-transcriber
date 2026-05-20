@@ -67,10 +67,7 @@ if [ "$NO_BUILD" = false ]; then
     "$ROOT/scripts/run_app.sh" --build-only >/dev/null
 fi
 
-if [ ! -x "$BIN" ]; then
-    echo "FAIL: dev binary not found at $BIN — run without --no-build first" >&2
-    exit 1
-fi
+[ -x "$BIN" ] || die "dev binary not found at $BIN — run without --no-build first"
 
 if [ ! -x "$MTCLI" ]; then
     echo "▸ Building mt-cli…"
@@ -96,10 +93,7 @@ APP_PID=$!
 # --- 4. Wait for RPC server to come up (max 30 s) ------------------------
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
-if ! wait_for_rpc "$MTCLI" 30; then
-    echo "FAIL: RPC server did not start within 30 s" >&2
-    exit 1
-fi
+wait_for_rpc "$MTCLI" 30 || die "RPC server did not start within 30 s"
 echo "  RPC up"
 
 # --- 5. Assert channelHealth state ---------------------------------------
@@ -112,16 +106,12 @@ read -r MIC_SILENT APP_SILENT < <(
 echo "▸ channelHealth: micSilent=$MIC_SILENT appSilent=$APP_SILENT"
 
 if [ "$MIC_SILENT" != "true" ]; then
-    echo "FAIL: channelHealth.micSilent expected 'true', got '$MIC_SILENT'" >&2
     echo "Full state JSON:" >&2
     echo "$STATE_JSON" | jq . >&2
-    exit 1
+    die "channelHealth.micSilent expected 'true', got '$MIC_SILENT'"
 fi
 
-if [ "$APP_SILENT" != "false" ]; then
-    echo "FAIL: channelHealth.appSilent expected 'false', got '$APP_SILENT'" >&2
-    exit 1
-fi
+[ "$APP_SILENT" = "false" ] || die "channelHealth.appSilent expected 'false', got '$APP_SILENT'"
 
 # --- 6. Optional visual proof --------------------------------------------
 

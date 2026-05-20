@@ -111,8 +111,8 @@ if [ "$NO_BUILD" = false ]; then
     # earlier failure would be silently dropped and surface ~60 lines down
     # as the confusing "required binary missing" guard. Wait individually so
     # whichever build failed is the failure that actually halts the script.
-    wait "$SIM_BUILD_PID" || { echo "FAIL: meeting-simulator build failed" >&2; exit 1; }
-    wait "$CLI_BUILD_PID" || { echo "FAIL: mt-cli build failed" >&2; exit 1; }
+    wait "$SIM_BUILD_PID" || die "meeting-simulator build failed"
+    wait "$CLI_BUILD_PID" || die "mt-cli build failed"
 
     # Deploy to the stable path and re-sign with the runner's dev cert so
     # the PPPC profile keeps granting Microphone + Screen Recording. Same
@@ -130,7 +130,7 @@ if [ "$NO_BUILD" = false ]; then
         SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
         [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
         codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
-            || { echo "FAIL: Developer ID re-sign failed" >&2; exit 1; }
+            || die "Developer ID re-sign failed"
     else
         # Local-dev path: self-signed cert from setup-self-hosted-runner.sh.
         # Resolve the SHA-1 directly from the keychain (the .pem written
@@ -152,11 +152,10 @@ if [ "$NO_BUILD" = false ]; then
                 "$ROOT/scripts/keychain-prepend.sh" "$DEV_KEYCHAIN" 2>/dev/null || true
                 codesign --force --sign "$DEV_CERT_HASH" --keychain "$DEV_KEYCHAIN" \
                     "$DEV_BUNDLE_DEPLOY" >/dev/null \
-                    || { echo "FAIL: dev-cert re-sign failed" >&2; exit 1; }
+                    || die "dev-cert re-sign failed"
             else
-                echo "FAIL: dev keychain present but no '$DEV_CERT_NAME' identity inside" >&2
-                echo "  Run scripts/setup-self-hosted-runner.sh to (re-)create it"
-                exit 1
+                echo "  Run scripts/setup-self-hosted-runner.sh to (re-)create it" >&2
+                die "dev keychain present but no '$DEV_CERT_NAME' identity inside"
             fi
         else
             echo "▸ WARNING: no DEVELOPER_ID and no $DEV_KEYCHAIN — TCC may deny capture" >&2
@@ -166,10 +165,7 @@ if [ "$NO_BUILD" = false ]; then
 fi
 
 for path in "$BIN" "$MTCLI" "$SIM"; do
-    if [ ! -x "$path" ]; then
-        echo "FAIL: required binary missing: $path — run without --no-build first" >&2
-        exit 1
-    fi
+    [ -x "$path" ] || die "required binary missing: $path — run without --no-build first"
 done
 
 # --- 2. Snapshot + override defaults so the test is deterministic -----------
@@ -192,10 +188,7 @@ env MEETINGTRANSCRIBER_DEBUG_RPC=1 "$BIN" &
 APP_PID=$!
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
-if ! wait_for_rpc "$MTCLI" 30; then
-    echo "FAIL: RPC server did not start within 30 s" >&2
-    exit 1
-fi
+wait_for_rpc "$MTCLI" 30 || die "RPC server did not start within 30 s"
 echo "  RPC up"
 
 # --- 5. Trigger a "silent meeting" via meeting-simulator --------------------
@@ -250,10 +243,9 @@ while [ "$(date +%s)" -lt "$DEADLINE" ]; do
 done
 
 if [ "$OBSERVED_SILENT" != "true" ]; then
-    echo "FAIL: channelHealth.recordingSilent never went true within 50 s" >&2
     echo "Final state:" >&2
     "$MTCLI" state 2>/dev/null | jq . >&2 || true
-    exit 1
+    die "channelHealth.recordingSilent never went true within 50 s"
 fi
 
 echo
