@@ -94,19 +94,28 @@
 
             if process.terminationStatus != 0 {
                 let stderrData = await stderrRead
-                let stderrText = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stderrText = String(data: stderrData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 logger.error(
                     "claude_cli_failed exit=\(process.terminationStatus, privacy: .public) stderr=\(stderrText, privacy: .public)",
                 )
-                throw ProtocolError.cliFailed(Int(process.terminationStatus), stderrText)
+                throw Self.makeFailureError(exitCode: process.terminationStatus, stderrText: stderrText)
             }
 
+            return try Self.validateGeneratedText(text)
+        }
+
+        /// Pair an already-decoded stderr string with `exitCode` as a
+        /// `ProtocolError.cliFailed`.
+        static func makeFailureError(exitCode: Int32, stderrText: String) -> ProtocolError {
+            .cliFailed(Int(exitCode), stderrText)
+        }
+
+        /// Trim whitespace from CLI output. Throws `.emptyProtocol` when
+        /// the subprocess exited successfully but produced no usable text.
+        static func validateGeneratedText(_ text: String) throws -> String {
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                logger.error("claude_cli_empty_response — subprocess exited 0 with empty output")
-                throw ProtocolError.emptyProtocol
-            }
-
+            guard !trimmed.isEmpty else { throw ProtocolError.emptyProtocol }
             return trimmed
         }
 
@@ -138,23 +147,36 @@
                 if chunk.isEmpty { break } // EOF
 
                 buffer.append(chunk)
-
-                // Process complete lines
-                while let newlineRange = buffer.range(of: Data([0x0A])) {
-                    let lineData = buffer[buffer.startIndex ..< newlineRange.lowerBound]
-                    buffer.removeSubrange(buffer.startIndex ... newlineRange.lowerBound)
-
-                    guard let line = String(data: lineData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                        !line.isEmpty else { continue }
-
-                    if let text = parseStreamJSONLine(line) {
-                        parts.append(text)
-                    }
-                }
+                parts.append(contentsOf: drainStreamJSONLines(buffer: &buffer))
             }
 
             return parts.joined()
+        }
+
+        /// Drain every newline-terminated line currently in `buffer`, parsing
+        /// each via `parseStreamJSONLine`. Returns the extracted text
+        /// fragments in order. Lines that are empty after trimming, lines
+        /// that don't decode as UTF-8, and lines that `parseStreamJSONLine`
+        /// rejects are silently skipped.
+        ///
+        /// Trailing bytes without a terminating newline stay in `buffer`
+        /// for the next call to consume — the caller must keep the buffer
+        /// across iterations.
+        static func drainStreamJSONLines(buffer: inout Data) -> [String] {
+            var fragments: [String] = []
+            while let newlineIdx = buffer.firstIndex(of: 0x0A) {
+                let lineData = buffer[buffer.startIndex ..< newlineIdx]
+                buffer.removeSubrange(buffer.startIndex ... newlineIdx)
+
+                guard let line = String(data: lineData, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                    !line.isEmpty else { continue }
+
+                if let text = parseStreamJSONLine(line) {
+                    fragments.append(text)
+                }
+            }
+            return fragments
         }
 
         /// Parse a single stream-json line and extract text content.

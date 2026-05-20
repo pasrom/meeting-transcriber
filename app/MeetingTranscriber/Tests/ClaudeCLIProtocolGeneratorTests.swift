@@ -175,5 +175,164 @@
             XCTAssertEqual(env["HOME"], "/Users/x")
             XCTAssertEqual(env["USER"], "x")
         }
+
+        // MARK: - drainStreamJSONLines
+
+        func testDrainStreamJSONLinesEmptyBufferReturnsNothing() {
+            var buffer = Data()
+            XCTAssertEqual(ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer), [])
+            XCTAssertEqual(buffer, Data())
+        }
+
+        func testDrainStreamJSONLinesPartialLineRemainsInBuffer() {
+            // Single line without trailing newline — must stay in the buffer
+            // for the next chunk to complete it.
+            let original = Data(#"{"type":"content_block_delta""#.utf8)
+            var buffer = original
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            XCTAssertEqual(fragments, [])
+            XCTAssertEqual(buffer, original)
+        }
+
+        /// Joins parts with `\n`; `trailingNewline` controls whether the last
+        /// part is terminated.
+        private func makeBuffer(_ parts: [String], trailingNewline: Bool) -> Data {
+            var data = Data()
+            for (i, part) in parts.enumerated() {
+                data.append(contentsOf: part.utf8)
+                if i < parts.count - 1 || trailingNewline {
+                    data.append(0x0A)
+                }
+            }
+            return data
+        }
+
+        func testDrainStreamJSONLinesSingleCompleteLineDrains() {
+            var buffer = makeBuffer(
+                [#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}"#],
+                trailingNewline: true,
+            )
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            XCTAssertEqual(fragments, ["Hi"])
+            XCTAssertEqual(buffer, Data())
+        }
+
+        func testDrainStreamJSONLinesMultipleCompleteLinesPreserveOrder() {
+            var buffer = makeBuffer(
+                [
+                    #"{"type":"content_block_delta","delta":{"type":"text_delta","text":"A"}}"#,
+                    #"{"type":"content_block_delta","delta":{"type":"text_delta","text":"B"}}"#,
+                ],
+                trailingNewline: true,
+            )
+            XCTAssertEqual(
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ["A", "B"],
+            )
+            XCTAssertEqual(buffer, Data())
+        }
+
+        func testDrainStreamJSONLinesMixOfCompleteAndPartialLeavesTailInBuffer() {
+            let partial = #"{"type":"content_block_delta","del"#
+            var buffer = makeBuffer(
+                [#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}"#, partial],
+                trailingNewline: false,
+            )
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            XCTAssertEqual(fragments, ["Done"])
+            XCTAssertEqual(buffer, Data(partial.utf8))
+        }
+
+        func testDrainStreamJSONLinesSkipsEmptyAndWhitespaceLines() {
+            // Empty lines and whitespace-only lines must be skipped — Claude
+            // CLI sometimes emits blank lines between JSON events.
+            var buffer = makeBuffer(
+                [
+                    "",
+                    "   ",
+                    #"{"type":"content_block_delta","delta":{"type":"text_delta","text":"OK"}}"#,
+                ],
+                trailingNewline: true,
+            )
+            XCTAssertEqual(
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ["OK"],
+            )
+        }
+
+        func testDrainStreamJSONLinesSkipsUnparseableLines() {
+            // Unknown event type → parseStreamJSONLine returns nil; drainer
+            // must not break the loop, continue with the next line.
+            var buffer = makeBuffer(
+                [
+                    #"{"type":"message_stop"}"#,
+                    #"{"type":"content_block_delta","delta":{"type":"text_delta","text":"After"}}"#,
+                ],
+                trailingNewline: true,
+            )
+            XCTAssertEqual(
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ["After"],
+            )
+        }
+
+        func testDrainStreamJSONLinesAcrossTwoChunks() {
+            // Simulate readStreamJSON: drain after the first chunk leaves
+            // a partial line; the second chunk supplies the rest plus a
+            // following complete line.
+            var buffer = Data(#"{"type":"content_block_delta","delta":{"type":"text_delta","tex"#.utf8)
+            XCTAssertEqual(ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer), [])
+
+            buffer.append(contentsOf: #"t":"Hello"}}"#.utf8)
+            buffer.append(0x0A)
+            XCTAssertEqual(
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ["Hello"],
+            )
+            XCTAssertEqual(buffer, Data())
+        }
+
+        // MARK: - validateGeneratedText
+
+        func testValidateGeneratedTextReturnsTrimmed() throws {
+            let result = try ClaudeCLIProtocolGenerator.validateGeneratedText("  Hello world  \n")
+            XCTAssertEqual(result, "Hello world")
+        }
+
+        func testValidateGeneratedTextWhitespaceOnlyThrowsEmptyProtocol() {
+            // Covers both empty input and whitespace-only — the guard
+            // operates on the trimmed string, so they share a branch.
+            XCTAssertThrowsError(try ClaudeCLIProtocolGenerator.validateGeneratedText("   \n\t  ")) { error in
+                guard case ProtocolError.emptyProtocol = error else {
+                    XCTFail("Expected .emptyProtocol, got \(error)")
+                    return
+                }
+            }
+        }
+
+        // MARK: - makeFailureError
+
+        func testMakeFailureErrorWrapsExitCodeAndStderr() {
+            let err = ClaudeCLIProtocolGenerator.makeFailureError(
+                exitCode: 2,
+                stderrText: "fatal: model not found",
+            )
+            guard case let .cliFailed(code, stderr) = err else {
+                XCTFail("Expected .cliFailed, got \(err)")
+                return
+            }
+            XCTAssertEqual(code, 2)
+            XCTAssertEqual(stderr, "fatal: model not found")
+        }
+
+        func testMakeFailureErrorEmptyStderrPassesThrough() {
+            let err = ClaudeCLIProtocolGenerator.makeFailureError(exitCode: 1, stderrText: "")
+            guard case let .cliFailed(code, stderr) = err else {
+                XCTFail("Expected .cliFailed, got \(err)")
+                return
+            }
+            XCTAssertEqual(code, 1)
+            XCTAssertEqual(stderr, "")
+        }
     }
 #endif
