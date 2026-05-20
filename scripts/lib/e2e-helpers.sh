@@ -124,6 +124,18 @@ assert_app_alive() {
     fi
 }
 
+# Snapshot a defaults value for later restoration, or empty when the
+# key isn't set. The caller's `$()` command substitution strips the
+# trailing newline that `defaults read` emits, so internal whitespace
+# in string values (e.g. "hello world") is preserved — important once
+# this gets used for keys beyond the current numeric/bool callsites.
+# Trailing `|| true` keeps a missing key from tripping `set -e`.
+snapshot_default() {
+    local bundle="$1"
+    local key="$2"
+    /usr/bin/defaults read "$bundle" "$key" 2>/dev/null || true
+}
+
 # Restore a defaults boolean from a snapshotted value as returned by
 # `defaults read`. That command returns "0"/"1" but `-bool` only
 # accepts the literal tokens `true`/`false`/`yes`/`no`; without this
@@ -139,4 +151,20 @@ restore_bool_default() {
         0) /usr/bin/defaults write "$bundle" "$key" -bool false ;;
         *) /usr/bin/defaults delete "$bundle" "$key" 2>/dev/null || true ;;
     esac
+}
+
+# Float companion to `restore_bool_default`. Empty `saved` (key wasn't
+# set before the test) deletes the key; anything else is written back
+# as `-float`. `defaults read` returns floats as plain numeric strings
+# (e.g. "30" or "30.5"), and `-float "30"` is happily accepted by
+# `defaults write` even without a decimal point.
+restore_float_default() {
+    local bundle="$1"
+    local key="$2"
+    local saved="$3"
+    if [ -n "$saved" ]; then
+        /usr/bin/defaults write "$bundle" "$key" -float "$saved"
+    else
+        /usr/bin/defaults delete "$bundle" "$key" 2>/dev/null || true
+    fi
 }
