@@ -201,13 +201,11 @@ echo "  RPC up"
 # --duration covers the 30 s detector threshold + slack for the
 # polling task to flip the flag.
 echo "▸ Launching meeting-simulator (silent, 75 s)…"
-# Pass the fixture explicitly — meeting-simulator's findFixture() looks
-# at a stale path (`tests/fixtures/...`) that doesn't match the actual
-# repo layout (`app/MeetingTranscriber/Tests/Fixtures/...`). We need the
-# fixture even in --silent mode so AVAudioPlayer pumps zero-content
-# frames through the audio device (see the simulator commit body for why).
-FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
-"$SIM" "$FIXTURE" "Simulator Meeting | MeetingSimulator" --silent --duration=75 &
+# `findFixture()` inside the simulator resolves the repo's bundled
+# WAV at compile time — no explicit path needed. The fixture is
+# required even in `--silent` mode so AVAudioPlayer pumps zero-content
+# frames through the audio device (see the simulator commit body).
+"$SIM" --silent --duration=75 &
 SIM_PID=$!
 
 # --- 6. Wait for WatchLoop to enter recording state ------------------------
