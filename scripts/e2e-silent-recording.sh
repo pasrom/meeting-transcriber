@@ -215,16 +215,6 @@ SIM_PID=$!
 
 # --- 6. Wait for WatchLoop to enter recording state ------------------------
 
-# Bail fast if the app died — otherwise the polling loop below would just
-# see `{}` for 50 s and surface as "recordingSilent never went true",
-# masking a real crash as a product bug.
-assert_app_alive() {
-    if ! kill -0 "$APP_PID" 2>/dev/null; then
-        echo "FAIL: app process (PID $APP_PID) died during polling" >&2
-        exit 1
-    fi
-}
-
 echo "▸ Waiting for app to detect + start recording (max 30 s)…"
 # `isProcessing` flips true while a job is in the queue. It's informational
 # only — if it never flips we still let step 7 run and time out there,
