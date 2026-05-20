@@ -4,14 +4,21 @@ import Foundation
 /// Translates PIDs to CoreAudio process `AudioObjectID`s for `CATapDescription`.
 @available(macOS 14.2, *)
 extension AppAudioCapture {
-    /// Translate every stored PID. PIDs that fail translation (helper has
-    /// no audio-object entry, process exited between enumeration and tap
-    /// creation) are dropped — that's expected for Electron helper trees
-    /// where only the audio-emitting renderer owns an audio object.
-    /// Throws when no PID at all could be translated, since the resulting
-    /// tap would have nothing to listen to.
-    func translatePIDs() throws -> [AudioObjectID] {
-        let translated = pids.compactMap { Self.translatePID($0) }
+    /// Translate every stored PID and return (pid, audioObjectID) pairs.
+    /// PIDs that fail translation (helper has no audio-object entry, process
+    /// exited between enumeration and tap creation) are dropped — that's
+    /// expected for Electron helper trees where only the audio-emitting
+    /// renderer owns an audio object. Throws when no PID at all could be
+    /// translated, since the resulting tap would have nothing to listen to.
+    ///
+    /// Returns pairs (not parallel arrays) so callers can log per-PID
+    /// without re-zipping against `pids` — `compactMap` would otherwise
+    /// silently mis-align the two sequences.
+    func translatePIDs() throws -> [(pid: pid_t, audioObjectID: AudioObjectID)] {
+        let translated: [(pid: pid_t, audioObjectID: AudioObjectID)] = pids.compactMap { pid in
+            guard let objectID = Self.translatePID(pid) else { return nil }
+            return (pid: pid, audioObjectID: objectID)
+        }
         guard !translated.isEmpty else {
             throw NSError(
                 domain: "audiotap", code: -1,
