@@ -231,9 +231,15 @@ OBSERVED_SILENT=false
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
     assert_app_alive
     STATE_JSON="$("$MTCLI" state 2>/dev/null || echo '{}')"
-    RECORDING_SILENT="$(echo "$STATE_JSON" | jq -r '.channelHealth.recordingSilent // false')"
-    MIC_SILENT="$(echo "$STATE_JSON" | jq -r '.channelHealth.micSilent // false')"
-    APP_SILENT="$(echo "$STATE_JSON" | jq -r '.channelHealth.appSilent // false')"
+    # Extract all three channelHealth flags in one jq pass. Safe here
+    # because every field has a `// false` default — no empties possible.
+    # `IFS=$'\t' read` would collapse consecutive empties (tab is
+    # whitespace-IFS), so if a non-defaulted field is added later, switch
+    # to `|`-join (see `_poll_for_new_lastjob_terminal` in e2e-app.sh).
+    IFS=$'\t' read -r RECORDING_SILENT MIC_SILENT APP_SILENT < <(
+        echo "$STATE_JSON" \
+            | jq -r '[.channelHealth.recordingSilent // false, .channelHealth.micSilent // false, .channelHealth.appSilent // false] | @tsv'
+    )
     if [ "$RECORDING_SILENT" = "true" ]; then
         OBSERVED_SILENT=true
         echo "  recordingSilent=true (mic=$MIC_SILENT app=$APP_SILENT)"
