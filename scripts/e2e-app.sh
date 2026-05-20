@@ -146,6 +146,9 @@ INTER_MEETING_COOLDOWN_S=8
 log()  { printf '[e2e-app] %s\n' "$*"; }
 fail() { printf '[e2e-app] FAIL: %s\n' "$*" >&2; exit 1; }
 
+# shellcheck source=lib/e2e-helpers.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
+
 require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
 }
@@ -162,32 +165,6 @@ rpc() {
         "$RPC_BASE$path" 2>/dev/null || true
 }
 
-# Stop any previous dev-app instance before we touch the bundle on disk
-# or open a new one. rsync would otherwise overwrite mmap'd mach-o pages,
-# and a still-running process holds the RPC port so the next `open` is a
-# no-op. Graceful AppleScript quit first, SIGTERM after 3 s, SIGKILL last.
-quit_running_app() {
-    local bundle_id="com.meetingtranscriber.dev"
-    if ! pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null; then
-        return 0
-    fi
-    log "Stopping previous MeetingTranscriber-Dev instance"
-    osascript -e "tell application id \"$bundle_id\" to quit" 2>/dev/null || true
-    for _ in 1 2 3; do
-        pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null || return 0
-        sleep 1
-    done
-    pkill -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
-    for _ in 1 2 3; do
-        pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null || return 0
-        sleep 1
-    done
-    pkill -KILL -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
-    sleep 1
-    if pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null; then
-        fail "could not stop running MeetingTranscriber-Dev — kill it manually and retry"
-    fi
-}
 
 # --- preflight ------------------------------------------------------------
 
