@@ -7,7 +7,7 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Replaces the CLI entry point — call `start()` and `stop()` directly from the host app.
 @available(macOS 14.2, *)
 public class AudioCaptureSession {
-    private let pid: pid_t
+    private let pids: [pid_t]
     private let sampleRate: Int
     private let channels: Int
     private let appOutputURL: URL
@@ -19,8 +19,12 @@ public class AudioCaptureSession {
     private var micCapture: MicCaptureHandler?
     private var appFileHandle: FileHandle?
 
+    /// - Parameter pids: PIDs to capture audio from. For Electron/WebView2
+    ///   apps (Teams 2.x, Slack, Discord) this should include the root PID
+    ///   plus helper/renderer children; for native Cocoa apps a
+    ///   single-element array is fine.
     public init(
-        pid: pid_t,
+        pids: [pid_t],
         appOutputURL: URL,
         sampleRate: Int = 48000,
         channels: Int = 2,
@@ -28,7 +32,7 @@ public class AudioCaptureSession {
         micDeviceUID: String? = nil,
         debugLogging: Bool = false,
     ) {
-        self.pid = pid
+        self.pids = pids
         self.sampleRate = sampleRate
         self.channels = channels
         self.appOutputURL = appOutputURL
@@ -49,7 +53,7 @@ public class AudioCaptureSession {
         let handle = try FileHandle(forWritingTo: appOutputURL)
 
         let capture = AppAudioCapture(
-            pid: pid,
+            pids: pids,
             outputFileDescriptor: handle.fileDescriptor,
             sampleRate: sampleRate,
             channels: channels,
@@ -75,7 +79,7 @@ public class AudioCaptureSession {
             }
         }
 
-        logger.info("Capture session started (PID \(self.pid), rate: \(self.sampleRate), channels: \(self.channels))")
+        logger.info("Capture session started (PIDs \(self.pids), rate: \(self.sampleRate), channels: \(self.channels))")
     }
 
     /// Instantaneous app-audio level in dBFS, decayed to -120 when no buffer has

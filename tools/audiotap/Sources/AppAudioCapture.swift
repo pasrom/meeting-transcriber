@@ -9,7 +9,9 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Monitors default output device changes and recreates the tap when needed.
 @available(macOS 14.2, *)
 public class AppAudioCapture {
-    private let pid: pid_t
+    /// `internal` (not `private`) so the cross-file `+PIDTranslation`
+    /// extension can read it; it's not otherwise touched from outside.
+    let pids: [pid_t]
     private let sampleRate: Int
     private let channels: Int
     private let outputFileDescriptor: Int32
@@ -54,50 +56,28 @@ public class AppAudioCapture {
     private var deviceChangeCoordinator = OutputDeviceChangeCoordinator()
 
     /// - Parameters:
-    ///   - pid: Process ID of the app to capture audio from.
+    ///   - pids: Process IDs to capture audio from. Pass the meeting app's
+    ///     root PID plus its helper/renderer child PIDs for Electron-based
+    ///     apps (Teams 2.x, Slack, Discord); pass a single-element array
+    ///     for native Cocoa apps. Helpers whose `translatePIDToProcessObject`
+    ///     lookup fails (no audio-object entry) are skipped silently.
     ///   - outputFileDescriptor: File descriptor to write raw PCM data to.
     ///   - sampleRate: Desired sample rate (default 48000).
     ///   - channels: Number of audio channels (default 2).
     ///   - debugLogging: When true, emit verbose forensic logs (process identity,
     ///     output device, periodic RMS energy of captured samples).
     public init(
-        pid: pid_t,
+        pids: [pid_t],
         outputFileDescriptor: Int32,
         sampleRate: Int = 48000,
         channels: Int = 2,
         debugLogging: Bool = false,
     ) {
-        self.pid = pid
+        self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
         self.sampleRate = sampleRate
         self.channels = channels
         self.debugLogging = debugLogging
-    }
-
-    /// Translate PID to CoreAudio process AudioObjectID.
-    private func translatePID() throws -> AudioObjectID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var objectID = AudioObjectID(kAudioObjectUnknown)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var mutablePid = pid
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject), &address,
-            UInt32(MemoryLayout<pid_t>.size), &mutablePid, &size, &objectID,
-        )
-        guard status == noErr, objectID != kAudioObjectUnknown else {
-            throw NSError(
-                domain: "audiotap", code: Int(status),
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Failed to translate PID \(pid) to audio object (status: \(status))",
-                ],
-            )
-        }
-        return objectID
     }
 
     public func start() throws {
@@ -234,15 +214,17 @@ public class AppAudioCapture {
 
     // swiftlint:disable:next function_body_length
     private func startCapture() throws {
-        let processObjectID = try translatePID()
-        logger.info("Process audio object ID: \(processObjectID)")
+        let processObjectIDs = try translatePIDs()
+        logger.info("Process audio object IDs: \(processObjectIDs) (from \(self.pids.count) PIDs)")
 
         if debugLogging {
-            let bundleID = getProcessBundleID(processObjectID) ?? "?"
-            let exeName = getExecutableName(pid: pid)
-            logger.info(
-                "[debug] Tap target: pid=\(self.pid, privacy: .public) exe=\(exeName, privacy: .public) bundle=\(bundleID, privacy: .public) audioObjectID=\(processObjectID, privacy: .public)",
-            )
+            for (pid, objectID) in zip(pids, processObjectIDs) {
+                let bundleID = getProcessBundleID(objectID) ?? "?"
+                let exeName = getExecutableName(pid: pid)
+                logger.info(
+                    "[debug] Tap target: pid=\(pid, privacy: .public) exe=\(exeName, privacy: .public) bundle=\(bundleID, privacy: .public) audioObjectID=\(objectID, privacy: .public)",
+                )
+            }
         }
 
         // Get default output device UID
@@ -263,8 +245,10 @@ public class AppAudioCapture {
             )
         }
 
-        // Create CATapDescription for the target process
-        let tap = CATapDescription(stereoMixdownOfProcesses: [processObjectID])
+        // Create CATapDescription for the target process(es). For Electron
+        // apps this covers the helper tree so the renderer holding the audio
+        // handle is included; for native apps the array is a single PID.
+        let tap = CATapDescription(stereoMixdownOfProcesses: processObjectIDs)
         tap.uuid = UUID()
         tap.name = "MeetingTranscriber-tap"
         tap.isPrivate = true
@@ -275,7 +259,7 @@ public class AppAudioCapture {
         guard tapStatus == noErr else {
             let hint = Self.describeTapError(tapStatus)
             logger.error(
-                "Failed to create process tap (pid=\(self.pid, privacy: .public)): \(hint, privacy: .public)",
+                "Failed to create process tap (pids=\(self.pids, privacy: .public)): \(hint, privacy: .public)",
             )
             throw NSError(
                 domain: "audiotap", code: Int(tapStatus),
@@ -292,9 +276,11 @@ public class AppAudioCapture {
             )
         }
 
-        // Create aggregate device with the tap
+        // Create aggregate device with the tap. The name embeds the root PID
+        // (first entry) — purely cosmetic for `system_profiler SPAudioDataType`.
+        let nameTag = pids.first.map(String.init) ?? "0"
         let desc: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "audiotap-\(pid)",
+            kAudioAggregateDeviceNameKey as String: "audiotap-\(nameTag)",
             kAudioAggregateDeviceUIDKey as String: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey as String: systemOutputUID,
             kAudioAggregateDeviceIsPrivateKey as String: true,
@@ -405,7 +391,7 @@ public class AppAudioCapture {
         actualSampleRate = Self.resolveActualSampleRate(
             deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
         )
-        logger.info("Audio capture started (PID \(self.pid), rate: \(self.actualSampleRate) Hz)")
+        logger.info("Audio capture started (PIDs \(self.pids), rate: \(self.actualSampleRate) Hz)")
     }
 
     private func stopCapture() {

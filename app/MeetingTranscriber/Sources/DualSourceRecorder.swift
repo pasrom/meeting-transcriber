@@ -1,3 +1,4 @@
+import AppKit
 import AudioTapLib
 
 // `@preconcurrency`: AVFoundation types lack Sendable annotations —
@@ -119,8 +120,15 @@ class DualSourceRecorder: RecordingProvider {
         let appTempURL = recDir.appendingPathComponent("\(ts)_app_raw.tmp")
         let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
 
+        // Electron/WebView2 apps (Teams 2.x, Slack, Discord) render call
+        // audio in helper/renderer children rather than the shell process
+        // the OS sees as the window owner. Tap the whole bundle tree so we
+        // catch whichever child holds the audio handle; fall back to the
+        // root PID alone if the bundle URL is unavailable.
+        let effectivePids = Self.resolveTapPIDs(rootPID: appPID)
+
         let session = AudioCaptureSession(
-            pid: appPID,
+            pids: effectivePids,
             appOutputURL: appTempURL,
             sampleRate: recordRate,
             channels: appChannels,
@@ -281,6 +289,22 @@ class DualSourceRecorder: RecordingProvider {
             micDelay: micDelay,
             recordingStart: recordingStart,
         )
+    }
+
+    /// Resolve the PID set to tap for a meeting-matched root PID.
+    ///
+    /// Returns `[rootPID]` alone when the running-application bundle URL is
+    /// unavailable (command-line tool, detached process) or enumeration
+    /// finds no PIDs under it. Otherwise returns every PID under the bundle,
+    /// prepending the root if enumeration somehow missed it — order matters
+    /// for the aggregate device's cosmetic name tag (root first).
+    static func resolveTapPIDs(rootPID: pid_t) -> [pid_t] {
+        guard let bundleURL = NSRunningApplication(processIdentifier: rootPID)?.bundleURL else {
+            return [rootPID]
+        }
+        let enumerated = ProcessTreeEnumerator.pidsRooted(in: bundleURL)
+        guard !enumerated.isEmpty else { return [rootPID] }
+        return enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
     }
 
     /// Downmix interleaved multi-channel audio to mono. Passthrough if already mono.
