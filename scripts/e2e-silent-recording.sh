@@ -80,13 +80,9 @@ cleanup() {
     fi
     # Restore defaults to whatever they were before we ran (or delete the
     # keys if they didn't exist).
-    restore_bool_default "$BUNDLE_ID" autoWatch "$SAVED_AUTOWATCH"
-    if [ -n "$SAVED_THRESHOLD" ]; then
-        /usr/bin/defaults write "$BUNDLE_ID" asymmetricSilenceWarningSeconds -float "$SAVED_THRESHOLD"
-    else
-        /usr/bin/defaults delete "$BUNDLE_ID" asymmetricSilenceWarningSeconds 2>/dev/null || true
-    fi
-    restore_bool_default "$BUNDLE_ID" perChannelIndicatorEnabled "$SAVED_INDICATOR"
+    restore_bool_default  "$BUNDLE_ID" autoWatch                       "$SAVED_AUTOWATCH"
+    restore_float_default "$BUNDLE_ID" asymmetricSilenceWarningSeconds "$SAVED_THRESHOLD"
+    restore_bool_default  "$BUNDLE_ID" perChannelIndicatorEnabled      "$SAVED_INDICATOR"
     bootout_stale_launchctl
 }
 trap cleanup EXIT
@@ -170,9 +166,9 @@ done
 
 # --- 2. Snapshot + override defaults so the test is deterministic -----------
 
-SAVED_AUTOWATCH="$(/usr/bin/defaults read "$BUNDLE_ID" autoWatch 2>/dev/null | tr -d '[:space:]' || true)"
-SAVED_THRESHOLD="$(/usr/bin/defaults read "$BUNDLE_ID" asymmetricSilenceWarningSeconds 2>/dev/null | tr -d '[:space:]' || true)"
-SAVED_INDICATOR="$(/usr/bin/defaults read "$BUNDLE_ID" perChannelIndicatorEnabled 2>/dev/null | tr -d '[:space:]' || true)"
+SAVED_AUTOWATCH="$(snapshot_default "$BUNDLE_ID" autoWatch)"
+SAVED_THRESHOLD="$(snapshot_default "$BUNDLE_ID" asymmetricSilenceWarningSeconds)"
+SAVED_INDICATOR="$(snapshot_default "$BUNDLE_ID" perChannelIndicatorEnabled)"
 
 /usr/bin/defaults write "$BUNDLE_ID" autoWatch -bool true
 /usr/bin/defaults write "$BUNDLE_ID" asymmetricSilenceWarningSeconds -float 30
