@@ -107,7 +107,12 @@ if [ "$NO_BUILD" = false ]; then
     SIM_BUILD_PID=$!
     (cd "$ROOT/tools/mt-cli" && swift build >/dev/null) &
     CLI_BUILD_PID=$!
-    wait $SIM_BUILD_PID $CLI_BUILD_PID
+    # `wait $PID1 $PID2` only returns the exit code of the LAST PID — an
+    # earlier failure would be silently dropped and surface ~60 lines down
+    # as the confusing "required binary missing" guard. Wait individually so
+    # whichever build failed is the failure that actually halts the script.
+    wait "$SIM_BUILD_PID" || { echo "FAIL: meeting-simulator build failed" >&2; exit 1; }
+    wait "$CLI_BUILD_PID" || { echo "FAIL: mt-cli build failed" >&2; exit 1; }
 
     # Deploy to the stable path and re-sign with the runner's dev cert so
     # the PPPC profile keeps granting Microphone + Screen Recording. Same
