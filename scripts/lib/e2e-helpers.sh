@@ -94,6 +94,19 @@ wait_for_rpc() {
     "$mtcli" healthz >/dev/null 2>&1
 }
 
+# Print "FAIL: <msg>" to stderr and exit 1. The e2e drivers fail-fast
+# on the first error, so a one-liner is more readable than the
+# `{ echo "FAIL: …" >&2; exit 1; }` block that gets repeated across
+# `||` chains and bare guards.
+#
+# Callers that need a script-specific prefix (e.g. e2e-app.sh's
+# `[e2e-app] FAIL:`) keep their own local `fail()` — `die()` is for
+# scripts that don't have one yet.
+die() {
+    echo "FAIL: $*" >&2
+    exit 1
+}
+
 # Assert that a process matching `$pattern` is running. Exits 1 with a
 # clear error if not. Intended for polling loops that would otherwise
 # burn their full timeout if the app crashed mid-poll — the loop just
@@ -107,8 +120,7 @@ wait_for_rpc() {
 assert_app_alive() {
     local pattern="${1:-MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber}"
     if ! pgrep -f "$pattern" >/dev/null 2>&1; then
-        echo "FAIL: app process matching '$pattern' is not running" >&2
-        exit 1
+        die "app process matching '$pattern' is not running"
     fi
 }
 
