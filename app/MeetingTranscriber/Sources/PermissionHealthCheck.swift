@@ -171,22 +171,59 @@ enum PermissionHealthCheck {
         }
     }
 
-    /// Thread-safe counter for mic probe buffer arrival (tap callback runs on audio thread).
+    /// Peak amplitude (linear, 0…1) below which a mic stream is treated as silence even
+    /// if buffers are flowing — a working mic in any real environment exceeds the
+    /// noise-floor by orders of magnitude. ~−80 dBFS.
+    static let silentMicPeakThreshold: Float = 0.0001
+
+    /// Returns the maximum absolute sample amplitude in `buffer` on channel 0, normalized
+    /// to 0…1. Unknown sample formats fall back to `1.0` so they pass the silence check —
+    /// preserves pre-cherry-pick behavior (any buffer = live).
+    static func peakAmplitude(of buffer: AVAudioPCMBuffer) -> Float {
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return 0 }
+        if let channelData = buffer.floatChannelData {
+            var peak: Float = 0
+            for sample in UnsafeBufferPointer(start: channelData[0], count: frames) {
+                let abs = Swift.abs(sample)
+                if abs > peak { peak = abs }
+            }
+            return peak
+        }
+        if let channelData = buffer.int16ChannelData {
+            var peak: Float = 0
+            let scale = 1.0 / Float(Int16.max)
+            for sample in UnsafeBufferPointer(start: channelData[0], count: frames) {
+                let abs = Swift.abs(Float(sample)) * scale
+                if abs > peak { peak = abs }
+            }
+            return peak
+        }
+        return 1.0
+    }
+
+    /// Thread-safe mic probe stats (tap callback runs on audio thread).
     private final class BufferCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
-        func increment() {
-            lock.lock(); count += 1; lock.unlock()
+        private var maxPeak: Float = 0
+        func record(buffer: AVAudioPCMBuffer) {
+            let peak = PermissionHealthCheck.peakAmplitude(of: buffer)
+            lock.lock()
+            count += 1
+            if peak > maxPeak { maxPeak = peak }
+            lock.unlock()
         }
 
-        func value() -> Int {
-            lock.lock(); defer { lock.unlock() }; return count
+        func snapshot() -> (count: Int, maxPeak: Float) {
+            lock.lock(); defer { lock.unlock() }
+            return (count, maxPeak)
         }
     }
 
-    /// Maximum time to wait for the first mic buffer to arrive.
+    /// Maximum time to wait for the mic probe to observe a non-silent sample.
     static let probeTimeout: TimeInterval = 0.5
-    /// Poll interval while waiting for the first buffer.
+    /// Poll interval while waiting for the probe to confirm a healthy signal.
     static let probePollInterval: TimeInterval = 0.02
 
     static func probeMicrophone() async -> Bool {
@@ -199,7 +236,10 @@ enum PermissionHealthCheck {
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
+        // inputFormat reflects what the hardware actually delivers; outputFormat can report
+        // a degenerate (sampleRate=0) format when nothing is attached downstream, which
+        // would false-fail the guard below.
+        let format = inputNode.inputFormat(forBus: 0)
 
         guard format.sampleRate > 0, format.channelCount > 0 else {
             debugLog("probeMicrophone: invalid format sampleRate=\(format.sampleRate) " +
@@ -209,7 +249,7 @@ enum PermissionHealthCheck {
 
         let counter = BufferCounter()
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            if buffer.frameLength > 0 { counter.increment() }
+            if buffer.frameLength > 0 { counter.record(buffer: buffer) }
         }
 
         do {
@@ -220,21 +260,44 @@ enum PermissionHealthCheck {
             return false
         }
 
-        // Poll until the first buffer arrives or the timeout elapses.
-        let deadline = Date().addingTimeInterval(probeTimeout)
-        let startedAt = Date()
-        while counter.value() == 0, Date() < deadline {
-            try? await Task.sleep(for: .seconds(probePollInterval))
-        }
-        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
-        let buffersSeen = counter.value()
+        let (stats, elapsedMs) = await waitForProbeSignal(
+            deadline: Date().addingTimeInterval(probeTimeout),
+            threshold: Self.silentMicPeakThreshold,
+            pollInterval: Self.probePollInterval,
+            snapshot: counter.snapshot,
+        )
 
         engine.stop()
         inputNode.removeTap(onBus: 0)
 
-        debugLog("probeMicrophone: buffers=\(buffersSeen) elapsed=\(elapsedMs)ms " +
+        debugLog("probeMicrophone: buffers=\(stats.count) peak=\(stats.maxPeak) elapsed=\(elapsedMs)ms " +
             "sampleRate=\(format.sampleRate) channels=\(format.channelCount)")
-        return buffersSeen > 0
+        // swiftformat:disable:next preferIsEmpty
+        return stats.count > 0 && stats.maxPeak > Self.silentMicPeakThreshold // swiftlint:disable:this empty_count
+    }
+
+    /// Polls `snapshot` until peak crosses `threshold` (healthy) or `now()` passes `deadline`
+    /// (broken). Polling on `count > 0` would exit on the first warm-up buffer — which is
+    /// commonly all-zeros — and falsely report `.broken`.
+    ///
+    /// `now` and `sleep` are injected so unit tests can drive the loop with a virtual clock.
+    static func waitForProbeSignal(
+        deadline: Date,
+        threshold: Float,
+        pollInterval: TimeInterval,
+        snapshot: @Sendable () -> (count: Int, maxPeak: Float),
+        now: @Sendable () -> Date = { Date() },
+        sleep: @Sendable (TimeInterval) async -> Void = { duration in
+            try? await Task.sleep(for: .seconds(duration))
+        },
+    ) async -> (stats: (count: Int, maxPeak: Float), elapsedMs: Int) {
+        let startedAt = now()
+        while now() < deadline {
+            if snapshot().maxPeak > threshold { break }
+            await sleep(pollInterval)
+        }
+        let elapsedMs = Int(now().timeIntervalSince(startedAt) * 1000)
+        return (snapshot(), elapsedMs)
     }
 
     static func checkMicrophoneLive() async -> PermissionStatus {
