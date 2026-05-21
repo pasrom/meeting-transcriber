@@ -384,6 +384,7 @@ final class AppState { // swiftlint:disable:this type_body_length
                 let controller = self.ensureLiveTranscriptionController()
                 controller.reset()
                 recorder.micLiveSink = controller.micSink
+                recorder.appLiveSink = controller.appSink
             }
             return recorder
         }
