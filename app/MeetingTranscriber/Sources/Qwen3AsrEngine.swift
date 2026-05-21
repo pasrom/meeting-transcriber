@@ -98,14 +98,15 @@ final class Qwen3AsrEngine: TranscribingEngine {
 
         // Chunk audio into <=30s segments (Qwen3AsrConfig.maxAudioSeconds)
         let maxSamples = Int(Qwen3AsrConfig.maxAudioSeconds * 16000)
+        let chunkRanges = Qwen3AsrChunking.chunkRanges(
+            totalCount: resampled.count,
+            maxSamples: maxSamples,
+        )
+        let totalChunks = max(1, chunkRanges.count)
         var allText: [String] = []
-        var offset = 0
-        let totalChunks = max(1, (resampled.count + maxSamples - 1) / maxSamples)
-        var chunkIndex = 0
 
-        while offset < resampled.count {
-            let end = min(offset + maxSamples, resampled.count)
-            let chunk = Array(resampled[offset ..< end])
+        for (chunkIndex, range) in chunkRanges.enumerated() {
+            let chunk = Array(resampled[range])
             let chunkText = try await manager.transcribe(
                 audioSamples: chunk,
                 language: resolvedLanguage,
@@ -114,9 +115,7 @@ final class Qwen3AsrEngine: TranscribingEngine {
             if !trimmed.isEmpty {
                 allText.append(trimmed)
             }
-            chunkIndex += 1
-            transcriptionProgress = Double(chunkIndex) / Double(totalChunks)
-            offset = end
+            transcriptionProgress = Double(chunkIndex + 1) / Double(totalChunks)
         }
         transcriptionProgress = 1.0
 
