@@ -10,19 +10,19 @@ protocol TranscribingEngine: AnyObject {
 
     func loadModel() async
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment]
-
-    /// Transcribe a buffer of 16 kHz mono Float32 samples. Used by the live
-    /// transcription pipeline which feeds VAD-bounded chunks straight from
-    /// the audio tap, bypassing file I/O. Engines that can't do in-memory
-    /// transcription should throw `TranscriptionError.streamingNotSupported`
-    /// (default implementation does exactly that).
-    func transcribeSamples(_ samples: [Float]) async throws -> String
 }
 
-extension TranscribingEngine {
-    func transcribeSamples(_: [Float]) throws -> String {
-        throw TranscriptionError.streamingNotSupported
-    }
+/// Engines that can transcribe an already-decoded `[Float]` buffer of
+/// 16 kHz mono samples in memory — the API the live-transcription
+/// pipeline feeds with VAD-bounded chunks straight off the audio tap.
+///
+/// Engines that can't do in-memory transcription (currently Qwen3, whose
+/// FluidAudio backend is chunk-batch-only) simply don't conform. The
+/// caller's `as? StreamingTranscribingEngine` cast is the static
+/// equivalent of `TranscriptionEngineSetting.supportsLiveTranscription`.
+@MainActor
+protocol StreamingTranscribingEngine: TranscribingEngine {
+    func transcribeSamples(_ samples: [Float]) async throws -> String
 }
 
 extension TranscribingEngine {

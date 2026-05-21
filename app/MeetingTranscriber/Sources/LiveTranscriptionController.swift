@@ -27,7 +27,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 ///      loaded — re-creating the streaming actors + resampler is cheap).
 @MainActor
 final class LiveTranscriptionController {
-    private let engine: any TranscribingEngine
+    private let engine: any StreamingTranscribingEngine
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
     private var micTranscriber: StreamingTranscriber?
@@ -57,7 +57,7 @@ final class LiveTranscriptionController {
     }
 
     init(
-        engine: any TranscribingEngine,
+        engine: any StreamingTranscribingEngine,
         vad: FluidVAD,
         captions: LiveCaptionsState,
     ) {
@@ -138,7 +138,7 @@ final class LiveTranscriptionController {
 /// `@unchecked Sendable` is the explicit "we know what we're doing" marker
 /// the Swift 6 sender-checking requires for this pattern.
 private struct EngineProxy: @unchecked Sendable {
-    let engine: any TranscribingEngine
+    let engine: any StreamingTranscribingEngine
 
     func transcribeSamples(_ samples: [Float]) async throws -> String {
         try await engine.transcribeSamples(samples)

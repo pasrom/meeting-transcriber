@@ -39,7 +39,7 @@ extension TimestampedSegment {
 
 @MainActor
 @Observable
-final class WhisperKitEngine: TranscribingEngine {
+final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
     var language: String?
     private(set) var modelState: ModelState = .unloaded
