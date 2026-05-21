@@ -44,6 +44,11 @@
         }
 
         override func tearDown() async throws {
+            // `LiveCaptionsState.applyPartial`/`applyFinalized` schedule a
+            // 5 s auto-clear Task via `scheduleAutoClear()`. Cancelling
+            // here keeps a long-running test suite from accumulating
+            // pending Tasks that outlive their AppState.
+            state?.liveCaptions.clear()
             actions = nil
             state = nil
             tmpDir = nil
@@ -192,6 +197,39 @@
 
             let pending = try XCTUnwrap(snapshot.pendingNamingJobs.first)
             XCTAssertEqual(pending.speakerCount, 0)
+        }
+
+        // MARK: - liveCaptions mapping in rpcStateSnapshot
+
+        /// Empty LiveCaptionsState should serialise to empty strings + empty
+        /// finals — what an idle / non-recording app should expose.
+        func test_snapshot_liveCaptions_empty_whenStateIsClear() {
+            let snapshot = state.rpcStateSnapshot()
+            XCTAssertEqual(snapshot.liveCaptions.hypothesisMic, "")
+            XCTAssertEqual(snapshot.liveCaptions.hypothesisApp, "")
+            XCTAssertTrue(snapshot.liveCaptions.recentFinals.isEmpty)
+        }
+
+        /// Per-channel hypothesis + finals must round-trip into the
+        /// snapshot, with the channel enum flattened to the short string
+        /// the e2e driver reads via jq.
+        func test_snapshot_liveCaptions_mapsHypothesisAndFinalsPerChannel() {
+            state.liveCaptions.applyPartial("hello", channel: .mic)
+            state.liveCaptions.applyPartial("guten tag", channel: .app)
+            state.liveCaptions.applyFinalized("hello there", channel: .mic)
+            state.liveCaptions.applyFinalized("guten morgen", channel: .app)
+
+            let snapshot = state.rpcStateSnapshot()
+
+            // applyFinalized clears the per-channel hypothesis, so both
+            // hypothesis fields are empty in this scenario.
+            XCTAssertEqual(snapshot.liveCaptions.hypothesisMic, "")
+            XCTAssertEqual(snapshot.liveCaptions.hypothesisApp, "")
+            XCTAssertEqual(snapshot.liveCaptions.recentFinals.count, 2)
+            XCTAssertEqual(snapshot.liveCaptions.recentFinals[0].channel, .mic)
+            XCTAssertEqual(snapshot.liveCaptions.recentFinals[0].text, "hello there")
+            XCTAssertEqual(snapshot.liveCaptions.recentFinals[1].channel, .app)
+            XCTAssertEqual(snapshot.liveCaptions.recentFinals[1].text, "guten morgen")
         }
 
         // MARK: - Helpers

@@ -36,6 +36,19 @@
                     appSilent: appSilentActive,
                     recordingSilent: recordingSilentActive,
                 ),
+                liveCaptions: liveCaptionsSnapshot(),
+            )
+        }
+
+        /// Snapshot the live-caption overlay state. `LiveCaptionLine`'s
+        /// `Codable` conformance encodes each entry as
+        /// `{"channel": "mic"|"app", "text": …}` directly — the channel
+        /// enum's raw value IS the wire format, so no mapping needed.
+        private func liveCaptionsSnapshot() -> RPCStateSnapshot.LiveCaptions {
+            RPCStateSnapshot.LiveCaptions(
+                hypothesisMic: liveCaptions.hypothesisMic,
+                hypothesisApp: liveCaptions.hypothesisApp,
+                recentFinals: liveCaptions.recentFinals,
             )
         }
 

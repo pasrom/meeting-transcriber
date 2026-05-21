@@ -18,6 +18,11 @@
         /// `asymmetricSilenceWarningSeconds`. E2E drivers poll these to assert
         /// the menu-bar red-tint indicator wiring without screenshot OCR.
         let channelHealth: ChannelHealth
+        /// Snapshot of the live-caption overlay state. E2E drivers poll
+        /// `recentFinals.count > 0` to assert that the full live-transcription
+        /// chain produced text without scraping the OSLog or screenshotting
+        /// the overlay panel.
+        let liveCaptions: LiveCaptions
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -42,6 +47,14 @@
             let meetingTitle: String
             let speakerCount: Int
             let namingSlug: String?
+        }
+
+        struct LiveCaptions: Codable {
+            let hypothesisMic: String
+            let hypothesisApp: String
+            let recentFinals: [LiveCaptionLine]
+
+            static let empty = Self(hypothesisMic: "", hypothesisApp: "", recentFinals: [])
         }
 
         struct ChannelHealth: Codable {
@@ -112,6 +125,7 @@
             engines: Engines = .empty,
             lastJob: LastJob? = nil,
             channelHealth: ChannelHealth = .inactive,
+            liveCaptions: LiveCaptions = .empty,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -119,6 +133,7 @@
             self.engines = engines
             self.lastJob = lastJob
             self.channelHealth = channelHealth
+            self.liveCaptions = liveCaptions
         }
 
         func jsonData() throws -> Data {

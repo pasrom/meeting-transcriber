@@ -3,7 +3,9 @@ import Observation
 
 /// Which capture source a caption came from. Drives the speaker prefix in
 /// the overlay ("Du" for the local mic, "Remote" for the meeting app audio).
-enum LiveCaptionChannel: Hashable {
+/// String raw values double as the RPC wire format — the `/state.liveCaptions
+/// .recentFinals[].channel` JSON field carries `"mic"` / `"app"` directly.
+enum LiveCaptionChannel: String, Hashable, Codable {
     case mic
     case app
 
@@ -16,7 +18,7 @@ enum LiveCaptionChannel: Hashable {
 }
 
 /// A finalised utterance with its source channel attached.
-struct LiveCaptionLine: Hashable {
+struct LiveCaptionLine: Hashable, Codable {
     let channel: LiveCaptionChannel
     let text: String
 }
