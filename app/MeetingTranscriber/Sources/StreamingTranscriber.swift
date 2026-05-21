@@ -1,0 +1,154 @@
+import AudioTapLib
+import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "StreamingTranscriber")
+
+/// Live transcription for a single audio channel (mic or app).
+///
+/// PoC scope: ingests 16 kHz mono Float32 buffers (matches `MicCaptureHandler`
+/// post-resample output), feeds them through `FluidVAD` in streaming mode,
+/// and calls `engine.transcribeSamples` once per ~400 ms while speaking
+/// (partial) and once per detected speech end / 5 s force-flush (final).
+///
+/// App-channel buffers (interleaved 48 kHz stereo) are accepted but ignored
+/// for now — they need a downmix+resample stage before they're usable here.
+/// That's a follow-up.
+actor StreamingTranscriber {
+    enum Event {
+        case partial(String)
+        case finalized(String)
+    }
+
+    typealias EventSink = @Sendable (Event) -> Void
+    /// Sample-based transcription closure. Wraps any `TranscribingEngine`
+    /// from outside the actor's isolation — typically the caller binds the
+    /// engine in a `@Sendable` closure on the main actor.
+    typealias TranscribeFunction = @Sendable ([Float]) async throws -> String
+
+    private let transcribe: TranscribeFunction
+    private let channelLabel: String
+    private let vad: FluidVAD
+    private var vadState: FluidVAD.StreamState?
+    private var inputAccumulator: [Float] = []
+    private var speechSamples: [Float] = []
+    private var isSpeaking = false
+    private var lastPartialAt: Date = .distantPast
+    private let onEvent: EventSink
+
+    /// Silero v6 chunk size at 16 kHz — what FluidVAD expects per call.
+    private static let chunkSize = 4096
+    private static let partialIntervalSeconds: TimeInterval = 0.4
+    /// 5 seconds at 16 kHz — force a final when speech keeps going without an end event.
+    private static let forceFlushSamples = 16000 * 5
+    /// Below 1 second of accumulated speech, drop instead of transcribing (noise).
+    private static let minFinalSamples = 16000
+
+    init(
+        channelLabel: String,
+        vad: FluidVAD,
+        transcribe: @escaping TranscribeFunction,
+        onEvent: @escaping EventSink,
+    ) {
+        self.channelLabel = channelLabel
+        self.vad = vad
+        self.transcribe = transcribe
+        self.onEvent = onEvent
+    }
+
+    /// Feed a captured buffer into the streaming pipeline. Buffers that don't
+    /// match the expected 16 kHz mono shape are dropped silently — for now,
+    /// only mic-channel buffers are supported.
+    func ingest(_ buffer: LiveAudioBuffer) async {
+        guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
+        inputAccumulator.append(contentsOf: buffer.samples)
+        await drainChunks()
+    }
+
+    private func drainChunks() async {
+        if vadState == nil {
+            do {
+                vadState = try await vad.makeStreamState()
+            } catch {
+                logger.error(
+                    "[\(self.channelLabel, privacy: .public)] vad init failed: \(error)",
+                )
+                return
+            }
+        }
+
+        while inputAccumulator.count >= Self.chunkSize {
+            let chunk = Array(inputAccumulator.prefix(Self.chunkSize))
+            inputAccumulator.removeFirst(Self.chunkSize)
+            guard let state = vadState else { return }
+            do {
+                let result = try await vad.processStreamingChunk(chunk, state: state)
+                vadState = result.state
+                await handleEvent(result.event, chunk: chunk)
+            } catch {
+                logger.warning(
+                    "[\(self.channelLabel, privacy: .public)] vad chunk error: \(error)",
+                )
+            }
+        }
+    }
+
+    private func handleEvent(_ event: FluidVAD.StreamEvent?, chunk: [Float]) async {
+        switch event?.kind {
+        case .speechStart:
+            isSpeaking = true
+            speechSamples.append(contentsOf: chunk)
+            lastPartialAt = .distantPast
+
+        case .speechEnd:
+            isSpeaking = false
+            await commitFinal()
+
+        case .none:
+            if isSpeaking {
+                speechSamples.append(contentsOf: chunk)
+                await maybeEmitPartial()
+                if speechSamples.count >= Self.forceFlushSamples {
+                    await commitFinal()
+                }
+            }
+        }
+    }
+
+    private func maybeEmitPartial() async {
+        let now = Date()
+        guard now.timeIntervalSince(lastPartialAt) >= Self.partialIntervalSeconds else { return }
+        guard !speechSamples.isEmpty else { return }
+        lastPartialAt = now
+        let snapshot = speechSamples
+        do {
+            let text = try await transcribe(snapshot)
+            if !text.isEmpty {
+                onEvent(.partial(text))
+            }
+        } catch {
+            logger.warning(
+                "[\(self.channelLabel, privacy: .public)] partial transcribe error: \(error)",
+            )
+        }
+    }
+
+    private func commitFinal() async {
+        guard speechSamples.count >= Self.minFinalSamples else {
+            speechSamples.removeAll(keepingCapacity: true)
+            return
+        }
+        let buffer = speechSamples
+        speechSamples.removeAll(keepingCapacity: true)
+        do {
+            let text = try await transcribe(buffer)
+            if !text.isEmpty {
+                onEvent(.finalized(text))
+            }
+        } catch {
+            logger.warning(
+                "[\(self.channelLabel, privacy: .public)] final transcribe error: \(error)",
+            )
+        }
+    }
+}

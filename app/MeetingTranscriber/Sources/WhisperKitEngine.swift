@@ -175,10 +175,12 @@ final class WhisperKitEngine: TranscribingEngine {
 
 enum TranscriptionError: LocalizedError {
     case modelNotLoaded
+    case streamingNotSupported
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded: "WhisperKit model not loaded"
+        case .streamingNotSupported: "This engine does not support sample-based live transcription"
         }
     }
 }

@@ -10,6 +10,19 @@ protocol TranscribingEngine: AnyObject {
 
     func loadModel() async
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment]
+
+    /// Transcribe a buffer of 16 kHz mono Float32 samples. Used by the live
+    /// transcription pipeline which feeds VAD-bounded chunks straight from
+    /// the audio tap, bypassing file I/O. Engines that can't do in-memory
+    /// transcription should throw `TranscriptionError.streamingNotSupported`
+    /// (default implementation does exactly that).
+    func transcribeSamples(_ samples: [Float]) async throws -> String
+}
+
+extension TranscribingEngine {
+    func transcribeSamples(_: [Float]) throws -> String {
+        throw TranscriptionError.streamingNotSupported
+    }
 }
 
 extension TranscribingEngine {
