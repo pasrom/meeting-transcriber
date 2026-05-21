@@ -4,28 +4,35 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTranscription")
 
-/// PoC controller that wires a `StreamingTranscriber` to the mic-channel
-/// `LiveAudioSink` of a `DualSourceRecorder`. Logs partial/final captions
-/// via os_log on subsystem `com.meetingtranscriber.app`,
-/// category `LiveTranscription`.
+/// PoC controller that wires `StreamingTranscriber` actors to both audio
+/// sinks of a `DualSourceRecorder`. Logs partial/final captions via os_log
+/// on subsystem `com.meetingtranscriber.app`, category `LiveTranscription`,
+/// and feeds them into the observable `LiveCaptionsState` that backs the
+/// caption-bar overlay.
 ///
 /// PoC scope:
-///   - mic channel only (16 kHz mono Float32 already, no conversion needed);
-///   - one engine (caller supplies any `TranscribingEngine` that overrides
-///     `transcribeSamples`; Parakeet is the only one in-tree today);
-///   - no UI, no AppState integration — pure logging.
+///   - mic + app channels supported. App-channel buffers (typically 48 kHz
+///     interleaved stereo from `CATapDescription`) are downsampled to
+///     16 kHz mono via `LiveAudioResampler` before reaching the engine.
+///     Mic buffers arrive 16 kHz mono already (post-`MicCaptureHandler`
+///     resample) and pass through unchanged.
+///   - one engine instance shared by both channels (Parakeet today —
+///     other engines fall back to `TranscriptionError.streamingNotSupported`).
 ///
 /// Lifecycle:
 ///   1. `prepare()` warms the engine + VAD model.
-///   2. Caller installs `micSink` on the recorder before `recorder.start(...)`.
+///   2. Caller installs `micSink` and `appSink` on the recorder before
+///      `recorder.start(...)`.
 ///   3. `reset()` clears accumulated state between recordings (keeps models
-///      loaded — re-creating the streaming actor is cheap).
+///      loaded — re-creating the streaming actors + resampler is cheap).
 @MainActor
 final class LiveTranscriptionController {
     private let engine: any TranscribingEngine
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
-    private var transcriber: StreamingTranscriber?
+    private var micTranscriber: StreamingTranscriber?
+    private var appTranscriber: StreamingTranscriber?
+    private var appResampler = LiveAudioResampler()
 
     /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
     /// before `recorder.start(...)`. Buffers arrive on the AVAudioEngine tap
@@ -33,7 +40,19 @@ final class LiveTranscriptionController {
     var micSink: LiveAudioSink {
         { [weak self] buffer in
             guard let self else { return }
-            Task { await self.handleBuffer(buffer) }
+            Task { await self.handleMicBuffer(buffer) }
+        }
+    }
+
+    /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
+    /// before `recorder.start(...)`. Buffers arrive on the CATap IOProc
+    /// thread at the device's native rate (typically 48 kHz stereo) — the
+    /// closure dispatches onto the actor, where `LiveAudioResampler` brings
+    /// them to 16 kHz mono before the streaming transcriber sees them.
+    var appSink: LiveAudioSink {
+        { [weak self] buffer in
+            guard let self else { return }
+            Task { await self.handleAppBuffer(buffer) }
         }
     }
 
@@ -51,24 +70,26 @@ final class LiveTranscriptionController {
     /// dedupe concurrent `loadModel` calls internally.
     func prepare() async {
         await engine.loadModel()
-        // FluidVAD lazily loads on first use; pre-warming would require a
-        // dummy chunk through it. Skip for the PoC — first VAD call takes
-        // the model-load hit (~200 ms) once at start of recording.
-        if transcriber == nil {
-            transcriber = makeTranscriber()
+        if micTranscriber == nil {
+            micTranscriber = makeTranscriber(channel: .mic)
+        }
+        if appTranscriber == nil {
+            appTranscriber = makeTranscriber(channel: .app)
         }
         logger.info("Live transcription ready (engine: \(String(describing: type(of: self.engine)), privacy: .public))")
     }
 
     /// Reset accumulated state for the next recording. Keeps engine + VAD
-    /// models loaded — re-creating the actor is cheap.
+    /// models loaded — re-creating the actors + resampler is cheap.
     func reset() {
-        transcriber = makeTranscriber()
+        micTranscriber = makeTranscriber(channel: .mic)
+        appTranscriber = makeTranscriber(channel: .app)
+        appResampler = LiveAudioResampler()
         captions.clear()
         logger.info("Live transcription reset for new recording")
     }
 
-    private func makeTranscriber() -> StreamingTranscriber {
+    private func makeTranscriber(channel: LiveCaptionChannel) -> StreamingTranscriber {
         // `EngineProxy` is `@unchecked Sendable` so the `@Sendable` closure
         // below can capture it. Safe because every call routes through the
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
@@ -76,7 +97,7 @@ final class LiveTranscriptionController {
         let proxy = EngineProxy(engine: engine)
         let captions = captions
         return StreamingTranscriber(
-            channelLabel: "mic",
+            channelLabel: channel.label,
             vad: vad,
             transcribe: { samples in
                 try await proxy.transcribeSamples(samples)
@@ -85,21 +106,28 @@ final class LiveTranscriptionController {
                 Task { @MainActor in
                     switch event {
                     case let .partial(text):
-                        logger.info("partial: \(text, privacy: .public)")
-                        captions.applyPartial(text)
+                        logger.info("[\(channel.label, privacy: .public)] partial: \(text, privacy: .public)")
+                        captions.applyPartial(text, channel: channel)
 
                     case let .finalized(text):
-                        logger.info("final: \(text, privacy: .public)")
-                        captions.applyFinalized(text)
+                        logger.info("[\(channel.label, privacy: .public)] final: \(text, privacy: .public)")
+                        captions.applyFinalized(text, channel: channel)
                     }
                 }
             },
         )
     }
 
-    private func handleBuffer(_ buffer: LiveAudioBuffer) async {
-        guard let transcriber else { return }
-        await transcriber.ingest(buffer)
+    private func handleMicBuffer(_ buffer: LiveAudioBuffer) async {
+        guard let micTranscriber else { return }
+        await micTranscriber.ingest(buffer)
+    }
+
+    private func handleAppBuffer(_ buffer: LiveAudioBuffer) async {
+        guard let appTranscriber,
+              let normalized = appResampler.resample(buffer)
+        else { return }
+        await appTranscriber.ingest(normalized)
     }
 }
 
