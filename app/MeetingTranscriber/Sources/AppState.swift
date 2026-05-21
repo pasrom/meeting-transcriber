@@ -310,11 +310,11 @@ final class AppState { // swiftlint:disable:this type_body_length
     }
 
     /// True when the caption-bar overlay should be visible: live transcription
-    /// toggle on, engine = Parakeet (only one with `transcribeSamples` today),
-    /// and an actual recording in progress.
+    /// toggle on, engine implements `transcribeSamples`, and an actual
+    /// recording is in progress.
     var shouldShowLiveCaptions: Bool {
         settings.liveTranscriptionEnabled
-            && settings.transcriptionEngine == .parakeet
+            && settings.transcriptionEngine.supportsLiveTranscription
             && watchLoop?.state == .recording
     }
 
@@ -374,15 +374,16 @@ final class AppState { // swiftlint:disable:this type_body_length
 
     /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
     /// `DualSourceRecorder` on each invocation; when `liveTranscriptionEnabled`
-    /// is on AND the active engine is Parakeet, also installs a mic-channel
-    /// live sink that pipes captured buffers to the `LiveTranscriptionController`.
-    /// PoC scope — see `LiveTranscriptionController` doc for what's logged.
+    /// is on AND the active engine supports `transcribeSamples`, also installs
+    /// mic + app live sinks that pipe captured buffers to the
+    /// `LiveTranscriptionController`. PoC scope — see
+    /// `LiveTranscriptionController` doc for what's logged.
     private func makeRecorderFactory() -> @MainActor () -> any RecordingProvider {
         { [weak self] in
             let recorder = DualSourceRecorder()
             guard let self else { return recorder }
             if self.settings.liveTranscriptionEnabled,
-               self.settings.transcriptionEngine == .parakeet {
+               self.settings.transcriptionEngine.supportsLiveTranscription {
                 let controller = self.ensureLiveTranscriptionController()
                 controller.reset()
                 recorder.micLiveSink = controller.micSink
@@ -392,13 +393,16 @@ final class AppState { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// Lazily create + warm the live transcription controller. Safe to call
-    /// repeatedly — `prepare()` is idempotent (`ParakeetEngine.loadModel`
-    /// dedupes concurrent calls).
+    /// Lazily create + warm the live transcription controller against the
+    /// currently-active engine. Safe to call repeatedly — `prepare()` is
+    /// idempotent (engines dedupe concurrent `loadModel` calls). When the
+    /// transcription-engine setting changes, the controller is invalidated
+    /// via `observeEngineSettings` so the next call rebuilds against the
+    /// new engine.
     private func ensureLiveTranscriptionController() -> LiveTranscriptionController {
         if let existing = liveTranscriptionController { return existing }
         let controller = LiveTranscriptionController(
-            engine: parakeetEngine,
+            engine: activeTranscriptionEngine,
             vad: FluidVAD(threshold: 0.5),
             captions: liveCaptions,
         )
@@ -808,13 +812,19 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// dedupe concurrent `loadModel` calls.
     private func prewarmLiveTranscriptionIfEligible() {
         guard settings.liveTranscriptionEnabled,
-              settings.transcriptionEngine == .parakeet
+              settings.transcriptionEngine.supportsLiveTranscription
         else { return }
         _ = ensureLiveTranscriptionController()
     }
 
     /// Re-arming withObservationTracking watcher on `liveTranscriptionEnabled`
     /// + `transcriptionEngine`. Mirrors the pattern in `observeEngineSettings`.
+    /// On every change, drop the cached controller so that a) the next
+    /// `ensureLiveTranscriptionController()` call rebuilds against the
+    /// (possibly new) `activeTranscriptionEngine`, and b) the controller
+    /// pre-warm in `prewarmLiveTranscriptionIfEligible()` warms the right
+    /// engine. The previous controller stays alive as long as any active
+    /// recording holds its sinks — that recording finishes normally.
     private func observeLiveTranscriptionPrewarm() {
         withObservationTracking {
             _ = settings.liveTranscriptionEnabled
@@ -822,6 +832,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                self.liveTranscriptionController = nil
                 self.prewarmLiveTranscriptionIfEligible()
                 self.observeLiveTranscriptionPrewarm()
             }

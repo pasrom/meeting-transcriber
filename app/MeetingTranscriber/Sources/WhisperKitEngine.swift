@@ -160,6 +160,32 @@ final class WhisperKitEngine: TranscribingEngine {
         return segments
     }
 
+    /// Transcribe a raw 16 kHz mono Float32 PCM buffer (no file). Used by
+    /// the live-transcription pipeline — `StreamingTranscriber` cuts
+    /// VAD-bounded windows out of the audio sink and hands them here. The
+    /// returned string is the joined plain text (no timestamps, no
+    /// segments) because the live overlay only renders one line at a time.
+    /// Hallucination-filter logic matches `transcribeSegments`.
+    func transcribeSamples(_ samples: [Float]) async throws -> String {
+        try await ensureModel()
+        guard let pipe else { throw TranscriptionError.modelNotLoaded }
+        let options = DecodingOptions(language: language, wordTimestamps: false)
+        let results = try await pipe.transcribe(
+            audioArray: samples,
+            decodeOptions: options,
+        )
+        var lastText = ""
+        var pieces: [String] = []
+        for segment in results.flatMap(\.segments) {
+            let text = Self.stripWhisperTokens(segment.text)
+                .trimmingCharacters(in: .whitespaces)
+            if text.isEmpty || text == lastText { continue }
+            lastText = text
+            pieces.append(text)
+        }
+        return pieces.joined(separator: " ")
+    }
+
     /// Estimate number of 30-second windows WhisperKit will process for the given audio file.
     private static func estimateWindowCount(audioPath: URL) -> Int {
         guard let audioFile = try? AVAudioFile(forReading: audioPath) else { return 1 }

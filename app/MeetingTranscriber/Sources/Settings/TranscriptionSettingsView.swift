@@ -80,7 +80,7 @@ struct TranscriptionSettingsView: View {
 
             Section("Live transcription (PoC)") {
                 Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
-                    .disabled(settings.transcriptionEngine != .parakeet)
+                    .disabled(!settings.transcriptionEngine.supportsLiveTranscription)
 
                 Text(liveTranscriptionFootnote)
                     .font(.caption)
@@ -94,13 +94,16 @@ struct TranscriptionSettingsView: View {
     }
 
     private var liveTranscriptionFootnote: String {
-        if settings.transcriptionEngine == .parakeet {
-            "PoC: partials + finals are logged to Console.app — subsystem "
-                + "com.meetingtranscriber.app, category LiveTranscription. "
-                + "No caption-bar UI yet."
+        if settings.transcriptionEngine.supportsLiveTranscription {
+            "Captions appear in a click-through overlay at the bottom of "
+                + "the screen during recording. Hold ⌥ (Option) to drag "
+                + "it; the position is remembered across sessions. "
+                + "Partials + finals are also logged to Console.app — "
+                + "subsystem com.meetingtranscriber.app, category "
+                + "LiveTranscription."
         } else {
-            "Available only with the Parakeet engine for now "
-                + "(lowest RAM + native auto-detect)."
+            "This engine does not yet support live streaming. "
+                + "Use WhisperKit or Parakeet."
         }
     }
 
