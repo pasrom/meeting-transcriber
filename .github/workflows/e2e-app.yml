@@ -33,12 +33,14 @@ jobs:
     # racing for the audio stack — see runner labels via
     # `gh api /repos/{owner}/{repo}/actions/runners`.
     runs-on: [self-hosted, macOS, ARM64, audio]
-    # Three lanes (transcript, record-only, reimport) at ~4–6 min each
-    # → ~14 min observed total. 20 min job budget gives honest margin;
-    # each lane has its own 10 min step-timeout below so a hang in lane
-    # N surfaces as `timed_out` on that step (not as an opaque job-level
-    # `cancelled`). See docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
-    timeout-minutes: 20
+    # Three transcript lanes (transcript, record-only, reimport) at
+    # ~4–6 min each → ~14 min observed. Plus channel-health (~30 s),
+    # silent-recording (~45 s), live-captions (~2 min) → ~17 min wall.
+    # 25 min job budget gives honest margin; each lane has its own
+    # step-timeout below so a hang in lane N surfaces as `timed_out`
+    # on that step (not as an opaque job-level `cancelled`). See
+    # docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
+    timeout-minutes: 25
 
     steps:
       - uses: actions/checkout@v6
@@ -177,6 +179,31 @@ jobs:
       - name: Run silent-recording detector E2E
         timeout-minutes: 3
         run: bash scripts/e2e-silent-recording.sh --no-build
+
+      # Live-transcription overlay e2e (PR #318): asserts on the
+      # in-flight LiveCaptionsState exposed at `/state.liveCaptions.
+      # recentFinals` rather than the post-pipeline transcript path
+      # the first three lanes already cover. Pre-sets the production
+      # UserDefaults the toggle reads — no debug env-var shortcut —
+      # so a regression in the recorder → live-sink → controller →
+      # streaming-transcriber → engine wiring chain surfaces here.
+      # The fixture-based xctest E2E in
+      # `app/MeetingTranscriber/Tests/LiveTranscriptionE2ETests.swift`
+      # covers everything from `LiveTranscriptionController` inward;
+      # this lane covers the parts outside the xctest harness (CATap
+      # tap, AudioCaptureSession, recorder live-sink wiring).
+      # `--no-build` reuses the deployed bundle from the earlier lanes.
+      - name: Run live-transcription overlay E2E
+        timeout-minutes: 5
+        run: bash scripts/e2e-live-captions.sh --no-build
+
+      - name: Upload live-captions simulator log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-captions-simulator.log
+          path: /tmp/e2e-live-captions-sim.log
+          if-no-files-found: ignore
 
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
