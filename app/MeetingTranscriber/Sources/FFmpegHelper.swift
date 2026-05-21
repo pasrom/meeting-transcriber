@@ -16,26 +16,32 @@ enum FFmpegHelper {
 
     /// Cached path to the ffmpeg binary, or `nil` if not found.
     /// Thread-safe via Swift static let semantics (dispatch_once).
-    static let ffmpegPath: String? = {
-        // 1. Environment variable override
-        if let envPath = ProcessInfo.processInfo.environment["FFMPEG_BINARY"],
-           FileManager.default.isExecutableFile(atPath: envPath) {
-            logger.info("ffmpeg found via FFMPEG_BINARY: \(envPath)")
+    static let ffmpegPath: String? = detectFFmpegPath(
+        environment: ProcessInfo.processInfo.environment,
+        searchPaths: searchPaths,
+    ) { FileManager.default.isExecutableFile(atPath: $0) }
+
+    /// Resolve the ffmpeg binary path using injected env + executable check.
+    /// Pure helper for testability — the `static let ffmpegPath` cache uses
+    /// the live defaults; tests drive this directly with mock inputs.
+    ///
+    /// Probe order: `FFMPEG_BINARY` env var → each `searchPaths` dir → nil.
+    static func detectFFmpegPath(
+        environment: [String: String],
+        searchPaths: [String],
+        isExecutable: (String) -> Bool,
+    ) -> String? {
+        if let envPath = environment["FFMPEG_BINARY"], isExecutable(envPath) {
             return envPath
         }
-
-        // 2. Search known paths
         for dir in searchPaths {
             let path = "\(dir)/ffmpeg"
-            if FileManager.default.isExecutableFile(atPath: path) {
-                logger.info("ffmpeg found: \(path)")
+            if isExecutable(path) {
                 return path
             }
         }
-
-        logger.info("ffmpeg not found")
         return nil
-    }()
+    }
 
     /// Whether ffmpeg is available on this system.
     static var isAvailable: Bool {
@@ -69,16 +75,11 @@ enum FFmpegHelper {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ffmpeg)
-        process.arguments = [
-            "-i", url.path,
-            "-vn", // no video
-            "-ac", "1", // mono
-            "-ar", "\(AudioConstants.targetSampleRate)", // speech recognition rate
-            "-f", "wav", // WAV output
-            tempURL.path,
-            "-y", // overwrite
-            "-loglevel", "error",
-        ]
+        process.arguments = Self.buildConversionArguments(
+            input: url,
+            output: tempURL,
+            sampleRate: AudioConstants.targetSampleRate,
+        )
 
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
@@ -126,14 +127,39 @@ enum FFmpegHelper {
         let stderrData = await stderrRead
 
         if process.terminationStatus != 0 {
-            let stderrText = String(data: stderrData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw AudioMixerError.ffmpegFailed(stderrText)
+            throw Self.makeFFmpegFailureError(stderrData: stderrData)
         }
 
         // Load the temp WAV file
         let samples = try AudioMixer.loadAudioFileAsFloat32(url: tempURL)
         logger.info("ffmpeg extracted \(samples.count) samples at 16kHz from \(url.lastPathComponent)")
         return (samples, AudioConstants.targetSampleRate)
+    }
+
+    // MARK: - Pure helpers
+
+    /// Build the ffmpeg argument vector for a conversion run.
+    /// Caller is responsible for picking the right `sampleRate`
+    /// (ASR uses `AudioConstants.targetSampleRate`).
+    static func buildConversionArguments(input: URL, output: URL, sampleRate: Int) -> [String] {
+        [
+            "-i", input.path,
+            "-vn",
+            "-ac", "1",
+            "-ar", "\(sampleRate)",
+            "-f", "wav",
+            output.path,
+            "-y",
+            "-loglevel", "error",
+        ]
+    }
+
+    /// Decode ffmpeg's stderr bytes into a trimmed string and wrap them
+    /// in `AudioMixerError.ffmpegFailed`. UTF-8 decode failures collapse
+    /// to empty so the error description stays readable.
+    static func makeFFmpegFailureError(stderrData: Data) -> AudioMixerError {
+        let stderrText = String(data: stderrData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return .ffmpegFailed(stderrText)
     }
 }
