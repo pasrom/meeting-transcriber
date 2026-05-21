@@ -77,8 +77,31 @@ struct TranscriptionSettingsView: View {
             }
             .accessibilityIdentifier("transcriptionSection")
             .recordOnlyDisabled(settings.recordOnly)
+
+            Section("Live transcription (PoC)") {
+                Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
+                    .disabled(settings.transcriptionEngine != .parakeet)
+
+                Text(liveTranscriptionFootnote)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityIdentifier("liveTranscriptionSection")
+            .recordOnlyDisabled(settings.recordOnly)
         }
         .formStyle(.grouped)
+    }
+
+    private var liveTranscriptionFootnote: String {
+        if settings.transcriptionEngine == .parakeet {
+            "PoC: partials + finals are logged to Console.app — subsystem "
+                + "com.meetingtranscriber.app, category LiveTranscription. "
+                + "No caption-bar UI yet."
+        } else {
+            "Available only with the Parakeet engine for now "
+                + "(lowest RAM + native auto-detect)."
+        }
     }
 
     private var activeEngine: any TranscribingEngine {
