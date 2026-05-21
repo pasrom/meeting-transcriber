@@ -157,6 +157,8 @@ final class AppState { // swiftlint:disable:this type_body_length
         // start observing for runtime changes.
         syncLanguageSettings()
         observeEngineSettings()
+        prewarmLiveTranscriptionIfEligible()
+        observeLiveTranscriptionPrewarm()
 
         #if !APPSTORE
             // Env var force-enables at launch only — preserves back-compat with
@@ -794,6 +796,34 @@ final class AppState { // swiftlint:disable:this type_body_length
                 guard let self else { return }
                 self.syncLanguageSettings()
                 self.observeEngineSettings()
+            }
+        }
+    }
+
+    /// Eagerly load the FluidVAD + Parakeet models when the live-transcription
+    /// toggle flips on (or is already on at launch with the right engine), so
+    /// the first utterance after the recorder starts doesn't pay the cold-load
+    /// cost (a few seconds for the first call to `engine.loadModel()` + VAD
+    /// init). No-op when the conditions aren't met. Idempotent — the engines
+    /// dedupe concurrent `loadModel` calls.
+    private func prewarmLiveTranscriptionIfEligible() {
+        guard settings.liveTranscriptionEnabled,
+              settings.transcriptionEngine == .parakeet
+        else { return }
+        _ = ensureLiveTranscriptionController()
+    }
+
+    /// Re-arming withObservationTracking watcher on `liveTranscriptionEnabled`
+    /// + `transcriptionEngine`. Mirrors the pattern in `observeEngineSettings`.
+    private func observeLiveTranscriptionPrewarm() {
+        withObservationTracking {
+            _ = settings.liveTranscriptionEnabled
+            _ = settings.transcriptionEngine
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.prewarmLiveTranscriptionIfEligible()
+                self.observeLiveTranscriptionPrewarm()
             }
         }
     }
