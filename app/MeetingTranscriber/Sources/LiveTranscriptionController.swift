@@ -24,6 +24,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 final class LiveTranscriptionController {
     private let engine: any TranscribingEngine
     private let vad: FluidVAD
+    private let captions: LiveCaptionsState
     private var transcriber: StreamingTranscriber?
 
     /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
@@ -36,9 +37,14 @@ final class LiveTranscriptionController {
         }
     }
 
-    init(engine: any TranscribingEngine, vad: FluidVAD) {
+    init(
+        engine: any TranscribingEngine,
+        vad: FluidVAD,
+        captions: LiveCaptionsState,
+    ) {
         self.engine = engine
         self.vad = vad
+        self.captions = captions
     }
 
     /// Warm the engine + VAD models. Safe to call multiple times — engines
@@ -58,6 +64,7 @@ final class LiveTranscriptionController {
     /// models loaded — re-creating the actor is cheap.
     func reset() {
         transcriber = makeTranscriber()
+        captions.clear()
         logger.info("Live transcription reset for new recording")
     }
 
@@ -67,6 +74,7 @@ final class LiveTranscriptionController {
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
         // to the main actor on every invocation.
         let proxy = EngineProxy(engine: engine)
+        let captions = captions
         return StreamingTranscriber(
             channelLabel: "mic",
             vad: vad,
@@ -74,12 +82,16 @@ final class LiveTranscriptionController {
                 try await proxy.transcribeSamples(samples)
             },
             onEvent: { event in
-                switch event {
-                case let .partial(text):
-                    logger.info("partial: \(text, privacy: .public)")
+                Task { @MainActor in
+                    switch event {
+                    case let .partial(text):
+                        logger.info("partial: \(text, privacy: .public)")
+                        captions.applyPartial(text)
 
-                case let .finalized(text):
-                    logger.info("final: \(text, privacy: .public)")
+                    case let .finalized(text):
+                        logger.info("final: \(text, privacy: .public)")
+                        captions.applyFinalized(text)
+                    }
                 }
             },
         )

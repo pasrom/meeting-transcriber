@@ -88,6 +88,11 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// engine + VAD models stay warm.
     @ObservationIgnored private var liveTranscriptionController: LiveTranscriptionController?
 
+    /// Observable state for the live caption overlay. Always present (the
+    /// `LiveCaptionsOverlay` window observes this); content is only populated
+    /// when live transcription is on AND a recording is active.
+    let liveCaptions: LiveCaptionsState = .init()
+
     #if !APPSTORE
         /// Lazy-started debug RPC server. Only constructed if the env var is
         /// set — otherwise `nil` and zero overhead.
@@ -302,6 +307,15 @@ final class AppState { // swiftlint:disable:this type_body_length
         watchLoop?.isActive == true && watchLoop?.isManualRecording == false
     }
 
+    /// True when the caption-bar overlay should be visible: live transcription
+    /// toggle on, engine = Parakeet (only one with `transcribeSamples` today),
+    /// and an actual recording in progress.
+    var shouldShowLiveCaptions: Bool {
+        settings.liveTranscriptionEnabled
+            && settings.transcriptionEngine == .parakeet
+            && watchLoop?.state == .recording
+    }
+
     var currentBadge: BadgeKind {
         BadgeKind.compute(
             watchLoopActive: watchLoop?.isActive == true,
@@ -383,6 +397,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         let controller = LiveTranscriptionController(
             engine: parakeetEngine,
             vad: FluidVAD(threshold: 0.5),
+            captions: liveCaptions,
         )
         liveTranscriptionController = controller
         Task { @MainActor in await controller.prepare() }
