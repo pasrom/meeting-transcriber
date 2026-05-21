@@ -81,6 +81,13 @@ final class AppState { // swiftlint:disable:this type_body_length
 
     @ObservationIgnored private var levelMonitorTask: Task<Void, Never>?
 
+    /// PoC live-transcription controller. Lazily created on first recording
+    /// start where `settings.liveTranscriptionEnabled` is true AND the active
+    /// engine is Parakeet (other engines silently no-op via
+    /// `TranscriptionError.streamingNotSupported`). Kept across recordings so
+    /// engine + VAD models stay warm.
+    @ObservationIgnored private var liveTranscriptionController: LiveTranscriptionController?
+
     #if !APPSTORE
         /// Lazy-started debug RPC server. Only constructed if the env var is
         /// set — otherwise `nil` and zero overhead.
@@ -347,6 +354,41 @@ final class AppState { // swiftlint:disable:this type_body_length
         )
     }
 
+    // MARK: - Live transcription factory
+
+    /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
+    /// `DualSourceRecorder` on each invocation; when `liveTranscriptionEnabled`
+    /// is on AND the active engine is Parakeet, also installs a mic-channel
+    /// live sink that pipes captured buffers to the `LiveTranscriptionController`.
+    /// PoC scope — see `LiveTranscriptionController` doc for what's logged.
+    private func makeRecorderFactory() -> @MainActor () -> any RecordingProvider {
+        { [weak self] in
+            let recorder = DualSourceRecorder()
+            guard let self else { return recorder }
+            if self.settings.liveTranscriptionEnabled,
+               self.settings.transcriptionEngine == .parakeet {
+                let controller = self.ensureLiveTranscriptionController()
+                controller.reset()
+                recorder.micLiveSink = controller.micSink
+            }
+            return recorder
+        }
+    }
+
+    /// Lazily create + warm the live transcription controller. Safe to call
+    /// repeatedly — `prepare()` is idempotent (`ParakeetEngine.loadModel`
+    /// dedupes concurrent calls).
+    private func ensureLiveTranscriptionController() -> LiveTranscriptionController {
+        if let existing = liveTranscriptionController { return existing }
+        let controller = LiveTranscriptionController(
+            engine: parakeetEngine,
+            vad: FluidVAD(threshold: 0.5),
+        )
+        liveTranscriptionController = controller
+        Task { @MainActor in await controller.prepare() }
+        return controller
+    }
+
     // MARK: - Start / Stop
 
     func toggleWatching() {
@@ -365,6 +407,7 @@ final class AppState { // swiftlint:disable:this type_body_length
 
                 let loop = WatchLoop(
                     detector: detector,
+                    recorderFactory: makeRecorderFactory(),
                     pipelineQueue: pipelineQueue,
                     pollInterval: settings.pollInterval,
                     endGracePeriod: settings.endGrace,
@@ -405,7 +448,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             ensurePipelineQueue()
 
             let loop = WatchLoop(
-                recorderFactory: { DualSourceRecorder() },
+                recorderFactory: makeRecorderFactory(),
                 pipelineQueue: pipelineQueue,
                 pollInterval: settings.pollInterval,
                 noMic: settings.noMic,

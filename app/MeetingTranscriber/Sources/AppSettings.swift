@@ -131,6 +131,15 @@ final class AppSettings {
         didSet { defaults.set(perChannelIndicatorEnabled, forKey: "perChannelIndicatorEnabled") }
     }
 
+    /// PoC: when on, mic-channel audio is also fed to a live `StreamingTranscriber`
+    /// during recording. Partial / finalised captions are logged via os_log on
+    /// subsystem `com.meetingtranscriber.app`, category `LiveTranscription` — no
+    /// caption-bar UI yet. Only effective when the active engine is Parakeet;
+    /// other engines silently no-op. Default: off.
+    var liveTranscriptionEnabled: Bool {
+        didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
+    }
+
     /// Seconds of continuous asymmetric silence before the indicator + notification
     /// fire. Clamped to [30, 300] on write — short enough to surface a dead channel
     /// inside a meeting, long enough not to trigger on normal speaking pauses.
@@ -377,6 +386,7 @@ final class AppSettings {
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
+        liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
         asymmetricSilenceWarningSeconds = max(30, min(
             300,
             defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90,
