@@ -14,6 +14,8 @@ public class AudioCaptureSession {
     private let micOutputURL: URL?
     private let micDeviceUID: String?
     private let debugLogging: Bool
+    private let appLiveSink: LiveAudioSink?
+    private let micLiveSink: LiveAudioSink?
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -23,6 +25,12 @@ public class AudioCaptureSession {
     ///   apps (Teams 2.x, Slack, Discord) this should include the root PID
     ///   plus helper/renderer children; for native Cocoa apps a
     ///   single-element array is fine.
+    /// - Parameter appLiveSink: Optional real-time buffer callback for the app
+    ///   audio track (CATap output, interleaved Float32 at the tap's native
+    ///   rate, typically 48 kHz). Called from the IOProc thread — non-blocking.
+    /// - Parameter micLiveSink: Optional real-time buffer callback for the mic
+    ///   track (mono Float32 at file rate, typically 16 kHz post-resample).
+    ///   Called from the AVAudioEngine tap thread — non-blocking.
     public init(
         pids: [pid_t],
         appOutputURL: URL,
@@ -31,6 +39,8 @@ public class AudioCaptureSession {
         micOutputURL: URL? = nil,
         micDeviceUID: String? = nil,
         debugLogging: Bool = false,
+        appLiveSink: LiveAudioSink? = nil,
+        micLiveSink: LiveAudioSink? = nil,
     ) {
         self.pids = pids
         self.sampleRate = sampleRate
@@ -39,6 +49,8 @@ public class AudioCaptureSession {
         self.micOutputURL = micOutputURL
         self.micDeviceUID = micDeviceUID
         self.debugLogging = debugLogging
+        self.appLiveSink = appLiveSink
+        self.micLiveSink = micLiveSink
     }
 
     /// Start capturing app audio (and optionally mic audio).
@@ -58,6 +70,7 @@ public class AudioCaptureSession {
             sampleRate: sampleRate,
             channels: channels,
             debugLogging: debugLogging,
+            liveSink: appLiveSink,
         )
         do {
             try capture.start()
@@ -70,7 +83,11 @@ public class AudioCaptureSession {
 
         // Start mic capture if requested
         if let micURL = micOutputURL {
-            let mic = MicCaptureHandler(outputURL: micURL, debugLogging: debugLogging)
+            let mic = MicCaptureHandler(
+                outputURL: micURL,
+                debugLogging: debugLogging,
+                liveSink: micLiveSink,
+            )
             do {
                 try mic.start(deviceUID: micDeviceUID)
                 micCapture = mic

@@ -19,10 +19,13 @@ public class AppAudioCapture: @unchecked Sendable {
     /// `internal` (not `private`) so the cross-file `+PIDTranslation`
     /// extension can read it; it's not otherwise touched from outside.
     let pids: [pid_t]
-    private let sampleRate: Int
+    /// `sampleRate` and `liveSink` are `internal` (not `private`) so the
+    /// cross-file `+LiveSink` extension can populate the live buffer struct.
+    let sampleRate: Int
     private let channels: Int
     private let outputFileDescriptor: Int32
     private let debugLogging: Bool
+    let liveSink: LiveAudioSink?
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -73,18 +76,23 @@ public class AppAudioCapture: @unchecked Sendable {
     ///   - channels: Number of audio channels (default 2).
     ///   - debugLogging: When true, emit verbose forensic logs (process identity,
     ///     output device, periodic RMS energy of captured samples).
+    ///   - liveSink: Optional callback receiving a copy of each captured buffer.
+    ///     Called on the audio IOProc thread — must not block. Nil = no-op,
+    ///     existing batch path unchanged.
     public init(
         pids: [pid_t],
         outputFileDescriptor: Int32,
         sampleRate: Int = 48000,
         channels: Int = 2,
         debugLogging: Bool = false,
+        liveSink: LiveAudioSink? = nil,
     ) {
         self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
         self.sampleRate = sampleRate
         self.channels = channels
         self.debugLogging = debugLogging
+        self.liveSink = liveSink
     }
 
     public func start() throws {
@@ -374,6 +382,7 @@ public class AppAudioCapture: @unchecked Sendable {
             self.accumulateDebugRMS(data: data, byteCount: byteCount)
             self.publishCurrentLevel()
             self.maybeReportDebugRMS()
+            self.forwardToLiveSink(data: data, byteCount: byteCount)
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
