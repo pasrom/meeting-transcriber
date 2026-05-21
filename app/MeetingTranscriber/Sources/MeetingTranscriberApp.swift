@@ -46,6 +46,7 @@ private struct AnimatedMenuBarIcon: View {
 @main
 struct MeetingTranscriberApp: App {
     @State private var appState = AppState(notifier: NotificationManager.shared)
+    @State private var captionsWindow: LiveCaptionsWindowController?
     @Environment(\.openWindow)
     private var openWindow
 
@@ -150,6 +151,15 @@ struct MeetingTranscriberApp: App {
                 // don't repeatedly churn the mic HAL via the 500 ms probe.
                 Task { @MainActor in
                     await appState.checkPermissions(minimumInterval: 3)
+                }
+            }
+            .onChange(of: appState.shouldShowLiveCaptions, initial: true) { _, visible in
+                let controller = captionsWindow ?? LiveCaptionsWindowController(state: appState.liveCaptions)
+                captionsWindow = controller
+                if visible {
+                    controller.show()
+                } else {
+                    controller.hide()
                 }
             }
         }
