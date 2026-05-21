@@ -22,6 +22,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     private var outputFile: AVAudioFile?
     private let outputURL: URL
     private let debugLogging: Bool
+    private let liveSink: LiveAudioSink?
     private var isRecording = false
     private var isRestarting = false
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
@@ -49,9 +50,14 @@ public class MicCaptureHandler: @unchecked Sendable {
         mElement: kAudioObjectPropertyElementMain,
     )
 
-    public init(outputURL: URL, debugLogging: Bool = false) {
+    public init(
+        outputURL: URL,
+        debugLogging: Bool = false,
+        liveSink: LiveAudioSink? = nil,
+    ) {
         self.outputURL = outputURL
         self.debugLogging = debugLogging
+        self.liveSink = liveSink
     }
 
     deinit {
@@ -198,9 +204,11 @@ public class MicCaptureHandler: @unchecked Sendable {
                         logger.warning("Mic resample error: \(error)")
                     } else {
                         try self.outputFile?.write(from: outputBuffer)
+                        self.forwardToLiveSink(buffer: outputBuffer)
                     }
                 } else {
                     try self.outputFile?.write(from: buffer)
+                    self.forwardToLiveSink(buffer: buffer)
                 }
             } catch {
                 logger.warning("Mic write error: \(error)")
@@ -370,6 +378,23 @@ extension MicCaptureHandler {
         logger.info(
             "[debug] Mic RMS (5s): \(dBStr, privacy: .public) dBFS, samples=\(report.samples, privacy: .public)",
         )
+    }
+
+    /// Hand the freshly-written PCM buffer (mono Float32 at file rate, typically
+    /// 16 kHz post-resample) to the optional live sink. Short-circuits when no
+    /// sink is installed.
+    func forwardToLiveSink(buffer: AVAudioPCMBuffer) {
+        guard let sink = liveSink else { return }
+        let frames = Int(buffer.frameLength)
+        guard frames > 0, let channelData = buffer.floatChannelData else { return }
+        let ptr = channelData[0]
+        let samples = Array(UnsafeBufferPointer(start: ptr, count: frames))
+        sink(LiveAudioBuffer(
+            samples: samples,
+            channelCount: Int(buffer.format.channelCount),
+            sampleRate: Int(buffer.format.sampleRate),
+            hostTime: mach_absolute_time(),
+        ))
     }
 }
 
