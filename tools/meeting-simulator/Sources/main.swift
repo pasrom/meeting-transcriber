@@ -48,7 +48,12 @@ struct MeetingSimulator: ParsableCommand {
 
     func run() {
         let fixturePath = audioPath ?? Self.findFixture()
-        runSimulator(fixturePath: fixturePath, windowTitle: windowTitle, silent: silent, duration: duration)
+        let title = windowTitle
+        let silentMode = silent
+        let dur = duration
+        MainActor.assumeIsolated {
+            runSimulator(fixturePath: fixturePath, windowTitle: title, silent: silentMode, duration: dur)
+        }
     }
 
     /// Locate the repo's bundled fixture WAV.
@@ -97,6 +102,7 @@ private let defaultSilentDuration: Double = 60
 /// AppKit lifecycle isn't reentrant — `NSApplication.shared.run()` blocks
 /// forever once started. This runs the whole window + audio + assertion
 /// dance from inside ArgumentParser's `run()` and never returns.
+@MainActor
 func runSimulator(fixturePath: String, windowTitle: String, silent: Bool, duration: Double?) {
     // Fail fast before any AppKit / IOKit state is created.
     guard FileManager.default.fileExists(atPath: fixturePath) else {
@@ -134,8 +140,10 @@ func runSimulator(fixturePath: String, windowTitle: String, silent: Bool, durati
 
     if let effectiveDuration {
         DispatchQueue.main.asyncAfter(deadline: .now() + effectiveDuration) {
-            print("Duration elapsed — closing.")
-            NSApplication.shared.terminate(nil)
+            MainActor.assumeIsolated {
+                print("Duration elapsed — closing.")
+                NSApplication.shared.terminate(nil)
+            }
         }
     }
 
@@ -144,6 +152,7 @@ func runSimulator(fixturePath: String, windowTitle: String, silent: Bool, durati
 
 /// Builds the window + content view + Teams-style toolbar. Returns the
 /// window and the status label so callers can update it during playback.
+@MainActor
 private func buildMeetingWindow(title: String) -> (NSWindow, NSTextField) {
     let window = NSWindow(
         contentRect: NSRect(x: 200, y: 200, width: 800, height: 600),
@@ -211,6 +220,7 @@ private func createPowerAssertion() -> IOPMAssertionID {
     return assertionID
 }
 
+@MainActor
 private func startPlayback(
     fixturePath: String,
     silent: Bool,
@@ -249,6 +259,7 @@ private func startPlayback(
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAudioPlayerDelegate {
     let assertionID: IOPMAssertionID
     var audioPlayer: AVAudioPlayer?
@@ -266,10 +277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, AVAu
         NSApplication.shared.terminate(nil)
     }
 
-    func audioPlayerDidFinishPlaying(_: AVAudioPlayer, successfully _: Bool) {
+    nonisolated func audioPlayerDidFinishPlaying(_: AVAudioPlayer, successfully _: Bool) {
         print("Audio finished — closing in 2s.")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            NSApplication.shared.terminate(nil)
+            MainActor.assumeIsolated {
+                NSApplication.shared.terminate(nil)
+            }
         }
     }
 
