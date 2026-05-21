@@ -125,6 +125,23 @@ final class ParakeetEngine: TranscribingEngine {
         return ParakeetTokenGrouping.groupIntoSegments(timings)
     }
 
+    /// Live transcription entry point: transcribe a raw 16 kHz mono Float32
+    /// buffer without going through disk. Returns the decoded text without
+    /// timestamps — `StreamingTranscriber` only needs the string to emit a
+    /// partial/final caption. Each call gets a fresh decoder state so callers
+    /// can be stateless across VAD segments.
+    func transcribeSamples(_ samples: [Float]) async throws -> String {
+        try await ensureModel()
+        guard let manager = asrManager else {
+            throw TranscriptionError.modelNotLoaded
+        }
+        var decoderState = await TdtDecoderState.make(decoderLayers: manager.decoderLayerCount)
+        let result = try await manager.transcribe(
+            samples, decoderState: &decoderState, language: fluidLanguageHint,
+        )
+        return result.text.trimmingCharacters(in: .whitespaces)
+    }
+
     /// Run CTC keyword spotting on the audio and rescore the TDT transcript.
     private func applyVocabularyRescoring(
         result: ASRResult,
