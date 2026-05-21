@@ -180,6 +180,61 @@ final class FluidVAD: @unchecked Sendable {
         return map
     }
 
+    // MARK: - Streaming API (live transcription)
+
+    /// Opaque state threaded across consecutive `processStreamingChunk` calls.
+    /// Callers must not introspect — pass back unchanged on the next call.
+    typealias StreamState = VadStreamState
+
+    /// A speech boundary detected by the streaming hysteresis state machine.
+    /// Wraps `FluidAudio.VadStreamEvent` so callers don't have to import
+    /// FluidAudio just to switch on the event kind.
+    struct StreamEvent: Equatable {
+        enum Kind: Equatable {
+            case speechStart
+            case speechEnd
+        }
+
+        let kind: Kind
+        /// Sample index (16 kHz) at which the boundary occurred, relative to
+        /// the cumulative stream start (the same axis as `state.processedSamples`).
+        let sampleIndex: Int
+        /// Wall-clock time of the boundary when `returnSeconds: true`.
+        let time: TimeInterval?
+    }
+
+    /// Construct a fresh streaming state mirroring Silero's `reset_states`.
+    /// Threaded across `processStreamingChunk` calls — one per channel.
+    func makeStreamState() async throws -> StreamState {
+        let mgr = try await ensureManager()
+        return await mgr.makeStreamState()
+    }
+
+    /// Process a single audio chunk (16 kHz mono Float32) and return the
+    /// updated state plus an optional speech boundary event. Caller is
+    /// responsible for delivering chunks at the model's expected size
+    /// (`VadManager.chunkSize`, 4096 samples ≈ 256 ms at 16 kHz).
+    func processStreamingChunk(
+        _ chunk: [Float],
+        state: StreamState,
+    ) async throws -> (state: StreamState, event: StreamEvent?) {
+        let mgr = try await ensureManager()
+        let result = try await mgr.processStreamingChunk(
+            chunk,
+            state: state,
+            returnSeconds: true,
+            timeResolution: 2,
+        )
+        let event = result.event.map { ev in
+            StreamEvent(
+                kind: ev.kind == .speechStart ? .speechStart : .speechEnd,
+                sampleIndex: ev.sampleIndex,
+                time: ev.time,
+            )
+        }
+        return (result.state, event)
+    }
+
     /// Merge regions that are closer together than maxGap seconds.
     private func mergeCloseRegions(_ regions: [SpeechRegion], maxGap: TimeInterval) -> [SpeechRegion] {
         guard !regions.isEmpty else { return [] }
