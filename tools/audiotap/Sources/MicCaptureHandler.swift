@@ -298,8 +298,18 @@ public class MicCaptureHandler: @unchecked Sendable {
             configChangeObserver = nil
         }
 
-        // AVAudioEngine can be in a bad state after config change — must recreate
+        // AVAudioEngine can be in a bad state after config change — must recreate.
+        // Hold a strong reference to the old engine for a grace period so any
+        // in-flight `AVAudioIOUnit::IOUnitPropertyListener` blocks that
+        // AVFoundation queued on a libdispatch worker fire against a live
+        // object. Without this hold, dropping the last reference here races
+        // against those blocks and crashes with EXC_BAD_ACCESS in
+        // `objc_msgSend` on the freed engine.
+        let oldEngine = engine
         engine = AVAudioEngine()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            _ = oldEngine
+        }
 
         do {
             try startEngine(deviceUID: deviceUID)
