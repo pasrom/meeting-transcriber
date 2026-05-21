@@ -32,6 +32,17 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     static var availableCases: [Self] {
         allCases.filter(\.isAvailable)
     }
+
+    /// Whether the engine implements `transcribeSamples([Float])` so the
+    /// live-transcription pipeline can feed it VAD-bounded windows. Qwen3
+    /// today uses a chunked API without a streaming-friendly hook —
+    /// excluded until that's wired up (deferred follow-up).
+    var supportsLiveTranscription: Bool {
+        switch self {
+        case .whisperKit, .parakeet: true
+        case .qwen3: false
+        }
+    }
 }
 
 enum DiarizerMode: String, CaseIterable {
