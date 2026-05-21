@@ -232,4 +232,35 @@ final class FluidVADTests: XCTestCase {
         XCTAssertEqual(remapped[1].start, 3.0, accuracy: 1e-9)
         XCTAssertEqual(remapped[1].end, 4.0, accuracy: 1e-9)
     }
+
+    // MARK: - Streaming API (pure value-type behavior)
+
+    func testStreamEventStartConstruction() {
+        let ev = FluidVAD.StreamEvent(kind: .speechStart, sampleIndex: 16000, time: 1.0)
+        XCTAssertEqual(ev.kind, .speechStart)
+        XCTAssertEqual(ev.sampleIndex, 16000)
+        XCTAssertEqual(ev.time, 1.0)
+    }
+
+    func testStreamEventEndConstruction() {
+        let ev = FluidVAD.StreamEvent(kind: .speechEnd, sampleIndex: 48000, time: 3.0)
+        XCTAssertEqual(ev.kind, .speechEnd)
+        XCTAssertEqual(ev.sampleIndex, 48000)
+        XCTAssertEqual(ev.time, 3.0)
+    }
+
+    func testStreamEventOmittedTime() {
+        let ev = FluidVAD.StreamEvent(kind: .speechStart, sampleIndex: 0, time: nil)
+        XCTAssertNil(ev.time)
+    }
+
+    func testStreamStateInitialIsTypealias() {
+        // Confirms FluidVAD.StreamState is a typealias to VadStreamState.
+        // If someone changes it to a wrapper, this stops compiling — useful
+        // because callers reach into FluidAudio types through this alias.
+        let state = FluidVAD.StreamState.initial()
+        XCTAssertFalse(state.triggered)
+        XCTAssertEqual(state.processedSamples, 0)
+        XCTAssertNil(state.tempEndSample)
+    }
 }
