@@ -1,13 +1,47 @@
 # Meeting Transcriber
 
-[![CI](https://github.com/pasrom/meeting-transcriber/actions/workflows/ci.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/ci.yml)
-[![E2E](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e.yml)
-[![E2E (App)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml)
-[![Quality & Safety](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml)
-[![App Store Smoke](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml)
-[![codecov](https://codecov.io/gh/pasrom/meeting-transcriber/branch/main/graph/badge.svg)](https://codecov.io/gh/pasrom/meeting-transcriber)
+> **The local-first meeting transcriber for macOS.** Records Teams, Zoom, and Webex calls, transcribes them on-device with Whisper / Parakeet / Qwen3, separates speakers, and turns the result into a Markdown protocol using your own Claude CLI or any local LLM. **No cloud. No subscription. No audio ever leaves your Mac.**
 
-A native macOS menu bar app that automatically detects, records, transcribes, and summarizes your meetings — fully on-device, no cloud transcription.
+<p align="center">
+  <img src="docs/hero.gif" alt="Meeting Transcriber turning a Teams call into a Markdown protocol on-device" width="860">
+</p>
+
+<p align="center">
+  <a href="https://github.com/pasrom/meeting-transcriber/actions?query=branch%3Amain"><img src="https://img.shields.io/github/checks-status/pasrom/meeting-transcriber/main?label=build" alt="Build status"></a>
+  <a href="https://github.com/pasrom/meeting-transcriber/releases/latest"><img src="https://img.shields.io/github/v/release/pasrom/meeting-transcriber?include_prereleases&label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-14.2%2B-blue" alt="macOS 14.2+">
+  <img src="https://img.shields.io/badge/Swift-6.2-orange" alt="Swift 6.2">
+  <a href="https://github.com/pasrom/meeting-transcriber/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pasrom/meeting-transcriber" alt="MIT License"></a>
+  <a href="https://github.com/pasrom/meeting-transcriber/stargazers"><img src="https://img.shields.io/github/stars/pasrom/meeting-transcriber?style=social" alt="GitHub stars"></a>
+</p>
+
+## Why this exists
+
+Cloud meeting recorders (Otter, Fireflies, Granola, tl;dv) work great, until you remember that every word from every meeting goes to a third-party server. For a lot of teams (legal, healthcare, M&A, anything under NDA, or just folks who'd rather not) that's a non-starter.
+
+Meeting Transcriber runs the entire pipeline (recording, transcription, speaker diarization, summarization) on your Mac. No account, no upload, no monthly bill.
+
+|                                | Cloud transcribers | **Meeting Transcriber** |
+|--------------------------------|:------------------:|:-----------------------:|
+| Audio leaves your machine      | Yes                | **No**                  |
+| Recurring cost                 | $10–30 / month     | **Free**                |
+| Works offline                  | No                 | **Yes**                 |
+| Choice of summarization LLM    | Vendor-locked      | **Claude · Ollama · LM Studio · any OpenAI API** |
+| Per-source speaker separation  | Mixed track        | **Dual-track diarization** |
+| Source available               | No                 | **MIT licensed**        |
+
+## Install
+
+```bash
+brew tap pasrom/meeting-transcriber
+brew install --cask meeting-transcriber
+```
+
+The app lives in your menu bar — open it, grant microphone + screen-recording permission, and the first detected Teams/Zoom/Webex call records automatically.
+
+---
+
+## How it works
 
 ```
          ┌──────────────────────┐         ┌──────────────────────┐
@@ -270,6 +304,13 @@ The toggle persists in `UserDefaults` and takes effect on the next recording wit
 ---
 
 ## Testing & CI
+
+[![CI](https://github.com/pasrom/meeting-transcriber/actions/workflows/ci.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/ci.yml)
+[![E2E](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e.yml)
+[![E2E (App)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/e2e-app.yml)
+[![Quality & Safety](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/quality-and-safety.yml)
+[![App Store Smoke](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml/badge.svg)](https://github.com/pasrom/meeting-transcriber/actions/workflows/appstore.yml)
+[![codecov](https://codecov.io/gh/pasrom/meeting-transcriber/branch/main/graph/badge.svg)](https://codecov.io/gh/pasrom/meeting-transcriber)
 
 Pull requests run unit tests, lint, and analyzer in [`ci.yml`](.github/workflows/ci.yml). Two complementary E2E layers run on a self-hosted Apple Silicon Mac mini against the real production models (no mocks): [`e2e.yml`](.github/workflows/e2e.yml) feeds fixture audio through each ASR engine + the WatchLoop pipeline, and [`e2e-app.yml`](.github/workflows/e2e-app.yml) builds and signs the actual `.app`, drives a simulated meeting via [`tools/meeting-simulator`](tools/meeting-simulator), and asserts on the resulting transcript over the embedded debug RPC server.
 
