@@ -122,7 +122,7 @@ final class ParakeetEngine: TranscribingEngine {
             ]
         }
 
-        return Self.groupTokensIntoSegments(timings)
+        return ParakeetTokenGrouping.groupIntoSegments(timings)
     }
 
     /// Run CTC keyword spotting on the audio and rescore the TDT transcript.
@@ -164,38 +164,6 @@ final class ParakeetEngine: TranscribingEngine {
             ctcDetectedTerms: detected.isEmpty ? nil : detected,
             ctcAppliedTerms: applied.isEmpty ? nil : applied,
         )
-    }
-
-    /// Group token-level timings into sentence-level `TimestampedSegment`s.
-    ///
-    /// Ends a segment at sentence-terminating punctuation (`. ! ?`) or
-    /// after 20 tokens to keep segment lengths reasonable.
-    private static func groupTokensIntoSegments(_ timings: [TokenTiming]) -> [TimestampedSegment] {
-        var segments: [TimestampedSegment] = []
-        var group: [TokenTiming] = []
-
-        for timing in timings {
-            let token = timing.token
-            guard !token.trimmingCharacters(in: CharacterSet.whitespaces).isEmpty else { continue }
-            group.append(timing)
-
-            let endsWithPunct = token.hasSuffix(".") || token.hasSuffix("!") || token.hasSuffix("?")
-            if endsWithPunct || group.count >= 20 {
-                if let seg = makeSegment(from: group) { segments.append(seg) }
-                group = []
-            }
-        }
-        if let seg = makeSegment(from: group) { segments.append(seg) }
-
-        return segments
-    }
-
-    private static func makeSegment(from timings: [TokenTiming]) -> TimestampedSegment? {
-        guard !timings.isEmpty else { return nil }
-        let text = timings.map(\.token).joined().trimmingCharacters(in: CharacterSet.whitespaces)
-        guard !text.isEmpty else { return nil }
-        // swiftlint:disable:next force_unwrapping
-        return TimestampedSegment(start: timings.first!.startTime, end: timings.last!.endTime, text: text)
     }
 
     // MARK: - Custom Vocabulary
