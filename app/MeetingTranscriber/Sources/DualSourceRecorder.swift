@@ -98,6 +98,13 @@ class DualSourceRecorder: RecordingProvider {
         }
     }
 
+    /// Optional live-buffer sinks installed by an external live transcription
+    /// controller. Set before calling `start(...)` — the next capture session
+    /// hands a copy of every mic/app buffer to these sinks alongside the
+    /// existing file write. Default nil = batch-only behaviour preserved.
+    var micLiveSink: LiveAudioSink?
+    var appLiveSink: LiveAudioSink?
+
     /// Start recording app audio and optionally mic.
     func start(
         appPID: pid_t,
@@ -135,6 +142,8 @@ class DualSourceRecorder: RecordingProvider {
             micOutputURL: micURL,
             micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
             debugLogging: debugLogging,
+            appLiveSink: appLiveSink,
+            micLiveSink: micLiveSink,
         )
         try session.start()
         captureSession = session
