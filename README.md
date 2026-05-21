@@ -43,47 +43,39 @@ The app lives in your menu bar — open it, grant microphone + screen-recording 
 
 ## How it works
 
-```
-         ┌──────────────────────┐         ┌──────────────────────┐
-         │   Meeting Detected   │         │     File Import      │
-         │  Teams / Zoom / Webex│         │ WAV MP3 M4A MP4 MKV  │
-         └──────────┬───────────┘         └──────────┬───────────┘
-                    │                                │
-                    ▼                                ▼
-         ┌──────────────────────┐         ┌──────────────────────┐
-         │   Dual Recording     │         │   16kHz Mono Convert │
-         │  App Audio + Mic     │         │  AVAudioFile/ffmpeg  │
-         │  (16kHz per track)   │         │                      │
-         └──────────┬───────────┘         └──────────┬───────────┘
-                    │                                │
-                    └────────────────┬───────────────┘
-                                     ▼
-                        ┌──────────────────────────┐
-                        │   Transcription Engine   │
-                        │ ┌──────────┬───────────┐ │
-                        │ │ Whisper  │FluidAudio │ │
-                        │ │   Kit    │ Parakeet  │ │
-                        │ │          │ Qwen3-ASR │ │
-                        │ └──────────┴───────────┘ │
-                        │      CoreML / ANE        │
-                        └────────────┬─────────────┘
-                                     ▼
-                         ┌────────────────────────┐
-                         │  Speaker Diarization   │
-                         │  FluidAudio CoreML/ANE │
-                         │  + Speaker Recognition │
-                         └───────────┬────────────┘
-                                     ▼
-                         ┌────────────────────────┐
-                         │  Protocol Generation   │
-                         │  Claude CLI / OpenAI   │
-                         └───────────┬────────────┘
-                                     ▼
-                         ┌────────────────────────┐
-                         │   Markdown Protocol    │
-                         │  Summary · Decisions   │
-                         │  Tasks · Transcript    │
-                         └────────────────────────┘
+```mermaid
+flowchart TD
+    A["Meeting Detected<br/>Teams · Zoom · Webex"]
+    A2["File Import<br/>WAV · MP3 · M4A · MP4 · MKV · WebM · OGG"]
+    B["Dual Recording<br/>App audio + Mic · 16 kHz per track"]
+    C["16 kHz Mono Convert<br/>AVAudioFile → AVAsset → ffmpeg"]
+    D{"Transcription Engine<br/>CoreML / ANE"}
+    D1["WhisperKit<br/>99 languages"]
+    D2["Parakeet TDT v3<br/>25 EU languages"]
+    D3["Qwen3-ASR<br/>30 languages · macOS 15+"]
+    E["Speaker Diarization<br/>FluidAudio · dual-track + recognition"]
+    F["Protocol Generation<br/>Claude CLI · OpenAI-compatible · none"]
+    G["Markdown Protocol<br/>Summary · Decisions · Tasks · Transcript"]
+
+    A --> B
+    A2 --> C
+    B --> D
+    C --> D
+    D --> D1
+    D --> D2
+    D --> D3
+    D1 --> E
+    D2 --> E
+    D3 --> E
+    E --> F
+    F --> G
+
+    classDef input fill:#5B8DEF,stroke:#3F6FD5,color:#fff
+    classDef engine fill:#8B5CF6,stroke:#7C3AED,color:#fff
+    classDef output fill:#22C55E,stroke:#16A34A,color:#fff
+    class A,A2 input
+    class D engine
+    class G output
 ```
 
 ---
