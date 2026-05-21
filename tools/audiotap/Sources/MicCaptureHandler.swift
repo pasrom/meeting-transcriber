@@ -346,6 +346,17 @@ public class MicCaptureHandler: @unchecked Sendable {
         engine.stop()
         engine.reset()
         outputFile = nil
+
+        // Mirror the retain-grace from executeRestart: if the caller drops
+        // MicCaptureHandler immediately after stop() returns, the engine
+        // ivar's last reference would race against any in-flight
+        // AVAudioIOUnit::IOUnitPropertyListener block AVFoundation queued
+        // on a libdispatch worker. Holding a local ref for 500 ms lets
+        // those blocks fire against a live object.
+        let retainedEngine = engine
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            _ = retainedEngine
+        }
         logger.info("Mic recording stopped")
     }
 }
