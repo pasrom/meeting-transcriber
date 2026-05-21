@@ -383,8 +383,8 @@ final class AppState { // swiftlint:disable:this type_body_length
             let recorder = DualSourceRecorder()
             guard let self else { return recorder }
             if self.settings.liveTranscriptionEnabled,
-               self.settings.transcriptionEngine.supportsLiveTranscription {
-                let controller = self.ensureLiveTranscriptionController()
+               self.settings.transcriptionEngine.supportsLiveTranscription,
+               let controller = self.ensureLiveTranscriptionController() {
                 controller.reset()
                 recorder.micLiveSink = controller.micSink
                 recorder.appLiveSink = controller.appSink
@@ -399,10 +399,20 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// transcription-engine setting changes, the controller is invalidated
     /// via `observeEngineSettings` so the next call rebuilds against the
     /// new engine.
-    private func ensureLiveTranscriptionController() -> LiveTranscriptionController {
+    ///
+    /// Returns nil when the active engine doesn't conform to
+    /// `StreamingTranscribingEngine` — the static equivalent of the
+    /// `supportsLiveTranscription` enum-level gate. Both `prewarm…` and
+    /// `makeRecorderFactory` callers already check that gate before
+    /// invoking this, so a nil return here only happens if a regression
+    /// breaks one of those guards.
+    private func ensureLiveTranscriptionController() -> LiveTranscriptionController? {
         if let existing = liveTranscriptionController { return existing }
+        guard let streamingEngine = activeTranscriptionEngine as? any StreamingTranscribingEngine else {
+            return nil
+        }
         let controller = LiveTranscriptionController(
-            engine: activeTranscriptionEngine,
+            engine: streamingEngine,
             vad: FluidVAD(threshold: 0.5),
             captions: liveCaptions,
         )
