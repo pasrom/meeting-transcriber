@@ -95,4 +95,49 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(LiveCaptionChannel.mic.label, "Du")
         XCTAssertEqual(LiveCaptionChannel.app.label, "Remote")
     }
+
+    // MARK: - Opacity fade (pure function of lastEventAt vs passed-in date)
+
+    func testOpacityIsZeroWithoutAnyEvent() {
+        let state = LiveCaptionsState()
+        XCTAssertEqual(state.opacity(at: Date()), 0.0, accuracy: 0.0001)
+    }
+
+    func testOpacityIsFullRightAfterEvent() {
+        let state = LiveCaptionsState()
+        state.applyPartial("hi", channel: .mic)
+        XCTAssertEqual(state.opacity(at: state.lastEventAt), 1.0, accuracy: 0.0001)
+    }
+
+    func testOpacityIsFullUntilFadeStartBoundary() {
+        let state = LiveCaptionsState()
+        state.applyPartial("hi", channel: .mic)
+        let justBeforeFade = state.lastEventAt
+            .addingTimeInterval(LiveCaptionsState.fadeStartSeconds - 0.01)
+        XCTAssertEqual(state.opacity(at: justBeforeFade), 1.0, accuracy: 0.0001)
+    }
+
+    func testOpacityIsZeroAtFadeEndBoundary() {
+        let state = LiveCaptionsState()
+        state.applyPartial("hi", channel: .mic)
+        let atFadeEnd = state.lastEventAt
+            .addingTimeInterval(LiveCaptionsState.fadeEndSeconds)
+        XCTAssertEqual(state.opacity(at: atFadeEnd), 0.0, accuracy: 0.0001)
+    }
+
+    func testOpacityInterpolatesLinearlyMidway() {
+        let state = LiveCaptionsState()
+        state.applyPartial("hi", channel: .mic)
+        let mid = (LiveCaptionsState.fadeStartSeconds + LiveCaptionsState.fadeEndSeconds) / 2
+        let midpointDate = state.lastEventAt.addingTimeInterval(mid)
+        XCTAssertEqual(state.opacity(at: midpointDate), 0.5, accuracy: 0.01)
+    }
+
+    func testOpacityStaysZeroBeyondFadeEnd() {
+        let state = LiveCaptionsState()
+        state.applyPartial("hi", channel: .mic)
+        let wayLater = state.lastEventAt
+            .addingTimeInterval(LiveCaptionsState.fadeEndSeconds + 10.0)
+        XCTAssertEqual(state.opacity(at: wayLater), 0.0, accuracy: 0.0001)
+    }
 }
