@@ -25,6 +25,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveAud
 final class LiveAudioResampler {
     private var converter: AVAudioConverter?
     private var inputFormat: AVAudioFormat?
+    private var driftDetector = SampleRateDriftDetector()
 
     static let targetSampleRate: Double = 16000
     static let targetChannels: AVAudioChannelCount = 1
@@ -34,6 +35,14 @@ final class LiveAudioResampler {
     /// and pass through unchanged.
     func resample(_ buffer: LiveAudioBuffer) -> LiveAudioBuffer? {
         guard !buffer.samples.isEmpty else { return nil }
+        if let report = driftDetector.observe(buffer) {
+            let claimed = String(format: "%.0f", report.claimedRate)
+            let observed = String(format: "%.0f", report.observedRate)
+            let pct = String(format: "%.1f", report.driftFraction * 100)
+            logger.warning(
+                "Sample-rate drift detected: claimed=\(claimed, privacy: .public) Hz observed=\(observed, privacy: .public) Hz drift=\(pct, privacy: .public)%",
+            )
+        }
         if buffer.channelCount == Int(Self.targetChannels),
            buffer.sampleRate == Int(Self.targetSampleRate) {
             return buffer
