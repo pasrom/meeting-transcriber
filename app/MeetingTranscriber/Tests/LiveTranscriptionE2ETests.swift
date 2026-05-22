@@ -11,6 +11,12 @@ import XCTest
 /// reason a sibling live-recording E2E (`scripts/e2e-live-captions.sh`)
 /// exists.
 ///
+/// Runs in regular CI (no `E2E_ENABLED` gate) so codecov sees the
+/// `StreamingTranscriber` + `LiveTranscriptionController` + engine
+/// streaming paths. The Parakeet model is already preloaded by
+/// `ModelPreloadTests`, so the additional wall-clock is just the
+/// fixture playback (~10 s end-to-end).
+///
 /// Acceptance principle (matches the existing channel-health E2E): revert
 /// any production wiring commit on this branch and one of these tests
 /// must fail. Examples:
@@ -19,17 +25,39 @@ import XCTest
 ///   * revert `c2dcc35` (FluidVAD streaming API) → both fail
 @MainActor
 final class LiveTranscriptionE2ETests: XCTestCase {
-    func testMicChannelProducesFinalisedCaption() async throws {
-        try skipIfCIWithoutE2EOptIn("requires Parakeet model download")
-
+    /// Combined coverage for the mic channel, the app channel, and the
+    /// idle (no-buffers) precondition. Kept as a single test method
+    /// because `swift test --parallel` runs each method in its own xctest
+    /// worker process, and two parallel workers freshly loading the
+    /// Parakeet CoreML model race on the `~/Library/Caches/.../e5rt`
+    /// bundle cache rename → `Directory not empty` from the BNNS encoder
+    /// bundle write → inference silently broken for the duration of the
+    /// run. Folding all three scenarios into one method means a single
+    /// worker loads Parakeet once and the race can't happen.
+    ///
+    /// Acceptance principle (matches the channel-health E2E): revert any
+    /// production wiring commit on this branch and one of the assertions
+    /// here must fail. Examples:
+    ///   * revert `b6cda33` (audiotap live sink) → mic + app paths fail
+    ///   * revert `bd46cdb` (app-channel live transcription) → app path fails
+    ///   * revert `c2dcc35` (FluidVAD streaming API) → both fail
+    func testLivePipelineProducesFinalisedCaptionsAcrossChannels() async throws {
         let setup = try await loadFixtureAndPrepareController()
-        feed(setup.fixtureSamples, into: setup.controller.micSink)
-        await waitForFinal(in: setup.captions)
 
-        XCTAssertFalse(
-            setup.captions.recentFinals.isEmpty,
-            "live mic channel must finalise at least one caption — wiring broken?",
-        )
+        // (1) Idle precondition: with the controller wired up but no
+        // buffers fed, nothing should appear in the caption state. Catches
+        // a regression where the controller pre-emits text on prepare()
+        // or an idle tick causes a spurious emission.
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(setup.captions.recentFinals.isEmpty, "idle controller must not emit captions")
+        XCTAssertEqual(setup.captions.hypothesisMic, "")
+        XCTAssertEqual(setup.captions.hypothesisApp, "")
+
+        // (2) Mic channel: feed the fixture into the mic sink, wait for
+        // a final on the .mic channel.
+        feed(setup.fixtureSamples, into: setup.controller.micSink)
+        await waitForFinal(in: setup.captions, channel: .mic)
+
         let micFinals = setup.captions.recentFinals.filter { $0.channel == .mic }
         XCTAssertFalse(
             micFinals.isEmpty,
@@ -39,38 +67,20 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         // words. Fuzzy match: any non-empty final at all means the chain
         // is wired and the engine produced text; a content match is the
         // robustness layer.
-        let allText = micFinals.map(\.text).joined(separator: " ").lowercased()
-        XCTAssertFalse(allText.isEmpty)
-    }
+        let micText = micFinals.map(\.text).joined(separator: " ").lowercased()
+        XCTAssertFalse(micText.isEmpty)
 
-    func testAppChannelProducesFinalisedCaption() async throws {
-        try skipIfCIWithoutE2EOptIn("requires Parakeet model download")
-
-        let setup = try await loadFixtureAndPrepareController()
+        // (3) App channel: feed the same fixture into the app sink, wait
+        // for a final on the .app channel. Re-uses the same engine + VAD
+        // — same process, no parallel-load race.
         feed(setup.fixtureSamples, into: setup.controller.appSink)
-        await waitForFinal(in: setup.captions)
+        await waitForFinal(in: setup.captions, channel: .app)
 
-        XCTAssertFalse(
-            setup.captions.recentFinals.isEmpty,
-            "live app channel must finalise at least one caption — wiring broken?",
-        )
         let appFinals = setup.captions.recentFinals.filter { $0.channel == .app }
         XCTAssertFalse(
             appFinals.isEmpty,
             "expected at least one .app-channel final, got channels: \(setup.captions.recentFinals.map(\.channel))",
         )
-    }
-
-    func testCaptionsStayEmptyWhenNoBuffersAreFed() async throws {
-        try skipIfCIWithoutE2EOptIn("requires Parakeet model download")
-
-        let setup = try await loadFixtureAndPrepareController()
-        // Idle for a moment with the controller wired up — nothing flowing
-        // through the sinks. No captions should appear.
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertTrue(setup.captions.recentFinals.isEmpty)
-        XCTAssertEqual(setup.captions.hypothesisMic, "")
-        XCTAssertEqual(setup.captions.hypothesisApp, "")
     }
 
     // MARK: - Setup
@@ -128,18 +138,32 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         }
     }
 
-    /// Poll the caption state until a final arrives or the deadline
-    /// elapses. Replaces a fixed 3 s `Task.sleep` — typical cases
-    /// complete in well under a second, so polling at 50 ms keeps the
-    /// test responsive while bounding the wait if the engine emits
+    /// Poll the caption state until a final on `channel` arrives or the
+    /// deadline elapses. Replaces a fixed `Task.sleep` — typical cases
+    /// complete in well under a second locally, so polling at 50 ms keeps
+    /// the test responsive while bounding the wait if the engine emits
     /// nothing.
+    ///
+    /// Default deadline is 30 s because the macos-26 CI runner is a
+    /// virtualised M1 with 3 CPU cores and no ANE — Parakeet inference
+    /// on CPU is ~5× slower than local M-series hardware. Locally the
+    /// poll usually returns inside 1 s on the first final, so the
+    /// generous deadline is "safety net for slow CI", not "expected
+    /// wall-clock budget".
+    ///
+    /// The `channel` filter lets a single test wait for a mic-channel
+    /// final and then a separate app-channel final — without the filter,
+    /// the second `waitForFinal` would return immediately on the lingering
+    /// mic-channel entries from step (2).
     private func waitForFinal(
         in captions: LiveCaptionsState,
-        deadlineSeconds: Double = 3.0,
+        channel: LiveCaptionChannel,
+        deadlineSeconds: Double = 30.0,
     ) async {
         let deadline = ContinuousClock.now + .seconds(deadlineSeconds)
-        while await MainActor.run(body: { captions.recentFinals.isEmpty }),
-              ContinuousClock.now < deadline {
+        while await MainActor.run(body: {
+            !captions.recentFinals.contains { $0.channel == channel }
+        }), ContinuousClock.now < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
