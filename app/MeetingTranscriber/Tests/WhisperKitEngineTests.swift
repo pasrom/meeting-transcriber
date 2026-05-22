@@ -69,4 +69,36 @@ final class WhisperKitEngineTests: XCTestCase {
             "Transcript should contain German words, got: \(transcript)",
         )
     }
+
+    /// Streaming entry point: same fixture, fed as a raw 16 kHz Float32
+    /// buffer through `transcribeSamples` — the path `StreamingTranscriber`
+    /// uses to hand VAD-windowed slices into WhisperKit during live
+    /// captions. Verifies the `StreamingTranscribingEngine` conformance
+    /// actually produces text on real audio (not just routes through the
+    /// type system).
+    func testTranscribeSamplesGermanAudio() async throws {
+        let fixture = fixtureURL()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.path))
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = "de"
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded)
+
+        let (raw, srcRate) = try await AudioMixer.loadAudioAsFloat32(url: fixture)
+        let mono16k = srcRate == 16000 ? raw : AudioMixer.resample(raw, from: srcRate, to: 16000)
+        // First ~5 s of the fixture — enough to produce text, fast to transcribe.
+        let clip = Array(mono16k.prefix(16000 * 5))
+
+        let text = try await engine.transcribeSamples(clip)
+        XCTAssertFalse(text.isEmpty, "Streaming transcription should produce non-empty text")
+
+        let lowered = text.lowercased()
+        let germanWords = ["und", "die", "der", "ist", "wir", "das", "den", "ich", "nicht", "ein", "guten", "tag"]
+        XCTAssertTrue(
+            germanWords.contains { lowered.contains($0) },
+            "Streaming transcript should contain German words, got: \(text)",
+        )
+    }
 }
