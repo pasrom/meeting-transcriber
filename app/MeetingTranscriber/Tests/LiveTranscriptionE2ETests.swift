@@ -144,12 +144,15 @@ final class LiveTranscriptionE2ETests: XCTestCase {
     /// the test responsive while bounding the wait if the engine emits
     /// nothing.
     ///
-    /// Default deadline is 30 s because the macos-26 CI runner is a
+    /// Default deadline is 60 s because the macos-26 CI runner is a
     /// virtualised M1 with 3 CPU cores and no ANE — Parakeet inference
-    /// on CPU is ~5× slower than local M-series hardware. Locally the
-    /// poll usually returns inside 1 s on the first final, so the
-    /// generous deadline is "safety net for slow CI", not "expected
-    /// wall-clock budget".
+    /// on CPU is ~5× slower than local M-series hardware, and parallel
+    /// xctest workers loading neighbouring CoreML models compete for
+    /// the same e5rt cache. Locally the poll usually returns inside 1 s
+    /// on the first final, so the generous deadline is "safety net for
+    /// slow CI", not "expected wall-clock budget". Was 30 s; bumped
+    /// after a CI run hit the deadline on the app channel while the
+    /// mic channel had already produced two finals.
     ///
     /// The `channel` filter lets a single test wait for a mic-channel
     /// final and then a separate app-channel final — without the filter,
@@ -158,7 +161,7 @@ final class LiveTranscriptionE2ETests: XCTestCase {
     private func waitForFinal(
         in captions: LiveCaptionsState,
         channel: LiveCaptionChannel,
-        deadlineSeconds: Double = 30.0,
+        deadlineSeconds: Double = 60.0,
     ) async {
         let deadline = ContinuousClock.now + .seconds(deadlineSeconds)
         while await MainActor.run(body: {
