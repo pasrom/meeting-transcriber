@@ -414,7 +414,9 @@ final class AppState { // swiftlint:disable:this type_body_length
             engine: streamingEngine,
             vad: FluidVAD(threshold: 0.5),
             captions: liveCaptions,
-        )
+        ) { [weak self] in
+            self?.settings.verboseDiagnostics ?? false
+        }
         liveTranscriptionController = controller
         Task { @MainActor in await controller.prepare() }
         return controller
@@ -832,8 +834,14 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// `transcriptionEngine`. On every change, drop the cached controller so
     /// the next `ensureLiveTranscriptionController()` call rebuilds against
     /// the (possibly new) `activeTranscriptionEngine` and re-warms the right
-    /// engine. The previous controller stays alive as long as any active
-    /// recording holds its sinks — that recording finishes normally.
+    /// engine.
+    ///
+    /// Engine changes take effect on the **next** recording. Switching the
+    /// engine mid-recording deallocates the controller (its sinks capture
+    /// `[weak self]`), buffers from the running recorder no longer reach any
+    /// engine, and the live overlay goes silent until the recording stops and
+    /// a new one starts. Live mid-recording engine swap is a deferred follow-up
+    /// — see PR #318 limitations.
     ///
     /// Combined into a single method (rather than two init-body calls) so the
     /// AppState init's type-check stays under the 300 ms `expression_type_check`
