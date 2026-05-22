@@ -81,6 +81,13 @@ ignore:
   - "tools/audiotap/Sources/AppAudioCapture.swift"
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
+  # SwiftUI overlay + NSPanel wrapper. The pure opacity math is extracted
+  # to LiveCaptionsState.opacity(at:) and unit-tested there; what remains
+  # is NSEvent global/local monitors, NSScreen frame checks, UserDefaults
+  # position persistence, and a SwiftUI TimelineView body — none of which
+  # has an xctest mock-point. Exercised end-to-end by e2e-live-captions.sh.
+  - "app/MeetingTranscriber/Sources/LiveCaptionsOverlay.swift"
+  - "app/MeetingTranscriber/Sources/LiveCaptionsWindowController.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
   - "tools/meeting-simulator/**/*"
   - "tools/mt-cli/**/*"
