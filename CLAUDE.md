@@ -99,9 +99,6 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
-tools/whisperkit-cli/      # WhisperKit CLI transcription tool (used by build_whisperkit.sh)
-  Package.swift
-  Sources/main.swift
 tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screenshot, open-settings, …)
   Package.swift
   Sources/
@@ -110,7 +107,6 @@ tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screen
   Tests/RPCClientTests.swift
   skill.md                 # Claude skill: when to use mt-cli, with examples
 scripts/
-  build_whisperkit.sh      # Build WhisperKit CLI tool
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)

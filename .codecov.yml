@@ -82,7 +82,6 @@ ignore:
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
-  - "tools/whisperkit-cli/**/*"
   - "tools/meeting-simulator/**/*"
   - "tools/mt-cli/**/*"
   - "scripts/**/*"
