@@ -47,6 +47,14 @@ runs:
     # the same variant; pre-warming sequentially populates the cache so
     # the parallel run can hit it. After the first successful CI run the
     # cache is populated and the preload step is skipped.
+    #
+    # The cache key also hashes `ModelPreloadTests.swift` so that adding a
+    # new pre-warm test (a new model FluidAudio downloads from a separate
+    # HF repo, e.g. Silero VAD) invalidates the cache and forces a fresh
+    # pre-warm. Without that, a `Package.resolved` that hasn't changed
+    # would let a stale cache from before the new model was added persist,
+    # and the un-pre-warmed model would race + hit HF rate limits under
+    # parallel xctest.
     - name: Cache ML models
       id: model-cache
       if: inputs.cache-models == 'true'
@@ -55,7 +63,7 @@ runs:
         path: |
           ~/Documents/huggingface
           ~/Library/Application Support/FluidAudio
-        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved') }}-v1
+        key: ml-models-${{ runner.os }}-${{ hashFiles('app/MeetingTranscriber/Package.resolved', 'app/MeetingTranscriber/Tests/ModelPreloadTests.swift') }}-v1
         restore-keys: ml-models-${{ runner.os }}-
 
     # Pre-warm step has no per-step `timeout-minutes` — composite actions
