@@ -31,7 +31,7 @@ struct LevelSlot {
 /// poll the lock is uncontended ~99.99% of the time, so the practical glitch
 /// probability is microscopic. Migration to lock-free `ManagedAtomic` via
 /// swift-atomics is tracked as a follow-up.
-final class LevelPublisher {
+final class LevelPublisher: Sendable {
     private let lock = OSAllocatedUnfairLock(initialState: LevelSlot())
     private let stalenessSec: Double
 

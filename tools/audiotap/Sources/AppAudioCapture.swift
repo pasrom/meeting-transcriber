@@ -7,8 +7,15 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// Captures app audio via CATapDescription (macOS 14.2+, CoreAudio).
 /// No Screen Recording permission needed — only Audio Capture.
 /// Monitors default output device changes and recreates the tap when needed.
+///
+/// All mutable state is serialized through `writeQueue` (`audiotap.writer`,
+/// userInteractive QoS) or driven from the CoreAudio IOProc callback which
+/// never overlaps with itself for a given tap. The DispatchQueue.main retry
+/// path is the only main-thread touch and it dispatches a single completion
+/// closure. `@unchecked Sendable` reflects that the serialization is manual
+/// rather than expressible to the compiler.
 @available(macOS 14.2, *)
-public class AppAudioCapture {
+public class AppAudioCapture: @unchecked Sendable {
     /// `internal` (not `private`) so the cross-file `+PIDTranslation`
     /// extension can read it; it's not otherwise touched from outside.
     let pids: [pid_t]

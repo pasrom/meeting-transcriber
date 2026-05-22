@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreAudio
 import Foundation
 import os.log
@@ -10,7 +10,14 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// and AVAudioEngine configuration change notification (format/route changes).
 /// Automatically restarts the engine on device switch, preserving the selected device
 /// when still available or falling back to system default with a warning.
-public class MicCaptureHandler {
+///
+/// Public API (`start`/`stop`/`currentLevelDBFS`) is called from the main actor.
+/// The `installTap` render-thread callback writes to per-buffer state guarded by
+/// `LevelPublisher` (lock-protected) and to `outputFile` which is only mutated
+/// between `engine.stop()` and `engine.start()` on the main thread, so concurrent
+/// IO with the render thread is impossible by lifecycle. `@unchecked Sendable`
+/// reflects that this discipline isn't expressible to the compiler.
+public class MicCaptureHandler: @unchecked Sendable {
     private var engine = AVAudioEngine()
     private var outputFile: AVAudioFile?
     private let outputURL: URL
@@ -170,13 +177,20 @@ public class MicCaptureHandler {
                         frameCapacity: outputFrames,
                     ) else { return }
                     var error: NSError?
-                    var consumed = false
+                    // The converter input block is typed `@Sendable`, so a
+                    // captured `var Bool` would trip Swift 6's concurrent-
+                    // capture check — even though the block actually runs
+                    // synchronously while `convert(to:error:withInputFrom:)`
+                    // is on the stack. Box the flag so the closure captures
+                    // it by-reference.
+                    final class InputState: @unchecked Sendable { var consumed = false }
+                    let inputState = InputState()
                     converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                        if consumed {
+                        if inputState.consumed {
                             outStatus.pointee = .noDataNow
                             return nil
                         }
-                        consumed = true
+                        inputState.consumed = true
                         outStatus.pointee = .haveData
                         return buffer
                     }
