@@ -91,29 +91,83 @@ struct VadSegmentMap {
 /// Lazily creates VadManager on first use.
 ///
 /// `@unchecked Sendable` because `PipelineQueue` caches a single instance
-/// and reuses it across jobs (`detectSpeech` may be called concurrently if
-/// future code adds parallel pre-processing). The mutable `manager` is
-/// initialised at most once via `ensureManager()`, and FluidAudio's
-/// VadManager is itself safe for concurrent inference reads.
+/// and reuses it across jobs, and live transcription shares one instance
+/// across the mic + app `StreamingTranscriber` actors that call
+/// `detectSpeech` concurrently. The mutable `manager` / `loadingTask`
+/// fields are protected by `loadLock`; concurrent first callers all
+/// await the same single-flight `Task` instead of racing on lazy init.
 final class FluidVAD: @unchecked Sendable {
     private static let mergeGapSeconds: TimeInterval = 0.3
     private static let minRegionSeconds: TimeInterval = 0.15
 
     private let threshold: Float
+    private let loadLock = NSLock()
     private var manager: VadManager?
+    private var loadingTask: Task<VadManager, any Error>?
 
     init(threshold: Float = 0.5) {
         self.threshold = threshold
     }
 
+    private enum LoadStep {
+        case ready(VadManager)
+        case pending(Task<VadManager, any Error>)
+    }
+
     /// Ensure the VadManager is loaded, creating it lazily on first use.
+    /// Safe to call concurrently from multiple tasks — the first caller
+    /// kicks off the load, the rest await the same `Task`. Without this
+    /// dedupe, two parallel first calls race on `manager` (TSan-visible)
+    /// and trigger duplicate CoreML compiles of the Silero model.
+    ///
+    /// On failure the shared `Task` is dropped so the next call retries
+    /// from scratch (mirrors `ParakeetEngine.loadModel()`). An awaiter
+    /// being cancelled only cancels its own `await`; the underlying load
+    /// continues so other awaiters still receive the manager.
     private func ensureManager() async throws -> VadManager {
-        if let manager { return manager }
-        let config = VadConfig(defaultThreshold: threshold)
-        let mgr = try await VadManager(config: config)
+        switch nextLoadStep() {
+        case let .ready(mgr): mgr
+        case let .pending(task): try await task.value
+        }
+    }
+
+    /// Synchronous helper so `NSLock` never spans an async suspension.
+    private func nextLoadStep() -> LoadStep {
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        if let manager { return .ready(manager) }
+        if let existing = loadingTask { return .pending(existing) }
+        let threshold = self.threshold
+        let task = Task<VadManager, any Error> { [weak self] in
+            let config = VadConfig(defaultThreshold: threshold)
+            do {
+                let mgr = try await VadManager(config: config)
+                self?.commitLoaded(mgr)
+                return mgr
+            } catch {
+                // Drop the failed Task so the next caller retries; without
+                // this, every future caller awaits the same poisoned Task
+                // and re-throws the original error for the process lifetime.
+                self?.clearLoadingTask()
+                throw error
+            }
+        }
+        loadingTask = task
+        return .pending(task)
+    }
+
+    private func commitLoaded(_ mgr: VadManager) {
+        loadLock.lock()
         manager = mgr
+        loadingTask = nil
+        loadLock.unlock()
         logger.info("VAD model loaded (threshold: \(self.threshold))")
-        return mgr
+    }
+
+    private func clearLoadingTask() {
+        loadLock.lock()
+        defer { loadLock.unlock() }
+        loadingTask = nil
     }
 
     /// Detect speech regions from pre-loaded audio samples (16kHz Float32).
