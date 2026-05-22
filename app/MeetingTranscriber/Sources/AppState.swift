@@ -157,8 +157,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         // start observing for runtime changes.
         syncLanguageSettings()
         observeEngineSettings()
-        prewarmLiveTranscriptionIfEligible()
-        observeLiveTranscriptionPrewarm()
+        setupLiveTranscriptionPrewarm()
 
         #if !APPSTORE
             // Env var force-enables at launch only — preserves back-compat with
@@ -827,15 +826,22 @@ final class AppState { // swiftlint:disable:this type_body_length
         _ = ensureLiveTranscriptionController()
     }
 
-    /// Re-arming withObservationTracking watcher on `liveTranscriptionEnabled`
-    /// + `transcriptionEngine`. Mirrors the pattern in `observeEngineSettings`.
-    /// On every change, drop the cached controller so that a) the next
-    /// `ensureLiveTranscriptionController()` call rebuilds against the
-    /// (possibly new) `activeTranscriptionEngine`, and b) the controller
-    /// pre-warm in `prewarmLiveTranscriptionIfEligible()` warms the right
+    /// Initial pre-warm of the live-transcription controller (when enabled +
+    /// the active engine supports streaming) plus a re-arming
+    /// `withObservationTracking` watcher on `liveTranscriptionEnabled` and
+    /// `transcriptionEngine`. On every change, drop the cached controller so
+    /// the next `ensureLiveTranscriptionController()` call rebuilds against
+    /// the (possibly new) `activeTranscriptionEngine` and re-warms the right
     /// engine. The previous controller stays alive as long as any active
     /// recording holds its sinks — that recording finishes normally.
-    private func observeLiveTranscriptionPrewarm() {
+    ///
+    /// Combined into a single method (rather than two init-body calls) so the
+    /// AppState init's type-check stays under the 300 ms `expression_type_check`
+    /// lint budget. Same recurring flake as `feedback_local_verify_before_push`
+    /// — the compiler's constraint solver gets slower with every method call
+    /// inside a long initializer.
+    private func setupLiveTranscriptionPrewarm() {
+        prewarmLiveTranscriptionIfEligible()
         withObservationTracking {
             _ = settings.liveTranscriptionEnabled
             _ = settings.transcriptionEngine
@@ -843,8 +849,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             Task { @MainActor in
                 guard let self else { return }
                 self.liveTranscriptionController = nil
-                self.prewarmLiveTranscriptionIfEligible()
-                self.observeLiveTranscriptionPrewarm()
+                self.setupLiveTranscriptionPrewarm()
             }
         }
     }
