@@ -9,72 +9,66 @@ import XCTest
 /// (verbose=false) closure, so caption delivery under the off-by-default
 /// privacy gate is already covered. This file pins the remaining contracts
 /// that don't need a real audio fixture or live CoreML model.
+///
+/// All scenarios live in a single test method on purpose — under
+/// `swift test --parallel` each XCTest method spins up its own worker
+/// process, and several workers competing for CoreML's e5rt cache + the
+/// 3-core macos-26 runner already produces a deadline flake on the
+/// neighbouring `LiveTranscriptionE2ETests`. Folding keeps these as one
+/// worker. See `feedback_coreml_e5rt_cache_race_under_parallel_xctest`.
 @MainActor
 final class LiveTranscriptionControllerTests: XCTestCase {
-    /// The production-default constructor takes no `verboseDiagnostics`
-    /// argument — callers that don't care about log emission rely on the
-    /// closure defaulting to `{ false }`. Pins the back-compat signature so
-    /// a future refactor that drops the default value gets caught here
-    /// rather than at every call site.
-    func testControllerBuildsWithDefaultVerboseClosureOff() async {
+    func testVerboseDiagnosticsGateContract() async {
+        // (1) Default constructor signature back-compat: the production
+        // path passes no verboseDiagnostics argument and relies on the
+        // closure defaulting to `{ false }`. Dropping the default would
+        // compile-fail every existing call site (e.g. the E2E tests).
         let engine = MockStreamingEngine()
         let captions = LiveCaptionsState()
-        let controller = LiveTranscriptionController(
+        let defaultController = LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
         )
-        await controller.prepare()
-        XCTAssertNotNil(controller.micSink)
-        XCTAssertNotNil(controller.appSink)
+        await defaultController.prepare()
+        XCTAssertNotNil(defaultController.micSink)
+        XCTAssertNotNil(defaultController.appSink)
         XCTAssertTrue(captions.recentFinals.isEmpty)
-    }
 
-    /// Pins that the verboseDiagnostics closure is actually wired into
-    /// the controller (not silently hard-coded to false somewhere). The
-    /// closure is consulted whenever a logger.info would otherwise emit
-    /// caption text — `prepare()` itself emits a "ready" log gated on the
-    /// same closure, so seeing at least one invocation here proves the
-    /// gate is connected. A regression that drops the parameter or always
-    /// uses `false` would flip this to zero.
-    func testVerboseClosureIsConsulted() async {
-        let engine = MockStreamingEngine()
-        let captions = LiveCaptionsState()
-        let verboseCalls = VerboseCounter()
-        let controller = LiveTranscriptionController(
-            engine: engine,
+        // (2) Gate-on path: the closure is consulted whenever a
+        // logger.info would otherwise emit caption text. `prepare()` itself
+        // emits a "ready" log gated on the same closure, so seeing at
+        // least one invocation here proves the gate is wired. A regression
+        // that drops the parameter or hardcodes `false` would flip this
+        // to zero.
+        let onCalls = VerboseCounter()
+        let onController = LiveTranscriptionController(
+            engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
-            captions: captions,
+            captions: LiveCaptionsState(),
         ) {
-            verboseCalls.increment()
+            onCalls.increment()
             return true
         }
-        await controller.prepare()
-        XCTAssertGreaterThan(verboseCalls.value, 0)
-        XCTAssertNotNil(controller)
-    }
+        await onController.prepare()
+        XCTAssertGreaterThan(onCalls.value, 0)
 
-    /// Mirror of `testVerboseClosureIsConsulted` for the off path: when
-    /// the closure returns false, the controller still calls it
-    /// (otherwise the gate isn't doing its job — false would be hardcoded
-    /// upstream and a future flip-to-true wouldn't take effect). This
-    /// pins symmetry: gate is read on every potential log site, decision
-    /// is left to the closure.
-    func testVerboseClosureIsConsultedWhenOff() async {
-        let engine = MockStreamingEngine()
-        let captions = LiveCaptionsState()
-        let verboseCalls = VerboseCounter()
-        let controller = LiveTranscriptionController(
-            engine: engine,
+        // (3) Gate-off mirror: the closure is also consulted when it
+        // returns false. Catches a regression where someone short-circuits
+        // to `if false` upstream, which would make a later flip-to-true
+        // a silent no-op.
+        let offCalls = VerboseCounter()
+        let offController = LiveTranscriptionController(
+            engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
-            captions: captions,
+            captions: LiveCaptionsState(),
         ) {
-            verboseCalls.increment()
+            offCalls.increment()
             return false
         }
-        await controller.prepare()
-        XCTAssertGreaterThan(verboseCalls.value, 0)
-        XCTAssertNotNil(controller)
+        await offController.prepare()
+        XCTAssertGreaterThan(offCalls.value, 0)
+        XCTAssertNotNil(offController)
     }
 }
 

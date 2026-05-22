@@ -3,18 +3,56 @@ import AudioTapLib
 import XCTest
 
 /// `StreamingTranscriber.ingest` is the boundary the recorder hands raw
-/// buffers across. Buffers that don't match the expected mono / 16 kHz
-/// shape must be silently dropped — without that guard the rest of the
-/// actor would happily push 48 kHz stereo into a 16 kHz mono VAD, and
-/// the engine would receive scrambled samples.
+/// buffers across. Buffers that don't match the 16 kHz / mono shape must
+/// be dropped before they reach VAD or the engine — without that guard
+/// the actor would happily push 48 kHz stereo into a 16 kHz mono VAD
+/// and the engine would receive scrambled samples.
 ///
-/// These tests pin the drop contract without loading a real VAD model or
-/// engine. The transcribe + onEvent closures are mounted as observers —
-/// if either fires, the drop was skipped.
+/// All three scenarios live in a single test method on purpose — under
+/// `swift test --parallel` each XCTest method spins up its own worker
+/// process, and the empty-buffer scenario does load FluidVAD lazily.
+/// Folding keeps these as one worker so they don't pile parallel-load
+/// pressure on the neighbouring `LiveTranscriptionE2ETests` on the
+/// 3-core macos-26 runner. See
+/// `feedback_coreml_e5rt_cache_race_under_parallel_xctest`.
 final class StreamingTranscriberDropTests: XCTestCase {
-    /// Helper: a stub LiveAudioBuffer that varies only in the dimension
-    /// being tested. samples count is non-zero so the actor can't bail
-    /// out on emptiness alone.
+    func testDropContract() async {
+        let observer = OnEventObserver()
+        let transcriber = makeTranscriber(observer: observer)
+
+        // (1) Stereo at the right sample rate is still wrong shape — the
+        // actor must not let it through. No VAD load triggered (early
+        // return before drainChunks).
+        await transcriber.ingest(buffer(channelCount: 2, sampleRate: 16000))
+        XCTAssertEqual(observer.partials.count, 0)
+        XCTAssertEqual(observer.finals.count, 0)
+        XCTAssertEqual(observer.transcribeCalls, 0)
+
+        // (2) Mono but 48 kHz — what raw CATap buffers look like before
+        // the resampler runs. Must be rejected to enforce the resampler
+        // step upstream.
+        await transcriber.ingest(buffer(channelCount: 1, sampleRate: 48000))
+        XCTAssertEqual(observer.partials.count, 0)
+        XCTAssertEqual(observer.finals.count, 0)
+        XCTAssertEqual(observer.transcribeCalls, 0)
+
+        // (3) Right shape, zero samples — must not advance into the VAD
+        // event loop nor emit anything. Mainly a smoke test that we
+        // don't divide-by-zero. Note: this path *does* lazily initialise
+        // FluidVAD inside drainChunks() because the shape guard passes,
+        // which is why all three checks live in one method (one xctest
+        // worker per method → one VAD load instead of three).
+        let empty = LiveAudioBuffer(
+            samples: [], channelCount: 1, sampleRate: 16000, hostTime: 0,
+        )
+        await transcriber.ingest(empty)
+        XCTAssertEqual(observer.partials.count, 0)
+        XCTAssertEqual(observer.finals.count, 0)
+        XCTAssertEqual(observer.transcribeCalls, 0)
+    }
+
+    // MARK: - Helpers
+
     private func buffer(channelCount: Int, sampleRate: Int) -> LiveAudioBuffer {
         LiveAudioBuffer(
             samples: [Float](repeating: 0.0, count: 64),
@@ -23,51 +61,6 @@ final class StreamingTranscriberDropTests: XCTestCase {
             hostTime: 0,
         )
     }
-
-    func testBufferWithMultipleChannelsIsDropped() async {
-        let observer = OnEventObserver()
-        let transcriber = makeTranscriber(observer: observer)
-
-        // Stereo at the right sample rate is still wrong — the actor must
-        // not let it through.
-        await transcriber.ingest(buffer(channelCount: 2, sampleRate: 16000))
-
-        XCTAssertEqual(observer.partials.count, 0)
-        XCTAssertEqual(observer.finals.count, 0)
-        XCTAssertEqual(observer.transcribeCalls, 0)
-    }
-
-    func testBufferWithWrongSampleRateIsDropped() async {
-        let observer = OnEventObserver()
-        let transcriber = makeTranscriber(observer: observer)
-
-        // Mono but 48 kHz — what raw CATap buffers come in at before the
-        // resampler runs. The transcriber must reject so the resampler
-        // step is enforced upstream.
-        await transcriber.ingest(buffer(channelCount: 1, sampleRate: 48000))
-
-        XCTAssertEqual(observer.partials.count, 0)
-        XCTAssertEqual(observer.finals.count, 0)
-        XCTAssertEqual(observer.transcribeCalls, 0)
-    }
-
-    func testEmptyBufferDoesNotCrash() async {
-        let observer = OnEventObserver()
-        let transcriber = makeTranscriber(observer: observer)
-
-        // Right shape, zero samples — must not advance into VAD or emit
-        // events. Mainly a smoke test that we don't divide-by-zero.
-        let empty = LiveAudioBuffer(
-            samples: [], channelCount: 1, sampleRate: 16000, hostTime: 0,
-        )
-        await transcriber.ingest(empty)
-
-        XCTAssertEqual(observer.partials.count, 0)
-        XCTAssertEqual(observer.finals.count, 0)
-        XCTAssertEqual(observer.transcribeCalls, 0)
-    }
-
-    // MARK: - Helpers
 
     private func makeTranscriber(observer: OnEventObserver) -> StreamingTranscriber {
         StreamingTranscriber(
@@ -85,10 +78,6 @@ final class StreamingTranscriberDropTests: XCTestCase {
 }
 
 /// Sendable, lock-protected observer for the actor's `@Sendable` callbacks.
-/// `StreamingTranscriber`'s `transcribe` + `onEvent` closures are required
-/// to be `@Sendable`; an `actor` of our own would work but adds an extra
-/// `await` per call site. A nonisolated class with a single NSLock is
-/// simpler for the small read/write pattern these tests need.
 private final class OnEventObserver: @unchecked Sendable {
     private let lock = NSLock()
     private var _partials: [String] = []
