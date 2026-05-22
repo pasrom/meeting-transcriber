@@ -122,12 +122,31 @@ if [ "$TAKE_SCREENSHOT" = true ]; then
     # does succeed, run the pixel-level assertion so a SwiftUI/MenuBarIcon
     # render regression that keeps the AppState flag true but doesn't show
     # the red tint is caught here.
-    if screencapture -R 0,0,3000,30 "$OUT" 2>/dev/null && [ -s "$OUT" ]; then
-        echo "▸ Menubar screenshot saved to $OUT"
-        "$ROOT/scripts/assert-red-pixels.swift" "$OUT"
-    else
+    #
+    # SwiftUI's MenuBarExtra → NSStatusItem composite can trail RPC readiness
+    # by 1-2 frames, so the assertion is polled rather than run once. Cold
+    # `swift` invocation per attempt provides the natural pacing.
+    if ! screencapture -R 0,0,3000,30 "$OUT" 2>/dev/null || [ ! -s "$OUT" ]; then
         echo "▸ Menubar screenshot skipped (no display rect available — pixel assertion skipped)"
         rm -f "$OUT"
+    else
+        attempt=1
+        max_attempts=25
+        while [ "$attempt" -le "$max_attempts" ]; do
+            if [ "$attempt" -eq "$max_attempts" ]; then
+                # Final attempt: unsuppressed so the pixel count and FAIL
+                # message surface on exhaustion (set -e propagates).
+                echo "▸ Menubar screenshot saved to $OUT (attempt $attempt/$max_attempts)"
+                "$ROOT/scripts/assert-red-pixels.swift" "$OUT"
+                break
+            fi
+            if "$ROOT/scripts/assert-red-pixels.swift" "$OUT" >/dev/null 2>&1; then
+                echo "▸ Menubar screenshot saved to $OUT (attempt $attempt/$max_attempts)"
+                break
+            fi
+            attempt=$((attempt + 1))
+            screencapture -R 0,0,3000,30 "$OUT" 2>/dev/null || true
+        done
     fi
 fi
 
