@@ -199,7 +199,13 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
 
         // Explicitly deallocate previous manager to prevent resource conflicts
         manager = nil
-        let config = Self.makeConfig(tuning: tuning, numSpeakers: numSpeakers)
+        let t = tuning
+        let config = Self.makeConfig(tuning: t, numSpeakers: numSpeakers)
+        let flag = t == .defaults ? "defaults" : "modified"
+        logger
+            .info(
+                "FluidAudio offline tuning (\(flag)): clusterThreshold=\(t.clusterThreshold) warmStartFa=\(t.warmStartFa) warmStartFb=\(t.warmStartFb) minSegmentDurationSeconds=\(t.minSegmentDurationSeconds) excludeOverlap=\(t.excludeOverlap)",
+            )
         let newManager = OfflineDiarizerManager(config: config)
         try await newManager.prepareModels()
         manager = newManager
