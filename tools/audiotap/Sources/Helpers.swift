@@ -109,8 +109,19 @@ public func getDefaultOutputDeviceName() -> String? {
 public func getExecutableName(pid: pid_t) -> String {
     var name = [CChar](repeating: 0, count: 1024)
     let result = proc_name(pid, &name, UInt32(name.count))
-    if result <= 0 { return "?" }
-    return String(cString: name)
+    guard result > 0 else { return "?" }
+    return stringFromNullTerminated(name)
+}
+
+/// Decodes a null-terminated `[CChar]` into a Swift `String`. Replaces the
+/// deprecated `String(cString: [CChar])` initializer with the buffer-pointer
+/// variant; the precondition is that `buffer` is non-empty (the only callers
+/// are fixed-size stack buffers populated by a `proc_*` BSD syscall).
+func stringFromNullTerminated(_ buffer: [CChar]) -> String {
+    buffer.withUnsafeBufferPointer { buf in
+        // swiftlint:disable:next force_unwrapping
+        String(cString: buf.baseAddress!)
+    }
 }
 
 /// Resolve the AudioObjectID of the system default input or output device.

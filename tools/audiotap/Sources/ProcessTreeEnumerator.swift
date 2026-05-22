@@ -72,6 +72,6 @@ public enum ProcessTreeEnumerator {
         var pathBuf = [CChar](repeating: 0, count: procPidPathMaxSize)
         let n = proc_pidpath(pid, &pathBuf, UInt32(pathBuf.count))
         guard n > 0 else { return nil }
-        return String(cString: pathBuf)
+        return stringFromNullTerminated(pathBuf)
     }
 }

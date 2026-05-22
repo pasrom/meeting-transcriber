@@ -10,14 +10,12 @@ let package = Package(
     targets: [
         .target(
             name: "AudioTapLib",
-            path: "Sources",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            path: "Sources"
         ),
         .testTarget(
             name: "AudioTapLibTests",
             dependencies: ["AudioTapLib"],
-            path: "Tests",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            path: "Tests"
         ),
     ]
 )
