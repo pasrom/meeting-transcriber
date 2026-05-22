@@ -30,6 +30,18 @@ final class LiveTranscriptionController {
     private let engine: any StreamingTranscribingEngine
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
+    /// Gate for caption-text logging. Caption strings are spoken user content
+    /// — privacy-sensitive — so even with `privacy: .private` on the log
+    /// arguments we don't emit by default. Same `() -> Bool` closure pattern
+    /// `AppState` already uses for the diarizer + speaker matcher. Tests
+    /// construct the controller without a closure (defaults to off).
+    ///
+    /// Kept on the `@MainActor`-isolated controller (not as a Sendable closure
+    /// passed into the transcriber's `@Sendable onEvent`) because `AppSettings`
+    /// itself is not `Sendable`. Callers read it via `self.verboseDiagnostics()`
+    /// from inside the `Task { @MainActor in ... }` hop in `onEvent`, so the
+    /// closure never crosses an isolation boundary.
+    private let verboseDiagnostics: () -> Bool
     private var micTranscriber: StreamingTranscriber?
     private var appTranscriber: StreamingTranscriber?
     private var appResampler = LiveAudioResampler()
@@ -60,10 +72,12 @@ final class LiveTranscriptionController {
         engine: any StreamingTranscribingEngine,
         vad: FluidVAD,
         captions: LiveCaptionsState,
+        verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         self.engine = engine
         self.vad = vad
         self.captions = captions
+        self.verboseDiagnostics = verboseDiagnostics
     }
 
     /// Warm the engine + VAD models. Safe to call multiple times — engines
@@ -76,7 +90,9 @@ final class LiveTranscriptionController {
         if appTranscriber == nil {
             appTranscriber = makeTranscriber(channel: .app)
         }
-        logger.info("Live transcription ready (engine: \(String(describing: type(of: self.engine)), privacy: .public))")
+        if verboseDiagnostics() {
+            logger.info("Live transcription ready (engine: \(String(describing: type(of: self.engine)), privacy: .public))")
+        }
     }
 
     /// Reset accumulated state for the next recording. Keeps engine + VAD
@@ -86,7 +102,9 @@ final class LiveTranscriptionController {
         appTranscriber = makeTranscriber(channel: .app)
         appResampler = LiveAudioResampler()
         captions.clear()
-        logger.info("Live transcription reset for new recording")
+        if verboseDiagnostics() {
+            logger.info("Live transcription reset for new recording")
+        }
     }
 
     private func makeTranscriber(channel: LiveCaptionChannel) -> StreamingTranscriber {
@@ -95,23 +113,31 @@ final class LiveTranscriptionController {
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
         // to the main actor on every invocation.
         let proxy = EngineProxy(engine: engine)
-        let captions = captions
         return StreamingTranscriber(
             channelLabel: channel.label,
             vad: vad,
             transcribe: { samples in
                 try await proxy.transcribeSamples(samples)
             },
-            onEvent: { event in
+            onEvent: { [weak self] event in
                 Task { @MainActor in
+                    guard let self else { return }
                     switch event {
                     case let .partial(text):
-                        logger.info("[\(channel.label, privacy: .public)] partial: \(text, privacy: .public)")
-                        captions.applyPartial(text, channel: channel)
+                        if self.verboseDiagnostics() {
+                            // `.private` on `text` masks the spoken content
+                            // in `log show` / Console.app unless the system
+                            // is in Private Data Capture mode. Defence in
+                            // depth on top of the gate.
+                            logger.info("[\(channel.label, privacy: .public)] partial: \(text, privacy: .private)")
+                        }
+                        self.captions.applyPartial(text, channel: channel)
 
                     case let .finalized(text):
-                        logger.info("[\(channel.label, privacy: .public)] final: \(text, privacy: .public)")
-                        captions.applyFinalized(text, channel: channel)
+                        if self.verboseDiagnostics() {
+                            logger.info("[\(channel.label, privacy: .public)] final: \(text, privacy: .private)")
+                        }
+                        self.captions.applyFinalized(text, channel: channel)
                     }
                 }
             },
