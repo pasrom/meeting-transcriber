@@ -36,4 +36,19 @@ final class ModelPreloadTests: XCTestCase {
         await engine.loadModel()
         XCTAssertEqual(engine.modelState, .loaded)
     }
+
+    /// FluidAudio's Silero VAD model lives in a separate HuggingFace repo
+    /// from the ASR models, so the engine pre-warms above don't pull it.
+    /// Without this, `LiveTranscriptionE2ETests` is the first test to need
+    /// it, and three parallel xctest workers race on the same download
+    /// (HuggingFace client's `weight.bin.<hash>.incomplete → weights/`
+    /// rename is not safe under concurrent fetches → timeouts).
+    func testPreloadFluidVAD() async throws {
+        let vad = FluidVAD(threshold: 0.5)
+        // `makeStreamState()` triggers the same `ensureManager()` /
+        // `VadManager(config:)` chain the streaming pipeline goes through;
+        // discarding the state is fine — we only care about the side effect
+        // of populating the model cache.
+        _ = try await vad.makeStreamState()
+    }
 }
