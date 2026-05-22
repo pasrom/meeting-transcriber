@@ -163,7 +163,6 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | Path | Role |
 |------|------|
 | `tools/mt-cli/` | Thin Swift client for `DebugRPCServer`. Subcommands: `state`, `healthz`, `screenshot`, `open-settings`, `close-settings`. Reads token from `~/Library/Application Support/MeetingTranscriber/.rpc-token`. Skill doc at `tools/mt-cli/skill.md`. |
-| `tools/whisperkit-cli/` | WhisperKit transcription CLI (used by `scripts/build_whisperkit.sh`) |
 | `tools/meeting-simulator/` | Test fixture: spawns a fake meeting window for E2E detection tests |
 
 ---
