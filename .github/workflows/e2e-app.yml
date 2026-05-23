@@ -142,6 +142,23 @@ jobs:
         timeout-minutes: 10
         run: bash scripts/e2e-app.sh --no-build --reimport-latest
 
+      # Sortformer-mode naming-dialog lane (Phase 1 of issue #165, PR #325):
+      # flips `AppSettings.diarizerMode` to `.sortformer` via UserDefaults
+      # pre-pop, runs one meeting, asserts that the speaker-naming dialog
+      # actually fires with N>=1 speakers — meaning `DiarizationResult.embeddings`
+      # is non-nil end-to-end. Pre-PR-#325 Sortformer mode returned
+      # `embeddings: nil` which silently broke the naming flow (issue #109);
+      # the env-gated assertion in `scripts/e2e-app.sh` would have caught it.
+      # `--no-build` reuses the dev .app from the first step; only the
+      # UserDefaults flip + meeting trigger differ. Adds ~30s to total lane.
+      - name: Run live-recording E2E driver (Sortformer naming dialog)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+          MTT_DIARIZER_MODE: sortformer
+          MTT_EXPECT_NAMING_SPEAKERS_MIN: "1"
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --no-build
+
       # Channel-health indicator e2e (issue #258): launches the dev
       # app with `MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT=1` so
       # `AppState.micSilentActive` is set at init, then asserts the
