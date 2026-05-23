@@ -1,26 +1,27 @@
 import Foundation
 import Observation
 
-/// Which capture source a caption came from. Drives the speaker prefix in
-/// the overlay ("Du" for the local mic, "Remote" for the meeting app audio).
-/// String raw values double as the RPC wire format — the `/state.liveCaptions
-/// .recentFinals[].channel` JSON field carries `"mic"` / `"app"` directly.
+/// Which capture source a caption came from. Distinct from the displayed
+/// speaker label — the channel identifies the audio source, the label is
+/// settings-driven (`LiveCaptionsState.micLabel` / `.appLabel`) and may be
+/// per-final-overridden in slice 2 once the app channel gets per-speaker
+/// matching. String raw values double as the RPC wire format — the
+/// `/state.liveCaptions.recentFinals[].channel` JSON field carries
+/// `"mic"` / `"app"` directly.
 enum LiveCaptionChannel: String, Hashable, Codable {
     case mic
     case app
-
-    var label: String {
-        switch self {
-        case .mic: "Du"
-        case .app: "Remote"
-        }
-    }
 }
 
-/// A finalised utterance with its source channel attached.
+/// A finalised utterance with its source channel and rendered speaker label.
+/// `speaker` is derived at finalize time from the current label source — the
+/// mic channel uses `LiveCaptionsState.micLabel` (driven by `settings.micName`),
+/// the app channel uses `.appLabel`. Captured per-line so a settings flip
+/// after the line is committed doesn't retroactively re-label it.
 struct LiveCaptionLine: Hashable, Codable {
     let channel: LiveCaptionChannel
     let text: String
+    let speaker: String
 }
 
 /// Observable state powering the live caption-bar overlay.
@@ -37,6 +38,22 @@ struct LiveCaptionLine: Hashable, Codable {
 @Observable
 @MainActor
 final class LiveCaptionsState {
+    /// Display label for the local-mic channel. Defaults to `"Me"` to match
+    /// `PipelineQueue.micLabel`'s batch default. `AppState` overwrites this
+    /// with `settings.micName` at construction and on every settings change
+    /// so partials + new finals pick up rename without rebuilding state.
+    var micLabel: String
+
+    /// Display label for the meeting-app audio channel. Will become per-line
+    /// in slice 2 (known-speaker matching). Slice 1 keeps the channel-level
+    /// fallback.
+    var appLabel: String
+
+    init(micLabel: String = "Me", appLabel: String = "Remote") {
+        self.micLabel = micLabel
+        self.appLabel = appLabel
+    }
+
     private(set) var hypothesisMic: String = ""
     private(set) var hypothesisApp: String = ""
 
@@ -71,17 +88,32 @@ final class LiveCaptionsState {
         scheduleAutoClear()
     }
 
-    func applyFinalized(_ text: String, channel: LiveCaptionChannel) {
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel, speaker: String) {
         switch channel {
         case .mic: hypothesisMic = ""
         case .app: hypothesisApp = ""
         }
-        recentFinals.append(LiveCaptionLine(channel: channel, text: text))
+        recentFinals.append(LiveCaptionLine(channel: channel, text: text, speaker: speaker))
         if recentFinals.count > Self.maxFinalsKept {
             recentFinals.removeFirst(recentFinals.count - Self.maxFinalsKept)
         }
         lastEventAt = Date()
         scheduleAutoClear()
+    }
+
+    /// Convenience: derives the speaker from the channel's current label.
+    /// Production wiring goes through the explicit-speaker overload so that
+    /// slice 2 can pass a matched name without needing to push it through
+    /// `micLabel`/`appLabel`. Kept on the type to keep test fixtures terse.
+    func applyFinalized(_ text: String, channel: LiveCaptionChannel) {
+        applyFinalized(text, channel: channel, speaker: label(for: channel))
+    }
+
+    func label(for channel: LiveCaptionChannel) -> String {
+        switch channel {
+        case .mic: micLabel
+        case .app: appLabel
+        }
     }
 
     func clear() {

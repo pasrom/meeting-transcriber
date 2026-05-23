@@ -5,9 +5,12 @@ import SwiftUI
 ///
 /// Layout (top to bottom): up to `maxFinalsKept` recent finalised utterances
 /// at full opacity, then the per-channel hypotheses at 60 % opacity. Each
-/// row is prefixed with its speaker label ("Du" / "Remote"). When the state
-/// is empty the rounded background collapses to a tiny pill — the wrapping
-/// panel uses `hasContent` to hide entirely.
+/// row is prefixed with its speaker label — finals carry their own
+/// `LiveCaptionLine.speaker` so a settings rename after commit doesn't
+/// retroactively re-label them, while live hypotheses read the current
+/// `LiveCaptionsState.micLabel` / `.appLabel`. When the state is empty the
+/// rounded background collapses to a tiny pill — the wrapping panel uses
+/// `hasContent` to hide entirely.
 ///
 /// The content is bottom-anchored inside the fixed-size NSPanel (see
 /// `LiveCaptionsWindowController`) so the bar visually grows upward as new
@@ -37,13 +40,13 @@ struct LiveCaptionsOverlay: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept), id: \.self) { line in
-                row(channel: line.channel, text: line.text, opacity: 1.0)
+                row(speaker: line.speaker, text: line.text, opacity: 1.0)
             }
             if !state.hypothesisApp.isEmpty {
-                row(channel: .app, text: state.hypothesisApp, opacity: 0.6)
+                row(speaker: state.appLabel, text: state.hypothesisApp, opacity: 0.6)
             }
             if !state.hypothesisMic.isEmpty {
-                row(channel: .mic, text: state.hypothesisMic, opacity: 0.6)
+                row(speaker: state.micLabel, text: state.hypothesisMic, opacity: 0.6)
             }
         }
         .font(.system(size: 22, weight: .medium, design: .rounded))
@@ -55,9 +58,9 @@ struct LiveCaptionsOverlay: View {
         .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
     }
 
-    private func row(channel: LiveCaptionChannel, text: String, opacity: Double) -> some View {
+    private func row(speaker: String, text: String, opacity: Double) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(channel.label + ":")
+            Text(speaker + ":")
                 .foregroundStyle(.white.opacity(min(opacity, 0.85)))
                 .fontWeight(.semibold)
             Text(text)

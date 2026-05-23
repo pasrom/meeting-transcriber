@@ -90,8 +90,11 @@ final class AppState { // swiftlint:disable:this type_body_length
 
     /// Observable state for the live caption overlay. Always present (the
     /// `LiveCaptionsOverlay` window observes this); content is only populated
-    /// when live transcription is on AND a recording is active.
-    let liveCaptions: LiveCaptionsState = .init()
+    /// when live transcription is on AND a recording is active. Constructed
+    /// in `init` so the mic label reflects `settings.micName` from the
+    /// first overlay render. Kept in sync with later settings changes via
+    /// `setupLiveTranscriptionPrewarm`.
+    let liveCaptions: LiveCaptionsState
 
     #if !APPSTORE
         /// Lazy-started debug RPC server. Only constructed if the env var is
@@ -131,6 +134,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         self.silentRecordingMonitor = SilentRecordingMonitor(
             debounceSeconds: settings.asymmetricSilenceWarningSeconds,
         )
+        self.liveCaptions = LiveCaptionsState(micLabel: settings.micName)
 
         #if !APPSTORE
             // E2E hook: force a per-channel flag on at launch so a driver
@@ -158,6 +162,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         syncLanguageSettings()
         observeEngineSettings()
         setupLiveTranscriptionPrewarm()
+        setupMicLabelSync()
 
         #if !APPSTORE
             // Env var force-enables at launch only — preserves back-compat with
@@ -858,6 +863,25 @@ final class AppState { // swiftlint:disable:this type_body_length
                 guard let self else { return }
                 self.liveTranscriptionController = nil
                 self.setupLiveTranscriptionPrewarm()
+            }
+        }
+    }
+
+    /// Keep `liveCaptions.micLabel` synced with `settings.micName`. Separate
+    /// from `setupLiveTranscriptionPrewarm` because a rename does **not**
+    /// need a controller rebuild — `LiveTranscriptionController` reads the
+    /// label from `captions` on every final, so the new value flows
+    /// automatically. Finals already committed keep their per-line speaker
+    /// snapshot (no retroactive relabel), matching PR #318's engine-swap
+    /// behaviour: captions in flight use the cached value, the next final
+    /// picks up the new name.
+    private func setupMicLabelSync() {
+        liveCaptions.micLabel = settings.micName
+        withObservationTracking {
+            _ = settings.micName
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.setupMicLabelSync()
             }
         }
     }

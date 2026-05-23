@@ -45,7 +45,10 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.hypothesisMic, "")
         XCTAssertEqual(state.hypothesisApp, "they are speaking")
         XCTAssertEqual(state.recentFinals.count, 1)
-        XCTAssertEqual(state.recentFinals[0], LiveCaptionLine(channel: .mic, text: "you done."))
+        XCTAssertEqual(
+            state.recentFinals[0],
+            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me"),
+        )
     }
 
     func testFinalsRotationCapDropsOldestFirst() {
@@ -91,9 +94,55 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertTrue(state.hasContent)
     }
 
-    func testChannelLabelStrings() {
-        XCTAssertEqual(LiveCaptionChannel.mic.label, "Du")
-        XCTAssertEqual(LiveCaptionChannel.app.label, "Remote")
+    func testDefaultLabelsMatchPipelineQueue() {
+        // "Me" matches PipelineQueue.micLabel's batch default, so live and
+        // batch transcripts render the same prefix when no rename is set.
+        // "Remote" stays the app-channel fallback until slice 2 introduces
+        // per-speaker matching.
+        let state = LiveCaptionsState()
+        XCTAssertEqual(state.micLabel, "Me")
+        XCTAssertEqual(state.appLabel, "Remote")
+    }
+
+    func testInitCustomMicLabelOverridesDefault() {
+        let state = LiveCaptionsState(micLabel: "Roman")
+        XCTAssertEqual(state.micLabel, "Roman")
+        XCTAssertEqual(state.appLabel, "Remote")
+    }
+
+    func testLabelForChannelTracksCurrentValues() {
+        let state = LiveCaptionsState(micLabel: "Roman")
+        XCTAssertEqual(state.label(for: .mic), "Roman")
+        XCTAssertEqual(state.label(for: .app), "Remote")
+        state.micLabel = "Roman P."
+        state.appLabel = "Anna"
+        XCTAssertEqual(state.label(for: .mic), "Roman P.")
+        XCTAssertEqual(state.label(for: .app), "Anna")
+    }
+
+    func testApplyFinalizedConvenienceUsesCurrentMicLabel() {
+        let state = LiveCaptionsState(micLabel: "Roman")
+        state.applyFinalized("hello world", channel: .mic)
+        XCTAssertEqual(state.recentFinals.first?.speaker, "Roman")
+    }
+
+    func testApplyFinalizedConvenienceCapturesLabelAtCommit() {
+        // Renaming after a final is committed must NOT retroactively
+        // relabel that line — the speaker is captured per-line.
+        let state = LiveCaptionsState(micLabel: "Roman")
+        state.applyFinalized("first utterance", channel: .mic)
+        state.micLabel = "Anna"
+        state.applyFinalized("second utterance", channel: .mic)
+        XCTAssertEqual(state.recentFinals[0].speaker, "Roman")
+        XCTAssertEqual(state.recentFinals[1].speaker, "Anna")
+    }
+
+    func testApplyFinalizedExplicitSpeakerOverridesLabel() {
+        // The explicit-speaker overload (used by slice 2's matched name)
+        // wins over the channel default.
+        let state = LiveCaptionsState()
+        state.applyFinalized("hi there", channel: .app, speaker: "Anna")
+        XCTAssertEqual(state.recentFinals.first?.speaker, "Anna")
     }
 
     // MARK: - Opacity fade (pure function of lastEventAt vs passed-in date)

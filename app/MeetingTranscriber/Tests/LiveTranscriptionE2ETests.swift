@@ -69,6 +69,14 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         // robustness layer.
         let micText = micFinals.map(\.text).joined(separator: " ").lowercased()
         XCTAssertFalse(micText.isEmpty)
+        // Speaker tagging: the captions state was built with
+        // `micLabel: "Roman"`, so every mic final must carry that label.
+        // Catches regressions that bypass `captions.label(for:)` and emit
+        // a hard-coded string (e.g. legacy "Du" or "Me").
+        XCTAssertTrue(
+            micFinals.allSatisfy { $0.speaker == "Roman" },
+            "every mic final must carry the configured speaker label, got: \(micFinals.map(\.speaker))",
+        )
 
         // (3) App channel: feed the same fixture into the app sink, wait
         // for a final on the .app channel. Re-uses the same engine + VAD
@@ -80,6 +88,13 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         XCTAssertFalse(
             appFinals.isEmpty,
             "expected at least one .app-channel final, got channels: \(setup.captions.recentFinals.map(\.channel))",
+        )
+        // App-channel default label stays "Remote" until slice 2 introduces
+        // per-speaker matching. Pinning it here surfaces a regression if
+        // someone wires the mic label into both channels.
+        XCTAssertTrue(
+            appFinals.allSatisfy { $0.speaker == "Remote" },
+            "every app final must carry the channel-default app label, got: \(appFinals.map(\.speaker))",
         )
     }
 
@@ -98,7 +113,11 @@ final class LiveTranscriptionE2ETests: XCTestCase {
             "Test fixture not found at \(fixture.path)",
         )
         let samples = try await loadFixtureAs16kMono(fixture)
-        let captions = LiveCaptionsState()
+        // Custom mic label so the assertion in the test asserts that the
+        // controller actually consults `captions.label(for:)` on every
+        // final — a regression that hard-codes the legacy "Du" / "Me"
+        // string would flip this to a mismatch.
+        let captions = LiveCaptionsState(micLabel: "Roman")
         let engine = ParakeetEngine()
         let vad = FluidVAD(threshold: 0.5)
         let controller = LiveTranscriptionController(

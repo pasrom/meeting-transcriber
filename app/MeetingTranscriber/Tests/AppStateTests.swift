@@ -834,6 +834,37 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertTrue(notifier.calls.first?.body.contains("Accessibility") ?? false)
     }
+
+    // MARK: - Live captions mic label sync
+
+    func testLiveCaptionsMicLabelInitialisedFromSettings() {
+        let settings = AppSettings()
+        settings.micName = "Roman"
+        let state = AppState(settings: settings, notifier: RecordingNotifier())
+        XCTAssertEqual(
+            state.liveCaptions.micLabel, "Roman",
+            "liveCaptions.micLabel must reflect settings.micName at construction",
+        )
+        XCTAssertEqual(state.liveCaptions.appLabel, "Remote")
+    }
+
+    func testLiveCaptionsMicLabelTracksSettingsRename() async {
+        let settings = AppSettings()
+        settings.micName = "Roman"
+        let state = AppState(settings: settings, notifier: RecordingNotifier())
+        XCTAssertEqual(state.liveCaptions.micLabel, "Roman")
+
+        // withObservationTracking fires asynchronously — give the
+        // re-arming Task<MainActor> a tick to settle. One main-actor
+        // hop is sufficient: the onChange callback enqueues a Task on
+        // MainActor, which becomes runnable as soon as we suspend.
+        settings.micName = "Anna"
+        for _ in 0 ..< 20 {
+            await Task.yield()
+            if state.liveCaptions.micLabel == "Anna" { break }
+        }
+        XCTAssertEqual(state.liveCaptions.micLabel, "Anna")
+    }
 }
 
 // MARK: - Private helpers

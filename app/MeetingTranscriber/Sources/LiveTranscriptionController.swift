@@ -113,8 +113,13 @@ final class LiveTranscriptionController {
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
         // to the main actor on every invocation.
         let proxy = EngineProxy(engine: engine)
+        // Log prefix uses the raw channel id, not the user-visible speaker
+        // label. The speaker label is settings-driven (`settings.micName`)
+        // and the log args here are `privacy: .public` — using it here
+        // would leak the user's display name into the unified log.
+        let logChannel = channel.rawValue
         return StreamingTranscriber(
-            channelLabel: channel.label,
+            channelLabel: logChannel,
             vad: vad,
             transcribe: { samples in
                 try await proxy.transcribeSamples(samples)
@@ -129,15 +134,22 @@ final class LiveTranscriptionController {
                             // in `log show` / Console.app unless the system
                             // is in Private Data Capture mode. Defence in
                             // depth on top of the gate.
-                            logger.info("[\(channel.label, privacy: .public)] partial: \(text, privacy: .private)")
+                            logger.info("[\(logChannel, privacy: .public)] partial: \(text, privacy: .private)")
                         }
                         self.captions.applyPartial(text, channel: channel)
 
                     case let .finalized(text):
                         if self.verboseDiagnostics() {
-                            logger.info("[\(channel.label, privacy: .public)] final: \(text, privacy: .private)")
+                            logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                         }
-                        self.captions.applyFinalized(text, channel: channel)
+                        // Slice 1: speaker = channel default label. Slice 2
+                        // will replace this with a matched name on the app
+                        // channel.
+                        self.captions.applyFinalized(
+                            text,
+                            channel: channel,
+                            speaker: self.captions.label(for: channel),
+                        )
                     }
                 }
             },

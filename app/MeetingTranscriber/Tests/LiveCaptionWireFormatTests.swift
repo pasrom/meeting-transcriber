@@ -26,23 +26,37 @@ final class LiveCaptionWireFormatTests: XCTestCase {
     }
 
     func testLineRoundTripPreservesValues() throws {
-        let original = LiveCaptionLine(channel: .app, text: "Hello world")
+        let original = LiveCaptionLine(channel: .app, text: "Hello world", speaker: "Anna")
         let data = try JSONEncoder().encode(original)
         let decoded = try JSONDecoder().decode(LiveCaptionLine.self, from: data)
         XCTAssertEqual(decoded, original)
     }
 
     func testLineEncodesExpectedShape() throws {
-        let line = LiveCaptionLine(channel: .mic, text: "Du sprichst")
+        let line = LiveCaptionLine(channel: .mic, text: "Du sprichst", speaker: "Roman")
         let data = try JSONEncoder().encode(line)
         let json = try XCTUnwrap(
             JSONSerialization.jsonObject(with: data) as? [String: Any],
         )
-        // Two top-level keys, no nested or renamed fields. If anyone
-        // wraps the line in a container or renames `text` → `content`,
-        // this fails before it can break mt-cli's snapshot expectations.
+        // Three top-level keys. Pins the addition of `speaker` (slice 1 of
+        // live-speaker-labels) so a future rename or removal — or a wrapper
+        // that nests these in a container — breaks here before it bricks
+        // `mt-cli` / `e2e-live-captions.sh`.
         XCTAssertEqual(json["channel"] as? String, "mic")
         XCTAssertEqual(json["text"] as? String, "Du sprichst")
-        XCTAssertEqual(json.count, 2)
+        XCTAssertEqual(json["speaker"] as? String, "Roman")
+        XCTAssertEqual(json.count, 3)
+    }
+
+    func testLineDecodesFromWireFormat() throws {
+        // Forward compatibility check: a payload produced by mt-cli or the
+        // RPC server must round-trip through `LiveCaptionLine` cleanly.
+        let payload = Data("""
+        {"channel":"app","text":"Hi there","speaker":"Anna"}
+        """.utf8)
+        let line = try JSONDecoder().decode(LiveCaptionLine.self, from: payload)
+        XCTAssertEqual(line.channel, .app)
+        XCTAssertEqual(line.text, "Hi there")
+        XCTAssertEqual(line.speaker, "Anna")
     }
 }
