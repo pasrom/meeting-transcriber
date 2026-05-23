@@ -88,6 +88,19 @@ ignore:
   # has an xctest mock-point. Exercised end-to-end by e2e-live-captions.sh.
   - "app/MeetingTranscriber/Sources/LiveCaptionsOverlay.swift"
   - "app/MeetingTranscriber/Sources/LiveCaptionsWindowController.swift"
+  # WeSpeaker post-hoc embedding extraction for Sortformer mode (Phase 1
+  # of #165). Pulls a 150 MB CoreML model pair (pyannote_segmentation +
+  # wespeaker_v2) the default xctest lane can't realistically download.
+  # Exercised end-to-end by SortformerEmbeddingsE2ETests under the
+  # RUN_QUALITY_TESTS=1 gate. The pure helpers (mask-builder, resampler,
+  # centroid aggregator) stay in FluidDiarizer.swift and ARE covered by
+  # the default lane.
+  # Codecov treats path entries as anchored regex (see https://docs.codecov.com/docs/ignoring-paths).
+  # `+` is a regex metachar ("one or more"), so the raw filename would
+  # accidentally match `FluidDiarizerrSortformerEmbeddings.swift` etc.
+  # and miss the real file. Backslash-escape with `\\+` to match the
+  # literal `+`.
+  - "app/MeetingTranscriber/Sources/FluidDiarizer\\+SortformerEmbeddings.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
   - "tools/meeting-simulator/**/*"
   - "tools/mt-cli/**/*"
