@@ -36,10 +36,10 @@ struct SpeakersSettingsView: View {
 
                     if settings.diarizerMode == .sortformer {
                         Label(
-                            "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
-                            systemImage: "exclamationmark.triangle.fill",
+                            "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
+                            systemImage: "info.circle",
                         )
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                         .font(.caption)
                     }
 
