@@ -1,3 +1,4 @@
+import CoreML
 import FluidAudio
 import Foundation
 import os.log
@@ -32,12 +33,41 @@ protocol LiveSpeakerMatching: Sendable {
 /// the same `wespeaker_v2` CoreML model via `DiarizerModels.load()`. The
 /// embeddings are byte-for-byte compatible with anything already in
 /// `speakers.json` — no re-enrollment needed when this ships.
+///
+/// **Cold-start optimisation:** The first call to `prepare()` ever made on
+/// a given installation loads the full `DiarizerModels` (both segmentation
+/// + embedding), reads the WeSpeaker mask frame count from the
+/// segmentation model's output shape, and persists that integer to
+/// `UserDefaults`. Every subsequent launch loads only the embedding model
+/// and reads the cached frame count — saving ~300–500 ms cold-start
+/// + ~150 MB resident RAM after the first use. The cache key includes
+/// `ModelNames.Diarizer.segmentationFile` so a FluidAudio model rename
+/// (the likely failure mode) invalidates the cache automatically.
 actor LiveSpeakerMatcher: LiveSpeakerMatching {
+    /// `UserDefaults` key for the cached WeSpeaker mask frame count.
+    /// Includes the FluidAudio segmentation model filename so a rename
+    /// (e.g. `pyannote_segmentation` → `pyannote_segmentation_v4`)
+    /// changes the key and the cache miss fires a fresh derivation
+    /// against the new model. Residual risk: same-filename-different-
+    /// content updates aren't detected here — `LiveTranscriptionE2ETests`
+    /// covers that case end-to-end (a wrong frame count produces
+    /// zero-embeddings → no matches → all-fallback labels).
+    private static let cachedFrameCountKey =
+        "LiveSpeakerMatcher.weSpeakerFrameCount.\(ModelNames.Diarizer.segmentationFile)"
+
     /// SpeakerMatcher is a class with internal NSLock-based DB
     /// serialization — safe to call from any thread. Held by reference so
     /// rename / delete operations made via the existing UI (KnownVoices)
     /// don't require us to rebuild the matcher.
     private let speakerMatcher: SpeakerMatcher
+
+    /// Closure-injection for the frame-count cache. Production wires the
+    /// default reader/writer pair backed by `UserDefaults.standard`; tests
+    /// inject in-memory closures so they don't share state with each
+    /// other or with the running app. `@Sendable` so the closures can
+    /// cross the actor isolation boundary from any caller.
+    private let readCachedFrameCount: @Sendable () -> Int?
+    private let writeCachedFrameCount: @Sendable (Int) -> Void
 
     /// Loaded lazily on first `prepare()`. Subsequent calls await the same
     /// task. Cleared on failure so a transient model-download error doesn't
@@ -53,10 +83,6 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
     /// "verified the Task → actor crossing" marker Swift 6 requires.
     private struct LoadedModels: @unchecked Sendable {
         let extractor: EmbeddingExtractor
-        /// Frame count expected by the WeSpeaker model's mask input.
-        /// Queried from the companion segmentation model's output shape so a
-        /// future FluidAudio model swap doesn't silently mis-shape masks.
-        let weSpeakerFrameCount: Int
         /// All-ones single-speaker mask pre-allocated once per session.
         /// Live matching always supplies a single speaker, so the mask is
         /// constant for the lifetime of `LoadedModels` — caching avoids a
@@ -64,14 +90,35 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         let allOnesMask: [[Float]]
     }
 
-    init(speakerMatcher: SpeakerMatcher = SpeakerMatcher()) {
+    init(
+        speakerMatcher: SpeakerMatcher = SpeakerMatcher(),
+        readCachedFrameCount: @escaping @Sendable () -> Int? = LiveSpeakerMatcher.defaultReadCachedFrameCount,
+        writeCachedFrameCount: @escaping @Sendable (Int) -> Void = LiveSpeakerMatcher.defaultWriteCachedFrameCount,
+    ) {
         self.speakerMatcher = speakerMatcher
+        self.readCachedFrameCount = readCachedFrameCount
+        self.writeCachedFrameCount = writeCachedFrameCount
     }
 
-    /// Load the WeSpeaker + companion segmentation models. Safe to call
-    /// multiple times — deduped via single-flight `loadingTask`. Called by
-    /// `LiveTranscriptionController.prepare()` so the first live final in
-    /// a recording doesn't pay the ~500 ms cold-load latency.
+    /// Production reader: `UserDefaults.standard.integer(forKey:)` returns
+    /// 0 for missing keys, so we distinguish "absent" from "cached 0"
+    /// (which would be invalid anyway: a zero frame count produces
+    /// zero-length masks).
+    @Sendable
+    private static func defaultReadCachedFrameCount() -> Int? {
+        let value = UserDefaults.standard.integer(forKey: cachedFrameCountKey)
+        return value > 0 ? value : nil
+    }
+
+    @Sendable
+    private static func defaultWriteCachedFrameCount(_ value: Int) {
+        UserDefaults.standard.set(value, forKey: cachedFrameCountKey)
+    }
+
+    /// Warm the embedding model. On the very first call ever made on this
+    /// installation, also loads the segmentation model once to derive +
+    /// cache the WeSpeaker mask frame count. Safe to call multiple times
+    /// — deduped via single-flight `loadingTask`.
     func prepare() async throws {
         if loadedModels != nil { return }
         if let existing = loadingTask {
@@ -79,7 +126,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
             return
         }
         let task = Task<LoadedModels, any Error> {
-            try await Self.loadModels()
+            try await self.loadModels()
         }
         loadingTask = task
         do {
@@ -106,10 +153,8 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         }
         guard let models = loadedModels else { return nil }
 
-        // Single-speaker mask is pre-allocated on the loaded models; the
-        // extractor pads / loops the audio internally to its expected
-        // 160 000-sample window, so short utterances are stretched rather
-        // than truncated — same behaviour the batch path tolerates.
+        // Extractor pads / loops the audio internally to its 160 000-sample
+        // window — short utterances are stretched, not truncated.
         let embedding: [Float]
         do {
             let embs = try models.extractor.getEmbeddings(audio: audio, masks: models.allOnesMask)
@@ -136,27 +181,64 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         return name
     }
 
-    private static func loadModels() async throws -> LoadedModels {
-        let models = try await DiarizerModels.load()
+    private func loadModels() async throws -> LoadedModels {
+        // `DiarizerModels.defaultModelsDirectory()` returns the model-bundle
+        // dir (`…/Models/diarizer-coreml`); `DownloadUtils` appends
+        // `repo.folderName` itself, so we strip the trailing component to
+        // give it the parent (`…/Models`).
+        let directory = DiarizerModels.defaultModelsDirectory()
+            .deletingLastPathComponent()
+        // Mirror `DiarizerModels.defaultConfiguration`'s CI vs. local
+        // compute-unit choice (that function is internal to FluidAudio
+        // so we can't call it directly) — keeps the live matcher's
+        // CoreML execution path identical to the batch loader on the
+        // same hardware.
+        let computeUnits: MLComputeUnits = ProcessInfo.processInfo
+            .environment["CI"] != nil ? .cpuAndNeuralEngine : .all
+
+        if let cachedFrameCount = readCachedFrameCount() {
+            // Cache hit: load only the embedding model. The savings vs.
+            // the first-launch path are documented in the type docstring.
+            let modelsByName = try await DownloadUtils.loadModels(
+                .diarizer,
+                modelNames: [ModelNames.Diarizer.embeddingFile],
+                directory: directory,
+                computeUnits: computeUnits,
+            )
+            guard let embeddingModel = modelsByName[ModelNames.Diarizer.embeddingFile] else {
+                throw LiveSpeakerMatcherError.modelLoadFailed
+            }
+            logger.info("WeSpeaker loaded for live matching (cached frameCount=\(cachedFrameCount, privacy: .public), segmentation skipped)")
+            return makeLoadedModels(embeddingModel: embeddingModel, frameCount: cachedFrameCount)
+        }
+
+        // First-ever launch (or cache invalidated by FluidAudio rename):
+        // load the full DiarizerModels so we can query the segmentation
+        // model's `segments` output shape — `segShape[1]` is the WeSpeaker
+        // mask frame count. Persist it so future launches take the
+        // embedding-only fast path above.
+        let full = try await DiarizerModels.load()
         guard
-            let segShape = models.segmentationModel.modelDescription
+            let segShape = full.segmentationModel.modelDescription
             .outputDescriptionsByName["segments"]?.multiArrayConstraint?.shape,
             segShape.count >= 2
         else {
             throw LiveSpeakerMatcherError.modelShapeUnavailable
         }
         let frameCount = segShape[1].intValue
-        let extractor = EmbeddingExtractor(embeddingModel: models.embeddingModel)
+        writeCachedFrameCount(frameCount)
+        logger.info("WeSpeaker loaded for live matching (first-launch, derived frameCount=\(frameCount, privacy: .public))")
+        return makeLoadedModels(embeddingModel: full.embeddingModel, frameCount: frameCount)
+    }
+
+    private func makeLoadedModels(embeddingModel: MLModel, frameCount: Int) -> LoadedModels {
+        let extractor = EmbeddingExtractor(embeddingModel: embeddingModel)
         let mask: [[Float]] = [[Float](repeating: 1.0, count: frameCount)]
-        logger.info("WeSpeaker (wespeaker_v2) loaded for live matching, frameCount=\(frameCount, privacy: .public)")
-        return LoadedModels(
-            extractor: extractor,
-            weSpeakerFrameCount: frameCount,
-            allOnesMask: mask,
-        )
+        return LoadedModels(extractor: extractor, allOnesMask: mask)
     }
 }
 
 enum LiveSpeakerMatcherError: Error {
+    case modelLoadFailed
     case modelShapeUnavailable
 }
