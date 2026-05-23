@@ -264,6 +264,44 @@ else
     defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
 fi
 
+# Optional diarizer-mode override. `MTT_DIARIZER_MODE=sortformer` flips the
+# dev .app into Sortformer mode for this run — used by the Sortformer-naming
+# lane to assert that Phase 1 of issue #165 (post-hoc WeSpeaker embeddings)
+# actually lights up the naming dialog in production-chain. Always cleared
+# on exit so subsequent runs return to the default `.offline` mode.
+#
+# `defaults write com.meetingtranscriber.dev` from outside writes to the
+# *standard* preferences domain. The dev .app's bundle has a pre-existing
+# container at `~/Library/Containers/com.meetingtranscriber.dev/...` —
+# from a prior App Store-variant build or interactive use — and macOS
+# routes the app's UserDefaults reads to that container regardless of
+# whether the current binary is sandboxed. A naïve `defaults write` is
+# silently a no-op there. Write to both: container if it exists (covers
+# this runner) AND standard domain (covers a clean runner where the
+# container hasn't been created yet).
+_CONTAINER_PLIST="$HOME/Library/Containers/com.meetingtranscriber.dev/Data/Library/Preferences/com.meetingtranscriber.dev.plist"
+_set_dev_default() {
+    local key="$1" value="$2" type="${3:-string}"
+    if [ "$type" = "bool" ]; then
+        defaults write com.meetingtranscriber.dev "$key" -bool "$value" 2>/dev/null || true
+        [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
+    else
+        defaults write com.meetingtranscriber.dev "$key" "$value" 2>/dev/null || true
+        [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" "$value" 2>/dev/null || true
+    fi
+}
+_delete_dev_default() {
+    local key="$1"
+    defaults delete com.meetingtranscriber.dev "$key" 2>/dev/null || true
+    [ -f "$_CONTAINER_PLIST" ] && defaults delete "$_CONTAINER_PLIST" "$key" 2>/dev/null || true
+}
+if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
+    log "Overriding diarizerMode=$MTT_DIARIZER_MODE for this run"
+    _set_dev_default diarizerMode "$MTT_DIARIZER_MODE"
+else
+    _delete_dev_default diarizerMode
+fi
+
 # LaunchServices' `open` routes to the WindowServer of the *foreground* Aqua
 # session, not just any session with our UID loaded. If a second user is
 # signed in via Fast User Switching and currently has the foreground, our
@@ -304,6 +342,13 @@ on_exit() {
             find "$RECORDINGS_DIR" -type f -newer "$RECORD_ONLY_MARKER" -delete 2>/dev/null || true
             rm -f "$RECORD_ONLY_MARKER"
         fi
+    fi
+    # Always clear the diarizerMode override so the next run on this host
+    # starts from the AppSettings default (.offline) regardless of which
+    # lane left it set. Clears both standard and container plists for the
+    # same reason `_set_dev_default` writes to both.
+    if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
+        _delete_dev_default diarizerMode
     fi
 }
 trap on_exit EXIT INT TERM
@@ -355,6 +400,17 @@ _poll_for_new_lastjob_terminal() {
         # UI click. Fire-and-forget; the endpoint is a no-op when nothing
         # is pending and the next tick picks up the state change.
         if [ "${pending_naming:-0}" != "0" ] && [ -n "$pending_naming" ]; then
+            # Capture pendingNamingJobs[0].speakerCount the FIRST time we
+            # observe a pending naming job — before /action/skipNaming
+            # clears the queue. Surfaces the speaker-count Phase 1 of
+            # issue #165 promises: Sortformer mode must populate
+            # `result.embeddings` so the naming dialog sees N>0 speakers.
+            # Without this capture there's no production-chain signal that
+            # the embedding-extraction wiring is actually producing output.
+            if [ -z "${OBSERVED_NAMING_SPEAKERS:-}" ]; then
+                OBSERVED_NAMING_SPEAKERS="$(rpc /state | jq -r '.pendingNamingJobs[0].speakerCount // 0')" || OBSERVED_NAMING_SPEAKERS=0
+                log "$label:   First observed pendingNamingJobs[0].speakerCount=$OBSERVED_NAMING_SPEAKERS"
+            fi
             log "$label:   Auto-skipping ${pending_naming} pending naming job(s) via /action/skipNaming"
             curl --silent --show-error --max-time 5 -X POST \
                 --header "Authorization: Bearer $RPC_TOKEN" \
@@ -382,6 +438,9 @@ _poll_for_new_lastjob_terminal() {
 
 run_one_meeting() {
     local label="$1"
+    # Reset between meetings so --two-meetings captures each run's first
+    # observed naming-dialog speaker count, not just meeting 1's stale value.
+    OBSERVED_NAMING_SPEAKERS=""
     log "$label: starting meeting-simulator → $SIMULATOR_FIXTURE"
     "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
@@ -408,6 +467,23 @@ run_one_meeting() {
     log "$label: transcript $transcript_path ($transcript_size bytes)"
     log "$label: preview:"
     head -c 500 "$transcript_path" | sed 's/^/    /'
+
+    # Phase 1 of #165 production-chain assertion: when caller sets
+    # MTT_EXPECT_NAMING_SPEAKERS_MIN, require that the pending naming
+    # dialog observed during this run carried at least N speakers.
+    # `OBSERVED_NAMING_SPEAKERS` is populated inside the poll loop when
+    # the first `pendingNamingJobs[0]` appears (before /action/skipNaming
+    # drains it). Default lane (offline) doesn't set the gate; the
+    # Sortformer-mode lane wires it via `MTT_EXPECT_NAMING_SPEAKERS_MIN=1`
+    # so a regression that returns `embeddings: nil` would surface as
+    # "speakerCount=0, naming dialog never opened".
+    if [ -n "${MTT_EXPECT_NAMING_SPEAKERS_MIN:-}" ]; then
+        observed="${OBSERVED_NAMING_SPEAKERS:-0}"
+        if [ "$observed" -lt "$MTT_EXPECT_NAMING_SPEAKERS_MIN" ]; then
+            fail "$label: pendingNamingJobs[0].speakerCount=$observed < MTT_EXPECT_NAMING_SPEAKERS_MIN=$MTT_EXPECT_NAMING_SPEAKERS_MIN — naming dialog did not fire with the expected speaker count (Phase 1 #165 production-chain regression?)"
+        fi
+        log "$label: naming-dialog speaker count assertion passed (observed=$observed >= min=$MTT_EXPECT_NAMING_SPEAKERS_MIN)"
+    fi
     echo
 
     PRE_LAST_JOB_ID="$lj_id"
