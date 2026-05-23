@@ -377,6 +377,38 @@ class MockEngine: TranscribingEngine {
     }
 }
 
+/// In-memory `LiveSpeakerMatching` fake. Returns canned names by call
+/// order (`canned[index % canned.count]`); empty `canned` means every
+/// call resolves to `nil` (channel-default fallback path). Lives here
+/// alongside `MockEngine` / `MockDiarization` / `MockProtocolGen` so
+/// every live-transcription test reaches for the same fixture.
+actor FakeLiveSpeakerMatcher: LiveSpeakerMatching {
+    private let canned: [String]
+    private var index = 0
+
+    init(canned: [String] = []) {
+        self.canned = canned
+    }
+
+    /// Convenience: keyed by channel name for readability at call sites,
+    /// flattened into a stable order (mic → app) for deterministic
+    /// playback.
+    init(canned: [String: String]) {
+        self.canned = [canned["mic"], canned["app"]].compactMap(\.self)
+    }
+
+    // swiftlint:disable:next unneeded_throws_rethrows async_without_await
+    func prepare() async throws {} // protocol conformance — async/throws matches `LiveSpeakerMatching`
+
+    // swiftlint:disable:next async_without_await
+    func match(audio _: [Float]) async -> String? { // protocol conformance — `async` matches `LiveSpeakerMatching`
+        guard !canned.isEmpty else { return nil }
+        let name = canned[index % canned.count]
+        index += 1
+        return name
+    }
+}
+
 // MARK: - Test Audio Fixture
 
 /// Create a minimal valid 16kHz Float32 mono WAV (0.5s silence).

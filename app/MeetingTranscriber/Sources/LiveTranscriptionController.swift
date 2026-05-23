@@ -30,6 +30,7 @@ final class LiveTranscriptionController {
     private let engine: any StreamingTranscribingEngine
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
+    private let speakerMatcher: any LiveSpeakerMatching
     /// Gate for caption-text logging. Caption strings are spoken user content
     /// — privacy-sensitive — so even with `privacy: .private` on the log
     /// arguments we don't emit by default. Same `() -> Bool` closure pattern
@@ -72,18 +73,21 @@ final class LiveTranscriptionController {
         engine: any StreamingTranscribingEngine,
         vad: FluidVAD,
         captions: LiveCaptionsState,
+        speakerMatcher: any LiveSpeakerMatching = LiveSpeakerMatcher(),
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         self.engine = engine
         self.vad = vad
         self.captions = captions
+        self.speakerMatcher = speakerMatcher
         self.verboseDiagnostics = verboseDiagnostics
     }
 
-    /// Warm the engine + VAD models. Safe to call multiple times — engines
-    /// dedupe concurrent `loadModel` calls internally.
+    /// Warm the engine + VAD + speaker-matcher models. Safe to call
+    /// multiple times — each loader dedupes concurrent calls internally.
     func prepare() async {
         await engine.loadModel()
+        await prewarmSpeakerMatcher()
         if micTranscriber == nil {
             micTranscriber = makeTranscriber(channel: .mic)
         }
@@ -92,6 +96,18 @@ final class LiveTranscriptionController {
         }
         if verboseDiagnostics() {
             logger.info("Live transcription ready (engine: \(String(describing: type(of: self.engine)), privacy: .public))")
+        }
+    }
+
+    private func prewarmSpeakerMatcher() async {
+        do {
+            try await speakerMatcher.prepare()
+        } catch {
+            // Matcher load failure is non-fatal: the controller still
+            // produces captions, just without per-utterance speaker names.
+            // `LiveSpeakerMatcher.match(audio:)` returns nil on cold-load
+            // errors → channel default fallback at the caption call site.
+            logger.warning("speaker matcher prewarm failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -113,8 +129,14 @@ final class LiveTranscriptionController {
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
         // to the main actor on every invocation.
         let proxy = EngineProxy(engine: engine)
+        // Log prefix uses the raw channel id, not the user-visible speaker
+        // label. The speaker label is resolved by the live matcher per final
+        // (so the value may differ per utterance) and the log args here are
+        // `.public` — using a matched name would leak enrolled speaker
+        // identities into the unified log.
+        let logChannel = channel.rawValue
         return StreamingTranscriber(
-            channelLabel: channel.label,
+            channelLabel: logChannel,
             vad: vad,
             transcribe: { samples in
                 try await proxy.transcribeSamples(samples)
@@ -129,15 +151,17 @@ final class LiveTranscriptionController {
                             // in `log show` / Console.app unless the system
                             // is in Private Data Capture mode. Defence in
                             // depth on top of the gate.
-                            logger.info("[\(channel.label, privacy: .public)] partial: \(text, privacy: .private)")
+                            logger.info("[\(logChannel, privacy: .public)] partial: \(text, privacy: .private)")
                         }
                         self.captions.applyPartial(text, channel: channel)
 
-                    case let .finalized(text):
+                    case let .finalized(text, audio):
                         if self.verboseDiagnostics() {
-                            logger.info("[\(channel.label, privacy: .public)] final: \(text, privacy: .private)")
+                            logger.info("[\(logChannel, privacy: .public)] final: \(text, privacy: .private)")
                         }
-                        self.captions.applyFinalized(text, channel: channel)
+                        let matched = await self.speakerMatcher.match(audio: audio)
+                        let speaker = matched ?? self.captions.label(for: channel)
+                        self.captions.applyFinalized(text, channel: channel, speaker: speaker)
                     }
                 }
             },

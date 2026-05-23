@@ -69,6 +69,14 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         // robustness layer.
         let micText = micFinals.map(\.text).joined(separator: " ").lowercased()
         XCTAssertFalse(micText.isEmpty)
+        // Speaker matching: the fake matcher returns canned names, so a
+        // mic final must carry a non-default speaker. A regression that
+        // bypasses the matcher (hardcoded `captions.label(for:)`) would
+        // flip every final's speaker back to "Me", failing this assertion.
+        XCTAssertTrue(
+            micFinals.allSatisfy { $0.speaker != "Me" },
+            "matcher-driven speaker must override channel default, got: \(micFinals.map(\.speaker))",
+        )
 
         // (3) App channel: feed the same fixture into the app sink, wait
         // for a final on the .app channel. Re-uses the same engine + VAD
@@ -80,6 +88,12 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         XCTAssertFalse(
             appFinals.isEmpty,
             "expected at least one .app-channel final, got channels: \(setup.captions.recentFinals.map(\.channel))",
+        )
+        // Same matcher-bypass guard for the app channel — the fake matcher's
+        // canned response must reach `recentFinals[].speaker`.
+        XCTAssertTrue(
+            appFinals.allSatisfy { $0.speaker != "Remote" },
+            "matcher-driven speaker must override channel default, got: \(appFinals.map(\.speaker))",
         )
     }
 
@@ -101,8 +115,16 @@ final class LiveTranscriptionE2ETests: XCTestCase {
         let captions = LiveCaptionsState()
         let engine = ParakeetEngine()
         let vad = FluidVAD(threshold: 0.5)
+        // Inject a fake matcher: the E2E asserts on transcription chain
+        // wiring (audio → VAD → engine → onEvent), not on speaker matching
+        // itself. The real `LiveSpeakerMatcher` would download ~150 MB of
+        // WeSpeaker models on first run — covered separately by its own
+        // unit tests + the batch-pipeline E2Es that already exercise the
+        // same CoreML model. Returns canned names so `recentFinals[].speaker`
+        // has a deterministic value the test can assert on.
+        let matcher = FakeLiveSpeakerMatcher(canned: ["Roman", "Anna"])
         let controller = LiveTranscriptionController(
-            engine: engine, vad: vad, captions: captions,
+            engine: engine, vad: vad, captions: captions, speakerMatcher: matcher,
         )
         await controller.prepare()
         return LiveSetup(

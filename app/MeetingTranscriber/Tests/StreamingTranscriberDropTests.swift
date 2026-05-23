@@ -103,7 +103,7 @@ private final class OnEventObserver: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         switch event {
         case let .partial(text): _partials.append(text)
-        case let .finalized(text): _finals.append(text)
+        case let .finalized(text, _): _finals.append(text)
         }
     }
 
