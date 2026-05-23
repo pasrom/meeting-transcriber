@@ -289,7 +289,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .sortformer
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(
-            text: "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
+            text: "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
         ))
     }
 
@@ -299,7 +299,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .offline
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(
-            text: "Sortformer does not identify recurring speakers — speaker naming and auto-recognition are disabled.",
+            text: "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
         ))
     }
 
