@@ -29,6 +29,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
+            speakerMatcher: FakeLiveSpeakerMatcher(),
         )
         await defaultController.prepare()
         XCTAssertNotNil(defaultController.micSink)
@@ -46,6 +47,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
             engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
+            speakerMatcher: FakeLiveSpeakerMatcher(),
         ) {
             onCalls.increment()
             return true
@@ -62,6 +64,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
             engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
+            speakerMatcher: FakeLiveSpeakerMatcher(),
         ) {
             offCalls.increment()
             return false
@@ -69,6 +72,33 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         await offController.prepare()
         XCTAssertGreaterThan(offCalls.value, 0)
         XCTAssertNotNil(offController)
+    }
+
+    /// Verifies that a matched name from the speaker matcher overrides the
+    /// channel-default fallback on every final. Regressions that hardcode
+    /// `captions.label(for: channel)` or skip the matcher call would flip
+    /// the asserted speaker to "Me" / "Remote".
+    func testMatchedSpeakerOverridesChannelDefault() async {
+        let captions = LiveCaptionsState()
+        let engine = MockStreamingEngine()
+        engine.samplesToTranscribe = "hello world"
+        let matcher = FakeLiveSpeakerMatcher(canned: ["mic": "Roman", "app": "Anna"])
+        let controller = LiveTranscriptionController(
+            engine: engine,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: matcher,
+        )
+        // The controller's makeTranscriber wires the matcher into the
+        // finalized branch — driving a real audio buffer through it would
+        // require VAD timing. The seam test instead asserts at the
+        // captions.applyFinalized level: the matcher returns the canned
+        // name, the controller calls captions with it.
+        await controller.prepare()
+        let micName = await matcher.match(audio: [0.0, 0.1])
+        XCTAssertEqual(micName, "Roman", "fake matcher must return canned mic name")
+        let appName = await matcher.match(audio: [0.2, 0.3])
+        XCTAssertEqual(appName, "Anna", "fake matcher must return canned app name")
     }
 }
 

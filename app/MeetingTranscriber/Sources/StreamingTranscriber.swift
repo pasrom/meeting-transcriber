@@ -17,7 +17,13 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Streami
 actor StreamingTranscriber {
     enum Event {
         case partial(String)
-        case finalized(String)
+        /// Finalized utterance. `audio` carries the buffered 16 kHz mono
+        /// speech samples that drove the transcription so downstream
+        /// consumers (e.g. `LiveSpeakerMatcher`) can derive a speaker
+        /// embedding from the exact same window without a second VAD pass.
+        /// 1–5 seconds of float32 mono = 64–320 KB per event, emitted at
+        /// most once per ~5 s — small enough to ship by value.
+        case finalized(text: String, audio: [Float])
     }
 
     typealias EventSink = @Sendable (Event) -> Void
@@ -138,12 +144,21 @@ actor StreamingTranscriber {
             speechSamples.removeAll(keepingCapacity: true)
             return
         }
+        // Transfer ownership of the speech buffer to `buffer` by replacing
+        // `speechSamples` with a fresh empty array, NOT by mutating it
+        // via `removeAll(keepingCapacity:)`. Mutating it would trigger a
+        // CoW clone of the 64–320 KB buffer (because `buffer` still holds
+        // a strong reference at the mutation point); reassignment leaves
+        // the original storage uniquely owned by `buffer` and drops our
+        // reference for free. The downside is losing the capacity hint for
+        // the next utterance — accepted because finals are emitted at most
+        // once per second and the realloc dominates neither cost.
         let buffer = speechSamples
-        speechSamples.removeAll(keepingCapacity: true)
+        speechSamples = []
         do {
             let text = try await transcribe(buffer)
             if !text.isEmpty {
-                onEvent(.finalized(text))
+                onEvent(.finalized(text: text, audio: buffer))
             }
         } catch {
             logger.warning(

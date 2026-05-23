@@ -45,7 +45,10 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertEqual(state.hypothesisMic, "")
         XCTAssertEqual(state.hypothesisApp, "they are speaking")
         XCTAssertEqual(state.recentFinals.count, 1)
-        XCTAssertEqual(state.recentFinals[0], LiveCaptionLine(channel: .mic, text: "you done."))
+        XCTAssertEqual(
+            state.recentFinals[0],
+            LiveCaptionLine(channel: .mic, text: "you done.", speaker: "Me"),
+        )
     }
 
     func testFinalsRotationCapDropsOldestFirst() {
@@ -91,9 +94,38 @@ final class LiveCaptionsStateTests: XCTestCase {
         XCTAssertTrue(state.hasContent)
     }
 
-    func testChannelLabelStrings() {
-        XCTAssertEqual(LiveCaptionChannel.mic.label, "Du")
-        XCTAssertEqual(LiveCaptionChannel.app.label, "Remote")
+    func testDefaultLabelsMatchPipelineQueue() {
+        // "Me" matches PipelineQueue.micLabel's batch default so live and
+        // batch transcripts render the same fallback prefix when the live
+        // matcher returns nil (no confident match against speakers.json).
+        let state = LiveCaptionsState()
+        XCTAssertEqual(state.micLabel, "Me")
+        XCTAssertEqual(state.appLabel, "Remote")
+    }
+
+    func testLabelForChannelLookup() {
+        let state = LiveCaptionsState(micLabel: "Mic", appLabel: "Other")
+        XCTAssertEqual(state.label(for: .mic), "Mic")
+        XCTAssertEqual(state.label(for: .app), "Other")
+    }
+
+    func testApplyFinalizedExplicitSpeakerWinsOverDefault() {
+        // The matcher-aware path: caller passes the matched name, state
+        // captures it per-line — independent of the channel-default label.
+        let state = LiveCaptionsState()
+        state.applyFinalized("hi there", channel: .app, speaker: "Anna")
+        XCTAssertEqual(state.recentFinals.first?.speaker, "Anna")
+        XCTAssertEqual(state.recentFinals.first?.channel, .app)
+    }
+
+    func testApplyFinalizedConvenienceFallsBackToChannelDefault() {
+        // Tests-only convenience: speaker defaults to the channel label.
+        // Production wiring always passes an explicit speaker (matched or
+        // fallback), but the convenience is used by fixture tests.
+        let state = LiveCaptionsState(micLabel: "Me", appLabel: "Remote")
+        state.applyFinalized("hello", channel: .mic)
+        state.applyFinalized("hi there", channel: .app)
+        XCTAssertEqual(state.recentFinals.map(\.speaker), ["Me", "Remote"])
     }
 
     // MARK: - Opacity fade (pure function of lastEventAt vs passed-in date)
