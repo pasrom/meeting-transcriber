@@ -51,6 +51,11 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     private var offlineProcessor: any OfflineDiarizationProcessing
 
     private var sortformerDiarizer: SortformerDiarizer?
+    /// Lazily-loaded WeSpeaker (pyannote `wespeaker_v2`) models, used only by
+    /// `FluidDiarizer+SortformerEmbeddings.extractSortformerEmbeddings`. Not
+    /// `private` because the extension lives in a separate file (codecov-
+    /// ignored — see `.codecov.yml`).
+    var sortformerEmbeddingModels: DiarizerModels?
 
     var isAvailable: Bool {
         true
@@ -137,7 +142,86 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
             }
         }
 
-        return Self.buildResult(segments: segments, speakerDatabase: nil)
+        // Phase 1 of issue #165: run WeSpeaker post-hoc on Sortformer's
+        // overlap-excluded frames so the naming dialog + SpeakerMatcher
+        // light up again. Without this, Sortformer mode produces
+        // `embeddings: nil` and `PipelineQueue.processNext()` aborts the
+        // naming flow (issue #109).
+        let embeddings = try await extractSortformerEmbeddings(audioPath: audioPath, timeline: timeline)
+
+        return Self.buildResult(segments: segments, speakerDatabase: embeddings)
+    }
+
+    /// L2-normalised running-mean of per-chunk embeddings → one centroid
+    /// per speaker. Pure so unit tests can pin behaviour without CoreML.
+    static func aggregateCentroids(
+        sums: [String: [Float]],
+        counts: [String: Int],
+    ) -> [String: [Float]] {
+        var result = [String: [Float]](minimumCapacity: sums.count)
+        for (label, sum) in sums {
+            let count = Float(counts[label] ?? 1)
+            var mean = sum.map { $0 / count }
+            let norm = (mean.reduce(into: Float(0)) { $0 += $1 * $1 }).squareRoot()
+            if norm > 1e-9 {
+                mean = mean.map { $0 / norm }
+            }
+            result[label] = mean
+        }
+        return result
+    }
+
+    /// Nearest-neighbour resample a per-frame activity mask onto a target
+    /// frame grid. Used to bridge Sortformer's 12.5 Hz output (~125 frames/10s)
+    /// to WeSpeaker's expected segmentation-frame count (typically 589/10s).
+    /// Pure so the unit tests can pin it without loading any model.
+    static func resampleMask(_ mask: [Float], to targetCount: Int) -> [Float] {
+        guard !mask.isEmpty, targetCount > 0 else {
+            return Array(repeating: Float(0.0), count: max(0, targetCount))
+        }
+        var out = Array(repeating: Float(0.0), count: targetCount)
+        let srcCount = mask.count
+        for i in 0 ..< targetCount {
+            let srcIdx = min(i * srcCount / targetCount, srcCount - 1)
+            out[i] = mask[srcIdx]
+        }
+        return out
+    }
+
+    /// Pure helper exposed for testability — build per-speaker activity
+    /// masks (1.0/0.0) with overlap-exclusion: any frame where ≥2 speakers
+    /// exceed `threshold` is zeroed across ALL speakers, so impure frames
+    /// never reach embedding extraction. DiariZen's stage-5 design.
+    ///
+    /// - Parameters:
+    ///   - predictions: flat `[numFrames × numSpeakers]` from `DiarizerTimeline.finalizedPredictions`.
+    ///   - numSpeakers: speaker-slot count (Sortformer hardcodes 4).
+    ///   - threshold: activity threshold (use `timeline.config.onsetThreshold`, 0.5 default).
+    /// - Returns: `[numSpeakers]` arrays of length `numFrames`.
+    static func buildOverlapExcludedMasks(
+        predictions: [Float],
+        numSpeakers: Int,
+        threshold: Float,
+    ) -> [[Float]] {
+        guard numSpeakers > 0, !predictions.isEmpty else { return [] }
+        let numFrames = predictions.count / numSpeakers
+        guard numFrames > 0 else { return [] }
+        var masks = Array(repeating: Array(repeating: Float(0.0), count: numFrames), count: numSpeakers)
+
+        for frame in 0 ..< numFrames {
+            let base = frame * numSpeakers
+            var activeSlot = -1
+            var activeCount = 0
+            for s in 0 ..< numSpeakers where predictions[base + s] >= threshold {
+                activeCount += 1
+                activeSlot = s
+                if activeCount > 1 { break }
+            }
+            if activeCount == 1 {
+                masks[activeSlot][frame] = 1.0
+            }
+        }
+        return masks
     }
 
     // MARK: - Shared Result Conversion
