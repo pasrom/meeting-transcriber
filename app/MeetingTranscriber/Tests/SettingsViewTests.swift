@@ -289,7 +289,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .sortformer
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(
-            text: "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
+            text: "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
         ))
     }
 
@@ -299,8 +299,29 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.diarizerMode = .offline
         let body = try makeSpeakers(settings: settings).inspect()
         XCTAssertThrowsError(try body.find(
-            text: "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
+            text: "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
         ))
+    }
+
+    // MARK: - Speakers Settings ↔ Diarizer Mode coupling
+
+    func testSpeakerCountRangePerMode() {
+        XCTAssertEqual(SpeakersSettingsView.speakerCountRange(for: .sortformer), 0 ... 4)
+        XCTAssertEqual(SpeakersSettingsView.speakerCountRange(for: .offline), 0 ... 10)
+    }
+
+    func testClampSpeakerCountPerMode() {
+        // Auto (0) is preserved across both modes.
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(0, for: .sortformer), 0)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(0, for: .offline), 0)
+        // Sortformer caps at 4.
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(2, for: .sortformer), 2)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(4, for: .sortformer), 4)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(10, for: .sortformer), 4)
+        // Offline preserves up to 10; out-of-band values still clamp.
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(7, for: .offline), 7)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(10, for: .offline), 10)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(99, for: .offline), 10)
     }
 
     // SpeakerMatcher.init reads + decodes speakers.json. It must run only

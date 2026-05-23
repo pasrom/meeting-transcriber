@@ -20,46 +20,25 @@ struct SpeakersSettingsView: View {
     @State private var sheetMatcher: SpeakerMatcher?
     @State private var experimentalTuningExpanded = false
 
+    /// Stepper range for `numSpeakers` given the active diarizer mode.
+    /// Upper bound from `DiarizerMode.speakerCap` (single source of truth
+    /// shared with the SpeakerNamingView re-run UI). 0 = Auto.
+    static func speakerCountRange(for mode: DiarizerMode) -> ClosedRange<Int> {
+        0 ... mode.speakerCap
+    }
+
+    /// Clamp a desired `numSpeakers` to the cap that applies for the given
+    /// mode. 0 = Auto stays 0. Pure so unit tests can pin behaviour.
+    static func clampSpeakerCount(_ count: Int, for mode: DiarizerMode) -> Int {
+        guard count > 0 else { return 0 }
+        return min(count, mode.speakerCap)
+    }
+
     var body: some View {
-        // swiftlint:disable:next closure_body_length
         Form {
-            Section("Diarization") {
-                Toggle("Speaker Diarization", isOn: $settings.diarize)
-
-                if settings.diarize {
-                    Picker("Diarizer", selection: $settings.diarizerMode) {
-                        ForEach(DiarizerMode.allCases, id: \.self) { mode in
-                            Text(mode.label).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if settings.diarizerMode == .sortformer {
-                        Label(
-                            "Sortformer supports up to 4 speakers per meeting. Switch to Offline mode for meetings with more participants.",
-                            systemImage: "info.circle",
-                        )
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
-                    }
-
-                    HStack {
-                        Text("Expected Speakers")
-                        Spacer()
-                        Text(settings.numSpeakers == 0 ? "Auto" : "\(settings.numSpeakers)")
-                            .frame(width: 40)
-                            .multilineTextAlignment(.trailing)
-                        Stepper("", value: $settings.numSpeakers, in: 0 ... 10)
-                            .labelsHidden()
-                    }
-
-                    if settings.diarizerMode == .offline {
-                        experimentalTuningDisclosure
-                    }
-                }
-            }
-            .accessibilityIdentifier("diarizationSection")
-            .recordOnlyDisabled(settings.recordOnly)
+            diarizationSection
+                .accessibilityIdentifier("diarizationSection")
+                .recordOnlyDisabled(settings.recordOnly)
 
             if !settings.noMic {
                 Section("Speaker Identity") {
@@ -100,6 +79,59 @@ struct SpeakersSettingsView: View {
                     onMutate: onSpeakerMutate,
                 )
             }
+        }
+    }
+
+    // MARK: - Diarization Section
+
+    private var diarizationSection: some View {
+        Section("Diarization") {
+            Toggle("Speaker Diarization", isOn: $settings.diarize)
+            if settings.diarize {
+                diarizationModePicker
+                if settings.diarizerMode == .sortformer {
+                    Label(
+                        "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
+                        systemImage: "info.circle",
+                    )
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                }
+                expectedSpeakersRow
+                if settings.diarizerMode == .offline {
+                    experimentalTuningDisclosure
+                }
+            }
+        }
+    }
+
+    private var diarizationModePicker: some View {
+        Picker("Diarizer", selection: $settings.diarizerMode) {
+            ForEach(DiarizerMode.allCases, id: \.self) { mode in
+                Text(mode.label).tag(mode)
+            }
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: settings.diarizerMode) { _, newMode in
+            // Clamp K to the new mode's cap so the value visible in the
+            // Stepper agrees with what the diarizer will actually honour.
+            settings.numSpeakers = Self.clampSpeakerCount(settings.numSpeakers, for: newMode)
+        }
+    }
+
+    private var expectedSpeakersRow: some View {
+        HStack {
+            Text("Expected Speakers")
+            Spacer()
+            Text(settings.numSpeakers == 0 ? "Auto" : "\(settings.numSpeakers)")
+                .frame(width: 40)
+                .multilineTextAlignment(.trailing)
+            Stepper(
+                "",
+                value: $settings.numSpeakers,
+                in: Self.speakerCountRange(for: settings.diarizerMode),
+            )
+            .labelsHidden()
         }
     }
 

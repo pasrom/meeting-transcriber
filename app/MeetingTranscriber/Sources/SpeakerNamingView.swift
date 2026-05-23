@@ -65,11 +65,15 @@ func formattedTime(_ seconds: Double) -> String {
 }
 
 /// Window that lets the user name speakers after diarization.
-struct SpeakerNamingView: View {
+struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     let data: PipelineQueue.SpeakerNamingData
     /// Names of speakers known from previous meetings, surfaced as quick-pick chips
     /// in addition to the current meeting's participants. Empty array hides the row.
     let knownSpeakerNames: [String]
+    /// Diarizer mode used to produce `data`. Initial value for the re-run
+    /// mode picker. `nil` for legacy jobs without a recorded mode — the
+    /// picker initialises to `.offline` in that case.
+    let currentDiarizerMode: DiarizerMode?
     let onComplete: (PipelineQueue.SpeakerNamingResult) -> Void
 
     /// Window after the dialog appears (or after Re-run produces a fresh `data.revision`)
@@ -86,11 +90,13 @@ struct SpeakerNamingView: View {
     init(
         data: PipelineQueue.SpeakerNamingData,
         knownSpeakerNames: [String] = [],
+        currentDiarizerMode: DiarizerMode? = nil,
         gracePeriod: TimeInterval = Self.defaultKeyboardGracePeriod,
         onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void,
     ) {
         self.data = data
         self.knownSpeakerNames = knownSpeakerNames
+        self.currentDiarizerMode = currentDiarizerMode
         self.gracePeriod = gracePeriod
         self.onComplete = onComplete
         // Seed `names` and `rerunCount` synchronously so the view renders
@@ -100,11 +106,28 @@ struct SpeakerNamingView: View {
         // never trigger SwiftUI lifecycle still see the correct surface.
         let speakerList = Self.computeSpeakers(from: data)
         _names = State(initialValue: Self.computeInitialNames(speakers: speakerList))
-        _rerunCount = State(initialValue: max(2, speakerList.count + 1))
+        let initialMode = currentDiarizerMode ?? .offline
+        _rerunMode = State(initialValue: initialMode)
+        let initialCount = max(2, speakerList.count + 1)
+        _rerunCount = State(initialValue: Self.clampCount(initialCount, for: initialMode))
         // Initialize the grace-period gate to "active" when the period is positive
         // so the buttons start disabled. When tests pass gracePeriod = 0 the gate
         // starts open (no grace) and the unlock task is a no-op.
         _keyboardGracePeriodActive = State(initialValue: gracePeriod > 0)
+    }
+
+    /// Clamp a desired speaker count to the cap that applies for the
+    /// given mode. Returns at most the upper bound of `rerunCountRange`
+    /// so callers can write the result back into the Stepper without
+    /// risking an out-of-range value on the next frame.
+    /// Pure so tests can pin it without instantiating the view.
+    static func clampCount(_ count: Int, for mode: DiarizerMode) -> Int {
+        max(1, min(count, rerunCountRange(for: mode).upperBound))
+    }
+
+    /// Re-run Stepper range for the given mode.
+    static func rerunCountRange(for mode: DiarizerMode) -> ClosedRange<Int> {
+        1 ... mode.speakerCap
     }
 
     @State private var keyboardGracePeriodActive: Bool = true
@@ -117,6 +140,7 @@ struct SpeakerNamingView: View {
     @State private var completedJobID: UUID?
     @State private var player: AVAudioPlayer?
     @State private var playingLabel: String?
+    @State private var rerunMode: DiarizerMode = .offline
     @State private var rerunCount: Int = 2
     /// Indices of speaker rows where the user clicked "More…" to reveal the full
     /// known-names list instead of the top-N ranked subset.
@@ -126,6 +150,78 @@ struct SpeakerNamingView: View {
 
     private var speakers: [(label: String, autoName: String?, speakingTime: Double)] {
         Self.computeSpeakers(from: data)
+    }
+
+    /// Re-run controls: mode picker, speaker-count Stepper, and Re-run button.
+    /// Stepper range narrows in Sortformer mode (1...4); mode-flip clamps
+    /// `rerunCount` to the new range. Re-run posts `.rerunWithMode(mode, count)`
+    /// when the picked mode differs from `currentDiarizerMode`, otherwise the
+    /// legacy `.rerun(count)` form (so consumers that don't care about
+    /// mode-switching stay unaffected).
+    private var rerunSection: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text("Wrong count?").font(.caption).foregroundStyle(.secondary)
+                // Hide the mode picker for callers that don't track per-job
+                // diarizer mode (currently the voice-enrollment flow): they
+                // can't honour `.rerunWithMode`, so a visible-but-inert
+                // picker would silently discard the user's choice.
+                if currentDiarizerMode != nil {
+                    rerunModePicker
+                }
+                Stepper(
+                    "\(rerunCount) speakers", value: $rerunCount,
+                    in: Self.rerunCountRange(for: rerunMode),
+                )
+                .font(.caption)
+                .accessibilityIdentifier("rerun-stepper")
+                rerunButton
+            }
+            if currentDiarizerMode != nil, rerunMode == .sortformer {
+                Text("Sortformer caps at \(DiarizerMode.sortformer.speakerCap) speakers — switch to Offline for larger meetings.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("sortformer-cap-hint")
+            }
+        }
+    }
+
+    private var rerunModePicker: some View {
+        Picker("", selection: $rerunMode) {
+            Text("Sortformer").tag(DiarizerMode.sortformer)
+            Text("Offline").tag(DiarizerMode.offline)
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 200)
+        .font(.caption)
+        .accessibilityIdentifier("rerun-mode-picker")
+        .onChange(of: rerunMode) { _, newMode in
+            rerunCount = Self.clampCount(rerunCount, for: newMode)
+        }
+    }
+
+    private var rerunButton: some View {
+        Button("Re-run") {
+            guard completedJobID != data.jobID else { return }
+            completedJobID = data.jobID
+            player?.stop()
+            // `nil` currentDiarizerMode = legacy / enrollment caller that
+            // doesn't track per-job mode → keep the legacy `.rerun(count)`
+            // shape so those consumers stay unaffected. When the caller
+            // provides a mode, always fire `.rerunWithMode` so the picker's
+            // selection is authoritative — even when it matches the
+            // recorded mode. Otherwise lateDiarization would fall back to
+            // the no-arg factory (current global setting), which can differ
+            // from the recorded mode if the user touched Settings between
+            // recording and re-run.
+            if currentDiarizerMode != nil {
+                onComplete(.rerunWithMode(rerunMode, rerunCount))
+            } else {
+                onComplete(.rerun(rerunCount))
+            }
+        }
+        .font(.caption)
+        .accessibilityIdentifier("rerun-button")
     }
 
     static func computeSpeakers(
@@ -160,22 +256,7 @@ struct SpeakerNamingView: View {
 
             Divider()
 
-            HStack(spacing: 8) {
-                Text("Wrong count?")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Stepper("\(rerunCount) speakers", value: $rerunCount, in: 1 ... 10)
-                    .font(.caption)
-                    .accessibilityIdentifier("rerun-stepper")
-                Button("Re-run") {
-                    guard completedJobID != data.jobID else { return }
-                    completedJobID = data.jobID
-                    player?.stop()
-                    onComplete(.rerun(rerunCount))
-                }
-                .font(.caption)
-                .accessibilityIdentifier("rerun-button")
-            }
+            rerunSection
 
             HStack(spacing: 12) {
                 Button("Skip") {
@@ -238,7 +319,16 @@ struct SpeakerNamingView: View {
     private func resetForCurrentPresentation() {
         completedJobID = nil
         names = Self.computeInitialNames(speakers: speakers)
-        rerunCount = max(2, speakers.count + 1)
+        // Re-seed `rerunMode` from the prop so cross-job dialog switches
+        // (same view identity, different data) start with the correct
+        // picker selection instead of inheriting the previous job's mode.
+        // Then clamp the count to the active mode's Stepper range so the
+        // value never sits outside `in:` on first frame (Sortformer caps
+        // at 4 even when the diarizer detected 4 speakers, which would
+        // otherwise compute max(2, 4+1) = 5).
+        let mode = currentDiarizerMode ?? rerunMode
+        rerunMode = mode
+        rerunCount = Self.clampCount(max(2, speakers.count + 1), for: mode)
         // Indices are speaker-position based; a different speaker count would
         // leave stale entries pointing at no-longer-rendered rows.
         knownExpanded.removeAll()

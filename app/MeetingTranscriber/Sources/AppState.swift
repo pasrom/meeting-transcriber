@@ -868,21 +868,28 @@ final class AppState { // swiftlint:disable:this type_body_length
         configurePipelineCallbacks()
     }
 
+    /// One-stop FluidDiarizer instantiation. Captures the current tuning
+    /// fields from settings so both the global-mode factory and the
+    /// per-job mode-override factory stay in sync. Tuning only affects
+    /// `.offline` mode, but is harmless when passed to `.sortformer`.
+    private func makeFluidDiarizer(mode: DiarizerMode) -> FluidDiarizer {
+        FluidDiarizer(
+            mode: mode,
+            tuning: OfflineDiarizerTuning(
+                clusterThreshold: settings.clusterThreshold,
+                warmStartFa: settings.warmStartFa,
+                warmStartFb: settings.warmStartFb,
+                minSegmentDurationSeconds: settings.minSegmentDurationSeconds,
+                excludeOverlap: settings.excludeOverlap,
+            ),
+        )
+    }
+
     func makePipelineQueue() -> PipelineQueue {
         let queue = PipelineQueue(
             engine: activeTranscriptionEngine,
-            diarizationFactory: { [self] in
-                FluidDiarizer(
-                    mode: settings.diarizerMode,
-                    tuning: OfflineDiarizerTuning(
-                        clusterThreshold: settings.clusterThreshold,
-                        warmStartFa: settings.warmStartFa,
-                        warmStartFb: settings.warmStartFb,
-                        minSegmentDurationSeconds: settings.minSegmentDurationSeconds,
-                        excludeOverlap: settings.excludeOverlap,
-                    ),
-                )
-            },
+            diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
+            diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,

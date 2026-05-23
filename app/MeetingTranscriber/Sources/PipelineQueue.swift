@@ -14,6 +14,11 @@ class PipelineQueue {
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
     let diarizationFactory: (() -> any DiarizationProvider)?
+    /// Optional mode-overriding factory used by `lateDiarization` when the
+    /// user picks a different mode in the re-run UI. `nil` = mode override
+    /// not supported, `lateDiarization` falls back to `diarizationFactory()`
+    /// (current global setting). Production wires both via `AppState`.
+    let diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)?
     let protocolGeneratorFactory: (() -> (any ProtocolGenerating)?)?
     let outputDir: URL?
     let diarizeEnabled: Bool
@@ -77,7 +82,12 @@ class PipelineQueue {
     /// Result from the speaker naming popup.
     enum SpeakerNamingResult {
         case confirmed([String: String]) // user confirmed with mapping
-        case rerun(Int) // re-run diarization with N speakers
+        case rerun(Int) // re-run diarization with N speakers (current mode)
+        /// Re-run diarization with a different mode AND speaker count. New in
+        /// the Mode↔Count-coupling follow-up: lets the user recover from a
+        /// wrong-mode-at-recording-time (e.g. Sortformer's 4-speaker cap hit
+        /// on a 6-speaker meeting) without leaving the naming dialog.
+        case rerunWithMode(DiarizerMode, Int)
         case skipped // user skipped
     }
 
@@ -117,6 +127,13 @@ class PipelineQueue {
         return pendingSpeakerNaming
     }
 
+    /// Diarizer mode used to produce the current `speakerNamingDataByJob`
+    /// entry for the given job. `nil` for legacy jobs persisted before the
+    /// field existed — callers fall back to the current global setting.
+    func usedDiarizerMode(forJobID jobID: UUID) -> DiarizerMode? {
+        jobs.first { $0.id == jobID }?.usedDiarizerMode
+    }
+
     /// Jobs in speakerNamingPending state.
     var pendingSpeakerNamingJobs: [PipelineJob] {
         jobs.filter { $0.state == .speakerNamingPending }
@@ -145,6 +162,9 @@ class PipelineQueue {
 
         case let .rerun(count):
             Task { await lateDiarization(jobID: jobID, speakerCount: count) }
+
+        case let .rerunWithMode(mode, count):
+            Task { await lateDiarization(jobID: jobID, speakerCount: count, mode: mode) }
 
         case .skipped:
             recordRecognition(
@@ -252,6 +272,7 @@ class PipelineQueue {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.engine = nil
         self.diarizationFactory = nil
+        self.diarizationFactoryWithMode = nil
         self.protocolGeneratorFactory = nil
         self.outputDir = nil
         self.diarizeEnabled = false
@@ -312,6 +333,7 @@ class PipelineQueue {
     init(
         engine: any TranscribingEngine,
         diarizationFactory: @escaping () -> any DiarizationProvider,
+        diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
         outputDir: URL,
         logDir: URL? = nil,
@@ -327,6 +349,7 @@ class PipelineQueue {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.engine = engine
         self.diarizationFactory = diarizationFactory
+        self.diarizationFactoryWithMode = diarizationFactoryWithMode
         self.protocolGeneratorFactory = protocolGeneratorFactory
         self.outputDir = outputDir
         self.diarizeEnabled = diarizeEnabled
@@ -741,6 +764,7 @@ class PipelineQueue {
                             saveNamingData(namingData, slug: slug)
                             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                                 jobs[idx].namingSlug = slug
+                                jobs[idx].usedDiarizerMode = diarizeProcess.mode
                             }
 
                             stopElapsedTimer()
@@ -780,6 +804,19 @@ class PipelineQueue {
                                     updateJobState(id: jobID, to: .diarizing)
                                     startElapsedTimer()
                                     logger.info("Re-running diarization with \(count) speakers")
+                                    continue diarizationLoop
+
+                                case let .rerunWithMode(_, count):
+                                    // Mode override is only honoured by the
+                                    // production `completeSpeakerNaming` ->
+                                    // `lateDiarization` path. The inline
+                                    // test-handler loop can't swap providers
+                                    // mid-iteration without rebuilding the
+                                    // factory; treat as a same-mode re-run.
+                                    speakerCount = count
+                                    updateJobState(id: jobID, to: .diarizing)
+                                    startElapsedTimer()
+                                    logger.info("Re-running diarization with \(count) speakers (mode override ignored in inline path)")
                                     continue diarizationLoop
 
                                 case .skipped:
@@ -1051,7 +1088,21 @@ class PipelineQueue {
     // MARK: - Late Re-diarization
 
     /// Re-run diarization from persisted 16kHz audio after pipeline completed.
-    private func lateDiarization(jobID: UUID, speakerCount: Int) async {
+    ///
+    /// - Parameters:
+    ///   - jobID: the job to re-diarize.
+    ///   - speakerCount: target speaker count (ignored by Sortformer mode).
+    ///   - mode: optional override for the diarizer mode. `nil` (default)
+    ///     keeps the original behaviour — re-instantiate the diarizer with
+    ///     the current global setting via `diarizationFactory()`. Non-nil
+    ///     uses `diarizationFactoryWithMode` to instantiate a one-off
+    ///     diarizer in the requested mode, so the user can recover from a
+    ///     wrong-mode-at-recording-time without leaving the naming dialog.
+    private func lateDiarization(
+        jobID: UUID,
+        speakerCount: Int,
+        mode: DiarizerMode? = nil,
+    ) async {
         guard let namingData = speakerNamingDataByJob[jobID],
               let jobIndex = jobs.firstIndex(where: { $0.id == jobID }),
               let diarizationFactory,
@@ -1062,7 +1113,17 @@ class PipelineQueue {
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
-        let diarizeProcess = diarizationFactory()
+        let diarizeProcess: any DiarizationProvider = {
+            if let mode, let factory = diarizationFactoryWithMode {
+                return factory(mode)
+            }
+            if let mode {
+                logger.warning(
+                    "Late re-diarize requested mode=\(mode.rawValue, privacy: .public) but no mode-aware factory wired; falling back to global setting",
+                )
+            }
+            return diarizationFactory()
+        }()
         guard diarizeProcess.isAvailable else {
             logger.warning("Diarization not available for late re-run")
             return
@@ -1073,27 +1134,12 @@ class PipelineQueue {
 
         do {
             let title = jobs[jobIndex].meetingTitle
-            let diarization: DiarizationResult
-
-            if namingData.isDualSource {
-                let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
-                let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
-                async let appDiar = diarizeProcess.run(
-                    audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
-                )
-                async let micDiar = diarizeProcess.run(
-                    audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
-                )
-                diarization = try await DiarizationProcess.mergeDualTrackDiarization(
-                    appDiarization: appDiar, micDiarization: micDiar,
-                )
-            } else {
-                let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
-                diarization = try await diarizeProcess.run(
-                    audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
-                )
-            }
-
+            let diarization = try await runLateDiarization(
+                diarizer: diarizeProcess,
+                audioBase: (dir: recordingsDir, slug: slug),
+                isDualSource: namingData.isDualSource,
+                speakerCount: speakerCount, title: title,
+            )
             stopElapsedTimer()
 
             guard let newNamingData = buildNamingData(
@@ -1105,15 +1151,15 @@ class PipelineQueue {
                 return
             }
 
-            // Update disk + RAM
             speakerNamingDataByJob[jobID] = newNamingData
             saveNamingData(newNamingData, slug: slug)
+            // Track which mode produced this fresh naming data so the next
+            // dialog open initialises the mode picker correctly.
+            jobs[jobIndex].usedDiarizerMode = diarizeProcess.mode
 
-            // Show naming dialog again
             updateJobState(id: jobID, to: .speakerNamingPending)
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
 
-            // If test handler is set, call it directly
             if let handler = speakerNamingHandler {
                 let result = await handler(newNamingData)
                 completeSpeakerNaming(jobID: jobID, result: result)
@@ -1123,6 +1169,37 @@ class PipelineQueue {
             stopElapsedTimer()
             updateJobState(id: jobID, to: .speakerNamingPending)
         }
+    }
+
+    /// Re-diarize the persisted 16 kHz audio for a job. Dispatches between
+    /// dual-source (separate app + mic tracks merged) and single-source
+    /// (mix only). Pure I/O helper extracted from `lateDiarization` to
+    /// keep its function body under the lint cap.
+    private func runLateDiarization(
+        diarizer: any DiarizationProvider,
+        audioBase: (dir: URL, slug: String),
+        isDualSource: Bool,
+        speakerCount: Int,
+        title: String,
+    ) async throws -> DiarizationResult {
+        let (recordingsDir, slug) = audioBase
+        if isDualSource {
+            let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
+            let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
+            async let appDiar = diarizer.run(
+                audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
+            )
+            async let micDiar = diarizer.run(
+                audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
+            )
+            return try await DiarizationProcess.mergeDualTrackDiarization(
+                appDiarization: appDiar, micDiarization: micDiar,
+            )
+        }
+        let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
+        return try await diarizer.run(
+            audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
+        )
     }
 
     /// Build SpeakerNamingData from fresh diarization, reusing context from prior naming data.

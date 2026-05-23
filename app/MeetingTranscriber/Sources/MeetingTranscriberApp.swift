@@ -260,6 +260,8 @@ struct MeetingTranscriberApp: App {
         SpeakerNamingView(
             data: data,
             knownSpeakerNames: appState.pipelineQueue.knownSpeakerNames,
+            currentDiarizerMode: appState.pipelineQueue.usedDiarizerMode(forJobID: data.jobID)
+                ?? appState.settings.diarizerMode,
         ) { result in
             appState.pipelineQueue.completeSpeakerNaming(jobID: data.jobID, result: result)
             if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {

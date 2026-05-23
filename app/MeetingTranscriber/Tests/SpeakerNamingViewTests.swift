@@ -714,4 +714,113 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertFalse(confirm.isDisabled())
         XCTAssertFalse(skip.isDisabled())
     }
+
+    // MARK: - Mode↔Count coupling (Sortformer 4-speaker cap)
+
+    func testRerunCountRangeIsOneToFourForSortformer() {
+        XCTAssertEqual(SpeakerNamingView.rerunCountRange(for: .sortformer), 1 ... 4)
+    }
+
+    func testRerunCountRangeIsOneToTenForOffline() {
+        XCTAssertEqual(SpeakerNamingView.rerunCountRange(for: .offline), 1 ... 10)
+    }
+
+    func testClampCountKeepsValueInsideSortformerCap() {
+        XCTAssertEqual(SpeakerNamingView.clampCount(2, for: .sortformer), 2)
+        XCTAssertEqual(SpeakerNamingView.clampCount(4, for: .sortformer), 4)
+    }
+
+    func testClampCountClampsValueAboveSortformerCap() {
+        XCTAssertEqual(SpeakerNamingView.clampCount(8, for: .sortformer), 4)
+        XCTAssertEqual(SpeakerNamingView.clampCount(10, for: .sortformer), 4)
+    }
+
+    func testClampCountIsIdentityForOfflineMode() {
+        XCTAssertEqual(SpeakerNamingView.clampCount(2, for: .offline), 2)
+        XCTAssertEqual(SpeakerNamingView.clampCount(8, for: .offline), 8)
+        XCTAssertEqual(SpeakerNamingView.clampCount(10, for: .offline), 10)
+    }
+
+    func testRerunFiresLegacyShapeWhenCurrentModeIsNil() throws {
+        // Legacy/enrollment callers don't pass `currentDiarizerMode`.
+        // The Re-run button must keep firing the legacy `.rerun(count)`
+        // shape so callers that pattern-match on `.rerun` keep working.
+        var captured: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { result in
+            captured = result
+        }
+        try sut.inspect().find(button: "Re-run").tap()
+        guard case .rerun = captured else {
+            XCTFail("Expected .rerun for nil currentDiarizerMode, got \(String(describing: captured))")
+            return
+        }
+    }
+
+    func testRerunFiresRerunWithModeWhenCurrentModeIsSet() throws {
+        // Whenever the caller supplies a `currentDiarizerMode`, the Re-run
+        // button always fires `.rerunWithMode(picked, count)` — even when
+        // the picker matches the recorded mode. This makes the picker
+        // authoritative; lateDiarization sees an explicit mode and uses
+        // the mode-aware factory rather than falling back to the global
+        // setting (which can differ if the user touched Settings between
+        // recording and re-run).
+        var captured: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            currentDiarizerMode: .offline,
+            gracePeriod: 0,
+        ) { result in captured = result }
+        try sut.inspect().find(button: "Re-run").tap()
+        guard case let .rerunWithMode(mode, _) = captured else {
+            XCTFail("Expected .rerunWithMode when currentDiarizerMode is set, got \(String(describing: captured))")
+            return
+        }
+        XCTAssertEqual(mode, .offline)
+    }
+
+    func testModePickerHiddenWhenCurrentModeIsNil() throws {
+        // Voice-enrollment caller doesn't pass currentDiarizerMode. The
+        // picker must be hidden in that flow — otherwise the user can
+        // pick Sortformer but the Re-run button always emits `.rerun`
+        // (legacy shape), silently discarding the mode choice.
+        let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { _ in }
+        let body = try sut.inspect()
+        XCTAssertThrowsError(
+            try body.find(viewWithAccessibilityIdentifier: "rerun-mode-picker"),
+            "Mode picker must not render when currentDiarizerMode is nil",
+        )
+    }
+
+    func testModePickerShownWhenCurrentModeIsSet() throws {
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            currentDiarizerMode: .offline,
+            gracePeriod: 0,
+        ) { _ in }
+        let body = try sut.inspect()
+        XCTAssertNoThrow(
+            try body.find(viewWithAccessibilityIdentifier: "rerun-mode-picker"),
+        )
+    }
+
+    /// Pure `rerunCountRange` + `clampCount` already pin the math directly.
+    /// This test pins the *contract* (mode picker hidden ⇒ legacy `.rerun`,
+    /// mode picker shown ⇒ `.rerunWithMode` with the current rerunMode)
+    /// for the Sortformer cap path — the integration of "user flips picker,
+    /// view clamps rerunCount" is harder via ViewInspector and is covered
+    /// at the system level by the live-recording e2e (PR #325 lane).
+    func testRerunWithSortformerModeCarriesMode() throws {
+        var captured: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            currentDiarizerMode: .sortformer,
+            gracePeriod: 0,
+        ) { result in captured = result }
+        try sut.inspect().find(button: "Re-run").tap()
+        guard case let .rerunWithMode(mode, _) = captured else {
+            XCTFail("Expected .rerunWithMode, got \(String(describing: captured))")
+            return
+        }
+        XCTAssertEqual(mode, .sortformer)
+    }
 }

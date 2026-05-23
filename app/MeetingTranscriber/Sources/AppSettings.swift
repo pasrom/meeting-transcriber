@@ -45,7 +45,11 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     }
 }
 
-enum DiarizerMode: String, CaseIterable {
+enum DiarizerMode: String, CaseIterable, Codable {
+    // RawValues are implicit (= case name). Future case renames must
+    // either keep the rawValue stable (`case foo = "offline"`) or add a
+    // migration step — `AppSettingsTests.testDiarizerModeRawValuesPinJSONShape`
+    // is the regression gate that surfaces the need.
     case offline
     case sortformer
 
@@ -53,6 +57,20 @@ enum DiarizerMode: String, CaseIterable {
         switch self {
         case .offline: "Offline (Clustering)"
         case .sortformer: "Sortformer (Overlap-aware)"
+        }
+    }
+
+    /// Maximum selectable speaker count for this mode. Sortformer's cap
+    /// is a hard architectural limit (`SortformerConfig.numSpeakers = 4`
+    /// in FluidAudio). Offline's cap is the upper bound of the Settings
+    /// Stepper — the diarizer has no hard limit, but anything above 10
+    /// is past the useful range for typical meetings. Surfaced as a
+    /// single source of truth so the Stepper ranges in Settings + the
+    /// SpeakerNamingView re-run UI + the cap-hint label all agree.
+    var speakerCap: Int {
+        switch self {
+        case .offline: 10
+        case .sortformer: 4
         }
     }
 }

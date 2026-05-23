@@ -248,6 +248,26 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
         XCTAssertEqual(count, 3)
     }
 
+    /// Enrollment flow doesn't expose mode toggling — `.rerunWithMode`
+    /// collapses to `.rerun` semantics, the mode component is ignored.
+    /// Today the SpeakerNamingView in enrollment context hides its mode
+    /// picker (Phase 2 of #165 follow-up), so this branch is defensive,
+    /// but it MUST still produce the same forwarding shape as `.rerun`.
+    func testHandleNamingResultRerunWithModeCollapsesToRerun() {
+        let url = URL(fileURLWithPath: "/tmp/mode-override.wav")
+        let outcome = VoiceEnrollmentLogic.handleNamingResult(
+            .rerunWithMode(.sortformer, 4),
+            payload: makeNamingPayload(url: url),
+            matcher: SpeakerMatcher(dbPath: dbPath),
+        )
+        guard case let .rerun(rerunURL, count) = outcome else {
+            XCTFail("Expected .rerun, got \(outcome)")
+            return
+        }
+        XCTAssertEqual(rerunURL, url)
+        XCTAssertEqual(count, 4)
+    }
+
     // MARK: - VoiceEnrollmentLogic.buildNamingPayload
 
     func testBuildNamingPayloadFallsBackToIdentityWhenMatcherEmpty() {
