@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -308,5 +309,148 @@ final class DualSourceRecorderTests: XCTestCase {
         let bogusPID: pid_t = 999_999
         let pids = DualSourceRecorder.resolveTapPIDs(rootPID: bogusPID)
         XCTAssertEqual(pids, [bogusPID])
+    }
+
+    // MARK: - buildRecording
+
+    /// Neither channel produced audio (0-byte app temp, no mic) → noAudioData.
+    func testBuildRecordingThrowsWhenNoAudioCaptured() throws {
+        let dir = try makeTempDirectory(prefix: "build_none")
+        let emptyApp = dir.appendingPathComponent("20260311_100000_app_raw.tmp")
+        try Data().write(to: emptyApp)
+
+        let result = AudioCaptureResult(
+            appAudioFileURL: emptyApp,
+            micAudioFileURL: nil,
+            actualSampleRate: 48000,
+            actualChannels: 2,
+            micDelay: 0,
+        )
+
+        XCTAssertThrowsError(
+            try DualSourceRecorder.buildRecording(
+                from: result,
+                recordingsDir: dir,
+                timestamp: "20260311_100000",
+                recordingStart: 1000,
+                format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+            ),
+        ) { error in
+            guard case RecorderError.noAudioData = error else {
+                return XCTFail("expected noAudioData, got \(error)")
+            }
+        }
+    }
+
+    /// App audio only (no mic) → app track saved, mix falls back to the
+    /// resampled app samples, and the raw `.tmp` is consumed.
+    func testBuildRecordingAppOnlyProducesMixFromResampledApp() throws {
+        let dir = try makeTempDirectory(prefix: "build_app")
+        let appTmp = dir.appendingPathComponent("20260311_120000_app_raw.tmp")
+        // 1 s of 48 kHz interleaved stereo.
+        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: nil,
+                actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
+            ),
+            recordingsDir: dir, timestamp: "20260311_120000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+        )
+
+        XCTAssertNotNil(result.appPath, "app track should be saved")
+        XCTAssertNil(result.micPath, "no mic track")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: appTmp.path), "raw .tmp should be consumed")
+    }
+
+    /// Mic audio only (0-byte app temp) → mic track surfaces, mix falls back to
+    /// the mic samples.
+    func testBuildRecordingMicOnlyProducesMixFromMic() throws {
+        let dir = try makeTempDirectory(prefix: "build_mic")
+        let appTmp = dir.appendingPathComponent("20260311_130000_app_raw.tmp")
+        try Data().write(to: appTmp)
+        let micWav = dir.appendingPathComponent("20260311_130000_mic.wav")
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: micWav,
+                actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
+            ),
+            recordingsDir: dir, timestamp: "20260311_130000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+        )
+
+        XCTAssertNil(result.appPath, "no app track")
+        XCTAssertEqual(result.micPath, micWav)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
+    }
+
+    /// Both channels present → both tracks surface and the mix is produced via
+    /// AudioMixer (delay alignment + mixing).
+    func testBuildRecordingAppAndMicProducesMixedTracks() throws {
+        let dir = try makeTempDirectory(prefix: "build_both")
+        let appTmp = dir.appendingPathComponent("20260311_140000_app_raw.tmp")
+        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
+        let micWav = dir.appendingPathComponent("20260311_140000_mic.wav")
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: micWav,
+                actualSampleRate: 48000, actualChannels: 2, micDelay: 0.1,
+            ),
+            recordingsDir: dir, timestamp: "20260311_140000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+        )
+
+        XCTAssertNotNil(result.appPath)
+        XCTAssertEqual(result.micPath, micWav)
+        XCTAssertEqual(result.micDelay, 0.1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
+    }
+
+    /// Captured channel count below the requested one (mono USB device) still
+    /// produces a valid track — downmix is a passthrough for mono input.
+    func testBuildRecordingToleratesChannelCountMismatch() throws {
+        let dir = try makeTempDirectory(prefix: "build_chmismatch")
+        let appTmp = dir.appendingPathComponent("20260311_150000_app_raw.tmp")
+        // 1 s of 48 kHz MONO — but the recorder requested stereo.
+        try writeRawFloat32([Float](repeating: 0.3, count: 48000), to: appTmp)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: nil,
+                actualSampleRate: 48000, actualChannels: 1, micDelay: 0,
+            ),
+            recordingsDir: dir, timestamp: "20260311_150000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+        )
+
+        XCTAssertNotNil(result.appPath, "mono capture should still produce an app track")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
+    }
+
+    /// Device-negotiated rate differing from the requested one (USB/Bluetooth
+    /// renegotiation) still produces a valid track.
+    func testBuildRecordingToleratesRateMismatch() throws {
+        let dir = try makeTempDirectory(prefix: "build_ratemismatch")
+        let appTmp = dir.appendingPathComponent("20260311_160000_app_raw.tmp")
+        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: nil,
+                actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
+            ),
+            // Requested 44.1 kHz but the device delivered 48 kHz.
+            recordingsDir: dir, timestamp: "20260311_160000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 44100, targetRate: 16000),
+        )
+
+        XCTAssertNotNil(result.appPath, "rate mismatch should still produce an app track")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
     }
 }

@@ -18,6 +18,16 @@ struct RecordingResult {
     let recordingStart: TimeInterval // ProcessInfo.systemUptime
 }
 
+/// The recorder's declared capture format, passed to `buildRecording` so the
+/// processing logic stays free of instance state (and unit-testable).
+/// `requested*` are what we asked the device for (used to flag a USB/Bluetooth
+/// renegotiation in the logs); `targetRate` is the rate we resample/mix to.
+struct CaptureFormat {
+    let requestedChannels: Int
+    let requestedRate: Int
+    let targetRate: Int
+}
+
 /// Abstraction for recording, enabling mock injection in tests.
 @MainActor
 protocol RecordingProvider {
@@ -154,8 +164,10 @@ class DualSourceRecorder: RecordingProvider {
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
     }
 
-    /// Stop recording and produce a mixed WAV.
-    func stop() throws -> RecordingResult { // swiftlint:disable:this function_body_length
+    /// Stop recording and produce a mixed WAV. The capture session is the only
+    /// hardware-bound part; everything after `session.stop()` is delegated to
+    /// the testable `buildRecording`.
+    func stop() throws -> RecordingResult {
         guard isRecording else {
             throw RecorderError.notRecording
         }
@@ -173,6 +185,30 @@ class DualSourceRecorder: RecordingProvider {
         let captureResult = session.stop()
         captureSession = nil
 
+        let ts = startTimestamp ?? Self.timestamp()
+        startTimestamp = nil
+
+        return try Self.buildRecording(
+            from: captureResult,
+            recordingsDir: Self.recordingsDir,
+            timestamp: ts,
+            recordingStart: recordingStart,
+            format: CaptureFormat(requestedChannels: appChannels, requestedRate: recordRate, targetRate: targetRate),
+        )
+    }
+
+    /// Convert a finished `AudioCaptureResult` (raw app `.tmp` + optional mic
+    /// WAV) into a mixed 16 kHz `RecordingResult`: cross-check the rate, downmix
+    /// + resample the app track, load the mic track, then mix or fall back to a
+    /// single track. Pure file-processing — no capture session, no `@available`
+    /// gate — so it is unit-testable with fixture files.
+    static func buildRecording( // swiftlint:disable:this function_body_length
+        from captureResult: AudioCaptureResult,
+        recordingsDir recDir: URL,
+        timestamp ts: String,
+        recordingStart: TimeInterval,
+        format: CaptureFormat,
+    ) throws -> RecordingResult {
         let micDelay = captureResult.micDelay
         let actualChannels = captureResult.actualChannels
 
@@ -189,7 +225,7 @@ class DualSourceRecorder: RecordingProvider {
             nil
         }
 
-        let actualRate = Self.crossCheckAppRate(
+        let actualRate = crossCheckAppRate(
             deviceRate: captureResult.actualSampleRate,
             appRawBytes: appRawBytes,
             appChannels: actualChannels,
@@ -200,17 +236,13 @@ class DualSourceRecorder: RecordingProvider {
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
         }
-        logger.info("App audio: \(actualChannels)ch, \(actualRate) Hz (requested: \(self.appChannels)ch, \(self.recordRate) Hz)")
-        if actualChannels != appChannels {
-            logger.warning("App audio channel count differs: actual=\(actualChannels), expected=\(self.appChannels) — mono USB device?")
+        logger.info("App audio: \(actualChannels)ch, \(actualRate) Hz (requested: \(format.requestedChannels)ch, \(format.requestedRate) Hz)")
+        if actualChannels != format.requestedChannels {
+            logger.warning("App audio channel count differs: actual=\(actualChannels), expected=\(format.requestedChannels) — mono USB device?")
         }
-        if actualRate != recordRate {
-            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(self.recordRate) — USB device may have negotiated different rate")
+        if actualRate != format.requestedRate {
+            logger.warning("App audio rate differs: actual=\(actualRate), expected=\(format.requestedRate) — USB device may have negotiated different rate")
         }
-
-        let recDir = Self.recordingsDir
-        let ts = startTimestamp ?? Self.timestamp()
-        startTimestamp = nil
 
         // ── Convert app audio from temp file to Float32 mono ──
         var appPath: URL?
@@ -234,14 +266,14 @@ class DualSourceRecorder: RecordingProvider {
                 }
             }
 
-            appSamples = Self.downmixToMono(floats, channels: actualChannels)
+            appSamples = downmixToMono(floats, channels: actualChannels)
 
             // Resample to 16kHz and save app track
-            appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: targetRate)
+            appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: format.targetRate)
             let appFile = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.app)")
-            try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: targetRate, url: appFile)
+            try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: format.targetRate, url: appFile)
             appPath = appFile
-            logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate)→\(self.targetRate) Hz)")
+            logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate)→\(format.targetRate) Hz)")
         } else if FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
@@ -269,7 +301,7 @@ class DualSourceRecorder: RecordingProvider {
 
         // ── Mix via AudioMixer ──
         // Both app and mic are already at 16kHz at this point.
-        let mixRate = targetRate
+        let mixRate = format.targetRate
         let mixPath = recDir.appendingPathComponent("\(ts)\(Self.mixFilenameSuffix)")
 
         if let app = appPath, let mic = micPath {

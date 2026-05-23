@@ -435,3 +435,11 @@ func createTestAudioFile(in dir: URL) throws -> URL {
     try data.write(to: audioPath)
     return audioPath
 }
+
+/// Write interleaved Float32 PCM as a raw `.tmp` blob (no header) — the format
+/// the CATap IOProc emits and `DualSourceRecorder.buildRecording` reads back.
+/// The headerless inverse of `createTestAudioFile` (which writes a WAV).
+func writeRawFloat32(_ samples: [Float], to url: URL) throws {
+    let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
+    try data.write(to: url)
+}

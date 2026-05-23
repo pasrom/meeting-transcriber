@@ -12,4 +12,21 @@ public struct AudioCaptureResult: Sendable {
     public let actualChannels: Int
     /// Time delta between app and mic first frames (seconds, positive = mic started later).
     public let micDelay: TimeInterval
+
+    /// A `public` struct's synthesized memberwise init is only `internal`, so
+    /// other modules can't construct one — declare it `public` to complete the
+    /// type's public API. (Lets the app's test target build fixtures directly.)
+    public init(
+        appAudioFileURL: URL,
+        micAudioFileURL: URL?,
+        actualSampleRate: Int,
+        actualChannels: Int,
+        micDelay: TimeInterval,
+    ) {
+        self.appAudioFileURL = appAudioFileURL
+        self.micAudioFileURL = micAudioFileURL
+        self.actualSampleRate = actualSampleRate
+        self.actualChannels = actualChannels
+        self.micDelay = micDelay
+    }
 }
