@@ -21,6 +21,11 @@ struct DiarizationResult {
 /// inference is thread-safe, mocks must follow the same contract.
 protocol DiarizationProvider: Sendable {
     var isAvailable: Bool { get }
+    /// The diarizer mode this provider was instantiated with. Read post-run
+    /// by `PipelineQueue` to record `PipelineJob.usedDiarizerMode`, so the
+    /// re-run UI in `SpeakerNamingView` can initialise its mode picker to
+    /// the mode that was actually used at recording time.
+    var mode: DiarizerMode { get }
     func run(audioPath: URL, numSpeakers: Int?, meetingTitle: String) async throws -> DiarizationResult
 }
 

@@ -293,6 +293,7 @@ class MockRecorder: RecordingProvider {
 /// exercising the diarizer; XCTest serialises per class.
 final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     var isAvailable: Bool = true
+    var mode: DiarizerMode = .offline
     var runCount = 0
     var throwOnPathSuffix: String?
     var resultToReturn: DiarizationResult?

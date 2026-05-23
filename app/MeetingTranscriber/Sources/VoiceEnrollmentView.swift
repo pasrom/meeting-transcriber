@@ -268,6 +268,13 @@ enum VoiceEnrollmentLogic {
 
         case let .rerun(count):
             return .rerun(url: payload.url, numSpeakers: count)
+
+        case let .rerunWithMode(_, count):
+            // Voice-enrollment flow re-runs against a single fixed audio
+            // file; the mode override case carries the same speaker-count
+            // semantics. The enrollment helper doesn't expose mode toggling,
+            // so the mode component is ignored here.
+            return .rerun(url: payload.url, numSpeakers: count)
         }
     }
 

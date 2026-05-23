@@ -703,6 +703,7 @@ final class PipelineQueueTests: XCTestCase {
     private func makeMockProcessingQueue(
         engine: MockEngine? = nil,
         diarizationFactory: @escaping () -> any DiarizationProvider = { MockDiarization() },
+        diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
     ) -> (PipelineQueue, MockEngine) {
@@ -710,6 +711,7 @@ final class PipelineQueueTests: XCTestCase {
         let q = PipelineQueue(
             engine: engine,
             diarizationFactory: diarizationFactory,
+            diarizationFactoryWithMode: diarizationFactoryWithMode,
             protocolGeneratorFactory: { MockProtocolGen() },
             outputDir: tmpDir,
             logDir: tmpDir,
@@ -1717,6 +1719,233 @@ final class PipelineQueueTests: XCTestCase {
 
         XCTAssertTrue(rerunHandlerCalled, "Handler should be called with new diarization results")
         XCTAssertEqual(pQueue.jobs.first?.state, .done)
+    }
+
+    /// Factory helper for the mode-override integration tests. Returns a
+    /// `MockDiarization` with `.mode` set + a small fixture result keyed off
+    /// the mode, so the two test bodies can verify which provider was used.
+    private func makeModeOverrideDiar(_ mode: DiarizerMode) -> MockDiarization {
+        let mock = MockDiarization()
+        mock.mode = mode
+        mock.resultToReturn = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 2, speaker: "SPEAKER_0"),
+                .init(start: 2, end: 5, speaker: "SPEAKER_1"),
+            ],
+            speakingTimes: ["SPEAKER_0": 2, "SPEAKER_1": 3],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]],
+        )
+        return mock
+    }
+
+    /// `.rerunWithMode(.sortformer, _)` swaps the `DiarizationProvider`
+    /// through the mode-aware factory and writes the new mode back onto
+    /// `PipelineJob.usedDiarizerMode`. Regression gate for the mode↔count
+    /// coupling: a missing wire-through here means the picker in
+    /// `SpeakerNamingView` becomes ghost UI in Sortformer mode.
+    func testLateRerunWithModeOverrideSwapsProviderAndRecordsMode() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let offlineDiar = makeModeOverrideDiar(.offline)
+        let sortformerDiar = makeModeOverrideDiar(.sortformer)
+        let modeOverrideCalls = OSAllocatedUnfairLock<[DiarizerMode]>(initialState: [])
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { offlineDiar },
+            diarizationFactoryWithMode: { mode in
+                modeOverrideCalls.withLock { $0.append(mode) }
+                return mode == .sortformer ? sortformerDiar : offlineDiar
+            },
+            diarizeEnabled: true,
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Mode Override Test", appName: "TestApp",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pendingExpectation.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+        XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .offline)
+
+        pQueue.speakerNamingHandler = { _ in .confirmed([:]) }
+        let doneExpectation = XCTestExpectation(description: "done after mode override")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { doneExpectation.fulfill() }
+        }
+        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerunWithMode(.sortformer, 2))
+        await fulfillment(of: [doneExpectation], timeout: 60)
+
+        XCTAssertEqual(modeOverrideCalls.withLock(\.self), [.sortformer])
+        XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .sortformer)
+        XCTAssertEqual(pQueue.jobs.first?.state, .done)
+    }
+
+    /// `.rerunWithMode(_, _)` falls back to the no-arg factory when no
+    /// mode-aware factory is wired (covers tests and any callsite that
+    /// hasn't been migrated yet). The mode metadata follows the actual
+    /// provider — so a default-mode `MockDiarization` keeps the job's
+    /// `usedDiarizerMode` consistent with what ran.
+    func testLateRerunWithModeOverrideFallsBackToDefaultFactory() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.mode = .offline
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        // No `diarizationFactoryWithMode` provided — covers the fallback path.
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Mode Override Fallback Test",
+            appName: "TestApp",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending {
+                pendingExpectation.fulfill()
+            }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+
+        pQueue.speakerNamingHandler = { _ in .confirmed([:]) }
+        let doneExpectation = XCTestExpectation(description: "done after fallback")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done {
+                doneExpectation.fulfill()
+            }
+        }
+
+        pQueue.completeSpeakerNaming(
+            jobID: job.id,
+            result: .rerunWithMode(.sortformer, 2),
+        )
+        await fulfillment(of: [doneExpectation], timeout: 60)
+
+        // Without a mode-aware factory, the fallback runs the no-arg
+        // factory and the resulting provider's mode (.offline) wins.
+        XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .offline)
+    }
+
+    /// `lateDiarization` swallows diarizer errors and rolls the job back
+    /// to `.speakerNamingPending` (so the user can try again) without
+    /// touching `usedDiarizerMode` — the cached naming data still
+    /// reflects the prior successful run.
+    func testLateRerunRollsBackToPendingWhenDiarizerThrows() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let mockDiar = MockDiarization()
+        mockDiar.mode = .offline
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Late Rerun Throw Test", appName: "TestApp",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pendingExpectation.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+        XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .offline)
+
+        // Make the diarizer throw on the next run (the `_16k.wav` re-run path).
+        mockDiar.throwOnPathSuffix = "_16k.wav"
+
+        let rolledBack = XCTestExpectation(description: "rolled back to pending after throw")
+        var seenStates: [JobState] = []
+        pQueue.onJobStateChange = { _, _, newState in
+            seenStates.append(newState)
+            if seenStates.contains(.diarizing), newState == .speakerNamingPending {
+                rolledBack.fulfill()
+            }
+        }
+        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(2))
+        await fulfillment(of: [rolledBack], timeout: 10)
+
+        XCTAssertEqual(pQueue.jobs.first?.state, .speakerNamingPending)
+        // usedDiarizerMode is unchanged from the prior successful run
+        // because the cached naming data still reflects that run.
+        XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .offline)
+    }
+
+    /// `isAvailable == false` short-circuits lateDiarization without
+    /// changing the job state — there's no recoverable path so the
+    /// user is left to fix the configuration (model download, etc.).
+    func testLateRerunIsNoOpWhenDiarizerNotAvailable() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let mockDiar = MockDiarization()
+        mockDiar.mode = .offline
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Late Rerun Unavailable", appName: "TestApp",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pendingExpectation.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+
+        // Flip the mock to "not available" so the late-rerun guard at the
+        // top of lateDiarization trips.
+        mockDiar.isAvailable = false
+        let initialState = pQueue.jobs.first?.state
+        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
+        // Yield once to let the Task dispatched from completeSpeakerNaming
+        // observe the unavailable guard and return early.
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(pQueue.jobs.first?.state, initialState)
     }
 
     func testLateConfirmationWithNoNamingDataIsNoOp() {

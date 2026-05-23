@@ -57,6 +57,15 @@ struct PipelineJob: Identifiable, Codable {
     var transcriptPath: URL?
     var protocolPath: URL?
     var namingSlug: String?
+    /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
+    /// entry. Set by `PipelineQueue` after diarisation completes (in the
+    /// initial pipeline run and after `lateDiarization`). Used by the
+    /// re-run UI in `SpeakerNamingView` to initialise the mode picker to
+    /// the mode that was actually used, not the current global setting
+    /// (which the user may have changed after recording).
+    /// `nil` for legacy jobs persisted before this field existed —
+    /// callers fall back to the current global setting.
+    var usedDiarizerMode: DiarizerMode?
 
     init(
         meetingTitle: String,
@@ -82,5 +91,6 @@ struct PipelineJob: Identifiable, Codable {
         self.transcriptPath = nil
         self.protocolPath = nil
         self.namingSlug = nil
+        self.usedDiarizerMode = nil
     }
 }
