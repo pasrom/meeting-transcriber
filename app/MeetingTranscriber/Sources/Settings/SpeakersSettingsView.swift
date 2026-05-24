@@ -1,5 +1,12 @@
 import SwiftUI
 
+/// Identifiable wrapper letting the Known Voices sheet use `.sheet(item:)`.
+/// A fresh `id` per presentation means each open carries its own matcher.
+private struct KnownVoicesSheetItem: Identifiable {
+    let id = UUID()
+    let matcher: SpeakerMatcher
+}
+
 struct SpeakersSettingsView: View {
     @Bindable var settings: AppSettings
     var recognitionStatsLog: RecognitionStatsLog
@@ -14,10 +21,14 @@ struct SpeakersSettingsView: View {
     var onSpeakerMutate: (() -> Void)?
     var matcherFactory: () -> SpeakerMatcher = { SpeakerMatcher() }
 
-    @State private var showKnownVoices = false
-    /// SpeakerMatcher.init reads + decodes speakers.json — must not run
-    /// per body re-evaluation, so the matcher is created lazily on tap.
-    @State private var sheetMatcher: SpeakerMatcher?
+    /// Holds the lazily-created matcher while the Known Voices sheet is up.
+    /// `SpeakerMatcher.init` reads + decodes speakers.json, so it must not run
+    /// per body re-evaluation — it's built on tap. Drives the sheet via
+    /// `.sheet(item:)` rather than `isPresented` + `if let`: item-presentation
+    /// fires only once the matcher exists and hands it in unwrapped, avoiding
+    /// the SwiftUI race where the first present snapshots a still-nil matcher
+    /// and shows an empty window (worked only on the second tap).
+    @State private var knownVoicesSheet: KnownVoicesSheetItem?
     @State private var experimentalTuningExpanded = false
 
     /// Stepper range for `numSpeakers` given the active diarizer mode.
@@ -58,8 +69,7 @@ struct SpeakersSettingsView: View {
 
             Section("Known Voices") {
                 Button("Manage\u{2026}") {
-                    sheetMatcher = matcherFactory()
-                    showKnownVoices = true
+                    knownVoicesSheet = KnownVoicesSheetItem(matcher: matcherFactory())
                 }
                 Text("Rename, delete, or merge entries in your speaker DB.")
                     .font(.caption)
@@ -69,16 +79,14 @@ struct SpeakersSettingsView: View {
             RecognitionStatsView(log: recognitionStatsLog)
         }
         .formStyle(.grouped)
-        .sheet(isPresented: $showKnownVoices) {
-            if let matcher = sheetMatcher {
-                KnownVoicesView(
-                    matcher: matcher,
-                    diarizerFactory: enrollmentDiarizerFactory,
-                    namingDialogActive: namingDialogActive,
-                    pipelineBusy: pipelineBusy,
-                    onMutate: onSpeakerMutate,
-                )
-            }
+        .sheet(item: $knownVoicesSheet) { item in
+            KnownVoicesView(
+                matcher: item.matcher,
+                diarizerFactory: enrollmentDiarizerFactory,
+                namingDialogActive: namingDialogActive,
+                pipelineBusy: pipelineBusy,
+                onMutate: onSpeakerMutate,
+            )
         }
     }
 
