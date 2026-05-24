@@ -339,8 +339,20 @@ class WatchLoop {
             participants = names
         }
 
-        // Wait for meeting to end
-        try await waitForMeetingEnd(meeting)
+        // Wait for meeting to end. If the watch task is cancelled mid-recording
+        // — the user clicked Stop Watching, or started a manual recording, both
+        // of which call `stop()` → `watchTask.cancel()` — treat it like a
+        // natural meeting end: fall through and finalize the recording rather
+        // than letting `CancellationError` discard it. The original bug lost
+        // the entire recording here (no WAV finalization, no PipelineJob, no
+        // naming dialog) because the cancellation propagated past `stop()` and
+        // `enqueueRecording()`. `recorder.stop()` + `enqueueRecording()` below
+        // are synchronous, so they still run to completion on the cancelled task.
+        do {
+            try await waitForMeetingEnd(meeting)
+        } catch is CancellationError {
+            logger.info("Watch cancelled mid-recording — finalizing in-flight recording")
+        }
 
         // Stop recording
         let recording = try recorder.stop()
