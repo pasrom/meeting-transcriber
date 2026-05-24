@@ -48,9 +48,11 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     Qwen3AsrChunking.swift  # Pure audio chunking logic extracted from Qwen3AsrEngine (testable)
     StreamingTranscriber.swift # Per-channel live transcription actor (FluidVAD streaming → engine.transcribeSamples → partial/final captions)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
+    FluidDiarizer+SortformerEmbeddings.swift  # Post-hoc WeSpeaker embedding extraction for Sortformer mode (feeds SpeakerMatcher)
     FluidVAD.swift         # VAD preprocessing via FluidAudio Silero v6 (silence trimming + timeline remapping)
     SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
     SpeakerMatcher+Logging.swift # Forensic match-decision logging (pseudonymized speaker names)
+    LiveSpeakerMatcher.swift  # Actor for real-time speaker matching in live captions overlay (same WeSpeaker model as batch path)
     StoredSpeaker.swift    # Codable speaker DB entry model (centroid + FIFO embeddings + metadata)
     RecognitionStats.swift # Recognition event logging + aggregate stats model (recognition_log.jsonl)
     RecordingSidecar.swift # Metadata sidecar written next to dual-source recordings in record-only mode
@@ -331,7 +333,10 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Diarization:**
 - `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offlineDiarizer` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
+- **Sortformer post-hoc embeddings:** `FluidDiarizer+SortformerEmbeddings.swift` extracts per-speaker WeSpeaker embeddings after Sortformer diarization (DiariZen-style hybrid), using overlap-excluded masks so mixed-speaker frames don't contaminate centroids. Enables `SpeakerMatcher` recognition when using the Sortformer mode.
 - `SpeakerMatcher` stores speakers in `speakers.json` with a running-mean **centroid** (primary anchor) plus a recent-samples FIFO (max 3, fallback when centroid match is borderline). Quality filter: embeddings from segments shorter than `minSpeakingTimeForCentroid` (3 s) are kept as fallback samples but excluded from the centroid. Threshold 0.40, confidence margin 0.10. Legacy entries without a persisted centroid compute `meanEmbedding(embeddings)` lazily until the next confirmation seeds a real centroid.
+- **Live speaker matching:** `LiveSpeakerMatcher` (actor) matches finalized live-caption utterances against `speakers.json` in real time using the same WeSpeaker CoreML model as the batch pipeline — voices enrolled post-meeting are recognised in subsequent live sessions without re-enrollment. Cold-start optimisation: caches the WeSpeaker mask frame count in `UserDefaults` so only the embedding model is loaded on subsequent launches.
+- **Experimental diarization tuning:** `AppSettings` exposes five `OfflineDiarizerConfig` knobs (`clusterThreshold`, `warmStartFa`, `warmStartFb`, `minSegmentDurationSeconds`, `excludeOverlap`) editable via Settings → Speakers → Experimental Diarization Tuning. All default to FluidAudio community values; a reset button restores defaults.
 - `DiarizationProvider` protocol enables mock injection in tests.
 
 **VAD preprocessing:**

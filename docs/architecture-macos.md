@@ -130,8 +130,10 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
 | `LiveTranscriptionController.swift` | Wires `StreamingTranscriber` to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` (PoC) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
+| `FluidDiarizer+SortformerEmbeddings.swift` | Post-hoc WeSpeaker embedding extraction for Sortformer mode — overlap-excluded masks feed `SpeakerMatcher` (DiariZen-style hybrid) |
 | `SpeakerMatcher.swift` | Speaker embedding DB + cosine similarity matching |
 | `SpeakerMatcher+Logging.swift` | Forensic match-decision logging (pseudonymized speaker names via `String.pseudonymized`) |
+| `LiveSpeakerMatcher.swift` | Actor for real-time speaker matching per finalized live-caption utterance; same WeSpeaker CoreML model as batch path; caches mask frame count in `UserDefaults` for fast cold start |
 | `StoredSpeaker.swift` | Codable speaker DB entry model (centroid + FIFO embeddings + metadata) |
 | `DiarizationProcess.swift` | Diarization result types, DiarizationProvider protocol, speaker assignment (standard + dual-track) |
 | `ProtocolGenerator.swift` | Shared protocol utilities: `ProtocolGenerating` protocol, prompts, file I/O, `ProtocolError` |
@@ -355,9 +357,11 @@ On-device speaker diarization using FluidAudio (CoreML/ANE). No HuggingFace toke
 
 Two modes selected via `AppSettings.diarizerMode`:
 - **`.offlineDiarizer`** (default) — `OfflineDiarizerManager`, standard speaker segmentation
-- **`.sortformer`** — `SortformerDiarizer`, overlap-aware diarization (handles simultaneous speech)
+- **`.sortformer`** — `SortformerDiarizer`, overlap-aware diarization (handles simultaneous speech); speaker embeddings extracted post-hoc via `FluidDiarizer+SortformerEmbeddings` using overlap-excluded WeSpeaker masks
 
 Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `DiarizationResult` with segments, speaking times, and speaker embeddings.
+
+**Experimental tuning:** Five `OfflineDiarizerConfig` parameters are exposed in `AppSettings` and editable in Settings → Speakers → Experimental Diarization Tuning: `clusterThreshold` (0.6), `warmStartFa` (0.07), `warmStartFb` (0.8), `minSegmentDurationSeconds` (1.0), `excludeOverlap` (true). All default to FluidAudio community values.
 
 ### Speaker Matching
 
@@ -510,7 +514,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 | **General** | Apps to Watch · Detection · Updates | `settings`, `updateChecker?` | — |
 | **Audio** | Microphone · VAD | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status | `settings`, three engines | — |
-| **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `showKnownVoices` |
+| **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `showKnownVoices` |
 | **Output** | LLM Provider · Protocol Language · Output Folder · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
 | **Advanced** | Permissions · Diagnostics · About | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
 
