@@ -505,7 +505,45 @@ class PipelineQueue {
 
     /// Process the first waiting job through the full pipeline:
     /// resample → transcribe → (diarize) → save transcript → generate protocol → save protocol.
-    func processNext() async { // swiftlint:disable:this function_body_length cyclomatic_complexity
+    /// Immutable per-job inputs threaded through the pipeline stages.
+    private struct JobContext {
+        let jobID: UUID
+        let shortID: String
+        let title: String
+        let mixPath: URL?
+        let appPath: URL?
+        let micPath: URL?
+        let micDelay: TimeInterval
+        let participants: [String]
+        /// Persisted-file basename, computed once from title + jobID so the
+        /// diarization and protocol stages agree on the same `\(slug)_16k.wav`.
+        let slug: String
+    }
+
+    /// Output of the transcription stage, consumed by diarization + protocol save.
+    private struct TranscriptionOutput {
+        let transcript: String
+        /// Segments cached for diarization reuse (avoids double transcription).
+        let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
+        let isDualSource: Bool
+    }
+
+    /// Typed errors thrown by the pipeline stages.
+    enum PipelineError: LocalizedError {
+        case missingMixPath
+        case noMixAudioForDiarization
+
+        var errorDescription: String? {
+            switch self {
+            case .missingMixPath: "Single-source job missing mixPath"
+            case .noMixAudioForDiarization: "No mix audio available for diarization"
+            }
+        }
+    }
+
+    /// Thin orchestrator: take the next waiting job and run it through the
+    /// pipeline — transcribe → diarize → generate protocol → done.
+    func processNext() async {
         guard let index = jobs.firstIndex(where: { $0.state == .waiting }) else {
             isProcessing = false
             return
@@ -515,482 +553,522 @@ class PipelineQueue {
             isProcessing = false
             return
         }
-        let jobID = jobs[index].id
-        let shortID = jobs[index].shortID
-        let title = jobs[index].meetingTitle
-        let mixPath = jobs[index].mixPath
-        let appPath = jobs[index].appPath
-        let micPath = jobs[index].micPath
-        let micDelay = jobs[index].micDelay
-        let participants = jobs[index].participants
+        let job = jobs[index]
+        let ctx = JobContext(
+            jobID: job.id,
+            shortID: job.shortID,
+            title: job.meetingTitle,
+            mixPath: job.mixPath,
+            appPath: job.appPath,
+            micPath: job.micPath,
+            micDelay: job.micDelay,
+            participants: job.participants,
+            slug: Self.namingSlug(title: job.meetingTitle, jobID: job.id),
+        )
 
         do {
-            // --- Transcription ---
-            updateJobState(id: jobID, to: .transcribing)
-            startElapsedTimer()
-            logger.info("[\(shortID, privacy: .public)] transcription_start title=\(title, privacy: .private)")
-
-            // Create a temp directory for intermediate 16kHz files
+            // Temp directory for intermediate 16kHz files, cleaned up on any exit.
             let workDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("pipeline_\(jobID.uuidString)")
+                .appendingPathComponent("pipeline_\(ctx.jobID.uuidString)")
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
-            // Compute slug early so it's available for persisted file names
-            let slug = Self.namingSlug(title: title, jobID: jobID)
+            let transcription = try await transcribe(ctx, engine: engine, workDir: workDir)
 
-            let transcript: String
-            // Segments cached for potential diarization reuse (avoids double transcription)
-            var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
-            let isDualSource = appPath != nil && micPath != nil
-            if let appAudioPath = appPath, let micAudioPath = micPath {
-                // Dual-source: resample both tracks to 16kHz concurrently
-                let app16k = workDir.appendingPathComponent("app_16k.wav")
-                let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-                async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
-                async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
-                try await appResample
-                try await micResample
-
-                // Transcribe each track separately
-                let appSegments = try await engine.transcribeSegments(audioPath: app16k)
-                let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
-
-                // Merge dual-source segments
-                let segments = engine.mergeDualSourceSegments(
-                    appSegments: appSegments,
-                    micSegments: micSegments,
-                    micDelay: micDelay,
-                    micLabel: micLabel,
-                )
-                cachedSegments = segments
-                transcript = segments.map(\.formattedLine).joined(separator: "\n")
-            } else {
-                // Single-source: resample mix to 16kHz
-                guard let mixPath else {
-                    throw NSError(
-                        domain: "PipelineQueue", code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Single-source job missing mixPath"],
-                    )
-                }
-                let mix16k = workDir.appendingPathComponent("mix_16k.wav")
-                try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
-
-                // Optional VAD preprocessing: trim silence before transcription
-                var vadMap: VadSegmentMap?
-                let transcriptionPath: URL
-                if vadConfig != nil, let vadResult = try await preprocessWithVAD(audioPath: mix16k, workDir: workDir) {
-                    transcriptionPath = vadResult.trimmedPath
-                    vadMap = vadResult.map
-                } else {
-                    transcriptionPath = mix16k
-                }
-
-                // Use transcribeSegments to cache results for diarization
-                var segments = try await engine.transcribeSegments(audioPath: transcriptionPath)
-
-                // Remap timestamps back to original timeline if VAD was used
-                if let map = vadMap {
-                    segments = map.remapTimestamps(segments)
-                }
-
-                cachedSegments = segments
-                transcript = segments.map(\.formattedLine).joined(separator: "\n")
-            }
-
-            stopElapsedTimer()
-
-            let segCount = cachedSegments?.count ?? 0
-            let totalSecs = cachedSegments?.last?.end ?? 0
-            logger.info(
-                "[\(shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
-            )
-
-            guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard !transcription.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 // Compute input RMS only on the failure path — loading the whole
                 // mix file is expensive (~MB-per-minute) and we only need it when
                 // diagnosing why transcription produced nothing. Paired imports
                 // without a real mix file report NaN (RMS unavailable).
-                let inputRMS = mixPath.flatMap { AudioMixer.rmsDecibels(forFileAt: $0) } ?? .nan
+                let inputRMS = ctx.mixPath.flatMap { AudioMixer.rmsDecibels(forFileAt: $0) } ?? .nan
                 logger.warning(
-                    "[\(shortID, privacy: .public)] transcription_empty inputRMSdBFS=\(inputRMS, privacy: .public). Likely silent input or ASR misconfiguration — check microphone level and engine settings.",
+                    "[\(ctx.shortID, privacy: .public)] transcription_empty inputRMSdBFS=\(inputRMS, privacy: .public). Likely silent input or ASR misconfiguration — check microphone level and engine settings.",
                 )
-                updateJobState(id: jobID, to: .error, error: "Empty transcript")
+                updateJobState(id: ctx.jobID, to: .error, error: "Empty transcript")
                 isProcessing = false
                 triggerProcessing()
                 return
             }
 
-            // --- Diarization (optional) ---
-            var finalTranscript = transcript
-            if diarizeEnabled, let diarizationFactory {
-                let diarizeProcess = diarizationFactory()
-                if diarizeProcess.isAvailable {
-                    updateJobState(id: jobID, to: .diarizing)
-                    startElapsedTimer()
-
-                    // Use mix audio for diarization (already resampled in single-source path).
-                    // Paired imports without a real `_mix.wav` source mix `app + mic`
-                    // directly into the workdir cache — no persistent mix file written.
-                    let mix16k = workDir.appendingPathComponent("mix_16k.wav")
-                    if !FileManager.default.fileExists(atPath: mix16k.path) {
-                        if let mixPath, FileManager.default.fileExists(atPath: mixPath.path) {
-                            try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
-                        } else if let appAudioPath = appPath, let micAudioPath = micPath {
-                            try AudioMixer.mix(
-                                appAudioPath: appAudioPath, micAudioPath: micAudioPath,
-                                outputPath: mix16k, micDelay: micDelay,
-                                sampleRate: AudioConstants.targetSampleRate,
-                            )
-                        } else {
-                            throw NSError(
-                                domain: "PipelineQueue", code: -1,
-                                userInfo: [NSLocalizedDescriptionKey: "No mix audio available for diarization"],
-                            )
-                        }
-                    }
-
-                    do {
-                        let useDualTrack = isDualSource
-
-                        // Diarization + naming loop: re-runs if user requests different speaker count
-                        var speakerCount = numSpeakers > 0 ? numSpeakers : nil
-                        var autoNames: [String: String] = [:]
-
-                        // Dual-track: separate diarization results
-                        var appDiarization: DiarizationResult?
-                        var micDiarization: DiarizationResult?
-                        // Single-source: combined diarization
-                        var diarization: DiarizationResult?
-
-                        diarizationLoop: while true {
-                            if useDualTrack {
-                                // Diarize app and mic tracks separately. Mic
-                                // failures (silent track on Mac mini hosts
-                                // without a real input device, etc.) are
-                                // tolerated — fall back to app-only.
-                                let app16k = workDir.appendingPathComponent("app_16k.wav")
-                                let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-
-                                appDiarization = try await diarizeProcess.run(
-                                    audioPath: app16k,
-                                    numSpeakers: speakerCount,
-                                    meetingTitle: title,
-                                )
-                                do {
-                                    micDiarization = try await diarizeProcess.run(
-                                        audioPath: mic16k,
-                                        numSpeakers: nil, // auto-detect local speakers
-                                        meetingTitle: title,
-                                    )
-                                } catch {
-                                    logger.warning(
-                                        "[\(shortID, privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
-                                    )
-                                    addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
-                                    micDiarization = nil
-                                }
-
-                                if let micDiar = micDiarization {
-                                    // Merge for speaker naming (prefixed IDs: R_, M_)
-                                    // swiftlint:disable force_unwrapping
-                                    diarization = DiarizationProcess.mergeDualTrackDiarization(
-                                        appDiarization: appDiarization!,
-                                        micDiarization: micDiar,
-                                        // swiftlint:enable force_unwrapping
-                                    )
-                                } else {
-                                    // App-only fallback. Feeds the speaker-naming
-                                    // loop below; the dual-track-app-only branch in
-                                    // the assignment block then keeps mic segments
-                                    // with their raw `micLabel` instead of forcing
-                                    // them through speaker matching.
-                                    diarization = appDiarization
-                                }
-                            } else {
-                                diarization = try await diarizeProcess.run(
-                                    audioPath: mix16k,
-                                    numSpeakers: speakerCount,
-                                    meetingTitle: title,
-                                )
-                            }
-
-                            guard let currentDiarization = diarization else { break }
-                            autoNames = currentDiarization.autoNames
-
-                            guard let embeddings = currentDiarization.embeddings else { break }
-
-                            let matcher = speakerMatcherFactory()
-                            let verbose = matcher.matchVerbose(embeddings: embeddings)
-                            let matched = verbose.mapValues(\.assignedName)
-                            autoNames = matched
-                            let topCandidates = verbose.mapValues(\.topCandidates)
-
-                            // Pre-match participants to remaining speakers
-                            if !participants.isEmpty {
-                                autoNames = SpeakerMatcher.preMatchParticipants(
-                                    mapping: autoNames,
-                                    speakingTimes: currentDiarization.speakingTimes,
-                                    participants: participants,
-                                )
-                            }
-
-                            let suggestedAtDialog = autoNames
-                            let autoMatched = matched.count { $0.key != $0.value }
-                            let unknown = matched.count - autoMatched
-                            logger.info(
-                                "[recognition] \(matched.count) speakers, \(autoMatched) auto, \(unknown) unknown",
-                            )
-
-                            // Use persisted 16kHz path (survives workDir cleanup)
-                            let recordingsDir = outputDir.appendingPathComponent("recordings")
-                            let persistedAudioPath = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
-
-                            let namingData = SpeakerNamingData(
-                                jobID: jobID,
-                                meetingTitle: title,
-                                mapping: autoNames,
-                                speakingTimes: currentDiarization.speakingTimes,
-                                embeddings: embeddings,
-                                audioPath: persistedAudioPath,
-                                segments: currentDiarization.segments.map { seg in
-                                    SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
-                                },
-                                participants: participants,
-                                isDualSource: isDualSource,
-                            )
-
-                            // Persist naming data and set slug early
-                            saveNamingData(namingData, slug: slug)
-                            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
-                                jobs[idx].namingSlug = slug
-                                jobs[idx].usedDiarizerMode = diarizeProcess.mode
-                            }
-
-                            stopElapsedTimer()
-
-                            // Stash recognition forensics on the job so the late-confirm
-                            // path can write the JSONL row when the user actually
-                            // confirms (which may be later via the re-openable dialog).
-                            stashedSuggestedAtDialog[jobID] = suggestedAtDialog
-                            stashedTopCandidates[jobID] = topCandidates
-
-                            // Non-blocking: allow test handler to confirm synchronously,
-                            // otherwise proceed with auto-names immediately.
-                            // User can confirm/re-run later via the naming dialog.
-                            if let handler = speakerNamingHandler {
-                                let namingResult = await handler(namingData)
-                                switch namingResult {
-                                case let .confirmed(userMapping):
-                                    for (label, name) in userMapping where !name.isEmpty {
-                                        autoNames[label] = name
-                                    }
-                                    updateSpeakerDB(
-                                        matcher: matcher,
-                                        mapping: autoNames,
-                                        embeddings: embeddings,
-                                        speakingTimes: currentDiarization.speakingTimes,
-                                    )
-                                    recordRecognition(
-                                        suggested: suggestedAtDialog,
-                                        userMapping: userMapping,
-                                        topCandidates: topCandidates,
-                                        jobID: jobID, title: title,
-                                    )
-                                    removeNamingData(jobID: jobID, slug: nil)
-
-                                case let .rerun(count):
-                                    speakerCount = count
-                                    updateJobState(id: jobID, to: .diarizing)
-                                    startElapsedTimer()
-                                    logger.info("Re-running diarization with \(count) speakers")
-                                    continue diarizationLoop
-
-                                case let .rerunWithMode(_, count):
-                                    // Mode override is only honoured by the
-                                    // production `completeSpeakerNaming` ->
-                                    // `lateDiarization` path. The inline
-                                    // test-handler loop can't swap providers
-                                    // mid-iteration without rebuilding the
-                                    // factory; treat as a same-mode re-run.
-                                    speakerCount = count
-                                    updateJobState(id: jobID, to: .diarizing)
-                                    startElapsedTimer()
-                                    logger.info("Re-running diarization with \(count) speakers (mode override ignored in inline path)")
-                                    continue diarizationLoop
-
-                                case .skipped:
-                                    break
-                                }
-                            } else {
-                                // Production: stash data, don't block pipeline. Notification
-                                // is posted later — after the job transitions to
-                                // .speakerNamingPending — so the window's onAppear
-                                // doesn't auto-close it on a state mismatch.
-                                speakerNamingDataByJob[jobID] = namingData
-                            }
-                            break diarizationLoop
-                        }
-
-                        // Apply speaker names to segments
-                        if useDualTrack, let appDiar = appDiarization, let micDiar = micDiarization,
-                           let cached = cachedSegments {
-                            // Dual-track: assign from respective diarizations
-                            let namedAppDiar = DiarizationResult(
-                                segments: appDiar.segments,
-                                speakingTimes: appDiar.speakingTimes,
-                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
-                                embeddings: appDiar.embeddings,
-                            )
-                            let namedMicDiar = DiarizationResult(
-                                segments: micDiar.segments,
-                                speakingTimes: micDiar.speakingTimes,
-                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "M_"),
-                                embeddings: micDiar.embeddings,
-                            )
-
-                            let appSegs = cached.filter { $0.speaker == "Remote" }
-                            let micSegs = cached.filter { $0.speaker == micLabel }
-                            let labeled = DiarizationProcess.assignSpeakersDualTrack(
-                                appSegments: appSegs,
-                                micSegments: micSegs,
-                                appDiarization: namedAppDiar,
-                                micDiarization: namedMicDiar,
-                            )
-                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
-                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
-                        } else if useDualTrack, let appDiar = appDiarization, let cached = cachedSegments {
-                            // Mic diarization failed (silent track / no input
-                            // device). Diarize the app track normally and keep
-                            // the mic transcript with its raw `micLabel` —
-                            // better than emitting "speakers not identified"
-                            // on a recording that has perfectly good remote
-                            // audio.
-                            let namedAppDiar = DiarizationResult(
-                                segments: appDiar.segments,
-                                speakingTimes: appDiar.speakingTimes,
-                                autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
-                                embeddings: appDiar.embeddings,
-                            )
-                            let appSegs = cached.filter { $0.speaker == "Remote" }
-                            let micSegs = cached.filter { $0.speaker == micLabel }
-                            let labeledApp = DiarizationProcess.assignSpeakers(
-                                transcript: appSegs, diarization: namedAppDiar,
-                            )
-                            // micSegs keep their original micLabel speaker tag.
-                            let combined = (labeledApp + micSegs).sorted { $0.start < $1.start }
-                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(combined)
-                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
-                        } else if let currentDiarization = diarization {
-                            // Single-source: standard assignment
-                            let namedDiarization = DiarizationResult(
-                                segments: currentDiarization.segments,
-                                speakingTimes: currentDiarization.speakingTimes,
-                                autoNames: autoNames,
-                                embeddings: currentDiarization.embeddings,
-                            )
-                            let segments: [TimestampedSegment] = if let cached = cachedSegments {
-                                cached
-                            } else {
-                                try await engine.transcribeSegments(audioPath: mix16k)
-                            }
-                            let labeled = DiarizationProcess.assignSpeakers(
-                                transcript: segments,
-                                diarization: namedDiarization,
-                            )
-                            let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
-                            finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
-                        }
-                        let segCount = diarization?.segments.count ?? 0
-                        logger.info("[\(shortID, privacy: .public)] diarization_complete segments=\(segCount, privacy: .public)")
-                    } catch {
-                        logger.warning("[\(shortID, privacy: .public)] diarization_failed error=\(error.localizedDescription, privacy: .public)")
-                        addWarning(id: jobID, "Diarization failed — speakers not identified")
-                        // Continue with original transcript
-                    }
-                } else {
-                    logger.info("[\(shortID, privacy: .public)] diarization_skipped")
-                }
-            }
-
-            // --- Save Transcript & Audio (always) ---
-            let protocolsDir = outputDir.appendingPathComponent("protocols")
-            let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: title, dir: protocolsDir)
-            logger.info("[\(shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .public)")
-
-            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
-                jobs[idx].transcriptPath = txtPath
-                jobs[idx].namingSlug = slug
-            }
-
-            let recordingsDir = outputDir.appendingPathComponent("recordings")
-            Self.copyAudioToOutput(
-                mixPath: mixPath, appPath: appPath, micPath: micPath,
-                title: title, outputDir: recordingsDir,
+            let finalTranscript = try await diarize(
+                transcription, ctx: ctx, engine: engine,
+                workDir: workDir, outputDir: outputDir,
             )
 
-            // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
-            try? FileManager.default.moveItem(
-                at: workDir.appendingPathComponent("mix_16k.wav"),
-                to: recordingsDir.appendingPathComponent("\(slug)_16k.wav"),
+            try await generateAndSaveProtocol(
+                finalTranscript: finalTranscript, transcription: transcription,
+                ctx: ctx, workDir: workDir, outputDir: outputDir,
             )
-
-            if isDualSource {
-                for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
-                    try? FileManager.default.moveItem(
-                        at: workDir.appendingPathComponent(name),
-                        to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"),
-                    )
-                }
-            }
-
-            // --- Persist transcript segments for late re-assignment ---
-            if let cachedSegments {
-                let segPath = recordingsDir.appendingPathComponent("\(slug)_segments.json")
-                if let data = try? JSONEncoder().encode(cachedSegments) {
-                    try? data.write(to: segPath, options: .atomic)
-                }
-            }
-
-            // --- Protocol Generation (optional) ---
-            // Skip when naming is pending — protocol will be generated on
-            // confirm (with the right names) or on skip/stale-cleanup (with
-            // the current auto-names). Saves an LLM call we'd otherwise
-            // have to redo.
-            if speakerNamingDataByJob[jobID] == nil {
-                await generateProtocol(
-                    jobID: jobID, transcript: finalTranscript, title: title,
-                    protocolsDir: protocolsDir,
-                )
-            }
-
-            stopElapsedTimer()
-            if speakerNamingDataByJob[jobID] != nil {
-                updateJobState(id: jobID, to: .speakerNamingPending)
-                // Auto-pop the dialog now that the job is in the right state.
-                // The window's onAppear guard reads pendingSpeakerNamingJobs,
-                // which only includes .speakerNamingPending jobs, so the
-                // notification has to come after the transition above.
-                NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
-            } else {
-                updateJobState(id: jobID, to: .done)
-            }
         } catch is CancellationError {
             stopElapsedTimer()
-            logger.info("Job \(jobID) cancelled")
+            logger.info("Job \(ctx.jobID) cancelled")
             // Job already removed by cancelJob()
         } catch {
             stopElapsedTimer()
-            if cancelledJobIDs.remove(jobID) != nil {
-                logger.info("Job \(jobID) cancelled")
+            if cancelledJobIDs.remove(ctx.jobID) != nil {
+                logger.info("Job \(ctx.jobID) cancelled")
             } else {
-                logger.error("Pipeline error for job \(jobID): \(error)")
-                updateJobState(id: jobID, to: .error, error: error.localizedDescription)
+                logger.error("Pipeline error for job \(ctx.jobID): \(error)")
+                updateJobState(id: ctx.jobID, to: .error, error: error.localizedDescription)
             }
         }
 
         isProcessing = false
         triggerProcessing()
+    }
+
+    // MARK: - Pipeline stages
+
+    /// Stage 1 — resample source audio to 16 kHz and transcribe. Dual-source
+    /// tracks are transcribed separately and merged; single-source optionally
+    /// runs VAD silence-trimming with timestamp remapping. Caches segments for
+    /// diarization reuse.
+    private func transcribe(
+        _ ctx: JobContext, engine: any TranscribingEngine, workDir: URL,
+    ) async throws -> TranscriptionOutput {
+        updateJobState(id: ctx.jobID, to: .transcribing)
+        startElapsedTimer()
+        logger.info("[\(ctx.shortID, privacy: .public)] transcription_start title=\(ctx.title, privacy: .private)")
+
+        let transcript: String
+        // Segments cached for potential diarization reuse (avoids double transcription)
+        var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
+        let isDualSource = ctx.appPath != nil && ctx.micPath != nil
+        if let appAudioPath = ctx.appPath, let micAudioPath = ctx.micPath {
+            // Dual-source: resample both tracks to 16kHz concurrently
+            let app16k = workDir.appendingPathComponent("app_16k.wav")
+            let mic16k = workDir.appendingPathComponent("mic_16k.wav")
+            async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
+            async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
+            try await appResample
+            try await micResample
+
+            // Transcribe each track separately
+            let appSegments = try await engine.transcribeSegments(audioPath: app16k)
+            let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
+
+            // Merge dual-source segments
+            let segments = engine.mergeDualSourceSegments(
+                appSegments: appSegments,
+                micSegments: micSegments,
+                micDelay: ctx.micDelay,
+                micLabel: micLabel,
+            )
+            cachedSegments = segments
+            transcript = segments.map(\.formattedLine).joined(separator: "\n")
+        } else {
+            // Single-source: resample mix to 16kHz
+            guard let mixPath = ctx.mixPath else {
+                throw PipelineError.missingMixPath
+            }
+            let mix16k = workDir.appendingPathComponent("mix_16k.wav")
+            try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+
+            // Optional VAD preprocessing: trim silence before transcription
+            var vadMap: VadSegmentMap?
+            let transcriptionPath: URL
+            if vadConfig != nil, let vadResult = try await preprocessWithVAD(audioPath: mix16k, workDir: workDir) {
+                transcriptionPath = vadResult.trimmedPath
+                vadMap = vadResult.map
+            } else {
+                transcriptionPath = mix16k
+            }
+
+            // Use transcribeSegments to cache results for diarization
+            var segments = try await engine.transcribeSegments(audioPath: transcriptionPath)
+
+            // Remap timestamps back to original timeline if VAD was used
+            if let map = vadMap {
+                segments = map.remapTimestamps(segments)
+            }
+
+            cachedSegments = segments
+            transcript = segments.map(\.formattedLine).joined(separator: "\n")
+        }
+
+        stopElapsedTimer()
+
+        let segCount = cachedSegments?.count ?? 0
+        let totalSecs = cachedSegments?.last?.end ?? 0
+        logger.info(
+            "[\(ctx.shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
+        )
+
+        return TranscriptionOutput(transcript: transcript, cachedSegments: cachedSegments, isDualSource: isDualSource)
+    }
+
+    /// Stage 2 — optional speaker diarization. Returns the transcript with
+    /// speaker labels applied, or the original transcript unchanged when
+    /// diarization is disabled, unavailable, or fails. Drives the speaker-naming
+    /// dialog loop and persists naming data + recognition forensics as side
+    /// effects.
+    private func diarize( // swiftlint:disable:this function_body_length cyclomatic_complexity
+        _ transcription: TranscriptionOutput, ctx: JobContext,
+        engine: any TranscribingEngine, workDir: URL, outputDir: URL,
+    ) async throws -> String {
+        var finalTranscript = transcription.transcript
+        let cachedSegments = transcription.cachedSegments
+        let isDualSource = transcription.isDualSource
+
+        guard diarizeEnabled, let diarizationFactory else { return finalTranscript }
+        let diarizeProcess = diarizationFactory()
+        guard diarizeProcess.isAvailable else {
+            logger.info("[\(ctx.shortID, privacy: .public)] diarization_skipped")
+            return finalTranscript
+        }
+
+        updateJobState(id: ctx.jobID, to: .diarizing)
+        startElapsedTimer()
+
+        // Use mix audio for diarization (already resampled in single-source path).
+        // Paired imports without a real `_mix.wav` source mix `app + mic`
+        // directly into the workdir cache — no persistent mix file written.
+        let mix16k = workDir.appendingPathComponent("mix_16k.wav")
+        if !FileManager.default.fileExists(atPath: mix16k.path) {
+            if let mixPath = ctx.mixPath, FileManager.default.fileExists(atPath: mixPath.path) {
+                try await AudioMixer.resampleFile(from: mixPath, to: mix16k)
+            } else if let appAudioPath = ctx.appPath, let micAudioPath = ctx.micPath {
+                try AudioMixer.mix(
+                    appAudioPath: appAudioPath, micAudioPath: micAudioPath,
+                    outputPath: mix16k, micDelay: ctx.micDelay,
+                    sampleRate: AudioConstants.targetSampleRate,
+                )
+            } else {
+                throw PipelineError.noMixAudioForDiarization
+            }
+        }
+
+        do {
+            let useDualTrack = isDualSource
+
+            // Diarization + naming loop: re-runs if user requests different speaker count
+            var speakerCount = numSpeakers > 0 ? numSpeakers : nil
+            var autoNames: [String: String] = [:]
+
+            // Dual-track: separate diarization results
+            var appDiarization: DiarizationResult?
+            var micDiarization: DiarizationResult?
+            // Single-source: combined diarization
+            var diarization: DiarizationResult?
+
+            diarizationLoop: while true {
+                if useDualTrack {
+                    // Diarize app and mic tracks separately. Mic
+                    // failures (silent track on Mac mini hosts
+                    // without a real input device, etc.) are
+                    // tolerated — fall back to app-only.
+                    let app16k = workDir.appendingPathComponent("app_16k.wav")
+                    let mic16k = workDir.appendingPathComponent("mic_16k.wav")
+
+                    appDiarization = try await diarizeProcess.run(
+                        audioPath: app16k,
+                        numSpeakers: speakerCount,
+                        meetingTitle: ctx.title,
+                    )
+                    do {
+                        micDiarization = try await diarizeProcess.run(
+                            audioPath: mic16k,
+                            numSpeakers: nil, // auto-detect local speakers
+                            meetingTitle: ctx.title,
+                        )
+                    } catch {
+                        logger.warning(
+                            "[\(ctx.shortID, privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
+                        )
+                        addWarning(id: ctx.jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+                        micDiarization = nil
+                    }
+
+                    if let micDiar = micDiarization {
+                        // Merge for speaker naming (prefixed IDs: R_, M_)
+                        // swiftlint:disable force_unwrapping
+                        diarization = DiarizationProcess.mergeDualTrackDiarization(
+                            appDiarization: appDiarization!,
+                            micDiarization: micDiar,
+                            // swiftlint:enable force_unwrapping
+                        )
+                    } else {
+                        // App-only fallback. Feeds the speaker-naming
+                        // loop below; the dual-track-app-only branch in
+                        // the assignment block then keeps mic segments
+                        // with their raw `micLabel` instead of forcing
+                        // them through speaker matching.
+                        diarization = appDiarization
+                    }
+                } else {
+                    diarization = try await diarizeProcess.run(
+                        audioPath: mix16k,
+                        numSpeakers: speakerCount,
+                        meetingTitle: ctx.title,
+                    )
+                }
+
+                guard let currentDiarization = diarization else { break }
+                autoNames = currentDiarization.autoNames
+
+                guard let embeddings = currentDiarization.embeddings else { break }
+
+                let matcher = speakerMatcherFactory()
+                let verbose = matcher.matchVerbose(embeddings: embeddings)
+                let matched = verbose.mapValues(\.assignedName)
+                autoNames = matched
+                let topCandidates = verbose.mapValues(\.topCandidates)
+
+                // Pre-match participants to remaining speakers
+                if !ctx.participants.isEmpty {
+                    autoNames = SpeakerMatcher.preMatchParticipants(
+                        mapping: autoNames,
+                        speakingTimes: currentDiarization.speakingTimes,
+                        participants: ctx.participants,
+                    )
+                }
+
+                let suggestedAtDialog = autoNames
+                let autoMatched = matched.count { $0.key != $0.value }
+                let unknown = matched.count - autoMatched
+                logger.info(
+                    "[recognition] \(matched.count) speakers, \(autoMatched) auto, \(unknown) unknown",
+                )
+
+                // Use persisted 16kHz path (survives workDir cleanup)
+                let recordingsDir = outputDir.appendingPathComponent("recordings")
+                let persistedAudioPath = recordingsDir.appendingPathComponent("\(ctx.slug)_16k.wav")
+
+                let namingData = SpeakerNamingData(
+                    jobID: ctx.jobID,
+                    meetingTitle: ctx.title,
+                    mapping: autoNames,
+                    speakingTimes: currentDiarization.speakingTimes,
+                    embeddings: embeddings,
+                    audioPath: persistedAudioPath,
+                    segments: currentDiarization.segments.map { seg in
+                        SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
+                    },
+                    participants: ctx.participants,
+                    isDualSource: isDualSource,
+                )
+
+                // Persist naming data and set slug early
+                saveNamingData(namingData, slug: ctx.slug)
+                if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
+                    jobs[idx].namingSlug = ctx.slug
+                    jobs[idx].usedDiarizerMode = diarizeProcess.mode
+                }
+
+                stopElapsedTimer()
+
+                // Stash recognition forensics on the job so the late-confirm
+                // path can write the JSONL row when the user actually
+                // confirms (which may be later via the re-openable dialog).
+                stashedSuggestedAtDialog[ctx.jobID] = suggestedAtDialog
+                stashedTopCandidates[ctx.jobID] = topCandidates
+
+                // Non-blocking: allow test handler to confirm synchronously,
+                // otherwise proceed with auto-names immediately.
+                // User can confirm/re-run later via the naming dialog.
+                if let handler = speakerNamingHandler {
+                    let namingResult = await handler(namingData)
+                    switch namingResult {
+                    case let .confirmed(userMapping):
+                        for (label, name) in userMapping where !name.isEmpty {
+                            autoNames[label] = name
+                        }
+                        updateSpeakerDB(
+                            matcher: matcher,
+                            mapping: autoNames,
+                            embeddings: embeddings,
+                            speakingTimes: currentDiarization.speakingTimes,
+                        )
+                        recordRecognition(
+                            suggested: suggestedAtDialog,
+                            userMapping: userMapping,
+                            topCandidates: topCandidates,
+                            jobID: ctx.jobID, title: ctx.title,
+                        )
+                        removeNamingData(jobID: ctx.jobID, slug: nil)
+
+                    case let .rerun(count):
+                        speakerCount = count
+                        updateJobState(id: ctx.jobID, to: .diarizing)
+                        startElapsedTimer()
+                        logger.info("Re-running diarization with \(count) speakers")
+                        continue diarizationLoop
+
+                    case let .rerunWithMode(_, count):
+                        // Mode override is only honoured by the
+                        // production `completeSpeakerNaming` ->
+                        // `lateDiarization` path. The inline
+                        // test-handler loop can't swap providers
+                        // mid-iteration without rebuilding the
+                        // factory; treat as a same-mode re-run.
+                        speakerCount = count
+                        updateJobState(id: ctx.jobID, to: .diarizing)
+                        startElapsedTimer()
+                        logger.info("Re-running diarization with \(count) speakers (mode override ignored in inline path)")
+                        continue diarizationLoop
+
+                    case .skipped:
+                        break
+                    }
+                } else {
+                    // Production: stash data, don't block pipeline. Notification
+                    // is posted later — after the job transitions to
+                    // .speakerNamingPending — so the window's onAppear
+                    // doesn't auto-close it on a state mismatch.
+                    speakerNamingDataByJob[ctx.jobID] = namingData
+                }
+                break diarizationLoop
+            }
+
+            // Apply speaker names to segments
+            if useDualTrack, let appDiar = appDiarization, let micDiar = micDiarization,
+               let cached = cachedSegments {
+                // Dual-track: assign from respective diarizations
+                let namedAppDiar = DiarizationResult(
+                    segments: appDiar.segments,
+                    speakingTimes: appDiar.speakingTimes,
+                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
+                    embeddings: appDiar.embeddings,
+                )
+                let namedMicDiar = DiarizationResult(
+                    segments: micDiar.segments,
+                    speakingTimes: micDiar.speakingTimes,
+                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "M_"),
+                    embeddings: micDiar.embeddings,
+                )
+
+                let appSegs = cached.filter { $0.speaker == "Remote" }
+                let micSegs = cached.filter { $0.speaker == micLabel }
+                let labeled = DiarizationProcess.assignSpeakersDualTrack(
+                    appSegments: appSegs,
+                    micSegments: micSegs,
+                    appDiarization: namedAppDiar,
+                    micDiarization: namedMicDiar,
+                )
+                let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
+                finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+            } else if useDualTrack, let appDiar = appDiarization, let cached = cachedSegments {
+                // Mic diarization failed (silent track / no input
+                // device). Diarize the app track normally and keep
+                // the mic transcript with its raw `micLabel` —
+                // better than emitting "speakers not identified"
+                // on a recording that has perfectly good remote
+                // audio.
+                let namedAppDiar = DiarizationResult(
+                    segments: appDiar.segments,
+                    speakingTimes: appDiar.speakingTimes,
+                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
+                    embeddings: appDiar.embeddings,
+                )
+                let appSegs = cached.filter { $0.speaker == "Remote" }
+                let micSegs = cached.filter { $0.speaker == micLabel }
+                let labeledApp = DiarizationProcess.assignSpeakers(
+                    transcript: appSegs, diarization: namedAppDiar,
+                )
+                // micSegs keep their original micLabel speaker tag.
+                let combined = (labeledApp + micSegs).sorted { $0.start < $1.start }
+                let merged = DiarizationProcess.mergeConsecutiveSpeakers(combined)
+                finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+            } else if let currentDiarization = diarization {
+                // Single-source: standard assignment
+                let namedDiarization = DiarizationResult(
+                    segments: currentDiarization.segments,
+                    speakingTimes: currentDiarization.speakingTimes,
+                    autoNames: autoNames,
+                    embeddings: currentDiarization.embeddings,
+                )
+                let segments: [TimestampedSegment] = if let cached = cachedSegments {
+                    cached
+                } else {
+                    try await engine.transcribeSegments(audioPath: mix16k)
+                }
+                let labeled = DiarizationProcess.assignSpeakers(
+                    transcript: segments,
+                    diarization: namedDiarization,
+                )
+                let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
+                finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+            }
+            let segCount = diarization?.segments.count ?? 0
+            logger.info("[\(ctx.shortID, privacy: .public)] diarization_complete segments=\(segCount, privacy: .public)")
+        } catch {
+            logger.warning("[\(ctx.shortID, privacy: .public)] diarization_failed error=\(error.localizedDescription, privacy: .public)")
+            addWarning(id: ctx.jobID, "Diarization failed — speakers not identified")
+            // Continue with original transcript
+        }
+
+        return finalTranscript
+    }
+
+    /// Stage 3 — persist the transcript + audio, run protocol generation
+    /// (unless speaker naming is still pending), and transition the job to its
+    /// terminal state.
+    private func generateAndSaveProtocol(
+        finalTranscript: String, transcription: TranscriptionOutput,
+        ctx: JobContext, workDir: URL, outputDir: URL,
+    ) async throws {
+        // --- Save Transcript & Audio (always) ---
+        let protocolsDir = outputDir.appendingPathComponent("protocols")
+        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: ctx.title, dir: protocolsDir)
+        logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .public)")
+
+        if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
+            jobs[idx].transcriptPath = txtPath
+            jobs[idx].namingSlug = ctx.slug
+        }
+
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        Self.copyAudioToOutput(
+            mixPath: ctx.mixPath, appPath: ctx.appPath, micPath: ctx.micPath,
+            title: ctx.title, outputDir: recordingsDir,
+        )
+
+        // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
+        try? FileManager.default.moveItem(
+            at: workDir.appendingPathComponent("mix_16k.wav"),
+            to: recordingsDir.appendingPathComponent("\(ctx.slug)_16k.wav"),
+        )
+
+        if transcription.isDualSource {
+            for (name, suffix) in [("app_16k.wav", "_app_16k.wav"), ("mic_16k.wav", "_mic_16k.wav")] {
+                try? FileManager.default.moveItem(
+                    at: workDir.appendingPathComponent(name),
+                    to: recordingsDir.appendingPathComponent("\(ctx.slug)\(suffix)"),
+                )
+            }
+        }
+
+        // --- Persist transcript segments for late re-assignment ---
+        if let cachedSegments = transcription.cachedSegments {
+            let segPath = recordingsDir.appendingPathComponent("\(ctx.slug)_segments.json")
+            if let data = try? JSONEncoder().encode(cachedSegments) {
+                try? data.write(to: segPath, options: .atomic)
+            }
+        }
+
+        // --- Protocol Generation (optional) ---
+        // Skip when naming is pending — protocol will be generated on
+        // confirm (with the right names) or on skip/stale-cleanup (with
+        // the current auto-names). Saves an LLM call we'd otherwise
+        // have to redo.
+        if speakerNamingDataByJob[ctx.jobID] == nil {
+            await generateProtocol(
+                jobID: ctx.jobID, transcript: finalTranscript, title: ctx.title,
+                protocolsDir: protocolsDir,
+            )
+        }
+
+        stopElapsedTimer()
+        if speakerNamingDataByJob[ctx.jobID] != nil {
+            updateJobState(id: ctx.jobID, to: .speakerNamingPending)
+            // Auto-pop the dialog now that the job is in the right state.
+            // The window's onAppear guard reads pendingSpeakerNamingJobs,
+            // which only includes .speakerNamingPending jobs, so the
+            // notification has to come after the transition above.
+            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+        } else {
+            updateJobState(id: ctx.jobID, to: .done)
+        }
     }
 
     // MARK: - Protocol generation
