@@ -124,6 +124,36 @@ assert_app_alive() {
     fi
 }
 
+# Poll a predicate until it succeeds or a timeout elapses. The loop
+# mechanics (deadline tracking, probe-then-sleep, timeout result) live
+# here so the e2e drivers stop re-deriving them inline.
+#
+# Usage: poll_until <timeout_s> <interval_s> <predicate> [args...]
+#
+# <predicate> is a command — typically a shell function — re-run each
+# tick in the CURRENT shell, so it can both read and assign caller-scope
+# variables (e.g. stash a parsed /state field for post-loop asserts).
+# Running in an `if` condition also suspends `set -e` for the predicate
+# body, so intermediate `jq`/`curl` hiccups don't abort the script.
+# Probe-then-sleep: an already-true condition returns on the first tick,
+# and one final probe runs right before the deadline check.
+#
+# Returns 0 on success, 1 on timeout. The caller decides how to report a
+# timeout (its own prefixed `fail()`, `die`, or a custom diagnostic
+# dump) — this stays agnostic to per-script conventions.
+poll_until() {
+    local timeout="$1" interval="$2"
+    shift 2
+    local deadline=$(( $(date +%s) + timeout ))
+    while true; do
+        if "$@"; then
+            return 0
+        fi
+        [ "$(date +%s)" -lt "$deadline" ] || return 1
+        sleep "$interval"
+    done
+}
+
 # Snapshot a defaults value for later restoration, or empty when the
 # key isn't set. The caller's `$()` command substitution strips the
 # trailing newline that `defaults read` emits, so internal whitespace

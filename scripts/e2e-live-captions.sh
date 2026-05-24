@@ -183,11 +183,11 @@ log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-deadline=$(( $(date +%s) + RPC_READY_TIMEOUT_S ))
-while [ ! -f "$RPC_TOKEN_FILE" ] || ! { RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null; }; do
-    [ "$(date +%s)" -lt "$deadline" ] || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
-    sleep 1
-done
+# Assigns RPC_TOKEN in caller scope on success so subsequent `rpc` calls
+# carry the bearer token.
+_rpc_ready() { [ -f "$RPC_TOKEN_FILE" ] && RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null 2>&1; }
+poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
+    || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 
 # Cleanup trap — kill simulator + restore defaults.

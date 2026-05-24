@@ -208,43 +208,35 @@ echo "▸ Waiting for app to detect + start recording (max 30 s)…"
 # `isProcessing` flips true while a job is in the queue. It's informational
 # only — if it never flips we still let step 7 run and time out there,
 # which gives a clearer "recordingSilent never went true" failure than
-# bailing here would.
-for _ in $(seq 1 30); do
+# bailing here would. Hence `|| true`: a timeout here is non-fatal.
+_processing_started() {
     assert_app_alive
-    STATE_JSON="$("$MTCLI" state 2>/dev/null || echo '{}')"
-    PROCESSING="$(echo "$STATE_JSON" | jq -r '.pipeline.isProcessing // false')"
-    if [ "$PROCESSING" = "true" ]; then
-        break
-    fi
-    sleep 1
-done
+    local state; state="$("$MTCLI" state 2>/dev/null || echo '{}')"
+    [ "$(echo "$state" | jq -r '.pipeline.isProcessing // false')" = "true" ]
+}
+poll_until 30 1 _processing_started || true
 
 # --- 7. Poll for recordingSilent flag -----------------------------------------
 
 echo "▸ Polling for channelHealth.recordingSilent (threshold 30 s + 20 s slack)…"
-DEADLINE=$(( $(date +%s) + 50 ))
-OBSERVED_SILENT=false
-while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+# Extract all three channelHealth flags in one jq pass. Safe with @tsv
+# because every field has a `// false` default — no empties possible.
+# `IFS=$'\t' read` would collapse consecutive empties (tab is
+# whitespace-IFS), so if a non-defaulted field is added later, switch to
+# `|`-join (see `_poll_for_new_lastjob_terminal` in e2e-app.sh). MIC_SILENT
+# and APP_SILENT leak to caller scope for the success log line below.
+_recording_silent() {
     assert_app_alive
-    STATE_JSON="$("$MTCLI" state 2>/dev/null || echo '{}')"
-    # Extract all three channelHealth flags in one jq pass. Safe here
-    # because every field has a `// false` default — no empties possible.
-    # `IFS=$'\t' read` would collapse consecutive empties (tab is
-    # whitespace-IFS), so if a non-defaulted field is added later, switch
-    # to `|`-join (see `_poll_for_new_lastjob_terminal` in e2e-app.sh).
+    local state; state="$("$MTCLI" state 2>/dev/null || echo '{}')"
     IFS=$'\t' read -r RECORDING_SILENT MIC_SILENT APP_SILENT < <(
-        echo "$STATE_JSON" \
+        echo "$state" \
             | jq -r '[.channelHealth.recordingSilent // false, .channelHealth.micSilent // false, .channelHealth.appSilent // false] | @tsv'
     )
-    if [ "$RECORDING_SILENT" = "true" ]; then
-        OBSERVED_SILENT=true
-        echo "  recordingSilent=true (mic=$MIC_SILENT app=$APP_SILENT)"
-        break
-    fi
-    sleep 2
-done
-
-if [ "$OBSERVED_SILENT" != "true" ]; then
+    [ "$RECORDING_SILENT" = "true" ]
+}
+if poll_until 50 2 _recording_silent; then
+    echo "  recordingSilent=true (mic=$MIC_SILENT app=$APP_SILENT)"
+else
     echo "Final state:" >&2
     "$MTCLI" state 2>/dev/null | jq . >&2 || true
     die "channelHealth.recordingSilent never went true within 50 s"
