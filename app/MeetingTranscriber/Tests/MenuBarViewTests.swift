@@ -403,6 +403,75 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Dismiss"))
     }
 
+    func testEditSpeakerNamesButtonShownForDoneJobWithRetainedNaming() throws {
+        let queue = PipelineQueue()
+        var job = makeRetainedNamingJob()
+        job.namingSlug = "retro_abc123"
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = makeJobRowView(queue: queue)
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Edit Speaker Names"))
+    }
+
+    func testEditSpeakerNamesButtonHiddenForDoneJobWithoutNaming() throws {
+        let queue = PipelineQueue()
+        let job = makeRetainedNamingJob() // no namingSlug
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        let sut = makeJobRowView(queue: queue)
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(text: "Edit Speaker Names"))
+    }
+
+    func testEditSpeakerNamesButtonCallsCallbackWithJobID() throws {
+        let queue = PipelineQueue()
+        var job = makeRetainedNamingJob()
+        job.namingSlug = "retro_abc123"
+        queue.enqueue(job)
+        queue.updateJobState(id: job.id, to: .done)
+
+        var reopenedID: UUID?
+        let sut = makeJobRowView(queue: queue) { reopenedID = $0 }
+        let body = try sut.inspect()
+        try body.find(button: "Edit Speaker Names").tap()
+        XCTAssertEqual(reopenedID, job.id)
+    }
+
+    private func makeRetainedNamingJob() -> PipelineJob {
+        PipelineJob(
+            meetingTitle: "Retro", appName: "Zoom",
+            mixPath: URL(fileURLWithPath: "/tmp/mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+    }
+
+    private func makeJobRowView(
+        queue: PipelineQueue,
+        onReopenNaming: @escaping (UUID) -> Void = { _ in },
+    ) -> MenuBarView {
+        MenuBarView(
+            status: makeStatus(),
+            isWatching: false,
+            pipelineQueue: queue,
+            updateChecker: nil,
+            onStartStop: {},
+            onRecordApp: {},
+            onStopManualRecording: nil,
+            onOpenLastProtocol: {},
+            onOpenProtocol: { _ in },
+            onOpenProtocolsFolder: {},
+            onOpenSettings: {},
+            onNameSpeakers: nil,
+            onProcessFiles: {},
+            onDismissJob: { _ in },
+            onQuit: {},
+            onReopenNaming: onReopenNaming,
+        )
+    }
+
     func testProcessFilesButtonCallsCallback() throws {
         var called = false
         let sut = MenuBarView(

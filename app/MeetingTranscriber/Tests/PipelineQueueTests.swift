@@ -2122,6 +2122,163 @@ final class PipelineQueueTests: XCTestCase {
         }
     }
 
+    // MARK: - Late Speaker Re-naming Recovery (Slice A: deferred sidecar delete)
+
+    /// Builds a queue (outputDir = tmpDir) holding one job whose naming data is
+    /// both cached in RAM and persisted to disk. Returns the queue, the job, and
+    /// the on-disk `_naming.json` path so tests can assert on its lifetime.
+    private func makeQueueWithPersistedNaming(
+        title: String = "Recovery Meeting",
+        state: JobState = .speakerNamingPending,
+    ) -> (PipelineQueue, PipelineJob, URL) {
+        let q = makeProcessingQueue()
+        var job = makeJob(title: title)
+        job.state = state
+        let slug = PipelineQueue.namingSlug(title: title, jobID: job.id)
+        job.namingSlug = slug
+        q.enqueue(job)
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: job.id, meetingTitle: title,
+            mapping: ["SPEAKER_0": "Speaker 1"],
+            speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [], isDualSource: false,
+        )
+        q.speakerNamingDataByJob[job.id] = data
+        q.saveNamingData(data, slug: slug)
+        let path = tmpDir.appendingPathComponent("recordings/\(slug)_naming.json")
+        return (q, job, path)
+    }
+
+    func testSkipKeepsNamingSidecarForLaterRename() {
+        let (q, job, path) = makeQueueWithPersistedNaming()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "precondition: sidecar persisted")
+
+        q.completeSpeakerNaming(jobID: job.id, result: .skipped)
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: path.path),
+            "naming sidecar must survive Skip so the user can re-name a .done job later",
+        )
+    }
+
+    func testSkipClearsInMemoryNamingCache() {
+        let (q, job, _) = makeQueueWithPersistedNaming()
+
+        q.completeSpeakerNaming(jobID: job.id, result: .skipped)
+
+        XCTAssertNil(
+            q.speakerNamingDataByJob[job.id],
+            "RAM cache is freed on completion even though the disk sidecar is kept",
+        )
+    }
+
+    func testDismissDeletesRetainedNamingSidecar() {
+        let (q, job, path) = makeQueueWithPersistedNaming(state: .done)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "precondition: sidecar persisted")
+
+        q.removeJob(id: job.id)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: path.path),
+            "explicit Dismiss must clean up the retained naming sidecar",
+        )
+    }
+
+    func testDoneJobWithRetainedNamingIsNotAutoRemoved() async throws {
+        // A done job WITHOUT naming data auto-removes after completedJobLifetime.
+        // One that retains a naming sidecar (signalled by a non-nil namingSlug)
+        // must persist so the re-name affordance stays reachable in the menu
+        // until explicit Dismiss.
+        let q = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            completedJobLifetime: 0.2,
+        )
+        var job = makeJob()
+        job.namingSlug = PipelineQueue.namingSlug(title: job.meetingTitle, jobID: job.id)
+        q.enqueue(job)
+
+        q.updateJobState(id: job.id, to: .done)
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(q.jobs.count, 1, "done job retaining naming data must not auto-remove")
+    }
+
+    func testDoneJobWithoutNamingStillAutoRemoves() async throws {
+        // Guard the inverse: jobs that never produced naming data (no slug) keep
+        // the original 60s auto-remove behaviour.
+        let q = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
+        let job = makeJob()
+        q.enqueue(job)
+
+        q.updateJobState(id: job.id, to: .done)
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(q.jobs.count, 0, "done job without naming data must auto-remove as before")
+    }
+
+    // MARK: - Late Speaker Re-naming Recovery (Slice B: re-open affordance)
+
+    func testReopenSpeakerNamingTransitionsDoneJobToPending() {
+        let (q, job, _) = makeQueueWithPersistedNaming(state: .done)
+        q.speakerNamingDataByJob[job.id] = nil // simulate post-confirm: RAM freed, disk kept
+
+        q.reopenSpeakerNaming(jobID: job.id)
+
+        XCTAssertEqual(
+            q.jobs.first { $0.id == job.id }?.state, .speakerNamingPending,
+            "re-open must return the job to the naming-pending state",
+        )
+        XCTAssertNotNil(
+            q.speakerNamingDataByJob[job.id],
+            "re-open must reload naming data from disk into the RAM cache",
+        )
+    }
+
+    func testReopenSpeakerNamingIsNoOpWithoutPersistedData() {
+        let q = makeProcessingQueue()
+        var job = makeJob()
+        job.state = .done // no namingSlug, no sidecar
+        q.enqueue(job)
+
+        q.reopenSpeakerNaming(jobID: job.id)
+
+        XCTAssertEqual(
+            q.jobs.first { $0.id == job.id }?.state, .done,
+            "re-open must be a no-op when there is no persisted naming data",
+        )
+    }
+
+    func testReopenSpeakerNamingUsesInMemoryDataWhenPresent() {
+        let (q, job, path) = makeQueueWithPersistedNaming(state: .done)
+        try? FileManager.default.removeItem(at: path) // disk gone, RAM intact
+
+        q.reopenSpeakerNaming(jobID: job.id)
+
+        XCTAssertEqual(
+            q.jobs.first { $0.id == job.id }?.state, .speakerNamingPending,
+            "re-open must use the in-RAM cache without requiring a disk read",
+        )
+    }
+
+    func testConfirmPersistsAppliedNamesForRepeatRename() throws {
+        // After a manual Confirm the transcript carries the applied names, not the
+        // original auto-names. Persisting the applied mapping lets a later re-open
+        // + re-name anchor on the current labels instead of silently no-op'ing.
+        let (q, job, _) = makeQueueWithPersistedNaming(state: .speakerNamingPending)
+
+        q.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]))
+
+        let reloaded = try q.loadNamingData(slug: XCTUnwrap(job.namingSlug))
+        XCTAssertEqual(
+            reloaded?.mapping["SPEAKER_0"], "Alice",
+            "the applied name must be folded into the persisted naming sidecar",
+        )
+    }
+
     // MARK: - knownSpeakerNames cache (issue #155)
 
     //

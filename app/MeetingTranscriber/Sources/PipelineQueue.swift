@@ -103,6 +103,11 @@ class PipelineQueue {
     private var stashedSuggestedAtDialog: [UUID: [String: String]] = [:]
     private var stashedTopCandidates: [UUID: [String: [TopCandidate]]] = [:]
 
+    /// Jobs whose recognition row has already been written. Prevents a
+    /// re-opened + re-confirmed job from double-logging recognition stats.
+    /// Cleared only on full teardown (`removeNamingData`), not on completion.
+    private var recognitionLoggedJobIDs: Set<UUID> = []
+
     /// The currently displayed naming data (first pending item).
     var pendingSpeakerNaming: SpeakerNamingData? {
         guard let firstPendingJob = pendingSpeakerNamingJobs.first else { return nil }
@@ -143,7 +148,6 @@ class PipelineQueue {
     /// Always handles "late" completion — the pipeline never blocks on naming.
     func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
         guard let data = speakerNamingDataByJob[jobID] else { return }
-        let slug = jobs.first { $0.id == jobID }?.namingSlug
 
         switch result {
         case let .confirmed(userMapping):
@@ -151,6 +155,10 @@ class PipelineQueue {
                 jobID: jobID, title: data.meetingTitle,
                 userMapping: userMapping, fallback: data.mapping,
             )
+            // Fold the applied names into the retained sidecar so a later
+            // re-open shows them and the transcript-rewrite anchors correctly
+            // (after this confirm the transcript no longer carries raw labels).
+            persistAppliedNames(jobID: jobID, userMapping: userMapping, base: data)
             // Transition out of .speakerNamingPending synchronously so the
             // UI's close-when-empty check sees the change immediately. The
             // transcript rewrite + protocol generation happens async below.
@@ -171,8 +179,30 @@ class PipelineQueue {
                 jobID: jobID, title: data.meetingTitle,
                 userMapping: nil, fallback: data.mapping,
             )
-            acceptAutoNames(jobID: jobID, slug: slug)
+            acceptAutoNames(jobID: jobID)
         }
+    }
+
+    /// Re-open the speaker-naming dialog for a finished job. Reloads the
+    /// retained naming data (RAM cache, or from the persisted sidecar), flips
+    /// the job back to `.speakerNamingPending`, and posts the show notification
+    /// so the window comes forward. No-op when the job isn't `.done` or its
+    /// naming data is gone (e.g. the recording was already dismissed).
+    func reopenSpeakerNaming(jobID: UUID) {
+        guard let idx = jobs.firstIndex(where: { $0.id == jobID }),
+              jobs[idx].state == .done else { return }
+
+        if speakerNamingDataByJob[jobID] == nil {
+            guard let slug = jobs[idx].namingSlug,
+                  let data = loadNamingData(slug: slug) else {
+                logger.warning("Cannot re-open speaker naming — data missing for job \(jobID)")
+                return
+            }
+            speakerNamingDataByJob[jobID] = data
+        }
+
+        updateJobState(id: jobID, to: .speakerNamingPending)
+        NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
     }
 
     /// Pull stashed forensics for a job and write the recognition-stats row.
@@ -183,6 +213,11 @@ class PipelineQueue {
         // swiftlint:disable:next discouraged_optional_collection
         userMapping: [String: String]?, fallback: [String: String],
     ) {
+        // Log recognition exactly once per job. A re-opened job that is
+        // re-confirmed would otherwise log a second row whose `suggested`
+        // baseline is the already-applied names (stash is gone, fallback is
+        // the folded mapping) — a phantom perfect match that never happened.
+        guard recognitionLoggedJobIDs.insert(jobID).inserted else { return }
         recordRecognition(
             suggested: stashedSuggestedAtDialog[jobID] ?? fallback,
             userMapping: userMapping,
@@ -197,7 +232,7 @@ class PipelineQueue {
     /// to .done. If a protocol generator is configured AND the transcript file
     /// exists, fires off protocol generation in the background; the job
     /// transitions through .generatingProtocol → .done as that completes.
-    private func acceptAutoNames(jobID: UUID, slug: String?) {
+    private func acceptAutoNames(jobID: UUID) {
         // Probe the factory's actual output, not just its existence — the
         // closure is wired even when protocolProvider is `.none`, but
         // returns nil. Without this, the Task path below fizzles silently
@@ -207,7 +242,9 @@ class PipelineQueue {
             && outputDir != nil
             && jobs.first { $0.id == jobID }?.transcriptPath != nil
 
-        removeNamingData(jobID: jobID, slug: slug)
+        // Keep the persisted sidecar on disk so the user can re-open the
+        // naming dialog for this job after it goes .done; only free RAM here.
+        clearNamingCaches(jobID: jobID)
 
         if canGenerateProtocol {
             Task { await generateProtocolForExistingJob(jobID: jobID) }
@@ -409,6 +446,10 @@ class PipelineQueue {
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             markProcessed(mixPath: jobs[index].mixPath)
+            // Explicit Dismiss is the user's signal that the recording is done
+            // with — clean up the naming sidecar we deliberately retained after
+            // .done so it doesn't linger on disk.
+            removeNamingData(jobID: id, slug: jobs[index].namingSlug)
             jobs.remove(at: index)
         }
         saveSnapshot()
@@ -456,7 +497,11 @@ class PipelineQueue {
         if newState == .done || newState == .error {
             markProcessed(mixPath: jobs[index].mixPath)
         }
-        if newState == .done {
+        // Auto-remove finished jobs after a grace period — but not ones that
+        // retain a naming sidecar (signalled by namingSlug). Those stay in the
+        // menu so the user can re-open the naming dialog; they're cleared by
+        // explicit Dismiss.
+        if newState == .done, jobs[index].namingSlug == nil {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
                 self?.removeJob(id: id)
@@ -885,7 +930,7 @@ class PipelineQueue {
                             topCandidates: topCandidates,
                             jobID: ctx.jobID, title: ctx.title,
                         )
-                        removeNamingData(jobID: ctx.jobID, slug: nil)
+                        clearNamingCaches(jobID: ctx.jobID)
 
                     case let .rerun(count):
                         speakerCount = count
@@ -1118,8 +1163,6 @@ class PipelineQueue {
         guard let namingData = speakerNamingDataByJob[jobID],
               let jobIndex = jobs.firstIndex(where: { $0.id == jobID }) else { return }
 
-        let slug = jobs[jobIndex].namingSlug
-
         // Update speaker matcher DB
         let matcher = speakerMatcherFactory()
         var fullMapping = namingData.mapping
@@ -1159,7 +1202,7 @@ class PipelineQueue {
             }
         }
 
-        removeNamingData(jobID: jobID, slug: slug)
+        clearNamingCaches(jobID: jobID)
         updateJobState(id: jobID, to: .done)
     }
 
@@ -1310,6 +1353,30 @@ class PipelineQueue {
 
     // MARK: - Speaker Naming Persistence
 
+    /// Fold the user's confirmed names into the persisted naming sidecar so a
+    /// later re-open shows the applied names and the transcript-rewrite anchors
+    /// on them (after a confirm the transcript no longer contains the raw
+    /// auto-name labels). No-op when the job has no slug.
+    private func persistAppliedNames(
+        jobID: UUID, userMapping: [String: String], base: SpeakerNamingData,
+    ) {
+        guard let slug = jobs.first(where: { $0.id == jobID })?.namingSlug else { return }
+        var folded = base.mapping
+        for (label, name) in userMapping where !name.isEmpty {
+            folded[label] = name
+        }
+        saveNamingData(
+            SpeakerNamingData(
+                jobID: base.jobID, meetingTitle: base.meetingTitle,
+                mapping: folded, speakingTimes: base.speakingTimes,
+                embeddings: base.embeddings, audioPath: base.audioPath,
+                segments: base.segments, participants: base.participants,
+                isDualSource: base.isDualSource,
+            ),
+            slug: slug,
+        )
+    }
+
     func saveNamingData(_ data: SpeakerNamingData, slug: String) {
         guard let outputDir else { return }
         let recordingsDir = outputDir.appendingPathComponent("recordings")
@@ -1354,13 +1421,23 @@ class PipelineQueue {
         try? FileManager.default.removeItem(at: path)
     }
 
-    /// Remove all naming-related data for a job: RAM caches, disk JSON, and
-    /// sidecar files. Also clears the recognition-stats stash dicts so they
-    /// don't leak across rerun / stale-cleanup paths.
-    private func removeNamingData(jobID: UUID, slug: String?) {
+    /// Free the in-RAM naming caches + recognition-stats stash for a job
+    /// WITHOUT touching disk. Used on successful completion (Confirm/Skip) so
+    /// the persisted `_naming.json` + audio sidecars survive for a later
+    /// re-name, while transient session state is released. Disk cleanup is
+    /// deferred to `removeJob` (explicit Dismiss) or `cancelJob`.
+    private func clearNamingCaches(jobID: UUID) {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         stashedSuggestedAtDialog.removeValue(forKey: jobID)
         stashedTopCandidates.removeValue(forKey: jobID)
+    }
+
+    /// Remove all naming-related data for a job: RAM caches, disk JSON, and
+    /// sidecar files. Used when the artefacts are no longer needed — cancel or
+    /// explicit Dismiss of a finished job.
+    private func removeNamingData(jobID: UUID, slug: String?) {
+        clearNamingCaches(jobID: jobID)
+        recognitionLoggedJobIDs.remove(jobID)
         deleteNamingData(slug: slug)
         cleanupSidecarFiles(slug: slug)
     }
@@ -1377,16 +1454,16 @@ class PipelineQueue {
     }
 
     /// Auto-resolve pending naming items older than maxAge (default: 24h).
-    /// Generates the protocol with auto-names, transitions them to .done,
-    /// deletes sidecar files.
+    /// Generates the protocol with auto-names and transitions them to .done.
+    /// The persisted sidecar is kept so the user can still re-name later — the
+    /// app retains all recordings indefinitely, so the naming data lives with
+    /// them rather than being reaped on its own.
     func cleanupStalePending(maxAge: TimeInterval = 86400) {
         let now = Date()
         for job in jobs where job.state == .speakerNamingPending {
             if now.timeIntervalSince(job.enqueuedAt) > maxAge {
                 logger.info("Auto-resolving stale pending naming for \(job.meetingTitle)")
-                let jobID = job.id
-                let slug = job.namingSlug
-                acceptAutoNames(jobID: jobID, slug: slug)
+                acceptAutoNames(jobID: job.id)
             }
         }
     }

@@ -16,6 +16,10 @@ struct MenuBarView: View {
     let onProcessFiles: () -> Void
     let onDismissJob: (UUID) -> Void
     let onQuit: () -> Void
+    /// Re-open the speaker-naming dialog for a finished job that still has a
+    /// retained naming sidecar. Defaulted + last so the many test/preview
+    /// construction sites stay terse.
+    var onReopenNaming: (UUID) -> Void = { _ in }
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -190,6 +194,10 @@ struct MenuBarView: View {
             if job.state == .waiting || job.state == .transcribing
                 || job.state == .diarizing || job.state == .generatingProtocol {
                 Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
+                    .font(.caption2)
+            }
+            if job.state == .done, job.namingSlug != nil {
+                Button("Edit Speaker Names") { onReopenNaming(job.id) }
                     .font(.caption2)
             }
             if job.state == .done || job.state == .error || job.state == .speakerNamingPending {
