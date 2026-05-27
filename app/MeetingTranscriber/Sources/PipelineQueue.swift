@@ -446,10 +446,11 @@ class PipelineQueue {
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             markProcessed(mixPath: jobs[index].mixPath)
-            // Explicit Dismiss is the user's signal that the recording is done
-            // with — clean up the naming sidecar we deliberately retained after
-            // .done so it doesn't linger on disk.
-            removeNamingData(jobID: id, slug: jobs[index].namingSlug)
+            // Drop the in-RAM caches but keep the on-disk naming sidecar — like
+            // every other recording the app retains, it stays so the job can be
+            // re-opened later from disk (see reopenSpeakerNaming(fromSidecar:)).
+            clearNamingCaches(jobID: id)
+            recognitionLoggedJobIDs.remove(id)
             jobs.remove(at: index)
         }
         saveSnapshot()
@@ -497,11 +498,10 @@ class PipelineQueue {
         if newState == .done || newState == .error {
             markProcessed(mixPath: jobs[index].mixPath)
         }
-        // Auto-remove finished jobs after a grace period — but not ones that
-        // retain a naming sidecar (signalled by namingSlug). Those stay in the
-        // menu so the user can re-open the naming dialog; they're cleared by
-        // explicit Dismiss.
-        if newState == .done, jobs[index].namingSlug == nil {
+        // Auto-remove finished jobs from the menu after a grace period. The
+        // retained naming sidecar stays on disk (removeJob keeps it), so a job
+        // that has scrolled out of the menu is still re-openable from disk.
+        if newState == .done {
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(self?.completedJobLifetime ?? 60))
                 self?.removeJob(id: id)

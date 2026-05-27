@@ -2172,23 +2172,22 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
-    func testDismissDeletesRetainedNamingSidecar() {
+    func testDismissKeepsNamingSidecarOnDisk() {
         let (q, job, path) = makeQueueWithPersistedNaming(state: .done)
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path), "precondition: sidecar persisted")
 
         q.removeJob(id: job.id)
 
-        XCTAssertFalse(
+        XCTAssertFalse(q.jobs.contains { $0.id == job.id }, "Dismiss removes the menu row")
+        XCTAssertTrue(
             FileManager.default.fileExists(atPath: path.path),
-            "explicit Dismiss must clean up the retained naming sidecar",
+            "Dismiss keeps the naming sidecar on disk so it stays re-openable from disk",
         )
     }
 
-    func testDoneJobWithRetainedNamingIsNotAutoRemoved() async throws {
-        // A done job WITHOUT naming data auto-removes after completedJobLifetime.
-        // One that retains a naming sidecar (signalled by a non-nil namingSlug)
-        // must persist so the re-name affordance stays reachable in the menu
-        // until explicit Dismiss.
+    func testAutoRemoveKeepsNamingSidecarOnDisk() async throws {
+        // A done job auto-removes from the menu after completedJobLifetime, but
+        // its naming sidecar must remain on disk for a later re-open from disk.
         let q = PipelineQueue(
             engine: MockEngine(),
             diarizationFactory: { MockDiarization() },
@@ -2198,26 +2197,26 @@ final class PipelineQueueTests: XCTestCase {
             completedJobLifetime: 0.2,
         )
         var job = makeJob()
-        job.namingSlug = PipelineQueue.namingSlug(title: job.meetingTitle, jobID: job.id)
+        let slug = PipelineQueue.namingSlug(title: job.meetingTitle, jobID: job.id)
+        job.namingSlug = slug
         q.enqueue(job)
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: job.id, meetingTitle: job.meetingTitle,
+            mapping: ["SPEAKER_0": "Speaker 1"],
+            speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [], isDualSource: false,
+        )
+        q.saveNamingData(data, slug: slug)
+        let path = tmpDir.appendingPathComponent("recordings/\(slug)_naming.json")
 
         q.updateJobState(id: job.id, to: .done)
         try await Task.sleep(for: .milliseconds(400))
 
-        XCTAssertEqual(q.jobs.count, 1, "done job retaining naming data must not auto-remove")
-    }
-
-    func testDoneJobWithoutNamingStillAutoRemoves() async throws {
-        // Guard the inverse: jobs that never produced naming data (no slug) keep
-        // the original 60s auto-remove behaviour.
-        let q = PipelineQueue(logDir: tmpDir, completedJobLifetime: 0.2)
-        let job = makeJob()
-        q.enqueue(job)
-
-        q.updateJobState(id: job.id, to: .done)
-        try await Task.sleep(for: .milliseconds(400))
-
-        XCTAssertEqual(q.jobs.count, 0, "done job without naming data must auto-remove as before")
+        XCTAssertEqual(q.jobs.count, 0, "done job auto-removes from the menu")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: path.path),
+            "auto-remove must keep the naming sidecar on disk",
+        )
     }
 
     // MARK: - Late Speaker Re-naming Recovery (Slice B: re-open affordance)
