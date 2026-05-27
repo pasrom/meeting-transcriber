@@ -162,6 +162,12 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Quit"))
     }
 
+    func testReopenNamingFromDiskButtonExists() throws {
+        let sut = makeView(status: makeStatus())
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Re-open Speaker Naming..."))
+    }
+
     // MARK: - Button tap callbacks
 
     func testStartStopButtonCallsCallback() throws {

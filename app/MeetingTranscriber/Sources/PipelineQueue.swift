@@ -58,6 +58,11 @@ class PipelineQueue {
         let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
         let isDualSource: Bool
+        /// Saved transcript this naming data belongs to. Stamped once the
+        /// transcript is written so a re-open from disk (where there's no live
+        /// job) can rewrite the right file — robust even for recurring
+        /// same-title meetings. `nil` for sidecars written before this field.
+        var transcriptPath: URL?
         /// Per-instance identity for SwiftUI `.onChange` change-detection.
         /// Late re-diarization can produce a `mapping`/`speakingTimes` set
         /// that compares byte-equal to the previous run (same speaker count,
@@ -69,7 +74,7 @@ class PipelineQueue {
 
         private enum CodingKeys: String, CodingKey {
             case jobID, meetingTitle, mapping, speakingTimes, embeddings,
-                 audioPath, segments, participants, isDualSource
+                 audioPath, segments, participants, isDualSource, transcriptPath
         }
 
         struct Segment: Codable {
@@ -203,6 +208,51 @@ class PipelineQueue {
 
         updateJobState(id: jobID, to: .speakerNamingPending)
         NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+    }
+
+    /// Re-open the speaker-naming dialog for a finished recording picked from
+    /// disk (its `_naming.json` sidecar). Reuses a still-listed job when one
+    /// matches the sidecar's slug, otherwise reconstructs a transient job from
+    /// the sidecar so the existing confirm/skip/re-run machinery applies
+    /// unchanged. Returns false if the sidecar can't be read.
+    @discardableResult
+    func reopenSpeakerNaming(fromNamingSidecar url: URL) -> Bool {
+        let suffix = "_naming.json"
+        let name = url.lastPathComponent
+        guard name.hasSuffix(suffix) else { return false }
+        let slug = String(name.dropLast(suffix.count))
+
+        // Still listed in the menu? Re-open in place rather than duplicating.
+        if let listed = jobs.first(where: { $0.namingSlug == slug }) {
+            switch listed.state {
+            case .done:
+                reopenSpeakerNaming(jobID: listed.id)
+                return true
+
+            case .speakerNamingPending:
+                NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+                return true
+
+            default:
+                return false // in-flight; nothing to re-open
+            }
+        }
+
+        // Not listed (auto-removed / fresh launch) — reconstruct a transient
+        // job from the sidecar so the existing naming machinery applies.
+        guard let data = loadNamingData(from: url) else { return false }
+        var job = PipelineJob(
+            meetingTitle: data.meetingTitle, appName: "",
+            mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+            participants: data.participants,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = slug
+        job.transcriptPath = data.transcriptPath
+        jobs.append(job)
+        speakerNamingDataByJob[job.id] = data
+        NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+        return true
     }
 
     /// Pull stashed forensics for a job and write the recognition-stats row.
@@ -1062,6 +1112,14 @@ class PipelineQueue {
             jobs[idx].namingSlug = ctx.slug
         }
 
+        // Stamp the transcript path into the persisted naming sidecar so a
+        // later re-open from disk (no live job) can rewrite the right file.
+        if var data = speakerNamingDataByJob[ctx.jobID] {
+            data.transcriptPath = txtPath
+            speakerNamingDataByJob[ctx.jobID] = data
+            saveNamingData(data, slug: ctx.slug)
+        }
+
         let recordingsDir = outputDir.appendingPathComponent("recordings")
         Self.copyAudioToOutput(
             mixPath: ctx.mixPath, appPath: ctx.appPath, micPath: ctx.micPath,
@@ -1371,7 +1429,7 @@ class PipelineQueue {
                 mapping: folded, speakingTimes: base.speakingTimes,
                 embeddings: base.embeddings, audioPath: base.audioPath,
                 segments: base.segments, participants: base.participants,
-                isDualSource: base.isDualSource,
+                isDualSource: base.isDualSource, transcriptPath: base.transcriptPath,
             ),
             slug: slug,
         )
@@ -1404,8 +1462,11 @@ class PipelineQueue {
 
     func loadNamingData(slug: String) -> SpeakerNamingData? {
         guard let outputDir else { return nil }
-        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
-        guard let json = try? Data(contentsOf: path) else { return nil }
+        return loadNamingData(from: outputDir.appendingPathComponent("recordings/\(slug)_naming.json"))
+    }
+
+    func loadNamingData(from url: URL) -> SpeakerNamingData? {
+        guard let json = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.nonConformingFloatDecodingStrategy = .convertFromString(
             positiveInfinity: "Infinity",

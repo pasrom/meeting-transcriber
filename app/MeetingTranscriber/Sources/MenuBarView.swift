@@ -20,6 +20,9 @@ struct MenuBarView: View {
     /// retained naming sidecar. Defaulted + last so the many test/preview
     /// construction sites stay terse.
     var onReopenNaming: (UUID) -> Void = { _ in }
+    /// Re-open speaker naming for a past recording chosen from disk (file
+    /// picker). Covers recordings that have scrolled out of the menu.
+    var onReopenNamingFromDisk: () -> Void = {}
 
     private var state: TranscriberState {
         status?.state ?? .idle
@@ -107,6 +110,12 @@ struct MenuBarView: View {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
+
+        Button {
+            onReopenNamingFromDisk()
+        } label: {
+            Label("Re-open Speaker Naming...", systemImage: "person.crop.circle.badge.questionmark")
+        }
 
         // Processing queue
         if !pipelineQueue.jobs.isEmpty {

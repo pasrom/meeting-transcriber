@@ -94,6 +94,7 @@ struct MeetingTranscriberApp: App {
                 onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
                 onQuit: quit,
                 onReopenNaming: reopenNaming,
+                onReopenNamingFromDisk: reopenNamingFromDisk,
             )
         } label: { // swiftlint:disable:this closure_body_length
             Label {
@@ -338,6 +339,25 @@ struct MeetingTranscriberApp: App {
 
     private func reopenNaming(_ id: UUID) {
         appState.pipelineQueue.reopenSpeakerNaming(jobID: id)
+    }
+
+    private func reopenNamingFromDisk() {
+        let panel = NSOpenPanel()
+        panel.title = "Select a recording's speaker-naming file"
+        panel.message = "Pick the …_naming.json of the recording whose speakers you want to re-name."
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.directoryURL = appState.settings.effectiveOutputDir.appendingPathComponent("recordings")
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !appState.pipelineQueue.reopenSpeakerNaming(fromNamingSidecar: url) {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't open speaker naming"
+            alert.informativeText = "That file isn't a recording's speaker-naming sidecar, or its data could not be read."
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     // MARK: - Pure Helpers (testable without @main)

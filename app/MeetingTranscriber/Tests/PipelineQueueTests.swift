@@ -2278,6 +2278,67 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    // MARK: - Late Speaker Re-naming Recovery (Slice D: re-open from disk via picker)
+
+    private func writeSidecar(slug: String, title: String, transcriptPath: URL?) -> URL {
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+        let data = PipelineQueue.SpeakerNamingData(
+            jobID: UUID(), meetingTitle: title,
+            mapping: ["SPEAKER_0": "Speaker 1"],
+            speakingTimes: [:], embeddings: [:],
+            audioPath: nil, segments: [], participants: [],
+            isDualSource: false, transcriptPath: transcriptPath,
+        )
+        makeProcessingQueue().saveNamingData(data, slug: slug)
+        return recordingsDir.appendingPathComponent("\(slug)_naming.json")
+    }
+
+    func testNamingDataTranscriptPathRoundTrips() {
+        let q = makeProcessingQueue()
+        let tx = tmpDir.appendingPathComponent("protocols/2026_meeting.txt")
+        let url = writeSidecar(slug: "rt_test_x", title: "M", transcriptPath: tx)
+        XCTAssertEqual(q.loadNamingData(from: url)?.transcriptPath, tx)
+    }
+
+    func testReopenFromSidecarReconstructsTransientJob() throws {
+        let q = makeProcessingQueue()
+        let slug = PipelineQueue.namingSlug(title: "Recovered Meeting", jobID: UUID())
+        let tx = tmpDir.appendingPathComponent("protocols/x.txt")
+        let url = writeSidecar(slug: slug, title: "Recovered Meeting", transcriptPath: tx)
+        XCTAssertTrue(q.jobs.isEmpty, "precondition: no live job")
+
+        let ok = q.reopenSpeakerNaming(fromNamingSidecar: url)
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(q.jobs.count, 1, "a transient job is reconstructed from the sidecar")
+        let job = q.jobs.first
+        XCTAssertEqual(job?.state, .speakerNamingPending)
+        XCTAssertEqual(job?.namingSlug, slug, "transient job carries the sidecar's slug for re-run/save")
+        XCTAssertEqual(job?.transcriptPath, tx, "transient job carries the transcript path for rewrite")
+        XCTAssertNotNil(try q.speakerNamingDataByJob[XCTUnwrap(job?.id)], "naming data loaded into RAM for the dialog")
+    }
+
+    func testReopenFromSidecarReusesListedJob() {
+        let (q, job, path) = makeQueueWithPersistedNaming(state: .done)
+        q.speakerNamingDataByJob[job.id] = nil // simulate RAM freed after completion
+
+        let ok = q.reopenSpeakerNaming(fromNamingSidecar: path)
+
+        XCTAssertTrue(ok)
+        XCTAssertEqual(q.jobs.count, 1, "must reuse the still-listed job, not add a duplicate")
+        XCTAssertEqual(q.jobs.first?.state, .speakerNamingPending)
+    }
+
+    func testReopenFromSidecarReturnsFalseForMissingFile() {
+        let q = makeProcessingQueue()
+        let ok = q.reopenSpeakerNaming(
+            fromNamingSidecar: tmpDir.appendingPathComponent("recordings/nope_naming.json"),
+        )
+        XCTAssertFalse(ok)
+        XCTAssertTrue(q.jobs.isEmpty)
+    }
+
     // MARK: - knownSpeakerNames cache (issue #155)
 
     //
