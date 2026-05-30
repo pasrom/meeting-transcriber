@@ -120,10 +120,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         // Estimate total 30s windows from audio duration
         let totalWindows = max(1, Self.estimateWindowCount(audioPath: audioPath))
 
-        let options = DecodingOptions(
-            language: language,
-            wordTimestamps: false,
-        )
+        let options = Self.decodingOptions(language: language)
 
         let results = await pipe.transcribe(
             audioPaths: [audioPath.path],
@@ -169,7 +166,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     func transcribeSamples(_ samples: [Float]) async throws -> String {
         try await ensureModel()
         guard let pipe else { throw TranscriptionError.modelNotLoaded }
-        let options = DecodingOptions(language: language, wordTimestamps: false)
+        let options = Self.decodingOptions(language: language)
         let results = try await pipe.transcribe(
             audioArray: samples,
             decodeOptions: options,
@@ -184,6 +181,18 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             pieces.append(text)
         }
         return pieces.joined(separator: " ")
+    }
+
+    /// Build the WhisperKit `DecodingOptions` for a transcription run.
+    /// `language` is `nil` for "Auto-detect" and a BCP-47 code otherwise.
+    static func decodingOptions(language: String?) -> DecodingOptions {
+        // WhisperKit defaults `detectLanguage` to `!usePrefillPrompt` (= false),
+        // so without this it skips detection and falls back to English (#339).
+        DecodingOptions(
+            language: language,
+            detectLanguage: language == nil,
+            wordTimestamps: false,
+        )
     }
 
     /// Estimate number of 30-second windows WhisperKit will process for the given audio file.

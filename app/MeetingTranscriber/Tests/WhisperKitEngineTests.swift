@@ -1,8 +1,34 @@
 @testable import MeetingTranscriber
+import WhisperKit
 import XCTest
 
 @MainActor
 final class WhisperKitEngineTests: XCTestCase {
+    /// Regression for #339: "Auto-detect" (language == nil) silently fell back
+    /// to English because WhisperKit's `DecodingOptions.detectLanguage` defaults
+    /// to `!usePrefillPrompt` (= false), so the language-detection path in
+    /// TranscribeTask was skipped and the output defaulted to "en".
+    func testAutoDetectEnablesLanguageDetection() {
+        let options = WhisperKitEngine.decodingOptions(language: nil)
+        XCTAssertNil(options.language, "Auto-detect must not pin a language")
+        XCTAssertTrue(
+            options.detectLanguage,
+            "Auto-detect (language == nil) must enable WhisperKit language detection, "
+                + "otherwise transcription falls back to English",
+        )
+    }
+
+    /// When an explicit language is chosen, detection must stay off so the
+    /// user's choice is honoured verbatim.
+    func testExplicitLanguageDisablesDetection() {
+        let options = WhisperKitEngine.decodingOptions(language: "pl")
+        XCTAssertEqual(options.language, "pl")
+        XCTAssertFalse(
+            options.detectLanguage,
+            "An explicit language must not trigger auto-detection",
+        )
+    }
+
     func testDefaultModel() {
         let engine = WhisperKitEngine()
         XCTAssertEqual(engine.modelVariant, "openai_whisper-large-v3-v20240930_turbo")
