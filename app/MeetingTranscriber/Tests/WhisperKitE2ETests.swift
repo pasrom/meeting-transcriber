@@ -349,7 +349,7 @@ final class WhisperKitE2ETests: XCTestCase {
         )
     }
 
-    // MARK: - Issue #256: Polish audio must transcribe as Polish, not English
+    // MARK: - Issues #256 / #339: Polish audio must transcribe as Polish, not English
 
     /// E2E reproduction of issue #256. The bug reporter (Polish speaker) saw
     /// most of their meeting "translated to English" because:
@@ -381,7 +381,40 @@ final class WhisperKitE2ETests: XCTestCase {
 
         let transcript = try await engine.transcribe(audioPath: fixture)
         XCTAssertFalse(transcript.isEmpty, "Polish transcript should not be empty")
+        assertTranscriptIsPolishNotEnglish(transcript)
+    }
 
+    /// E2E reproduction of issue #339, the auto-detect counterpart of #256.
+    /// With "Auto-detect" selected (`engine.language = nil`), WhisperKit used
+    /// to skip language detection entirely (`DecodingOptions.detectLanguage`
+    /// defaults to false) and fall back to English. The fix enables detection
+    /// whenever no explicit language is pinned, so the same Polish fixture must
+    /// now transcribe as Polish without the user choosing a language.
+    func testPolishAudioTranscribesAsPolishWithAutoDetect() async throws {
+        try skipIfCIWithoutE2EOptIn("requires WhisperKit model download")
+
+        let fixture = fixtureURL("polish_sample.wav")
+        try XCTSkipUnless(
+            FileManager.default.fileExists(atPath: fixture.path),
+            "Polish fixture not found at \(fixture.path)",
+        )
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.language = nil // Auto-detect
+
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded, "Model should be loaded")
+
+        let transcript = try await engine.transcribe(audioPath: fixture)
+        XCTAssertFalse(transcript.isEmpty, "Auto-detect transcript should not be empty")
+        assertTranscriptIsPolishNotEnglish(transcript)
+    }
+
+    /// Shared assertions for the Polish fixture: the transcript must look like
+    /// Polish (diacritics + word stems) and must not have drifted to English.
+    /// Used by both the explicit-language (#256) and auto-detect (#339) paths.
+    private func assertTranscriptIsPolishNotEnglish(_ transcript: String) {
         let lower = transcript.lowercased()
 
         // Polish letters that don't occur in English at all. `ó` is shared with
