@@ -11,9 +11,11 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Streami
 /// and calls `engine.transcribeSamples` once per ~400 ms while speaking
 /// (partial) and once per detected speech end / 5 s force-flush (final).
 ///
-/// App-channel buffers (interleaved 48 kHz stereo) are accepted but ignored
-/// for now — they need a downmix+resample stage before they're usable here.
-/// That's a follow-up.
+/// Both mic and app channels are supported. App-channel buffers (typically
+/// interleaved 48 kHz stereo from `CATapDescription`) are downmixed and
+/// resampled to 16 kHz mono upstream in `LiveTranscriptionController` (via
+/// `LiveAudioResampler`) before they reach `ingest`, so this actor always
+/// sees the 16 kHz mono format described above.
 actor StreamingTranscriber {
     enum Event {
         case partial(String)
