@@ -93,6 +93,7 @@ struct MeetingTranscriberApp: App {
                 onProcessFiles: processAudioFiles,
                 onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
                 onQuit: quit,
+                onReopenNaming: reopenNaming,
             )
         } label: { // swiftlint:disable:this closure_body_length
             Label {
@@ -333,6 +334,10 @@ struct MeetingTranscriberApp: App {
     private func quit() {
         appState.watchLoop?.stop()
         NSApplication.shared.terminate(nil)
+    }
+
+    private func reopenNaming(_ id: UUID) {
+        appState.pipelineQueue.reopenSpeakerNaming(jobID: id)
     }
 
     // MARK: - Pure Helpers (testable without @main)
