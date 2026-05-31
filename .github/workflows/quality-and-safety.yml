@@ -5,8 +5,8 @@ name: Quality & Safety
 #   - TSan/ASan sanitizer sweeps (catches races/UB the static checker
 #     can't see; ~10–15 min per leg).
 #   - WER/DER quality regression (downloads ~1 GB of model weights and
-#     runs real ASR; produces the baseline artifact future PRs diff
-#     against).
+#     runs real ASR, then diffs the result against the committed baseline
+#     in Tests/Fixtures/quality/quality-baseline.json; fails on regression).
 #
 # Triggers: push to main, nightly cron, and explicit manual dispatch.
 # Never runs on pull requests — review iteration stays fast.
@@ -137,6 +137,20 @@ jobs:
           QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
           WHISPERKIT_MODEL: openai_whisper-large-v3-v20240930_turbo
         run: cd app/MeetingTranscriber && swift test --filter "WhisperKitQualityTests|FluidDiarizerQualityTests|ParakeetQualityTests"
+      # Diff this run's WER/DER against the committed baseline
+      # (Tests/Fixtures/quality/quality-baseline.json). Fails the job if any
+      # metric regressed beyond tolerance — a relative regression the per-test
+      # catastrophic floors (0.5/0.6/0.85) wouldn't catch. MUST stay a separate
+      # `swift test` invocation: folding the gate into the measurement filter
+      # wouldn't guarantee the gate class runs last (XCTest orders classes
+      # alphabetically), so it could read a half-flushed results file and
+      # silently treat not-yet-run engines as "missing". Intended quality
+      # changes re-bless via scripts/bless_quality_baseline.sh in the same PR.
+      - name: Compare against quality baseline
+        env:
+          RUN_QUALITY_TESTS: "1"
+          QUALITY_RESULTS_PATH: ${{ github.workspace }}/quality-results.json
+        run: cd app/MeetingTranscriber && swift test --filter QualityBaselineGateTests
       - name: Upload quality results
         if: always()
         uses: actions/upload-artifact@v7
