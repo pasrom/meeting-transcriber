@@ -156,6 +156,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     override func tearDown() {
         MockURLProtocol.handler = nil
+        MockURLProtocol.errorHandler = nil
         super.tearDown()
     }
 
@@ -265,6 +266,24 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         }
     }
 
+    func testGenerateTransportErrorMapsToConnectionFailed() async throws {
+        // session.bytes(for:) rethrows the transport-layer URLError; generate()
+        // must wrap it as ProtocolError.connectionFailed rather than leak it.
+        MockURLProtocol.errorHandler = { _ in URLError(.cannotConnectToHost) }
+
+        let gen = makeGenerator(session: makeMockSession())
+        do {
+            _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+            XCTFail("Expected connectionFailed")
+        } catch let error as ProtocolError {
+            if case let .connectionFailed(reason) = error {
+                XCTAssertFalse(reason.isEmpty, "Expected a non-empty failure reason")
+            } else {
+                XCTFail("Expected connectionFailed, got \(error)")
+            }
+        }
+    }
+
     // MARK: - testConnection() via MockURLProtocol
 
     func testTestConnectionSuccess() async {
@@ -301,6 +320,24 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
             XCTAssertEqual(code, 401)
         } else {
             XCTFail("Expected httpError(401)")
+        }
+    }
+
+    func testTestConnectionTransportErrorMapsToConnectionFailed() async {
+        // session.data(for:) rethrows the transport-layer URLError; testConnection
+        // must surface it as a connectionFailed failure rather than crash/leak.
+        MockURLProtocol.errorHandler = { _ in URLError(.cannotConnectToHost) }
+
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1/chat/completions",
+            model: "test",
+            apiKey: nil,
+            session: makeMockSession(),
+        )
+        if case let .failure(error) = result, let pe = error as? ProtocolError, case .connectionFailed = pe {
+            // expected
+        } else {
+            XCTFail("Expected connectionFailed failure, got \(result)")
         }
     }
 
@@ -381,6 +418,10 @@ private final class MockURLProtocol: URLProtocol {
     // URLSession serialises protocol callbacks per task; the handler is set
     // before the request is started and cleared in tearDown. No real race.
     nonisolated(unsafe) static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
+    // When set, the request fails at the transport layer with this error
+    // (mirrors a connection refused / DNS failure / dropped socket). Takes
+    // precedence over `handler` so the generator's catch path is exercised.
+    nonisolated(unsafe) static var errorHandler: ((URLRequest) -> any Error)?
 
     override static func canInit(with _: URLRequest) -> Bool {
         true
@@ -391,6 +432,10 @@ private final class MockURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
+        if let errorHandler = Self.errorHandler {
+            client?.urlProtocol(self, didFailWithError: errorHandler(request))
+            return
+        }
         guard let handler = Self.handler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
