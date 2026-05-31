@@ -309,7 +309,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Concurrency:**
 - `WatchLoop` is `@MainActor`. Tests for this class must also be `@MainActor`.
 - All three engine `loadModel()` methods deduplicate concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
-- `ProtocolGenerator` uses async process I/O: `terminationHandler` + `withCheckedContinuation` instead of `process.waitUntilExit()`. stdout/stderr are read in detached `Task`s.
+- `ClaudeCLIProtocolGenerator` uses async process I/O: the process `terminationHandler` yields into an `AsyncStream<Void>` that the caller awaits, instead of blocking on `process.waitUntilExit()`. The stream is installed before `process.run()` and buffers the yield, so an early exit is never missed. stdin/stdout are written/read in detached `Task`s.
 
 **View architecture:**
 - `SettingsView` receives engine instances as stored properties (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:parakeetEngine:qwen3Engine:updateChecker:)`. `qwen3Engine` is `(any TranscribingEngine)?` — nil on macOS <15.

@@ -41,7 +41,7 @@
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
 
-            // C5 fix: Set terminationHandler BEFORE process.run() to avoid race
+            // Set terminationHandler BEFORE process.run() to avoid race
             // where the process exits before the handler is installed.
             // AsyncStream buffers the yield, so even if the process exits before
             // we iterate, the value is not lost.
@@ -61,12 +61,12 @@
                 throw ProtocolError.cliNotFound(claudeBin)
             }
 
-            // C5 fix: Guard against process having already exited before we awaited.
+            // Guard against process having already exited before we awaited.
             // If the process already exited, terminationHandler may have already fired,
             // but AsyncStream buffers the yield so we won't miss it.
             // No additional check needed — AsyncStream handles the race.
 
-            // C6 fix: Write stdin in a detached task to avoid deadlock on large transcripts.
+            // Write stdin in a detached task to avoid deadlock on large transcripts.
             // The pipe buffer is finite (~64KB); if the prompt exceeds it, a synchronous
             // write blocks until the reader drains — but we haven't started reading yet.
             let promptData = Data(prompt.utf8)
@@ -154,7 +154,7 @@
                     throw ProtocolError.timeout
                 }
 
-                // I1 fix: Wrap blocking availableData in Task.detached to avoid
+                // Wrap blocking availableData in Task.detached to avoid
                 // blocking Swift's cooperative thread pool. availableData blocks
                 // until data is available or EOF, which would starve other tasks.
                 let chunk = await Task.detached { handle.availableData }.value
