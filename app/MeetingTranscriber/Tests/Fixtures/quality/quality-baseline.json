@@ -1,0 +1,44 @@
+[
+  {
+    "der": 0.6811,
+    "engine": "fluidDiarizer.offline",
+    "fixture": "three_speakers_de"
+  },
+  {
+    "der": 0.5325,
+    "engine": "fluidDiarizer.offline",
+    "fixture": "two_speakers_de"
+  },
+  {
+    "der": 0.0898,
+    "engine": "fluidDiarizer.sortformer",
+    "fixture": "three_speakers_de"
+  },
+  {
+    "der": 0.0597,
+    "engine": "fluidDiarizer.sortformer",
+    "fixture": "two_speakers_de"
+  },
+  {
+    "engine": "parakeet",
+    "fixture": "three_speakers_de",
+    "wer": 0.4528
+  },
+  {
+    "engine": "parakeet",
+    "fixture": "two_speakers_de",
+    "wer": 0.4286
+  },
+  {
+    "engine": "whisperKit",
+    "fixture": "three_speakers_de",
+    "modelVariant": "openai_whisper-large-v3-v20240930_turbo",
+    "wer": 0.2642
+  },
+  {
+    "engine": "whisperKit",
+    "fixture": "two_speakers_de",
+    "modelVariant": "openai_whisper-large-v3-v20240930_turbo",
+    "wer": 0.2857
+  }
+]
