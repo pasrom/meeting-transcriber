@@ -1072,4 +1072,19 @@ final class SpeakerMatcherTests: XCTestCase {
         }
         XCTAssertEqual(names.count, count, "Final DB has wrong entry count")
     }
+
+    // MARK: - File permissions
+
+    /// `speakers.json` holds biometric-adjacent voice embeddings/centroids;
+    /// it must never carry the world/group-readable bits a plain `.write(to:)`
+    /// inherits from the umask. Asserts the persisted DB is owner-only (0600).
+    func testSaveDBWritesOwnerOnlyPermissions() throws {
+        let matcher = SpeakerMatcher(dbPath: dbPath)
+        matcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: dbPath.path)[.posixPermissions] as? Int,
+        )
+        XCTAssertEqual(mode & 0o777, 0o600)
+    }
 }

@@ -59,6 +59,9 @@ struct RecordingSidecar: Codable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = try encoder.encode(self)
         try data.write(to: url, options: .atomic)
+        // Holds meeting title + participants — match the owner-only (0600)
+        // treatment of the audio it sits beside.
+        try FileManager.default.restrictToOwner(url)
         return url
     }
 

@@ -111,6 +111,8 @@ enum ProtocolGenerator {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(filename(title: title, ext: "txt"))
         try text.write(to: url, atomically: true, encoding: .utf8)
+        // Transcripts contain verbatim meeting speech — restrict to owner-only.
+        try FileManager.default.restrictToOwner(url)
         logger.info("Transcript saved: \(url.lastPathComponent)")
         return url
     }
@@ -124,6 +126,8 @@ enum ProtocolGenerator {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(filename(title: title, ext: "md"))
         try markdown.write(to: url, atomically: true, encoding: .utf8)
+        // Protocol markdown summarises the meeting — restrict to owner-only.
+        try FileManager.default.restrictToOwner(url)
         logger.info("Protocol saved: \(url.lastPathComponent)")
         return url
     }

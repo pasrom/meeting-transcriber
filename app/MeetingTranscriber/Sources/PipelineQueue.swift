@@ -1145,6 +1145,9 @@ class PipelineQueue {
                     }
                 }
                 try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
+                // Re-applying speaker names rewrites the transcript — keep it
+                // owner-only (the original save in saveTranscript already is).
+                try FileManager.default.restrictToOwner(transcriptPath)
 
                 if let outputDir {
                     await generateProtocol(
@@ -1327,6 +1330,8 @@ class PipelineQueue {
             )
             let json = try encoder.encode(data)
             try json.write(to: path, options: .atomic)
+            // Carries per-speaker voice embeddings — restrict to owner-only.
+            try FileManager.default.restrictToOwner(path)
         } catch {
             // Silent failure here means late-confirm won't work after a
             // restart. Make it visible: log + warning on the job.
@@ -1797,6 +1802,10 @@ class PipelineQueue {
                 handle.write(line.data(using: .utf8)!)
             } else {
                 try line.write(to: logPath, atomically: true, encoding: .utf8)
+                // First write creates the file — restrict it to owner-only so
+                // the meeting log isn't world-readable. Subsequent appends go
+                // through the FileHandle branch and inherit these permissions.
+                try FileManager.default.restrictToOwner(logPath)
             }
         } catch {
             logger.error("Failed to append pipeline log: \(error)")
