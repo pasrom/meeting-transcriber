@@ -334,5 +334,42 @@
             XCTAssertEqual(code, 1)
             XCTAssertEqual(stderr, "")
         }
+
+        // MARK: - generate (subprocess integration)
+
+        /// Drives the full `generate()` path against a fake `claude` binary that
+        /// reads the piped prompt and replies with a stream-json line. Exercises
+        /// the detached stdin write + close end to end — the path where the
+        /// deprecated crashing `write(_:)` was replaced with the throwing
+        /// `write(contentsOf:)`. The broken-pipe error the throwing call guards
+        /// against can't be triggered deterministically in a unit test (it
+        /// depends on the process's SIGPIPE disposition and write timing), so
+        /// only the success path is asserted here.
+        func testGenerateFeedsStdinAndParsesStreamJSONReply() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                printf '%s\\n' '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Protocol body"}}'
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let result = try await generator.generate(
+                transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+            )
+            XCTAssertEqual(result, "Protocol body")
+        }
+
+        /// Writes a temporary executable `#!/bin/sh` script wrapping `body` and
+        /// returns its absolute path. Caller deletes it.
+        private static func makeFakeClaudeScript(body: String) throws -> String {
+            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
+            try "#!/bin/sh\n\(body)\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: path,
+            )
+            return path
+        }
     }
 #endif
