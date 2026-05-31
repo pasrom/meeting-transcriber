@@ -157,6 +157,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
     override func tearDown() {
         MockURLProtocol.handler = nil
         MockURLProtocol.errorHandler = nil
+        MockURLProtocol.rawResponseHandler = nil
         super.tearDown()
     }
 
@@ -341,6 +342,70 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         }
     }
 
+    func testGenerateNonHTTPResponseThrowsConnectionFailed() async {
+        // A delivered response that isn't an HTTPURLResponse must map to
+        // .connectionFailed("Invalid response") — generate()'s
+        // `response as? HTTPURLResponse` guard, not a crash or hang.
+        MockURLProtocol.rawResponseHandler = { request in
+            // swiftlint:disable:next force_unwrapping
+            let response = URLResponse(url: request.url!, mimeType: "text/plain", expectedContentLength: 0, textEncodingName: nil)
+            return (response, Data())
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        do {
+            _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+            XCTFail("Expected connectionFailed")
+        } catch let error as ProtocolError {
+            guard case .connectionFailed = error else {
+                XCTFail("Expected connectionFailed, got \(error)")
+                return
+            }
+        } catch {
+            XCTFail("Expected ProtocolError.connectionFailed, got \(error)")
+        }
+    }
+
+    func testTestConnectionMalformed2xxBodyReturnsEmptySuccess() async {
+        // A 2xx whose JSON lacks a "data" array is a soft success with no
+        // models, not a failure.
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, body: Data(#"{"object":"list"}"#.utf8))
+        }
+
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1/chat/completions",
+            model: "test",
+            apiKey: nil,
+            session: makeMockSession(),
+        )
+        if case let .success(models) = result {
+            XCTAssertEqual(models, [])
+        } else {
+            XCTFail("Expected empty success, got \(result)")
+        }
+    }
+
+    func testTestConnectionSortsModelNames() async {
+        // Model ids are returned sorted regardless of the server's order.
+        let modelsJSON = #"{"data":[{"id":"mistral"},{"id":"alpaca"},{"id":"llama3"}]}"#
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, body: Data(modelsJSON.utf8))
+        }
+
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1/chat/completions",
+            model: "test",
+            apiKey: nil,
+            session: makeMockSession(),
+        )
+        if case let .success(models) = result {
+            XCTAssertEqual(models, ["alpaca", "llama3", "mistral"])
+        } else {
+            XCTFail("Expected success, got \(result)")
+        }
+    }
+
     func testTestConnectionInvalidEndpoint() async {
         let result = await OpenAIProtocolGenerator.testConnection(
             endpoint: "",
@@ -422,6 +487,9 @@ private final class MockURLProtocol: URLProtocol {
     // (mirrors a connection refused / DNS failure / dropped socket). Takes
     // precedence over `handler` so the generator's catch path is exercised.
     nonisolated(unsafe) static var errorHandler: ((URLRequest) -> any Error)?
+    // When set, delivers a NON-HTTP `URLResponse` (takes precedence over
+    // `handler`) so the generator's `response as? HTTPURLResponse` guard fails.
+    nonisolated(unsafe) static var rawResponseHandler: ((URLRequest) -> (URLResponse, Data))?
 
     override static func canInit(with _: URLRequest) -> Bool {
         true
@@ -434,6 +502,13 @@ private final class MockURLProtocol: URLProtocol {
     override func startLoading() {
         if let errorHandler = Self.errorHandler {
             client?.urlProtocol(self, didFailWithError: errorHandler(request))
+            return
+        }
+        if let rawResponseHandler = Self.rawResponseHandler {
+            let (response, data) = rawResponseHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
             return
         }
         guard let handler = Self.handler else {
