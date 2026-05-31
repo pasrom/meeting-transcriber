@@ -65,8 +65,10 @@ actor StreamingTranscriber {
     }
 
     /// Feed a captured buffer into the streaming pipeline. Buffers that don't
-    /// match the expected 16 kHz mono shape are dropped silently — for now,
-    /// only mic-channel buffers are supported.
+    /// match the expected 16 kHz mono shape are dropped silently. Both mic and
+    /// app channels are normalized to that shape upstream (mic via
+    /// `MicCaptureHandler`, app via `LiveAudioResampler` in
+    /// `LiveTranscriptionController`) before reaching here.
     func ingest(_ buffer: LiveAudioBuffer) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
         inputAccumulator.append(contentsOf: buffer.samples)
