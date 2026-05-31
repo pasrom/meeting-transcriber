@@ -431,4 +431,29 @@ final class ProtocolGeneratorTests: XCTestCase {
             "yesterday's prefix should have been stripped: \(result)",
         )
     }
+
+    // MARK: - File permissions
+
+    /// Transcripts contain verbatim meeting speech — they must be owner-only
+    /// (0600), not world-readable from the inherited umask.
+    func testSaveTranscriptWritesOwnerOnlyPermissions() throws {
+        let dir = try makeTempDirectory(prefix: "ProtocolGenSaveTranscript")
+        let url = try ProtocolGenerator.saveTranscript("hello world", title: "Standup", dir: dir)
+
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int,
+        )
+        XCTAssertEqual(mode & 0o777, 0o600)
+    }
+
+    /// Protocol markdown summarises the meeting — same owner-only requirement.
+    func testSaveProtocolWritesOwnerOnlyPermissions() throws {
+        let dir = try makeTempDirectory(prefix: "ProtocolGenSaveProtocol")
+        let url = try ProtocolGenerator.saveProtocol("# Notes", title: "Standup", dir: dir)
+
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int,
+        )
+        XCTAssertEqual(mode & 0o777, 0o600)
+    }
 }

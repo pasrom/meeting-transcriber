@@ -93,4 +93,16 @@ final class RecordingSidecarTests: XCTestCase {
         let dir = try makeTempDirectory(prefix: "rs")
         XCTAssertNil(RecordingSidecar.read(fromDirectory: dir, basename: "absent"))
     }
+
+    /// The sidecar records meeting title + participants; it must be owner-only
+    /// (0600), not world-readable, matching the audio it sits next to.
+    func test_write_setsOwnerOnlyPermissions() throws {
+        let dir = try makeTempDirectory(prefix: "rs")
+        let url = try makeFullSidecar().write(toDirectory: dir, basename: "20260503_083000")
+
+        let mode = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int,
+        )
+        XCTAssertEqual(mode & 0o777, 0o600)
+    }
 }

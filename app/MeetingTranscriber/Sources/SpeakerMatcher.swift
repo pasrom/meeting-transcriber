@@ -437,6 +437,10 @@ class SpeakerMatcher {
                 .appendingPathComponent("speakers.json.tmp")
             try data.write(to: tmp)
             _ = try FileManager.default.replaceItemAt(dbPath, withItemAt: tmp)
+            // Voice embeddings/centroids are biometric-adjacent — restrict the
+            // persisted DB to owner-only. The temp-file rename does not carry a
+            // chmod applied pre-rename, so set it on the final path.
+            try FileManager.default.restrictToOwner(dbPath)
         } catch {
             logger.error("Failed to save speaker DB: \(error)")
         }
