@@ -259,12 +259,12 @@ enum AudioMixer {
             return (samples, sampleRate)
         } catch let audioFileError {
             // Fallback 1: AVAsset for video containers (MP4, MOV)
-            logger.info("AVAudioFile failed for \(url.lastPathComponent): \(audioFileError.localizedDescription), trying AVAsset fallback")
+            logger.info("AVAudioFile failed for \(url.lastPathComponent, privacy: .private): \(audioFileError.localizedDescription), trying AVAsset fallback")
             do {
                 return try await loadAudioFromAVAsset(url: url)
             } catch {
                 // Fallback 2: ffmpeg for unsupported formats
-                logger.info("AVAsset failed for \(url.lastPathComponent): \(error.localizedDescription), trying ffmpeg fallback")
+                logger.info("AVAsset failed for \(url.lastPathComponent, privacy: .private): \(error.localizedDescription), trying ffmpeg fallback")
                 return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
             }
         }

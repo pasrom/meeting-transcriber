@@ -113,7 +113,7 @@ enum ProtocolGenerator {
         try text.write(to: url, atomically: true, encoding: .utf8)
         // Transcripts contain verbatim meeting speech — restrict to owner-only.
         try FileManager.default.restrictToOwner(url)
-        logger.info("Transcript saved: \(url.lastPathComponent)")
+        logger.info("Transcript saved: \(url.lastPathComponent, privacy: .private)")
         return url
     }
 
@@ -128,7 +128,7 @@ enum ProtocolGenerator {
         try markdown.write(to: url, atomically: true, encoding: .utf8)
         // Protocol markdown summarises the meeting — restrict to owner-only.
         try FileManager.default.restrictToOwner(url)
-        logger.info("Protocol saved: \(url.lastPathComponent)")
+        logger.info("Protocol saved: \(url.lastPathComponent, privacy: .private)")
         return url
     }
 

@@ -215,7 +215,7 @@ class WatchLoop {
             await self.monitorManualRecording(pid: pid)
         }
 
-        logger.info("Manual recording started for \(appName) (PID \(pid)): \(title)")
+        logger.info("Manual recording started for \(appName) (PID \(pid)): \(title, privacy: .private)")
     }
 
     func stopManualRecording() {
@@ -427,7 +427,7 @@ class WatchLoop {
             participants: participants,
         )
         pipelineQueue?.enqueue(job)
-        logger.info("Enqueued pipeline job for: \(title)")
+        logger.info("Enqueued pipeline job for: \(title, privacy: .private)")
     }
 
     /// Convert a `ProcessInfo.systemUptime`-based timestamp captured at recording
@@ -480,7 +480,7 @@ class WatchLoop {
                 micFilename: movedMic?.lastPathComponent,
             )
             try sidecar.write(toDirectory: destDir, basename: basename)
-            logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title)")
+            logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title, privacy: .private)")
         } catch {
             logger.error("Record-only: \(error.localizedDescription)")
             update { next in

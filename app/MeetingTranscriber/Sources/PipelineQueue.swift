@@ -378,7 +378,7 @@ class PipelineQueue {
         jobs.append(job)
         appendLog(jobID: job.id, event: "enqueued", from: nil, to: job.state)
         saveSnapshot()
-        logger.info("Enqueued job: \(job.meetingTitle) (\(job.id))")
+        logger.info("Enqueued job: \(job.meetingTitle, privacy: .private) (\(job.id))")
         triggerProcessing()
     }
 
@@ -1010,7 +1010,7 @@ class PipelineQueue {
         // --- Save Transcript & Audio (always) ---
         let protocolsDir = outputDir.appendingPathComponent("protocols")
         let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: ctx.title, dir: protocolsDir)
-        logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .public)")
+        logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
 
         if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
             jobs[idx].transcriptPath = txtPath
@@ -1097,7 +1097,7 @@ class PipelineQueue {
             let mdPath = try ProtocolGenerator.saveProtocol(
                 fullMD, title: title, dir: protocolsDir,
             )
-            logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .public)")
+            logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .private)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
                 jobs[idx].protocolPath = mdPath
             }
@@ -1388,7 +1388,7 @@ class PipelineQueue {
         let now = Date()
         for job in jobs where job.state == .speakerNamingPending {
             if now.timeIntervalSince(job.enqueuedAt) > maxAge {
-                logger.info("Auto-resolving stale pending naming for \(job.meetingTitle)")
+                logger.info("Auto-resolving stale pending naming for \(job.meetingTitle, privacy: .private)")
                 let jobID = job.id
                 let slug = job.namingSlug
                 acceptAutoNames(jobID: jobID, slug: slug)
@@ -1550,15 +1550,15 @@ class PipelineQueue {
             // re-picks the new name on next launch). The file is already at its
             // final home; keep it put.
             if src.deletingLastPathComponent().standardizedFileURL == outputDirStd {
-                logger.info("Audio already in output dir, skipping rename: \(src.lastPathComponent)")
+                logger.info("Audio already in output dir, skipping rename: \(src.lastPathComponent, privacy: .private)")
                 continue
             }
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: src, to: dst)
-                logger.info("Audio moved: \(name)")
+                logger.info("Audio moved: \(name, privacy: .private)")
             } catch {
-                logger.warning("Failed to move audio \(name): \(error.localizedDescription)")
+                logger.warning("Failed to move audio \(name, privacy: .private): \(error.localizedDescription)")
             }
         }
     }
