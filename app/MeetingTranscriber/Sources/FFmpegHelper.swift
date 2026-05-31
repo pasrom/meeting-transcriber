@@ -100,7 +100,7 @@ enum FFmpegHelper {
             throw AudioMixerError.ffmpegNotAvailable
         }
 
-        logger.info("ffmpeg converting: \(url.lastPathComponent)")
+        logger.info("ffmpeg converting: \(url.lastPathComponent, privacy: .private)")
 
         // Read stderr in background to prevent pipe buffer deadlock
         async let stderrRead = Task.detached {
@@ -132,7 +132,7 @@ enum FFmpegHelper {
 
         // Load the temp WAV file
         let samples = try AudioMixer.loadAudioFileAsFloat32(url: tempURL)
-        logger.info("ffmpeg extracted \(samples.count) samples at 16kHz from \(url.lastPathComponent)")
+        logger.info("ffmpeg extracted \(samples.count) samples at 16kHz from \(url.lastPathComponent, privacy: .private)")
         return (samples, AudioConstants.targetSampleRate)
     }
 
