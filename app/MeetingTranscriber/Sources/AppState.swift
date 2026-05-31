@@ -104,26 +104,65 @@ final class AppState { // swiftlint:disable:this type_body_length
         private(set) var persistentLogStreamer: PersistentDiagnosticLog.Streamer?
     #endif
 
+    // MARK: - Dependency factories
+
+    // These exist purely to keep the dependency-default construction out of
+    // `init`'s type-check budget — see the comment at the top of `init`.
+    // Each has an explicit return type so the call site resolves to a plain
+    // function reference instead of re-solving the dependency's init.
+
+    private static func makeDefaultSettings() -> AppSettings {
+        AppSettings()
+    }
+
+    private static func makeWhisperKit() -> WhisperKitEngine {
+        WhisperKitEngine()
+    }
+
+    private static func makeParakeet() -> ParakeetEngine {
+        ParakeetEngine()
+    }
+
+    private static func makeUpdateChecker() -> UpdateChecker {
+        UpdateChecker()
+    }
+
+    @available(macOS 15, *)
+    private static func makeQwen3() -> Qwen3AsrEngine {
+        Qwen3AsrEngine()
+    }
+
     // MARK: - Init
 
     init(
-        settings: AppSettings = AppSettings(),
+        settings: AppSettings = AppState.makeDefaultSettings(),
         whisperKit: WhisperKitEngine? = nil,
         parakeetEngine: ParakeetEngine? = nil,
         qwen3Engine: AnyObject? = nil,
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
     ) {
+        // Dependency defaults are resolved through explicitly-typed factory
+        // helpers (above) rather than inline `?? SomeType()` expressions (and
+        // an inline `AppSettings()` default argument). Each inline
+        // `@Observable` / protocol-existential constructor forces the
+        // type-checker to re-solve the dependency's own init constraints at
+        // this call site; summed across the engine + settings dependencies
+        // that pushed this init's body-type-check time right up against the
+        // 300 ms hard limit enforced in Package.swift, where it flaked
+        // intermittently under heavy CI load. A factory with a declared
+        // return type collapses the inference here to a plain function
+        // reference. Behaviour is identical.
         self.settings = settings
-        self.whisperKit = whisperKit ?? WhisperKitEngine()
-        self.parakeetEngine = parakeetEngine ?? ParakeetEngine()
+        self.whisperKit = whisperKit ?? Self.makeWhisperKit()
+        self.parakeetEngine = parakeetEngine ?? Self.makeParakeet()
         if #available(macOS 15, *) {
-            self._qwen3Engine = (qwen3Engine as? Qwen3AsrEngine) ?? Qwen3AsrEngine()
+            self._qwen3Engine = (qwen3Engine as? Qwen3AsrEngine) ?? Self.makeQwen3()
         } else {
             self._qwen3Engine = nil
         }
         self.notifier = notifier
-        self.updateChecker = updateChecker ?? UpdateChecker()
+        self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
         self.pipelineQueue = PipelineQueue()
         self.channelHealthMonitor = ChannelHealthMonitor(
             debounceSeconds: settings.asymmetricSilenceWarningSeconds,
