@@ -1,6 +1,6 @@
 import CoreAudio
 import Foundation
-import os.log
+import os
 
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "AppAudioCapture")
 
@@ -8,11 +8,12 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// No Screen Recording permission needed — only Audio Capture.
 /// Monitors default output device changes and recreates the tap when needed.
 ///
-/// All mutable state is serialized through `writeQueue` (`audiotap.writer`,
+/// Most mutable state is serialized through `writeQueue` (`audiotap.writer`,
 /// userInteractive QoS) or driven from the CoreAudio IOProc callback which
-/// never overlaps with itself for a given tap. The DispatchQueue.main retry
-/// path is the only main-thread touch and it dispatches a single completion
-/// closure. `@unchecked Sendable` reflects that the serialization is manual
+/// never overlaps with itself for a given tap. The two fields the main thread
+/// and the IOProc genuinely touch concurrently — `actualSampleRate` and
+/// `isRunning` — are instead `OSAllocatedUnfairLock`-backed so each access is
+/// atomic. `@unchecked Sendable` reflects that this serialization is manual
 /// rather than expressible to the compiler.
 @available(macOS 14.2, *)
 public class AppAudioCapture: @unchecked Sendable {
@@ -31,7 +32,15 @@ public class AppAudioCapture: @unchecked Sendable {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
-    private var isRunning = false
+    /// Gates the IOProc callback (read on `writeQueue`), set on the start/stop
+    /// path on the main thread. `isRunning = true` must follow `AudioDeviceStart`,
+    /// so it can't be reordered ahead of the callback's read — hence an atomic lock.
+    private let runningLock = OSAllocatedUnfairLock(initialState: false)
+    private var isRunning: Bool {
+        get { runningLock.withLock { $0 } }
+        set { runningLock.withLock { $0 = newValue } }
+    }
+
     private var outputListenerInstalled = false
     /// Stored listener block so we can pass the same instance to remove.
     private var outputDeviceChangeListener: AudioObjectPropertyListenerBlock?
@@ -62,7 +71,15 @@ public class AppAudioCapture: @unchecked Sendable {
     /// mach_absolute_time() of first audio callback.
     public private(set) var appFirstFrameTime: UInt64 = 0
     /// Actual sample rate of the aggregate device (may differ from requested).
-    public private(set) var actualSampleRate: Int = 0
+    /// Touched by the IOProc (`writeQueue`) and the main thread (start/restart
+    /// logs, restart event), so it is `OSAllocatedUnfairLock`-backed for atomic
+    /// cross-thread access; `private(set)` keeps writes internal.
+    private let actualSampleRateLock = OSAllocatedUnfairLock(initialState: 0)
+    public private(set) var actualSampleRate: Int {
+        get { actualSampleRateLock.withLock { $0 } }
+        set { actualSampleRateLock.withLock { $0 = newValue } }
+    }
+
     /// Actual channel count detected from first IOProc callback.
     public private(set) var actualChannels: Int = 0
     private var didLogFormat = false
@@ -402,6 +419,18 @@ public class AppAudioCapture: @unchecked Sendable {
         }
         procID = validProcID
 
+        // Resolve and store the sample rate BEFORE starting the device — value
+        // ordering, not race-safety (the field's lock handles cross-thread
+        // access, see its declaration). Writing the resolved value first lets
+        // the IOProc's first-callback measured-rate correction layer on top
+        // instead of a post-start write clobbering it. Resolving is valid
+        // pre-start: `resolveActualSampleRate` reads only the tap format and the
+        // device's nominal/stream-format properties; the one started-device
+        // query (kAudioDevicePropertyActualSampleRate) lives in the IOProc.
+        actualSampleRate = Self.resolveActualSampleRate(
+            deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
+        )
+
         let startStatus = AudioDeviceStart(aggregateID, procID)
         guard startStatus == noErr else {
             AudioHardwareDestroyAggregateDevice(aggregateID)
@@ -417,9 +446,6 @@ public class AppAudioCapture: @unchecked Sendable {
 
         isRunning = true
 
-        actualSampleRate = Self.resolveActualSampleRate(
-            deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
-        )
         logger.info("Audio capture started (PIDs \(self.pids), rate: \(self.actualSampleRate) Hz)")
     }
 
