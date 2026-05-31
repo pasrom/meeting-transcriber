@@ -72,8 +72,22 @@
             let promptData = Data(prompt.utf8)
             logger.info("claude_cli_subprocess_start prompt_bytes=\(promptData.count, privacy: .public)")
             let stdinWriteTask = Task.detached {
-                stdinPipe.fileHandleForWriting.write(promptData)
-                stdinPipe.fileHandleForWriting.closeFile()
+                // Use the throwing `write(contentsOf:)` rather than the deprecated
+                // `write(_:)`: the latter raises an uncatchable Obj-C NSException on
+                // a write error (e.g. EPIPE when the child's stdin read end has
+                // closed — which happens on the timeout path where readStreamJSON
+                // calls process.terminate()), aborting the whole app. The throwing
+                // API turns a broken pipe into a handled Swift error so we can log
+                // and fall through to close the handle. Mirrors the write sites in
+                // RecognitionStats and PersistentDiagnosticLog.
+                do {
+                    try stdinPipe.fileHandleForWriting.write(contentsOf: promptData)
+                } catch {
+                    logger.debug(
+                        "claude_cli_stdin_write_failed error=\(error.localizedDescription, privacy: .public)",
+                    )
+                }
+                try? stdinPipe.fileHandleForWriting.close()
             }
 
             // Read stream-json output concurrently with stdin write
