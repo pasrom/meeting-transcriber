@@ -2036,6 +2036,71 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(pQueue.jobs.first?.usedDiarizerMode, .offline)
     }
 
+    /// Late re-run of a dual-source job whose mic track fails to diarize must
+    /// fall back to the *unprefixed* app-only diarization — mirroring the batch
+    /// `runDiarization` path — instead of throwing (a silent no-op that bounces
+    /// the job back to pending) or emitting `R_`-prefixed keys that no longer
+    /// match the persisted app-only transcript. Regression guard for the
+    /// late-path sibling of the batch mic-fail app-name-loss bug.
+    func testLateRerunDualSourceMicFailFallsBackToAppOnly() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let mockDiar = MockDiarization()
+        mockDiar.mode = .offline
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        // First run: both tracks succeed → reach speakerNamingPending with
+        // persisted naming data + namingSlug + persisted _app_16k/_mic_16k audio.
+        try pQueue.enqueue(makeDualSourceJob(title: "Late MicFail"))
+        let job = try XCTUnwrap(pQueue.jobs.first)
+        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pendingExpectation.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pendingExpectation], timeout: 10)
+
+        // Re-run: make ONLY the mic track fail. The fallback must still drive the
+        // naming dialog (no silent no-op) with the raw, unprefixed app keys.
+        mockDiar.throwOnPathSuffix = "_mic_16k.wav"
+        var rerunKeys: [String] = []
+        // The handler firing at all proves the fallback ran — the buggy path
+        // throws on the mic track and bounces back to pending without calling it.
+        let handlerCalled = XCTestExpectation(description: "naming handler called after mic-fail fallback")
+        pQueue.speakerNamingHandler = { data in
+            rerunKeys = Array(data.mapping.keys)
+            handlerCalled.fulfill()
+            return .confirmed([:])
+        }
+
+        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(2))
+        await fulfillment(of: [handlerCalled], timeout: 10)
+
+        XCTAssertTrue(
+            rerunKeys.contains("SPEAKER_0"),
+            "fallback should expose the raw app diarization keys — got: \(rerunKeys)",
+        )
+        XCTAssertFalse(
+            rerunKeys.contains { $0.hasPrefix("R_") || $0.hasPrefix("M_") },
+            "mic-fail fallback must use the unprefixed app diarization, not the R_/M_ merge — got: \(rerunKeys)",
+        )
+        let warnings = try XCTUnwrap(pQueue.jobs.first?.warnings)
+        XCTAssertTrue(
+            warnings.contains { $0.contains("Mic track diarization failed") },
+            "late mic-fail fallback should add a warning, like the batch path — got: \(warnings)",
+        )
+    }
+
     /// `isAvailable == false` short-circuits lateDiarization without
     /// changing the job state — there's no recoverable path so the
     /// user is left to fix the configuration (model download, etc.).
