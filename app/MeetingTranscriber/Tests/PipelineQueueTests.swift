@@ -1026,6 +1026,10 @@ final class PipelineQueueTests: XCTestCase {
 
         // Handler should be called twice (first returns rerun, second returns skipped)
         XCTAssertEqual(callCount, 2)
+        // The re-run must actually re-diarize with the new speaker count: first
+        // run uses the default (nil → auto), second uses the rerun's count (3).
+        XCTAssertEqual(mockDiar.runCount, 2)
+        XCTAssertEqual(mockDiar.receivedNumSpeakers, [nil, 3])
     }
 
     func testCompleteSpeakerNamingDoubleResumeIsNoOp() {
