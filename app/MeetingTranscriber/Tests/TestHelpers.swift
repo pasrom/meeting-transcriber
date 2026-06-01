@@ -179,6 +179,8 @@ func makeTestWatchLoop(
     recordOnly: @escaping () -> Bool = { false },
     recordOnlyOutputDir: @escaping () -> URL = { AppPaths.recordingsDir },
     notifier: any AppNotifying = SilentNotifier(),
+    noMic: Bool = false,
+    micDeviceUID: String? = nil,
 ) -> (WatchLoop, MockRecorder) {
     let recorder = MockRecorder()
     recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
@@ -188,6 +190,8 @@ func makeTestWatchLoop(
         pipelineQueue: pipelineQueue,
         pollInterval: 0.05,
         endGracePeriod: 0.1,
+        noMic: noMic,
+        micDeviceUID: micDeviceUID,
         recordOnly: recordOnly,
         recordOnlyDestination: { .unscoped(recordOnlyOutputDir()) },
         notifier: notifier,
@@ -261,14 +265,25 @@ class MockRecorder: RecordingProvider {
     var startCalled = false
     var stopCalled = false
 
+    /// Args captured from the last `start(...)` so tests can pin that `WatchLoop`
+    /// threads them through (appPID, noMic, micDeviceUID) instead of only checking
+    /// `startCalled`. Defaults are deliberately "impossible" values so an unset or
+    /// dropped argument fails an equality assertion rather than passing silently.
+    var capturedAppPID: pid_t = -1
+    var capturedNoMic = false
+    var capturedMicDeviceUID: String?
+
     /// Per-channel level overrides for asymmetric-silence tests. Both default to -120
     /// (silence) so existing tests that don't touch these see the same behavior as
     /// the protocol's default implementations.
     var micLevelDBFS: Double = -120
     var appLevelDBFS: Double = -120
 
-    func start(appPID _: pid_t, noMic _: Bool, micDeviceUID _: String?, debugLogging _: Bool) {
+    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging _: Bool) {
         startCalled = true
+        capturedAppPID = appPID
+        capturedNoMic = noMic
+        capturedMicDeviceUID = micDeviceUID
     }
 
     func stop() throws -> RecordingResult {

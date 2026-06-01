@@ -10,8 +10,17 @@ private final class CapturingRecorder: RecordingProvider {
     var appLevelDBFS: Double = -120
     var micLevelDBFS: Double = -120
 
-    func start(appPID _: pid_t, noMic _: Bool, micDeviceUID _: String?, debugLogging _: Bool) {
+    // Captured start(...) args — appPID + noMic only, since this file's test
+    // doesn't exercise micDeviceUID threading (covered in WatchLoopTests).
+    // Defaults are deliberately "impossible" so a dropped/inverted argument
+    // fails an equality assertion instead of passing.
+    var capturedAppPID: pid_t = -1
+    var capturedNoMic = false
+
+    func start(appPID: pid_t, noMic: Bool, micDeviceUID _: String?, debugLogging _: Bool) {
         startCalled = true
+        capturedAppPID = appPID
+        capturedNoMic = noMic
     }
 
     func stop() -> RecordingResult {
@@ -76,6 +85,14 @@ final class WatchLoopActiveRecorderTests: XCTestCase {
         try await loop.handleMeeting(meeting)
 
         XCTAssertTrue(recorder.startCalled, "recorder.start must be called during handleMeeting")
+        XCTAssertEqual(
+            recorder.capturedAppPID, meeting.windowPID,
+            "auto-watch start must tap the detected meeting's window PID",
+        )
+        XCTAssertTrue(
+            recorder.capturedNoMic,
+            "loop's noMic=true must reach the recorder on the auto-watch path",
+        )
         XCTAssertTrue(recorder.stopCalled, "recorder.stop must be called during handleMeeting")
         XCTAssertIdentical(
             captured as AnyObject?,
