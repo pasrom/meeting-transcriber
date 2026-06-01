@@ -295,11 +295,15 @@ final class MockDiarization: DiarizationProvider, @unchecked Sendable {
     var isAvailable: Bool = true
     var mode: DiarizerMode = .offline
     var runCount = 0
+    /// The `numSpeakers` value passed to each `run` call, in order — lets tests
+    /// assert how the speaker count is threaded (e.g. a naming-dialog re-run).
+    var receivedNumSpeakers: [Int?] = []
     var throwOnPathSuffix: String?
     var resultToReturn: DiarizationResult?
 
-    func run(audioPath: URL, numSpeakers _: Int?, meetingTitle _: String) throws -> DiarizationResult {
+    func run(audioPath: URL, numSpeakers: Int?, meetingTitle _: String) throws -> DiarizationResult {
         runCount += 1
+        receivedNumSpeakers.append(numSpeakers)
         if let suffix = throwOnPathSuffix, audioPath.lastPathComponent.hasSuffix(suffix) {
             throw NSError(
                 domain: "MockDiarization", code: 1,
