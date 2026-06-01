@@ -259,10 +259,14 @@ extension DiarizationProcess {
             )
 
         case let .dualTrackAppOnly(cached, micLabel, app):
+            // Mic diarization failed, so `combined` is the *unprefixed* app
+            // diarization — autoNames keys are raw ("SPEAKER_0"), not "R_"-prefixed.
+            // Pass them through directly; unprefixing would drop every mapping and
+            // surface raw diarizer IDs instead of matched names.
             let namedApp = DiarizationResult(
                 segments: app.segments,
                 speakingTimes: app.speakingTimes,
-                autoNames: unprefixNames(autoNames, prefix: "R_"),
+                autoNames: autoNames,
                 embeddings: app.embeddings,
             )
             let appSegs = cached.filter { $0.speaker == remoteSpeakerLabel }
