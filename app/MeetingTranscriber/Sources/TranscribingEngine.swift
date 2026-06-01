@@ -48,7 +48,7 @@ extension TranscribingEngine {
         }
 
         for i in app.indices {
-            app[i].speaker = "Remote"
+            app[i].speaker = DiarizationProcess.remoteSpeakerLabel
         }
         for i in mic.indices {
             mic[i].speaker = micLabel
