@@ -184,6 +184,21 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertTrue(recorder.startCalled)
     }
 
+    /// Pins that `startManualRecording` threads its `pid` plus the loop's
+    /// `noMic`/`micDeviceUID` into `recorder.start(...)` — not just that start
+    /// was called. A regression that dropped the PID, inverted `noMic`, or lost
+    /// `micDeviceUID` would tap the wrong process / wrong mic config and used to
+    /// pass unnoticed (the mock ignored every argument).
+    func testStartManualRecordingThreadsRecorderParams() async throws {
+        let (loop, recorder) = makeTestWatchLoop(noMic: true, micDeviceUID: "mock-mic-uid")
+        try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+
+        XCTAssertEqual(recorder.capturedAppPID, 42, "manual start must tap the requested PID")
+        XCTAssertTrue(recorder.capturedNoMic, "loop's noMic=true must reach the recorder")
+        XCTAssertEqual(recorder.capturedMicDeviceUID, "mock-mic-uid", "loop's micDeviceUID must reach the recorder")
+    }
+
     func testManualRecordingHasMeetingInfo() async throws {
         let (loop, _) = makeTestWatchLoop()
         try await loop.startManualRecording(pid: 42, appName: "Safari", title: "Standup")
