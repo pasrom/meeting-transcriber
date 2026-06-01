@@ -830,22 +830,44 @@ class PipelineQueue {
             return DiarizationRun(app: nil, mic: nil, combined: diarization)
         }
 
+        return try await runDualTrackDiarization(
+            diarizeProcess: diarizeProcess,
+            tracks: (
+                app: workDir.appendingPathComponent("app_16k.wav"),
+                mic: workDir.appendingPathComponent("mic_16k.wav"),
+            ),
+            speakerCount: speakerCount, title: ctx.title, jobID: ctx.jobID,
+        )
+    }
+
+    /// Diarize the app + mic tracks separately, tolerating a mic-track failure
+    /// (silent track on a host without a real input device). The app track is
+    /// required; on mic failure the `combined` result is the *unprefixed* app
+    /// diarization — so downstream naming keys stay consistent with the
+    /// persisted app-only transcript — rather than the `R_`/`M_`-prefixed merge.
+    /// Shared by the batch (`runDiarization`) and late re-run
+    /// (`runLateDiarization`) paths so the mic-fail fallback can't diverge
+    /// between them.
+    private func runDualTrackDiarization(
+        diarizeProcess: any DiarizationProvider,
+        tracks: (app: URL, mic: URL),
+        speakerCount: Int?, title: String, jobID: UUID,
+    ) async throws -> DiarizationRun {
         let appDiarization = try await diarizeProcess.run(
-            audioPath: workDir.appendingPathComponent("app_16k.wav"),
-            numSpeakers: speakerCount, meetingTitle: ctx.title,
+            audioPath: tracks.app, numSpeakers: speakerCount, meetingTitle: title,
         )
         var micDiarization: DiarizationResult?
         do {
             micDiarization = try await diarizeProcess.run(
-                audioPath: workDir.appendingPathComponent("mic_16k.wav"),
+                audioPath: tracks.mic,
                 numSpeakers: nil, // auto-detect local speakers
-                meetingTitle: ctx.title,
+                meetingTitle: title,
             )
         } catch {
             logger.warning(
-                "[\(ctx.shortID, privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
+                "[\(PipelineJob.shortID(for: jobID), privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
             )
-            addWarning(id: ctx.jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+            addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
             micDiarization = nil
         }
 
@@ -1239,7 +1261,7 @@ class PipelineQueue {
             let title = jobs[jobIndex].meetingTitle
             let diarization = try await runLateDiarization(
                 diarizer: diarizeProcess,
-                audioBase: (dir: recordingsDir, slug: slug),
+                recording: (dir: recordingsDir, slug: slug, jobID: jobID),
                 isDualSource: namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
@@ -1280,24 +1302,30 @@ class PipelineQueue {
     /// keep its function body under the lint cap.
     private func runLateDiarization(
         diarizer: any DiarizationProvider,
-        audioBase: (dir: URL, slug: String),
+        recording: (dir: URL, slug: String, jobID: UUID),
         isDualSource: Bool,
         speakerCount: Int,
         title: String,
     ) async throws -> DiarizationResult {
-        let (recordingsDir, slug) = audioBase
+        let (recordingsDir, slug, jobID) = recording
         if isDualSource {
-            let app16k = recordingsDir.appendingPathComponent("\(slug)_app_16k.wav")
-            let mic16k = recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav")
-            async let appDiar = diarizer.run(
-                audioPath: app16k, numSpeakers: speakerCount, meetingTitle: title,
+            // Mirror the batch path's mic-fail fallback (via the shared helper):
+            // a silent/failing mic track must degrade to the unprefixed app-only
+            // diarization, not throw (a no-op re-run) or emit prefixed keys the
+            // persisted app-only transcript can't match.
+            let run = try await runDualTrackDiarization(
+                diarizeProcess: diarizer,
+                tracks: (
+                    app: recordingsDir.appendingPathComponent("\(slug)_app_16k.wav"),
+                    mic: recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav"),
+                ),
+                speakerCount: speakerCount, title: title, jobID: jobID,
             )
-            async let micDiar = diarizer.run(
-                audioPath: mic16k, numSpeakers: nil, meetingTitle: title,
-            )
-            return try await DiarizationProcess.mergeDualTrackDiarization(
-                appDiarization: appDiar, micDiarization: micDiar,
-            )
+            // Dual-track always yields a combined result (the merge or the
+            // app-only fallback); the optional is only the diarize-loop
+            // placeholder's concern.
+            guard let combined = run.combined else { throw DiarizationError.notAvailable }
+            return combined
         }
         let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
         return try await diarizer.run(
