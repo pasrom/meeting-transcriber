@@ -66,13 +66,10 @@ final class DiarizationLabelSegmentsTests: XCTestCase {
             .dualTrackAppOnly(cached: cached, micLabel: "Me", app: app),
             autoNames: ["SPEAKER_0": "Alice"],
         )
-        // Mic segments keep their raw micLabel (intended). App segments
-        // currently surface the raw diarizer ID rather than "Alice":
-        // labelSegments unprefixes autoNames with "R_", but the app-only
-        // fallback's keys are already unprefixed, so the mapping is dropped.
-        // Pinned as current behavior — the app-track name-loss in this fallback
-        // is a known issue tracked for a separate fix.
-        XCTAssertEqual(result.map(\.speaker), ["SPEAKER_0", "Me"])
+        // App segments are assigned their matched name (the autoNames keys are
+        // already unprefixed in this fallback, since `combined == appDiarization`).
+        // Mic segments keep their raw micLabel (mic wasn't diarized).
+        XCTAssertEqual(result.map(\.speaker), ["Alice", "Me"])
         XCTAssertEqual(result.map(\.text), ["app line", "mic line"])
     }
 }

@@ -894,15 +894,17 @@ final class PipelineQueueTests: XCTestCase {
             transcript.contains("] Me:"),
             "mic-fail fallback: mic segments keep raw mic label — got: \(transcript)",
         )
-        // Pin the app track too, so this test actually exercises labelSegments
-        // (asserting only the surviving raw mic label would pass even against a
-        // no-op). The app segment is assigned via assignSpeakers; the diarizer
-        // ID "SPEAKER_0" surfaces because the app-only fallback unprefixes
-        // autoNames with "R_" against already-unprefixed keys (the documented
-        // name-loss) — but it must no longer carry the raw "Remote" tag.
+        // The app track is still diarized + named: its segment gets the matched
+        // name "Alice", not the raw diarizer ID and not the pre-assignment
+        // "Remote" tag. (This is the bug fix — the app-only fallback used to
+        // drop app-track names by unprefixing already-unprefixed keys.)
         XCTAssertTrue(
+            transcript.contains("Alice:"),
+            "mic-fail fallback: app segments keep their matched name — got: \(transcript)",
+        )
+        XCTAssertFalse(
             transcript.contains("SPEAKER_0:"),
-            "mic-fail fallback: app segments are assigned (raw diarizer ID surfaces) — got: \(transcript)",
+            "mic-fail fallback: app segments must not surface the raw diarizer ID — got: \(transcript)",
         )
         XCTAssertFalse(
             transcript.contains("Remote:"),
