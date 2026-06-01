@@ -354,7 +354,15 @@ class PipelineQueue {
         self.outputDir = outputDir
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
-        self.micLabel = micLabel
+        // "Remote" is the reserved routing tag for the app/remote track
+        // (DiarizationProcess.remoteSpeakerLabel). If the user names the mic
+        // speaker that too, mergeDualSourceSegments tags both tracks identically
+        // and labelSegments' per-track filters each match every segment → app
+        // audio is double-counted under both speakers. Fall back to the default
+        // so the two routing tags can never collide. (This is the single source
+        // of micLabel for both the tagging and the re-split, so sanitizing here
+        // keeps them consistent.)
+        self.micLabel = micLabel == DiarizationProcess.remoteSpeakerLabel ? "Me" : micLabel
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
