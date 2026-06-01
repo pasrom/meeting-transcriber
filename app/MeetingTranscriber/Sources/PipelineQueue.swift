@@ -920,72 +920,33 @@ class PipelineQueue {
                 break diarizationLoop
             }
 
-            // Apply speaker names to segments
+            // Apply speaker names to segments. The three topologies (dual-track,
+            // mic-fail app-only fallback, single-source) share the same
+            // merge + format tail, applied once here.
+            let topology: DiarizationProcess.LabelingTopology?
             if useDualTrack, let appDiar = appDiarization, let micDiar = micDiarization,
                let cached = cachedSegments {
-                // Dual-track: assign from respective diarizations
-                let namedAppDiar = DiarizationResult(
-                    segments: appDiar.segments,
-                    speakingTimes: appDiar.speakingTimes,
-                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
-                    embeddings: appDiar.embeddings,
-                )
-                let namedMicDiar = DiarizationResult(
-                    segments: micDiar.segments,
-                    speakingTimes: micDiar.speakingTimes,
-                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "M_"),
-                    embeddings: micDiar.embeddings,
-                )
-
-                let appSegs = cached.filter { $0.speaker == "Remote" }
-                let micSegs = cached.filter { $0.speaker == micLabel }
-                let labeled = DiarizationProcess.assignSpeakersDualTrack(
-                    appSegments: appSegs,
-                    micSegments: micSegs,
-                    appDiarization: namedAppDiar,
-                    micDiarization: namedMicDiar,
-                )
-                let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
-                finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+                topology = .dualTrack(cached: cached, micLabel: micLabel, app: appDiar, mic: micDiar)
             } else if useDualTrack, let appDiar = appDiarization, let cached = cachedSegments {
-                // Mic diarization failed (silent track / no input
-                // device). Diarize the app track normally and keep
-                // the mic transcript with its raw `micLabel` —
-                // better than emitting "speakers not identified"
-                // on a recording that has perfectly good remote
-                // audio.
-                let namedAppDiar = DiarizationResult(
-                    segments: appDiar.segments,
-                    speakingTimes: appDiar.speakingTimes,
-                    autoNames: DiarizationProcess.unprefixNames(autoNames, prefix: "R_"),
-                    embeddings: appDiar.embeddings,
-                )
-                let appSegs = cached.filter { $0.speaker == "Remote" }
-                let micSegs = cached.filter { $0.speaker == micLabel }
-                let labeledApp = DiarizationProcess.assignSpeakers(
-                    transcript: appSegs, diarization: namedAppDiar,
-                )
-                // micSegs keep their original micLabel speaker tag.
-                let combined = (labeledApp + micSegs).sorted { $0.start < $1.start }
-                let merged = DiarizationProcess.mergeConsecutiveSpeakers(combined)
-                finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
+                // Mic diarization failed (silent track / no input device). Keep
+                // the mic transcript with its raw `micLabel` — better than
+                // emitting "speakers not identified" on a recording that has
+                // perfectly good remote audio.
+                topology = .dualTrackAppOnly(cached: cached, micLabel: micLabel, app: appDiar)
             } else if let currentDiarization = diarization {
-                // Single-source: standard assignment
-                let namedDiarization = DiarizationResult(
-                    segments: currentDiarization.segments,
-                    speakingTimes: currentDiarization.speakingTimes,
-                    autoNames: autoNames,
-                    embeddings: currentDiarization.embeddings,
-                )
-                let segments: [TimestampedSegment] = if let cached = cachedSegments {
+                // Single-source: standard assignment. cachedSegments is set by
+                // the transcribe stage in practice; re-transcribe defensively.
+                let segments = if let cached = cachedSegments {
                     cached
                 } else {
                     try await engine.transcribeSegments(audioPath: mix16k)
                 }
-                let labeled = DiarizationProcess.assignSpeakers(
-                    transcript: segments,
-                    diarization: namedDiarization,
-                )
+                topology = .single(segments: segments, diarization: currentDiarization)
+            } else {
+                topology = nil
+            }
+            if let topology {
+                let labeled = DiarizationProcess.labelSegments(topology, autoNames: autoNames)
                 let merged = DiarizationProcess.mergeConsecutiveSpeakers(labeled)
                 finalTranscript = merged.map(\.formattedLine).joined(separator: "\n")
             }
