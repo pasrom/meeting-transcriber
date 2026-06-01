@@ -768,25 +768,151 @@ final class PipelineQueueTests: XCTestCase {
         ]
         let (pQueue, _) = makeMockProcessingQueue(engine: engine)
 
-        let audioPath = try createTestAudioFile(in: tmpDir)
-        let appPath = tmpDir.appendingPathComponent("app_audio.wav")
-        let micPath = tmpDir.appendingPathComponent("mic_audio.wav")
-        try FileManager.default.copyItem(at: audioPath, to: appPath)
-        try FileManager.default.copyItem(at: audioPath, to: micPath)
-
-        let job = PipelineJob(
-            meetingTitle: "Dual Source",
-            appName: "Teams",
-            mixPath: audioPath,
-            appPath: appPath,
-            micPath: micPath,
-            micDelay: 0,
-        )
-        pQueue.enqueue(job)
+        try pQueue.enqueue(makeDualSourceJob(title: "Dual Source"))
         await pQueue.processNext()
 
         // Dual source: transcribes app + mic = 2 calls
         XCTAssertEqual(engine.transcribeCallCount, 2)
+    }
+
+    // MARK: - diarize() assign-phase characterization
+
+    //
+    // These pin the final speaker-labeled transcript that diarize() hands to
+    // protocol generation, for each of its three assignment topologies
+    // (single-source / dual-track-both / dual-track-mic-fail). They guard the
+    // extraction of the assignment logic into DiarizationProcess: the
+    // observable output must stay identical across the refactor. `embeddings:
+    // nil` short-circuits the matcher + naming dialog so the job flows straight
+    // through to the assignment branch.
+
+    private func makeCapturingQueue(
+        engine: MockEngine,
+        diar: MockDiarization,
+        protocolGen: MockProtocolGen,
+    ) -> PipelineQueue {
+        PipelineQueue(
+            engine: engine,
+            diarizationFactory: { diar },
+            diarizationFactoryWithMode: nil,
+            protocolGeneratorFactory: { protocolGen },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+            numSpeakers: 0,
+            micLabel: "Me",
+        )
+    }
+
+    private func makeDualSourceJob(title: String) throws -> PipelineJob {
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let appPath = tmpDir.appendingPathComponent("app_audio.wav")
+        let micPath = tmpDir.appendingPathComponent("mic_audio.wav")
+        try? FileManager.default.removeItem(at: appPath)
+        try? FileManager.default.removeItem(at: micPath)
+        try FileManager.default.copyItem(at: audioPath, to: appPath)
+        try FileManager.default.copyItem(at: audioPath, to: micPath)
+        return PipelineJob(
+            meetingTitle: title, appName: "Teams",
+            mixPath: audioPath, appPath: appPath, micPath: micPath, micDelay: 0,
+        )
+    }
+
+    func testDiarizeSingleSourceLabelsTranscriptWithAutoNames() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello world")]
+        let diar = MockDiarization()
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: ["SPEAKER_0": "Alice"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        q.enqueue(PipelineJob(
+            meetingTitle: "Single", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        XCTAssertTrue(
+            transcript.contains("Alice: Hello world"),
+            "single-source: SPEAKER_0 should map to Alice — got: \(transcript)",
+        )
+    }
+
+    func testDiarizeDualTrackLabelsBothTracks() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: ["SPEAKER_0": "Alice"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        try q.enqueue(makeDualSourceJob(title: "Dual"))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        // Both tracks' segments are assigned via their (R_/M_-unprefixed) diarization → Alice.
+        XCTAssertTrue(transcript.contains("Alice:"), "dual-track: speakers should be named — got: \(transcript)")
+        XCTAssertFalse(transcript.contains("Remote:"), "dual-track: raw 'Remote' app label should be replaced")
+        XCTAssertFalse(
+            transcript.contains("] Me:"),
+            "dual-track: raw 'Me' mic label should be replaced when mic diarization succeeds — got: \(transcript)",
+        )
+    }
+
+    func testDiarizeDualTrackMicFailKeepsRawMicLabel() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.throwOnPathSuffix = "mic_16k.wav" // mic diarization fails → app-only fallback
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: ["SPEAKER_0": "Alice"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        try q.enqueue(makeDualSourceJob(title: "Dual MicFail"))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        // App-only fallback: mic segments keep their raw 'Me' label (not force-matched).
+        XCTAssertTrue(
+            transcript.contains("] Me:"),
+            "mic-fail fallback: mic segments keep raw mic label — got: \(transcript)",
+        )
+        // Pin the app track too, so this test actually exercises labelSegments
+        // (asserting only the surviving raw mic label would pass even against a
+        // no-op). The app segment is assigned via assignSpeakers; the diarizer
+        // ID "SPEAKER_0" surfaces because the app-only fallback unprefixes
+        // autoNames with "R_" against already-unprefixed keys (the documented
+        // name-loss) — but it must no longer carry the raw "Remote" tag.
+        XCTAssertTrue(
+            transcript.contains("SPEAKER_0:"),
+            "mic-fail fallback: app segments are assigned (raw diarizer ID surfaces) — got: \(transcript)",
+        )
+        XCTAssertFalse(
+            transcript.contains("Remote:"),
+            "mic-fail fallback: app segments must lose their raw 'Remote' tag — got: \(transcript)",
+        )
+        let warnings = try XCTUnwrap(q.jobs.first?.warnings)
+        XCTAssertTrue(
+            warnings.contains { $0.contains("Mic track diarization failed") },
+            "mic-fail fallback should add a warning — got: \(warnings)",
+        )
     }
 
     func testSpeakerNamingHandlerCalled() async throws {
