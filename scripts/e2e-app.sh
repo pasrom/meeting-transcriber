@@ -639,10 +639,16 @@ if [ "$REIMPORT_LATEST" = true ]; then
     # freshest `*_mix.wav` in $RECORDINGS_DIR — eliminates the audible
     # ~30 s playback + capture round and the meeting-detector cooldown
     # that --reimport-recorded incurs.
+    # Pick the freshest *_mix.wav by mtime. A single awk max-pass replaces
+    # `sort -rn | head -1`: under `set -o pipefail`, `head` closing the pipe
+    # after one line left `sort` writing into a closed pipe → SIGPIPE (exit
+    # 141) → `set -e` aborted with "sort: Broken pipe" once two or more
+    # recordings had accumulated. awk reads the whole stream, so the upstream
+    # find/stat finish cleanly. (`$1` = mtime, `$0` = "mtime path"; cut keeps
+    # the path, tolerating spaces.)
     latest_mix="$(find "$RECORDINGS_DIR" -maxdepth 1 -name '*_mix.wav' -type f \
         -exec stat -f '%m %N' {} + 2>/dev/null \
-        | sort -rn \
-        | head -1 \
+        | awk 'NR == 1 || $1 > newest { newest = $1; line = $0 } END { if (NR) print line }' \
         | cut -d' ' -f2-)"
     [ -n "$latest_mix" ] && [ -f "$latest_mix" ] \
         || fail "--reimport-latest: no *_mix.wav found in $RECORDINGS_DIR — run \`e2e-app.sh --record-only --keep-recordings\` first to produce one"
