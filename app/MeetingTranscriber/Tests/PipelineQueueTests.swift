@@ -790,6 +790,7 @@ final class PipelineQueueTests: XCTestCase {
         engine: MockEngine,
         diar: MockDiarization,
         protocolGen: MockProtocolGen,
+        micLabel: String = "Me",
     ) -> PipelineQueue {
         PipelineQueue(
             engine: engine,
@@ -800,7 +801,7 @@ final class PipelineQueueTests: XCTestCase {
             logDir: tmpDir,
             diarizeEnabled: true,
             numSpeakers: 0,
-            micLabel: "Me",
+            micLabel: micLabel,
         )
     }
 
@@ -914,6 +915,40 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(
             warnings.contains { $0.contains("Mic track diarization failed") },
             "mic-fail fallback should add a warning — got: \(warnings)",
+        )
+    }
+
+    /// A user can set the Mic Speaker Name to "Remote" — the same literal used
+    /// as the reserved app/remote routing tag (`DiarizationProcess.remoteSpeakerLabel`).
+    /// Without sanitization, `mergeDualSourceSegments` tags both tracks "Remote"
+    /// and `labelSegments`' per-track filters both match every segment, so each
+    /// utterance is emitted once per track filter → app audio double-counted.
+    /// PipelineQueue must fall the colliding mic label back to a distinct one.
+    func testDiarizeDualTrackMicLabelRemoteDoesNotDoubleCount() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "ZZWORD")]
+        let diar = MockDiarization()
+        // Both tracks diarize successfully (no mic-fail) → dual-track topology.
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen, micLabel: "Remote")
+
+        try q.enqueue(makeDualSourceJob(title: "Remote MicLabel"))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        // Dual-source mock transcribes both tracks → "ZZWORD" twice (once per
+        // real track). The double-count bug routes every segment through BOTH
+        // filters → four. Pin two.
+        let occurrences = transcript.components(separatedBy: "ZZWORD").count - 1
+        XCTAssertEqual(
+            occurrences, 2,
+            "app/mic audio must not be double-counted when micName == 'Remote' — got: \(transcript)",
         )
     }
 
