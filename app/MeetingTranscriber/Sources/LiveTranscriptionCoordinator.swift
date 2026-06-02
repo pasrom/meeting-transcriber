@@ -34,17 +34,41 @@ final class LiveTranscriptionCoordinator {
     private let liveEnabled: () -> Bool
     private let engineSupportsLive: () -> Bool
     private let verboseDiagnostics: () -> Bool
+    private let makeController: ControllerFactory
+
+    /// Builds the streaming controller for an already-resolved engine. Injectable
+    /// so tests can supply a controller with mock collaborators (no model load);
+    /// the default builds the real one. Takes `captions` + `verboseDiagnostics` as
+    /// parameters (rather than capturing `self`) so the default can be a `static`
+    /// function with no init-ordering dependency.
+    typealias ControllerFactory = @MainActor (
+        any StreamingTranscribingEngine, LiveCaptionsState, @escaping () -> Bool,
+    ) -> LiveTranscriptionController
 
     init(
         captions: LiveCaptionsState,
         liveEnabled: @escaping () -> Bool,
         engineSupportsLive: @escaping () -> Bool,
         verboseDiagnostics: @escaping () -> Bool,
+        makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
     ) {
         self.captions = captions
         self.liveEnabled = liveEnabled
         self.engineSupportsLive = engineSupportsLive
         self.verboseDiagnostics = verboseDiagnostics
+        self.makeController = makeController
+    }
+
+    private static func makeDefaultController(
+        engine: any StreamingTranscribingEngine,
+        captions: LiveCaptionsState,
+        verboseDiagnostics: @escaping () -> Bool,
+    ) -> LiveTranscriptionController {
+        LiveTranscriptionController(
+            engine: engine,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+        ) { verboseDiagnostics() }
     }
 
     /// Wire the active-engine source, then do the initial pre-warm + arm the
@@ -116,11 +140,7 @@ final class LiveTranscriptionCoordinator {
         else {
             return nil
         }
-        let controller = LiveTranscriptionController(
-            engine: streamingEngine,
-            vad: FluidVAD(threshold: 0.5),
-            captions: captions,
-        ) { [verboseDiagnostics] in verboseDiagnostics() }
+        let controller = makeController(streamingEngine, captions, verboseDiagnostics)
         self.controller = controller
         Task { @MainActor in await controller.prepare() }
         return controller
