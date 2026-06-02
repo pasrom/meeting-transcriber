@@ -69,9 +69,11 @@ final class AppState { // swiftlint:disable:this type_body_length
     let liveTranscription: LiveTranscriptionCoordinator
 
     #if !APPSTORE
-        /// Lazy-started debug RPC server. Only constructed if the env var is
-        /// set — otherwise `nil` and zero overhead.
-        var debugRPCServer: DebugRPCServer?
+        /// Debug RPC server lifecycle (launch gate, settings-driven start/stop,
+        /// token rotation), extracted into its own controller. `AppState` supplies
+        /// the wired server via `buildDebugRPCServer()` and keeps the state
+        /// projection (`rpcStateSnapshot`) + speaker-DB actions.
+        let rpcController: RPCServerController
 
         /// Background `log stream` subprocess that mirrors our subsystems to
         /// `~/Library/Logs/MeetingTranscriber/diagnostics-YYYY-MM-DD.log`.
@@ -153,6 +155,11 @@ final class AppState { // swiftlint:disable:this type_body_length
         )
 
         #if !APPSTORE
+            // Not trailing-closure: `isEnabled` is the first param (the other two
+            // have defaults), so a trailing closure would bind to `rotateToken`.
+            // swiftlint:disable:next trailing_closure
+            self.rpcController = RPCServerController(isEnabled: { [settings] in settings.debugRPCEnabled })
+
             // E2E hook: force a per-channel flag on at launch so a driver
             // script can assert the menu-bar red-tint pipeline end-to-end
             // without orchestrating real audio. Only honoured in non-AppStore
@@ -176,14 +183,11 @@ final class AppState { // swiftlint:disable:this type_body_length
         liveTranscription.beginPrewarm { [weak self] in self?.activeTranscriptionEngine }
 
         #if !APPSTORE
-            // Env var force-enables at launch only — preserves back-compat with
-            // scripts/test_rpc.sh and CI. After init, settings.debugRPCEnabled
-            // is the sole driver, so toggling off mid-session works even when
-            // the env var was set at launch.
-            if DebugRPCServer.enabled || settings.debugRPCEnabled {
-                startDebugRPCServer()
-            }
-            observeDebugRPCSetting()
+            // Launch gate (env var OR setting) + the settings observer now live
+            // in RPCServerController.activate; AppState only supplies the wired
+            // server. The closure is set here (post stored-property init) so it
+            // can capture self.
+            rpcController.activate { [weak self] in self?.buildDebugRPCServer() }
 
             PersistentDiagnosticLog.cleanup()
             do {
@@ -223,25 +227,10 @@ final class AppState { // swiftlint:disable:this type_body_length
     #endif
 
     #if !APPSTORE
-        /// Reconcile the debug RPC server with the current setting.
-        ///
-        /// Called only from the settings-driven `observeDebugRPCSetting` path
-        /// (init has its own gate). On a toggle off → on we rotate the bearer
-        /// token before starting the listener: that way any token an attacker
-        /// scraped while the server was previously running is invalidated by
-        /// the act of turning it off and on again — the same gesture a user
-        /// already performs to "reset" the feature.
-        func applyDebugRPCSetting() {
-            if settings.debugRPCEnabled, debugRPCServer == nil {
-                DebugRPCServer.rotateToken()
-                startDebugRPCServer()
-            } else if !settings.debugRPCEnabled, let server = debugRPCServer {
-                server.stop()
-                debugRPCServer = nil
-            }
-        }
-
-        private func startDebugRPCServer() {
+        /// Build a fully-wired debug RPC server (state snapshot + speaker-DB
+        /// actions + skip-naming + file-enqueue closures). `RPCServerController`
+        /// owns when to start/stop it; this just constructs it.
+        func buildDebugRPCServer() -> DebugRPCServer {
             let snapshot: () -> RPCStateSnapshot = { [weak self] in
                 self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
             }
@@ -273,30 +262,13 @@ final class AppState { // swiftlint:disable:this type_body_length
             let enqueueFilesRPC: ([URL]) -> Int = { [weak self] urls in
                 self?.enqueueExistingFiles(urls) ?? 0
             }
-            let server = DebugRPCServer(
+            return DebugRPCServer(
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
                 enqueueFile: enqueueFile,
                 enqueueFiles: enqueueFilesRPC,
             )
-            server.start()
-            debugRPCServer = server
-        }
-
-        /// `withObservationTracking` is one-shot — re-arm after each fire so
-        /// the AppState reacts to every toggle of `settings.debugRPCEnabled`,
-        /// not just the first one.
-        private func observeDebugRPCSetting() {
-            withObservationTracking {
-                _ = settings.debugRPCEnabled
-            } onChange: { [weak self] in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.applyDebugRPCSetting()
-                    self.observeDebugRPCSetting()
-                }
-            }
         }
     #endif
 
@@ -638,7 +610,7 @@ final class AppState { // swiftlint:disable:this type_body_length
 
     /// `withObservationTracking` is one-shot — re-arm after each fire so the
     /// AppState reacts to every settings change, not just the first one.
-    /// Mirrors the `observeDebugRPCSetting` pattern.
+    /// Same self-re-arming pattern the concern controllers use for their observers.
     private func observeEngineSettings() {
         withObservationTracking {
             _ = settings.transcriptionEngine
