@@ -57,17 +57,16 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// state transitions, and the menu-bar icon + RPC snapshot read its flags.
     let channelHealth: ChannelHealthController
 
-    /// PoC live-transcription controller. Lazily created on first recording
-    /// start where `settings.liveTranscriptionEnabled` is true AND the active
-    /// engine is Parakeet (other engines silently no-op via
-    /// `TranscriptionError.streamingNotSupported`). Kept across recordings so
-    /// engine + VAD models stay warm.
-    @ObservationIgnored private var liveTranscriptionController: LiveTranscriptionController?
-
     /// Observable state for the live caption overlay. Always present (the
     /// `LiveCaptionsOverlay` window observes this); content is only populated
-    /// when live transcription is on AND a recording is active.
+    /// when live transcription is on AND a recording is active. Owned here (read
+    /// by the overlay window + RPC snapshot) and injected into `liveTranscription`.
     let liveCaptions: LiveCaptionsState = .init()
+
+    /// Live-transcription controller lifecycle (lazy creation against the active
+    /// engine, pre-warm, per-recording sink installation), extracted into its own
+    /// coordinator. `makeRecorderFactory` delegates sink installation to it.
+    let liveTranscription: LiveTranscriptionCoordinator
 
     #if !APPSTORE
         /// Lazy-started debug RPC server. Only constructed if the env var is
@@ -146,6 +145,12 @@ final class AppState { // swiftlint:disable:this type_body_length
             debounceSeconds: { [settings] in settings.asymmetricSilenceWarningSeconds },
             indicatorEnabled: { [settings] in settings.perChannelIndicatorEnabled },
         )
+        self.liveTranscription = LiveTranscriptionCoordinator(
+            captions: liveCaptions,
+            liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
+            engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
+            verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
+        )
 
         #if !APPSTORE
             // E2E hook: force a per-channel flag on at launch so a driver
@@ -168,7 +173,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         // start observing for runtime changes.
         syncLanguageSettings()
         observeEngineSettings()
-        setupLiveTranscriptionPrewarm()
+        liveTranscription.beginPrewarm { [weak self] in self?.activeTranscriptionEngine }
 
         #if !APPSTORE
             // Env var force-enables at launch only — preserves back-compat with
@@ -415,46 +420,9 @@ final class AppState { // swiftlint:disable:this type_body_length
     private func makeRecorderFactory() -> @MainActor () -> any RecordingProvider {
         { [weak self] in
             let recorder = DualSourceRecorder()
-            guard let self else { return recorder }
-            if self.settings.liveTranscriptionEnabled,
-               self.settings.transcriptionEngine.supportsLiveTranscription,
-               let controller = self.ensureLiveTranscriptionController() {
-                controller.reset()
-                recorder.micLiveSink = controller.micSink
-                recorder.appLiveSink = controller.appSink
-            }
+            self?.liveTranscription.attachSinks(to: recorder)
             return recorder
         }
-    }
-
-    /// Lazily create + warm the live transcription controller against the
-    /// currently-active engine. Safe to call repeatedly — `prepare()` is
-    /// idempotent (engines dedupe concurrent `loadModel` calls). When the
-    /// transcription-engine setting changes, the controller is invalidated
-    /// via `observeEngineSettings` so the next call rebuilds against the
-    /// new engine.
-    ///
-    /// Returns nil when the active engine doesn't conform to
-    /// `StreamingTranscribingEngine` — the static equivalent of the
-    /// `supportsLiveTranscription` enum-level gate. Both `prewarm…` and
-    /// `makeRecorderFactory` callers already check that gate before
-    /// invoking this, so a nil return here only happens if a regression
-    /// breaks one of those guards.
-    private func ensureLiveTranscriptionController() -> LiveTranscriptionController? {
-        if let existing = liveTranscriptionController { return existing }
-        guard let streamingEngine = activeTranscriptionEngine as? any StreamingTranscribingEngine else {
-            return nil
-        }
-        let controller = LiveTranscriptionController(
-            engine: streamingEngine,
-            vad: FluidVAD(threshold: 0.5),
-            captions: liveCaptions,
-        ) { [weak self] in
-            self?.settings.verboseDiagnostics ?? false
-        }
-        liveTranscriptionController = controller
-        Task { @MainActor in await controller.prepare() }
-        return controller
     }
 
     // MARK: - Start / Stop
@@ -683,53 +651,6 @@ final class AppState { // swiftlint:disable:this type_body_length
                 guard let self else { return }
                 self.syncLanguageSettings()
                 self.observeEngineSettings()
-            }
-        }
-    }
-
-    /// Eagerly load the FluidVAD + Parakeet models when the live-transcription
-    /// toggle flips on (or is already on at launch with the right engine), so
-    /// the first utterance after the recorder starts doesn't pay the cold-load
-    /// cost (a few seconds for the first call to `engine.loadModel()` + VAD
-    /// init). No-op when the conditions aren't met. Idempotent — the engines
-    /// dedupe concurrent `loadModel` calls.
-    private func prewarmLiveTranscriptionIfEligible() {
-        guard settings.liveTranscriptionEnabled,
-              settings.transcriptionEngine.supportsLiveTranscription
-        else { return }
-        _ = ensureLiveTranscriptionController()
-    }
-
-    /// Initial pre-warm of the live-transcription controller (when enabled +
-    /// the active engine supports streaming) plus a re-arming
-    /// `withObservationTracking` watcher on `liveTranscriptionEnabled` and
-    /// `transcriptionEngine`. On every change, drop the cached controller so
-    /// the next `ensureLiveTranscriptionController()` call rebuilds against
-    /// the (possibly new) `activeTranscriptionEngine` and re-warms the right
-    /// engine.
-    ///
-    /// Engine changes take effect on the **next** recording. Switching the
-    /// engine mid-recording deallocates the controller (its sinks capture
-    /// `[weak self]`), buffers from the running recorder no longer reach any
-    /// engine, and the live overlay goes silent until the recording stops and
-    /// a new one starts. Live mid-recording engine swap is a deferred follow-up
-    /// — see PR #318 limitations.
-    ///
-    /// Combined into a single method (rather than two init-body calls) so the
-    /// AppState init's type-check stays under the 300 ms `expression_type_check`
-    /// lint budget. Same recurring flake as `feedback_local_verify_before_push`
-    /// — the compiler's constraint solver gets slower with every method call
-    /// inside a long initializer.
-    private func setupLiveTranscriptionPrewarm() {
-        prewarmLiveTranscriptionIfEligible()
-        withObservationTracking {
-            _ = settings.liveTranscriptionEnabled
-            _ = settings.transcriptionEngine
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.liveTranscriptionController = nil
-                self.setupLiveTranscriptionPrewarm()
             }
         }
     }
