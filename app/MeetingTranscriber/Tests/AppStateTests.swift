@@ -614,7 +614,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     func testStartManualRecordingSendsNotification() async {
         let (state, notifier) = makeState()
-        state.permissionHealth = HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
         addTeardownBlock { state.watchLoop?.stop() }
 
         state.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
@@ -629,7 +629,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     func testStartManualRecordingStopsExistingAutoWatchLoop() async {
         let (state, _) = makeState()
-        state.permissionHealth = HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
         let (existingLoop, _) = makeTestWatchLoop()
         existingLoop.start()
         state.watchLoop = existingLoop
@@ -759,80 +759,6 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.settings.numSpeakers = 4
         let queue = state.makePipelineQueue()
         XCTAssertEqual(queue.numSpeakers, 4)
-    }
-
-    // MARK: - Permission Health Check
-
-    func testHandlePermissionHealthBrokenSendsNotification() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        state.handlePermissionHealth(HealthCheckResult(
-            screenRecording: .broken,
-            microphone: .healthy,
-        ))
-        XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertTrue(notifier.calls.first?.title.contains("Permission") ?? false)
-    }
-
-    func testHandlePermissionHealthHealthyNoNotification() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        state.handlePermissionHealth(HealthCheckResult(
-            screenRecording: .healthy,
-            microphone: .healthy,
-        ))
-        XCTAssertTrue(notifier.calls.isEmpty)
-    }
-
-    func testHandlePermissionHealthStoresResult() {
-        let state = AppState(notifier: RecordingNotifier())
-        let result = HealthCheckResult(
-            screenRecording: .healthy,
-            microphone: .healthy,
-        )
-        state.handlePermissionHealth(result)
-        XCTAssertEqual(state.permissionHealth, result)
-    }
-
-    func testHandlePermissionHealthDedupsRepeatedProblem() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        let broken = HealthCheckResult(screenRecording: .healthy, microphone: .broken)
-        state.handlePermissionHealth(broken)
-        state.handlePermissionHealth(broken)
-        state.handlePermissionHealth(broken)
-        XCTAssertEqual(notifier.calls.count, 1, "Identical problem set should only notify once")
-    }
-
-    func testHandlePermissionHealthReNotifiesAfterRecovery() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        let broken = HealthCheckResult(screenRecording: .healthy, microphone: .broken)
-        let healthy = HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
-        state.handlePermissionHealth(broken) // notify #1
-        state.handlePermissionHealth(healthy) // clears dedup memory
-        state.handlePermissionHealth(broken) // notify #2
-        XCTAssertEqual(notifier.calls.count, 2)
-    }
-
-    func testHandlePermissionHealthNotifiesWhenProblemChanges() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        state.handlePermissionHealth(HealthCheckResult(screenRecording: .healthy, microphone: .broken))
-        state.handlePermissionHealth(HealthCheckResult(screenRecording: .broken, microphone: .healthy))
-        XCTAssertEqual(notifier.calls.count, 2, "Different problem sets should each trigger a notification")
-    }
-
-    func testHandlePermissionHealthAccessibilityBrokenNotifies() {
-        let notifier = RecordingNotifier()
-        let state = AppState(notifier: notifier)
-        state.handlePermissionHealth(HealthCheckResult(
-            screenRecording: .healthy,
-            microphone: .healthy,
-            accessibility: .broken,
-        ))
-        XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertTrue(notifier.calls.first?.body.contains("Accessibility") ?? false)
     }
 }
 
