@@ -100,7 +100,7 @@ struct MeetingTranscriberApp: App {
             } icon: {
                 AnimatedMenuBarIcon(
                     badge: appState.currentBadge,
-                    permissionOverlay: appState.permissionHealth?.isHealthy == false,
+                    permissionOverlay: appState.hasPermissionProblem,
                     recordOnlyOverlay: appState.settings.recordOnly,
                     // `recordingSilentActive` paints both halves; OR'd in here so
                     // MenuBarIcon only needs the two per-channel overlay inputs.
@@ -143,14 +143,14 @@ struct MeetingTranscriberApp: App {
                 appState.updateChecker.startPeriodicChecks(settings: appState.settings)
             }
             .task {
-                await appState.checkPermissions()
+                await appState.permissions.check()
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 // Re-check permissions when the user returns to the app (e.g. from System
                 // Settings after toggling a permission). Debounced so rapid Cmd-Tab cycles
                 // don't repeatedly churn the mic HAL via the 500 ms probe.
                 Task { @MainActor in
-                    await appState.checkPermissions(minimumInterval: 3)
+                    await appState.permissions.check(minimumInterval: 3)
                 }
             }
             .onChange(of: appState.shouldShowLiveCaptions, initial: true) { _, visible in

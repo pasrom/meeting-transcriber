@@ -46,7 +46,10 @@ final class AppState { // swiftlint:disable:this type_body_length
     var pipelineQueue: PipelineQueue
     var updateChecker: UpdateChecker
     var selectedNamingJobID: UUID?
-    var permissionHealth: HealthCheckResult?
+
+    /// Live TCC permission-health concern, extracted into its own controller.
+    /// `currentBadge` composes its `health` into the `.error` state.
+    let permissions: PermissionsController
 
     /// True while the **mic** channel is silent and the app channel is carrying
     /// speech continuously for `settings.asymmetricSilenceWarningSeconds`. Drives
@@ -162,6 +165,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             self._qwen3Engine = nil
         }
         self.notifier = notifier
+        self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
         self.pipelineQueue = PipelineQueue()
         self.channelHealthMonitor = ChannelHealthMonitor(
@@ -363,7 +367,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             transcriberState: watchLoop?.transcriberState ?? .idle,
             activeJobState: pipelineQueue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
-            permissionProblem: permissionHealth?.isHealthy == false,
+            permissionProblem: permissions.health?.isHealthy == false,
         )
     }
 
@@ -372,6 +376,15 @@ final class AppState { // swiftlint:disable:this type_body_length
             return loop.transcriberState.label
         }
         return "Idle"
+    }
+
+    /// Whether the live permission health check currently reports a problem.
+    /// Hoisted out of the SwiftUI menu-bar body: resolving the
+    /// `permissions.health?.isHealthy == false` chain inline pushed that body's
+    /// type-check over the 300 ms budget on slower CI runners. Reading it as a
+    /// named `Bool` property keeps the body cheap.
+    var hasPermissionProblem: Bool {
+        permissions.health?.isHealthy == false
     }
 
     private static let isoFormatter = ISO8601DateFormatter()
@@ -495,7 +508,7 @@ final class AppState { // swiftlint:disable:this type_body_length
 
                 attachStateChangeHandler(to: loop, notifyOnRecording: true)
 
-                if let health = permissionHealth {
+                if let health = permissions.health {
                     loop.permissionChecker = { health }
                 }
 
@@ -541,7 +554,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             attachStateChangeHandler(to: loop, notifyOnRecording: false)
 
             // Use cached health check result instead of live probe
-            if let health = permissionHealth {
+            if let health = permissions.health {
                 loop.permissionChecker = { health }
             }
 
@@ -768,46 +781,6 @@ final class AppState { // swiftlint:disable:this type_body_length
         micSilentActive = false
         appSilentActive = false
         recordingSilentActive = false
-    }
-
-    // MARK: - Permission Health
-
-    func handlePermissionHealth(_ result: HealthCheckResult) {
-        let previousProblems = permissionHealth?.problems ?? []
-        permissionHealth = result
-        let line = "[PermissionHealthCheck] screen=\(result.screenRecording) mic=\(result.microphone) " +
-            "ax=\(result.accessibility) healthy=\(result.isHealthy) problems=\(result.problems)"
-        PermissionHealthCheck.debugLog(line)
-
-        let problems = result.problems
-        if !problems.isEmpty, problems != previousProblems {
-            PermissionHealthCheck.debugLog("[PermissionHealthCheck] Sending notification: \(result.notificationBody)")
-            notifier.notify(
-                title: "Permission Problem",
-                body: result.notificationBody,
-            )
-        }
-    }
-
-    /// Timestamp of the last completed `checkPermissions()` run. Used to debounce repeated
-    /// calls triggered by `NSApplication.didBecomeActiveNotification` so the 500 ms mic
-    /// probe doesn't churn the audio HAL on every Cmd-Tab.
-    private var lastPermissionCheckAt: Date?
-
-    /// Run the live permission health check.
-    ///
-    /// - Parameter minimumInterval: if non-nil, skip the run when the last completed check
-    ///   happened less than `minimumInterval` seconds ago. The initial startup call passes
-    ///   `nil` so it always runs; the `didBecomeActive` handler passes a small value to
-    ///   avoid HAL churn on rapid re-activations.
-    func checkPermissions(minimumInterval: TimeInterval? = nil) async {
-        if let minimumInterval, let last = lastPermissionCheckAt,
-           Date().timeIntervalSince(last) < minimumInterval {
-            return
-        }
-        let result = await PermissionHealthCheck.runLive()
-        lastPermissionCheckAt = Date()
-        handlePermissionHealth(result)
     }
 
     // MARK: - Pipeline
