@@ -59,7 +59,7 @@ struct MeetingTranscriberApp: App {
         // E2E drivers that force channel-health flags via env var also set
         // `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1` so a +3 s
         // `toggleWatching` doesn't reset the forced flag through the
-        // normal `stopChannelHealthMonitoring()` path.
+        // normal `channelHealth.stop()` path.
         if (CommandLine.arguments.contains("--auto-watch")
             || UserDefaults.standard.bool(forKey: "autoWatch"))
             && !suppressAutoWatch {
@@ -102,10 +102,11 @@ struct MeetingTranscriberApp: App {
                     badge: appState.currentBadge,
                     permissionOverlay: appState.hasPermissionProblem,
                     recordOnlyOverlay: appState.settings.recordOnly,
-                    // `recordingSilentActive` paints both halves; OR'd in here so
-                    // MenuBarIcon only needs the two per-channel overlay inputs.
-                    micSilentOverlay: appState.micSilentActive || appState.recordingSilentActive,
-                    appSilentOverlay: appState.appSilentActive || appState.recordingSilentActive,
+                    // `recordingSilentActive` paints both halves; folded into the
+                    // hoisted overlay props so MenuBarIcon only needs the two
+                    // per-channel overlay inputs.
+                    micSilentOverlay: appState.micSilentOverlay,
+                    appSilentOverlay: appState.appSilentOverlay,
                 )
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in

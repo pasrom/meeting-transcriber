@@ -51,38 +51,11 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// `currentBadge` composes its `health` into the `.error` state.
     let permissions: PermissionsController
 
-    /// True while the **mic** channel is silent and the app channel is carrying
-    /// speech continuously for `settings.asymmetricSilenceWarningSeconds`. Drives
-    /// the menu-bar **top-half** red tint. Latches until the dead channel recovers
-    /// (or recording stops). At most one of `micSilentActive` / `appSilentActive`
-    /// is true at a time — the monitor's channel-switch path resets when roles flip.
-    var micSilentActive: Bool = false
-
-    /// True while the **app-audio** channel is silent and the mic is carrying
-    /// speech continuously for `settings.asymmetricSilenceWarningSeconds`. Drives
-    /// the menu-bar **bottom-half** red tint.
-    var appSilentActive: Bool = false
-
-    /// True while **both** capture channels have been below the silence
-    /// threshold continuously for `settings.asymmetricSilenceWarningSeconds`
-    /// — the failure mode `ChannelHealthMonitor` intentionally ignores
-    /// (symmetric silence). Drives the menu-bar **full red** waveform
-    /// (both halves tinted simultaneously).
-    var recordingSilentActive: Bool = false
-
-    /// Pure state machine driven by the 10-Hz level poll while recording. Lives
-    /// here (not on WatchLoop) so its lifecycle outlasts a single recording —
-    /// observers of `micSilentActive` / `appSilentActive` keep their identity across the
-    /// detect → record → process state churn.
-    @ObservationIgnored private var channelHealthMonitor = ChannelHealthMonitor()
-
-    /// Sibling monitor that catches the symmetric-silence case
-    /// `ChannelHealthMonitor` intentionally skips. Shares the same
-    /// debounce threshold; lifecycle managed alongside the channel-health
-    /// monitor in `startChannelHealthMonitoring` / `stopChannelHealthMonitoring`.
-    @ObservationIgnored private var silentRecordingMonitor = SilentRecordingMonitor()
-
-    @ObservationIgnored private var levelMonitorTask: Task<Void, Never>?
+    /// Per-channel + symmetric-silence detection that drives the menu-bar
+    /// red-tint indicators while recording. Extracted into its own controller;
+    /// `attachStateChangeHandler` wires its `start()` / `stop()` to `WatchLoop`
+    /// state transitions, and the menu-bar icon + RPC snapshot read its flags.
+    let channelHealth: ChannelHealthController
 
     /// PoC live-transcription controller. Lazily created on first recording
     /// start where `settings.liveTranscriptionEnabled` is true AND the active
@@ -168,11 +141,10 @@ final class AppState { // swiftlint:disable:this type_body_length
         self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
         self.pipelineQueue = PipelineQueue()
-        self.channelHealthMonitor = ChannelHealthMonitor(
-            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
-        )
-        self.silentRecordingMonitor = SilentRecordingMonitor(
-            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
+        self.channelHealth = ChannelHealthController(
+            notifier: notifier,
+            debounceSeconds: { [settings] in settings.asymmetricSilenceWarningSeconds },
+            indicatorEnabled: { [settings] in settings.perChannelIndicatorEnabled },
         )
 
         #if !APPSTORE
@@ -182,17 +154,13 @@ final class AppState { // swiftlint:disable:this type_body_length
             // builds and only when explicitly enabled via env var. The driver
             // is also expected to set `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1`
             // so an auto-watch state transition doesn't clear the flag at +3 s
-            // through the regular `stopChannelHealthMonitoring()` path.
+            // through the regular `channelHealth.stop()` path.
             let env = ProcessInfo.processInfo.environment
-            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT"] == "1" {
-                micSilentActive = true
-            }
-            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1" {
-                appSilentActive = true
-            }
-            if env["MEETINGTRANSCRIBER_DEBUG_FORCE_RECORDING_SILENT"] == "1" {
-                recordingSilentActive = true
-            }
+            channelHealth.applyForcedFlagsForE2E(
+                micSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT"] == "1",
+                appSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1",
+                recordingSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_RECORDING_SILENT"] == "1",
+            )
         #endif
 
         // Bring engines in line with the current settings up front so the
@@ -385,6 +353,21 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// named `Bool` property keeps the body cheap.
     var hasPermissionProblem: Bool {
         permissions.health?.isHealthy == false
+    }
+
+    /// Menu-bar **top-half** red tint: mic channel silent, OR both channels
+    /// silent (`recordingSilentActive` paints both halves). Hoisted out of the
+    /// menu-bar body for the same type-check-budget reason as
+    /// `hasPermissionProblem` — reading two `channelHealth.*` flags through the
+    /// sub-controller inline is more than the body can afford on slow CI.
+    var micSilentOverlay: Bool {
+        channelHealth.micSilentActive || channelHealth.recordingSilentActive
+    }
+
+    /// Menu-bar **bottom-half** red tint: app-audio channel silent, OR both
+    /// channels silent. See `micSilentOverlay`.
+    var appSilentOverlay: Bool {
+        channelHealth.appSilentActive || channelHealth.recordingSilentActive
     }
 
     private static let isoFormatter = ISO8601DateFormatter()
@@ -646,141 +629,18 @@ final class AppState { // swiftlint:disable:this type_body_length
                         body: "Recording: \(meeting.windowTitle)",
                     )
                 }
-                self?.startChannelHealthMonitoring()
+                self?.channelHealth.start { [weak self] in self?.watchLoop?.activeRecorder }
 
             case .error:
                 if let err = loop?.lastError {
                     notifier.notify(title: "Error", body: err)
                 }
-                self?.stopChannelHealthMonitoring()
+                self?.channelHealth.stop()
 
             default:
-                self?.stopChannelHealthMonitoring()
+                self?.channelHealth.stop()
             }
         }
-    }
-
-    /// Rebuilds `channelHealthMonitor` with the current settings-driven debounce.
-    /// Called from `startChannelHealthMonitoring` and exposed as a test seam so
-    /// `ChannelHealthIntegrationTests` can simulate the "user changed threshold
-    /// between recordings" path without spinning up the polling Task.
-    func simulateStartChannelHealthMonitoringForTests() {
-        rebuildChannelHealthMonitor()
-    }
-
-    private func rebuildChannelHealthMonitor() {
-        channelHealthMonitor = ChannelHealthMonitor(
-            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
-        )
-        silentRecordingMonitor = SilentRecordingMonitor(
-            debounceSeconds: settings.asymmetricSilenceWarningSeconds,
-        )
-    }
-
-    /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
-    /// levels into `channelHealthMonitor` and flips `micSilentActive` /
-    /// `appSilentActive` based on the resulting events. Idempotent: calling while already running
-    /// is a no-op. Skips entirely when the master toggle is off.
-    private func startChannelHealthMonitoring() {
-        guard settings.perChannelIndicatorEnabled else { return }
-        guard levelMonitorTask == nil else { return }
-        rebuildChannelHealthMonitor()
-        levelMonitorTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                self.tickChannelHealth()
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-        }
-    }
-
-    private func tickChannelHealth() {
-        guard let recorder = watchLoop?.activeRecorder else { return }
-        applyChannelHealthTick(recorder: recorder, now: Date())
-    }
-
-    /// Internal test seam: drives one polling tick against an arbitrary
-    /// recorder + clock. Production code uses `tickChannelHealth()` which
-    /// reads the active recorder + wall clock.
-    @discardableResult
-    func applyChannelHealthTick(
-        recorder: any RecordingProvider,
-        now: Date,
-    ) -> ChannelHealthEvent? {
-        let mic = recorder.micLevelDBFS
-        let app = recorder.appLevelDBFS
-
-        let event = channelHealthMonitor.update(micDBFS: mic, appDBFS: app, now: now)
-        switch event {
-        case let .started(channel, _):
-            switch channel {
-            case .mic:
-                micSilentActive = true
-                appSilentActive = false
-
-            case .app:
-                appSilentActive = true
-                micSilentActive = false
-            }
-            notifier.notify(
-                title: "Capture Channel Silent",
-                body: Self.asymmetricSilenceMessage(for: channel),
-            )
-
-        case .recovered:
-            micSilentActive = false
-            appSilentActive = false
-
-        case .none:
-            break
-        }
-
-        let silentEvent = silentRecordingMonitor.update(micDBFS: mic, appDBFS: app, now: now)
-        switch silentEvent {
-        case .started:
-            recordingSilentActive = true
-            notifier.notify(
-                title: "Recording Appears Silent",
-                body: Self.silentRecordingMessage,
-            )
-
-        case .recovered:
-            recordingSilentActive = false
-
-        case .none:
-            break
-        }
-
-        return event
-    }
-
-    nonisolated static func asymmetricSilenceMessage(for channel: AudioChannel) -> String {
-        switch channel {
-        case .app:
-            "The app-audio channel went silent while the mic is still carrying audio. "
-                + "Check the meeting app's audio settings or system audio permission."
-
-        case .mic:
-            "The microphone went silent while the app audio is still recording. "
-                + "Check the mic device, mute state, or microphone permission."
-        }
-    }
-
-    nonisolated static let silentRecordingMessage: String =
-        "Both capture channels have been silent since the recording started. "
-            + "Check the audio routing — the meeting app may have claimed the mic "
-            + "in exclusive mode (e.g. AirPods HFP), or the system input device may be muted."
-
-    /// Stops the polling task and resets the monitor + UI flag. Called when
-    /// recording ends or an error transition happens.
-    private func stopChannelHealthMonitoring() {
-        levelMonitorTask?.cancel()
-        levelMonitorTask = nil
-        channelHealthMonitor.reset()
-        silentRecordingMonitor.reset()
-        micSilentActive = false
-        appSilentActive = false
-        recordingSilentActive = false
     }
 
     // MARK: - Pipeline
