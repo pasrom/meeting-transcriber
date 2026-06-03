@@ -1,13 +1,30 @@
 #if !APPSTORE
     import Foundation
 
+    extension PipelineQueue {
+        /// Build the RPC pipeline-queue status from inside `PipelineQueue`, so the
+        /// counter reads are single-hop `self.` accesses. Constructing this
+        /// 4-field struct in `AppState.rpcStateSnapshot` from the two-hop
+        /// `pipeline.queue.…` `@Observable` chain instead blew the type-checker up
+        /// to ~100 ms (cross-type chain access + memberwise init in one body),
+        /// tripping the 300 ms `-warn-long-function-bodies` budget on loaded CI
+        /// runners. Self-access here type-checks in ~2 ms.
+        /// `pendingNamingCount` is passed in (rather than read as
+        /// `pendingSpeakerNamingJobs.count`) so the caller can reuse the count of
+        /// the `pendingNamingJobs` array it already builds — one filter pass, not two.
+        func rpcQueueStatus(pendingNamingCount: Int) -> RPCStateSnapshot.Pipeline {
+            RPCStateSnapshot.Pipeline(
+                isProcessing: isProcessing,
+                activeJobCount: activeJobs.count,
+                waitingJobCount: pendingJobs.count,
+                pendingNamingJobCount: pendingNamingCount,
+            )
+        }
+    }
+
     extension AppState {
         /// Build a snapshot of state for the debug RPC. Read-only.
         func rpcStateSnapshot() -> RPCStateSnapshot {
-            // Bind the queue to a local so the reads below stay single-member
-            // accesses (`q.x`) rather than going through `pipeline.queue.x` —
-            // the extra member layer in this already-large literal would push
-            // its type-check over the 300 ms budget.
             let q = pipeline.queue
             let stored = SpeakerMatcher().loadDB()
             let recentNames = SpeakerMatcher.rankByRecency(speakers: stored)
@@ -22,12 +39,9 @@
                 )
             }
             return RPCStateSnapshot(
-                pipeline: .init(
-                    isProcessing: q.isProcessing,
-                    activeJobCount: q.activeJobs.count,
-                    waitingJobCount: q.pendingJobs.count,
-                    pendingNamingJobCount: pendingJobs.count,
-                ),
+                // Built inside PipelineQueue (single-hop) to stay under the
+                // type-check budget — see `rpcQueueStatus`.
+                pipeline: q.rpcQueueStatus(pendingNamingCount: pendingJobs.count),
                 speakerDB: .init(
                     count: stored.count,
                     recentNames: recentNames,
