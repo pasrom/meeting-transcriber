@@ -314,6 +314,25 @@ if [ "$fg_user" != "$my_user" ]; then
     fail "Aqua foreground user is '$fg_user', not '$my_user' — Fast User Switching is active. On the Mac mini, log '$fg_user' out completely (Apple menu → Log Out '$fg_user'…), then re-trigger this workflow."
 fi
 
+# Stale pipeline-queue reset (CI ONLY). A persisted errored job in
+# `ipc/pipeline_queue.json` is recovered on every launch and surfaces as
+# `lastJob`, so a single genuine silent-capture flake turns into a permanent
+# red across all later runs — the same job UUID + frozen `enqueuedAt` reappear
+# run-to-run (observed 2026-06-03: 7ABA2BA8… with a monotonically growing
+# durationSec). The app was already stopped above (`quit_running_app`), so the
+# snapshot is static here.
+#
+# GUARDED to CI via `$GITHUB_ACTIONS` — that variable is set only inside a
+# GitHub Actions runner, NEVER in a developer's shell, so this branch can
+# never execute on a local / production machine. It also removes ONLY the
+# regenerable queue snapshot — never recordings, speakers.json, protocols, or
+# any other user content.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    _ipc_dir="$HOME/Library/Application Support/MeetingTranscriber/ipc"
+    rm -f "$_ipc_dir/pipeline_queue.json" "$_ipc_dir/pipeline_queue.tmp"
+    log "CI: reset stale pipeline-queue snapshot ($_ipc_dir/pipeline_queue.json)"
+fi
+
 log "Launching $DEV_BUNDLE_DEPLOY"
 open "$DEV_BUNDLE_DEPLOY"
 
@@ -358,6 +377,27 @@ trap on_exit EXIT INT TERM
 # `$1` as a human label for log lines ("meeting 1 of 2", etc.). Mutates
 # `PRE_LAST_JOB_ID` so the next call recognises the next job as new.
 PRE_LAST_JOB_ID=""
+# Capture the pre-trigger baseline only AFTER the app's async
+# `recoverOrphanedRecordings()` / `loadSnapshot()` has settled. Those run off
+# the main actor a beat after launch, so a job they recover isn't yet visible
+# the instant RPC comes up. If we baseline too early, a recovered job appears
+# *after* the baseline and the poll loop's `id != PRE_LAST_JOB_ID` test
+# mistakes it for the job THIS trigger produced — and a recovered *errored*
+# job (see the CI reset above) fails the run before the fresh recording even
+# finishes. Poll until `lastJob.jobID` is stable across two reads (bounded
+# ~15 s), then baseline. Read-only — touches no files, safe on any machine.
+_pre_prev="" _pre_stable=0
+for _ in $(seq 1 15); do
+    _pre_cur="$(rpc /state | jq -r '.lastJob.jobID // ""')" || _pre_cur=""
+    if [ "$_pre_cur" = "$_pre_prev" ]; then
+        _pre_stable=$(( _pre_stable + 1 ))
+        [ "$_pre_stable" -ge 2 ] && break
+    else
+        _pre_stable=0
+    fi
+    _pre_prev="$_pre_cur"
+    sleep 1
+done
 PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
 log "Pre-trigger lastJob.jobID: ${PRE_LAST_JOB_ID:-<none>}"
 
