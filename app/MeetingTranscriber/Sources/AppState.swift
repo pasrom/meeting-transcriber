@@ -1,4 +1,3 @@
-// swiftlint:disable file_length
 import AppKit
 import Foundation
 import Observation
@@ -17,7 +16,7 @@ protocol AppNotifying {
 // MARK: - AppState
 
 /// Observable ViewModel that composes the app's concern-specific controllers
-/// (`pipeline`, `permissions`, `channelHealth`, `liveTranscription`,
+/// (`watching`, `pipeline`, `permissions`, `channelHealth`, `liveTranscription`,
 /// `rpcController`) and exposes the derived UI properties (badge, status label)
 /// the menu-bar scene binds to. It wires the controllers together rather than
 /// owning their state — new concern state belongs in a controller, not here.
@@ -45,9 +44,15 @@ final class AppState {
 
     // MARK: - State
 
-    var watchLoop: WatchLoop?
     var updateChecker: UpdateChecker
     var selectedNamingJobID: UUID?
+
+    /// Watching / recording lifecycle concern (the active `WatchLoop`, the
+    /// auto-detect toggle, manual recording start/stop, the recorder factory,
+    /// and the state-change handler), extracted into its own controller. It
+    /// holds the sibling controllers it reaches across; AppState's derived UI
+    /// properties read its `watchLoop`.
+    let watching: WatchingController
 
     /// Post-processing pipeline concern (the `PipelineQueue` instance, its
     /// wiring from settings + active engine, job-state notifications, and the
@@ -62,8 +67,8 @@ final class AppState {
 
     /// Per-channel + symmetric-silence detection that drives the menu-bar
     /// red-tint indicators while recording. Extracted into its own controller;
-    /// `attachStateChangeHandler` wires its `start()` / `stop()` to `WatchLoop`
-    /// state transitions, and the menu-bar icon + RPC snapshot read its flags.
+    /// `WatchingController` wires its `start()` / `stop()` to `WatchLoop` state
+    /// transitions, and the menu-bar icon + RPC snapshot read its flags.
     let channelHealth: ChannelHealthController
 
     /// Observable state for the live caption overlay. Always present (the
@@ -74,7 +79,8 @@ final class AppState {
 
     /// Live-transcription controller lifecycle (lazy creation against the active
     /// engine, pre-warm, per-recording sink installation), extracted into its own
-    /// coordinator. `makeRecorderFactory` delegates sink installation to it.
+    /// coordinator. `WatchingController`'s recorder factory delegates sink
+    /// installation to it.
     let liveTranscription: LiveTranscriptionCoordinator
 
     #if !APPSTORE
@@ -162,26 +168,20 @@ final class AppState {
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
         )
+        self.watching = WatchingController(
+            settings: settings,
+            notifier: notifier,
+            pipeline: pipeline,
+            channelHealth: channelHealth,
+            permissions: permissions,
+            liveTranscription: liveTranscription,
+        )
 
         #if !APPSTORE
             // Not trailing-closure: `isEnabled` is the first param (the other two
             // have defaults), so a trailing closure would bind to `rotateToken`.
             // swiftlint:disable:next trailing_closure
             self.rpcController = RPCServerController(isEnabled: { [settings] in settings.debugRPCEnabled })
-
-            // E2E hook: force a per-channel flag on at launch so a driver
-            // script can assert the menu-bar red-tint pipeline end-to-end
-            // without orchestrating real audio. Only honoured in non-AppStore
-            // builds and only when explicitly enabled via env var. The driver
-            // is also expected to set `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1`
-            // so an auto-watch state transition doesn't clear the flag at +3 s
-            // through the regular `channelHealth.stop()` path.
-            let env = ProcessInfo.processInfo.environment
-            channelHealth.applyForcedFlagsForE2E(
-                micSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT"] == "1",
-                appSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1",
-                recordingSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_RECORDING_SILENT"] == "1",
-            )
         #endif
 
         // Bring engines in line with the current settings up front so the
@@ -194,8 +194,13 @@ final class AppState {
         // `[weak self]` engine closure is valid). The pipeline is rebuilt
         // lazily on the first watch/enqueue, never during init.
         pipeline.activate { [weak self] in self?.activeTranscriptionEngine }
+        // Wire the up-front engine-sync hook the watch-start path runs before
+        // the first transcription (engine concern still owned by AppState).
+        watching.activate { [weak self] in self?.syncLanguageSettings() }
 
         #if !APPSTORE
+            applyForcedChannelFlagsFromEnvironment()
+
             // Launch gate (env var OR setting) + the settings observer now live
             // in RPCServerController.activate; AppState only supplies the wired
             // server. The closure is set here (post stored-property init) so it
@@ -236,6 +241,22 @@ final class AppState {
         func stopPersistentLogStreamer() {
             persistentLogStreamer?.stop()
             persistentLogStreamer = nil
+        }
+
+        /// E2E hook: force a per-channel silence flag on at launch so a driver
+        /// script can assert the menu-bar red-tint pipeline end-to-end without
+        /// orchestrating real audio. Only honoured in non-AppStore builds and
+        /// only when explicitly enabled via env var. The driver is also expected
+        /// to set `MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1` so an auto-watch
+        /// state transition doesn't clear the flag at +3 s through the regular
+        /// `channelHealth.stop()` path.
+        private func applyForcedChannelFlagsFromEnvironment() {
+            let env = ProcessInfo.processInfo.environment
+            channelHealth.applyForcedFlagsForE2E(
+                micSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_MIC_SILENT"] == "1",
+                appSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_APP_SILENT"] == "1",
+                recordingSilent: env["MEETINGTRANSCRIBER_DEBUG_FORCE_RECORDING_SILENT"] == "1",
+            )
         }
     #endif
 
@@ -305,8 +326,11 @@ final class AppState {
 
     // MARK: - Derived properties
 
+    /// Whether the auto-detect watch loop is active (not a manual recording).
+    /// Delegates to `watching`; exposed here as a single-member accessor so the
+    /// menu-bar body that reads `appState.isWatching` stays cheap to type-check.
     var isWatching: Bool {
-        watchLoop?.isActive == true && watchLoop?.isManualRecording == false
+        watching.isWatching
     }
 
     /// True when the caption-bar overlay should be visible: live transcription
@@ -315,14 +339,15 @@ final class AppState {
     var shouldShowLiveCaptions: Bool {
         settings.liveTranscriptionEnabled
             && settings.transcriptionEngine.supportsLiveTranscription
-            && watchLoop?.state == .recording
+            && watching.watchLoop?.state == .recording
     }
 
     var currentBadge: BadgeKind {
-        BadgeKind.compute(
-            watchLoopActive: watchLoop?.isActive == true,
-            watchLoopState: watchLoop?.state ?? .idle,
-            transcriberState: watchLoop?.transcriberState ?? .idle,
+        let loop = watching.watchLoop
+        return BadgeKind.compute(
+            watchLoopActive: loop?.isActive == true,
+            watchLoopState: loop?.state ?? .idle,
+            transcriberState: loop?.transcriberState ?? .idle,
             activeJobState: pipeline.queue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
             permissionProblem: permissions.health?.isHealthy == false,
@@ -330,7 +355,7 @@ final class AppState {
     }
 
     var currentStateLabel: String {
-        if let loop = watchLoop, loop.isActive {
+        if let loop = watching.watchLoop, loop.isActive {
             return loop.transcriberState.label
         }
         return "Idle"
@@ -358,6 +383,13 @@ final class AppState {
         !pipeline.queue.pendingSpeakerNamingJobs.isEmpty
     }
 
+    /// Whether the active loop is a manual recording (vs. auto-detect). Drives
+    /// the menu-bar "Stop Recording" item; hoisted to a single-member accessor
+    /// so the body reading it through `watching.watchLoop` stays cheap.
+    var isManualRecording: Bool {
+        watching.watchLoop?.isManualRecording == true
+    }
+
     /// Menu-bar **top-half** red tint: mic channel silent, OR both channels
     /// silent (`recordingSilentActive` paints both halves). Hoisted out of the
     /// menu-bar body for the same type-check-budget reason as
@@ -376,7 +408,7 @@ final class AppState {
     private static let isoFormatter = ISO8601DateFormatter()
 
     var currentStatus: TranscriberStatus? {
-        guard let loop = watchLoop, loop.isActive else { return nil }
+        guard let loop = watching.watchLoop, loop.isActive else { return nil }
 
         let meeting: MeetingInfo? = if let manual = loop.manualRecordingInfo {
             MeetingInfo(
@@ -405,154 +437,6 @@ final class AppState {
             audioPath: nil,
             pid: Int(ProcessInfo.processInfo.processIdentifier),
         )
-    }
-
-    // MARK: - Live transcription factory
-
-    /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
-    /// `DualSourceRecorder` on each invocation; when `liveTranscriptionEnabled`
-    /// is on AND the active engine supports `transcribeSamples`, also installs
-    /// mic + app live sinks that pipe captured buffers to the
-    /// `LiveTranscriptionController`. PoC scope — see
-    /// `LiveTranscriptionController` doc for what's logged.
-    private func makeRecorderFactory() -> @MainActor () -> any RecordingProvider {
-        { [weak self] in
-            let recorder = DualSourceRecorder()
-            self?.liveTranscription.attachSinks(to: recorder)
-            return recorder
-        }
-    }
-
-    // MARK: - Start / Stop
-
-    func toggleWatching() {
-        if let loop = watchLoop, loop.isManualRecording { return }
-        if let loop = watchLoop, loop.isActive {
-            loop.stop()
-            watchLoop = nil
-        } else {
-            Task { @MainActor in
-                _ = await Permissions.ensureMicrophoneAccess()
-
-                syncLanguageSettings()
-                pipeline.rebuild()
-
-                let detector: any MeetingDetecting = PowerAssertionDetector()
-
-                let loop = WatchLoop(
-                    detector: detector,
-                    recorderFactory: makeRecorderFactory(),
-                    pipelineQueue: pipeline.queue,
-                    pollInterval: settings.pollInterval,
-                    endGracePeriod: settings.endGrace,
-                    noMic: settings.noMic,
-                    micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                    verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
-                    recordOnly: { [settings] in settings.recordOnly },
-                    recordOnlyDestination: { [settings] in
-                        .production(parent: settings.effectiveOutputDir)
-                    },
-                    notifier: notifier,
-                )
-
-                attachStateChangeHandler(to: loop, notifyOnRecording: true)
-
-                if let health = permissions.health {
-                    loop.permissionChecker = { health }
-                }
-
-                watchLoop = loop
-                loop.start()
-            }
-        }
-    }
-
-    func startManualRecording(pid: pid_t, appName: String, title: String) {
-        // Stop auto-watch if active
-        if let loop = watchLoop, loop.isActive, !loop.isManualRecording {
-            loop.stop()
-            watchLoop = nil
-        }
-
-        Task { @MainActor in
-            _ = await Permissions.ensureMicrophoneAccess()
-
-            pipeline.ensureQueue()
-
-            let loop = WatchLoop(
-                recorderFactory: makeRecorderFactory(),
-                pipelineQueue: pipeline.queue,
-                pollInterval: settings.pollInterval,
-                noMic: settings.noMic,
-                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
-                recordOnly: { [settings] in settings.recordOnly },
-                recordOnlyDestination: { [settings] in
-                    .production(parent: settings.effectiveOutputDir)
-                },
-                notifier: notifier,
-            )
-            watchLoop = loop
-
-            // Wire channel-health monitoring + error notification on state
-            // transitions — same hook the auto-detect path installs, so the
-            // red-tint indicator and asymmetric-silence notification work
-            // for manual recordings too.
-            attachStateChangeHandler(to: loop, notifyOnRecording: false)
-
-            // Use cached health check result instead of live probe
-            if let health = permissions.health {
-                loop.permissionChecker = { health }
-            }
-
-            do {
-                try await loop.startManualRecording(pid: pid, appName: appName, title: title)
-                notifier.notify(
-                    title: "Manual Recording",
-                    body: "Recording: \(title)",
-                )
-            } catch {
-                notifier.notify(title: "Error", body: error.localizedDescription)
-                watchLoop = nil
-            }
-        }
-    }
-
-    func stopManualRecording() {
-        watchLoop?.stopManualRecording()
-        watchLoop = nil
-    }
-
-    // MARK: - Channel Health Monitor
-
-    /// Attaches the state-change callback that drives channel-health monitoring
-    /// and post-`.error` notifications. Shared between the auto-detect path
-    /// (`toggleWatching`) and the manual-recording path (`startManualRecording`)
-    /// so the red-tint indicator + asymmetric-silence notification fire in both.
-    /// `notifyOnRecording` only fires "Meeting Detected" notifications for the
-    /// auto-detect path; manual recording emits its own start notification.
-    private func attachStateChangeHandler(to loop: WatchLoop, notifyOnRecording: Bool) {
-        loop.onStateChange = { [weak self, weak loop, notifier] _, newState in
-            switch newState {
-            case .recording:
-                if notifyOnRecording, let meeting = loop?.currentMeeting {
-                    notifier.notify(
-                        title: "Meeting Detected",
-                        body: "Recording: \(meeting.windowTitle)",
-                    )
-                }
-                self?.channelHealth.start { [weak self] in self?.watchLoop?.activeRecorder }
-
-            case .error:
-                if let err = loop?.lastError {
-                    notifier.notify(title: "Error", body: err)
-                }
-                self?.channelHealth.stop()
-
-            default:
-                self?.channelHealth.stop()
-            }
-        }
     }
 
     // MARK: - Engine Settings
