@@ -135,8 +135,11 @@ struct OutputSettingsView: View {
     private var openAIConfigView: some View { // swiftlint:disable:this attributes
         VStack(alignment: .leading, spacing: 4) {
             Text("Endpoint")
-            TextField("", text: $settings.openAIEndpoint)
+            TextField("http://localhost:1234/v1", text: $settings.openAIEndpoint)
                 .textFieldStyle(.roundedBorder)
+            Text("Base URL (e.g. http://localhost:1234/v1) or full chat-completions URL — both work.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
 
         if !availableModels.isEmpty {

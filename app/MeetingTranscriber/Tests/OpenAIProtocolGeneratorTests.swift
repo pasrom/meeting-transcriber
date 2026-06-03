@@ -1,7 +1,7 @@
 @testable import MeetingTranscriber
 import XCTest
 
-final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle
+final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this balanced_xctest_lifecycle type_body_length
     // MARK: - SSE Line Parsing
 
     func testParseSSELineExtractsContent() {
@@ -415,6 +415,61 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         if case .failure = result { /* expected */ } else {
             XCTFail("Expected failure for empty endpoint")
         }
+    }
+
+    // MARK: - Endpoint Base-URL Handling (issue #363)
+
+    func testTestConnectionDerivesModelsURLFromBaseURL() async {
+        // Issue #363: the OpenAI ecosystem convention (and LM Studio's own UI)
+        // is to enter the *base URL* ".../v1". Fetch Models must then hit
+        // ".../v1/models", NOT ".../models" (which 404s on LM Studio).
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "http://test.local/v1/models",
+                "base URL '/v1' must resolve to '/v1/models', not '/models'",
+            )
+            return self.mockResponse(request, body: Data(#"{"data":[]}"#.utf8))
+        }
+
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1",
+            model: "test",
+            apiKey: nil,
+            session: makeMockSession(),
+        )
+        // Non-vacuity: prove the request was actually issued (handler reached),
+        // so the in-handler URL assertion above is not skipped.
+        guard case .success = result else {
+            XCTFail("Expected the models request to be issued, got \(result)")
+            return
+        }
+    }
+
+    func testGeneratePostsToChatCompletionsFromBaseURL() async throws {
+        // Issue #363: with the base URL ".../v1", generate() must POST to
+        // ".../v1/chat/completions", not to ".../v1" itself (which 404s and
+        // makes summarization fail).
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(
+                request.url?.absoluteString,
+                "http://test.local/v1/chat/completions",
+                "base URL '/v1' must POST to '/v1/chat/completions'",
+            )
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        let gen = try OpenAIProtocolGenerator(
+            endpoint: XCTUnwrap(URL(string: "http://test.local/v1")),
+            model: "test-model",
+            language: "German",
+            session: makeMockSession(),
+        )
+        // Non-vacuity: the "OK" body is only reachable through the mock, so a
+        // matching result proves the request was issued and the in-handler URL
+        // assertion above actually ran.
+        let result = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+        XCTAssertEqual(result, "OK")
     }
 
     // MARK: - Full Protocol Roundtrip
