@@ -633,24 +633,24 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let settings = AppSettings()
         settings.transcriptionEngine = .whisperKit
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is WhisperKitEngine)
     }
 
     func testActiveTranscriptionEngineReturnsParakeetWhenSet() {
         let settings = AppSettings()
         settings.transcriptionEngine = .parakeet
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is ParakeetEngine)
     }
 
     func testActiveTranscriptionEngineSwitchesBack() {
         let settings = AppSettings()
         settings.transcriptionEngine = .parakeet
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is ParakeetEngine)
 
         settings.transcriptionEngine = .whisperKit
-        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is WhisperKitEngine)
     }
 
     func testMakeQueueUsesActiveEngine() {
@@ -676,7 +676,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let settings = AppSettings()
         settings.transcriptionEngine = .qwen3
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.activeTranscriptionEngine is Qwen3AsrEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is Qwen3AsrEngine)
     }
 
     func testActiveTranscriptionEngineSwitchesToQwen3AndBack() {
@@ -684,13 +684,13 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let settings = AppSettings()
         settings.transcriptionEngine = .whisperKit
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is WhisperKitEngine)
 
         settings.transcriptionEngine = .qwen3
-        XCTAssertTrue(state.activeTranscriptionEngine is Qwen3AsrEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is Qwen3AsrEngine)
 
         settings.transcriptionEngine = .parakeet
-        XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
+        XCTAssertTrue(state.engines.activeTranscriptionEngine is ParakeetEngine)
     }
 
     func testMakeQueueUsesQwen3Engine() {
@@ -721,7 +721,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         settings.transcriptionEngine = .qwen3
         let state = AppState(settings: settings)
         // On macOS 15+: Qwen3AsrEngine; on older: WhisperKit (fallback)
-        XCTAssertNotNil(state.activeTranscriptionEngine)
+        XCTAssertNotNil(state.engines.activeTranscriptionEngine)
     }
 
     // MARK: - makeQueue settings
