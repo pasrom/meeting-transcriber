@@ -38,6 +38,22 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(SpeakerMatcher.cosineDistance(a, b), 1, accuracy: 0.001)
     }
 
+    // MARK: - StoredSpeaker model
+
+    /// `StoredSpeaker.id` (its `Identifiable` conformance) is the speaker's
+    /// `name`. `KnownVoicesView`'s list diffing and the rename/merge UI key off
+    /// this, so a refactor that switched `id` to a synthesized UUID would break
+    /// list identity across DB reloads without any other test noticing.
+    func testIdentifiableIDIsName() {
+        // Two distinct names so the assertions catch a constant-return `id` (e.g.
+        // a hardcoded string) as well as a synthesized-UUID `id` — a single
+        // fixture name would let a `return name`-vs-`return "Alice"` mutant pass.
+        let alice = StoredSpeaker(name: "Alice", embeddings: [[1, 0, 0]])
+        let bob = StoredSpeaker(name: "Bob", embeddings: [[0, 1, 0]])
+        XCTAssertEqual(alice.id, "Alice")
+        XCTAssertEqual(bob.id, "Bob")
+    }
+
     // MARK: - Match
 
     func testMatchEmptyDB() {
