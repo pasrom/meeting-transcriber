@@ -161,8 +161,8 @@
         func test_snapshot_pendingNamingJobs_mapsQueueStateToRPCFields() throws {
             var job = makeJob(title: "Acme Standup")
             job.state = .speakerNamingPending
-            state.pipelineQueue.insertJobForTesting(job)
-            state.pipelineQueue.speakerNamingDataByJob[job.id] = PipelineQueue.SpeakerNamingData(
+            state.pipeline.queue.insertJobForTesting(job)
+            state.pipeline.queue.speakerNamingDataByJob[job.id] = PipelineQueue.SpeakerNamingData(
                 jobID: job.id,
                 meetingTitle: "Acme Standup",
                 mapping: ["R_0": "Alice", "R_1": "Bob"],
@@ -191,7 +191,7 @@
         func test_snapshot_pendingNamingJob_withoutData_speakerCountIsZero() throws {
             var job = makeJob(title: "Orphan")
             job.state = .speakerNamingPending
-            state.pipelineQueue.insertJobForTesting(job)
+            state.pipeline.queue.insertJobForTesting(job)
 
             let snapshot = state.rpcStateSnapshot()
 
