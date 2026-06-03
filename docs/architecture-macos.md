@@ -332,7 +332,7 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 - **Language:** 30 languages via `Qwen3AsrConfig.Language` enum, selectable in Settings. `nil` = auto-detect.
 - **No timestamps:** Returns plain text — emits single `TimestampedSegment` spanning full audio duration
 - **Chunking:** Audio split into <=30s windows (`Qwen3AsrConfig.maxAudioSeconds`), results concatenated
-- **Availability:** `@available(macOS 15, *)` — type-erased via `AnyObject?` in AppState for macOS <15 compatibility
+- **Availability:** `@available(macOS 15, *)` — type-erased via `AnyObject?` in `EngineController` for macOS <15 compatibility
 
 ### Modes
 
