@@ -171,7 +171,7 @@ func makeSilentDetector() -> MeetingDetector {
 }
 
 /// Creates a WatchLoop backed by a MockRecorder and a silent detector.
-/// Assign the returned loop to `appState.watchLoop` in tests that need
+/// Assign the returned loop to `appState.watching.watchLoop` in tests that need
 /// an active loop without calling toggleWatching() (which requires Permissions).
 @MainActor
 func makeTestWatchLoop(

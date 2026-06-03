@@ -85,7 +85,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testIsWatchingTrueWhenLoopActiveNotManual() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertTrue(state.isWatching)
@@ -94,7 +94,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testIsWatchingFalseWhenLoopNotStarted() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         // loop not started → isActive == false
         XCTAssertFalse(state.isWatching)
     }
@@ -102,7 +102,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testIsWatchingFalseWhenManualRecording() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
         XCTAssertFalse(state.isWatching)
@@ -113,7 +113,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStateLabelWatchingWhenLoopActive() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertEqual(state.currentStateLabel, "Watching for Meetings...")
@@ -122,7 +122,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStateLabelRecordingWhenManualRecording() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
         XCTAssertEqual(state.currentStateLabel, "Recording")
@@ -131,10 +131,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStateLabelIdleWhenLoopStopped() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         loop.stop()
-        state.watchLoop = nil
+        state.watching.watchLoop = nil
         XCTAssertEqual(state.currentStateLabel, "Idle")
     }
 
@@ -143,14 +143,14 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStatusNilWhenLoopNotStarted() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         XCTAssertNil(state.currentStatus)
     }
 
     func testCurrentStatusNotNilWhenLoopActive() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertNotNil(state.currentStatus)
@@ -159,7 +159,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStatusStateMatchesLoopTranscriberState() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertEqual(state.currentStatus?.state, .watching)
@@ -168,7 +168,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStatusDetailMatchesLoopDetail() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertEqual(state.currentStatus?.detail, "Polling for meetings...")
@@ -177,7 +177,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStatusMeetingNilWhenNoActiveMeeting() {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         loop.start()
         defer { loop.stop() }
         XCTAssertNil(state.currentStatus?.meeting)
@@ -186,7 +186,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentStatusMeetingFromManualRecordingInfo() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Standup")
         defer { loop.stop() }
         let status = try XCTUnwrap(state.currentStatus)
@@ -213,7 +213,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testCurrentBadgeRecordingWhenLoopRecording() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
         XCTAssertEqual(state.currentBadge, .recording)
@@ -225,26 +225,26 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
         loop.start()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         XCTAssertTrue(state.isWatching)
 
-        state.toggleWatching()
+        state.watching.toggleWatching()
 
-        XCTAssertNil(state.watchLoop)
+        XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.isWatching)
     }
 
     func testToggleWatchingWhileManualRecordingIsNoOp() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
 
-        state.toggleWatching() // must be a no-op
+        state.watching.toggleWatching() // must be a no-op
 
-        XCTAssertNotNil(state.watchLoop)
-        XCTAssertEqual(state.watchLoop?.isManualRecording, true)
+        XCTAssertNotNil(state.watching.watchLoop)
+        XCTAssertEqual(state.watching.watchLoop?.isManualRecording, true)
     }
 
     // MARK: - toggleWatching: start path (async)
@@ -255,22 +255,22 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     func testToggleWatchingCreatesWatchLoop() async {
         let (state, _) = makeState()
-        addTeardownBlock { state.watchLoop?.stop() }
+        addTeardownBlock { state.watching.watchLoop?.stop() }
 
-        state.toggleWatching()
-        await waitFor(state.watchLoop != nil)
+        state.watching.toggleWatching()
+        await waitFor(state.watching.watchLoop != nil)
 
-        XCTAssertNotNil(state.watchLoop)
+        XCTAssertNotNil(state.watching.watchLoop)
     }
 
     func testToggleWatchingMakesLoopActive() async {
         let (state, _) = makeState()
-        addTeardownBlock { state.watchLoop?.stop() }
+        addTeardownBlock { state.watching.watchLoop?.stop() }
 
-        state.toggleWatching()
-        await waitFor(state.watchLoop?.isActive == true)
+        state.watching.toggleWatching()
+        await waitFor(state.watching.watchLoop?.isActive == true)
 
-        XCTAssertEqual(state.watchLoop?.isActive, true)
+        XCTAssertEqual(state.watching.watchLoop?.isActive, true)
     }
 
     // MARK: - stopManualRecording
@@ -278,18 +278,18 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testStopManualRecordingClearsWatchLoop() async throws {
         let (state, _) = makeState()
         let (loop, _) = makeTestWatchLoop()
-        state.watchLoop = loop
+        state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
 
-        state.stopManualRecording()
+        state.watching.stopManualRecording()
 
-        XCTAssertNil(state.watchLoop)
+        XCTAssertNil(state.watching.watchLoop)
     }
 
     func testStopManualRecordingWhenNoLoopIsNoOp() {
         let (state, _) = makeState()
-        state.stopManualRecording() // must not crash
-        XCTAssertNil(state.watchLoop)
+        state.watching.stopManualRecording() // must not crash
+        XCTAssertNil(state.watching.watchLoop)
     }
 
     // MARK: - enqueueFiles
@@ -601,9 +601,9 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     func testStartManualRecordingSendsNotification() async {
         let (state, notifier) = makeState()
         state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
-        addTeardownBlock { state.watchLoop?.stop() }
+        addTeardownBlock { state.watching.watchLoop?.stop() }
 
-        state.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        state.watching.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
         // Success → "Manual Recording" / hardware unavailable → "Error"
         await waitFor(!notifier.calls.isEmpty)
 
@@ -618,10 +618,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
         let (existingLoop, _) = makeTestWatchLoop()
         existingLoop.start()
-        state.watchLoop = existingLoop
+        state.watching.watchLoop = existingLoop
         XCTAssertTrue(existingLoop.isActive)
 
-        state.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        state.watching.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
         await waitFor(!existingLoop.isActive)
 
         XCTAssertFalse(existingLoop.isActive, "Existing auto-watch loop should be stopped")
