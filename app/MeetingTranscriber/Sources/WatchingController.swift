@@ -20,10 +20,10 @@ import Observation
 /// Testability seams: `ensureMicAccess` + `makeDetector` are injectable (default
 /// to the production `Permissions.ensureMicrophoneAccess` / `PowerAssertionDetector`)
 /// so `toggleWatching` can be exercised without real TCC or IOKit. `syncEngines`
-/// is wired post-init via `activate(syncEngines:)` because it calls back into
-/// AppState's engine-sync (an engine concern not yet extracted) and must capture
-/// `self` after stored-property init — the same post-init wiring idiom the other
-/// controllers use.
+/// is wired post-init via `activate(syncEngines:)`: it bridges to
+/// `EngineController.syncLanguageSettings()` (held by `AppState`, not injected
+/// here as a sibling) and the closure must capture `self` after stored-property
+/// init — the same post-init wiring idiom the other controllers use.
 @Observable
 @MainActor
 final class WatchingController {
@@ -46,10 +46,10 @@ final class WatchingController {
     /// `PowerAssertionDetector`.
     private let makeDetector: () -> any MeetingDetecting
 
-    /// Engine-sync hook, wired by `activate`. Calls back into AppState's
-    /// `syncLanguageSettings` (an engine concern not yet extracted); nil until
-    /// `activate` runs, in which case the up-front sync is skipped (the reactive
-    /// `observeEngineSettings` observer still keeps engines in line).
+    /// Engine-sync hook, wired by `activate`. Bridges to
+    /// `EngineController.syncLanguageSettings()`; nil until `activate` runs, in
+    /// which case the up-front sync is skipped (EngineController's own reactive
+    /// observer still keeps the engines in line).
     private var syncEngines: (() -> Void)?
 
     init(

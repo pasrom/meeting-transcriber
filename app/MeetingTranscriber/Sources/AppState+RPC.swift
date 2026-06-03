@@ -92,17 +92,17 @@
         /// settings → engine propagation without running a transcription.
         private func enginesSnapshot() -> RPCStateSnapshot.Engines {
             let qwen3State: RPCStateSnapshot.Engines.Qwen3? = if #available(macOS 15, *) {
-                .init(language: qwen3Engine.language)
+                .init(language: engines.qwen3Engine.language)
             } else {
                 nil
             }
             return RPCStateSnapshot.Engines(
                 active: settings.transcriptionEngine,
                 whisperKit: .init(
-                    modelVariant: whisperKit.modelVariant,
-                    language: whisperKit.language,
+                    modelVariant: engines.whisperKit.modelVariant,
+                    language: engines.whisperKit.language,
                 ),
-                parakeet: .init(customVocabularyPath: parakeetEngine.customVocabularyPath),
+                parakeet: .init(customVocabularyPath: engines.parakeetEngine.customVocabularyPath),
                 qwen3: qwen3State,
             )
         }
