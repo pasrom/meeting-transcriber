@@ -208,7 +208,7 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testOpenAIEndpointDefault() {
-        XCTAssertEqual(settings.openAIEndpoint, "http://localhost:11434/v1/chat/completions")
+        XCTAssertEqual(settings.openAIEndpoint, "http://localhost:11434/v1")
     }
 
     func testOpenAIModelDefault() {

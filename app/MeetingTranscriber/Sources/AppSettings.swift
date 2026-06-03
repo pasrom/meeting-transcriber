@@ -344,6 +344,11 @@ final class AppSettings {
         }
     #endif
 
+    /// Default OpenAI-compatible endpoint — Ollama's base URL. Both the base
+    /// form (`.../v1`) and a full chat-completions URL are accepted on read
+    /// (see `OpenAIProtocolGenerator.apiBaseURL`); the base form is canonical.
+    static let defaultOpenAIEndpoint = "http://localhost:11434/v1"
+
     var openAIEndpoint: String {
         didSet { defaults.set(openAIEndpoint, forKey: "openAIEndpoint") }
     }
@@ -504,7 +509,7 @@ final class AppSettings {
         protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
-            ?? "http://localhost:11434/v1/chat/completions"
+            ?? Self.defaultOpenAIEndpoint
         openAIModel = defaults.object(forKey: "openAIModel") as? String ?? "llama3.1"
 
         // Migrate legacy "audioDebugLogging" key (renamed to "verboseDiagnostics" 2026-05-04).
