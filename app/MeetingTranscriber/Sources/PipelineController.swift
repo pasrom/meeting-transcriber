@@ -127,7 +127,7 @@ final class PipelineController {
             OpenAIProtocolGenerator(
                 endpoint: URL(string: settings.openAIEndpoint)
                     // swiftlint:disable:next force_unwrapping
-                    ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
+                    ?? URL(string: AppSettings.defaultOpenAIEndpoint)!,
                 model: settings.openAIModel,
                 language: settings.protocolLanguage,
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
