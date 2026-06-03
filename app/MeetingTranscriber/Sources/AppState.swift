@@ -16,14 +16,17 @@ protocol AppNotifying {
 
 // MARK: - AppState
 
-/// Observable ViewModel that owns all business state and derived UI properties.
+/// Observable ViewModel that composes the app's concern-specific controllers
+/// (`pipeline`, `permissions`, `channelHealth`, `liveTranscription`,
+/// `rpcController`) and exposes the derived UI properties (badge, status label)
+/// the menu-bar scene binds to. It wires the controllers together rather than
+/// owning their state — new concern state belongs in a controller, not here.
 ///
-/// Extracted from `MeetingTranscriberApp` so that:
-/// - Badge/watching logic is testable without instantiating the `@main` App struct.
-/// - `BadgeKind.compute(...)` can be called directly in tests.
+/// Extracted from `MeetingTranscriberApp` so badge/watching logic and
+/// `BadgeKind.compute(...)` are testable without the `@main` App struct.
 @Observable
 @MainActor
-final class AppState { // swiftlint:disable:this type_body_length
+final class AppState {
     // MARK: - Dependencies
 
     let settings: AppSettings
@@ -43,9 +46,15 @@ final class AppState { // swiftlint:disable:this type_body_length
     // MARK: - State
 
     var watchLoop: WatchLoop?
-    var pipelineQueue: PipelineQueue
     var updateChecker: UpdateChecker
     var selectedNamingJobID: UUID?
+
+    /// Post-processing pipeline concern (the `PipelineQueue` instance, its
+    /// wiring from settings + active engine, job-state notifications, and the
+    /// file-enqueue entry points), extracted into its own controller. Read as
+    /// `pipeline.queue` by the menu-bar UI + RPC snapshot. `AppState` supplies
+    /// the active engine via `activate(engineProvider:)` post-init.
+    let pipeline: PipelineController
 
     /// Live TCC permission-health concern, extracted into its own controller.
     /// `currentBadge` composes its `health` into the `.error` state.
@@ -141,7 +150,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         self.notifier = notifier
         self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
-        self.pipelineQueue = PipelineQueue()
+        self.pipeline = PipelineController(settings: settings, notifier: notifier)
         self.channelHealth = ChannelHealthController(
             notifier: notifier,
             debounceSeconds: { [settings] in settings.asymmetricSilenceWarningSeconds },
@@ -181,6 +190,10 @@ final class AppState { // swiftlint:disable:this type_body_length
         syncLanguageSettings()
         observeEngineSettings()
         liveTranscription.beginPrewarm { [weak self] in self?.activeTranscriptionEngine }
+        // Wire the active-engine source (post stored-property init so the
+        // `[weak self]` engine closure is valid). The pipeline is rebuilt
+        // lazily on the first watch/enqueue, never during init.
+        pipeline.activate { [weak self] in self?.activeTranscriptionEngine }
 
         #if !APPSTORE
             // Launch gate (env var OR setting) + the settings observer now live
@@ -244,9 +257,9 @@ final class AppState { // swiftlint:disable:this type_body_length
                     // pending list unchanged) — observed live during E2E
                     // when the data dictionary was already cleared by an
                     // earlier skip race.
-                    let pendingIDs = self.pipelineQueue.pendingSpeakerNamingJobs.map(\.id)
+                    let pendingIDs = self.pipeline.queue.pendingSpeakerNamingJobs.map(\.id)
                     for jobID in pendingIDs {
-                        self.pipelineQueue.completeSpeakerNaming(jobID: jobID, result: .skipped)
+                        self.pipeline.queue.completeSpeakerNaming(jobID: jobID, result: .skipped)
                     }
                 }
             }
@@ -256,11 +269,11 @@ final class AppState { // swiftlint:disable:this type_body_length
             // menu uses, so the import code path is identical.
             let enqueueFile: (URL) -> Bool = { [weak self] url in
                 guard let self, FileManager.default.fileExists(atPath: url.path) else { return false }
-                Task { @MainActor in self.enqueueFiles([url]) }
+                Task { @MainActor in self.pipeline.enqueueFiles([url]) }
                 return true
             }
             let enqueueFilesRPC: ([URL]) -> Int = { [weak self] urls in
-                self?.enqueueExistingFiles(urls) ?? 0
+                self?.pipeline.enqueueExistingFiles(urls) ?? 0
             }
             return DebugRPCServer(
                 snapshot: snapshot,
@@ -310,7 +323,7 @@ final class AppState { // swiftlint:disable:this type_body_length
             watchLoopActive: watchLoop?.isActive == true,
             watchLoopState: watchLoop?.state ?? .idle,
             transcriberState: watchLoop?.transcriberState ?? .idle,
-            activeJobState: pipelineQueue.activeJobs.first?.state,
+            activeJobState: pipeline.queue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
             permissionProblem: permissions.health?.isHealthy == false,
         )
@@ -330,6 +343,19 @@ final class AppState { // swiftlint:disable:this type_body_length
     /// named `Bool` property keeps the body cheap.
     var hasPermissionProblem: Bool {
         permissions.health?.isHealthy == false
+    }
+
+    /// Single-member accessors that keep the menu-bar body's type-check cheap.
+    /// Reading `pipeline.queue.…` directly in that body adds a member-resolution
+    /// layer per use that pushed its type-check over budget on slower CI runners
+    /// (the same footgun `hasPermissionProblem` / `micSilentOverlay` address).
+    /// The body reads these named props instead; the chains resolve here.
+    var pipelineQueue: PipelineQueue {
+        pipeline.queue
+    }
+
+    var hasPendingSpeakerNamingJobs: Bool {
+        !pipeline.queue.pendingSpeakerNamingJobs.isEmpty
     }
 
     /// Menu-bar **top-half** red tint: mic channel silent, OR both channels
@@ -409,14 +435,14 @@ final class AppState { // swiftlint:disable:this type_body_length
                 _ = await Permissions.ensureMicrophoneAccess()
 
                 syncLanguageSettings()
-                pipelineQueue = makePipelineQueue()
+                pipeline.rebuild()
 
                 let detector: any MeetingDetecting = PowerAssertionDetector()
 
                 let loop = WatchLoop(
                     detector: detector,
                     recorderFactory: makeRecorderFactory(),
-                    pipelineQueue: pipelineQueue,
+                    pipelineQueue: pipeline.queue,
                     pollInterval: settings.pollInterval,
                     endGracePeriod: settings.endGrace,
                     noMic: settings.noMic,
@@ -435,8 +461,6 @@ final class AppState { // swiftlint:disable:this type_body_length
                     loop.permissionChecker = { health }
                 }
 
-                configurePipelineCallbacks()
-
                 watchLoop = loop
                 loop.start()
             }
@@ -453,11 +477,11 @@ final class AppState { // swiftlint:disable:this type_body_length
         Task { @MainActor in
             _ = await Permissions.ensureMicrophoneAccess()
 
-            ensurePipelineQueue()
+            pipeline.ensureQueue()
 
             let loop = WatchLoop(
                 recorderFactory: makeRecorderFactory(),
-                pipelineQueue: pipelineQueue,
+                pipelineQueue: pipeline.queue,
                 pollInterval: settings.pollInterval,
                 noMic: settings.noMic,
                 micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
@@ -499,58 +523,6 @@ final class AppState { // swiftlint:disable:this type_body_length
         watchLoop = nil
     }
 
-    /// Filters `urls` to files that currently exist on disk, forwards them to
-    /// `enqueueFiles`, and returns the existing count. RPC-friendly entry
-    /// point; nil-callers (weak self) treat absent app as 0-enqueued.
-    @discardableResult
-    func enqueueExistingFiles(_ urls: [URL]) -> Int {
-        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
-        guard !existing.isEmpty else { return 0 }
-        enqueueFiles(existing)
-        return existing.count
-    }
-
-    func enqueueFiles(_ urls: [URL]) {
-        ensurePipelineQueue()
-
-        let resolution = PairedRecordingResolver.resolve(urls: urls)
-
-        for group in resolution.paired {
-            let sidecar = RecordingSidecar.read(
-                fromDirectory: group.directory,
-                basename: group.stem,
-            )
-            let title = sidecar?.title ?? group.stem
-            let appName = sidecar?.appName ?? "File"
-            let micDelay = sidecar?.micDelaySeconds ?? 0
-            let participants = sidecar?.participants ?? []
-
-            // For paired groups: pass `group.mix` directly (nil when only app+mic
-            // were selected — the pipeline mixes app+mic into the workdir cache
-            // on the fly, no persistent `_mix.wav` is written to the user's
-            // recordings dir).
-            let job = PipelineJob(
-                meetingTitle: title, appName: appName,
-                mixPath: group.mix, appPath: group.app, micPath: group.mic,
-                micDelay: micDelay, participants: participants,
-            )
-            pipelineQueue.enqueue(job)
-        }
-
-        for url in resolution.singletons {
-            let title = url.deletingPathExtension().lastPathComponent
-            let job = PipelineJob(
-                meetingTitle: title,
-                appName: "File",
-                mixPath: url,
-                appPath: nil,
-                micPath: nil,
-                micDelay: 0,
-            )
-            pipelineQueue.enqueue(job)
-        }
-    }
-
     // MARK: - Channel Health Monitor
 
     /// Attaches the state-change callback that drives channel-health monitoring
@@ -583,7 +555,7 @@ final class AppState { // swiftlint:disable:this type_body_length
         }
     }
 
-    // MARK: - Pipeline
+    // MARK: - Engine Settings
 
     /// Push current language/vocabulary settings into the active engine.
     /// Idempotent — each branch only writes when the value actually differs,
@@ -623,93 +595,6 @@ final class AppState { // swiftlint:disable:this type_body_length
                 guard let self else { return }
                 self.syncLanguageSettings()
                 self.observeEngineSettings()
-            }
-        }
-    }
-
-    func ensurePipelineQueue() {
-        guard pipelineQueue.engine == nil else { return }
-        pipelineQueue = makePipelineQueue()
-        configurePipelineCallbacks()
-    }
-
-    /// One-stop FluidDiarizer instantiation. Captures the current tuning
-    /// fields from settings so both the global-mode factory and the
-    /// per-job mode-override factory stay in sync. Tuning only affects
-    /// `.offline` mode, but is harmless when passed to `.sortformer`.
-    private func makeFluidDiarizer(mode: DiarizerMode) -> FluidDiarizer {
-        FluidDiarizer(
-            mode: mode,
-            tuning: OfflineDiarizerTuning(
-                clusterThreshold: settings.clusterThreshold,
-                warmStartFa: settings.warmStartFa,
-                warmStartFb: settings.warmStartFb,
-                minSegmentDurationSeconds: settings.minSegmentDurationSeconds,
-                excludeOverlap: settings.excludeOverlap,
-            ),
-        )
-    }
-
-    func makePipelineQueue() -> PipelineQueue {
-        let queue = PipelineQueue(
-            engine: activeTranscriptionEngine,
-            diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
-            diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
-            protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            outputDir: settings.effectiveOutputDir,
-            diarizeEnabled: settings.diarize,
-            numSpeakers: settings.numSpeakers,
-            micLabel: settings.micName,
-            speakerMatcherFactory: { SpeakerMatcher() },
-            vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
-            recognitionStatsLog: RecognitionStatsLog(),
-        )
-        queue.loadSnapshot()
-        // Fire-and-forget: dir scan + per-file attr probes run off-main so
-        // app startup (and the first call to `enqueueFiles`) isn't blocked
-        // by a slow filesystem. Recovered jobs appear in `queue.jobs` once
-        // the scan returns.
-        Task { await queue.recoverOrphanedRecordings() }
-        queue.refreshKnownSpeakerNames()
-        return queue
-    }
-
-    func makeProtocolGenerator() -> (any ProtocolGenerating)? {
-        switch settings.protocolProvider {
-        #if !APPSTORE
-            case .claudeCLI:
-                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin, language: settings.protocolLanguage)
-        #endif
-
-        case .openAICompatible:
-            OpenAIProtocolGenerator(
-                endpoint: URL(string: settings.openAIEndpoint)
-                    // swiftlint:disable:next force_unwrapping
-                    ?? URL(string: "http://localhost:11434/v1/chat/completions")!,
-                model: settings.openAIModel,
-                language: settings.protocolLanguage,
-                apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
-            )
-
-        case .none:
-            nil
-        }
-    }
-
-    func configurePipelineCallbacks() {
-        pipelineQueue.onJobStateChange = { [notifier] job, _, newState in
-            switch newState {
-            case .done:
-                let title = job.protocolPath != nil ? "Protocol Ready" : "Transcript Saved"
-                notifier.notify(title: title, body: job.meetingTitle)
-
-            case .error:
-                if let err = job.error {
-                    notifier.notify(title: "Error", body: err)
-                }
-
-            default:
-                break
             }
         }
     }

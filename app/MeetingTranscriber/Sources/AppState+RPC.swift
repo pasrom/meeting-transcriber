@@ -4,11 +4,16 @@
     extension AppState {
         /// Build a snapshot of state for the debug RPC. Read-only.
         func rpcStateSnapshot() -> RPCStateSnapshot {
+            // Bind the queue to a local so the reads below stay single-member
+            // accesses (`q.x`) rather than going through `pipeline.queue.x` —
+            // the extra member layer in this already-large literal would push
+            // its type-check over the 300 ms budget.
+            let q = pipeline.queue
             let stored = SpeakerMatcher().loadDB()
             let recentNames = SpeakerMatcher.rankByRecency(speakers: stored)
                 .prefix(10).map(\.name)
-            let pendingJobs = pipelineQueue.pendingSpeakerNamingJobs.map { job in
-                let data = pipelineQueue.speakerNamingDataByJob[job.id]
+            let pendingJobs = q.pendingSpeakerNamingJobs.map { job in
+                let data = q.speakerNamingDataByJob[job.id]
                 return RPCStateSnapshot.PendingNaming(
                     jobID: job.id.uuidString,
                     meetingTitle: job.meetingTitle,
@@ -18,15 +23,15 @@
             }
             return RPCStateSnapshot(
                 pipeline: .init(
-                    isProcessing: pipelineQueue.isProcessing,
-                    activeJobCount: pipelineQueue.activeJobs.count,
-                    waitingJobCount: pipelineQueue.pendingJobs.count,
+                    isProcessing: q.isProcessing,
+                    activeJobCount: q.activeJobs.count,
+                    waitingJobCount: q.pendingJobs.count,
                     pendingNamingJobCount: pendingJobs.count,
                 ),
                 speakerDB: .init(
                     count: stored.count,
                     recentNames: recentNames,
-                    knownSpeakerNames: pipelineQueue.knownSpeakerNames,
+                    knownSpeakerNames: q.knownSpeakerNames,
                 ),
                 pendingNamingJobs: pendingJobs,
                 engines: enginesSnapshot(),
@@ -64,7 +69,7 @@
         /// snapshot shape. Used by E2E driver scripts to assert on outcome
         /// after triggering a meeting.
         private func lastFinishedJobSnapshot() -> RPCStateSnapshot.LastJob? {
-            guard let job = pipelineQueue.jobs.last(where: { job in
+            guard let job = pipeline.queue.jobs.last(where: { job in
                 job.state == .done || job.state == .error
             }) else {
                 return nil
@@ -123,17 +128,17 @@
                     case .noop: .noop
                     case .notFound: .notFound
                     }
-                    if outcome != .notFound { self?.pipelineQueue.refreshKnownSpeakerNames() }
+                    if outcome != .notFound { self?.pipeline.queue.refreshKnownSpeakerNames() }
                     return outcome
                 },
                 delete: { [weak self] name in
                     let removed = speakerMatcherFactory().deleteSpeaker(name: name)
-                    if removed { self?.pipelineQueue.refreshKnownSpeakerNames() }
+                    if removed { self?.pipeline.queue.refreshKnownSpeakerNames() }
                     return removed ? .ok : .notFound
                 },
                 merge: { [weak self] from, into in
                     let merged = speakerMatcherFactory().mergeSpeakers(from: from, into: into)
-                    if merged { self?.pipelineQueue.refreshKnownSpeakerNames() }
+                    if merged { self?.pipeline.queue.refreshKnownSpeakerNames() }
                     return merged ? .ok : .notFound
                 },
                 seed: { [weak self] name in
@@ -154,7 +159,7 @@
                             isSynthetic: true,
                         ))
                     }
-                    self?.pipelineQueue.refreshKnownSpeakerNames()
+                    self?.pipeline.queue.refreshKnownSpeakerNames()
                     return .ok
                 },
             )
