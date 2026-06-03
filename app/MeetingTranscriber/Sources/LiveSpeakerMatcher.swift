@@ -23,10 +23,10 @@ protocol LiveSpeakerMatching: Sendable {
 /// dialog gets recognised live without retraining.
 ///
 /// Off-MainActor (actor isolation) so the CoreML inference doesn't stall
-/// the UI. `prepare()` is idempotent and deduped via a single-flight task
-/// in the same shape as `WhisperKitEngine.loadModel()` /
-/// `ParakeetEngine.loadModel()` / `FluidVAD.ensureManager()` — second
-/// caller awaits the first's work.
+/// the UI. `prepare()` is idempotent and deduped via a single-flight task —
+/// concurrent callers await the first's work. This is the typed/throwing
+/// variant (like `FluidVAD.ensureManager()`); the engines' simpler
+/// non-throwing `loadModel()` dedup is factored into `SingleFlight`.
 ///
 /// **Vector-space note:** Both the batch path
 /// (`FluidDiarizer.extractSortformerEmbeddings`) and this live path load
