@@ -166,7 +166,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
-  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + v* tags)
+  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push)
   e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly)
   appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
@@ -312,7 +312,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `ClaudeCLIProtocolGenerator` uses async process I/O: the process `terminationHandler` yields into an `AsyncStream<Void>` that the caller awaits, instead of blocking on `process.waitUntilExit()`. The stream is installed before `process.run()` and buffers the yield, so an early exit is never missed. stdin/stdout are written/read in detached `Task`s.
 
 **View architecture:**
-- `SettingsView` receives engine instances as stored properties (not `@State`). Constructor: `SettingsView(settings:whisperKitEngine:parakeetEngine:qwen3Engine:updateChecker:)`. `qwen3Engine` is `(any TranscribingEngine)?` — nil on macOS <15.
+- `SettingsView` receives its dependencies as stored properties (not `@State`): the three engine instances, `updateChecker`, `recognitionStatsLog`, an `enrollmentDiarizerFactory`, the `namingDialogActive`/`pipelineBusy` state flags, and an `onSpeakerMutate` callback. `qwen3Engine` is `(any TranscribingEngine)?` — nil on macOS <15.
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).
@@ -331,7 +331,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
 
 **Diarization:**
-- `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offlineDiarizer` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.
+- `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offline` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.
 - **Dual-track diarization:** App and mic tracks are diarized separately. Speaker IDs are prefixed (`R_` for remote/app, `M_` for mic/local), merged, and assigned via `assignSpeakersDualTrack`. Single-source recordings fall back to diarizing the mix with `assignSpeakers`.
 - **Sortformer post-hoc embeddings:** `FluidDiarizer+SortformerEmbeddings.swift` extracts per-speaker WeSpeaker embeddings after Sortformer diarization (DiariZen-style hybrid), using overlap-excluded masks so mixed-speaker frames don't contaminate centroids. Enables `SpeakerMatcher` recognition when using the Sortformer mode.
 - `SpeakerMatcher` stores speakers in `speakers.json` with a running-mean **centroid** (primary anchor) plus a recent-samples FIFO (max 3, fallback when centroid match is borderline). Quality filter: embeddings from segments shorter than `minSpeakingTimeForCentroid` (3 s) are kept as fallback samples but excluded from the centroid. Threshold 0.40, confidence margin 0.10. Legacy entries without a persisted centroid compute `meanEmbedding(embeddings)` lazily until the next confirmation seeds a real centroid.
@@ -390,7 +390,7 @@ you're validating:
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
   (Parakeet, WhisperKit, Qwen3, WatchLoop) feed pre-recorded `two_speakers_de.wav`
   into the components and assert on transcripts.
-- Triggered on `workflow_dispatch` and `v*` tag pushes.
+- Triggered on `workflow_dispatch` and every push to `main`.
 - No live recording — `DualSourceRecorder` is bypassed; tests substitute
   fixture WAVs at the same point the recorder would emit them.
 - Strengths: fast, deterministic, isolates engine logic; runs in xctest's
@@ -471,7 +471,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Debug RPC server** | Yes (env-gated) | No (`#if !APPSTORE`) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~996 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~1,900 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
