@@ -18,7 +18,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
                                            │ owns
                 ┌──────────────────────────▼───────────────────────┐
                 │            AppState (@Observable @MainActor)     │
-                │   watchLoop, pipelineQueue, settings, engines    │
+                │   concern controllers, settings, engines         │
                 └────────┬─────────────────────────────────┬───────┘
                          │                                 │ optional
                          │                                 │ (#if !APPSTORE
