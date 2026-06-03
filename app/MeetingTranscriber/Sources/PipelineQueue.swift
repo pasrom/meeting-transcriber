@@ -843,6 +843,7 @@ class PipelineQueue {
             tracks: (
                 app: workDir.appendingPathComponent("app_16k.wav"),
                 mic: workDir.appendingPathComponent("mic_16k.wav"),
+                micDelay: ctx.micDelay,
             ),
             speakerCount: speakerCount, title: ctx.title, jobID: ctx.jobID,
         )
@@ -858,7 +859,7 @@ class PipelineQueue {
     /// between them.
     private func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
-        tracks: (app: URL, mic: URL),
+        tracks: (app: URL, mic: URL, micDelay: TimeInterval),
         speakerCount: Int?, title: String, jobID: UUID,
     ) async throws -> DiarizationRun {
         let appDiarization = try await diarizeProcess.run(
@@ -866,11 +867,15 @@ class PipelineQueue {
         )
         var micDiarization: DiarizationResult?
         do {
-            micDiarization = try await diarizeProcess.run(
+            let rawMic = try await diarizeProcess.run(
                 audioPath: tracks.mic,
                 numSpeakers: nil, // auto-detect local speakers
                 meetingTitle: title,
             )
+            // Shift the mic diarization onto the app/canonical timeline so it
+            // aligns with the mic transcript segments, which
+            // `mergeDualSourceSegments` already shifted by `+micDelay`.
+            micDiarization = DiarizationProcess.shiftSegments(rawMic, by: tracks.micDelay)
         } catch {
             logger.warning(
                 "[\(PipelineJob.shortID(for: jobID), privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
@@ -1269,7 +1274,7 @@ class PipelineQueue {
             let title = jobs[jobIndex].meetingTitle
             let diarization = try await runLateDiarization(
                 diarizer: diarizeProcess,
-                recording: (dir: recordingsDir, slug: slug, jobID: jobID),
+                recording: (dir: recordingsDir, slug: slug, jobID: jobID, micDelay: jobs[jobIndex].micDelay),
                 isDualSource: namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
@@ -1310,12 +1315,12 @@ class PipelineQueue {
     /// keep its function body under the lint cap.
     private func runLateDiarization(
         diarizer: any DiarizationProvider,
-        recording: (dir: URL, slug: String, jobID: UUID),
+        recording: (dir: URL, slug: String, jobID: UUID, micDelay: TimeInterval),
         isDualSource: Bool,
         speakerCount: Int,
         title: String,
     ) async throws -> DiarizationResult {
-        let (recordingsDir, slug, jobID) = recording
+        let (recordingsDir, slug, jobID, micDelay) = recording
         if isDualSource {
             // Mirror the batch path's mic-fail fallback (via the shared helper):
             // a silent/failing mic track must degrade to the unprefixed app-only
@@ -1326,6 +1331,7 @@ class PipelineQueue {
                 tracks: (
                     app: recordingsDir.appendingPathComponent("\(slug)_app_16k.wav"),
                     mic: recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav"),
+                    micDelay: micDelay,
                 ),
                 speakerCount: speakerCount, title: title, jobID: jobID,
             )

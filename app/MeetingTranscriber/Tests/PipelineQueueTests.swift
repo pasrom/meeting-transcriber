@@ -805,7 +805,7 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
-    private func makeDualSourceJob(title: String) throws -> PipelineJob {
+    private func makeDualSourceJob(title: String, micDelay: TimeInterval = 0) throws -> PipelineJob {
         let audioPath = try createTestAudioFile(in: tmpDir)
         let appPath = tmpDir.appendingPathComponent("app_audio.wav")
         let micPath = tmpDir.appendingPathComponent("mic_audio.wav")
@@ -815,7 +815,7 @@ final class PipelineQueueTests: XCTestCase {
         try FileManager.default.copyItem(at: audioPath, to: micPath)
         return PipelineJob(
             meetingTitle: title, appName: "Teams",
-            mixPath: audioPath, appPath: appPath, micPath: micPath, micDelay: 0,
+            mixPath: audioPath, appPath: appPath, micPath: micPath, micDelay: micDelay,
         )
     }
 
@@ -916,6 +916,47 @@ final class PipelineQueueTests: XCTestCase {
             warnings.contains { $0.contains("Mic track diarization failed") },
             "mic-fail fallback should add a warning — got: \(warnings)",
         )
+    }
+
+    /// Dual-track diarization must shift the mic track's diarization by
+    /// `micDelay` so it lands on the same (app/canonical) timeline as the mic
+    /// transcript segments — which `mergeDualSourceSegments` already shifted by
+    /// `+micDelay`. Without the shift, the diarization and transcript are offset
+    /// by `micDelay` and `assignSpeakers` overlaps the wrong diarization segment,
+    /// mislabeling mic-side speakers (only visible with ≥2 mic speakers; a single
+    /// mic speaker is masked by the nearest-gap fallback).
+    func testDiarizeDualTrackShiftsMicDiarizationByMicDelay() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "MICWORD")]
+        let diar = MockDiarization()
+        // Mic-timeline diarization: the utterance's true speaker is SPEAKER_0
+        // (Bob), who speaks at raw [0,5]. SPEAKER_1 (Carol) speaks later at
+        // [100,105]. The pipeline shifts the mic transcript by +micDelay (100s)
+        // to [100,105]; the mic diarization must be shifted to match, else
+        // [100,105] overlaps SPEAKER_1 and the utterance is mislabeled Carol.
+        diar.resultToReturn = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_0"),
+                .init(start: 100, end: 105, speaker: "SPEAKER_1"),
+            ],
+            speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
+            autoNames: ["SPEAKER_0": "Bob", "SPEAKER_1": "Carol"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        try q.enqueue(makeDualSourceJob(title: "MicDelay", micDelay: 100))
+        await q.processNext()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        // The mic utterance's true speaker is Bob; Carol only surfaces if the
+        // mic diarization wasn't shifted to match the +micDelay transcript shift.
+        XCTAssertFalse(
+            transcript.contains("Carol"),
+            "mic diarization must be shifted by micDelay to align with the shifted mic transcript — got: \(transcript)",
+        )
+        XCTAssertTrue(transcript.contains("Bob"), "mic utterance should be labeled Bob — got: \(transcript)")
     }
 
     /// A user can set the Mic Speaker Name to "Remote" — the same literal used

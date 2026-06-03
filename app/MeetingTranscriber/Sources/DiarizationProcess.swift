@@ -87,6 +87,27 @@ enum DiarizationProcess {
 
     // MARK: - Dual-Track Diarization
 
+    /// Shift every segment's `start`/`end` by `offset` seconds, moving a
+    /// track's diarization onto a different timeline. Used to bring the mic
+    /// track's diarization onto the app/canonical timeline by `+micDelay`, so it
+    /// aligns with the mic transcript segments — which
+    /// `TranscribingEngine.mergeDualSourceSegments` already shifts by the same
+    /// `+micDelay`. Without this the two are offset and overlap-based speaker
+    /// assignment mislabels mic-side segments. `speakingTimes` (durations),
+    /// `autoNames`, and `embeddings` are timeline-independent, so they pass
+    /// through unchanged. A zero offset is a no-op (returns the input verbatim).
+    static func shiftSegments(_ result: DiarizationResult, by offset: TimeInterval) -> DiarizationResult {
+        guard offset != 0 else { return result }
+        return DiarizationResult(
+            segments: result.segments.map { seg in
+                DiarizationResult.Segment(start: seg.start + offset, end: seg.end + offset, speaker: seg.speaker)
+            },
+            speakingTimes: result.speakingTimes,
+            autoNames: result.autoNames,
+            embeddings: result.embeddings,
+        )
+    }
+
     /// Merge two separate diarization results (app + mic) into one,
     /// prefixing speaker IDs with `R_` (remote/app) and `M_` (mic/local).
     static func mergeDualTrackDiarization(
