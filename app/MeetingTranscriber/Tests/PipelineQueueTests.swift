@@ -2177,6 +2177,68 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The late re-run path (`runLateDiarization`) threads the job's `micDelay`
+    /// into the shared dual-track helper, so its mic diarization is shifted onto
+    /// the canonical timeline exactly like the batch path
+    /// (`testDiarizeDualTrackShiftsMicDiarizationByMicDelay`). Pinned separately
+    /// because the late re-run is a distinct caller: dropping `micDelay` from its
+    /// `recording` tuple (threading 0) would silently misalign re-run mic labels
+    /// — the same misalignment the batch-path shift prevents — and the batch test
+    /// would not catch it.
+    func testLateRerunDualSourceShiftsMicDiarizationByMicDelay() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let mockDiar = MockDiarization()
+        // Both tracks diarize the same raw [0,5] segment (the mock ignores the
+        // audio path). The mic copy must be shifted by +micDelay onto the
+        // canonical timeline before the R_/M_ merge.
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+
+        // First run → speakerNamingPending (persists _app_16k/_mic_16k + naming).
+        try pQueue.enqueue(makeDualSourceJob(title: "Late MicDelay", micDelay: 100))
+        let jobID = try XCTUnwrap(pQueue.jobs.first?.id)
+        let pending = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pending.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pending], timeout: 10)
+
+        // Re-run via the late path: capture its fresh naming data, then finish.
+        var rerunData: PipelineQueue.SpeakerNamingData?
+        let handlerCalled = XCTestExpectation(description: "naming handler called on re-run")
+        pQueue.speakerNamingHandler = { data in
+            rerunData = data
+            handlerCalled.fulfill()
+            return .confirmed([:])
+        }
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(2))
+        await fulfillment(of: [handlerCalled], timeout: 10)
+
+        // The mic track's raw [0,5] diarization must be shifted by +micDelay
+        // (100s) → the merged M_-prefixed mic segment sits at [100,105]. A late
+        // path that threaded micDelay=0 would leave it at [0,5].
+        let segments = try XCTUnwrap(rerunData).segments
+        let micSegment = try XCTUnwrap(
+            segments.first { $0.speaker.hasPrefix("M_") },
+            "re-run naming data should include a mic-track (M_) segment — got: \(segments.map(\.speaker))",
+        )
+        XCTAssertEqual(
+            micSegment.start, 100, accuracy: 0.001,
+            "late re-run must shift mic diarization by micDelay (100s) — got start=\(micSegment.start)",
+        )
+    }
+
     /// `isAvailable == false` short-circuits lateDiarization without
     /// changing the job state — there's no recoverable path so the
     /// user is left to fix the configuration (model download, etc.).
