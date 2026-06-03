@@ -76,10 +76,10 @@ struct MeetingTranscriberApp: App {
                 isWatching: appState.isWatching,
                 pipelineQueue: appState.pipelineQueue,
                 updateChecker: appState.updateChecker,
-                onStartStop: appState.toggleWatching,
+                onStartStop: { appState.watching.toggleWatching() },
                 onRecordApp: { bringWindowToFront(id: "record-app") },
-                onStopManualRecording: appState.watchLoop?.isManualRecording == true ? {
-                    appState.stopManualRecording()
+                onStopManualRecording: appState.isManualRecording ? {
+                    appState.watching.stopManualRecording()
                 } : nil,
                 onOpenLastProtocol: openLastProtocol,
                 onOpenProtocol: { url in NSWorkspace.shared.open(url) },
@@ -111,7 +111,7 @@ struct MeetingTranscriberApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !appState.isWatching {
-                    appState.toggleWatching()
+                    appState.watching.toggleWatching()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
@@ -211,7 +211,7 @@ struct MeetingTranscriberApp: App {
         Window("Record App", id: "record-app") {
             AppPickerView(
                 onStartRecording: { pid, appName, title in
-                    appState.startManualRecording(pid: pid, appName: appName, title: title)
+                    appState.watching.startManualRecording(pid: pid, appName: appName, title: title)
                     closeWindow(id: "record-app")
                 },
                 onCancel: { closeWindow(id: "record-app") },
@@ -332,7 +332,7 @@ struct MeetingTranscriberApp: App {
     }
 
     private func quit() {
-        appState.watchLoop?.stop()
+        appState.watching.watchLoop?.stop()
         NSApplication.shared.terminate(nil)
     }
 
