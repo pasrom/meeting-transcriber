@@ -77,7 +77,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         settings.liveTranscriptionEnabled = true
         let state = AppState(settings: settings)
         // No watch loop has been started → recording state is unreachable
-        XCTAssertNil(state.watchLoop)
+        XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 
@@ -85,7 +85,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         settings.transcriptionEngine = .whisperKit
         settings.liveTranscriptionEnabled = true
         let state = AppState(settings: settings)
-        XCTAssertNil(state.watchLoop)
+        XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 }
