@@ -87,9 +87,9 @@ struct MeetingTranscriberApp: App {
                 onOpenSettings: {
                     bringWindowToFront(id: "settings")
                 },
-                onNameSpeakers: appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty ? nil : {
+                onNameSpeakers: appState.hasPendingSpeakerNamingJobs ? {
                     bringWindowToFront(id: "speaker-naming")
-                },
+                } : nil,
                 onProcessFiles: processAudioFiles,
                 onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
                 onQuit: quit,
@@ -169,14 +169,14 @@ struct MeetingTranscriberApp: App {
             speakerNamingContent
                 .onAppear {
                     // Close restored window if no naming data available (macOS state restoration)
-                    if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
+                    if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
                         closeWindow(id: "speaker-naming")
                     }
                 }
                 // Auto-close when the pending list drains. Covers RPC-driven
                 // skip (`POST /action/skipNaming`), where the data layer
                 // transitions but the UI callback never fires.
-                .onChange(of: appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty) { _, isEmpty in
+                .onChange(of: appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty) { _, isEmpty in
                     if isEmpty {
                         closeWindow(id: "speaker-naming")
                     }
@@ -199,11 +199,11 @@ struct MeetingTranscriberApp: App {
                 // Share the pipeline's actor instance so both writers serialise on
                 // the same `recognition_log.jsonl` file. Fallback only fires in the
                 // test-only PipelineQueue init that intentionally leaves it nil.
-                recognitionStatsLog: appState.pipelineQueue.recognitionStatsLog ?? RecognitionStatsLog(),
+                recognitionStatsLog: appState.pipeline.queue.recognitionStatsLog ?? RecognitionStatsLog(),
                 enrollmentDiarizerFactory: { FluidDiarizer(mode: appState.settings.diarizerMode) },
-                namingDialogActive: appState.pipelineQueue.pendingSpeakerNaming != nil,
-                pipelineBusy: appState.pipelineQueue.isProcessing,
-                onSpeakerMutate: appState.pipelineQueue.refreshKnownSpeakerNames,
+                namingDialogActive: appState.pipeline.queue.pendingSpeakerNaming != nil,
+                pipelineBusy: appState.pipeline.queue.isProcessing,
+                onSpeakerMutate: appState.pipeline.queue.refreshKnownSpeakerNames,
             )
         }
         .windowResizability(.contentSize)
@@ -223,7 +223,7 @@ struct MeetingTranscriberApp: App {
     // MARK: - Speaker Naming Window
 
     @ViewBuilder private var speakerNamingContent: some View {
-        if let data = appState.pipelineQueue.speakerNamingData(
+        if let data = appState.pipeline.queue.speakerNamingData(
             forJobID: appState.selectedNamingJobID,
         ) {
             VStack(spacing: 0) {
@@ -237,15 +237,15 @@ struct MeetingTranscriberApp: App {
     }
 
     @ViewBuilder private var speakerNamingPicker: some View {
-        if appState.pipelineQueue.pendingSpeakerNamingJobs.count > 1 {
+        if appState.pipeline.queue.pendingSpeakerNamingJobs.count > 1 {
             Picker("Meeting", selection: Binding(
                 get: {
                     appState.selectedNamingJobID
-                        ?? appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
+                        ?? appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
                 },
                 set: { appState.selectedNamingJobID = $0 },
             )) {
-                ForEach(appState.pipelineQueue.pendingSpeakerNamingJobs) { job in
+                ForEach(appState.pipeline.queue.pendingSpeakerNamingJobs) { job in
                     Text(job.meetingTitle).tag(Optional(job.id))
                 }
             }
@@ -260,16 +260,16 @@ struct MeetingTranscriberApp: App {
     ) -> some View {
         SpeakerNamingView(
             data: data,
-            knownSpeakerNames: appState.pipelineQueue.knownSpeakerNames,
-            currentDiarizerMode: appState.pipelineQueue.usedDiarizerMode(forJobID: data.jobID)
+            knownSpeakerNames: appState.pipeline.queue.knownSpeakerNames,
+            currentDiarizerMode: appState.pipeline.queue.usedDiarizerMode(forJobID: data.jobID)
                 ?? appState.settings.diarizerMode,
         ) { result in
-            appState.pipelineQueue.completeSpeakerNaming(jobID: data.jobID, result: result)
-            if appState.pipelineQueue.pendingSpeakerNamingJobs.isEmpty {
+            appState.pipeline.queue.completeSpeakerNaming(jobID: data.jobID, result: result)
+            if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
                 closeWindow(id: "speaker-naming")
             } else {
                 appState.selectedNamingJobID =
-                    appState.pipelineQueue.pendingSpeakerNamingJobs.first?.id
+                    appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
             }
         }
     }
@@ -296,11 +296,11 @@ struct MeetingTranscriberApp: App {
         panel.isAccessoryViewDisclosed = true
 
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        appState.enqueueFiles(panel.urls)
+        appState.pipeline.enqueueFiles(panel.urls)
     }
 
     private func openLastProtocol() {
-        if let job = appState.pipelineQueue.completedJobs.last,
+        if let job = appState.pipeline.queue.completedJobs.last,
            let path = job.protocolPath ?? job.transcriptPath {
             NSWorkspace.shared.open(path)
         }
