@@ -144,7 +144,7 @@
         func test_snapshot_lastJob_skipsWaitingAndInFlightJobs() {
             let state = AppState(settings: settings)
             let waiting = makeJob(title: "in-flight")
-            state.pipelineQueue.insertJobForTesting(waiting)
+            state.pipeline.queue.insertJobForTesting(waiting)
             // .waiting is the default state on init; not finished yet.
             XCTAssertNil(state.rpcStateSnapshot().lastJob)
         }
@@ -161,8 +161,8 @@
             // Order in the array determines "last" — `last(where:)` walks
             // back-to-front. Append done first, then errored, so the latter
             // is returned.
-            state.pipelineQueue.insertJobForTesting(done)
-            state.pipelineQueue.insertJobForTesting(errored)
+            state.pipeline.queue.insertJobForTesting(done)
+            state.pipeline.queue.insertJobForTesting(errored)
 
             let snapshot = state.rpcStateSnapshot()
             let last = try XCTUnwrap(snapshot.lastJob)
@@ -181,7 +181,7 @@
             done.transcriptPath = URL(fileURLWithPath: "/tmp/transcript.md")
             done.protocolPath = URL(fileURLWithPath: "/tmp/protocol.md")
             done.warnings = ["diarization fell back to single track"]
-            state.pipelineQueue.insertJobForTesting(done)
+            state.pipeline.queue.insertJobForTesting(done)
 
             let json = try state.rpcStateSnapshot().jsonData()
             let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: json)

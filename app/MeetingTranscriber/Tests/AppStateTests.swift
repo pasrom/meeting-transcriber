@@ -24,10 +24,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
         // Inject a PipelineQueue with mocks + the per-test isolated logDir.
-        // The engine != nil arm short-circuits `ensurePipelineQueue()` so
+        // The engine != nil arm short-circuits `pipeline.ensureQueue()` so
         // it doesn't replace our queue with one wired to the production
         // `AppPaths.ipcDir` path on the first `enqueueFiles` call.
-        state.pipelineQueue = PipelineQueue(
+        state.pipeline.queue = PipelineQueue(
             engine: MockEngine(),
             diarizationFactory: { MockDiarization() },
             protocolGeneratorFactory: { MockProtocolGen() },
@@ -43,7 +43,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     private func makeIsolatedState(logDir: URL) -> (AppState, RecordingNotifier) {
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
-        state.pipelineQueue = PipelineQueue(logDir: logDir)
+        state.pipeline.queue = PipelineQueue(logDir: logDir)
         return (state, notifier)
     }
 
@@ -298,46 +298,46 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, _) = makeState()
         let url = URL(fileURLWithPath: "/tmp/sprint-review.wav")
 
-        state.enqueueFiles([url])
+        state.pipeline.enqueueFiles([url])
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
     }
 
     func testEnqueueFilesMultipleURLs() {
         let (state, _) = makeState()
         let urls = (1 ... 3).map { URL(fileURLWithPath: "/tmp/meeting-\($0).wav") }
 
-        state.enqueueFiles(urls)
+        state.pipeline.enqueueFiles(urls)
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 3)
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 3)
     }
 
     func testEnqueueFilesTitleFromLastPathComponent() {
         let (state, _) = makeState()
         let url = URL(fileURLWithPath: "/tmp/sprint-review.wav")
 
-        state.enqueueFiles([url])
+        state.pipeline.enqueueFiles([url])
 
-        XCTAssertEqual(state.pipelineQueue.jobs[0].meetingTitle, "sprint-review")
+        XCTAssertEqual(state.pipeline.queue.jobs[0].meetingTitle, "sprint-review")
     }
 
     func testEnqueueFilesAppNameIsFile() {
         let (state, _) = makeState()
-        state.enqueueFiles([URL(fileURLWithPath: "/tmp/meeting.wav")])
-        XCTAssertEqual(state.pipelineQueue.jobs[0].appName, "File")
+        state.pipeline.enqueueFiles([URL(fileURLWithPath: "/tmp/meeting.wav")])
+        XCTAssertEqual(state.pipeline.queue.jobs[0].appName, "File")
     }
 
     func testEnqueueFilesEmptyArrayIsNoOp() {
         let (state, _) = makeState()
-        state.enqueueFiles([])
-        XCTAssertTrue(state.pipelineQueue.jobs.isEmpty)
+        state.pipeline.enqueueFiles([])
+        XCTAssertTrue(state.pipeline.queue.jobs.isEmpty)
     }
 
     func testEnqueueFilesCreatesJobsWithNilAudioPaths() {
         let (state, _) = makeState()
-        state.enqueueFiles([URL(fileURLWithPath: "/tmp/meeting.wav")])
-        XCTAssertNil(state.pipelineQueue.jobs[0].appPath)
-        XCTAssertNil(state.pipelineQueue.jobs[0].micPath)
+        state.pipeline.enqueueFiles([URL(fileURLWithPath: "/tmp/meeting.wav")])
+        XCTAssertNil(state.pipeline.queue.jobs[0].appPath)
+        XCTAssertNil(state.pipeline.queue.jobs[0].micPath)
     }
 
     func testEnqueueFilesPairsTripletAsOneDualTrackJob() {
@@ -348,10 +348,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             URL(fileURLWithPath: "/tmp/standup_mix.wav"),
         ]
 
-        state.enqueueFiles(urls)
+        state.pipeline.enqueueFiles(urls)
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
-        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
+        let job = state.pipeline.queue.jobs[0]
         XCTAssertEqual(job.mixPath?.lastPathComponent, "standup_mix.wav")
         XCTAssertEqual(job.appPath?.lastPathComponent, "standup_app.wav")
         XCTAssertEqual(job.micPath?.lastPathComponent, "standup_mic.wav")
@@ -359,8 +359,8 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     func testEnqueueExistingFilesEmptyArrayReturnsZero() {
         let (state, _) = makeState()
-        XCTAssertEqual(state.enqueueExistingFiles([]), 0)
-        XCTAssertTrue(state.pipelineQueue.jobs.isEmpty)
+        XCTAssertEqual(state.pipeline.enqueueExistingFiles([]), 0)
+        XCTAssertTrue(state.pipeline.queue.jobs.isEmpty)
     }
 
     func testEnqueueExistingFilesAllMissingReturnsZeroAndDoesNotEnqueue() {
@@ -369,8 +369,8 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             URL(fileURLWithPath: "/tmp/never-exists-\(UUID().uuidString).wav"),
             URL(fileURLWithPath: "/tmp/also-missing-\(UUID().uuidString).wav"),
         ]
-        XCTAssertEqual(state.enqueueExistingFiles(urls), 0)
-        XCTAssertTrue(state.pipelineQueue.jobs.isEmpty)
+        XCTAssertEqual(state.pipeline.enqueueExistingFiles(urls), 0)
+        XCTAssertTrue(state.pipeline.queue.jobs.isEmpty)
     }
 
     func testEnqueueExistingFilesPartialExistenceForwardsOnlyExisting() throws {
@@ -380,11 +380,11 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let missing = tmpDir.appendingPathComponent("absent.wav")
         try Data("RIFF".utf8).write(to: existing)
 
-        let count = state.enqueueExistingFiles([existing, missing])
+        let count = state.pipeline.enqueueExistingFiles([existing, missing])
 
         XCTAssertEqual(count, 1)
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
-        XCTAssertEqual(state.pipelineQueue.jobs[0].mixPath?.lastPathComponent, "present.wav")
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
+        XCTAssertEqual(state.pipeline.queue.jobs[0].mixPath?.lastPathComponent, "present.wav")
     }
 
     func testEnqueueFilesAppPlusMicWithoutMixHasNilMixPath() {
@@ -397,10 +397,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             URL(fileURLWithPath: "/tmp/20260311_143000_mic.wav"),
         ]
 
-        state.enqueueFiles(urls)
+        state.pipeline.enqueueFiles(urls)
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
-        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
+        let job = state.pipeline.queue.jobs[0]
         XCTAssertNil(job.mixPath, "paired without mix → nil mixPath")
         XCTAssertEqual(job.appPath?.lastPathComponent, "20260311_143000_app.wav")
         XCTAssertEqual(job.micPath?.lastPathComponent, "20260311_143000_mic.wav")
@@ -410,10 +410,10 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, _) = makeState()
         let urls = [URL(fileURLWithPath: "/tmp/orphan_app.wav")]
 
-        state.enqueueFiles(urls)
+        state.pipeline.enqueueFiles(urls)
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
-        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
+        let job = state.pipeline.queue.jobs[0]
         XCTAssertEqual(job.mixPath?.lastPathComponent, "orphan_app.wav")
         XCTAssertNil(job.appPath)
         XCTAssertNil(job.micPath)
@@ -428,11 +428,11 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             URL(fileURLWithPath: "/tmp/podcast.mp3"),
         ]
 
-        state.enqueueFiles(urls)
+        state.pipeline.enqueueFiles(urls)
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 2)
-        let paired = state.pipelineQueue.jobs.first { $0.appPath != nil }
-        let single = state.pipelineQueue.jobs.first { $0.appPath == nil }
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 2)
+        let paired = state.pipeline.queue.jobs.first { $0.appPath != nil }
+        let single = state.pipeline.queue.jobs.first { $0.appPath == nil }
         XCTAssertEqual(paired?.meetingTitle, "meeting")
         XCTAssertEqual(single?.meetingTitle, "podcast")
     }
@@ -454,65 +454,65 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             micFilename: "\(basename)_mic.wav",
         ).write(toDirectory: tmpDir, basename: basename)
 
-        state.enqueueFiles([
+        state.pipeline.enqueueFiles([
             tmpDir.appendingPathComponent("\(basename)_app.wav"),
             tmpDir.appendingPathComponent("\(basename)_mic.wav"),
             tmpDir.appendingPathComponent("\(basename)_mix.wav"),
         ])
 
-        XCTAssertEqual(state.pipelineQueue.jobs.count, 1)
-        let job = state.pipelineQueue.jobs[0]
+        XCTAssertEqual(state.pipeline.queue.jobs.count, 1)
+        let job = state.pipeline.queue.jobs[0]
         XCTAssertEqual(job.meetingTitle, "Sprint Review")
         XCTAssertEqual(job.appName, "Microsoft Teams")
         XCTAssertEqual(job.participants, ["Speaker A", "Speaker B"])
         XCTAssertEqual(job.micDelay, 0.25, accuracy: 0.0001)
     }
 
-    // MARK: - ensurePipelineQueue
+    // MARK: - pipeline.ensureQueue
 
-    func testEnsurePipelineQueueReplacesBareQueue() {
+    func testEnsureQueueReplacesBareQueue() {
         // Bare queue (no engine) — uses the no-engine init; logDir is the
         // production path but this test never enqueues so no I/O hits it.
         let notifier = RecordingNotifier()
         let state = AppState(notifier: notifier)
-        state.pipelineQueue = PipelineQueue(logDir: testLogDir)
-        XCTAssertNil(state.pipelineQueue.engine, "Precondition: fresh queue has no engine")
+        state.pipeline.queue = PipelineQueue(logDir: testLogDir)
+        XCTAssertNil(state.pipeline.queue.engine, "Precondition: fresh queue has no engine")
 
-        state.ensurePipelineQueue()
+        state.pipeline.ensureQueue()
 
-        XCTAssertNotNil(state.pipelineQueue.engine)
+        XCTAssertNotNil(state.pipeline.queue.engine)
     }
 
-    func testEnsurePipelineQueueIdempotent() {
+    func testEnsureQueueIdempotent() {
         let (state, _) = makeState()
-        state.ensurePipelineQueue()
-        let firstID = ObjectIdentifier(state.pipelineQueue)
+        state.pipeline.ensureQueue()
+        let firstID = ObjectIdentifier(state.pipeline.queue)
 
-        state.ensurePipelineQueue()
+        state.pipeline.ensureQueue()
 
-        XCTAssertEqual(ObjectIdentifier(state.pipelineQueue), firstID)
+        XCTAssertEqual(ObjectIdentifier(state.pipeline.queue), firstID)
     }
 
-    // MARK: - makePipelineQueue
+    // MARK: - pipeline.makeQueue
 
-    func testMakePipelineQueueHasEngine() {
+    func testMakeQueueHasEngine() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().engine)
+        XCTAssertNotNil(state.pipeline.makeQueue().engine)
     }
 
-    func testMakePipelineQueueHasDiarizationFactory() {
+    func testMakeQueueHasDiarizationFactory() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().diarizationFactory)
+        XCTAssertNotNil(state.pipeline.makeQueue().diarizationFactory)
     }
 
-    func testMakePipelineQueueHasProtocolGeneratorFactory() {
+    func testMakeQueueHasProtocolGeneratorFactory() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().protocolGeneratorFactory)
+        XCTAssertNotNil(state.pipeline.makeQueue().protocolGeneratorFactory)
     }
 
-    func testMakePipelineQueueSetsOutputDir() {
+    func testMakeQueueSetsOutputDir() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().outputDir)
+        XCTAssertNotNil(state.pipeline.makeQueue().outputDir)
     }
 
     // MARK: - makeProtocolGenerator
@@ -521,7 +521,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let settings = AppSettings()
         settings.protocolProvider = .openAICompatible
         let state = AppState(settings: settings)
-        XCTAssertTrue(state.makeProtocolGenerator() is OpenAIProtocolGenerator)
+        XCTAssertTrue(state.pipeline.makeProtocolGenerator() is OpenAIProtocolGenerator)
     }
 
     #if !APPSTORE
@@ -529,7 +529,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             let settings = AppSettings()
             settings.protocolProvider = .claudeCLI
             let state = AppState(settings: settings)
-            XCTAssertTrue(state.makeProtocolGenerator() is ClaudeCLIProtocolGenerator)
+            XCTAssertTrue(state.pipeline.makeProtocolGenerator() is ClaudeCLIProtocolGenerator)
         }
     #endif
 
@@ -537,31 +537,31 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let settings = AppSettings()
         settings.protocolProvider = .none
         let state = AppState(settings: settings)
-        XCTAssertNil(state.makeProtocolGenerator())
+        XCTAssertNil(state.pipeline.makeProtocolGenerator())
     }
 
-    // MARK: - configurePipelineCallbacks
+    // MARK: - pipeline.configureCallbacks
 
-    func testConfigurePipelineCallbacksDoneFiresNotification() throws {
+    func testConfigureCallbacksDoneFiresNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
-        state.configurePipelineCallbacks()
+        state.pipeline.configureCallbacks()
 
         var job = makeJob(title: "Sprint Review")
         job.protocolPath = URL(fileURLWithPath: "/tmp/protocol.md")
-        state.pipelineQueue.onJobStateChange?(job, .transcribing, .done)
+        state.pipeline.queue.onJobStateChange?(job, .transcribing, .done)
 
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertEqual(notifier.calls[0].title, "Protocol Ready")
         XCTAssertEqual(notifier.calls[0].body, "Sprint Review")
     }
 
-    func testConfigurePipelineCallbacksErrorFiresNotification() throws {
+    func testConfigureCallbacksErrorFiresNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
-        state.configurePipelineCallbacks()
+        state.pipeline.configureCallbacks()
 
         var job = makeJob()
         job = PipelineJob(
@@ -574,20 +574,20 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         )
         // Simulate a job with an error string
         let errorJob = jobWithError(job, message: "Transcription failed")
-        state.pipelineQueue.onJobStateChange?(errorJob, .transcribing, .error)
+        state.pipeline.queue.onJobStateChange?(errorJob, .transcribing, .error)
 
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertEqual(notifier.calls[0].title, "Error")
         XCTAssertEqual(notifier.calls[0].body, "Transcription failed")
     }
 
-    func testConfigurePipelineCallbacksTranscribingNoNotification() throws {
+    func testConfigureCallbacksTranscribingNoNotification() throws {
         let tmpDir = try makeTempDirectory(prefix: "appstate_callbacks")
 
         let (state, notifier) = makeIsolatedState(logDir: tmpDir)
-        state.configurePipelineCallbacks()
+        state.pipeline.configureCallbacks()
 
-        state.pipelineQueue.onJobStateChange?(makeJob(), .waiting, .transcribing)
+        state.pipeline.queue.onJobStateChange?(makeJob(), .waiting, .transcribing)
 
         XCTAssertTrue(notifier.calls.isEmpty)
     }
@@ -653,22 +653,22 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertTrue(state.activeTranscriptionEngine is WhisperKitEngine)
     }
 
-    func testMakePipelineQueueUsesActiveEngine() {
+    func testMakeQueueUsesActiveEngine() {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.makePipelineQueue().engine, "WhisperKit engine should be set")
+        XCTAssertNotNil(state.pipeline.makeQueue().engine, "WhisperKit engine should be set")
 
         state.settings.transcriptionEngine = .parakeet
-        XCTAssertNotNil(state.makePipelineQueue().engine, "Parakeet engine should be set")
+        XCTAssertNotNil(state.pipeline.makeQueue().engine, "Parakeet engine should be set")
     }
 
-    func testEnsurePipelineQueueWithParakeet() {
+    func testEnsureQueueWithParakeet() {
         let settings = AppSettings()
         settings.transcriptionEngine = .parakeet
         let state = AppState(settings: settings)
 
-        state.ensurePipelineQueue()
+        state.pipeline.ensureQueue()
 
-        XCTAssertNotNil(state.pipelineQueue.engine)
+        XCTAssertNotNil(state.pipeline.queue.engine)
     }
 
     func testActiveTranscriptionEngineReturnsQwen3WhenSet() {
@@ -693,23 +693,23 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertTrue(state.activeTranscriptionEngine is ParakeetEngine)
     }
 
-    func testMakePipelineQueueUsesQwen3Engine() {
+    func testMakeQueueUsesQwen3Engine() {
         guard #available(macOS 15, *) else { return }
         let settings = AppSettings()
         settings.transcriptionEngine = .qwen3
         let state = AppState(settings: settings)
-        XCTAssertNotNil(state.makePipelineQueue().engine, "Qwen3 engine should be set")
+        XCTAssertNotNil(state.pipeline.makeQueue().engine, "Qwen3 engine should be set")
     }
 
-    func testEnsurePipelineQueueWithQwen3() {
+    func testEnsureQueueWithQwen3() {
         guard #available(macOS 15, *) else { return }
         let settings = AppSettings()
         settings.transcriptionEngine = .qwen3
         let state = AppState(settings: settings)
 
-        state.ensurePipelineQueue()
+        state.pipeline.ensureQueue()
 
-        XCTAssertNotNil(state.pipelineQueue.engine)
+        XCTAssertNotNil(state.pipeline.queue.engine)
     }
 
     // MARK: - Qwen3 Fallback
@@ -724,26 +724,26 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertNotNil(state.activeTranscriptionEngine)
     }
 
-    // MARK: - MakePipelineQueue Settings
+    // MARK: - makeQueue settings
 
-    func testMakePipelineQueueUsesDiarizeSettingFromSettings() {
+    func testMakeQueueUsesDiarizeSettingFromSettings() {
         let (state, _) = makeState()
         state.settings.diarize = true
-        let queue = state.makePipelineQueue()
+        let queue = state.pipeline.makeQueue()
         XCTAssertTrue(queue.diarizeEnabled)
     }
 
-    func testMakePipelineQueueUsesMicLabelFromSettings() {
+    func testMakeQueueUsesMicLabelFromSettings() {
         let (state, _) = makeState()
         state.settings.micName = "Speaker A"
-        let queue = state.makePipelineQueue()
+        let queue = state.pipeline.makeQueue()
         XCTAssertEqual(queue.micLabel, "Speaker A")
     }
 
-    func testMakePipelineQueueUsesNumSpeakersFromSettings() {
+    func testMakeQueueUsesNumSpeakersFromSettings() {
         let (state, _) = makeState()
         state.settings.numSpeakers = 4
-        let queue = state.makePipelineQueue()
+        let queue = state.pipeline.makeQueue()
         XCTAssertEqual(queue.numSpeakers, 4)
     }
 }

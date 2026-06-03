@@ -2358,7 +2358,7 @@ final class PipelineQueueTests: XCTestCase {
 
     //
     // The SpeakerNamingView dialog used to call
-    // `appState.pipelineQueue.speakerMatcherFactory().allSpeakerNames()`
+    // `appState.pipeline.queue.speakerMatcherFactory().allSpeakerNames()`
     // inside the SwiftUI body getter. Each body re-eval re-constructed a
     // SpeakerMatcher (running migrateIfNeeded → file read) and re-parsed
     // the entire speakers.json (including embeddings) just to extract
