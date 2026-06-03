@@ -23,15 +23,10 @@ final class Qwen3AsrEngine: TranscribingEngine {
     var language: String?
 
     private var asrManager: Qwen3AsrManager?
-    private var loadingTask: Task<Void, Never>?
+    private let modelLoad = SingleFlight()
 
     func loadModel() async {
-        if let existing = loadingTask {
-            await existing.value
-            return
-        }
-
-        let task = Task {
+        await modelLoad.run { [self] in
             modelState = .downloading
             downloadProgress = 0
             do {
@@ -51,10 +46,7 @@ final class Qwen3AsrEngine: TranscribingEngine {
                 modelState = .unloaded
                 downloadProgress = 0
             }
-            loadingTask = nil
         }
-        loadingTask = task
-        await task.value
     }
 
     private func ensureModel() async throws {

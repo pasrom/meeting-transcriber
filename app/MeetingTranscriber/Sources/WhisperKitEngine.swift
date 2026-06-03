@@ -47,16 +47,10 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
-    private var loadingTask: Task<Void, Never>?
+    private let modelLoad = SingleFlight()
 
     func loadModel() async {
-        // Deduplicate concurrent loads
-        if let existing = loadingTask {
-            await existing.value
-            return
-        }
-
-        let task = Task {
+        await modelLoad.run { [self] in
             modelState = .downloading
             downloadProgress = 0
             do {
@@ -84,10 +78,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                 modelState = .unloaded
                 downloadProgress = 0
             }
-            loadingTask = nil
         }
-        loadingTask = task
-        await task.value
     }
 
     /// Ensure model is loaded, loading it if necessary.

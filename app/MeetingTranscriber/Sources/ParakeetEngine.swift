@@ -35,7 +35,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     private var asrManager: AsrManager?
-    private var loadingTask: Task<Void, Never>?
+    private let modelLoad = SingleFlight()
 
     // CTC vocabulary boosting state
     private struct VocabularyBooster {
@@ -50,12 +50,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     private var currentVocabularyPath: String = ""
 
     func loadModel() async {
-        if let existing = loadingTask {
-            await existing.value
-            return
-        }
-
-        let task = Task {
+        await modelLoad.run { [self] in
             modelState = .downloading
             downloadProgress = 0
             do {
@@ -80,10 +75,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
                 modelState = .unloaded
                 downloadProgress = 0
             }
-            loadingTask = nil
         }
-        loadingTask = task
-        await task.value
     }
 
     private func ensureModel() async throws {

@@ -121,7 +121,8 @@ final class FluidVAD: @unchecked Sendable {
     /// and trigger duplicate CoreML compiles of the Silero model.
     ///
     /// On failure the shared `Task` is dropped so the next call retries
-    /// from scratch (mirrors `ParakeetEngine.loadModel()`). An awaiter
+    /// from scratch (the same clear-on-failure invariant `SingleFlight`
+    /// documents for the engine loaders). An awaiter
     /// being cancelled only cancels its own `await`; the underlying load
     /// continues so other awaiters still receive the manager.
     private func ensureManager() async throws -> VadManager {
