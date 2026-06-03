@@ -124,21 +124,7 @@ struct MeetingTranscriberApp: App {
                 closeWindow(id: "settings")
             }
             .task {
-                switch appState.settings.transcriptionEngine {
-                case .whisperKit:
-                    appState.whisperKit.modelVariant = appState.settings.whisperKitModel
-                    appState.whisperKit.language = appState.settings.whisperLanguageOrNil
-                    await appState.whisperKit.loadModel()
-
-                case .parakeet:
-                    await appState.parakeetEngine.loadModel()
-
-                case .qwen3:
-                    if #available(macOS 15, *) {
-                        appState.qwen3Engine.language = appState.settings.qwen3LanguageOrNil
-                        await appState.qwen3Engine.loadModel()
-                    }
-                }
+                await appState.engines.preloadActiveModel()
             }
             .task {
                 appState.updateChecker.startPeriodicChecks(settings: appState.settings)
@@ -187,11 +173,11 @@ struct MeetingTranscriberApp: App {
         Window("Settings", id: "settings") {
             SettingsView(
                 settings: appState.settings,
-                whisperKitEngine: appState.whisperKit,
-                parakeetEngine: appState.parakeetEngine,
+                whisperKitEngine: appState.engines.whisperKit,
+                parakeetEngine: appState.engines.parakeetEngine,
                 qwen3Engine: {
                     if #available(macOS 15, *) {
-                        return appState.qwen3Engine
+                        return appState.engines.qwen3Engine
                     }
                     return nil
                 }(),

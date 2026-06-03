@@ -16,10 +16,11 @@ protocol AppNotifying {
 // MARK: - AppState
 
 /// Observable ViewModel that composes the app's concern-specific controllers
-/// (`watching`, `pipeline`, `permissions`, `channelHealth`, `liveTranscription`,
-/// `rpcController`) and exposes the derived UI properties (badge, status label)
-/// the menu-bar scene binds to. It wires the controllers together rather than
-/// owning their state — new concern state belongs in a controller, not here.
+/// (`engines`, `watching`, `pipeline`, `permissions`, `channelHealth`,
+/// `liveTranscription`, `rpcController`) and exposes the derived UI properties
+/// (badge, status label) the menu-bar scene binds to. It wires the controllers
+/// together rather than owning their state — new concern state belongs in a
+/// controller, not here.
 ///
 /// Extracted from `MeetingTranscriberApp` so badge/watching logic and
 /// `BadgeKind.compute(...)` are testable without the `@main` App struct.
@@ -29,23 +30,19 @@ final class AppState {
     // MARK: - Dependencies
 
     let settings: AppSettings
-    let whisperKit: WhisperKitEngine
-    let parakeetEngine: ParakeetEngine
-    // Only created on macOS 15+ where Qwen3-ASR is available.
-    private let _qwen3Engine: AnyObject?
     private let notifier: any AppNotifying
-
-    /// Typed accessor (only callable under @available(macOS 15, *) checks).
-    @available(macOS 15, *)
-    var qwen3Engine: Qwen3AsrEngine {
-        // swiftlint:disable:next force_cast
-        _qwen3Engine as! Qwen3AsrEngine
-    }
 
     // MARK: - State
 
     var updateChecker: UpdateChecker
     var selectedNamingJobID: UUID?
+
+    /// Transcription-engine concern (the three engine instances, active-engine
+    /// selection, and settings → engine language/vocabulary sync), extracted
+    /// into its own controller. Read as `engines.activeTranscriptionEngine` by
+    /// the pipeline + live-transcription coordinators and `engines.whisperKit`
+    /// etc. by the Settings UI + RPC snapshot.
+    let engines: EngineController
 
     /// Watching / recording lifecycle concern (the active `WatchLoop`, the
     /// auto-detect toggle, manual recording start/stop, the recorder factory,
@@ -107,53 +104,28 @@ final class AppState {
         AppSettings()
     }
 
-    private static func makeWhisperKit() -> WhisperKitEngine {
-        WhisperKitEngine()
-    }
-
-    private static func makeParakeet() -> ParakeetEngine {
-        ParakeetEngine()
-    }
-
     private static func makeUpdateChecker() -> UpdateChecker {
         UpdateChecker()
-    }
-
-    @available(macOS 15, *)
-    private static func makeQwen3() -> Qwen3AsrEngine {
-        Qwen3AsrEngine()
     }
 
     // MARK: - Init
 
     init(
         settings: AppSettings = AppState.makeDefaultSettings(),
-        whisperKit: WhisperKitEngine? = nil,
-        parakeetEngine: ParakeetEngine? = nil,
-        qwen3Engine: AnyObject? = nil,
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
     ) {
         // Dependency defaults are resolved through explicitly-typed factory
-        // helpers (above) rather than inline `?? SomeType()` expressions (and
-        // an inline `AppSettings()` default argument). Each inline
-        // `@Observable` / protocol-existential constructor forces the
-        // type-checker to re-solve the dependency's own init constraints at
-        // this call site; summed across the engine + settings dependencies
-        // that pushed this init's body-type-check time right up against the
-        // 300 ms hard limit enforced in Package.swift, where it flaked
-        // intermittently under heavy CI load. A factory with a declared
-        // return type collapses the inference here to a plain function
-        // reference. Behaviour is identical.
+        // helpers (above) rather than inline `?? SomeType()` expressions (and an
+        // inline `AppSettings()` default argument). An inline `@Observable`
+        // constructor forces the type-checker to re-solve the dependency's own
+        // init constraints at this call site, which pushed this init's
+        // body-type-check time toward the 300 ms hard limit enforced in
+        // Package.swift. A factory with a declared return type collapses the
+        // inference here to a plain function reference. Behaviour is identical.
         self.settings = settings
-        self.whisperKit = whisperKit ?? Self.makeWhisperKit()
-        self.parakeetEngine = parakeetEngine ?? Self.makeParakeet()
-        if #available(macOS 15, *) {
-            self._qwen3Engine = (qwen3Engine as? Qwen3AsrEngine) ?? Self.makeQwen3()
-        } else {
-            self._qwen3Engine = nil
-        }
         self.notifier = notifier
+        self.engines = EngineController(settings: settings)
         self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
         self.pipeline = PipelineController(settings: settings, notifier: notifier)
@@ -184,19 +156,14 @@ final class AppState {
             self.rpcController = RPCServerController(isEnabled: { [settings] in settings.debugRPCEnabled })
         #endif
 
-        // Bring engines in line with the current settings up front so the
-        // first transcription doesn't run against stale defaults, then
-        // start observing for runtime changes.
-        syncLanguageSettings()
-        observeEngineSettings()
-        liveTranscription.beginPrewarm { [weak self] in self?.activeTranscriptionEngine }
-        // Wire the active-engine source (post stored-property init so the
-        // `[weak self]` engine closure is valid). The pipeline is rebuilt
-        // lazily on the first watch/enqueue, never during init.
-        pipeline.activate { [weak self] in self?.activeTranscriptionEngine }
-        // Wire the up-front engine-sync hook the watch-start path runs before
-        // the first transcription (engine concern still owned by AppState).
-        watching.activate { [weak self] in self?.syncLanguageSettings() }
+        // Wire the active-engine source + the watch-start up-front engine sync
+        // (post stored-property init so the `[weak self]` closures are valid).
+        // `EngineController` does its own up-front sync + reactive observe in its
+        // init; these hooks let the pipeline / live-transcription / watch paths
+        // reach the active engine and re-sync before the first transcription.
+        liveTranscription.beginPrewarm { [weak self] in self?.engines.activeTranscriptionEngine }
+        pipeline.activate { [weak self] in self?.engines.activeTranscriptionEngine }
+        watching.activate { [weak self] in self?.engines.syncLanguageSettings() }
 
         #if !APPSTORE
             applyForcedChannelFlagsFromEnvironment()
@@ -305,24 +272,6 @@ final class AppState {
             )
         }
     #endif
-
-    /// The active transcription engine based on the current settings.
-    var activeTranscriptionEngine: any TranscribingEngine {
-        switch settings.transcriptionEngine {
-        case .parakeet:
-            parakeetEngine
-
-        case .qwen3:
-            if #available(macOS 15, *) {
-                qwen3Engine
-            } else {
-                whisperKit // Fallback (should not happen -- UI prevents selection)
-            }
-
-        case .whisperKit:
-            whisperKit
-        }
-    }
 
     // MARK: - Derived properties
 
@@ -437,50 +386,6 @@ final class AppState {
             audioPath: nil,
             pid: Int(ProcessInfo.processInfo.processIdentifier),
         )
-    }
-
-    // MARK: - Engine Settings
-
-    /// Push current language/vocabulary settings into the active engine.
-    /// Idempotent — each branch only writes when the value actually differs,
-    /// so unchanged settings don't churn the engine's `@Observable` watchers.
-    private func syncLanguageSettings() {
-        switch settings.transcriptionEngine {
-        case .whisperKit:
-            let next = settings.whisperLanguageOrNil
-            if whisperKit.language != next { whisperKit.language = next }
-
-        case .parakeet:
-            let nextVocab = settings.customVocabularyPath
-            if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
-            let nextLang = settings.parakeetLanguageOrNil
-            if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
-
-        case .qwen3:
-            if #available(macOS 15, *) {
-                let next = settings.qwen3LanguageOrNil
-                if qwen3Engine.language != next { qwen3Engine.language = next }
-            }
-        }
-    }
-
-    /// `withObservationTracking` is one-shot — re-arm after each fire so the
-    /// AppState reacts to every settings change, not just the first one.
-    /// Same self-re-arming pattern the concern controllers use for their observers.
-    private func observeEngineSettings() {
-        withObservationTracking {
-            _ = settings.transcriptionEngine
-            _ = settings.whisperLanguage
-            _ = settings.customVocabularyPath
-            _ = settings.parakeetLanguage
-            _ = settings.qwen3Language
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.syncLanguageSettings()
-                self.observeEngineSettings()
-            }
-        }
     }
 }
 
