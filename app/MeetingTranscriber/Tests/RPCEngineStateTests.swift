@@ -43,8 +43,8 @@
         func test_snapshot_reflectsActiveEngine_whisperKit() {
             settings.transcriptionEngine = .whisperKit
             let state = AppState(settings: settings)
-            state.whisperKit.modelVariant = "openai_whisper-large-v3-v20240930_turbo"
-            state.whisperKit.language = "de"
+            state.engines.whisperKit.modelVariant = "openai_whisper-large-v3-v20240930_turbo"
+            state.engines.whisperKit.language = "de"
 
             let snapshot = state.rpcStateSnapshot()
 
@@ -59,7 +59,7 @@
         func test_snapshot_reflectsActiveEngine_parakeet() {
             settings.transcriptionEngine = .parakeet
             let state = AppState(settings: settings)
-            state.parakeetEngine.customVocabularyPath = "/tmp/parakeet-vocab.txt"
+            state.engines.parakeetEngine.customVocabularyPath = "/tmp/parakeet-vocab.txt"
 
             let snapshot = state.rpcStateSnapshot()
 
@@ -75,7 +75,7 @@
             }
             settings.transcriptionEngine = .qwen3
             let state = AppState(settings: settings)
-            state.qwen3Engine.language = "en"
+            state.engines.qwen3Engine.language = "en"
 
             let snapshot = state.rpcStateSnapshot()
 
@@ -85,7 +85,7 @@
 
         func test_snapshot_whisperLanguageNil_surfacesAsNil() {
             let state = AppState(settings: settings)
-            state.whisperKit.language = nil
+            state.engines.whisperKit.language = nil
 
             let snapshot = state.rpcStateSnapshot()
 
