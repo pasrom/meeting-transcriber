@@ -70,7 +70,9 @@ class MicRecorder {
             channels: 1,
         )
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
+        // safeInstallTap bridges the uncatchable NSException installTap raises
+        // for a mismatched format (issue #379) into a Swift throw.
+        try inputNode.safeInstallTap(onBus: 0, bufferSize: 4096, format: tapFormat) { [weak self] buffer, _ in
             guard let self, self.isRecording else { return }
             do {
                 try file.write(from: buffer)
