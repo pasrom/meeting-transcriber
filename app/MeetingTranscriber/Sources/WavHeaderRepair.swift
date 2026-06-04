@@ -59,6 +59,22 @@ enum WavHeaderRepair {
         return true
     }
 
+    /// Scans `dir` (non-recursively) for `*.wav` files and repairs any with an
+    /// unfinalized header. Returns the number actually repaired. Called at
+    /// launch to rescue recordings whose writer was killed mid-stream (#379).
+    @discardableResult
+    static func repairUnfinalized(in dir: URL) -> Int {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil,
+        ) else { return 0 }
+        var repaired = 0
+        for url in entries where url.pathExtension.lowercased() == "wav" {
+            if (try? repairIfNeeded(at: url)) == true { repaired += 1 }
+        }
+        return repaired
+    }
+
     private static func isFourCC(_ data: Data, _ offset: Int, _ cc: String) -> Bool {
         let start = data.startIndex + offset
         return data[start ..< start + 4].elementsEqual(cc.utf8)
