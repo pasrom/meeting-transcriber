@@ -33,6 +33,7 @@ REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /
 REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.wav already on disk
 KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --reimport-latest run
 MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert the app survives it
+CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is re-mixed on relaunch (issue #379 part 3)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -46,6 +47,7 @@ while [ $# -gt 0 ]; do
         --reimport-latest)  REIMPORT_LATEST=true ;;
         --keep-recordings)  KEEP_RECORDINGS=true ;;
         --mic-device-change) MIC_DEVICE_CHANGE=true ;;
+        --crash-recovery)   CRASH_RECOVERY=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -83,6 +85,13 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        and the recording still completes. Pre-fix this crashes;
                        the fix must catch + recover. Requires a build (incompatible
                        with --no-build).
+  --crash-recovery     Issue #379 part 3: start a meeting, wait until the
+                       recorder is writing its raw app temp, then SIGKILL the
+                       app mid-recording (no stop() -> the raw _app_raw.tmp +
+                       unfinalized _mic.wav survive, no _mix.wav). Relaunch and
+                       assert the orphan is re-mixed into a readable _mix.wav and
+                       the temp consumed. Pre-fix the launch cleanup deletes the
+                       temp -> no recovery (RED); the fix re-mixes it (GREEN).
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -391,6 +400,13 @@ on_exit() {
     if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
         _delete_dev_default diarizerMode
     fi
+    # Crash-recovery: remove only THIS run's recording artifacts (the exact
+    # stem we created). Stem-targeted, so it never touches pre-existing user
+    # recordings. See feedback memory `no_destructive_fs_on_real_dirs`.
+    if [ "$CRASH_RECOVERY" = true ] && [ -n "${CRASH_STEM:-}" ]; then
+        rm -f "$CRASH_RECORDINGS/${CRASH_STEM}"* 2>/dev/null || true
+        [ -n "${CRASH_MARKER:-}" ] && rm -f "$CRASH_MARKER"
+    fi
 }
 trap on_exit EXIT INT TERM
 
@@ -695,6 +711,94 @@ run_one_reimport() {
 
 LAST_RECORDED_MIX_PATH=""
 
+# Issue #379 part 3 — crash recovery. Record via the live stack, SIGKILL the
+# app mid-recording so `stop()` never runs (the raw `_app_raw.tmp` + unfinalized
+# `_mic.wav` survive, no `_mix.wav`), then relaunch and assert the orphan is
+# re-mixed into a readable `_mix.wav` and the temp consumed. Pre-fix the launch
+# cleanup deletes the temp first → no recovery (RED); the fix re-mixes it (GREEN).
+#
+# Live temps go to AppPaths.recordingsDir (Application Support), NOT the
+# record-only Downloads dir — recovery scans the same path.
+CRASH_RECORDINGS="$HOME/Library/Application Support/MeetingTranscriber/recordings"
+CRASH_MARKER=""
+CRASH_STEM=""
+run_crash_recovery() {
+    local label="[crash-recovery]"
+    mkdir -p "$CRASH_RECORDINGS"
+    CRASH_MARKER="/tmp/e2e-crash-recovery-marker.$$"
+    rm -f "$CRASH_MARKER"; touch "$CRASH_MARKER"
+
+    # Baseline the pre-crash lastJob now (RPC is already up from launch). The
+    # recovered recording gets a fresh job id after relaunch, so this stable
+    # baseline can never equal the recovered job — avoids a race where recovery
+    # enqueues before we could sample a post-relaunch baseline.
+    PRE_LAST_JOB_ID="$(rpc /state | jq -r '.lastJob.jobID // empty')"
+    log "$label: pre-crash baseline lastJob.jobID=${PRE_LAST_JOB_ID:-<none>}"
+
+    # 1. Start a meeting so the app begins recording.
+    log "$label: starting meeting-simulator -> $SIMULATOR_FIXTURE"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
+
+    # 2. Wait until the recorder is writing the raw app temp (recording active).
+    local orphan_tmp=""
+    _crash_tmp_appeared() {
+        orphan_tmp="$(find "$CRASH_RECORDINGS" -maxdepth 1 -name '*_app_raw.tmp' -newer "$CRASH_MARKER" -print 2>/dev/null | head -1)"
+        [ -n "$orphan_tmp" ]
+    }
+    log "$label: waiting for an active recording (*_app_raw.tmp)"
+    poll_until 40 1 _crash_tmp_appeared || fail "$label: no *_app_raw.tmp appeared — recording never started"
+    sleep 3   # let a little audio accumulate before the kill
+
+    CRASH_STEM="$(basename "$orphan_tmp")"; CRASH_STEM="${CRASH_STEM%_app_raw.tmp}"
+    local stem="$CRASH_STEM"
+    log "$label: recording active, orphan stem=$stem"
+
+    # 3. Simulate a crash: SIGKILL the app (no stop() → temp survives, no mix).
+    #    Kill the simulator too so the relaunch sees no active meeting — the
+    #    only recording that can surface post-relaunch is the recovered one.
+    log "$label: SIGKILL the app mid-recording (simulating a crash)"
+    pkill -KILL -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
+    [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
+    SIM_PID=""
+    sleep 2
+
+    # 4. Verify the crashed-orphan state on disk.
+    [ -f "$CRASH_RECORDINGS/${stem}_app_raw.tmp" ] || fail "$label: orphan ${stem}_app_raw.tmp did not survive the crash"
+    [ ! -f "$CRASH_RECORDINGS/${stem}_mix.wav" ] || fail "$label: a _mix.wav exists — stop() ran, this wasn't a crash"
+    log "$label: confirmed crashed state (raw temp present, no mix)"
+
+    # 5. Backdate the orphan past recovery's in-progress guard (a real
+    #    crash→relaunch gap is minutes; keeps the e2e fast + deterministic).
+    local old; old="$(date -v-5M +%Y%m%d%H%M.%S)"
+    touch -t "$old" "$CRASH_RECORDINGS/${stem}_app_raw.tmp"
+    [ -f "$CRASH_RECORDINGS/${stem}_mic.wav" ] && touch -t "$old" "$CRASH_RECORDINGS/${stem}_mic.wav" || true
+
+    # 6. Relaunch — recovery runs at the launch queue-build.
+    log "$label: relaunching $DEV_BUNDLE_DEPLOY"
+    open "$DEV_BUNDLE_DEPLOY"
+    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "$label: RPC did not come back after relaunch"
+    log "$label: RPC back up after relaunch"
+
+    # 7. Assert recovery: the orphan is re-mixed into a readable _mix.wav and
+    #    the raw temp is consumed. This is the crisp red/green signal.
+    log "$label: waiting for the recovered ${stem}_mix.wav (timeout 90s)"
+    _crash_mix_appeared() { [ -f "$CRASH_RECORDINGS/${stem}_mix.wav" ]; }
+    poll_until 90 2 _crash_mix_appeared \
+        || fail "$label: orphan NOT recovered — no ${stem}_mix.wav after relaunch (recovery missing, or the temp was deleted by launch cleanup)"
+    local mix_size
+    mix_size="$(wc -c <"$CRASH_RECORDINGS/${stem}_mix.wav" | tr -d ' ')"
+    [ "$mix_size" -gt 65536 ] || fail "$label: recovered mix suspiciously small: $mix_size bytes (expected > 64 KB)"
+    [ ! -f "$CRASH_RECORDINGS/${stem}_app_raw.tmp" ] || fail "$label: raw temp not consumed after recovery"
+    log "$label: recovered ${stem}_mix.wav ($mix_size bytes), raw temp consumed ✅"
+
+    # 8. Full chain: the recovered mix is enqueued by recoverOrphanedRecordings
+    #    → assert a new pipeline job reaches done.
+    _poll_for_new_lastjob_terminal "$label"
+    [ "$POLL_LJ_STATE" = "done" ] || fail "$label: recovered job state=$POLL_LJ_STATE, expected done"
+    log "$label: recovered recording transcribed (lastJob done) ✅"
+}
+
 if [ "$REIMPORT_LATEST" = true ]; then
     # Skip the live-record phase and reuse a WAV produced by an earlier
     # `--record-only --keep-recordings` run on this host. Picks the
@@ -754,6 +858,8 @@ elif [ "$MIC_DEVICE_CHANGE" = true ]; then
     run_one_meeting "[mic-device-change]"
     assert_app_alive
     log "[mic-device-change] app survived the injected device-change restart ✅"
+elif [ "$CRASH_RECOVERY" = true ]; then
+    run_crash_recovery
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
