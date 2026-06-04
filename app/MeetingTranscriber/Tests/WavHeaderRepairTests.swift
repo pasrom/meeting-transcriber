@@ -17,8 +17,8 @@ final class WavHeaderRepairTests: XCTestCase {
     /// Writes a real 16 kHz mono Int16 WAV via AVAudioFile and returns its URL
     /// + finalized frame count. The AVAudioFile closes (finalizes the header)
     /// when it goes out of scope at the end of this function.
-    private func writeFinalizedWav(seconds: Double) throws -> (url: URL, frames: AVAudioFramePosition) {
-        let url = tempURL()
+    private func writeFinalizedWav(seconds: Double, at target: URL? = nil) throws -> (url: URL, frames: AVAudioFramePosition) {
+        let url = target ?? tempURL()
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
             AVSampleRateKey: 16000.0,
@@ -102,5 +102,28 @@ final class WavHeaderRepairTests: XCTestCase {
         let repaired = try WavHeaderRepair.repairIfNeeded(at: url)
         XCTAssertFalse(repaired, "a non-WAV file must not be touched")
         XCTAssertEqual(try Data(contentsOf: url), junk, "a non-WAV file must be left unchanged")
+    }
+
+    func testRepairUnfinalizedScansDirAndFixesOnlyBrokenWavs() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wavrepairdir-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let brokenURL = dir.appendingPathComponent("crashed_mic.wav")
+        _ = try writeFinalizedWav(seconds: 0.4, at: brokenURL)
+        try corruptHeader(at: brokenURL)
+        let validURL = dir.appendingPathComponent("clean_mix.wav")
+        _ = try writeFinalizedWav(seconds: 0.4, at: validURL)
+        let validBefore = try Data(contentsOf: validURL)
+        try Data("junk".utf8).write(to: dir.appendingPathComponent("notes.txt"))
+
+        XCTAssertEqual(readableFrames(brokenURL), 0, "broken WAV starts unreadable")
+
+        let count = WavHeaderRepair.repairUnfinalized(in: dir)
+
+        XCTAssertEqual(count, 1, "only the one unfinalized WAV should be repaired")
+        XCTAssertGreaterThan(readableFrames(brokenURL), 0, "the crashed WAV is readable after the dir pass")
+        XCTAssertEqual(try Data(contentsOf: validURL), validBefore, "a finalized WAV must be left unchanged")
     }
 }

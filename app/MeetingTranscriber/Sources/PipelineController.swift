@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "PipelineController")
 
 // MARK: - PipelineController
 
@@ -89,7 +92,18 @@ final class PipelineController {
         // Fire-and-forget: dir scan + per-file attr probes run off-main so app
         // startup (and the first call to `enqueueFiles`) isn't blocked by a slow
         // filesystem. Recovered jobs appear in `queue.jobs` once the scan returns.
-        Task { await q.recoverOrphanedRecordings() }
+        Task {
+            // Rescue recordings whose writer was killed mid-stream: repair any
+            // unfinalized WAV headers (#379) before the orphan scan, so the
+            // audio is readable again. Detached so the dir scan + per-file
+            // header rewrites run off-main and don't block startup (same reason
+            // the orphan scan below offloads its own filesystem work).
+            await Task.detached(priority: .utility) {
+                let repaired = WavHeaderRepair.repairUnfinalized(in: AppPaths.recordingsDir)
+                if repaired > 0 { logger.info("Repaired \(repaired) unfinalized recording(s) on launch") }
+            }.value
+            await q.recoverOrphanedRecordings()
+        }
         q.refreshKnownSpeakerNames()
         return q
     }
