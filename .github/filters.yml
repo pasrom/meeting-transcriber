@@ -1,5 +1,7 @@
 # Shared dorny/paths-filter definitions. Referenced by ci.yml and release.yml
-# so docs-only PRs reliably skip both the test matrix and the DMG build.
+# so docs- and landing-site-only PRs reliably skip both the test matrix and the
+# DMG build. The site/ tree is the GitHub Pages landing page; it deploys via its
+# own pages.yml workflow and never affects the app build or tests.
 #
 # Use with `predicate-quantifier: every` — with the v4 default `some`, the
 # `**` catch-all alone marks every file as matched and the `!…` negations
@@ -9,5 +11,6 @@ code:
   - '!*.md'
   - '!**/*.md'
   - '!docs/**'
+  - '!site/**'
   - '!LICENSE'
   - '!.gitignore'
