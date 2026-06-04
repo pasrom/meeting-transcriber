@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy &middot; Meeting Transcriber</title>
+<meta name="description" content="Privacy policy for Meeting Transcriber. The app runs on your Mac and does not collect or transmit your data.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html">Meeting Transcriber</a>
+    <nav class="top-nav">
+      <a href="https://github.com/pasrom/meeting-transcriber">GitHub</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap legal">
+
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: June 3, 2026</p>
+
+  <p>Meeting Transcriber is a macOS app that runs on your own computer. The short version: it does not collect your data, and there is no server in the picture to send it to. This page spells out exactly what that means.</p>
+
+  <h2>What the app collects about you</h2>
+  <p>Nothing. There is no account, no sign-up, no analytics, no telemetry, and no usage tracking. The developer has no way to see who uses the app or what they record.</p>
+
+  <h2>Where your recordings and transcripts live</h2>
+  <p>Your recordings, transcripts, summaries and saved voice profiles are stored as files on your Mac, in your user folder. They are never uploaded anywhere by the app. If you delete them, they are gone. You can move or back them up like any other file.</p>
+
+  <h2>When the app uses the network</h2>
+  <p>The app works offline once it is set up. There are only three times it talks to the network, and you control all of them:</p>
+  <ul class="plain">
+    <li><b>Model download, once.</b> On first run it downloads the speech models it needs (for example WhisperKit, Parakeet or the diarization model). This is a normal file download. Your audio is not involved and nothing about you is sent.</li>
+    <li><b>Update check, optional.</b> The app can check GitHub for a newer release so it can tell you one is available. This is a request to GitHub for the public release list. You can ignore or disable it.</li>
+    <li><b>The summary step, your choice.</b> Writing the summary is the only step that can involve an outside service, and only if you set it up that way. If you point it at a cloud model (such as Anthropic Claude or an OpenAI-compatible API), the transcript text is sent to that provider and handled under their privacy terms. If you point it at a local model (Ollama, LM Studio, llama.cpp) or turn the summary off, nothing leaves your Mac.</li>
+  </ul>
+
+  <h2>System permissions the app asks for</h2>
+  <ul class="plain">
+    <li><b>Microphone.</b> To record your side of the call.</li>
+    <li><b>Screen and System Audio Recording.</b> To capture the call audio, and to detect a meeting by reading the window title of apps like Teams, Zoom or Webex. Window titles are read on your Mac and are not sent anywhere.</li>
+  </ul>
+  <p>You grant these in System Settings and can revoke them at any time.</p>
+
+  <h2>Third parties</h2>
+  <p>There are no ads, no third-party trackers, and no analytics SDKs in the app. The only third parties that can ever receive anything are the model host you download from, GitHub for the optional update check, and the summary provider you choose, as described above.</p>
+
+  <h2>Children</h2>
+  <p>The app is a general productivity tool and is not directed at children.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the updated version will be published on this page with a new date. Because the source is public, the history is visible on GitHub.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy: <a href="mailto:meetingtranscriber@proton.me">meetingtranscriber@proton.me</a>, or <a href="https://github.com/pasrom/meeting-transcriber/issues/new">open an issue</a> on GitHub.</p>
+
+  <p class="note"><a href="index.html">&larr; Back to the app</a></p>
+
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="links">
+      <a href="https://github.com/pasrom/meeting-transcriber">GitHub</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="impressum.html">Imprint</a>
+      <a href="mailto:meetingtranscriber@proton.me">Contact</a>
+    </div>
+    <div class="madeby">Made by <a href="https://www.linkedin.com/in/roman-p-75880a91/">Roman P.</a>. Open source, MIT licensed.</div>
+  </div>
+</footer>
+
+</body>
+</html>
