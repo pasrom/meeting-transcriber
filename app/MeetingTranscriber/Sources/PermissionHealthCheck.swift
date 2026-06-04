@@ -2,6 +2,7 @@
 // types lack Sendable annotations — same gaps as Permissions.swift /
 // AudioMixer.swift; preemptively guarded.
 @preconcurrency import ApplicationServices
+import AudioTapLib
 @preconcurrency import AVFoundation
 import CoreGraphics
 import os.log
@@ -248,8 +249,16 @@ enum PermissionHealthCheck {
         }
 
         let counter = BufferCounter()
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            if buffer.frameLength > 0 { counter.record(buffer: buffer) }
+        do {
+            // safeInstallTap: a device change mid-probe could make installTap
+            // raise an uncatchable NSException (issue #379); treat that as a
+            // failed probe rather than an abort.
+            try inputNode.safeInstallTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                if buffer.frameLength > 0 { counter.record(buffer: buffer) }
+            }
+        } catch {
+            debugLog("probeMicrophone: installTap failed: \(error.localizedDescription)")
+            return false
         }
 
         do {

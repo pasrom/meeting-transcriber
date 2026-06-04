@@ -25,6 +25,16 @@ public class MicCaptureHandler: @unchecked Sendable {
     private let liveSink: LiveAudioSink?
     private var isRecording = false
     private var isRestarting = false
+    // Bounded retry for transient restart failures (issue #379): a device
+    // change can briefly expose an invalid format; retry with exponential
+    // backoff (MicRestartRetryPolicy) rather than dropping the recording.
+    // Reset to 0 on a successful (re)start.
+    private var restartRetryCount = 0
+    // True while a retry is pending in the backoff window. `isRestarting` is
+    // cleared synchronously when executeRestart returns, so without this a
+    // device change arriving during the 0.3 s backoff would start a second,
+    // parallel restart chain racing the pending one on `engine`.
+    private var retryScheduled = false
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     private var configChangeObserver: NSObjectProtocol?
     private var selectedDeviceUID: String?
@@ -102,6 +112,24 @@ public class MicCaptureHandler: @unchecked Sendable {
         installConfigChangeObserver()
     }
 
+    /// Validate the live hardware format and derive a tap format that MATCHES
+    /// the node's actual channel count. Issue #379: a device change to a
+    /// multi-channel input (e.g. 24 kHz/1ch → 44.1 kHz/2ch) crashed because the
+    /// tap was hardcoded to 1 channel — installTapOnBus raises an NSException
+    /// when the tap format's channel count differs from the freshly-negotiated
+    /// node bus. Matching the node's channel count and downmixing to mono in
+    /// the converter (see startEngine) avoids the mismatch at the source. The
+    /// 0 Hz / 0-channel guard covers the transient where the device hasn't
+    /// finished re-initialising; throwing lets executeRestart retry.
+    private func validatedTapFormat(for hwFormat: AVAudioFormat) throws -> AVAudioFormat {
+        guard let tapFormat = TapFormatResolver.tapFormat(forHardware: hwFormat) else {
+            throw MicCaptureError.invalidHardwareFormat(
+                sampleRate: hwFormat.sampleRate, channelCount: hwFormat.channelCount,
+            )
+        }
+        return tapFormat
+    }
+
     // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
         // No input device available (e.g. Mac Mini server without mic hardware) —
@@ -131,6 +159,8 @@ public class MicCaptureHandler: @unchecked Sendable {
         let hwFormat = inputNode.outputFormat(forBus: 0)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
 
+        let tapFormat = try validatedTapFormat(for: hwFormat)
+
         if debugLogging {
             let inUID = getDefaultInputDeviceUID() ?? "?"
             let inName = getDefaultInputDeviceName() ?? "?"
@@ -139,9 +169,6 @@ public class MicCaptureHandler: @unchecked Sendable {
             )
         }
 
-        let tapFormat = AVAudioFormat(
-            standardFormatWithSampleRate: hwFormat.sampleRate, channels: 1,
-        )! // swiftlint:disable:this force_unwrapping
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
 
         // Always 16kHz — WhisperKit target rate
@@ -165,14 +192,19 @@ public class MicCaptureHandler: @unchecked Sendable {
         }
 
         converter = nil
-        resampleRatio = 1.0
-        if tapFormat.sampleRate != fileSampleRate {
+        resampleRatio = fileSampleRate / tapFormat.sampleRate
+        // Convert to 16 kHz mono whenever the tap isn't already there — this
+        // covers resampling AND downmixing a multi-channel input device. Since
+        // the tap now matches the node's real channel count (issue #379), a
+        // 2ch device is captured as 2ch and folded to the mono WAV here.
+        if tapFormat.sampleRate != fileSampleRate || tapFormat.channelCount != 1 {
             let outputFormat = AVAudioFormat(
                 standardFormatWithSampleRate: fileSampleRate, channels: 1,
             )! // swiftlint:disable:this force_unwrapping
             converter = AVAudioConverter(from: tapFormat, to: outputFormat)
-            resampleRatio = fileSampleRate / tapFormat.sampleRate
-            logger.info("Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(self.fileSampleRate)) Hz")
+            logger.info(
+                "Mic: converting \(Int(tapFormat.sampleRate))Hz/\(tapFormat.channelCount)ch → \(Int(self.fileSampleRate))Hz/1ch",
+            )
         }
 
         #if E2E_FAULT_INJECTION
@@ -180,8 +212,11 @@ public class MicCaptureHandler: @unchecked Sendable {
         #else
             let installFormat = tapFormat
         #endif
+        // installTapOnBus raises an ObjC NSException for an invalid/incompatible
+        // format (issue #379); Swift can't catch that. Build the tap block, then
+        // install it through the ObjC shim so a raise becomes a recoverable throw.
         // swiftlint:disable closure_parameter_position closure_body_length
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: installFormat) {
+        let tapBlock: AVAudioNodeTapBlock = {
             [weak self] buffer, _ in
             // swiftlint:enable closure_parameter_position closure_body_length
             guard let self, self.isRecording else { return }
@@ -233,9 +268,17 @@ public class MicCaptureHandler: @unchecked Sendable {
             }
         }
 
+        do {
+            try inputNode.safeInstallTap(onBus: 0, bufferSize: 4096, format: installFormat, block: tapBlock)
+        } catch {
+            logger.error("Mic: installTap failed (\(error.localizedDescription)) — restart will retry")
+            throw error
+        }
+
         engine.prepare()
         try engine.start()
         isRecording = true
+        restartRetryCount = 0
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
 
         #if E2E_FAULT_INJECTION
@@ -289,7 +332,9 @@ public class MicCaptureHandler: @unchecked Sendable {
         let isDeviceAvailable = selectedDeviceUID.map { Self.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
         let action = MicRestartPolicy.decideRestart(
             isRecording: isRecording,
-            isRestarting: isRestarting,
+            // Treat a pending retry as still-restarting so a device change in
+            // the backoff window doesn't spawn a competing restart chain.
+            isRestarting: isRestarting || retryScheduled,
             selectedDeviceUID: selectedDeviceUID,
             isSelectedDeviceAvailable: isDeviceAvailable,
         )
@@ -342,8 +387,35 @@ public class MicCaptureHandler: @unchecked Sendable {
             installConfigChangeObserver()
             logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device (\(Int(hwRate)) Hz)")
         } catch {
+            // A transient invalid format / installTap raise (issue #379) is
+            // recoverable: the device usually settles within a few hundred ms.
+            // Keep recording and retry with backoff instead of killing it.
+            logger.error("Failed to restart mic after device change: \(error) — scheduling retry")
+            scheduleRestartRetry(deviceUID: deviceUID)
+        }
+    }
+
+    /// Re-attempt a failed restart after a short backoff, bounded by
+    /// `maxRestartRetries`. Only retries while still recording; gives up (and
+    /// stops recording) once the budget is exhausted.
+    private func scheduleRestartRetry(deviceUID: String?) {
+        guard isRecording else { return }
+        switch MicRestartRetryPolicy.decide(attemptsSoFar: restartRetryCount) {
+        case .giveUp:
             isRecording = false
-            logger.error("Failed to restart mic after device change: \(error)")
+            logger.error("Mic: giving up restart after \(MicRestartRetryPolicy.maxAttempts) failed attempts")
+
+        case let .retry(delay):
+            restartRetryCount += 1
+            retryScheduled = true
+            let attempt = restartRetryCount
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.retryScheduled = false
+                guard self.isRecording else { return }
+                logger.info("Mic: restart retry \(attempt)/\(MicRestartRetryPolicy.maxAttempts)")
+                self.executeRestart(deviceUID: deviceUID)
+            }
         }
     }
 
@@ -471,10 +543,14 @@ private func sumOfSquaresInt16(
 
 public enum MicCaptureError: LocalizedError {
     case noInputDevice
+    case invalidHardwareFormat(sampleRate: Double, channelCount: UInt32)
 
     public var errorDescription: String? {
         switch self {
         case .noInputDevice: "No microphone hardware available"
+
+        case let .invalidHardwareFormat(sampleRate, channelCount):
+            "Microphone reported an invalid format (\(sampleRate) Hz, \(channelCount) ch)"
         }
     }
 }

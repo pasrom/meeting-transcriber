@@ -81,6 +81,11 @@ ignore:
   - "tools/audiotap/Sources/AppAudioCapture.swift"
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
+  # Thin installTap wrapper bridging the NSException to a throw. The bridging
+  # shim itself is unit-tested (CExceptionCatcherTests); the installTap call is
+  # hardware-bound (exercised by e2e-app.yml). `+` is a regex metachar — escape
+  # as `\\+` to match the literal filename (see the note further down).
+  - "tools/audiotap/Sources/AVAudioNode\\+SafeInstallTap.swift"
   # SwiftUI overlay + NSPanel wrapper. The pure opacity math is extracted
   # to LiveCaptionsState.opacity(at:) and unit-tested there; what remains
   # is NSEvent global/local monitors, NSScreen frame checks, UserDefaults
