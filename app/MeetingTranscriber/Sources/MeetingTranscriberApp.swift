@@ -53,7 +53,10 @@ struct MeetingTranscriberApp: App {
     init() {
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
-        DualSourceRecorder.cleanupTempFiles()
+        // Temp-file cleanup moved into the queue-build recovery flow
+        // (`PipelineController.makeQueue`): a crashed `_app_raw.tmp` must be
+        // re-mixed by `recoverCrashedRecordings` BEFORE it's cleaned up, so the
+        // delete can no longer run first here (issue #379).
         let suppressAutoWatch = ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH"] == "1"
         // Auto-watch: schedule on main run loop after app finishes launching.
         // E2E drivers that force channel-health flags via env var also set
