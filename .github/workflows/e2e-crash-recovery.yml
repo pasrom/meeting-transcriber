@@ -1,0 +1,63 @@
+name: E2E (Crash Recovery)
+
+# Focused live-recording E2E for issue #379 part 3: start a meeting, wait until
+# the recorder is writing its raw app temp, SIGKILL the app mid-recording (no
+# stop() — the raw _app_raw.tmp + unfinalized _mic.wav survive, no _mix.wav),
+# then relaunch and assert the orphan is re-mixed into a readable _mix.wav and a
+# pipeline job reaches done. Pre-fix the launch cleanup deletes the temp first →
+# no recovery (RED); the fix re-mixes it (GREEN).
+#
+# Kept out of the always-run e2e-app.yml sequence: it SIGKILLs + relaunches the
+# shared bundle mid-run, which would disrupt the other lanes. Dispatch-only: run
+# manually when touching the recovery / recorder-teardown path or before a
+# release. GitHub indexes workflow_dispatch from the default branch, so this is
+# dispatchable once merged: gh workflow run e2e-crash-recovery.yml
+on:
+  workflow_dispatch:
+
+# Shares e2e-app.yml's concurrency group so the two never race for the
+# BlackHole input device / RPC port / deployed bundle on the Mini.
+concurrency:
+  group: e2e-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-crash-recovery:
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/verify-xcode
+
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for e2e-app.sh
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Run crash-recovery E2E (issue #379 part 3)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --crash-recovery
+
+      - name: Upload simulator log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: meeting-simulator.log
+          path: /tmp/e2e-app-sim.log
+          if-no-files-found: ignore
+
+      - name: Cleanup signing keychain
+        if: always() && env.E2E_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true
