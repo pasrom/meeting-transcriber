@@ -144,6 +144,17 @@ class DualSourceRecorder: RecordingProvider {
         // root PID alone if the bundle URL is unavailable.
         let effectivePids = Self.resolveTapPIDs(rootPID: appPID)
 
+        // Mic device-change e2e (issue #379): inject a one-shot tap fault so the
+        // app self-triggers a mid-recording restart with an invalid format and
+        // the lane can verify the installTap NSException recovery. Compiled ONLY
+        // in the e2e build (run_app.sh -DE2E_FAULT_INJECTION); the fault is
+        // physically absent from every shipped binary.
+        #if E2E_FAULT_INJECTION
+            let micDebugFault: DebugTapFault? = DebugTapFault(triggerRestartAfter: 2)
+        #else
+            let micDebugFault: DebugTapFault? = nil
+        #endif
+
         let session = AudioCaptureSession(
             pids: effectivePids,
             appOutputURL: appTempURL,
@@ -154,6 +165,7 @@ class DualSourceRecorder: RecordingProvider {
             debugLogging: debugLogging,
             appLiveSink: appLiveSink,
             micLiveSink: micLiveSink,
+            micDebugFault: micDebugFault,
         )
         try session.start()
         captureSession = session
