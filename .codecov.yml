@@ -81,6 +81,11 @@ ignore:
   - "tools/audiotap/Sources/AppAudioCapture.swift"
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
+  # Fault-injection test seam (#379): a 2-field config struct constructed ONLY
+  # in the e2e build's composition root under #if E2E_FAULT_INJECTION, so the
+  # xctest suite never executes its init. Exercised by e2e-mic-device-change.yml;
+  # a unit test would only pin a struct literal (vacuous).
+  - "tools/audiotap/Sources/DebugTapFault.swift"
   # Thin installTap wrapper bridging the NSException to a throw. The bridging
   # shim itself is unit-tested (CExceptionCatcherTests); the installTap call is
   # hardware-bound (exercised by e2e-app.yml). `+` is a regex metachar — escape

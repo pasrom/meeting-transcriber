@@ -16,6 +16,9 @@ public class AudioCaptureSession {
     private let debugLogging: Bool
     private let appLiveSink: LiveAudioSink?
     private let micLiveSink: LiveAudioSink?
+    // Inert in production (nil); an e2e build injects one to verify the mic
+    // installTap NSException recovery (issue #379). Forwarded to MicCaptureHandler.
+    private let micDebugFault: DebugTapFault?
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -41,6 +44,7 @@ public class AudioCaptureSession {
         debugLogging: Bool = false,
         appLiveSink: LiveAudioSink? = nil,
         micLiveSink: LiveAudioSink? = nil,
+        micDebugFault: DebugTapFault? = nil,
     ) {
         self.pids = pids
         self.sampleRate = sampleRate
@@ -51,6 +55,7 @@ public class AudioCaptureSession {
         self.debugLogging = debugLogging
         self.appLiveSink = appLiveSink
         self.micLiveSink = micLiveSink
+        self.micDebugFault = micDebugFault
     }
 
     /// Start capturing app audio (and optionally mic audio).
@@ -87,6 +92,7 @@ public class AudioCaptureSession {
                 outputURL: micURL,
                 debugLogging: debugLogging,
                 liveSink: micLiveSink,
+                debugFault: micDebugFault,
             )
             do {
                 try mic.start(deviceUID: micDeviceUID)
