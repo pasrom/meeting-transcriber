@@ -33,7 +33,7 @@ REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /
 REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.wav already on disk
 KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --reimport-latest run
 MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert the app survives it
-CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is re-mixed on relaunch (issue #379 part 3)
+CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered into the pipeline on relaunch (issue #379 part 3)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -89,9 +89,11 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        recorder is writing its raw app temp, then SIGKILL the
                        app mid-recording (no stop() -> the raw _app_raw.tmp +
                        unfinalized _mic.wav survive, no _mix.wav). Relaunch and
-                       assert the orphan is re-mixed into a readable _mix.wav and
-                       the temp consumed. Pre-fix the launch cleanup deletes the
-                       temp -> no recovery (RED); the fix re-mixes it (GREEN).
+                       assert the recovered recording enters the pipeline and a
+                       job reaches done (the re-mixed _mix.wav is transient — the
+                       pipeline consumes it into its workdir within seconds).
+                       Pre-fix the launch cleanup deletes the temp -> no
+                       recovery (RED); the fix re-mixes + enqueues it (GREEN).
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -713,9 +715,12 @@ LAST_RECORDED_MIX_PATH=""
 
 # Issue #379 part 3 — crash recovery. Record via the live stack, SIGKILL the
 # app mid-recording so `stop()` never runs (the raw `_app_raw.tmp` + unfinalized
-# `_mic.wav` survive, no `_mix.wav`), then relaunch and assert the orphan is
-# re-mixed into a readable `_mix.wav` and the temp consumed. Pre-fix the launch
-# cleanup deletes the temp first → no recovery (RED); the fix re-mixes it (GREEN).
+# `_mic.wav` survive, no `_mix.wav`), then relaunch and assert the recovered
+# recording enters the pipeline and a job reaches done. The re-mixed `_mix.wav`
+# is transient (recoverOrphanedRecordings enqueues it + the pipeline consumes it
+# into its workdir within seconds), so the assertion is on the pipeline job, not
+# the file. Pre-fix the launch cleanup deletes the temp first → no recovery
+# (RED); the fix re-mixes + enqueues it (GREEN).
 #
 # Live temps go to AppPaths.recordingsDir (Application Support), NOT the
 # record-only Downloads dir — recovery scans the same path.
@@ -780,20 +785,27 @@ run_crash_recovery() {
     poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "$label: RPC did not come back after relaunch"
     log "$label: RPC back up after relaunch"
 
-    # 7. Assert recovery: the orphan is re-mixed into a readable _mix.wav and
-    #    the raw temp is consumed. This is the crisp red/green signal.
-    log "$label: waiting for the recovered ${stem}_mix.wav (timeout 90s)"
-    _crash_mix_appeared() { [ -f "$CRASH_RECORDINGS/${stem}_mix.wav" ]; }
-    poll_until 90 2 _crash_mix_appeared \
-        || fail "$label: orphan NOT recovered — no ${stem}_mix.wav after relaunch (recovery missing, or the temp was deleted by launch cleanup)"
-    local mix_size
-    mix_size="$(wc -c <"$CRASH_RECORDINGS/${stem}_mix.wav" | tr -d ' ')"
-    [ "$mix_size" -gt 65536 ] || fail "$label: recovered mix suspiciously small: $mix_size bytes (expected > 64 KB)"
-    [ ! -f "$CRASH_RECORDINGS/${stem}_app_raw.tmp" ] || fail "$label: raw temp not consumed after recovery"
-    log "$label: recovered ${stem}_mix.wav ($mix_size bytes), raw temp consumed ✅"
+    # 7. Assert recovery: the recovered recording enters the pipeline. The
+    #    re-mixed `_mix.wav` is TRANSIENT — `recoverOrphanedRecordings` enqueues
+    #    it and the pipeline moves it into its workdir within a few seconds — so
+    #    asserting the file persists is wrong (it races the pipeline). Assert on
+    #    a NEW pipeline job instead: any active / pending-naming / waiting job.
+    #    The CI snapshot reset (above, $GITHUB_ACTIONS-gated) zeroes the queue
+    #    first, so a non-zero count here is the recovered recording. Pre-fix the
+    #    orphan is deleted with no recovery → the queue stays empty (RED).
+    log "$label: waiting for the recovered recording to enter the pipeline (timeout 120s)"
+    _crash_recovered_job() {
+        local n
+        n="$(rpc /state | jq -r '(.pipeline.activeJobCount // 0) + (.pipeline.pendingNamingJobCount // 0) + (.pipeline.waitingJobCount // 0)')"
+        [ "${n:-0}" -gt 0 ] 2>/dev/null
+    }
+    poll_until 120 3 _crash_recovered_job \
+        || fail "$label: orphan NOT recovered — no recovered recording entered the pipeline within 120s (recovery missing, or the orphan was deleted by launch cleanup)"
+    log "$label: recovered recording entered the pipeline ✅"
 
-    # 8. Full chain: the recovered mix is enqueued by recoverOrphanedRecordings
-    #    → assert a new pipeline job reaches done.
+    # 8. Full chain: drive the recovered job to a terminal state (the poll loop
+    #    auto-skips the speaker-naming dialog) and assert it reached done — the
+    #    crashed recording was re-mixed AND transcribed end-to-end.
     _poll_for_new_lastjob_terminal "$label"
     [ "$POLL_LJ_STATE" = "done" ] || fail "$label: recovered job state=$POLL_LJ_STATE, expected done"
     log "$label: recovered recording transcribed (lastJob done) ✅"
