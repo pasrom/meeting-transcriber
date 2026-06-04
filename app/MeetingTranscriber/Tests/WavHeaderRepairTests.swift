@@ -1,0 +1,106 @@
+@preconcurrency import AVFoundation
+@testable import MeetingTranscriber
+import XCTest
+
+/// Issue #379 secondary bug: a crash mid-recording leaves the WAV header
+/// unfinalized (`data` size = 0, `RIFF` size = placeholder), so the file reads
+/// as 0 frames even though the PCM is intact. These tests write a real WAV via
+/// AVAudioFile (the app's exact format, incl. the JUNK chunk), corrupt the two
+/// size fields to mimic the crash, and assert `WavHeaderRepair` makes it
+/// readable again. Fully deterministic — pure byte structure, no hardware.
+final class WavHeaderRepairTests: XCTestCase {
+    private func tempURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("wavrepair-\(UUID().uuidString).wav")
+    }
+
+    /// Writes a real 16 kHz mono Int16 WAV via AVAudioFile and returns its URL
+    /// + finalized frame count. The AVAudioFile closes (finalizes the header)
+    /// when it goes out of scope at the end of this function.
+    private func writeFinalizedWav(seconds: Double) throws -> (url: URL, frames: AVAudioFramePosition) {
+        let url = tempURL()
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16000.0,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        let frames = AVAudioFrameCount(16000.0 * seconds)
+        let length: AVAudioFramePosition
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: settings)
+            let buffer = try XCTUnwrap(
+                AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames),
+            )
+            buffer.frameLength = frames
+            if let ch = buffer.floatChannelData {
+                for i in 0 ..< Int(frames) {
+                    ch[0][i] = Float(i % 100) / 100.0
+                }
+            }
+            try file.write(from: buffer)
+            length = file.length
+        } // `file` deallocs here → header finalized on disk
+        return (url, length)
+    }
+
+    /// Mimic the crash: zero the `data` chunk size and set the `RIFF` size to a
+    /// placeholder. Locates the `data` marker by search (the crafted PCM ramp
+    /// never contains the ASCII "data"), independent of WavHeaderRepair's parse.
+    private func corruptHeader(at url: URL) throws {
+        var data = try Data(contentsOf: url)
+        let dataMarker = Data("data".utf8)
+        let r = try XCTUnwrap(data.range(of: dataMarker), "no data chunk found")
+        let sizeOffset = r.upperBound
+        data.replaceSubrange(sizeOffset ..< sizeOffset + 4, with: [0, 0, 0, 0]) // data size = 0
+        data.replaceSubrange(4 ..< 8, with: [4, 0, 0, 0]) // RIFF size = placeholder
+        try data.write(to: url)
+    }
+
+    /// Frames AVAudioFile can read, or 0 if it can't even open the file — an
+    /// unfinalized header may make AVAudioFile throw rather than report 0 frames.
+    private func readableFrames(_ url: URL) -> AVAudioFramePosition {
+        (try? AVAudioFile(forReading: url))?.length ?? 0
+    }
+
+    func testRepairsUnfinalizedWavSoItReadsAgain() throws {
+        let (url, _) = try writeFinalizedWav(seconds: 0.5)
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Baseline against the finalized file's READ-BACK length (the true
+        // on-disk frame count the repair must restore), not the write-side
+        // file.length.
+        let originalFrames = readableFrames(url)
+        XCTAssertGreaterThan(originalFrames, 0, "baseline WAV should have frames")
+
+        try corruptHeader(at: url)
+        XCTAssertEqual(readableFrames(url), 0, "corruption should make the file unreadable/empty (the bug)")
+
+        let repaired = try WavHeaderRepair.repairIfNeeded(at: url)
+        XCTAssertTrue(repaired, "should report it repaired an unfinalized file")
+        XCTAssertEqual(readableFrames(url), originalFrames, "repaired file should read the original frames")
+    }
+
+    func testLeavesAlreadyFinalizedWavUntouched() throws {
+        let (url, _) = try writeFinalizedWav(seconds: 0.3)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let before = try Data(contentsOf: url)
+
+        let repaired = try WavHeaderRepair.repairIfNeeded(at: url)
+        XCTAssertFalse(repaired, "a finalized WAV must not be reported as repaired")
+        XCTAssertEqual(try Data(contentsOf: url), before, "a finalized WAV must be left byte-for-byte unchanged")
+    }
+
+    func testIgnoresNonWavFile() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let junk = Data("not a wav file at all, just some bytes".utf8)
+        try junk.write(to: url)
+
+        let repaired = try WavHeaderRepair.repairIfNeeded(at: url)
+        XCTAssertFalse(repaired, "a non-WAV file must not be touched")
+        XCTAssertEqual(try Data(contentsOf: url), junk, "a non-WAV file must be left unchanged")
+    }
+}
