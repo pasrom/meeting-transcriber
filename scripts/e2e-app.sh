@@ -32,6 +32,7 @@ RECORD_ONLY=false        # validate record-only mode (sidecar+WAV instead of tra
 REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /action/enqueueFile
 REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.wav already on disk
 KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --reimport-latest run
+MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert the app survives it
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,6 +45,7 @@ while [ $# -gt 0 ]; do
         --reimport-recorded) REIMPORT_RECORDED=true ;;
         --reimport-latest)  REIMPORT_LATEST=true ;;
         --keep-recordings)  KEEP_RECORDINGS=true ;;
+        --mic-device-change) MIC_DEVICE_CHANGE=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -72,6 +74,15 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
   --keep-recordings    Suppress the on-exit cleanup of record-only output, so
                        a follow-up --reimport-latest can pick the WAV up.
                        Only meaningful with --record-only.
+  --mic-device-change  Build with the issue #379 fault-injection seam
+                       (-DE2E_FAULT_INJECTION) and run one meeting. The app
+                       self-triggers a mic device-change restart mid-recording
+                       that installs the tap with an invalid format — the
+                       condition that raises an uncatchable NSException from
+                       installTapOnBus. Asserts the app SURVIVES (no SIGABRT)
+                       and the recording still completes. Pre-fix this crashes;
+                       the fix must catch + recover. Requires a build (incompatible
+                       with --no-build).
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -87,6 +98,17 @@ done
 if [ "$REIMPORT_RECORDED" = true ] && [ "$REIMPORT_LATEST" = true ]; then
     echo "Error: --reimport-recorded and --reimport-latest are mutually exclusive" >&2
     exit 2
+fi
+
+# --mic-device-change needs the fault-injection seam compiled in, so it must
+# build — `defaults`/runtime flags can't add the -DE2E_FAULT_INJECTION code.
+if [ "$MIC_DEVICE_CHANGE" = true ] && [ "$NO_BUILD" = true ]; then
+    echo "Error: --mic-device-change requires a build; incompatible with --no-build" >&2
+    exit 2
+fi
+# Export before the build step below so run_app.sh adds -DE2E_FAULT_INJECTION.
+if [ "$MIC_DEVICE_CHANGE" = true ]; then
+    export MTT_FAULT_INJECTION=1
 fi
 
 # --reimport-recorded chains a record-only meeting with a follow-up
@@ -719,6 +741,19 @@ elif [ "$RECORD_ONLY" = true ]; then
     else
         run_one_record_only_meeting "meeting"
     fi
+elif [ "$MIC_DEVICE_CHANGE" = true ]; then
+    # Issue #379: the fault-injection build self-triggers a mic device-change
+    # restart ~2 s into recording whose tap install uses an invalid format,
+    # raising an NSException from installTapOnBus. Pre-fix the app aborts mid
+    # recording → the poll loop's assert_app_alive fails before any job lands
+    # (RED). Post-fix the app catches + recovers → recording completes → the
+    # existing run_one_meeting .done/transcript assertions pass (GREEN).
+    log "[mic-device-change] fault-injection build active; app will self-trigger a"
+    log "[mic-device-change] mic device-change restart with an invalid tap format mid-recording."
+    log "[mic-device-change] PASS = app survives (no SIGABRT) AND recording completes."
+    run_one_meeting "[mic-device-change]"
+    assert_app_alive
+    log "[mic-device-change] app survived the injected device-change restart ✅"
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"

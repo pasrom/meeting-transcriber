@@ -32,7 +32,15 @@ INFO_PLIST="$SPM_DIR/Sources/Info.plist"
 # Always rebuild to pick up code changes
 echo "Building Meeting Transcriber app..."
 cd "$SPM_DIR"
-swift build -c release
+SWIFT_BUILD_FLAGS=(-c release)
+# Opt-in fault-injection build for the mic-device-change e2e lane only
+# (scripts/e2e-app.sh --mic-device-change). Compiles the issue #379
+# reproduction seam in MicCaptureHandler; never set for normal/release builds.
+if [ -n "${MTT_FAULT_INJECTION:-}" ]; then
+    SWIFT_BUILD_FLAGS+=(-Xswiftc -DE2E_FAULT_INJECTION)
+    echo "  (fault-injection build: -DE2E_FAULT_INJECTION)"
+fi
+swift build "${SWIFT_BUILD_FLAGS[@]}"
 
 # Assemble .app bundle
 mkdir -p "$APP_MACOS"
