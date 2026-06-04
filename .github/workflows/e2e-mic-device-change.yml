@@ -1,0 +1,61 @@
+name: E2E (Mic Device-Change)
+
+# Focused live-recording E2E for issue #379: the app self-triggers a mic
+# device-change restart mid-recording whose tap install uses an invalid
+# format, the condition that raises an uncatchable NSException from
+# installTapOnBus. Asserts the app SURVIVES (no SIGABRT) and the recording
+# completes. It builds a deliberately-crashing (-DE2E_FAULT_INJECTION)
+# bundle, so it is kept out of the always-run e2e-app.yml sequence (whose
+# shared deploy path it would also poison). Dispatch-only: run manually when
+# touching the mic-restart path or before a release. GitHub indexes
+# workflow_dispatch from the default branch, so this is dispatchable once
+# merged: gh workflow run e2e-mic-device-change.yml
+on:
+  workflow_dispatch:
+
+# Shares e2e-app.yml's concurrency group so the two never race for the
+# BlackHole input device / RPC port / deployed bundle on the Mini.
+concurrency:
+  group: e2e-app-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-mic-device-change:
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/verify-xcode
+
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for e2e-app.sh
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Run mic device-change fault-injection E2E (issue #379)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --mic-device-change
+
+      - name: Upload simulator log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: meeting-simulator.log
+          path: /tmp/e2e-app-sim.log
+          if-no-files-found: ignore
+
+      - name: Cleanup signing keychain
+        if: always() && env.E2E_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true
