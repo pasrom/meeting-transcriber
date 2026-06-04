@@ -34,6 +34,19 @@ public class MicCaptureHandler: @unchecked Sendable {
     private var resampleRatio: Double = 1.0
     public private(set) var firstFrameTime: UInt64 = 0
 
+    #if E2E_FAULT_INJECTION
+        // Issue #379 reproduction seam — compile-gated, built ONLY by the
+        // mic-device-change e2e lane (run_app.sh passes -DE2E_FAULT_INJECTION when
+        // MTT_FAULT_INJECTION is set). Never present in any shipped variant.
+        // Simulates a transient dead input device mid-recording: after the first
+        // successful start it self-triggers ONE real device-change restart whose
+        // tap is installed with an invalid (0 Hz) format — the exact condition
+        // that makes installTapOnBus raise an uncatchable NSException (verified on
+        // macOS 26.5). Pre-fix this aborts the app; the fix must catch + recover.
+        private var e2eFaultArmed = false
+        private var e2eInjectBadTapFormatOnce = false
+    #endif
+
     private var debugRMS = DebugRMSReporter()
     private let levelPublisher = LevelPublisher()
 
@@ -162,8 +175,13 @@ public class MicCaptureHandler: @unchecked Sendable {
             logger.info("Mic: resampling \(Int(tapFormat.sampleRate))→\(Int(self.fileSampleRate)) Hz")
         }
 
+        #if E2E_FAULT_INJECTION
+            let installFormat = e2eResolveTapFormat(default: tapFormat)
+        #else
+            let installFormat = tapFormat
+        #endif
         // swiftlint:disable closure_parameter_position closure_body_length
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: tapFormat) {
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: installFormat) {
             [weak self] buffer, _ in
             // swiftlint:enable closure_parameter_position closure_body_length
             guard let self, self.isRecording else { return }
@@ -219,6 +237,10 @@ public class MicCaptureHandler: @unchecked Sendable {
         try engine.start()
         isRecording = true
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
+
+        #if E2E_FAULT_INJECTION
+            e2eArmFaultInjectionIfNeeded()
+        #endif
     }
 
     private func installDeviceChangeListener() {
@@ -456,3 +478,38 @@ public enum MicCaptureError: LocalizedError {
         }
     }
 }
+
+#if E2E_FAULT_INJECTION
+
+    // MARK: - Issue #379 fault injection (compile-gated, e2e only)
+
+    extension MicCaptureHandler {
+        /// Returns an invalid (0 Hz) tap format exactly once after injection has
+        /// been armed, otherwise the real format. The 0 Hz format makes
+        /// installTapOnBus raise `IsFormatSampleRateAndChannelCountValid`.
+        func e2eResolveTapFormat(default real: AVAudioFormat) -> AVAudioFormat {
+            guard e2eInjectBadTapFormatOnce else { return real }
+            e2eInjectBadTapFormatOnce = false
+            guard let bad = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32, sampleRate: 0, channels: 1, interleaved: false,
+            ) else { return real }
+            logger.warning("[e2e] injecting invalid (0 Hz) tap format to reproduce issue #379")
+            return bad
+        }
+
+        /// Once, after the first successful start: schedule a single self-triggered
+        /// device-change restart whose tap install uses the bad format. Drives the
+        /// real handleDeviceChange → executeRestart → startEngine path so the
+        /// reproduction exercises production code, not a shortcut.
+        func e2eArmFaultInjectionIfNeeded() {
+            guard !e2eFaultArmed else { return }
+            e2eFaultArmed = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let self, self.isRecording else { return }
+                logger.warning("[e2e] firing simulated mic device-change mid-recording (issue #379 repro)")
+                self.e2eInjectBadTapFormatOnce = true
+                self.handleDeviceChange()
+            }
+        }
+    }
+#endif
