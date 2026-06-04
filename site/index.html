@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Transcriber</title>
+<meta name="description" content="A macOS menu bar app that records Teams, Zoom and Webex calls and turns them into transcripts and summaries, entirely on your Mac. Free and open source.">
+<meta property="og:title" content="Meeting Transcriber">
+<meta property="og:description" content="Meeting notes that stay on your Mac. Free and open source.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pasrom.github.io/meeting-transcriber/">
+<meta property="og:image" content="https://pasrom.github.io/meeting-transcriber/assets/social-preview.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html">Meeting Transcriber</a>
+    <nav class="top-nav">
+      <a href="https://github.com/pasrom/meeting-transcriber">GitHub</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap">
+
+  <h1>Meeting notes that stay on your Mac.</h1>
+  <p class="lede">A menu bar app that records your calls and writes the notes, without sending anything to the cloud.</p>
+
+  <p>I record a lot of work calls, and I never liked that the tools for it (Otter, Fireflies, Granola and the rest) upload the audio to someone else's servers. For me that is a non-starter. So I built one that runs entirely on the Mac, and kept going with it. It is free and the source is on GitHub.</p>
+
+  <img class="shot" src="assets/hero.gif" alt="Meeting Transcriber running in the macOS menu bar: detecting a call, recording, transcribing and writing a summary.">
+
+  <h2>What it does</h2>
+  <p>It sits in the menu bar. When it notices a Teams, Zoom or Webex window it starts recording, and when the call ends it transcribes the audio, separates the speakers, and writes a Markdown summary with the decisions and action items. None of the audio leaves your machine.</p>
+
+  <ul class="plain">
+    <li><b>Two separate tracks.</b> It captures the app audio and your microphone separately (the app audio through the CATapDescription API that shipped with macOS 14.2). Diarizing them apart instead of one mixed track keeps the remote side and your own voice from bleeding together.</li>
+    <li><b>Transcription on the Neural Engine.</b> Pick WhisperKit (99 languages), Parakeet (smaller and faster, EU languages), or Qwen3. All on device.</li>
+    <li><b>Speaker diarization with FluidAudio.</b> Also on device, no Hugging Face token. It remembers voices across meetings, so the same person gets the same label next time.</li>
+    <li><b>Your own model for the summary.</b> The summary step goes through the Claude CLI or any OpenAI-compatible endpoint, so you can point it at a local Ollama or LM Studio model and keep the whole thing offline end to end.</li>
+  </ul>
+
+  <p>Here is the kind of file it writes. The meeting below is made up, just to show the shape:</p>
+  <div class="doc">
+    <div class="filename">weekly-product-sync.md</div>
+    <div class="body">
+      <div class="doc-title">Weekly Product Sync</div>
+      <div class="meta">2026-05-28 · 32 min · 3 speakers</div>
+
+      <h3>Summary</h3>
+      <p>The team went through the beta feedback, agreed to ship the onboarding rewrite in the next release, and moved the analytics work to the following sprint.</p>
+
+      <h3>Decisions</h3>
+      <ul>
+        <li>Ship the onboarding rewrite in 0.7.</li>
+        <li>Hold the analytics work until after the beta wrap-up.</li>
+      </ul>
+
+      <h3>Action items</h3>
+      <ul>
+        <li>Maria: finalize the onboarding copy by Thursday.</li>
+        <li>Tom: cut the 0.7 release branch on Monday.</li>
+        <li>Priya: schedule the beta debrief.</li>
+      </ul>
+
+      <h3>Transcript <span class="excerpt-note">excerpt</span></h3>
+      <p class="turn"><b>Maria:</b> Let's start with the beta feedback before we get into planning.</p>
+      <p class="turn"><b>Tom:</b> Most of the drop-off is on the second onboarding screen.</p>
+      <p class="turn"><b>Priya:</b> Right, the rewrite should take care of that.</p>
+      <p class="more">…the full, time-stamped transcript continues below the summary.</p>
+    </div>
+  </div>
+
+  <h2>Install</h2>
+  <pre><code>brew tap pasrom/meeting-transcriber
+brew install --cask meeting-transcriber</code></pre>
+  <p class="note">Requires macOS 14.2 or later on Apple Silicon (M1 or newer). The transcription runs on the Neural Engine, which Intel Macs do not have.</p>
+
+  <h2>Privacy</h2>
+  <p>There is no account, no analytics, and no server behind this, because there is no server. Audio, transcripts and summaries stay on your Mac. The only network traffic is the model download on first run, an optional check for updates against GitHub, and the summary step if you deliberately point it at a cloud model instead of a local one. The full version is on the <a href="privacy.html">privacy page</a>.</p>
+
+  <h2>Honest about the rough edges</h2>
+  <ul class="caveats">
+    <li>Meeting detection reads window titles, so it needs Screen Recording permission.</li>
+    <li>The Whisper model is about 1&nbsp;GB on first download. Parakeet is much smaller.</li>
+    <li>Diarization on noisy, many-speaker calls is still hit and miss.</li>
+    <li>It is a solo side project, so the rough edges are mine.</li>
+  </ul>
+
+  <h2>Source</h2>
+  <p>Everything is on GitHub under the MIT license: <a href="https://github.com/pasrom/meeting-transcriber">github.com/pasrom/meeting-transcriber</a>. <a href="https://github.com/pasrom/meeting-transcriber/issues/new">Issues</a> and pull requests are welcome.</p>
+
+  <p>Built and maintained by Roman P. You can reach me on <a href="https://www.linkedin.com/in/roman-p-75880a91/">LinkedIn</a> or by email at <a href="mailto:meetingtranscriber@proton.me">meetingtranscriber@proton.me</a>.</p>
+
+</div>
+</main>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="links">
+      <a href="https://github.com/pasrom/meeting-transcriber">GitHub</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="impressum.html">Imprint</a>
+      <a href="mailto:meetingtranscriber@proton.me">Contact</a>
+    </div>
+    <div class="madeby">Made by <a href="https://www.linkedin.com/in/roman-p-75880a91/">Roman P.</a>. Open source, MIT licensed.</div>
+  </div>
+</footer>
+
+</body>
+</html>

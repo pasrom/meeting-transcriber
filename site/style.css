@@ -1,0 +1,190 @@
+:root {
+  color-scheme: light dark;
+  --ink: #1b1b1f;
+  --muted: #5c5f66;
+  --faint: #8a8d94;
+  --line: #e6e6ea;
+  --accent: #3a6df0;
+  --bg: #ffffff;
+  --code-bg: #f5f5f7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e7e9f0;
+    --muted: #9aa1b3;
+    --faint: #6c7486;
+    --line: #242b3c;
+    --accent: #7aa2ff;
+    --bg: #0f1320;
+    --code-bg: #181d2a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 0 22px;
+}
+
+/* top bar */
+header.top {
+  border-bottom: 1px solid var(--line);
+}
+header.top .wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+.brand {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  color: var(--ink);
+}
+nav.top-nav a {
+  color: var(--muted);
+  text-decoration: none;
+  margin-left: 18px;
+  font-size: 15px;
+}
+nav.top-nav a:hover { color: var(--ink); }
+
+main { padding: 56px 0 40px; }
+
+h1 {
+  font-size: 38px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+}
+.lede {
+  font-size: 20px;
+  color: var(--muted);
+  margin: 0 0 28px;
+}
+
+h2 {
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  margin: 44px 0 12px;
+}
+
+p { margin: 0 0 16px; }
+
+a { color: var(--accent); }
+
+.shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 8px 0 8px;
+}
+
+ul.plain {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px;
+}
+ul.plain > li {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+ul.plain > li:last-child { border-bottom: 1px solid var(--line); }
+ul.plain b { font-weight: 600; }
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 16px;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+p code, li code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.88em;
+}
+
+.note {
+  color: var(--faint);
+  font-size: 15px;
+}
+
+.caveats li { color: var(--muted); }
+
+/* sample output document */
+.doc {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 6px 0 10px;
+  background: var(--code-bg);
+}
+.doc .filename {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--faint);
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.doc .body { padding: 6px 20px 18px; }
+.doc .doc-title { font-size: 19px; font-weight: 600; margin: 14px 0 2px; letter-spacing: -0.01em; }
+.doc .meta { color: var(--faint); font-size: 14px; margin: 0 0 6px; }
+.doc h3 { font-size: 15px; margin: 18px 0 6px; letter-spacing: 0; }
+.doc p { font-size: 15px; margin: 0 0 9px; }
+.doc ul { margin: 0 0 10px; padding-left: 20px; }
+.doc li { font-size: 15px; margin: 3px 0; color: var(--ink); }
+.doc .turn { margin: 0 0 5px; color: var(--muted); }
+.doc .turn b { color: var(--ink); font-weight: 600; }
+.doc h3 .excerpt-note { color: var(--faint); font-weight: 400; font-size: 13px; }
+.doc .more { color: var(--faint); margin: 2px 0 0; }
+
+footer.foot {
+  border-top: 1px solid var(--line);
+  margin-top: 56px;
+  padding: 26px 0 48px;
+  color: var(--faint);
+  font-size: 15px;
+}
+footer.foot a { color: var(--muted); text-decoration: none; }
+footer.foot a:hover { color: var(--ink); }
+footer.foot .links a { margin-right: 16px; }
+footer.foot .madeby { margin-top: 12px; }
+
+/* legal pages */
+.legal h1 { font-size: 30px; margin-bottom: 6px; }
+.legal .updated { color: var(--faint); font-size: 15px; margin-bottom: 32px; }
+.legal h2 { font-size: 19px; }
+.legal { font-size: 16px; }
+
+@media (max-width: 520px) {
+  body { font-size: 16px; }
+  h1 { font-size: 30px; }
+  main { padding: 40px 0 32px; }
+}
