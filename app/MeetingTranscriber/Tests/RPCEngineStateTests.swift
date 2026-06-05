@@ -1,5 +1,6 @@
 #if !APPSTORE
     @testable import MeetingTranscriber
+    import WhisperKit
     import XCTest
 
     /// Verifies that `rpcStateSnapshot()` exposes the live engine state so
@@ -83,6 +84,32 @@
             XCTAssertEqual(snapshot.engines.qwen3?.language, "en")
         }
 
+        func test_snapshot_exposesEngineModelStates() {
+            let state = AppState(settings: settings)
+
+            let snapshot = state.rpcStateSnapshot()
+
+            // Freshly constructed engines have loaded nothing. The field
+            // exists so driver scripts (e2e-cpu-load.sh) can wait for
+            // "loaded" before measuring an idle window — pipeline state
+            // tracks jobs, not model preloads.
+            XCTAssertEqual(snapshot.engines.whisperKit.modelState, "unloaded")
+            XCTAssertEqual(snapshot.engines.parakeet.modelState, "unloaded")
+            if #available(macOS 15, *) {
+                XCTAssertEqual(snapshot.engines.qwen3?.modelState, "unloaded")
+            }
+        }
+
+        func test_modelStateWireFormat_pinsDescriptionContract() {
+            // e2e-cpu-load.sh string-matches `.modelState == "loaded"` to know
+            // when model preload is done. The wire value is
+            // `String(describing: ModelState).lowercased()` — pin that mapping
+            // here so a WhisperKit upgrade changing the enum's description
+            // breaks THIS test, not silently the e2e runner's settle gate.
+            XCTAssertEqual(String(describing: ModelState.loaded).lowercased(), "loaded")
+            XCTAssertEqual(String(describing: ModelState.unloaded).lowercased(), "unloaded")
+        }
+
         func test_snapshot_whisperLanguageNil_surfacesAsNil() {
             let state = AppState(settings: settings)
             state.engines.whisperKit.language = nil
@@ -117,6 +144,23 @@
                 state.rpcStateSnapshot().engines.parakeet.customVocabularyPath,
                 "/tmp/runtime.txt",
             )
+        }
+
+        // MARK: - Watch state
+
+        func test_snapshot_exposesWatchState() {
+            let state = AppState(settings: settings)
+            // No watch loop yet → nil (encodes as absent in JSON).
+            XCTAssertNil(state.rpcStateSnapshot().watchState)
+
+            // Live wiring: the snapshot mirrors the loop's state, so driver
+            // scripts (e2e-cpu-load.sh) can gate a measurement window on
+            // `.watchState == "recording"` without a caption signal.
+            let (loop, _) = makeTestWatchLoop()
+            state.watching.watchLoop = loop
+            loop.start()
+            defer { loop.stop() }
+            XCTAssertEqual(state.rpcStateSnapshot().watchState, "watching")
         }
 
         // MARK: - JSON shape

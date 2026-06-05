@@ -23,6 +23,12 @@
         /// chain produced text without scraping the OSLog or screenshotting
         /// the overlay panel.
         let liveCaptions: LiveCaptions
+        /// Current watch-loop state (`WatchLoop.State` raw value: "idle",
+        /// "watching", "recording", "error"), nil when no watch loop exists.
+        /// Lets driver scripts gate a measurement window on
+        /// `watchState == "recording"` when no caption signal is available
+        /// (live transcription off — the default user profile).
+        let watchState: String?
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -96,24 +102,31 @@
             /// `nil` on macOS <15 where `Qwen3AsrEngine` isn't available.
             let qwen3: Qwen3?
 
+            // `modelState` (stringified `ModelState`, e.g. "unloaded"/"loaded")
+            // lets driver scripts wait for model preload before measuring —
+            // pipeline state tracks jobs, not loads (used by e2e-cpu-load.sh).
+
             struct WhisperKit: Codable {
                 let modelVariant: String
                 /// `nil` = auto-detect (matches `language: nil` on `DecodingOptions`).
                 let language: String?
+                let modelState: String
             }
 
             struct Parakeet: Codable {
                 let customVocabularyPath: String
+                let modelState: String
             }
 
             struct Qwen3: Codable {
                 let language: String?
+                let modelState: String
             }
 
             static let empty = Self(
                 active: .whisperKit,
-                whisperKit: .init(modelVariant: "", language: nil),
-                parakeet: .init(customVocabularyPath: ""),
+                whisperKit: .init(modelVariant: "", language: nil, modelState: ""),
+                parakeet: .init(customVocabularyPath: "", modelState: ""),
                 qwen3: nil,
             )
         }
@@ -126,6 +139,7 @@
             lastJob: LastJob? = nil,
             channelHealth: ChannelHealth = .inactive,
             liveCaptions: LiveCaptions = .empty,
+            watchState: String? = nil,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -134,6 +148,7 @@
             self.lastJob = lastJob
             self.channelHealth = channelHealth
             self.liveCaptions = liveCaptions
+            self.watchState = watchState
         }
 
         func jsonData() throws -> Data {

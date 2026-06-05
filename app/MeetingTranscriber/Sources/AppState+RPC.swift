@@ -52,6 +52,7 @@
                 lastJob: lastFinishedJobSnapshot(),
                 channelHealth: channelHealthSnapshot(),
                 liveCaptions: liveCaptionsSnapshot(),
+                watchState: watching.watchLoop?.state.rawValue,
             )
         }
 
@@ -106,7 +107,10 @@
         /// settings → engine propagation without running a transcription.
         private func enginesSnapshot() -> RPCStateSnapshot.Engines {
             let qwen3State: RPCStateSnapshot.Engines.Qwen3? = if #available(macOS 15, *) {
-                .init(language: engines.qwen3Engine.language)
+                .init(
+                    language: engines.qwen3Engine.language,
+                    modelState: String(describing: engines.qwen3Engine.modelState).lowercased(),
+                )
             } else {
                 nil
             }
@@ -115,8 +119,12 @@
                 whisperKit: .init(
                     modelVariant: engines.whisperKit.modelVariant,
                     language: engines.whisperKit.language,
+                    modelState: String(describing: engines.whisperKit.modelState).lowercased(),
                 ),
-                parakeet: .init(customVocabularyPath: engines.parakeetEngine.customVocabularyPath),
+                parakeet: .init(
+                    customVocabularyPath: engines.parakeetEngine.customVocabularyPath,
+                    modelState: String(describing: engines.parakeetEngine.modelState).lowercased(),
+                ),
                 qwen3: qwen3State,
             )
         }
