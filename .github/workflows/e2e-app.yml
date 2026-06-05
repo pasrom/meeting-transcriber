@@ -35,12 +35,13 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, audio]
     # Three transcript lanes (transcript, record-only, reimport) at
     # ~4–6 min each → ~14 min observed. Plus channel-health (~30 s),
-    # silent-recording (~45 s), live-captions (~2 min) → ~17 min wall.
-    # 25 min job budget gives honest margin; each lane has its own
+    # silent-recording (~45 s), live-captions (~2 min), crash-recovery
+    # (~5 min: record → kill → relaunch → recover → transcribe) → ~22 min
+    # wall. 32 min job budget gives honest margin; each lane has its own
     # step-timeout below so a hang in lane N surfaces as `timed_out`
     # on that step (not as an opaque job-level `cancelled`). See
     # docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
-    timeout-minutes: 25
+    timeout-minutes: 32
 
     steps:
       - uses: actions/checkout@v6
@@ -221,6 +222,23 @@ jobs:
           name: live-captions-simulator.log
           path: /tmp/e2e-live-captions-sim.log
           if-no-files-found: ignore
+
+      # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
+      # SIGKILL the app mid-recording (no stop() → orphaned _app_raw.tmp +
+      # unfinalized _mic.wav, no _mix.wav survive), relaunch, and assert the
+      # launch recovery re-mixes the orphan into the pipeline and a job reaches
+      # done. Reverting the recovery wiring in DualSourceRecorder/PipelineController
+      # makes this fail (the orphan is deleted by launch cleanup, no job lands).
+      # Same dispatch-only driver as e2e-crash-recovery.yml, wired here as an
+      # always-run regression guard. Kept LAST among the test lanes: it
+      # SIGKILLs + relaunches the shared bundle, so running it after every
+      # other lane means that teardown can't disrupt them. `--no-build` reuses
+      # the bundle the first lane built + signed.
+      - name: "Run crash-recovery E2E (issue #379 part 3)"
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --no-build --crash-recovery
 
       # Best-effort: capture the simulator's stdout for post-mortem if
       # the driver failed before tearing it down.
