@@ -173,7 +173,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push)
   e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly)
-  e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch-only, RESULT artifact for trends)
+  e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch + nightly trend cron, RESULT artifact)
   appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
   quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch)
