@@ -1,0 +1,90 @@
+name: E2E (CPU Load)
+
+# Resource measurement of the deployed production app: idle, recording
+# without live captions (default profile), and recording with live captions
+# — via RPC /metrics deltas (scripts/e2e-cpu-load.sh). Logs everything,
+# gates only a generous idle-CPU catastrophe bound — real thresholds get
+# derived from trend data later (see the RESULT artifact).
+#
+# Dispatch-only for now: the lane is in its measure-and-log phase. A nightly
+# cron + threshold gate comes once run-to-run variance is known.
+# Runner prerequisites: scripts/setup-self-hosted-runner.sh.
+
+on:
+  workflow_dispatch:
+
+# Mutates host state (deploys the bundle, plays audio through the
+# speakers) and needs an otherwise-quiet app process for honest numbers —
+# never run two in parallel.
+concurrency:
+  group: e2e-cpu-load-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-cpu-load:
+    # `audio` label: the runner with exclusive access to the BlackHole
+    # virtual input device (same as e2e-app.yml).
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    # Observed budget: build+deploy ~2 min, settle <=130 s, idle window
+    # 60 s, caption wait <=90 s, active window 25 s → ~7 min typical.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/verify-xcode
+
+      # Same signing flow as e2e-app.yml: Developer ID cert when the secret
+      # exists, otherwise the self-signed setup-self-hosted-runner.sh path.
+      # Distinct keychain name so a concurrent e2e-app run on the second
+      # runner can't collide on keychain setup/teardown.
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-cpu-load-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for e2e-cpu-load.sh
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Run CPU-load measurement driver
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 12
+        # pipefail: without it `| tee` would mask the driver's exit code.
+        run: |
+          set -o pipefail
+          bash scripts/e2e-cpu-load.sh | tee /tmp/e2e-cpu-load-run.log
+
+      # The RESULT line is the machine-readable summary (idle + active
+      # window averages + contamination flag). Collected as an artifact so
+      # trend analysis across runs needs no log scraping.
+      - name: Extract RESULT line for trend collection
+        if: always()
+        run: |
+          grep -F '[e2e-cpu-load] RESULT ' /tmp/e2e-cpu-load-run.log 2>/dev/null \
+            | sed 's/^.*RESULT //' > /tmp/cpu-load-result.json || true
+
+      - name: Upload measurement result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-load-result
+          path: /tmp/cpu-load-result.json
+          if-no-files-found: ignore
+
+      - name: Upload simulator log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-load-simulator.log
+          path: /tmp/e2e-cpu-load-sim.log
+          if-no-files-found: ignore
+
+      - name: Cleanup signing keychain
+        if: always() && env.E2E_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true
