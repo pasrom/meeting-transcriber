@@ -92,6 +92,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
     DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
     DebugRPCServer+Metrics.swift # GET /metrics handler (line-cap split from DebugRPCServer.route)
+    HTTPRequest.swift      # HTTP/1.1 request parsing for DebugRPCServer (line-cap split)
+    HTTPResponse.swift     # HTTP/1.1 response serialization for DebugRPCServer (line-cap split)
     RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
     RPCResourceMetrics.swift # Cumulative CPU/RAM/instructions self-report via proc_pid_rusage (#if !APPSTORE, served at GET /metrics)
     Assets.xcassets        # App icon assets
