@@ -487,10 +487,16 @@ POLL_LJ_ID=""
 POLL_LJ_STATE=""
 _poll_for_new_lastjob_terminal() {
     local label="$1"
+    # When $2 is non-empty, launch-recovery jobs ("Recovered Recording (...)")
+    # never satisfy the wait: a stale orphan from a previous run is recovered
+    # at app launch and races the simulator-triggered job — three CI reds in
+    # one day came from lanes mistaking that recovery job for their own. The
+    # crash-recovery lane omits the flag; its expected job IS the recovered one.
+    local ignore_recovered="${2:-}"
     log "$label: polling /state every 5s for new lastJob (timeout ${PIPELINE_TIMEOUT_S}s)"
     local deadline=$(( $(date +%s) + PIPELINE_TIMEOUT_S ))
-    local last_state="" last_id=""
-    local lj_id="" lj_state="" pipe_active="" pipe_processing="" pending_naming=""
+    local last_state="" last_id="" noted_recovered=""
+    local lj_id="" lj_state="" lj_recovered="" pipe_active="" pipe_processing="" pending_naming=""
 
     while true; do
         # Fail fast if the dev .app died — otherwise the loop just sees
@@ -499,9 +505,9 @@ _poll_for_new_lastjob_terminal() {
         # job reached terminal state", masking the real crash.
         assert_app_alive
 
-        lj_id=""; lj_state=""; pipe_active=""; pipe_processing=""; pending_naming=""
-        IFS='|' read -r lj_id lj_state pipe_active pipe_processing pending_naming < <(
-            rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
+        lj_id=""; lj_state=""; lj_recovered=""; pipe_active=""; pipe_processing=""; pending_naming=""
+        IFS='|' read -r lj_id lj_state lj_recovered pipe_active pipe_processing pending_naming < <(
+            rpc /state | jq -r '[.lastJob.jobID // "", .lastJob.state // "", ((.lastJob.meetingTitle // "") | startswith("Recovered Recording")), .pipeline.activeJobCount, .pipeline.isProcessing, .pipeline.pendingNamingJobCount] | join("|")'
         ) || true
 
         # Drain speaker-naming dialogs so headless runs don't deadlock on a
@@ -531,7 +537,13 @@ _poll_for_new_lastjob_terminal() {
             last_id="$lj_id"
         fi
 
+        if [ -n "$ignore_recovered" ] && [ "$lj_recovered" = "true" ] \
+            && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] && [ "$lj_id" != "${noted_recovered:-}" ]; then
+            log "$label:   ignoring launch-recovery job $lj_id (state=$lj_state) — waiting for the simulator-triggered job"
+            noted_recovered="$lj_id"
+        fi
         if [ -n "$lj_id" ] && [ "$lj_id" != "$PRE_LAST_JOB_ID" ] \
+            && { [ -z "$ignore_recovered" ] || [ "$lj_recovered" != "true" ]; } \
             && { [ "$lj_state" = "done" ] || [ "$lj_state" = "error" ]; }; then
             break
         fi
@@ -553,7 +565,7 @@ run_one_meeting() {
     "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" >/tmp/e2e-app-sim.log 2>&1 &
     SIM_PID=$!
 
-    _poll_for_new_lastjob_terminal "$label"
+    _poll_for_new_lastjob_terminal "$label" ignore-recovered
     local lj_id="$POLL_LJ_ID" lj_state="$POLL_LJ_STATE"
 
     log "$label: final state: $lj_state"
