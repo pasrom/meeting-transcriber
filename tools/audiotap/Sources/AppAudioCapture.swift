@@ -29,6 +29,17 @@ public class AppAudioCapture: @unchecked Sendable {
     /// can drive the throttled dBFS log line.
     let debugLogging: Bool
     let liveSink: LiveAudioSink?
+    /// Resamples + downmixes each captured buffer to 16 kHz mono in the IOProc
+    /// (issue #379 follow-up — see `writeCapturedBuffer` in `+Resampling`).
+    /// `internal` (not `private`) so that cross-file extension can reach it.
+    /// `nil` only if a 16 kHz output format couldn't be built (not expected);
+    /// the write then falls back to the raw native-rate path.
+    let resampler: StreamingMonoResampler?
+    /// Wall-clock anchoring so an output-device-restart gap becomes silence in
+    /// the file instead of an under-run that drifts against the mic track (issue
+    /// #379 follow-up — see `writeCapturedBuffer` in `+Resampling`). `internal`
+    /// for that cross-file extension; touched only on `writeQueue`.
+    var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
@@ -82,6 +93,9 @@ public class AppAudioCapture: @unchecked Sendable {
 
     /// Actual channel count detected from first IOProc callback.
     public private(set) var actualChannels: Int = 0
+    // `outputSampleRate` / `outputChannels` (the format actually written to the
+    // fd, 16 kHz mono after the in-IOProc resample) live in `+Resampling`.
+
     private var didLogFormat = false
     /// Pure state machine that decides when/what to dispatch on device-change events.
     private var deviceChangeCoordinator = OutputDeviceChangeCoordinator()
@@ -114,6 +128,7 @@ public class AppAudioCapture: @unchecked Sendable {
         self.channels = channels
         self.debugLogging = debugLogging
         self.liveSink = liveSink
+        resampler = StreamingMonoResampler(targetRate: Int(speechSampleRate))
     }
 
     public func start() throws {
@@ -363,7 +378,7 @@ public class AppAudioCapture: @unchecked Sendable {
         var newProcID: AudioDeviceIOProcID?
         let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
             &newProcID, aggregateID, writeQueue,
-        ) { [weak self] _, inInputData, _, _, _ in
+        ) { [weak self] _, inInputData, inInputTime, _, _ in
             guard let self, self.isRunning else { return }
             let abl = inInputData.pointee
 
@@ -395,10 +410,17 @@ public class AppAudioCapture: @unchecked Sendable {
                 )
             }
 
-            // CATapDescription delivers interleaved float32 — write directly
+            // CATapDescription delivers interleaved float32. Resample + downmix
+            // to 16 kHz mono AT CAPTURE (writeCapturedBuffer, +Resampling),
+            // rebuilding the converter on a mid-recording rate change so a
+            // device swap can't time-warp the file the way a single post-hoc
+            // resample did (issue #379 follow-up). RMS/level/live-sink stay on
+            // the raw buffer below — the live path has its own rate-adaptive
+            // resampler.
             guard let data = abl.mBuffers.mData else { return }
             let byteCount = Int(abl.mBuffers.mDataByteSize)
-            writeAllToFileHandle(fd, data, count: byteCount)
+            let hostTicks = Self.hostTicks(from: inInputTime)
+            self.writeCapturedBuffer(fd: fd, data: data, byteCount: byteCount, hostTicks: hostTicks)
 
             self.accumulateDebugRMS(data: data, byteCount: byteCount)
             self.publishCurrentLevel()
@@ -492,28 +514,6 @@ public class AppAudioCapture: @unchecked Sendable {
             outputListenerInstalled = false
         }
         logger.info("Audio capture stopped")
-    }
-
-    /// Translates an `AudioHardwareCreateProcessTap` OSStatus to a human hint.
-    /// Exposed `internal` for unit tests.
-    static func describeTapError(_ status: OSStatus) -> String {
-        switch status {
-        case -12988:
-            "OSStatus -12988: likely missing permission. " +
-                "Check System Settings → Privacy & Security → Screen Recording " +
-                "and enable Meeting Transcriber."
-
-        case -10851:
-            "OSStatus -10851 (kAudioUnitErr_InvalidProperty): " +
-                "the tap target may have exited before the tap was created."
-
-        case -50:
-            "OSStatus -50 (paramErr): invalid CATapDescription parameter " +
-                "(target process may not be capturable)."
-
-        default:
-            "OSStatus \(status): unrecognised — see CoreAudio headers."
-        }
     }
 }
 

@@ -132,8 +132,10 @@ public class AudioCaptureSession {
             }
         }
 
-        let actualRate = appCapture?.actualSampleRate ?? 0
-        let actualChannels = appCapture?.actualChannels ?? 0
+        // The app file is what `AppAudioCapture` actually WROTE — 16 kHz mono
+        // after the in-IOProc resample, not the device's raw capture format.
+        let actualRate = appCapture?.outputSampleRate ?? 0
+        let actualChannels = appCapture?.outputChannels ?? 0
 
         // Close file handle
         try? appFileHandle?.close()
