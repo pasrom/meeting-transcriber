@@ -24,6 +24,26 @@ func secondsToMachTicks(_ seconds: Double) -> UInt64 {
     return UInt64(nanos * Double(machTimebaseInfo.denom) / Double(machTimebaseInfo.numer))
 }
 
+/// Average interleaved multi-channel samples to mono. Passthrough for mono
+/// input; an incomplete trailing frame is dropped. `public` so the app module's
+/// `DualSourceRecorder` can delegate to the same implementation
+/// `StreamingMonoResampler` uses (the app depends on this library, not the
+/// other way round).
+public func downmixToMono(_ samples: [Float], channels: Int) -> [Float] {
+    guard channels >= 2, samples.count >= channels else { return samples }
+    let n = samples.count - (samples.count % channels)
+    var mono = [Float](repeating: 0, count: n / channels)
+    let scale = 1.0 / Float(channels)
+    for i in 0 ..< mono.count {
+        var sum: Float = 0
+        for ch in 0 ..< channels {
+            sum += samples[i * channels + ch]
+        }
+        mono[i] = sum * scale
+    }
+    return mono
+}
+
 /// Write all bytes to a file descriptor using POSIX write() — no Data copy, no Foundation overhead.
 func writeAllToFileHandle(_ fd: Int32, _ ptr: UnsafeRawPointer, count: Int) {
     var remaining = count
