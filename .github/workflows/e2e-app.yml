@@ -225,7 +225,7 @@ jobs:
           if-no-files-found: ignore
 
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
-      # SIGKILL the app mid-recording (no stop() → orphaned _app_raw.tmp +
+      # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +
       # unfinalized _mic.wav, no _mix.wav survive), relaunch, and assert the
       # launch recovery re-mixes the orphan into the pipeline and a job reaches
       # done. Reverting the recovery wiring in DualSourceRecorder/PipelineController

@@ -100,10 +100,11 @@ class DualSourceRecorder: RecordingProvider {
         AppPaths.recordingsDir
     }
 
-    /// Remove leftover `*_app_raw.tmp` files a previous crash left behind. Run
-    /// AFTER `recoverCrashedRecordings` (which consumes the recoverable ones via
-    /// `buildRecording`) so a rescuable recording isn't deleted before it's
-    /// re-mixed — only genuinely unusable temps (e.g. 0-byte) remain to delete.
+    /// Remove leftover raw app temp files (current or legacy suffix) a previous
+    /// crash left behind. Run AFTER `recoverCrashedRecordings` (which consumes
+    /// the recoverable ones via `buildRecording`) so a rescuable recording isn't
+    /// deleted before it's re-mixed — only genuinely unusable temps (e.g.
+    /// 0-byte) remain to delete.
     ///
     /// `minAge` skips a temp still being written by an in-progress recording
     /// (recent mtime). This runs in the launch queue-build Task, which a
@@ -121,7 +122,7 @@ class DualSourceRecorder: RecordingProvider {
         ) else { return }
         let cutoff = Date().addingTimeInterval(-minAge)
 
-        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.appRaw) {
+        for file in entries where RecordingFileSuffix.stripAppRaw(from: file.lastPathComponent) != nil {
             if let mtime = (try? fm.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date,
                mtime > cutoff { continue }
             try? fm.removeItem(at: file)
@@ -131,10 +132,11 @@ class DualSourceRecorder: RecordingProvider {
 
     // MARK: - Crash recovery (#379 durability, part 3)
 
-    /// Stems of recordings whose writer was killed mid-capture: a leftover
-    /// `_app_raw.tmp` with no matching `_mix.wav`. In the normal flow
-    /// `buildRecording` deletes the `.tmp` once the mix exists, so a surviving
-    /// `.tmp` means `stop()` never ran. Pure — operates on filenames only.
+    /// Stems of recordings whose writer was killed mid-capture: a leftover raw
+    /// app temp (current or legacy suffix) with no matching `_mix.wav`. In the
+    /// normal flow `buildRecording` deletes the `.tmp` once the mix exists, so a
+    /// surviving `.tmp` means `stop()` never ran. Pure — operates on filenames
+    /// only.
     nonisolated static func crashedRecordingStems(in filenames: [String]) -> [String] {
         let mixStems = Set(filenames.compactMap { name -> String? in
             name.hasSuffix(RecordingFileSuffix.mix)
@@ -142,36 +144,54 @@ class DualSourceRecorder: RecordingProvider {
         })
         var seen = Set<String>()
         var stems: [String] = []
-        for name in filenames where name.hasSuffix(RecordingFileSuffix.appRaw) {
-            let stem = String(name.dropLast(RecordingFileSuffix.appRaw.count))
+        for name in filenames {
+            guard let stem = RecordingFileSuffix.stripAppRaw(from: name) else { continue }
             guard !mixStems.contains(stem), seen.insert(stem).inserted else { continue }
             stems.append(stem)
         }
         return stems
     }
 
+    /// Locate a crashed stem's surviving temp, current format first. Returns
+    /// the URL and whether it is the legacy (raw device-rate stereo) format —
+    /// the temp is headerless, so the suffix is the only format marker.
+    nonisolated private static func crashedTemp(stem: String, in dir: URL) -> (url: URL, isLegacy: Bool)? {
+        for suffix in RecordingFileSuffix.appRawAny {
+            let url = dir.appendingPathComponent(stem + suffix)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return (url, suffix == RecordingFileSuffix.legacyAppRaw)
+            }
+        }
+        return nil
+    }
+
     /// Re-mix one crashed recording's surviving app track (+ mic, if present)
-    /// into a `_mix.wav`, reusing the normal `buildRecording` path. The app temp
-    /// is already 16 kHz mono float — `AppAudioCapture` resamples in the IOProc
-    /// (issue #379 follow-up) — so recovery reads it at the speech target rate,
-    /// not the device capture rate. The mic WAV header is repaired first (a
-    /// crash leaves it unfinalized). The per-track `micDelay` is unrecoverable
-    /// after a crash, so the tracks are mixed from their file starts — a
-    /// sub-100 ms drift vs. a clean recording, an acceptable cost to rescue
-    /// audio that would otherwise be lost.
+    /// into a `_mix.wav`, reusing the normal `buildRecording` path. A current
+    /// temp is already 16 kHz mono float (`AppAudioCapture` resamples in the
+    /// IOProc) and is read at the target rate; a legacy temp from a pre-upgrade
+    /// version holds raw device-rate stereo and gets the pre-resampler
+    /// interpretation (device rate/channels + buildRecording's mic-duration
+    /// rate cross-check). The mic WAV header is repaired first (a crash leaves
+    /// it unfinalized). The per-track `micDelay` is unrecoverable after a
+    /// crash, so the tracks are mixed from their file starts — a sub-100 ms
+    /// drift vs. a clean recording, an acceptable cost to rescue audio that
+    /// would otherwise be lost.
     @discardableResult
     nonisolated static func recoverCrashedRecording(stem: String, in recDir: URL) throws -> URL {
-        let appTmp = recDir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
+        guard let temp = crashedTemp(stem: stem, in: recDir) else {
+            throw RecorderError.noAudioData
+        }
         let micWav = recDir.appendingPathComponent(stem + RecordingFileSuffix.mic)
         let hasMic = FileManager.default.fileExists(atPath: micWav.path)
         if hasMic { _ = try? WavHeaderRepair.repairIfNeeded(at: micWav) }
 
-        let recoveredRate = AudioConstants.targetSampleRate
+        let rate = temp.isLegacy ? defaultRecordRate : AudioConstants.targetSampleRate
+        let channels = temp.isLegacy ? defaultAppChannels : 1
         let result = AudioCaptureResult(
-            appAudioFileURL: appTmp,
+            appAudioFileURL: temp.url,
             micAudioFileURL: hasMic ? micWav : nil,
-            actualSampleRate: recoveredRate,
-            actualChannels: 1,
+            actualSampleRate: rate,
+            actualChannels: channels,
             micDelay: 0,
         )
         let recording = try buildRecording(
@@ -180,9 +200,9 @@ class DualSourceRecorder: RecordingProvider {
             timestamp: stem,
             recordingStart: 0,
             format: CaptureFormat(
-                requestedChannels: 1,
-                requestedRate: recoveredRate,
-                targetRate: recoveredRate,
+                requestedChannels: channels,
+                requestedRate: rate,
+                targetRate: AudioConstants.targetSampleRate,
             ),
         )
         return recording.mixPath
@@ -209,8 +229,8 @@ class DualSourceRecorder: RecordingProvider {
         let cutoff = Date().addingTimeInterval(-minAge)
         var recovered = 0
         for stem in crashedRecordingStems(in: names) {
-            let appTmp = dir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
-            if let mtime = (try? fm.attributesOfItem(atPath: appTmp.path)[.modificationDate]) as? Date,
+            guard let temp = crashedTemp(stem: stem, in: dir) else { continue }
+            if let mtime = (try? fm.attributesOfItem(atPath: temp.url.path)[.modificationDate]) as? Date,
                mtime > cutoff { continue }
             do {
                 let mix = try recoverCrashedRecording(stem: stem, in: dir)
