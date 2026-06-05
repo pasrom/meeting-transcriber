@@ -181,8 +181,24 @@
                     Task { @MainActor in self?.handle(connection) }
                 }
                 listener.stateUpdateHandler = { [weak self] state in
-                    guard case .ready = state, let self else { return }
-                    Task { @MainActor in self.boundPort = listener.port?.rawValue }
+                    switch state {
+                    case .ready:
+                        guard let self else { return }
+                        Task { @MainActor in self.boundPort = listener.port?.rawValue }
+
+                    case let .failed(error):
+                        // Without this, a post-start bind failure (e.g. the
+                        // port held by a half-dead previous instance — observed
+                        // in the field as a SIGKILL-immune process squatting
+                        // 9876 for days) is COMPLETELY silent: `start()` only
+                        // catches the constructor throw, and SO_REUSEPORT can
+                        // even let a doomed listener log nothing while the
+                        // kernel routes connections to the dead twin.
+                        logger.error("DebugRPCServer listener failed: \(error.localizedDescription, privacy: .public)")
+
+                    default:
+                        break
+                    }
                 }
                 listener.start(queue: .main)
                 self.listener = listener
