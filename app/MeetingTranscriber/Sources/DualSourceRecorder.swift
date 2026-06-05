@@ -18,10 +18,12 @@ struct RecordingResult {
     let recordingStart: TimeInterval // ProcessInfo.systemUptime
 }
 
-/// The recorder's declared capture format, passed to `buildRecording` so the
-/// processing logic stays free of instance state (and unit-testable).
-/// `requested*` are what we asked the device for (used to flag a USB/Bluetooth
-/// renegotiation in the logs); `targetRate` is the rate we resample/mix to.
+/// The format `buildRecording` should expect the app track to arrive in, passed
+/// explicitly so the processing logic stays free of instance state (and
+/// unit-testable). `requested*` describe the file the capture session is
+/// expected to produce — 16 kHz mono since `AppAudioCapture` resamples in the
+/// IOProc — so a logged mismatch flags the unexpected fallback/legacy path, not
+/// routine device renegotiation. `targetRate` is the rate we resample/mix to.
 struct CaptureFormat {
     let requestedChannels: Int
     let requestedRate: Int
@@ -81,12 +83,11 @@ class DualSourceRecorder: RecordingProvider {
         return captureSession?.micLevelDBFS ?? -120
     }
 
-    /// Default app-audio capture format. Static so crash recovery — which has
-    /// no live capture session to read the actual format from — can reconstruct
-    /// the `buildRecording` input. When a mic track survives, `buildRecording`
-    /// cross-checks the rate from its duration; an app-only crash falls back to
-    /// this requested rate (a renegotiated device could then be mis-rated, but
-    /// the audio is recovered, not lost).
+    /// Requested app-audio capture format (what the CATap aggregate device is
+    /// asked for). The device may renegotiate to another rate/channel count
+    /// mid-session; `AppAudioCapture` resamples every buffer to 16 kHz mono in
+    /// the IOProc regardless, so the written file — and crash recovery — are
+    /// always at the speech target rate, not this one.
     nonisolated static let defaultRecordRate = 48000
     nonisolated static let defaultAppChannels = 2
 
@@ -149,12 +150,15 @@ class DualSourceRecorder: RecordingProvider {
         return stems
     }
 
-    /// Re-mix one crashed recording's surviving raw app track (+ mic, if
-    /// present) into a `_mix.wav`, reusing the normal `buildRecording` path. The
-    /// mic WAV header is repaired first (a crash leaves it unfinalized). The
-    /// per-track `micDelay` is unrecoverable after a crash, so the tracks are
-    /// mixed from their file starts — a sub-100 ms drift vs. a clean recording,
-    /// an acceptable cost to rescue audio that would otherwise be lost.
+    /// Re-mix one crashed recording's surviving app track (+ mic, if present)
+    /// into a `_mix.wav`, reusing the normal `buildRecording` path. The app temp
+    /// is already 16 kHz mono float — `AppAudioCapture` resamples in the IOProc
+    /// (issue #379 follow-up) — so recovery reads it at the speech target rate,
+    /// not the device capture rate. The mic WAV header is repaired first (a
+    /// crash leaves it unfinalized). The per-track `micDelay` is unrecoverable
+    /// after a crash, so the tracks are mixed from their file starts — a
+    /// sub-100 ms drift vs. a clean recording, an acceptable cost to rescue
+    /// audio that would otherwise be lost.
     @discardableResult
     nonisolated static func recoverCrashedRecording(stem: String, in recDir: URL) throws -> URL {
         let appTmp = recDir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
@@ -162,11 +166,12 @@ class DualSourceRecorder: RecordingProvider {
         let hasMic = FileManager.default.fileExists(atPath: micWav.path)
         if hasMic { _ = try? WavHeaderRepair.repairIfNeeded(at: micWav) }
 
+        let recoveredRate = AudioConstants.targetSampleRate
         let result = AudioCaptureResult(
             appAudioFileURL: appTmp,
             micAudioFileURL: hasMic ? micWav : nil,
-            actualSampleRate: defaultRecordRate,
-            actualChannels: defaultAppChannels,
+            actualSampleRate: recoveredRate,
+            actualChannels: 1,
             micDelay: 0,
         )
         let recording = try buildRecording(
@@ -175,9 +180,9 @@ class DualSourceRecorder: RecordingProvider {
             timestamp: stem,
             recordingStart: 0,
             format: CaptureFormat(
-                requestedChannels: defaultAppChannels,
-                requestedRate: defaultRecordRate,
-                targetRate: AudioConstants.targetSampleRate,
+                requestedChannels: 1,
+                requestedRate: recoveredRate,
+                targetRate: recoveredRate,
             ),
         )
         return recording.mixPath
@@ -310,12 +315,16 @@ class DualSourceRecorder: RecordingProvider {
         let ts = startTimestamp ?? Self.timestamp()
         startTimestamp = nil
 
+        // The capture session writes 16 kHz mono (in-IOProc resample), so that —
+        // not the device-facing recordRate/appChannels — is the expected file
+        // format; a buildRecording mismatch warning then means the resampler
+        // fallback wrote raw native-rate audio.
         return try Self.buildRecording(
             from: captureResult,
             recordingsDir: Self.recordingsDir,
             timestamp: ts,
             recordingStart: recordingStart,
-            format: CaptureFormat(requestedChannels: appChannels, requestedRate: recordRate, targetRate: targetRate),
+            format: CaptureFormat(requestedChannels: 1, requestedRate: targetRate, targetRate: targetRate),
         )
     }
 
@@ -347,13 +356,21 @@ class DualSourceRecorder: RecordingProvider {
             nil
         }
 
-        let actualRate = crossCheckAppRate(
-            deviceRate: captureResult.actualSampleRate,
-            appRawBytes: appRawBytes,
-            appChannels: actualChannels,
-            micDurationSeconds: micDuration,
-            micDelay: micDelay,
-        )
+        // A temp already at the target rate (the in-IOProc resampler's output)
+        // has no rate left to second-guess — the duration heuristic could only
+        // mis-correct it (e.g. a mic that died mid-recording shortens the
+        // reference duration and would re-warp a healthy 16 kHz track). The
+        // cross-check still guards the fallback/legacy path where the temp is
+        // raw device-rate audio.
+        let actualRate = captureResult.actualSampleRate == format.targetRate
+            ? captureResult.actualSampleRate
+            : crossCheckAppRate(
+                deviceRate: captureResult.actualSampleRate,
+                appRawBytes: appRawBytes,
+                appChannels: actualChannels,
+                micDurationSeconds: micDuration,
+                micDelay: micDelay,
+            )
 
         if micDelay != 0 {
             logger.info("Mic delay: \(micDelay)s")
@@ -470,20 +487,11 @@ class DualSourceRecorder: RecordingProvider {
         return enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
     }
 
-    /// Downmix interleaved multi-channel audio to mono. Passthrough if already mono.
+    /// Downmix interleaved multi-channel audio to mono. Passthrough if already
+    /// mono. Delegates to the AudioTapLib implementation so the averaging logic
+    /// lives once (the capture-time resampler uses the same function).
     nonisolated static func downmixToMono(_ samples: [Float], channels: Int) -> [Float] {
-        guard channels >= 2, samples.count >= channels else { return samples }
-        let n = samples.count - (samples.count % channels)
-        var mono = [Float](repeating: 0, count: n / channels)
-        let scale = 1.0 / Float(channels)
-        for i in 0 ..< mono.count {
-            var sum: Float = 0
-            for ch in 0 ..< channels {
-                sum += samples[i * channels + ch]
-            }
-            mono[i] = sum * scale
-        }
-        return mono
+        AudioTapLib.downmixToMono(samples, channels: channels)
     }
 
     /// Cross-check the device-reported sample rate against raw file size and mic duration.
