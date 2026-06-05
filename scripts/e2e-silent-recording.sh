@@ -51,8 +51,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/e2e-helpers.sh
 source "$ROOT/scripts/lib/e2e-helpers.sh"
 DEV_BUNDLE_BUILD="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app"
-# Deploy to a stable path so the dev .app's TCC permissions (granted via
-# the self-hosted runner's PPPC profile, keyed on bundle path + cert SHA)
+# Deploy to a stable path so the dev .app's TCC permissions (granted once
+# manually on the self-hosted runner, keyed on bundle path + cert SHA)
 # persist across builds. A `/tmp/...` launch would get a fresh cdhash AND
 # a fresh path on every clone — TCC would deny Microphone + Screen
 # Recording and the recorder would emit zero-byte WAVs (observed during
@@ -111,9 +111,9 @@ if [ "$NO_BUILD" = false ]; then
     wait "$CLI_BUILD_PID" || die "mt-cli build failed"
 
     # Deploy to the stable path and re-sign with the runner's dev cert so
-    # the PPPC profile keeps granting Microphone + Screen Recording. Same
-    # pattern as scripts/e2e-app.sh — without this the recorder runs but
-    # emits zero-byte WAVs because TCC denies the capture stack.
+    # the manual TCC grant (keyed on the cert SHA) keeps Microphone + Screen
+    # Recording granted. Same pattern as scripts/e2e-app.sh — without this the
+    # recorder runs but emits zero-byte WAVs because TCC denies the capture stack.
     echo "▸ Deploying to ${DEV_BUNDLE_DEPLOY} ..."
     mkdir -p "$(dirname "$DEV_BUNDLE_DEPLOY")"
     if [ -d "$DEV_BUNDLE_DEPLOY" ]; then

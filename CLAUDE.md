@@ -143,7 +143,7 @@ scripts/
   e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
   e2e-live-captions.sh     # E2E driver asserting on in-flight liveCaptions.recentFinals RPC state (complements e2e-app.sh)
-  setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + PPPC profile (needed before e2e-app.sh works)
+  setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + manual TCC grants keyed on cert SHA-1 (needed before e2e-app.sh works)
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   generate_test_audio_with_silence.sh # Generate 2-speaker fixture with engineered silence block for VAD E2E tests
@@ -422,7 +422,8 @@ you're validating:
   no-input host hits a libmalloc abort.
 - The production `.app` doesn't have any of those problems because it has
   a stable bundle ID + (with `setup-self-hosted-runner.sh`) a stable
-  signing identity that PPPC profiles can grant permissions to.
+  signing identity whose cert leaf SHA-1 TCC keys its permission grants on,
+  so the grants survive rebuilds.
 
 **One-time self-hosted runner setup**:
 1. `brew install blackhole-2ch` then reboot (or `sudo killall coreaudiod`),
@@ -432,18 +433,36 @@ you're validating:
 2. Configure auto-login for the runner user so loginwindow brings up an
    Aqua session at boot. CATapDescription captures silence in non-GUI
    contexts even when API calls return `noErr`.
-3. Run `scripts/setup-self-hosted-runner.sh` once. Creates a self-signed
-   code-signing cert in the login keychain, signs and deploys the dev
-   `.app` to `~/Applications/`, generates and installs a PPPC mobileconfig
-   that grants Microphone + Screen & System Audio Recording to the bundle
-   gated on the cert SHA-1.
-4. Open System Settings → Profiles, click "Install" once on the
-   downloaded "MeetingTranscriber-Dev TCC Permissions" profile.
+3. Run `scripts/setup-self-hosted-runner.sh` once. It creates a self-signed
+   code-signing cert in a dedicated dev keychain, builds the dev `.app`, signs
+   it with that cert, and deploys to `~/Applications/`. It does NOT install a
+   configuration profile: macOS ignores a non-MDM-delivered PPPC payload, and
+   the MDM/`add-trusted-cert -d` path needs an actual MDM server (unavailable
+   here). TCC permissions are instead granted manually, once, and macOS keys
+   the grant on the cert leaf SHA-1.
+4. In the GUI session, launch the deployed `.app`
+   (`open ~/Applications/MeetingTranscriber-Dev.app`). Click "Allow" on the
+   Microphone prompt, and toggle the dev `.app` on under System Settings →
+   Privacy & Security → Screen & System Audio Recording (used for window-title
+   meeting detection — the e2e also has a sandbox-safe power-assertion detector,
+   so this one is belt-and-suspenders).
 5. Verify Microphone + Screen & System Audio Recording show the dev `.app`
    with the toggle on.
 
-After setup, every CI run rebuilds the `.app`; cdhash differs per build but
-the cert SHA-1 doesn't, so PPPC keeps granting permissions automatically.
+After setup, every CI run rebuilds + re-signs the `.app`; the cdhash differs
+per build but the cert leaf SHA-1 doesn't, so TCC keeps the manual grant across
+rebuilds. The grant keys on the cert of whatever bundle you Allowed — CI
+re-signs with the Developer ID cert each run, so make the grant against a
+Developer-ID-signed bundle (the state CI leaves at `~/Applications/`).
+
+NOTE: the dev `.app` is **unnotarized** Developer ID (`spctl` reports
+"rejected"), and macOS occasionally revokes TCC grants for such apps — observed
+2026-06-05: e2e-app went green→red overnight with no reboot, no OS/XProtect
+update, and no rebuild, because the Microphone grant was silently dropped and
+the headless run then blocked on the consent prompt (first lane fails with
+`no new pipeline job within 240s, active=0`). Remedy: re-click "Allow" in the
+GUI session. Notarizing the dev build or a real MDM-delivered PPPC profile
+would make the grant fully durable; neither is set up.
 
 ## Diagnostics
 
