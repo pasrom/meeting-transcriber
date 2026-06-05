@@ -76,6 +76,7 @@ SIMULATOR_PKG="$ROOT/tools/meeting-simulator"
 SIMULATOR_BIN="$SIMULATOR_PKG/.build/release/meeting-simulator"
 DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
+REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
 RPC_BASE="http://127.0.0.1:9876"
 BUNDLE_ID="com.meetingtranscriber.dev"
 
@@ -242,6 +243,10 @@ launch_app_and_wait() {
     log "RPC up"
 }
 
+# Timestamp anchor for on_exit cleanup: every recording artifact this run
+# creates is newer than this marker file.
+RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-cpu-load-start.XXXXXX")"
+
 SIM_PID=""
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
@@ -254,6 +259,27 @@ on_exit() {
     restore_bool_default "$BUNDLE_ID" debugRPCEnabled "$SAVED_DEBUG_RPC"
     restore_bool_default "$BUNDLE_ID" autoWatch       "$SAVED_AUTO_WATCH"
     restore_bool_default "$BUNDLE_ID" recordOnly      "$SAVED_RECORD_ONLY"
+    if [ "$APP_AFTER" = quit ]; then
+        # `|| true`: under set -e a wedged app (quit ladder exhausted) must not
+        # abort the trap before the artifact sweep below runs.
+        quit_running_app || true
+        # The lane's recordings are measurement garbage, and quitting the app
+        # mid-grace orphans raw temps: the NEXT run's app crash-recovers a
+        # stale temp into a garbage job, and an errored recovery job is
+        # re-enqueued on every launch (it never enters
+        # processed_recordings.json). Delete everything this run created;
+        # pre-existing files are older than the marker and stay untouched.
+        # GUARDED to CI via $GITHUB_ACTIONS (same pattern as the queue-snapshot
+        # reset): dev and prod app share the recordings dir on a developer
+        # machine, so a local sweep could catch a real recording made during
+        # the run. Locally the orphans are harmless -- the next app launch
+        # recovers them.
+        if [ "${GITHUB_ACTIONS:-}" = "true" ] \
+            && [ -n "${RUN_START_MARKER:-}" ] && [ -d "$REC_DIR" ]; then
+            find "$REC_DIR" -type f -newer "$RUN_START_MARKER" -delete 2>/dev/null || true
+        fi
+    fi
+    rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
 }
 trap on_exit EXIT INT TERM
 
@@ -422,6 +448,5 @@ IFS=$'\t' read -r IDLE_CPU idle_ok < <(
 
 log "PASS — idle ${IDLE_CPU}% CPU (bound ${IDLE_MAX_CPU_PCT}%); recording + live-captions windows logged for trend"
 
-if [ "$APP_AFTER" = quit ]; then
-    quit_running_app
-fi
+# App quit + recording-artifact cleanup happen in on_exit (EXIT trap), so
+# failure paths get the same hygiene as the happy path.
