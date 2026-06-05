@@ -476,66 +476,37 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
     }
 
-    // MARK: - Crash recovery (#379 durability, part 3)
+    /// An app temp already at the target rate must be trusted — the
+    /// mic-duration rate heuristic must not re-warp it. Scenario: the mic died
+    /// mid-recording (restart retries exhausted), so the mic track is much
+    /// shorter than the app track; inferring the app rate from that short
+    /// reference would override 16 kHz with a bogus higher rate and time-warp
+    /// a healthy track.
+    func testBuildRecordingTrustsTargetRateAppTempOverMicDurationInference() throws {
+        let dir = try makeTempDirectory(prefix: "build_trust16k")
+        let appTmp = dir.appendingPathComponent("20260311_180000_app_raw.tmp")
+        // 10 s of 16 kHz mono app audio, but only 4 s of mic.
+        try writeRawFloat32([Float](repeating: 0.3, count: 16000 * 10), to: appTmp)
+        let micWav = dir.appendingPathComponent("20260311_180000_mic.wav")
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000 * 4), sampleRate: 16000, url: micWav)
 
-    /// Only a `_app_raw.tmp` with no matching `_mix.wav` is a crash orphan:
-    /// one that already has a mix was processed, and a lone `_mic.wav` (no
-    /// raw app temp) isn't an app-track orphan.
-    func testCrashedRecordingStemsDetectsTmpWithoutMix() {
-        let stems = DualSourceRecorder.crashedRecordingStems(in: [
-            "20260311_100000_app_raw.tmp", // crashed: temp, no mix
-            "20260311_100000_mic.wav",
-            "20260311_110000_app_raw.tmp", // already processed: temp + mix
-            "20260311_110000_mix.wav",
-            "20260311_120000_mic.wav", // mic only, no temp → not an app orphan
-            "notes.txt",
-        ])
-        XCTAssertEqual(stems, ["20260311_100000"])
-    }
-
-    /// A crashed recording (surviving raw app `.tmp` + mic WAV, no mix) is
-    /// re-mixed into a readable `_mix.wav` and the raw temp is consumed.
-    func testRecoverCrashedRecordingsRemixesOrphanedRawAppAndMic() throws {
-        let dir = try makeTempDirectory(prefix: "crash_recover")
-        let stem = "20260311_140000"
-        let appTmp = dir.appendingPathComponent(stem + "_app_raw.tmp")
-        // 1 s of 48 kHz interleaved stereo — the surviving raw app track.
-        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
-        let micWav = dir.appendingPathComponent(stem + "_mic.wav")
-        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
-        // A crashed recording's temp predates the relaunch — backdate it past
-        // the in-progress guard.
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date(timeIntervalSinceNow: -120)], ofItemAtPath: appTmp.path,
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: appTmp, micAudioFileURL: micWav,
+                actualSampleRate: 16000, actualChannels: 1, micDelay: 0,
+            ),
+            recordingsDir: dir, timestamp: "20260311_180000", recordingStart: 1000,
+            format: CaptureFormat(requestedChannels: 1, requestedRate: 16000, targetRate: 16000),
         )
 
-        let count = DualSourceRecorder.recoverCrashedRecordings(in: dir)
-
-        XCTAssertEqual(count, 1, "the crashed recording should be recovered")
-        let mix = dir.appendingPathComponent(stem + "_mix.wav")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: mix.path), "a mix should be produced")
-        XCTAssertGreaterThan(
-            try AudioMixer.loadAudioFileAsFloat32(url: mix).count, 0,
-            "the recovered mix should contain audio",
-        )
-        XCTAssertFalse(FileManager.default.fileExists(atPath: appTmp.path), "the raw temp should be consumed")
-    }
-
-    /// A freshly-written `.tmp` (recent mtime) looks like an in-progress
-    /// recording, not a crash — recovery must leave it untouched.
-    func testRecoverCrashedRecordingsSkipsInProgressTemp() throws {
-        let dir = try makeTempDirectory(prefix: "crash_inprogress")
-        let stem = "20260311_150000"
-        let appTmp = dir.appendingPathComponent(stem + "_app_raw.tmp")
-        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
-
-        let count = DualSourceRecorder.recoverCrashedRecordings(in: dir)
-
-        XCTAssertEqual(count, 0, "an in-progress (fresh) temp must not be recovered")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: appTmp.path), "the temp must be left untouched")
-        XCTAssertFalse(
-            FileManager.default.fileExists(atPath: dir.appendingPathComponent(stem + "_mix.wav").path),
-            "no mix should be produced for an in-progress temp",
+        let appPath = try XCTUnwrap(result.appPath)
+        let out = try AudioMixer.loadAudioFileAsFloat32(url: appPath)
+        XCTAssertEqual(
+            out.count, 160_000, accuracy: 800,
+            "a target-rate temp must keep its duration regardless of mic length",
         )
     }
+
+    // Crash-recovery coverage (#379 durability, part 3) lives in
+    // DualSourceRecorderCrashRecoveryTests.swift (type-body-length cap).
 }
