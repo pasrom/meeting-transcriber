@@ -6,12 +6,17 @@ name: E2E (CPU Load)
 # gates only a generous idle-CPU catastrophe bound — real thresholds get
 # derived from trend data later (see the RESULT artifact).
 #
-# Dispatch-only for now: the lane is in its measure-and-log phase. A nightly
-# cron + threshold gate comes once run-to-run variance is known.
-# Runner prerequisites: scripts/setup-self-hosted-runner.sh.
+# Measure-and-log phase: the nightly cron collects one RESULT artifact per
+# day to establish run-to-run variance; a threshold gate comes once that
+# variance is known. Runner prerequisites: scripts/setup-self-hosted-runner.sh.
 
 on:
   workflow_dispatch:
+  schedule:
+    # 05:15 UTC — offset from quality-and-safety (03:00) and e2e-app
+    # (04:30, ~22 min) so the audio runner is quiet when measurement
+    # starts and concurrent failures stay easy to tell apart.
+    - cron: '15 5 * * *'
 
 # Mutates host state (deploys the bundle, plays audio through the
 # speakers) and needs an otherwise-quiet app process for honest numbers —
