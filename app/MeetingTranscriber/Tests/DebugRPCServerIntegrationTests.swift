@@ -110,6 +110,22 @@
             XCTAssertEqual(decoded.speakerDB.count, 7)
         }
 
+        func testMetricsReturnsLiveResourceSnapshot() async throws {
+            let base = try await startServer()
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("metrics"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(
+                (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"),
+                "application/json",
+            )
+            let decoded = try JSONDecoder().decode(RPCResourceMetrics.self, from: data)
+            XCTAssertEqual(decoded.pid, getpid())
+            XCTAssertGreaterThan(decoded.cpuUserSeconds + decoded.cpuSystemSeconds, 0)
+            XCTAssertGreaterThan(decoded.physFootprintBytes, 0)
+        }
+
         func testOpenSettingsReturns200() async throws {
             // The notification fires into a test process with no SwiftUI
             // scenes, so it's a no-op; we only verify the route plumbs through

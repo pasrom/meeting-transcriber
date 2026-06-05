@@ -91,7 +91,9 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PersistentDiagnosticLog.swift # Persistent log stream subprocess with sliding-window restart policy
     String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
     DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
+    DebugRPCServer+Metrics.swift # GET /metrics handler (line-cap split from DebugRPCServer.route)
     RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
+    RPCResourceMetrics.swift # Cumulative CPU/RAM/instructions self-report via proc_pid_rusage (#if !APPSTORE, served at GET /metrics)
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
   Entitlements/
@@ -362,7 +364,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Debug RPC server (dev-only):**
 - `DebugRPCServer` is an embedded HTTP server bound to `127.0.0.1:9876` that exposes app state, screenshots, and scene actions for shell-driven inspection. Whole file is `#if !APPSTORE`. Two enable paths: persistent `Settings → Advanced → Debug RPC Server` toggle (off by default), or per-session `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var (force-starts at launch). `AppState.applyDebugRPCSetting()` reconciles the running server with both signals at startup and on toggle changes.
-- Endpoints: `GET /state` (pipeline + speaker DB JSON), `GET /healthz`, `GET /screenshot` (PNG of the largest visible window), `POST /action/openSettings`, `POST /action/closeSettings`.
+- Endpoints: `GET /state` (pipeline + speaker DB JSON), `GET /healthz`, `GET /metrics` (cumulative CPU/RAM/instructions self-report via `proc_pid_rusage` — diff two snapshots for window averages; process-only, child processes excluded; consumed by `scripts/e2e-cpu-load.sh`), `GET /screenshot` (PNG of the largest visible window), `POST /action/openSettings`, `POST /action/closeSettings`.
 - Two-layer auth: 32-byte hex bearer token at `~/Library/Application Support/MeetingTranscriber/.rpc-token` (chmod 0600) + reject on any non-empty browser `Origin` header.
 - Action endpoints post `Notification.Name.showSettings` / `.closeSettings` that the `@main` scene observes and routes to `bringWindowToFront(id: "settings")` / `closeWindow(id: "settings")` — same path the menu bar uses.
 - `tools/mt-cli` is the matching CLI client; `scripts/test_rpc.sh` is a live end-to-end smoketest. In-process integration tests live in `Tests/DebugRPCServerIntegrationTests.swift` (real sockets via OS-assigned port exposed through `DebugRPCServer.boundPort`).
