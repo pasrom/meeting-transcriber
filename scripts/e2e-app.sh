@@ -34,6 +34,7 @@ REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.
 KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --reimport-latest run
 MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert the app survives it
 CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered into the pipeline on relaunch (issue #379 part 3)
+REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle and exit — restores a clean bundle after --mic-device-change
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -48,6 +49,7 @@ while [ $# -gt 0 ]; do
         --keep-recordings)  KEEP_RECORDINGS=true ;;
         --mic-device-change) MIC_DEVICE_CHANGE=true ;;
         --crash-recovery)   CRASH_RECOVERY=true ;;
+        --redeploy-only)    REDEPLOY_ONLY=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -94,6 +96,13 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        pipeline consumes it into its workdir within seconds).
                        Pre-fix the launch cleanup deletes the temp -> no
                        recovery (RED); the fix re-mixes + enqueues it (GREEN).
+  --redeploy-only      Rebuild + redeploy the canonical (non-fault-injection)
+                       bundle to ~/Applications/MeetingTranscriber-Dev.app and
+                       exit without launching or running a meeting. Used as an
+                       always() cleanup after --mic-device-change to restore a
+                       clean bundle (that run leaves a deliberately-crashing
+                       fault-injection build deployed). Requires a build
+                       (incompatible with --no-build and --mic-device-change).
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -115,6 +124,16 @@ fi
 # build — `defaults`/runtime flags can't add the -DE2E_FAULT_INJECTION code.
 if [ "$MIC_DEVICE_CHANGE" = true ] && [ "$NO_BUILD" = true ]; then
     echo "Error: --mic-device-change requires a build; incompatible with --no-build" >&2
+    exit 2
+fi
+# --redeploy-only rebuilds the canonical bundle, so it must build (not --no-build)
+# and must NOT carry the fault-injection seam it exists to clean up.
+if [ "$REDEPLOY_ONLY" = true ] && [ "$NO_BUILD" = true ]; then
+    echo "Error: --redeploy-only rebuilds the bundle; incompatible with --no-build" >&2
+    exit 2
+fi
+if [ "$REDEPLOY_ONLY" = true ] && [ "$MIC_DEVICE_CHANGE" = true ]; then
+    echo "Error: --redeploy-only restores the canonical bundle; incompatible with --mic-device-change" >&2
     exit 2
 fi
 # Export before the build step below so run_app.sh adds -DE2E_FAULT_INJECTION.
@@ -272,6 +291,15 @@ else
             "$DEV_BUNDLE_DEPLOY" >/dev/null \
             || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
     fi
+fi
+
+# --redeploy-only stops here: the canonical bundle is rebuilt + deployed +
+# signed above, which is the whole job. Don't launch, don't run a meeting.
+# This is the always() cleanup the --mic-device-change workflow runs to leave
+# a clean (non-fault-injection) bundle at the shared deploy path.
+if [ "$REDEPLOY_ONLY" = true ]; then
+    log "Redeployed the canonical (non-fault-injection) bundle to $DEV_BUNDLE_DEPLOY; exiting (--redeploy-only)"
+    exit 0
 fi
 
 if [ ! -x "$SIMULATOR_BIN" ]; then
