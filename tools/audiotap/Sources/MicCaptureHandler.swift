@@ -19,7 +19,9 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// reflects that this discipline isn't expressible to the compiler.
 public class MicCaptureHandler: @unchecked Sendable {
     private var engine = AVAudioEngine()
-    private var outputFile: AVAudioFile?
+    /// `internal` (not `private`) so the cross-file `+Timeline` extension can
+    /// write gap-fill silence to it.
+    var outputFile: AVAudioFile?
     private let outputURL: URL
     private let debugLogging: Bool
     private let liveSink: LiveAudioSink?
@@ -46,6 +48,10 @@ public class MicCaptureHandler: @unchecked Sendable {
     private var converter: AVAudioConverter?
     /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
     private var resampleRatio: Double = 1.0
+    /// Wall-clock anchoring so a device-restart gap becomes silence in the WAV
+    /// instead of an under-run (issue #379 follow-up — see `+Timeline`).
+    /// `internal` for that cross-file extension; survives restarts (never reset).
+    var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
     public private(set) var firstFrameTime: UInt64 = 0
 
     // State for an injected DebugTapFault (above). Always compiled but inert
@@ -188,6 +194,10 @@ public class MicCaptureHandler: @unchecked Sendable {
                 [.posixPermissions: 0o600],
                 ofItemAtPath: outputURL.path,
             )
+            // A fresh file gets a fresh wall-clock anchor — its accounting
+            // belongs to this file's sample stream. Restarts keep the file
+            // (and the anchor), so a restart gap is bridged with silence.
+            timelineAnchor = TimelineAnchor(rate: Int(fileSampleRate))
         }
 
         converter = nil
@@ -214,7 +224,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         // install it through the ObjC shim so a raise becomes a recoverable throw.
         // swiftlint:disable closure_parameter_position closure_body_length
         let tapBlock: AVAudioNodeTapBlock = {
-            [weak self] buffer, _ in
+            [weak self] buffer, when in
             // swiftlint:enable closure_parameter_position closure_body_length
             guard let self, self.isRecording else { return }
             if self.firstFrameTime == 0 {
@@ -233,30 +243,19 @@ public class MicCaptureHandler: @unchecked Sendable {
                         frameCapacity: outputFrames,
                     ) else { return }
                     var error: NSError?
-                    // The converter input block is typed `@Sendable`, so a
-                    // captured `var Bool` would trip Swift 6's concurrent-
-                    // capture check — even though the block actually runs
-                    // synchronously while `convert(to:error:withInputFrom:)`
-                    // is on the stack. Box the flag so the closure captures
-                    // it by-reference.
-                    final class InputState: @unchecked Sendable { var consumed = false }
-                    let inputState = InputState()
+                    let feed = FeedOnce(buffer: buffer)
                     converter.convert(to: outputBuffer, error: &error) { _, outStatus in
-                        if inputState.consumed {
-                            outStatus.pointee = .noDataNow
-                            return nil
-                        }
-                        inputState.consumed = true
-                        outStatus.pointee = .haveData
-                        return buffer
+                        feed.next(outStatus)
                     }
                     if let error {
                         logger.warning("Mic resample error: \(error)")
                     } else {
+                        self.fillTimelineGap(before: when, outputFrames: Int(outputBuffer.frameLength))
                         try self.outputFile?.write(from: outputBuffer)
                         self.forwardToLiveSink(buffer: outputBuffer)
                     }
                 } else {
+                    self.fillTimelineGap(before: when, outputFrames: Int(buffer.frameLength))
                     try self.outputFile?.write(from: buffer)
                     self.forwardToLiveSink(buffer: buffer)
                 }
