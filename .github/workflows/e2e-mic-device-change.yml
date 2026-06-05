@@ -4,14 +4,31 @@ name: E2E (Mic Device-Change)
 # device-change restart mid-recording whose tap install uses an invalid
 # format, the condition that raises an uncatchable NSException from
 # installTapOnBus. Asserts the app SURVIVES (no SIGABRT) and the recording
-# completes. It builds a deliberately-crashing (-DE2E_FAULT_INJECTION)
-# bundle, so it is kept out of the always-run e2e-app.yml sequence (whose
-# shared deploy path it would also poison). Dispatch-only: run manually when
-# touching the mic-restart path or before a release. GitHub indexes
-# workflow_dispatch from the default branch, so this is dispatchable once
-# merged: gh workflow run e2e-mic-device-change.yml
+# completes.
+#
+# It builds a deliberately-crashing (-DE2E_FAULT_INJECTION) bundle, which is
+# why it stays a SEPARATE workflow rather than a lane inside e2e-app.yml: that
+# fault build would poison e2e-app's shared deploy path. Two things keep it
+# safe to run on a schedule:
+#   1. It's its own isolated job (serialized against e2e-app via the shared
+#      concurrency group below), and e2e-app rebuilds the canonical bundle at
+#      its own first step — so the fault bundle never leaks into an e2e-app run.
+#   2. The always() "Restore canonical bundle" step below runs
+#      `e2e-app.sh --redeploy-only` to rebuild + redeploy the non-fault bundle
+#      at the shared path, so a later `--no-build` dispatch (e.g.
+#      e2e-crash-recovery.yml) can't accidentally run against the fault build.
+#
+# Runs nightly + on manual dispatch. The core crash is already guarded on every
+# CI run by the TapFormatResolver mutation test + safeInstallTap shim; this is
+# the end-to-end belt-and-suspenders. GitHub indexes workflow_dispatch from the
+# default branch: gh workflow run e2e-mic-device-change.yml
 on:
   workflow_dispatch:
+  schedule:
+    # 05:30 UTC = 07:30 CEST. Offset an hour past e2e-app.yml's 04:30 cron so
+    # the two don't queue behind each other on the shared concurrency group and
+    # are easy to tell apart in `gh run list`.
+    - cron: '30 5 * * *'
 
 # Shares e2e-app.yml's concurrency group so the two never race for the
 # BlackHole input device / RPC port / deployed bundle on the Mini.
@@ -22,7 +39,11 @@ concurrency:
 jobs:
   e2e-mic-device-change:
     runs-on: [self-hosted, macOS, ARM64, audio]
-    timeout-minutes: 15
+    # Fault run (~5 min, 10 min step cap) + the always() "Restore canonical
+    # bundle" rebuild (~3 min, 5 min step cap) + setup. 20 gives the restore
+    # step honest room even if the fault run burns its full step budget — it
+    # MUST be able to finish so the shared bundle is left clean.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v6
@@ -42,7 +63,7 @@ jobs:
         if: steps.dev-id.outputs.keychain-path != ''
         run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
 
-      - name: Run mic device-change fault-injection E2E (issue #379)
+      - name: "Run mic device-change fault-injection E2E (issue #379)"
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 10
@@ -55,6 +76,20 @@ jobs:
           name: meeting-simulator.log
           path: /tmp/e2e-app-sim.log
           if-no-files-found: ignore
+
+      # Restore a clean (non-fault-injection) bundle at the shared deploy path.
+      # The run above leaves the deliberately-crashing build deployed; without
+      # this, a later `--no-build` dispatch (e2e-crash-recovery.yml, or a manual
+      # e2e-app.sh --no-build) would silently run against the fault build.
+      # always() so it restores the bundle whether the fault test passed or
+      # failed. Must precede the keychain cleanup below — it re-signs the
+      # rebuilt bundle with the same Developer ID + keychain.
+      - name: Restore canonical bundle
+        if: always()
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 5
+        run: bash scripts/e2e-app.sh --redeploy-only
 
       - name: Cleanup signing keychain
         if: always() && env.E2E_SIGNING_KEYCHAIN != ''
