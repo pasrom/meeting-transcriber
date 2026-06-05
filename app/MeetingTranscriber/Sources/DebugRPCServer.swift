@@ -259,6 +259,9 @@
             case ("GET", "/healthz"):
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
 
+            case ("GET", "/metrics"):
+                return Self.metricsResponse()
+
             case ("POST", "/action/openSettings"):
                 Self.openSettings()
                 return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
