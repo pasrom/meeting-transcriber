@@ -50,11 +50,12 @@ jobs:
 
       # Import the Developer ID Application cert into a temporary keychain
       # so codesign can find it. Apple roots are in the system trust store
-      # already, so the resulting signature satisfies the dev .app's PPPC
-      # code requirement out of the box — no add-trusted-cert ceremony
-      # needed. If the secret isn't set, the action becomes a no-op and
-      # e2e-app.sh falls back to the self-signed path that
-      # setup-self-hosted-runner.sh installed.
+      # already, so the Developer ID signature is trusted out of the box —
+      # no add-trusted-cert ceremony needed — and the one-time manual TCC
+      # grant (keyed on this cert's leaf SHA-1) keeps applying across
+      # rebuilds. If the secret isn't set, the action becomes a no-op and
+      # e2e-app.sh falls back to the self-signed cert that
+      # setup-self-hosted-runner.sh creates.
       - name: Install Developer ID certificate
         id: dev-id
         uses: ./.github/actions/install-developer-id
