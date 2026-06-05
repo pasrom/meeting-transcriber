@@ -2,7 +2,7 @@ name: E2E (Crash Recovery)
 
 # Focused live-recording E2E for issue #379 part 3: start a meeting, wait until
 # the recorder is writing its raw app temp, SIGKILL the app mid-recording (no
-# stop() — the raw _app_raw.tmp + unfinalized _mic.wav survive, no _mix.wav),
+# stop() — the raw _app16k_raw.tmp + unfinalized _mic.wav survive, no _mix.wav),
 # then relaunch and assert the recovered recording enters the pipeline and a job
 # reaches done (the re-mixed _mix.wav is transient — the pipeline consumes it
 # into its workdir within seconds). Pre-fix the launch cleanup deletes the temp

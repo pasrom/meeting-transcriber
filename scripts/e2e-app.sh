@@ -89,7 +89,7 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        with --no-build).
   --crash-recovery     Issue #379 part 3: start a meeting, wait until the
                        recorder is writing its raw app temp, then SIGKILL the
-                       app mid-recording (no stop() -> the raw _app_raw.tmp +
+                       app mid-recording (no stop() -> the raw _app16k_raw.tmp +
                        unfinalized _mic.wav survive, no _mix.wav). Relaunch and
                        assert the recovered recording enters the pipeline and a
                        job reaches done (the re-mixed _mix.wav is transient — the
@@ -754,7 +754,7 @@ run_one_reimport() {
 LAST_RECORDED_MIX_PATH=""
 
 # Issue #379 part 3 — crash recovery. Record via the live stack, SIGKILL the
-# app mid-recording so `stop()` never runs (the raw `_app_raw.tmp` + unfinalized
+# app mid-recording so `stop()` never runs (the raw `_app16k_raw.tmp` + unfinalized
 # `_mic.wav` survive, no `_mix.wav`), then relaunch and assert the recovered
 # recording enters the pipeline and a job reaches done. The re-mixed `_mix.wav`
 # is transient (recoverOrphanedRecordings enqueues it + the pipeline consumes it
@@ -788,14 +788,14 @@ run_crash_recovery() {
     # 2. Wait until the recorder is writing the raw app temp (recording active).
     local orphan_tmp=""
     _crash_tmp_appeared() {
-        orphan_tmp="$(find "$CRASH_RECORDINGS" -maxdepth 1 -name '*_app_raw.tmp' -newer "$CRASH_MARKER" -print 2>/dev/null | head -1)"
+        orphan_tmp="$(find "$CRASH_RECORDINGS" -maxdepth 1 -name '*_app16k_raw.tmp' -newer "$CRASH_MARKER" -print 2>/dev/null | head -1)"
         [ -n "$orphan_tmp" ]
     }
-    log "$label: waiting for an active recording (*_app_raw.tmp)"
-    poll_until 40 1 _crash_tmp_appeared || fail "$label: no *_app_raw.tmp appeared — recording never started"
+    log "$label: waiting for an active recording (*_app16k_raw.tmp)"
+    poll_until 40 1 _crash_tmp_appeared || fail "$label: no *_app16k_raw.tmp appeared — recording never started"
     sleep 3   # let a little audio accumulate before the kill
 
-    CRASH_STEM="$(basename "$orphan_tmp")"; CRASH_STEM="${CRASH_STEM%_app_raw.tmp}"
+    CRASH_STEM="$(basename "$orphan_tmp")"; CRASH_STEM="${CRASH_STEM%_app16k_raw.tmp}"
     local stem="$CRASH_STEM"
     log "$label: recording active, orphan stem=$stem"
 
@@ -809,14 +809,14 @@ run_crash_recovery() {
     sleep 2
 
     # 4. Verify the crashed-orphan state on disk.
-    [ -f "$CRASH_RECORDINGS/${stem}_app_raw.tmp" ] || fail "$label: orphan ${stem}_app_raw.tmp did not survive the crash"
+    [ -f "$CRASH_RECORDINGS/${stem}_app16k_raw.tmp" ] || fail "$label: orphan ${stem}_app16k_raw.tmp did not survive the crash"
     [ ! -f "$CRASH_RECORDINGS/${stem}_mix.wav" ] || fail "$label: a _mix.wav exists — stop() ran, this wasn't a crash"
     log "$label: confirmed crashed state (raw temp present, no mix)"
 
     # 5. Backdate the orphan past recovery's in-progress guard (a real
     #    crash→relaunch gap is minutes; keeps the e2e fast + deterministic).
     local old; old="$(date -v-5M +%Y%m%d%H%M.%S)"
-    touch -t "$old" "$CRASH_RECORDINGS/${stem}_app_raw.tmp"
+    touch -t "$old" "$CRASH_RECORDINGS/${stem}_app16k_raw.tmp"
     [ -f "$CRASH_RECORDINGS/${stem}_mic.wav" ] && touch -t "$old" "$CRASH_RECORDINGS/${stem}_mic.wav" || true
 
     # 6. Relaunch — recovery runs at the launch queue-build.
