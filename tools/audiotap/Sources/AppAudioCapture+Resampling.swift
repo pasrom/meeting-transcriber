@@ -31,30 +31,50 @@ public extension AppAudioCapture {
     }
 
     /// Resample + downmix one interleaved CATap buffer to 16 kHz mono and write
-    /// it to `fd`, rebuilding the converter on a mid-recording rate change. The
-    /// resampler buffers internally, so a buffer that yields no output yet
-    /// (converter priming) is simply not written — its samples emerge on a later
-    /// call, no data lost. Falls back to the raw native-rate write only if no
-    /// resampler was built (not expected for a 16 kHz target). `hostTicks` is the
-    /// buffer's hardware presentation time, used to fill device-restart gaps with
-    /// silence so the track stays aligned to wall-clock. Runs on `writeQueue`.
+    /// it to `fd`, also forwarding the resampled buffer to the live sink. The
+    /// converter is rebuilt on a mid-recording rate change. The resampler buffers
+    /// internally, so a buffer that yields no output yet (converter priming) is
+    /// simply not written — its samples emerge on a later call, no data lost.
+    /// Falls back to the raw native-rate write *and* raw-format live-sink forward
+    /// only if no resampler was built (not expected for a 16 kHz target).
+    /// `hostTicks` is the buffer's hardware presentation time, used to fill
+    /// device-restart gaps with silence so the track stays aligned to wall-clock.
+    /// Runs on `writeQueue`.
     internal func writeCapturedBuffer(
         fd: Int32, data: UnsafeMutableRawPointer, byteCount: Int, hostTicks: UInt64,
     ) {
-        guard let resampler else {
+        guard resampler != nil else {
             writeAllToFileHandle(fd, data, count: byteCount)
+            forwardToLiveSink(data: data, byteCount: byteCount)
             return
         }
         let floatCount = byteCount / MemoryLayout<Float>.size
         let interleaved = Array(UnsafeBufferPointer(
             start: data.assumingMemoryBound(to: Float.self), count: floatCount,
         ))
+        resampleForwardAndWrite(
+            fd: fd, interleaved: interleaved,
+            inputRate: actualSampleRate, inputChannels: max(actualChannels, 1),
+            hostTicks: hostTicks,
+        )
+    }
+
+    /// Core of `writeCapturedBuffer`, parameterised on the input rate/channels so
+    /// it's drivable without a live CATap. Resamples to 16 kHz mono, fills any
+    /// device-restart gap with silence (file only — the live path doesn't need
+    /// gap-fill), writes the resampled samples to `fd`, and forwards those same
+    /// samples to the live sink. Caller guarantees `resampler != nil`.
+    internal func resampleForwardAndWrite(
+        fd: Int32, interleaved: [Float], inputRate: Int, inputChannels: Int, hostTicks: UInt64,
+    ) {
+        guard let resampler else { return }
         let mono16k = resampler.process(
-            interleaved, inputRate: actualSampleRate, inputChannels: max(actualChannels, 1),
+            interleaved, inputRate: inputRate, inputChannels: inputChannels,
         )
         guard !mono16k.isEmpty else { return }
         fillTimelineGap(fd: fd, hostTicks: hostTicks, outputFrames: mono16k.count)
         Self.writeFloats(mono16k, to: fd)
+        forwardToLiveSink(monoSamples: mono16k)
     }
 
     /// Write silence for a device-restart gap before this buffer's audio, so the
