@@ -16,7 +16,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Streami
 /// resampled to 16 kHz mono upstream in `LiveTranscriptionController` (via
 /// `LiveAudioResampler`) before they reach `ingest`, so this actor always
 /// sees the 16 kHz mono format described above.
-actor StreamingTranscriber {
+///
+/// Conforms to `LiveCaptionPipeline` — the VAD-driven strategy behind that
+/// seam. `ingest(_:)` is the protocol requirement.
+actor StreamingTranscriber: LiveCaptionPipeline {
     enum Event {
         case partial(String)
         /// Finalized utterance. `audio` carries the buffered 16 kHz mono

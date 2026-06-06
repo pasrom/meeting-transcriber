@@ -89,7 +89,7 @@ final class LiveTranscriptionControllerTests: XCTestCase {
             captions: captions,
             speakerMatcher: matcher,
         )
-        // The controller's makeTranscriber wires the matcher into the
+        // The controller's makePipeline wires the matcher into the
         // finalized branch — driving a real audio buffer through it would
         // require VAD timing. The seam test instead asserts at the
         // captions.applyFinalized level: the matcher returns the canned
