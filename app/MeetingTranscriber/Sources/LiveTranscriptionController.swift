@@ -43,8 +43,8 @@ final class LiveTranscriptionController {
     /// from inside the `Task { @MainActor in ... }` hop in `onEvent`, so the
     /// closure never crosses an isolation boundary.
     private let verboseDiagnostics: () -> Bool
-    private var micTranscriber: StreamingTranscriber?
-    private var appTranscriber: StreamingTranscriber?
+    private var micPipeline: (any LiveCaptionPipeline)?
+    private var appPipeline: (any LiveCaptionPipeline)?
     private var appResampler = LiveAudioResampler()
 
     /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
@@ -88,11 +88,11 @@ final class LiveTranscriptionController {
     func prepare() async {
         await engine.loadModel()
         await prewarmSpeakerMatcher()
-        if micTranscriber == nil {
-            micTranscriber = makeTranscriber(channel: .mic)
+        if micPipeline == nil {
+            micPipeline = makePipeline(channel: .mic)
         }
-        if appTranscriber == nil {
-            appTranscriber = makeTranscriber(channel: .app)
+        if appPipeline == nil {
+            appPipeline = makePipeline(channel: .app)
         }
         if verboseDiagnostics() {
             logger.info("Live transcription ready (engine: \(String(describing: type(of: self.engine)), privacy: .public))")
@@ -114,8 +114,8 @@ final class LiveTranscriptionController {
     /// Reset accumulated state for the next recording. Keeps engine + VAD
     /// models loaded — re-creating the actors + resampler is cheap.
     func reset() {
-        micTranscriber = makeTranscriber(channel: .mic)
-        appTranscriber = makeTranscriber(channel: .app)
+        micPipeline = makePipeline(channel: .mic)
+        appPipeline = makePipeline(channel: .app)
         appResampler = LiveAudioResampler()
         captions.clear()
         if verboseDiagnostics() {
@@ -123,7 +123,7 @@ final class LiveTranscriptionController {
         }
     }
 
-    private func makeTranscriber(channel: LiveCaptionChannel) -> StreamingTranscriber {
+    private func makePipeline(channel: LiveCaptionChannel) -> any LiveCaptionPipeline {
         // `EngineProxy` is `@unchecked Sendable` so the `@Sendable` closure
         // below can capture it. Safe because every call routes through the
         // engine's `@MainActor`-isolated `transcribeSamples`, which hops back
@@ -169,15 +169,15 @@ final class LiveTranscriptionController {
     }
 
     private func handleMicBuffer(_ buffer: LiveAudioBuffer) async {
-        guard let micTranscriber else { return }
-        await micTranscriber.ingest(buffer)
+        guard let micPipeline else { return }
+        await micPipeline.ingest(buffer)
     }
 
     private func handleAppBuffer(_ buffer: LiveAudioBuffer) async {
-        guard let appTranscriber,
+        guard let appPipeline,
               let normalized = appResampler.resample(buffer)
         else { return }
-        await appTranscriber.ingest(normalized)
+        await appPipeline.ingest(normalized)
     }
 }
 
