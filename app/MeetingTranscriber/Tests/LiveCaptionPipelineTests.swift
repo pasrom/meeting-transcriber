@@ -120,6 +120,101 @@ final class LiveCaptionPipelineTests: XCTestCase {
         XCTAssertEqual(micFinals.first?.text, "tail utterance")
     }
 
+    /// Actor-level: `flush()` after a *natural* `speechEnd` adds no new final —
+    /// the most common real stop case (user stops the recorder a beat after a
+    /// sentence finishes, so VAD already committed it). Feeds the fixture
+    /// through its first natural `speechEnd` at chunk 33; the speech-active span
+    /// is long enough that the 5 s force-flush also fires once, so the baseline
+    /// is two finals (a fixture fact, not the point). The contract pinned here is
+    /// that `flush()` commits *nothing more* once the buffer was already drained
+    /// by a real `speechEnd` — no phantom duplicate of the last utterance.
+    func testFlushAfterNaturalSpeechEndEmitsNoSecondFinal() async throws {
+        let samples = try await loadSpeechFixture()
+        // chunks 0…33 — through the fixture's first natural speechEnd (chunk 33).
+        let throughEnd = Array(samples.prefix(Self.chunkSize * 34))
+        let recorder = OnEventRecorder()
+        let pipeline = makePipeline(observer: recorder)
+        await pipeline.ingest(buffer(throughEnd))
+
+        let baseline = recorder.finals.count
+        XCTAssertGreaterThan(
+            baseline, 0,
+            "the natural speechEnd (plus the 5 s force-flush) must have committed at least one final",
+        )
+
+        await pipeline.flush()
+
+        XCTAssertEqual(
+            recorder.finals.count, baseline,
+            "flush after a natural speechEnd must add no final — the buffer was already drained",
+        )
+    }
+
+    /// Actor-level: `flush()` is idempotent. The first flush commits the pending
+    /// (>1 s) tail; `commitFinal()` reassigns `speechSamples = []`, consuming the
+    /// buffer, so a second flush finds nothing to commit. Guards against a
+    /// regression where the buffer isn't reset and the tail is emitted twice.
+    func testFlushIsIdempotent() async throws {
+        let samples = try await loadSpeechFixture()
+        // 5-chunk speech-active prefix (~1.3 s > 1 s minFinalSamples), no
+        // speechEnd yet → speech stays buffered until flush commits it.
+        let speakingPrefix = Array(samples.prefix(Self.chunkSize * 5))
+        let recorder = OnEventRecorder()
+        let pipeline = makePipeline(observer: recorder)
+        await pipeline.ingest(buffer(speakingPrefix))
+        XCTAssertEqual(recorder.finals.count, 0, "no speechEnd yet — nothing finalized before flush")
+
+        await pipeline.flush()
+        XCTAssertEqual(recorder.finals.count, 1, "first flush commits the pending tail")
+
+        await pipeline.flush()
+        XCTAssertEqual(
+            recorder.finals.count, 1,
+            "second flush is a no-op — commitFinal already consumed the buffer",
+        )
+    }
+
+    /// Controller-level: `flush()` must reach the APP channel too, mirroring the
+    /// mic-channel test above. App buffers normally arrive 48 kHz stereo and are
+    /// resampled by `LiveAudioResampler`; here the input is already 16 kHz mono
+    /// (the resampler short-circuits and passes it through unchanged), isolating
+    /// the controller's `appSink` → `handleAppBuffer` → `appPipeline` fan-out.
+    /// Pins the `async let` symmetry in `LiveTranscriptionController.flush()` —
+    /// a regression that only flushed the mic pipeline would leave this empty.
+    func testControllerFlushDeliversPendingAppChannelFinal() async throws {
+        let samples = try await loadSpeechFixture()
+        let captions = LiveCaptionsState()
+        let engine = MockStreamingEngine()
+        engine.samplesToTranscribe = "tail utterance"
+        let controller = LiveTranscriptionController(
+            engine: engine,
+            vad: FluidVAD(threshold: 0.5),
+            captions: captions,
+            speakerMatcher: FakeLiveSpeakerMatcher(),
+        )
+        await controller.prepare()
+
+        // Feed a >1 s speech-active prefix through the APP sink (the CATap entry
+        // point). Same deterministic drain signal as the mic test above: wait
+        // for the prefix's partial instead of a fixed sleep, so a cold-CI VAD
+        // load can't race flush() past the still-suspended ingestion.
+        let prefix = Array(samples.prefix(Self.chunkSize * 5))
+        controller.appSink(buffer(prefix))
+        await waitFor(!captions.hypothesisApp.isEmpty, timeout: .seconds(30))
+        XCTAssertFalse(captions.hypothesisApp.isEmpty, "ingestion must surface a partial before flushing")
+        XCTAssertTrue(captions.recentFinals.isEmpty, "no final should appear before flush")
+
+        await controller.flush()
+        await waitFor(!captions.recentFinals.isEmpty, timeout: .seconds(2))
+
+        let appFinals = captions.recentFinals.filter { $0.channel == .app }
+        XCTAssertEqual(
+            appFinals.count, 1,
+            "controller.flush() must deliver the pending app-channel final to captions",
+        )
+        XCTAssertEqual(appFinals.first?.text, "tail utterance")
+    }
+
     // MARK: - Helpers
 
     private func makePipeline(observer: OnEventRecorder) -> StreamingTranscriber {
