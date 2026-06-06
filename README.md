@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/pasrom/meeting-transcriber/actions?query=branch%3Amain"><img src="https://img.shields.io/github/checks-status/pasrom/meeting-transcriber/main?label=build" alt="Build status"></a>
-  <a href="https://github.com/pasrom/meeting-transcriber/releases/latest"><img src="https://img.shields.io/github/v/release/pasrom/meeting-transcriber?include_prereleases&label=release" alt="Latest release"></a>
+  <a href="https://github.com/pasrom/meeting-transcriber/releases"><img src="https://img.shields.io/github/v/release/pasrom/meeting-transcriber?include_prereleases&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14.2%2B-blue" alt="macOS 14.2+">
   <img src="https://img.shields.io/badge/Swift-6.2-orange" alt="Swift 6.2">
   <a href="https://github.com/pasrom/meeting-transcriber/blob/main/LICENSE"><img src="https://img.shields.io/github/license/pasrom/meeting-transcriber" alt="MIT License"></a>
