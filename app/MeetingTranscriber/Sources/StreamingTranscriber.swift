@@ -46,6 +46,11 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     private var isSpeaking = false
     private var lastPartialAt: Date = .distantPast
     private let onEvent: EventSink
+    /// True while a `drainChunks()` pass owns the input accumulator. The actor
+    /// suspends at the VAD and transcribe awaits, so a second caller (another
+    /// `ingest` Task or `flush`) can interleave; without this guard two drain
+    /// loops would fork the VAD stream state and process chunks out of order.
+    private var isDrainingInput = false
 
     /// Silero v6 chunk size at 16 kHz — what FluidVAD expects per call.
     private static let chunkSize = 4096
@@ -78,7 +83,32 @@ actor StreamingTranscriber: LiveCaptionPipeline {
         await drainChunks()
     }
 
+    /// Recording stopped — commit any pending speech as a final so the last
+    /// utterance isn't dropped when the recorder stops mid-speech (no VAD
+    /// `speechEnd` event ever arrives for the tail). `commitFinal()` keeps the
+    /// ≥1 s `minFinalSamples` guard, so sub-second pending speech is still
+    /// dropped as noise. Reset `isSpeaking` afterwards so the actor returns to
+    /// a clean idle state (the controller recreates pipelines per recording, so
+    /// this is belt-and-suspenders against any reuse).
+    func flush() async {
+        // Ingestion may still be mid-drain (the actor suspends at the VAD and
+        // partial-transcribe awaits) — wait for the active pass to finish and
+        // process any input that accumulated meanwhile, so audio the recorder
+        // already delivered before the stop isn't dropped by stop-timing.
+        while isDrainingInput {
+            await Task.yield()
+        }
+        if !inputAccumulator.isEmpty { await drainChunks() }
+        await commitFinal()
+        isSpeaking = false
+    }
+
     private func drainChunks() async {
+        // Single-pass guard: the active drain re-checks the accumulator every
+        // iteration, so anything appended while it runs is consumed by it.
+        if isDrainingInput { return }
+        isDrainingInput = true
+        defer { isDrainingInput = false }
         if vadState == nil {
             do {
                 vadState = try await vad.makeStreamState()

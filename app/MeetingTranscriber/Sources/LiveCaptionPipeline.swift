@@ -10,4 +10,6 @@ import AudioTapLib
 /// already exposed `ingest(_:)` with this exact shape.
 protocol LiveCaptionPipeline: Actor {
     func ingest(_ buffer: LiveAudioBuffer) async
+    /// Recording stopped — flush any pending utterance as a final.
+    func flush() async
 }

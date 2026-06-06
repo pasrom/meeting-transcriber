@@ -192,14 +192,4 @@ final class LiveTranscriptionE2ETests: XCTestCase {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
-
-    /// Decode the fixture WAV into a 16 kHz mono Float32 array via the
-    /// production `AudioMixer` helpers — exercising the same load+resample
-    /// path the batch pipeline uses, so a regression in either landing on
-    /// only-test code is unlikely.
-    private func loadFixtureAs16kMono(_ url: URL) async throws -> [Float] {
-        let (raw, srcRate) = try await AudioMixer.loadAudioAsFloat32(url: url)
-        guard srcRate != 16000 else { return raw }
-        return AudioMixer.resample(raw, from: srcRate, to: 16000)
-    }
 }

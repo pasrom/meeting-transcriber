@@ -94,6 +94,16 @@ final class LiveTranscriptionCoordinator {
         recorder.appLiveSink = controller.appSink
     }
 
+    /// Flush the live controller's pending tail utterance when recording stops.
+    /// No-op when no controller is active (live transcription off / unsupported
+    /// engine / never warmed). Called at STOP time — before any `reset()` that
+    /// clears caption state on the next recording — so the user sees the final
+    /// caption of the last utterance. Idempotent: a second call after the
+    /// pipelines already flushed finds nothing pending and emits nothing.
+    func flush() async {
+        await controller?.flush()
+    }
+
     /// Eagerly load the VAD + engine models when the toggle is on (or already on
     /// at launch with a streaming engine) so the first utterance after the
     /// recorder starts doesn't pay the cold-load cost. Plus a re-arming
