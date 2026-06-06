@@ -208,7 +208,18 @@ final class WatchingController {
     /// `notifyOnRecording` only fires "Meeting Detected" notifications for the
     /// auto-detect path; manual recording emits its own start notification.
     private func attachStateChangeHandler(to loop: WatchLoop, notifyOnRecording: Bool) {
-        loop.onStateChange = { [weak self, weak loop, notifier] _, newState in
+        loop.onStateChange = { [weak self, weak loop, notifier] oldState, newState in
+            // Leaving `.recording` (natural meeting end, manual stop, or
+            // mid-recording cancel — all route through this transition) is the
+            // unified stop signal for both the auto-detect and manual paths.
+            // Flush the live pipeline here so the pending tail utterance is
+            // committed before the next recording's reset() clears state. The
+            // flush runs after `recorder.stop()` (WatchLoop stops the recorder
+            // before this transition fires); the buffered tail lives in the
+            // streaming actors, not the recorder, so it survives the stop.
+            if oldState == .recording {
+                Task { @MainActor in await self?.liveTranscription.flush() }
+            }
             switch newState {
             case .recording:
                 if notifyOnRecording, let meeting = loop?.currentMeeting {

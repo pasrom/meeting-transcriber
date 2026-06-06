@@ -111,6 +111,17 @@ final class LiveTranscriptionController {
         }
     }
 
+    /// Recording stopped — flush both channel pipelines so any pending
+    /// tail utterance (speech that was still in progress when the recorder
+    /// stopped, so VAD never emitted a `speechEnd`) is committed as a final.
+    /// Must run at STOP time, before the next recording's `reset()` clears
+    /// caption state. Awaits both channels concurrently.
+    func flush() async {
+        async let mic: Void? = micPipeline?.flush()
+        async let app: Void? = appPipeline?.flush()
+        _ = await (mic, app)
+    }
+
     /// Reset accumulated state for the next recording. Keeps engine + VAD
     /// models loaded — re-creating the actors + resampler is cheap.
     func reset() {
