@@ -152,4 +152,44 @@ final class AppAudioCaptureLiveSinkTests: XCTestCase {
         }
         XCTAssertEqual(recorder.buffers[0].channelCount, 1, "must clamp to 1")
     }
+
+    // MARK: - Resampled forward (the normal capture-write path)
+
+    /// The seam PR-1 changes: the resampled 16 kHz mono buffer that
+    /// `writeCapturedBuffer` writes to the file fd is the SAME buffer handed to
+    /// the live sink. Feeds one second of 48 kHz interleaved stereo through the
+    /// real converter and asserts the sink received 16 kHz mono — so the app
+    /// side never resamples a second time. `resampleForwardAndWrite` is the
+    /// parameterised core of `writeCapturedBuffer` (drivable without a live
+    /// CATap, which can't set `actualSampleRate`).
+    func test_resampleForwardAndWrite_forwardsResampled16kMonoToSink() {
+        let recorder = SinkRecorder()
+        let capture = makeCapture(sampleRate: 48000, channels: 2) { recorder.sink($0) }
+
+        // 1 s of 48 kHz interleaved stereo, L=0.4 R=0.6 → mono average 0.5.
+        var stereo = [Float]()
+        stereo.reserveCapacity(48000 * 2)
+        for _ in 0 ..< 48000 {
+            stereo.append(0.4)
+            stereo.append(0.6)
+        }
+
+        capture.resampleForwardAndWrite(
+            fd: devNullFD, interleaved: stereo,
+            inputRate: 48000, inputChannels: 2, hostTicks: mach_absolute_time(),
+        )
+
+        XCTAssertEqual(recorder.buffers.count, 1, "sink must receive exactly the one resampled buffer")
+        let delivered = recorder.buffers[0]
+        XCTAssertEqual(delivered.sampleRate, 16000, "sink must get 16 kHz, not the raw 48 kHz device rate")
+        XCTAssertEqual(delivered.channelCount, 1, "sink must get mono, not the raw 2-channel stereo")
+        // 48 k stereo (96000 interleaved samples) → ~16000 mono. Allow converter
+        // priming slop, matching StreamingMonoResamplerTests' ±300 tolerance.
+        XCTAssertEqual(
+            delivered.samples.count, 16000, accuracy: 300,
+            "1 s of 48 kHz stereo → ~16000 mono samples (≈ input frames / 3)",
+        )
+        let mid = delivered.samples[delivered.samples.count / 2]
+        XCTAssertEqual(mid, 0.5, accuracy: 0.05, "stereo must downmix to the channel average")
+    }
 }

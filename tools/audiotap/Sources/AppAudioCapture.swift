@@ -414,9 +414,10 @@ public class AppAudioCapture: @unchecked Sendable {
             // to 16 kHz mono AT CAPTURE (writeCapturedBuffer, +Resampling),
             // rebuilding the converter on a mid-recording rate change so a
             // device swap can't time-warp the file the way a single post-hoc
-            // resample did (issue #379 follow-up). RMS/level/live-sink stay on
-            // the raw buffer below — the live path has its own rate-adaptive
-            // resampler.
+            // resample did (issue #379 follow-up). The live sink is fed the SAME
+            // resampled 16 kHz mono buffer from inside writeCapturedBuffer, so
+            // the app doesn't resample a second time. RMS/level still read the
+            // raw buffer below.
             guard let data = abl.mBuffers.mData else { return }
             let byteCount = Int(abl.mBuffers.mDataByteSize)
             let hostTicks = Self.hostTicks(from: inInputTime)
@@ -425,7 +426,6 @@ public class AppAudioCapture: @unchecked Sendable {
             self.accumulateDebugRMS(data: data, byteCount: byteCount)
             self.publishCurrentLevel()
             self.maybeReportDebugRMS()
-            self.forwardToLiveSink(data: data, byteCount: byteCount)
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
