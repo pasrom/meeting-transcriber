@@ -8,7 +8,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Streami
 ///
 /// PoC scope: ingests 16 kHz mono Float32 buffers (matches `MicCaptureHandler`
 /// post-resample output), feeds them through `FluidVAD` in streaming mode,
-/// and calls `engine.transcribeSamples` once per ~400 ms while speaking
+/// and calls `engine.transcribeSamples` once per ~800 ms while speaking
 /// (partial) and once per detected speech end / 5 s force-flush (final).
 ///
 /// Both mic and app channels are supported. App-channel buffers (typically
@@ -54,7 +54,13 @@ actor StreamingTranscriber: LiveCaptionPipeline {
 
     /// Silero v6 chunk size at 16 kHz — what FluidVAD expects per call.
     private static let chunkSize = 4096
-    private static let partialIntervalSeconds: TimeInterval = 0.4
+    /// Minimum wall-clock gap between partial re-transcriptions while speaking.
+    /// Every partial re-runs the engine over the whole accumulated utterance,
+    /// and FluidAudio's offline encoder zero-pads any input to a constant 15 s
+    /// window — so the partial cadence is the only lever on live-caption CPU
+    /// for the multilingual path. 0.8 s halves the encoder passes vs. the
+    /// original 0.4 s at a still-conversational caption update rate.
+    private static let partialIntervalSeconds: TimeInterval = 0.8
     /// 5 seconds at 16 kHz — force a final when speech keeps going without an end event.
     private static let forceFlushSamples = 16000 * 5
     /// Below 1 second of accumulated speech, drop instead of transcribing (noise).
