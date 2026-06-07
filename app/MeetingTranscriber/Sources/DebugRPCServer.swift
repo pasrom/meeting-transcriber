@@ -177,14 +177,25 @@
                     port: port,
                 )
                 let listener = try NWListener(using: params)
+                // Assign BEFORE wiring the handlers + starting so the handlers can
+                // reach the listener through `self.listener` instead of capturing
+                // the local `listener` strongly. Capturing it strongly would form a
+                // `listener → stateUpdateHandler → listener` self-cycle: a
+                // `DebugRPCServer` dropped without `stop()` (e.g. the controller
+                // overwriting `self.server` with a fresh instance) would then leave
+                // a handler-less listener squatting the LISTEN socket — connections
+                // get accepted but `self?` is nil, so they are never serviced. That
+                // is exactly the observed CLOSE_WAIT wedge. With only `[weak self]`
+                // captured, dropping the server releases its strong ref to the
+                // listener and ARC reclaims it.
+                self.listener = listener
                 listener.newConnectionHandler = { [weak self] connection in
                     Task { @MainActor in self?.handle(connection) }
                 }
                 listener.stateUpdateHandler = { [weak self] state in
                     switch state {
                     case .ready:
-                        guard let self else { return }
-                        Task { @MainActor in self.boundPort = listener.port?.rawValue }
+                        Task { @MainActor in self?.boundPort = self?.listener?.port?.rawValue }
 
                     case let .failed(error):
                         // Without this, a post-start bind failure (e.g. the
@@ -195,13 +206,16 @@
                         // even let a doomed listener log nothing while the
                         // kernel routes connections to the dead twin.
                         logger.error("DebugRPCServer listener failed: \(error.localizedDescription, privacy: .public)")
+                        // Tear THIS instance's listener down so a doomed bind never
+                        // lingers holding the socket. Scoped to `self?.stop()` — it
+                        // can never touch another server's listener.
+                        Task { @MainActor in self?.stop() }
 
                     default:
                         break
                     }
                 }
                 listener.start(queue: .main)
-                self.listener = listener
                 logger.info("DebugRPCServer listening on 127.0.0.1:\(self.port.rawValue, privacy: .public)")
             } catch {
                 logger.error("DebugRPCServer failed to start: \(error.localizedDescription)")
@@ -210,9 +224,27 @@
 
         /// Cancel the listener and free the port. Idempotent.
         func stop() {
+            // Sever the handlers before dropping the reference. The handlers only
+            // capture `[weak self]` (no self-cycle — see `start()`), but a callback
+            // can still be in flight on `.main` after `cancel()`; clearing them
+            // first guarantees a stopped instance does nothing further.
+            listener?.stateUpdateHandler = nil
+            listener?.newConnectionHandler = nil
             listener?.cancel()
             listener = nil
             boundPort = nil
+        }
+
+        /// Releasing the last strong reference to an NWListener does NOT close its
+        /// socket — only `cancel()` does. The field hit exactly this: the launch
+        /// double-start path overwrites the controller's `self.server`, dropping a
+        /// started instance without `stop()`. Without an explicit cancel the kernel
+        /// keeps the LISTEN socket on the port, blocking the survivor from re-binding
+        /// and accumulating unserviced connections. Cancelling here guarantees the
+        /// socket is reclaimed however the instance is torn down. `NWListener.cancel()`
+        /// is thread-safe, so calling it from `deinit` (nonisolated) is sound.
+        deinit {
+            listener?.cancel()
         }
 
         // MARK: - Connection handling

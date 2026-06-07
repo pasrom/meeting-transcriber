@@ -274,6 +274,104 @@
             XCTAssertEqual(received, 2)
         }
 
+        // MARK: - Listener lifecycle: don't-break-the-survivor + no leak on drop
+
+        /// Construct + start a server pinned to a specific port and wait until it
+        /// reports `boundPort`. Caller owns the returned strong ref (so the leak
+        /// test can drop it deliberately). Does NOT store into `self.server`.
+        private func startServerPinned(port: UInt16) async throws -> DebugRPCServer {
+            let server = DebugRPCServer(port: port, token: Self.testToken) { .empty }
+            server.start()
+            for _ in 0 ..< 50 {
+                if server.boundPort != nil { return server }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw XCTestError(.timeoutWhileWaiting)
+        }
+
+        private func healthzStatus(port: UInt16) async -> Int? {
+            guard let url = URL(string: "http://127.0.0.1:\(port)/healthz") else { return nil }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 2
+            req.setValue("Bearer \(Self.testToken)", forHTTPHeaderField: "Authorization")
+            guard let (_, response) = try? await URLSession.shared.data(for: req) else { return nil }
+            return (response as? HTTPURLResponse)?.statusCode
+        }
+
+        /// A second server whose bind collides with a live server must NOT damage
+        /// the survivor: server A keeps serving after server B's bind fails. Pins
+        /// the controller's reference-overwrite hazard at the socket layer — a
+        /// doomed instance #2 may never disturb the live instance #1.
+        func testCollidingSecondServerDoesNotBreakSurvivor() async throws {
+            let serverA = try await startServerPinned(port: 0)
+            let portA = try XCTUnwrap(serverA.boundPort)
+            let before = await healthzStatus(port: portA)
+            XCTAssertEqual(before, 200, "server A should serve before the collision")
+
+            // B pinned to A's port → its bind fails (Address already in use). The
+            // failure path must confine itself to B's own listener.
+            let serverB = DebugRPCServer(port: portA, token: Self.testToken) { .empty }
+            serverB.start()
+
+            // Re-assert the survivor invariant repeatedly instead of sleeping a
+            // fixed interval (CI-flaky on a loaded runner). B can never reach
+            // `.ready` while A holds the port, so `boundPort` stays nil throughout;
+            // A must answer 200 on every probe, so a transient mid-failure
+            // regression surfaces, not just the end state. ~10 probes (each a real
+            // healthz roundtrip + 50 ms step) span well past B's async bind-fail.
+            for _ in 0 ..< 10 {
+                let aStatus = await healthzStatus(port: portA)
+                XCTAssertEqual(aStatus, 200, "server A must keep serving while B's bind fails")
+                XCTAssertNil(serverB.boundPort, "B's colliding bind must never reach .ready")
+                try await Task.sleep(for: .milliseconds(50))
+            }
+
+            serverA.stop()
+            serverB.stop()
+        }
+
+        /// The wedge: a started server dropped WITHOUT `stop()` (the controller
+        /// overwriting `self.server` with a fresh instance dealloc'd #1) must not
+        /// leave its listener squatting the port. With the old `listener →
+        /// stateUpdateHandler → listener` self-cycle the listener outlived the
+        /// dealloc'd server, kept the LISTEN socket, and accepted connections that
+        /// `self?` (now nil) never serviced. We assert the inverse: after dropping
+        /// the only strong ref, a FRESH server can bind the same port and serve.
+        func testDroppingServerWithoutStopReleasesPort() async throws {
+            var first: DebugRPCServer? = try await startServerPinned(port: 0)
+            let port = try XCTUnwrap(first?.boundPort)
+            let firstStatus = await healthzStatus(port: port)
+            XCTAssertEqual(firstStatus, 200, "first server should serve")
+
+            // Drop the only strong reference WITHOUT stop() — models the controller
+            // overwriting `self.server`. ARC must reclaim the listener (no cycle).
+            first = nil
+
+            // Poll the observable end-condition — a FRESH server can bind + serve
+            // the same port — instead of a fixed sleep waiting for dealloc+cancel
+            // to settle (CI-flaky on a loaded runner). Each attempt waits for the
+            // candidate to reach `.ready` (or times out) before retrying; if the
+            // old listener leaked and squatted the socket, every attempt fails and
+            // the loop exhausts its ~5 s budget. The successful candidate is kept
+            // and stopped once; failed candidates are released between attempts.
+            var served = false
+            for _ in 0 ..< 25 {
+                if let candidate = try? await startServerPinned(port: port) {
+                    let status = await healthzStatus(port: port)
+                    candidate.stop()
+                    if status == 200 {
+                        served = true
+                        break
+                    }
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertTrue(
+                served,
+                "a fresh server must bind + serve the port the dropped one held",
+            )
+        }
+
         // MARK: - M6: Host header allowlist (raw-socket)
 
         /// `URLRequest.setValue(_:forHTTPHeaderField: "Host")` is silently
