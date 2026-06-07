@@ -1,3 +1,4 @@
+import FluidAudio
 @testable import MeetingTranscriber
 import XCTest
 
@@ -50,5 +51,17 @@ final class ModelPreloadTests: XCTestCase {
         // discarding the state is fine — we only care about the side effect
         // of populating the model cache.
         _ = try await vad.makeStreamState()
+    }
+
+    /// The Parakeet EOU 320ms streaming models live in their own HuggingFace
+    /// repo, separate from the batch Parakeet TDT models the engine pre-warms.
+    /// Without this, `EouStreamingE2ETests` is the first test to need them and
+    /// a cold CI run would download them inline (and parallel workers would
+    /// race the HuggingFace `*.incomplete → weights/` rename). Mirrors the
+    /// production backend (`LiveTranscriptionController.makeDefaultEouManager`):
+    /// `StreamingEouAsrManager(chunkSize: .ms320)`.
+    func testPreloadEouStreaming() async throws {
+        let manager = StreamingEouAsrManager(chunkSize: .ms320, eouDebounceMs: 1280)
+        try await manager.loadModels()
     }
 }
