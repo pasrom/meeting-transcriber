@@ -43,7 +43,7 @@ class WatchLoop {
 
     // Dependencies
     let detector: any MeetingDetecting
-    let recorderFactory: @MainActor () -> any RecordingProvider
+    let recorderFactory: @MainActor () async -> any RecordingProvider
     var pipelineQueue: PipelineQueue?
     var permissionChecker: () async -> HealthCheckResult = { await PermissionHealthCheck.runLive() }
 
@@ -90,7 +90,7 @@ class WatchLoop {
 
     init(
         detector: any MeetingDetecting = WatchLoop.defaultDetector(),
-        recorderFactory: @MainActor @escaping () -> any RecordingProvider = { DualSourceRecorder() },
+        recorderFactory: @MainActor @escaping () async -> any RecordingProvider = { DualSourceRecorder() },
         pipelineQueue: PipelineQueue? = nil,
         pollInterval: TimeInterval = 3.0,
         endGracePeriod: TimeInterval = 15.0,
@@ -197,7 +197,7 @@ class WatchLoop {
         watchTask?.cancel()
         watchTask = nil
 
-        let recorder = recorderFactory()
+        let recorder = await recorderFactory()
         try recorder.start(
             appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
@@ -320,7 +320,7 @@ class WatchLoop {
             next.detail = "Recording: \(title)"
         }
 
-        let recorder = recorderFactory()
+        let recorder = await recorderFactory()
         try recorder.start(
             appPID: meeting.windowPID,
             noMic: noMic,

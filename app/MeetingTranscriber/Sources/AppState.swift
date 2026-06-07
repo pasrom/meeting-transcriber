@@ -138,6 +138,7 @@ final class AppState {
             captions: liveCaptions,
             liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
+            englishStreaming: { [settings] in settings.liveCaptionsEnglishStreaming },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
         )
         self.watching = WatchingController(
@@ -282,13 +283,16 @@ final class AppState {
         watching.isWatching
     }
 
-    /// True when the caption-bar overlay should be visible: live transcription
-    /// toggle on, engine implements `transcribeSamples`, and an actual
-    /// recording is in progress.
+    /// True when the caption-bar overlay should be visible: captions are
+    /// available per the shared gate (master toggle on, and either the engine
+    /// implements `transcribeSamples` or the English-streaming opt-in is on —
+    /// the latter is engine-independent) AND an actual recording is in progress.
     var shouldShowLiveCaptions: Bool {
-        settings.liveTranscriptionEnabled
-            && settings.transcriptionEngine.supportsLiveTranscription
-            && watching.watchLoop?.state == .recording
+        LiveCaptionsGate.captionsAvailable(
+            liveEnabled: settings.liveTranscriptionEnabled,
+            englishStreaming: settings.liveCaptionsEnglishStreaming,
+            engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
+        ) && watching.watchLoop?.state == .recording
     }
 
     var currentBadge: BadgeKind {

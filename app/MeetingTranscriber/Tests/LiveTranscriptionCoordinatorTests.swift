@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import WhisperKit
 import XCTest
 
 /// Unit tests for `LiveTranscriptionCoordinator.attachSinks`'s gate — that live
@@ -19,18 +20,25 @@ import XCTest
 final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// Builds a controller with mock collaborators — `prepare()` is a no-op
     /// (mock engine `loadModel`, fake matcher `prepare`), so no model loads.
+    /// The EOU factory returns a mock manager that never loads real models, so
+    /// the English-streaming branch is exercisable without CoreML downloads.
     private func mockControllerFactory() -> LiveTranscriptionCoordinator.ControllerFactory {
-        { engine, captions, verboseDiagnostics in
-            LiveTranscriptionController(
+        { engine, captions, englishStreaming, verboseDiagnostics in
+            let eouFactory: LiveTranscriptionController.EouSessionFactory = { MockEouManager() }
+            let verbose: () -> Bool = { verboseDiagnostics() }
+            return LiveTranscriptionController(
                 engine: engine,
                 vad: FluidVAD(threshold: 0.5),
                 captions: captions,
                 speakerMatcher: FakeLiveSpeakerMatcher(),
-            ) { verboseDiagnostics() }
+                englishStreaming: englishStreaming,
+                eouSessionFactory: eouFactory,
+                verboseDiagnostics: verbose,
+            )
         }
     }
 
-    func testAttachSinksInstallsWhenGateOpenAndControllerReady() {
+    func testAttachSinksInstallsWhenGateOpenAndControllerReady() async {
         let coordinator = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
             liveEnabled: { true },
@@ -41,13 +49,13 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         coordinator.beginPrewarm { MockStreamingEngine() }
 
         let recorder = DualSourceRecorder()
-        coordinator.attachSinks(to: recorder)
+        await coordinator.attachSinks(to: recorder)
 
         XCTAssertNotNil(recorder.micLiveSink, "gate open + controller ready should install the mic sink")
         XCTAssertNotNil(recorder.appLiveSink, "gate open + controller ready should install the app sink")
     }
 
-    func testAttachSinksSkipsWhenLiveDisabledEvenWithControllerReady() {
+    func testAttachSinksSkipsWhenLiveDisabledEvenWithControllerReady() async {
         var enabled = true
         let coordinator = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
@@ -60,13 +68,13 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         enabled = false
 
         let recorder = DualSourceRecorder()
-        coordinator.attachSinks(to: recorder)
+        await coordinator.attachSinks(to: recorder)
 
         XCTAssertNil(recorder.micLiveSink, "live disabled must skip sink install even with a cached controller")
         XCTAssertNil(recorder.appLiveSink)
     }
 
-    func testAttachSinksSkipsWhenEngineUnsupportedEvenWithControllerReady() {
+    func testAttachSinksSkipsWhenEngineUnsupportedEvenWithControllerReady() async {
         var supportsLive = true
         let coordinator = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
@@ -79,9 +87,53 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         supportsLive = false
 
         let recorder = DualSourceRecorder()
-        coordinator.attachSinks(to: recorder)
+        await coordinator.attachSinks(to: recorder)
 
         XCTAssertNil(recorder.micLiveSink, "unsupported engine must skip sink install even with a cached controller")
         XCTAssertNil(recorder.appLiveSink)
+    }
+
+    /// English-streaming opt-in bypasses the engine-support gate: with the
+    /// engine reporting no live support, `attachSinks` still installs the sinks
+    /// because the EOU sessions are engine-independent. The non-vacuity twin of
+    /// `testAttachSinksSkipsWhenEngineUnsupportedEvenWithControllerReady` — same
+    /// unsupported engine, but `englishStreaming` ON flips the outcome.
+    func testAttachSinksInstallsWhenEngineUnsupportedButEnglishStreamingOn() async {
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { false },
+            englishStreaming: { true },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(),
+        )
+        // Non-streaming engine provider (mirrors Qwen3 active): the EOU path
+        // builds a controller with a nil streaming engine, so the sinks still
+        // install. `nil` here would short-circuit ensureController before the
+        // gate, so use a non-streaming stand-in.
+        coordinator.beginPrewarm { NonStreamingEngine() }
+
+        let recorder = DualSourceRecorder()
+        await coordinator.attachSinks(to: recorder)
+
+        XCTAssertNotNil(
+            recorder.micLiveSink,
+            "english streaming must bypass the engine-support gate and install the mic sink",
+        )
+        XCTAssertNotNil(recorder.appLiveSink)
+    }
+}
+
+/// A `TranscribingEngine` that does NOT conform to `StreamingTranscribingEngine`
+/// — the static equivalent of Qwen3, for which the English-streaming path must
+/// build a controller with a nil streaming engine.
+@MainActor
+private final class NonStreamingEngine: TranscribingEngine {
+    var modelState: ModelState = .loaded
+    var downloadProgress: Double = 1.0
+    var transcriptionProgress: Double = 1.0
+    func loadModel() {}
+    func transcribeSegments(audioPath _: URL) -> [TimestampedSegment] {
+        []
     }
 }

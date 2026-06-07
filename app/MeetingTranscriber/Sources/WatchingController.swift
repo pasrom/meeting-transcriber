@@ -187,14 +187,14 @@ final class WatchingController {
     // MARK: - Recorder factory
 
     /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
-    /// `DualSourceRecorder` on each invocation; when live transcription is on AND
-    /// the active engine supports `transcribeSamples`, the coordinator installs
-    /// mic + app live sinks that pipe captured buffers to the
-    /// `LiveTranscriptionController`.
-    private func makeRecorderFactory() -> @MainActor () -> any RecordingProvider {
+    /// `DualSourceRecorder` on each invocation; when live captions are eligible,
+    /// the coordinator installs mic + app live sinks that pipe captured buffers to
+    /// the `LiveTranscriptionController`. `async` so the coordinator can await the
+    /// prior recording's stop-time flush before reusing a kept EOU session.
+    private func makeRecorderFactory() -> @MainActor () async -> any RecordingProvider {
         { [weak self] in
             let recorder = DualSourceRecorder()
-            self?.liveTranscription.attachSinks(to: recorder)
+            await self?.liveTranscription.attachSinks(to: recorder)
             return recorder
         }
     }
@@ -213,7 +213,7 @@ final class WatchingController {
             // mid-recording cancel — all route through this transition) is the
             // unified stop signal for both the auto-detect and manual paths.
             // Flush the live pipeline here so the pending tail utterance is
-            // committed before the next recording's reset() clears state. The
+            // committed before the next recording's prepareForNextRecording() clears state. The
             // flush runs after `recorder.stop()` (WatchLoop stops the recorder
             // before this transition fires); the buffered tail lives in the
             // streaming actors, not the recorder, so it survives the stop.

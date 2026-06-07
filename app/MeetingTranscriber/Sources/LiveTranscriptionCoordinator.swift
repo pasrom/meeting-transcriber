@@ -33,42 +33,65 @@ final class LiveTranscriptionCoordinator {
     private let captions: LiveCaptionsState
     private let liveEnabled: () -> Bool
     private let engineSupportsLive: () -> Bool
+    private let englishStreaming: () -> Bool
     private let verboseDiagnostics: () -> Bool
     private let makeController: ControllerFactory
 
-    /// Builds the streaming controller for an already-resolved engine. Injectable
-    /// so tests can supply a controller with mock collaborators (no model load);
-    /// the default builds the real one. Takes `captions` + `verboseDiagnostics` as
-    /// parameters (rather than capturing `self`) so the default can be a `static`
-    /// function with no init-ordering dependency.
+    /// Builds the streaming controller for the (optional) active engine. The
+    /// engine is nil when the English-streaming opt-in is on with a non-streaming
+    /// active engine — the EOU sessions don't need it. Injectable so tests can
+    /// supply a controller with mock collaborators (no model load); the default
+    /// builds the real one. Takes `captions` + `englishStreaming` +
+    /// `verboseDiagnostics` as parameters (rather than capturing `self`) so the
+    /// default can be a `static` function with no init-ordering dependency.
     typealias ControllerFactory = @MainActor (
-        any StreamingTranscribingEngine, LiveCaptionsState, @escaping () -> Bool,
+        (any StreamingTranscribingEngine)?, LiveCaptionsState, Bool, @escaping () -> Bool,
     ) -> LiveTranscriptionController
 
     init(
         captions: LiveCaptionsState,
         liveEnabled: @escaping () -> Bool,
         engineSupportsLive: @escaping () -> Bool,
+        englishStreaming: @escaping () -> Bool = { false },
         verboseDiagnostics: @escaping () -> Bool,
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
     ) {
         self.captions = captions
         self.liveEnabled = liveEnabled
         self.engineSupportsLive = engineSupportsLive
+        self.englishStreaming = englishStreaming
         self.verboseDiagnostics = verboseDiagnostics
         self.makeController = makeController
     }
 
     private static func makeDefaultController(
-        engine: any StreamingTranscribingEngine,
+        engine: (any StreamingTranscribingEngine)?,
         captions: LiveCaptionsState,
+        englishStreaming: Bool,
         verboseDiagnostics: @escaping () -> Bool,
     ) -> LiveTranscriptionController {
-        LiveTranscriptionController(
+        // `verboseDiagnostics` passed labeled (not trailing): with two
+        // closure-typed trailing-eligible params (`eouSessionFactory` +
+        // `verboseDiagnostics`) a bare trailing closure is ambiguous, so name it.
+        let verbose: () -> Bool = { verboseDiagnostics() }
+        return LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
-        ) { verboseDiagnostics() }
+            englishStreaming: englishStreaming,
+            verboseDiagnostics: verbose,
+        )
+    }
+
+    /// Whether live captions are eligible to run at all, per the shared gate.
+    /// `englishStreaming` bypasses the engine-support requirement because the
+    /// EOU sessions are engine-independent.
+    private var captionsEligible: Bool {
+        LiveCaptionsGate.captionsAvailable(
+            liveEnabled: liveEnabled(),
+            englishStreaming: englishStreaming(),
+            engineSupportsLive: engineSupportsLive(),
+        )
     }
 
     /// Wire the active-engine source, then do the initial pre-warm + arm the
@@ -83,20 +106,24 @@ final class LiveTranscriptionCoordinator {
         prewarmAndObserve()
     }
 
-    /// Install mic + app live sinks onto `recorder` when live transcription is on
-    /// AND the active engine supports streaming. No-op otherwise — the recorder
-    /// records normally with no live overlay. Called by `AppState`'s recorder
-    /// factory on each recording start.
-    func attachSinks(to recorder: DualSourceRecorder) {
-        guard liveEnabled(), engineSupportsLive(), let controller = ensureController() else { return }
-        controller.reset()
+    /// Install mic + app live sinks onto `recorder` when captions are eligible.
+    /// No-op otherwise — the recorder records normally with no live overlay.
+    /// Called by `AppState`'s recorder factory on each recording start.
+    ///
+    /// `async` because `prepareForNextRecording()` awaits any in-flight stop-time
+    /// flush before reusing a kept EOU session — the deterministic stop→start
+    /// boundary that keeps a slow `asr.finish()` from interleaving with the next
+    /// recording's ingests on the same session actor.
+    func attachSinks(to recorder: DualSourceRecorder) async {
+        guard captionsEligible, let controller = ensureController() else { return }
+        await controller.prepareForNextRecording()
         recorder.micLiveSink = controller.micSink
         recorder.appLiveSink = controller.appSink
     }
 
     /// Flush the live controller's pending tail utterance when recording stops.
     /// No-op when no controller is active (live transcription off / unsupported
-    /// engine / never warmed). Called at STOP time — before any `reset()` that
+    /// engine / never warmed). Called at STOP time — before any `prepareForNextRecording()` that
     /// clears caption state on the next recording — so the user sees the final
     /// caption of the last utterance. Idempotent: a second call after the
     /// pipelines already flushed finds nothing pending and emits nothing.
@@ -119,9 +146,11 @@ final class LiveTranscriptionCoordinator {
         prewarmIfEligible()
         withObservationTracking {
             // Touch the underlying settings via the gate closures so the change
-            // tracker observes `liveTranscriptionEnabled` + `transcriptionEngine`.
+            // tracker observes `liveTranscriptionEnabled` + `transcriptionEngine`
+            // + `liveCaptionsEnglishStreaming`.
             _ = liveEnabled()
             _ = engineSupportsLive()
+            _ = englishStreaming()
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -132,25 +161,27 @@ final class LiveTranscriptionCoordinator {
     }
 
     private func prewarmIfEligible() {
-        guard liveEnabled(), engineSupportsLive() else { return }
+        guard captionsEligible else { return }
         _ = ensureController()
     }
 
     /// Lazily create + warm the controller against the active engine. Idempotent
     /// — `prepare()` dedupes concurrent `loadModel` calls.
     ///
-    /// Returns nil when no engine source is wired yet, or the active engine
-    /// doesn't conform to `StreamingTranscribingEngine` (the static equivalent of
-    /// the `supportsLiveTranscription` gate). Callers already check that gate, so
-    /// a nil return only happens if a regression breaks one of those guards.
+    /// The English-streaming path is engine-independent, so it builds a
+    /// controller with a nil streaming engine when the active engine doesn't
+    /// conform to `StreamingTranscribingEngine` (e.g. Qwen3). The re-transcribe
+    /// path still requires a streaming engine: it returns nil otherwise, the
+    /// static equivalent of the `supportsLiveTranscription` gate (callers already
+    /// check `captionsEligible`, so that nil only happens on a regression).
     private func ensureController() -> LiveTranscriptionController? {
         if let existing = controller { return existing }
-        guard let engine = engineProvider?(),
-              let streamingEngine = engine as? any StreamingTranscribingEngine
-        else {
-            return nil
-        }
-        let controller = makeController(streamingEngine, captions, verboseDiagnostics)
+        guard let engine = engineProvider?() else { return nil }
+        let streamingEngine = engine as? any StreamingTranscribingEngine
+        let english = englishStreaming()
+        // Re-transcribe path needs a streaming engine; English streaming doesn't.
+        guard english || streamingEngine != nil else { return nil }
+        let controller = makeController(streamingEngine, captions, english, verboseDiagnostics)
         self.controller = controller
         Task { @MainActor in await controller.prepare() }
         return controller
