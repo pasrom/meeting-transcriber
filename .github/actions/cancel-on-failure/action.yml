@@ -10,9 +10,33 @@ description: >
   step-level `if`). The inner step swallows errors via continue-on-error
   so a transient gh CLI hiccup doesn't mask the original failure.
 
+  The run-level cancellation races the calling job's own conclusion:
+  the culprit job usually ends up marked `cancelled` like its victims,
+  hiding which job actually failed. The annotation + step-summary line
+  emitted before cancelling survive that repaint and name the culprit
+  in the run summary.
+
+inputs:
+  job-name:
+    description: >
+      Human-readable name of the failing job for the culprit annotation.
+      Matrix jobs should pass the expanded name (e.g. "test (appstore)")
+      because `github.job` only carries the job key.
+    required: false
+    default: ${{ github.job }}
+
 runs:
   using: "composite"
   steps:
+    - name: Name the culprit before cancelling
+      shell: bash
+      continue-on-error: true
+      run: |
+        echo "::error title=Run cancelled by failing job::'${JOB_NAME}' failed and cancelled this run — sibling jobs marked 'cancelled' are victims, not causes."
+        echo "### ⚠️ Run cancelled by failing job: \`${JOB_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+        echo "Sibling jobs marked \`cancelled\` are victims, not causes." >> "$GITHUB_STEP_SUMMARY"
+      env:
+        JOB_NAME: ${{ inputs.job-name }}
     - name: Cancel current workflow run
       shell: bash
       continue-on-error: true

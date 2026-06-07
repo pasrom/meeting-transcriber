@@ -144,6 +144,8 @@ jobs:
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
+        with:
+          job-name: test (${{ matrix.variant }})
 
   # AudioTapLib SPM library lives in `tools/audiotap/` and has its own
   # test suite (`tools/audiotap/Tests/`). Runs as its own top-level job
