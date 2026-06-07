@@ -79,6 +79,15 @@
         }
 
         private func start() {
+            // Single-flight: never build/start a second server while one is live.
+            // Two start signals race at launch — the gate in `activate()` and the
+            // observer's `onChange` — and the field hit a third, cross-instance
+            // path (SwiftUI re-evaluating the `@State` default that constructs
+            // `AppState`). Without this guard a second `makeServer()` overwrites
+            // `self.server`, dropping the last strong ref to the live instance #1
+            // while instance #2 fails to bind the already-held port. The toggle-off
+            // path that stops + nils `server` re-opens this gate as intended.
+            guard server == nil else { return }
             guard let server = makeServer?() else { return }
             server.start()
             self.server = server
