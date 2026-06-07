@@ -176,6 +176,14 @@ final class AppState {
             rpcController.activate { [weak self] in self?.buildDebugRPCServer() }
 
             PersistentDiagnosticLog.cleanup()
+            // Reap any `log stream` children orphaned by a previous crash/SIGKILL
+            // (re-parented to launchd) so they can't accumulate across launches.
+            // Off the main thread: it shells out to `ps` + waitUntilExit(), which
+            // would otherwise stall launch proportional to the process-table size.
+            // The reap is deliberately NOT ordered before `startForToday()` — an
+            // orphan surviving a few extra ms is benign next to blocking launch,
+            // and the new streamer is matched by parent pid so it's never reaped.
+            Task.detached(priority: .utility) { PersistentDiagnosticLog.reapOrphans() }
             do {
                 self.persistentLogStreamer = try PersistentDiagnosticLog.startForToday()
             } catch {

@@ -126,6 +126,116 @@ final class PersistentDiagnosticLogTests: XCTestCase {
         PersistentDiagnosticLog.cleanup(in: bogus, retentionDays: 30)
     }
 
+    // MARK: - Orphan reaper (pure matching)
+
+    // The reaper machinery (`parseProcessTable`, `reapOrphans`, …) is `#if
+    // !APPSTORE` in the source — `Process`/`ps` are forbidden under sandbox —
+    // so these tests are guarded too. `orphanPids` happens to be unguarded, but
+    // keeping all reaper tests together under one guard avoids a split that
+    // would re-break the appstore build the next time a test moves.
+    #if !APPSTORE
+        /// A `log stream` we spawned (our predicate marker), re-parented to PID 1,
+        /// is reaped.
+        func test_orphanPids_matchesOurReparentedStreamer() {
+            let cmd = "/usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber' --style syslog --info"
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 4242, ppid: 1, command: cmd),
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [4242])
+        }
+
+        /// A streamer still owned by a *running* sibling instance (ppid != 1) is a
+        /// live child, not an orphan — leave it alone.
+        func test_orphanPids_skipsLiveChildOfRunningParent() {
+            let cmd = "/usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber' --style syslog --info"
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 4242, ppid: 777, command: cmd), // parent alive
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [])
+        }
+
+        /// An unrelated `log stream` the user started for a different subsystem must
+        /// never be reaped — matching keys on OUR predicate marker.
+        func test_orphanPids_skipsUnrelatedLogStream() {
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 4242, ppid: 1, command: "/usr/bin/log stream --predicate subsystem CONTAINS 'com.apple.network' --style syslog"),
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [])
+        }
+
+        /// A non-`log` process whose argv happens to mention our predicate (e.g. a
+        /// grep over logs) is not our streamer — the `/usr/bin/log` executable match
+        /// excludes it.
+        func test_orphanPids_skipsNonLogProcessMentioningPredicate() {
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 4242, ppid: 1, command: "grep subsystem CONTAINS 'com.meetingtranscriber' somefile"),
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [])
+        }
+
+        /// Never reap ourselves even if the row otherwise matches (defence-in-depth).
+        func test_orphanPids_neverReapsOwnPid() {
+            let cmd = "/usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber'"
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 99, ppid: 1, command: cmd),
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [])
+        }
+
+        /// Several rows at once: only the orphaned, predicate-matching `log` rows
+        /// come back, preserving order.
+        func test_orphanPids_returnsAllMatchingOrphans() {
+            let ourCmd = "/usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber' --style syslog --info"
+            let table: [(pid: Int32, ppid: Int32, command: String)] = [
+                (pid: 10, ppid: 1, command: ourCmd), // orphan ✓
+                (pid: 11, ppid: 1, command: "/usr/bin/log stream --predicate subsystem CONTAINS 'com.apple.foo'"), // unrelated ✗
+                (pid: 12, ppid: 500, command: ourCmd), // live child ✗
+                (pid: 13, ppid: 1, command: ourCmd), // orphan ✓
+            ]
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: table, ownPid: 99), [10, 13])
+        }
+
+        // MARK: - Orphan reaper (process-table parsing)
+
+        /// Parses the `ps -axo pid=,ppid=,command=` shape, keeping spaces inside the
+        /// command field intact.
+        func test_parseProcessTable_parsesPidPpidAndSpacedCommand() {
+            let text = """
+              501     1 /usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber'
+              777   501 /Applications/Foo.app/Contents/MacOS/Foo --flag value
+            """
+            let rows = PersistentDiagnosticLog.parseProcessTable(text)
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows[0].pid, 501)
+            XCTAssertEqual(rows[0].ppid, 1)
+            XCTAssertEqual(rows[0].command, "/usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber'")
+            XCTAssertEqual(rows[1].pid, 777)
+            XCTAssertEqual(rows[1].ppid, 501)
+            XCTAssertEqual(rows[1].command, "/Applications/Foo.app/Contents/MacOS/Foo --flag value")
+        }
+
+        /// Blank and malformed lines (missing a command field) are skipped, not
+        /// treated as a process.
+        func test_parseProcessTable_skipsBlankAndMalformedLines() {
+            let text = "\n  501     1 /usr/bin/log stream\n\nnotanumber 1 cmd\n  601 2\n"
+            let rows = PersistentDiagnosticLog.parseProcessTable(text)
+            XCTAssertEqual(rows.count, 1)
+            XCTAssertEqual(rows[0].pid, 501)
+            XCTAssertEqual(rows[0].command, "/usr/bin/log stream")
+        }
+
+        /// End-to-end of the pure pair: real `ps`-style text → parse → orphan filter.
+        func test_parseThenOrphanPids_endToEnd() {
+            let text = """
+              900     1 /usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber' --style syslog --info
+              901   900 /usr/bin/log stream --predicate subsystem CONTAINS 'com.meetingtranscriber'
+            """
+            let rows = PersistentDiagnosticLog.parseProcessTable(text)
+            // 900 is the orphan (ppid 1); 901's parent (900) is alive → live child.
+            XCTAssertEqual(PersistentDiagnosticLog.orphanPids(processTable: rows, ownPid: 99), [900])
+        }
+    #endif
+
     // MARK: - Streamer day-rotation
 
     #if !APPSTORE
