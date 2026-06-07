@@ -103,6 +103,8 @@ jobs:
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
+        with:
+          job-name: sanitizers (${{ matrix.variant }})
 
   quality-baseline:
     if: |
