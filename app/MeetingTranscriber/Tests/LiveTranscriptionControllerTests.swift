@@ -43,15 +43,17 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         // that drops the parameter or hardcodes `false` would flip this
         // to zero.
         let onCalls = VerboseCounter()
+        let onVerbose: () -> Bool = {
+            onCalls.increment()
+            return true
+        }
         let onController = LiveTranscriptionController(
             engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-        ) {
-            onCalls.increment()
-            return true
-        }
+            verboseDiagnostics: onVerbose,
+        )
         await onController.prepare()
         XCTAssertGreaterThan(onCalls.value, 0)
 
@@ -60,15 +62,17 @@ final class LiveTranscriptionControllerTests: XCTestCase {
         // to `if false` upstream, which would make a later flip-to-true
         // a silent no-op.
         let offCalls = VerboseCounter()
+        let offVerbose: () -> Bool = {
+            offCalls.increment()
+            return false
+        }
         let offController = LiveTranscriptionController(
             engine: MockStreamingEngine(),
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-        ) {
-            offCalls.increment()
-            return false
-        }
+            verboseDiagnostics: offVerbose,
+        )
         await offController.prepare()
         XCTAssertGreaterThan(offCalls.value, 0)
         XCTAssertNotNil(offController)

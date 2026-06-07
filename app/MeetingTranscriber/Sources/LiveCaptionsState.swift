@@ -34,7 +34,7 @@ struct LiveCaptionLine: Hashable, Codable {
 /// Finalised lines are merged into a single rolling buffer keyed by channel
 /// so the overlay renders them in time order with stable speaker prefixes.
 ///
-/// Reset semantics: `clear()` is called by `LiveTranscriptionController.reset()`
+/// Reset semantics: `clear()` is called by `LiveTranscriptionController.prepareForNextRecording()`
 /// at the start of every new recording so the overlay doesn't carry over text
 /// from a prior session.
 @Observable

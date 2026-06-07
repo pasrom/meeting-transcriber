@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 @testable import MeetingTranscriber
 import WhisperKit
@@ -473,4 +474,44 @@ func createTestAudioFile(in dir: URL) throws -> URL {
 func writeRawFloat32(_ samples: [Float], to url: URL) throws {
     let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
     try data.write(to: url)
+}
+
+// MARK: - EOU streaming mock
+
+/// Minimal `EouStreamingAsrManaging` double for the live-transcription
+/// controller/coordinator tests: it produces no captions and loads no CoreML.
+/// Construct with `loadError` to make `loadModels()` throw — the path the
+/// English-streaming fallback (re-transcribe / no captions) hinges on. Lives
+/// here (not in a single test file) so both the coordinator and controller
+/// suites reach for the same fixture; `EouStreamingCaptionSessionTests` keeps
+/// its own richer scripted mock.
+actor MockEouManager: EouStreamingAsrManaging {
+    private(set) var loadModelsCount = 0
+    private let loadError: (any Error)?
+
+    init(loadError: (any Error)? = nil) {
+        self.loadError = loadError
+    }
+
+    func loadModels() throws {
+        loadModelsCount += 1
+        if let loadError { throw loadError }
+    }
+
+    // swiftlint:disable:next unneeded_throws_rethrows
+    func appendAudio(_: AVAudioPCMBuffer) throws {}
+    // swiftlint:disable:next async_without_await
+    func processBufferedAudio() async {}
+    // swiftlint:disable:next async_without_await
+    func finish() async -> String {
+        ""
+    }
+
+    // swiftlint:disable:next async_without_await
+    func reset() async {}
+    func setPartialCallback(_: @Sendable (String) -> Void) {}
+    func setEouCallback(_: @Sendable (String) -> Void) {}
+    func getEouTimestampsMs() -> [Int] {
+        []
+    }
 }

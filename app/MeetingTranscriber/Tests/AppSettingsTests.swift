@@ -55,6 +55,17 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.whisperKitModel, "openai_whisper-large-v3-v20240930_turbo")
         XCTAssertTrue(settings.perChannelIndicatorEnabled)
         XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 90.0)
+        XCTAssertFalse(settings.liveTranscriptionEnabled)
+        XCTAssertFalse(settings.liveCaptionsEnglishStreaming)
+    }
+
+    func test_liveCaptionsEnglishStreaming_defaultsToFalse() {
+        XCTAssertFalse(settings.liveCaptionsEnglishStreaming)
+    }
+
+    func test_liveCaptionsEnglishStreaming_persistsToUserDefaults() {
+        settings.liveCaptionsEnglishStreaming = true
+        XCTAssertTrue(defaults.bool(forKey: "liveCaptionsEnglishStreaming"))
     }
 
     // MARK: - Clamping

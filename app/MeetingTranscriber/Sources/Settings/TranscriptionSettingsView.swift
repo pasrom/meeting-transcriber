@@ -78,23 +78,48 @@ struct TranscriptionSettingsView: View {
             .accessibilityIdentifier("transcriptionSection")
             .recordOnlyDisabled(settings.recordOnly)
 
-            Section("Live transcription (PoC)") {
-                Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
-                    .disabled(!settings.transcriptionEngine.supportsLiveTranscription)
-
-                Text(liveTranscriptionFootnote)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .accessibilityIdentifier("liveTranscriptionSection")
-            .recordOnlyDisabled(settings.recordOnly)
+            liveTranscriptionSection
         }
         .formStyle(.grouped)
     }
 
+    /// Hoisted out of `body` into a named property so the section's nesting
+    /// doesn't grow the `body` type-check past the 300 ms hard limit on CI.
+    private var liveTranscriptionSection: some View {
+        Section("Live transcription (PoC)") {
+            // The toggle stays enabled even for engines without the
+            // re-transcribe hook, because the English low-latency sub-toggle
+            // below routes captions through an engine-independent streaming
+            // session — so a Qwen3 user can still reach that path.
+            Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
+
+            Toggle("English low-latency captions", isOn: $settings.liveCaptionsEnglishStreaming)
+                .disabled(!settings.liveTranscriptionEnabled)
+
+            Text(englishStreamingFootnote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(liveTranscriptionFootnote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("liveTranscriptionSection")
+        .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    private var englishStreamingFootnote: String {
+        "English-only model; other languages keep the standard caption engine."
+    }
+
     private var liveTranscriptionFootnote: String {
-        if settings.transcriptionEngine.supportsLiveTranscription {
+        // The "unsupported" message applies only when neither caption path is
+        // available. With the English low-latency opt-in on, captions work even
+        // for an engine without the re-transcribe hook (e.g. Qwen3), so show the
+        // normal overlay explainer instead of contradicting the working state.
+        if settings.transcriptionEngine.supportsLiveTranscription || settings.liveCaptionsEnglishStreaming {
             "Captions appear in a click-through overlay at the bottom of "
                 + "the screen during recording. Hold ⌥ (Option) to drag "
                 + "it; the position is remembered across sessions. "
@@ -106,7 +131,7 @@ struct TranscriptionSettingsView: View {
                 + "switching mid-recording is not supported."
         } else {
             "This engine does not yet support live streaming. "
-                + "Use WhisperKit or Parakeet."
+                + "Use WhisperKit or Parakeet, or enable English low-latency captions above."
         }
     }
 
