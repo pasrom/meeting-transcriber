@@ -95,6 +95,42 @@ enum PersistentDiagnosticLog {
         return name.range(of: pattern, options: .regularExpression) != nil
     }
 
+    /// The `log stream` predicate that uniquely identifies a streamer we spawned.
+    /// Shared by the `Streamer` argument list and the orphan reaper so the two
+    /// can never drift — the reaper kills only processes whose command line
+    /// carries this exact marker, never an unrelated `log stream` a user started.
+    static let streamPredicate = "subsystem CONTAINS 'com.meetingtranscriber'"
+
+    /// Path of the `log` binary we spawn. Reused by the reaper's command match.
+    static let logExecutablePath = "/usr/bin/log"
+
+    /// PURE: from a snapshot of the process table, pick the pids of orphaned
+    /// `log stream` subprocesses WE spawned that survived a crash/SIGKILL and
+    /// were re-parented to launchd (PID 1). Matching is deliberately narrow:
+    ///
+    /// - the command must invoke our exact `log` executable, AND
+    /// - the command must carry our `streamPredicate` marker (so a user's own
+    ///   unrelated `log stream` is never touched), AND
+    /// - the parent must be PID 1 (re-parented orphan — a live streamer of a
+    ///   *running* sibling instance still has that instance as its parent and
+    ///   is left alone), AND
+    /// - the pid is not our own (defence-in-depth; our process isn't `log`
+    ///   anyway, but never reap self).
+    ///
+    /// `command` is the full argv string as `ps -axo command=` renders it.
+    static func orphanPids(
+        processTable: [(pid: Int32, ppid: Int32, command: String)],
+        ownPid: Int32,
+    ) -> [Int32] {
+        processTable.compactMap { entry in
+            guard entry.ppid == 1 else { return nil }
+            guard entry.pid != ownPid else { return nil }
+            guard entry.command.contains(logExecutablePath) else { return nil }
+            guard entry.command.contains(streamPredicate) else { return nil }
+            return entry.pid
+        }
+    }
+
     #if !APPSTORE
         /// Convenience: open today's log file as the stream target. Returns the
         /// running streamer so the caller can stop it on app shutdown.
@@ -103,6 +139,68 @@ enum PersistentDiagnosticLog {
             let streamer = try Streamer()
             try streamer.start()
             return streamer
+        }
+
+        /// Effect shell for the orphan reaper. Snapshots the process table via
+        /// `ps`, runs the pure `orphanPids` filter, and SIGTERMs each match.
+        ///
+        /// Why this exists: a crash / SIGKILL of the app leaves the `log stream`
+        /// subprocess alive — `stop()`/`deinit` never run — and launchd re-parents
+        /// it to PID 1. Successive launches stack up these orphans (one machine
+        /// had five, the oldest days old), each holding a unified-log subscription.
+        /// Call this at launch BEFORE starting a fresh streamer so the count can't
+        /// grow without bound.
+        ///
+        /// SIGTERM is enough: `log stream` exits cleanly on it. No escalation —
+        /// a process wedged hard enough to ignore TERM is rare and not worth the
+        /// complexity here. Best-effort: a `ps` failure is logged and ignored.
+        static func reapOrphans() {
+            let victims = orphanPids(processTable: snapshotProcessTable(), ownPid: getpid())
+            for pid in victims {
+                logger.info("reaping orphaned log stream pid=\(pid, privacy: .public)")
+                kill(pid, SIGTERM)
+            }
+        }
+
+        /// Run `ps -axo pid=,ppid=,command=` and parse it into the tuple shape
+        /// `orphanPids` consumes. Returns an empty table if `ps` can't be run or
+        /// read — best-effort, so a `ps` failure simply reaps nothing. The `=`
+        /// suffixes suppress the header row; the first two fields are numeric,
+        /// the remainder (which can contain spaces) is the command.
+        private static func snapshotProcessTable() -> [(pid: Int32, ppid: Int32, command: String)] {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.arguments = ["-axo", "pid=,ppid=,command="]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+            } catch {
+                logger.error("reap_orphans_ps_failed error=\(error.localizedDescription, privacy: .public)")
+                return []
+            }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard let text = String(data: data, encoding: .utf8) else { return [] }
+            return parseProcessTable(text)
+        }
+
+        /// PURE: parse `ps -axo pid=,ppid=,command=` output into tuples. Each line
+        /// is `<pid> <ppid> <command…>`; the command can contain spaces so only
+        /// the first two whitespace-delimited fields are split off. Malformed or
+        /// blank lines are skipped.
+        static func parseProcessTable(_ text: String) -> [(pid: Int32, ppid: Int32, command: String)] {
+            text.split(separator: "\n").compactMap { rawLine in
+                let line = rawLine.trimmingCharacters(in: .whitespaces)
+                guard !line.isEmpty else { return nil }
+                let parts = line.split(separator: " ", maxSplits: 2, omittingEmptySubsequences: true)
+                guard parts.count == 3,
+                      let pid = Int32(parts[0]),
+                      let ppid = Int32(parts[1])
+                else { return nil }
+                return (pid: pid, ppid: ppid, command: String(parts[2]))
+            }
         }
     #endif
 
@@ -190,10 +288,10 @@ enum PersistentDiagnosticLog {
                 logDirectory: URL = PersistentDiagnosticLog.logDirectory,
                 now: @escaping () -> Date = { Date() },
                 restartPolicy: RestartPolicy = .default,
-                logExecutable: URL = URL(fileURLWithPath: "/usr/bin/log"),
+                logExecutable: URL = URL(fileURLWithPath: PersistentDiagnosticLog.logExecutablePath),
                 logArguments: [String] = [
                     "stream",
-                    "--predicate", "subsystem CONTAINS 'com.meetingtranscriber'",
+                    "--predicate", PersistentDiagnosticLog.streamPredicate,
                     "--style", "syslog",
                     "--info",
                 ],
