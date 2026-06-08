@@ -92,6 +92,22 @@ final class ParakeetTokenGroupingTests: XCTestCase {
         XCTAssertEqual(segments[1].text, "next")
     }
 
+    func testGroupIntoSegmentsSoftCapKeepsUnbrokenRunInOneSegment() {
+        // 25 non-blank tokens, no whitespace between them, no terminal
+        // punctuation. There is no safe split point, so the soft cap keeps
+        // them in a single segment even though it exceeds maxTokensPerSegment.
+        // Documents that the cap is a target, not a hard invariant — the old
+        // hard cap would have split this into two segments at the 20th token.
+        let timings = (0 ..< 25).map { i in
+            timing("x", start: Double(i), end: Double(i) + 1)
+        }
+
+        let segments = ParakeetTokenGrouping.groupIntoSegments(timings)
+
+        XCTAssertEqual(segments.count, 1)
+        XCTAssertEqual(segments[0].text, String(repeating: "x", count: 25))
+    }
+
     func testGroupIntoSegmentsSkipsBlankTokensInsideGroup() {
         // Whitespace-only tokens must not count toward the 20-cap and must
         // not appear in the joined text. They're stripped before grouping.
