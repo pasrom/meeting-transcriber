@@ -1,7 +1,20 @@
 name: Auto-label PRs
 
+# Uses pull_request_target (not pull_request) so labeling also works on PRs
+# opened from forks. Under pull_request, a fork PR gets a read-only
+# GITHUB_TOKEN regardless of the permissions block below, so addLabels fails
+# with 403 "Resource not accessible by integration". pull_request_target runs
+# in the base-repo context with a token that honors the declared permissions.
+#
+# SAFETY: this is only safe because the job never checks out or executes the
+# PR's code. It reads the PR title from the event payload as data (via
+# context.payload, not a `${{ }}` interpolation) and applies a label from a
+# fixed allowlist. Do NOT add an `actions/checkout` of the PR head followed by
+# build/run steps here, and do NOT interpolate PR-controlled fields (title,
+# body, branch name) via `${{ }}` into a script/run block — either would expose
+# the writable token to untrusted fork input.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, edited]
 
 jobs:
