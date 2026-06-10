@@ -60,7 +60,7 @@ final class StreamingMonoResampler {
         }
 
         let ratio = outputFormat.sampleRate / Double(inputRate)
-        let outputCapacity = AVAudioFrameCount(Double(inputFrames) * ratio + 16)
+        let outputCapacity = resampleOutputCapacity(inputFrames: inputFrames, ratio: ratio)
         guard let outputBuffer = AVAudioPCMBuffer(
             pcmFormat: outputFormat, frameCapacity: outputCapacity,
         ) else { return [] }

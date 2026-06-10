@@ -47,6 +47,26 @@ final class HelpersTests: XCTestCase {
         XCTAssertEqual(speechSampleRate, 16000)
     }
 
+    // MARK: - resampleOutputCapacity
+
+    func testResampleOutputCapacityIncludesHeadroom() {
+        // 48 kHz → 16 kHz, 4096-frame input buffer: 4096 * (1/3) = 1365.33,
+        // which truncates to 1365. AVAudioConverter retains the fractional
+        // output sample each call; a floor()'d capacity strands it and the
+        // remainder accumulates into a growing backlog (→ TimelineAnchor
+        // injects silence to "catch up", drifting real audio later). The
+        // capacity must exceed the floor so the converter can flush per call.
+        let cap = resampleOutputCapacity(inputFrames: 4096, ratio: 16000.0 / 48000.0)
+        XCTAssertEqual(cap, 1365 + 16)
+        XCTAssertGreaterThan(cap, 1365, "no headroom → converter backlog → timeline drift")
+    }
+
+    func testResampleOutputCapacityIdentityRateKeepsHeadroom() {
+        // Same-rate path (ratio 1.0) still carries headroom — the converter
+        // can be primed/flushed without the capacity ever being the limiter.
+        XCTAssertEqual(resampleOutputCapacity(inputFrames: 1000, ratio: 1.0), 1016)
+    }
+
     // MARK: - writeAllToFileHandle
 
     func testWriteAllToFileHandleWritesAllBytes() throws {

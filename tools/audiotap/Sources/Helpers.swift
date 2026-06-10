@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -42,6 +43,22 @@ public func downmixToMono(_ samples: [Float], channels: Int) -> [Float] {
         mono[i] = sum * scale
     }
     return mono
+}
+
+/// Output-buffer frame capacity for a sample-rate conversion, with a fixed
+/// headroom margin. `AVAudioConverter` retains a fractional output sample on
+/// each `convert` call; sizing the output buffer to exactly `floor(inputFrames
+/// * ratio)` strands that remainder, and it accumulates into a growing backlog
+/// the converter can never flush — the written track then under-runs wall-clock
+/// and `TimelineAnchor` papers over the deficit by injecting silence mid-speech.
+/// The `headroom` lets the converter emit its retained samples every call so no
+/// backlog builds. Single source of truth for both the mic and app capture
+/// paths. Note `floor(x + headroom) == floor(x) + headroom` for integer
+/// headroom, so this matches a `* ratio + headroom`-then-truncate form exactly.
+func resampleOutputCapacity(
+    inputFrames: AVAudioFrameCount, ratio: Double, headroom: AVAudioFrameCount = 16,
+) -> AVAudioFrameCount {
+    AVAudioFrameCount(Double(inputFrames) * ratio) + headroom
 }
 
 /// Write all bytes to a file descriptor using POSIX write() — no Data copy, no Foundation overhead.
