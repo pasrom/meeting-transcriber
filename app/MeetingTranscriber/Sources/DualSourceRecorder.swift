@@ -410,7 +410,6 @@ class DualSourceRecorder: RecordingProvider {
 
         if appRawBytes > 0 {
             let raw = try Data(contentsOf: tempURL)
-            try? FileManager.default.removeItem(at: tempURL)
 
             let floatCount = raw.count / MemoryLayout<Float>.size
             var floats = [Float](repeating: 0, count: floatCount)
@@ -481,6 +480,13 @@ class DualSourceRecorder: RecordingProvider {
         }
 
         logger.info("Mix saved: \(mixPath.lastPathComponent)")
+
+        // The raw app temp is the canonical recovery source on the crash-
+        // recovery path. Drop it only now that a durable mix exists, so a
+        // failure anywhere above leaves it intact for the next recovery attempt.
+        if appRawBytes > 0 {
+            try? FileManager.default.removeItem(at: tempURL)
+        }
 
         return RecordingResult(
             mixPath: mixPath,

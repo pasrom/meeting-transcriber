@@ -434,6 +434,39 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
     }
 
+    /// Crash-recovery safety: the raw app `.tmp` is the only recoverable copy
+    /// on the recovery path. If buildRecording fails *after* reading it but
+    /// *before* a durable mix exists, it must leave the temp intact so the next
+    /// recovery attempt can retry — eagerly deleting it would destroy the
+    /// recording.
+    func testBuildRecordingPreservesAppTempWhenLaterStepThrows() throws {
+        let dir = try makeTempDirectory(prefix: "build_preserve")
+        let appTmp = dir.appendingPathComponent("20260311_160000_app_raw.tmp")
+        try writeRawFloat32([Float](repeating: 0.3, count: 48000 * 2), to: appTmp)
+        // A mic file that exists and is larger than a WAV header but is not
+        // decodable audio: buildRecording clears the size guard, then
+        // AVAudioFile(forReading:) throws — failing the build after the temp
+        // has been read but before any durable mix is written.
+        let badMic = dir.appendingPathComponent("20260311_160000_mic.wav")
+        try Data(repeating: 0xFF, count: 128).write(to: badMic)
+
+        XCTAssertThrowsError(
+            try DualSourceRecorder.buildRecording(
+                from: AudioCaptureResult(
+                    appAudioFileURL: appTmp, micAudioFileURL: badMic,
+                    actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
+                ),
+                recordingsDir: dir, timestamp: "20260311_160000", recordingStart: 1000,
+                format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+            ),
+        )
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: appTmp.path),
+            "app .tmp must survive a failed buildRecording so crash-recovery can retry",
+        )
+    }
+
     /// Captured channel count below the requested one (mono USB device) still
     /// produces a valid track — downmix is a passthrough for mono input.
     func testBuildRecordingToleratesChannelCountMismatch() throws {
