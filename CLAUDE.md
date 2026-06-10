@@ -8,7 +8,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
   Package.swift            # SPM manifest (WhisperKit + FluidAudio + AudioTapLib runtime deps; ViewInspector + SnapshotTesting test deps)
   Sources/
     MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
-    AppState.swift         # @Observable @MainActor ViewModel (business state, badge logic, pipeline wiring)
+    AppState.swift         # @Observable @MainActor composition root: wires the concern controllers (engines/watching/pipeline/permissions/channelHealth/liveTranscription/rpc) + exposes derived UI props (badge, status label)
     AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
     EngineController.swift   # @Observable @MainActor engine selection + model lifecycle controller (language/vocabulary sync, preload)
     AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
@@ -147,12 +147,28 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     TapFormatResolver.swift          # Derives mic tap format from hardware format (prevents installTap channel mismatch)
     TimelineAnchor.swift             # Wall-clock timeline anchor across device-change restarts (aligns track to real time)
   Tests/
+    AppAudioCaptureDebugLoggingTests.swift
+    AppAudioCaptureLiveSinkTests.swift
+    AppAudioCapturePIDTranslationTests.swift
+    AppAudioCaptureResamplingTests.swift
+    AppAudioCaptureStatusTests.swift
     AudioCaptureResultTests.swift
+    CExceptionCatcherTests.swift
+    CurrentLevelTests.swift
+    DebugRMSReporterTests.swift
     HelpersTests.swift
+    LevelPublisherTests.swift
+    LiveAudioBufferTests.swift
     MicCaptureErrorTests.swift
+    MicCaptureHandlerTimelineTests.swift
     MicRestartPolicyTests.swift
+    MicRestartRetryPolicyTests.swift
     OutputDeviceChangeCoordinatorTests.swift
+    ProcessTreeEnumeratorTests.swift
     SampleRateQueryTests.swift
+    StreamingMonoResamplerTests.swift
+    TapFormatResolverTests.swift
+    TimelineAnchorTests.swift
 tools/meeting-simulator/   # Meeting simulator tool for testing
   Package.swift
   Sources/main.swift
@@ -405,7 +421,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Record-only mode:**
 - When `AppSettings.recordOnly` is true, `WatchLoop.enqueueRecording()` moves the dual-source WAVs into `<settings.effectiveOutputDir>/recordings/` and writes a `<basename>_meta.json` `RecordingSidecar` next to them, skipping the entire post-processing pipeline (VAD, transcription, diarization, protocol generation). Both call sites — auto-detected meetings (`handleMeeting`) and manual recordings (`stopManualRecording`) — flow through the same branch. The destination is wrapped in `startAccessingSecurityScopedResource()` to honour user-picked Output Folder bookmarks (relevant for the App Store sandboxed build).
-- Sidecar JSON contains: `version` (currently `RecordingSidecar.currentVersion = 1`), `title`, `appName`, `startedAt`/`stoppedAt` (ISO 8601, reconstructed from `recordingStart` uptime), `participants`, `micDelaySeconds`, `files` (basenames only). Optional `app` / `mic` filenames are omitted when nil. Suffix constants live as static lets on the relevant types: `RecordingSidecar.filenameSuffix = "_meta.json"`, `DualSourceRecorder.mixFilenameSuffix = "_mix.wav"`.
+- Sidecar JSON contains: `version` (currently `RecordingSidecar.currentVersion = 1`), `title`, `appName`, `startedAt`/`stoppedAt` (ISO 8601, reconstructed from `recordingStart` uptime), `participants`, `micDelaySeconds`, `files` (basenames only). Optional `app` / `mic` filenames are omitted when nil. Suffix constants live as static lets: the audio-file suffixes on `RecordingFileSuffix` (`mix = "_mix.wav"`, `app`, `mic`, and the raw-temp `appRaw`/`legacyAppRaw`), and the sidecar suffix on `RecordingSidecar.filenameSuffix = "_meta.json"`.
 - Intended for fleet topologies where macOS clients capture and a separate machine (e.g. Linux GPU host) processes the audio via Syncthing or similar.
 - Menu bar: the small red dot is rendered as a **persistent overlay** (`MenuBarIcon.image(..., recordOnlyOverlay:)`) on top of *whatever* primary badge `BadgeKind.compute(...)` would otherwise show — idle, recording, transcribing, etc. — so the mode is always visible. Permission overlay (red exclamation) takes precedence when both apply, since a permission problem actually breaks recording. Settings tabs dim Transcription / Protocol / VAD / Diarization sections via `View.recordOnlyDisabled(_:)` and show a banner in the General tab pointing at the active output dir.
 - Sidecar write failures notify the user via `NotificationManager` (injected as `any AppNotifying` on `WatchLoop`) since record-only does not transition state to `.error`.

@@ -27,7 +27,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
                          │                  ┌──────────────────────────┐
                          │                  │  DebugRPCServer          │
                          │                  │  127.0.0.1:9876          │
-                         │                  │  /state /healthz         │
+                         │                  │  /state /healthz /metrics│
                          │                  │  /screenshot             │
                          │                  │  /action/openSettings    │
                          │                  │  /action/closeSettings   │
@@ -60,7 +60,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │      └─ TranscribingEngine: WhisperKit | Parakeet | Qwen3      │
         │         (dual-source: each track separately, then merge)       │
         │ 4. (opt) Diarize via FluidDiarizer                             │
-        │      └─ Mode: .offlineDiarizer | .sortformer                   │
+        │      └─ Mode: .offline | .sortformer                           │
         │      └─ Dual-source: app + mic diarized separately,            │
         │         IDs prefixed R_ (remote) / M_ (mic), then merged       │
         │ 5. SpeakerMatcher: cosine match against speakers.json          │
@@ -85,7 +85,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | File | Role |
 |------|------|
 | `MeetingTranscriberApp.swift` | `@main` UI shell — SwiftUI scenes, windows, NSOpenPanel, NSWorkspace. Observes `.showSettings` / `.closeSettings` / `.showSpeakerNaming` notifications for RPC- and pipeline-driven scene control |
-| `AppState.swift` | `@Observable @MainActor` ViewModel — business state, badge logic, pipeline wiring |
+| `AppState.swift` | `@Observable @MainActor` composition root — wires the concern controllers (`engines`, `watching`, `pipeline`, `permissions`, `channelHealth`, `liveTranscription`, `rpcController`) and exposes the derived UI state (badge, status label) rather than owning it |
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `SettingsView.swift` | Settings window — `TabView` shell hosting six topic-grouped sub-views in `Sources/Settings/` |
 | `Settings/GeneralSettingsView.swift` | Apps to Watch · Detection (Poll Interval, Grace Period) · Updates |
@@ -94,6 +94,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats |
 | `Settings/OutputSettingsView.swift` | LLM provider · protocol language · output folder · custom prompt |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics · About |
+| `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
@@ -306,8 +307,7 @@ AudioTapLib (CATapDescription)
 ### Processing (DualSourceRecorder.stop())
 
 ```
-Raw float32 (mono or stereo, actual channel count from AudioCaptureResult) → mono
-  → Resample to 16kHz
+App temp: already 16kHz mono float32 (resampled in-IOProc at capture time)
   → Save app.wav (16kHz mono)
   → Load mic.wav (already 16kHz from MicCaptureHandler)
   → Apply mute mask (zero mic during muted periods)
@@ -380,7 +380,7 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 On-device speaker diarization using FluidAudio (CoreML/ANE). No HuggingFace token or Python subprocess needed. Models downloaded automatically on first run (~50 MB).
 
 Two modes selected via `AppSettings.diarizerMode`:
-- **`.offlineDiarizer`** (default) — `OfflineDiarizerManager`, standard speaker segmentation
+- **`.offline`** (default) — `OfflineDiarizerManager`, standard speaker segmentation
 - **`.sortformer`** — `SortformerDiarizer`, overlap-aware diarization (handles simultaneous speech); speaker embeddings extracted post-hoc via `FluidDiarizer+SortformerEmbeddings` using overlap-excluded WeSpeaker masks
 
 Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `DiarizationResult` with segments, speaking times, and speaker embeddings.
@@ -498,7 +498,7 @@ AppSettings (UserDefaults)
 | ProtocolGenerator | `claudeBin` parameter |
 | AppNotifying | `notifier` parameter in `AppState.init` (`SilentNotifier` default, `RecordingNotifier` in tests) |
 | BadgeKind.compute | Pure static function — call directly with any input combination, no WatchLoop needed |
-| DebugRPCServer | Out-of-process inspection via HTTP. Endpoints: `GET /state /healthz /screenshot`, `POST /action/openSettings /action/closeSettings`. `#if !APPSTORE` + env-gated. `boundPort` exposes OS-assigned port for in-process integration tests. `tools/mt-cli/` is the matching CLI. `scripts/test_rpc.sh` is a live smoketest (build + launch + drive + assert). |
+| DebugRPCServer | Out-of-process inspection via HTTP. Endpoints: `GET /state /healthz /metrics /screenshot`, `POST /action/openSettings /action/closeSettings`. `#if !APPSTORE` + env-gated. `boundPort` exposes OS-assigned port for in-process integration tests. `tools/mt-cli/` is the matching CLI. `scripts/test_rpc.sh` is a live smoketest (build + launch + drive + assert). |
 
 ---
 
@@ -568,5 +568,5 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference
-10. **Embedded debug RPC** — In-process HTTP server (`DebugRPCServer`) exposes state + screenshot + scene actions for shell-driven inspection and integration tests. Off by default, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`, excluded from App Store builds via `#if !APPSTORE`. Action endpoints route through existing `Notification.Name` observers in `MeetingTranscriberApp`, so RPC-driven flows mirror real menu-bar paths.
+10. **Embedded debug RPC** — In-process HTTP server (`DebugRPCServer`) exposes state, resource metrics (`GET /metrics`), screenshot, and scene actions for shell-driven inspection and integration tests. Off by default, opt-in via the `Settings → Advanced → Debug RPC Server` toggle or the `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var, excluded from App Store builds via `#if !APPSTORE`. Action endpoints route through existing `Notification.Name` observers in `MeetingTranscriberApp`, so RPC-driven flows mirror real menu-bar paths.
 11. **No expensive work in SwiftUI hot paths** — view bodies, computed properties read by the body, and per-render closures must not call disk I/O, JSON decode, factory constructors, regex compilation, or other non-trivial work. SwiftUI re-renders on every `@State`/`@Observable` change and fans out aggressively, so what looks cheap once becomes a CPU pin fast. Push heavy values up: store as `@State`, inject as a stored property, or surface via an `@Observable` model. Caches that mirror the underlying source (e.g. `PipelineQueue.knownSpeakerNames` mirroring the speakers DB) must wire invalidation from every mutation site in the same PR — see issue #155 → PR #158 → PR #159 for the cautionary tale.
