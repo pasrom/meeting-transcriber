@@ -21,8 +21,39 @@ struct MenuBarView: View {
         status?.state ?? .idle
     }
 
+    // The sections below are hoisted out of `body` into separate computed
+    // properties so each is type-checked independently. Inlined as one
+    // expression, the `body` getter crossed the 300 ms type-check budget that
+    // the analyze build enforces (-warn-long-expression-type-checking=300 with
+    // -warnings-as-errors), failing the build on slower CI hardware. The view
+    // order, dividers, and conditionals are unchanged.
     var body: some View {
-        // Status header
+        statusHeader
+        meetingInfo
+        errorInfo
+
+        Divider()
+
+        watchControls
+        processingQueue
+
+        Divider()
+
+        protocolActions
+        updateSection
+
+        Divider()
+
+        settingsButton
+
+        Divider()
+
+        quitButton
+    }
+
+    // MARK: - Body sections
+
+    private var statusHeader: some View {
         VStack(alignment: .leading, spacing: 2) {
             Label(state.label, systemImage: state.icon)
                 .font(.headline)
@@ -34,8 +65,9 @@ struct MenuBarView: View {
             }
         }
         .padding(.horizontal, 4)
+    }
 
-        // Meeting info
+    @ViewBuilder private var meetingInfo: some View {
         if let meeting = status?.meeting {
             Divider()
             VStack(alignment: .leading, spacing: 2) {
@@ -48,8 +80,9 @@ struct MenuBarView: View {
             }
             .padding(.horizontal, 4)
         }
+    }
 
-        // Error info
+    @ViewBuilder private var errorInfo: some View {
         if let error = status?.error, state == .error {
             Divider()
             Text(error)
@@ -57,10 +90,9 @@ struct MenuBarView: View {
                 .foregroundStyle(.red)
                 .padding(.horizontal, 4)
         }
+    }
 
-        Divider()
-
-        // Start/Stop Watching
+    @ViewBuilder private var watchControls: some View {
         Button {
             onStartStop()
         } label: {
@@ -103,8 +135,9 @@ struct MenuBarView: View {
             Label("Process Audio/Video Files...", systemImage: "doc.badge.plus")
         }
         .keyboardShortcut("p")
+    }
 
-        // Processing queue
+    @ViewBuilder private var processingQueue: some View {
         if !pipelineQueue.jobs.isEmpty {
             Divider()
             Label("Processing", systemImage: "gearshape.2.fill")
@@ -115,10 +148,9 @@ struct MenuBarView: View {
                 jobRow(job)
             }
         }
+    }
 
-        Divider()
-
-        // Open last protocol
+    @ViewBuilder private var protocolActions: some View {
         if let protocolPath = status?.protocolPath {
             Button {
                 onOpenLastProtocol()
@@ -134,7 +166,9 @@ struct MenuBarView: View {
         } label: {
             Label("Open Protocols Folder", systemImage: "folder")
         }
+    }
 
+    @ViewBuilder private var updateSection: some View {
         if let update = updateChecker?.availableUpdate {
             Divider()
             Button {
@@ -146,18 +180,18 @@ struct MenuBarView: View {
                 )
             }
         }
+    }
 
-        Divider()
-
+    private var settingsButton: some View {
         Button {
             onOpenSettings()
         } label: {
             Label("Settings...", systemImage: "gear")
         }
         .keyboardShortcut(",")
+    }
 
-        Divider()
-
+    private var quitButton: some View {
         Button {
             onQuit()
         } label: {
