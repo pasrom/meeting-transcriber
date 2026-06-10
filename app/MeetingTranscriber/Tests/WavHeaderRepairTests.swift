@@ -120,10 +120,33 @@ final class WavHeaderRepairTests: XCTestCase {
 
         XCTAssertEqual(readableFrames(brokenURL), 0, "broken WAV starts unreadable")
 
-        let count = WavHeaderRepair.repairUnfinalized(in: dir)
+        // minAge: 0 disables the live-file guard so this freshly-written
+        // fixture exercises the repair logic itself (the guard has its own test).
+        let count = WavHeaderRepair.repairUnfinalized(in: dir, minAge: 0)
 
         XCTAssertEqual(count, 1, "only the one unfinalized WAV should be repaired")
         XCTAssertGreaterThan(readableFrames(brokenURL), 0, "the crashed WAV is readable after the dir pass")
         XCTAssertEqual(try Data(contentsOf: validURL), validBefore, "a finalized WAV must be left unchanged")
+    }
+
+    func testRepairUnfinalizedSkipsRecentlyModifiedWavs() throws {
+        // A WAV still being written by a live recording legitimately has a zero
+        // data size. The launch scan must not "repair" it: stamping a partial
+        // size now erases the 0-size signature, so a later crash of the same
+        // file could never be recovered (the ==0 guard would reject it).
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wavrepairfresh-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let liveURL = dir.appendingPathComponent("inprogress_mic.wav")
+        _ = try writeFinalizedWav(seconds: 0.4, at: liveURL)
+        try corruptHeader(at: liveURL) // unfinalized + just written → recent mtime
+
+        // Default 30 s guard: a file modified moments ago is treated as live.
+        let count = WavHeaderRepair.repairUnfinalized(in: dir)
+
+        XCTAssertEqual(count, 0, "a recently-modified (possibly live) WAV must be skipped")
+        XCTAssertEqual(readableFrames(liveURL), 0, "the live WAV's header must be left untouched")
     }
 }
