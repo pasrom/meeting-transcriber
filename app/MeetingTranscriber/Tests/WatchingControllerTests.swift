@@ -127,6 +127,30 @@ final class WatchingControllerTests: XCTestCase {
         XCTAssertNil(controller.watchLoop, "second toggle should stop and clear the loop")
     }
 
+    func testReentrantToggleWhileStartingStartsOnlyOneLoop() async {
+        // The start path is async: it awaits mic access before it assigns
+        // `watchLoop`. A second toggle fired in that window sees `watchLoop ==
+        // nil` and, without a guard, launches a *second* start — duplicating the
+        // queue rebuild and leaving an orphan WatchLoop running. The mic-access
+        // gate counts starts: a re-entrant toggle must not trip it twice.
+        var startAttempts = 0
+        // Not trailing-closure: a trailing closure binds to the last param
+        // (`makeDetector`), not `ensureMicAccess`.
+        // swiftlint:disable:next trailing_closure
+        let controller = makeController(ensureMicAccess: {
+            startAttempts += 1
+            return true
+        })
+        addTeardownBlock { await controller.watchLoop?.stop() }
+
+        // Two toggles back-to-back, before the first start can finish.
+        controller.toggleWatching()
+        controller.toggleWatching()
+
+        await waitFor(controller.watchLoop != nil)
+        XCTAssertEqual(startAttempts, 1, "a re-entrant toggle during start must not launch a second WatchLoop")
+    }
+
     func testToggleWatchingNoOpWhileManualRecording() async throws {
         let controller = makeController()
         let (loop, _) = makeTestWatchLoop()

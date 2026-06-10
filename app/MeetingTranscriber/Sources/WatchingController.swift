@@ -29,6 +29,12 @@ import Observation
 final class WatchingController {
     var watchLoop: WatchLoop?
 
+    /// Non-nil while `toggleWatching`'s async start is in flight — it awaits mic
+    /// access before `watchLoop` is assigned, so without this a second toggle in
+    /// that window would launch a duplicate start. Cleared when the start task
+    /// finishes.
+    private var startTask: Task<Void, Never>?
+
     private let settings: AppSettings
     private let notifier: any AppNotifying
     private let pipeline: PipelineController
@@ -92,7 +98,13 @@ final class WatchingController {
             loop.stop()
             watchLoop = nil
         } else {
-            Task { @MainActor in
+            // The start is async — mic access is awaited before `watchLoop` is
+            // assigned — so a second toggle in that window would otherwise launch
+            // a duplicate WatchLoop and rebuild the queue twice. Ignore it while
+            // a start is already in flight.
+            guard startTask == nil else { return }
+            startTask = Task { @MainActor in
+                defer { startTask = nil }
                 _ = await ensureMicAccess()
 
                 syncEngines?()
