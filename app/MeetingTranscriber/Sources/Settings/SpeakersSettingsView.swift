@@ -218,7 +218,7 @@ private struct TuningKnob {
         step: 0.05,
         format: "%.2f",
         suffix: "",
-        help: "Euclidean distance threshold for clustering speaker embeddings. Lower values split speakers more aggressively.",
+        help: "Cosine-similarity threshold for merging speaker embeddings. Higher values split speakers more aggressively (more speakers detected).",
     )
 
     static let warmStartFa = Self(
