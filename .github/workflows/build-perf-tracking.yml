@@ -30,4 +30,8 @@ jobs:
           ALERT_PCT: ${{ inputs.alert_pct || '20' }}
           WORKFLOW: ci.yml
           BRANCH: main
-        run: bash scripts/build_perf_report.sh | tee -a "$GITHUB_STEP_SUMMARY"
+        # pipefail: without it `| tee` masks the report script's exit code, so a
+        # detected slowdown (the script's exit 1) would never fail the step.
+        run: |
+          set -o pipefail
+          bash scripts/build_perf_report.sh | tee -a "$GITHUB_STEP_SUMMARY"
