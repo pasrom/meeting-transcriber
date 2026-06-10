@@ -107,8 +107,11 @@ jobs:
       contents: read
       actions: write
     strategy:
-      # Both Homebrew and AppStore variants must pass; one failing leg
-      # shouldn't kill the other's diagnostic output.
+      # Both Homebrew and AppStore variants must pass. fail-fast: false NOT to
+      # keep the sibling running on failure — the `Cancel run on failure` step
+      # below cancels the whole run on any failure — but so the failing leg runs
+      # that step and names itself the culprit in the run summary, instead of
+      # being silently auto-cancelled by the matrix before it can.
       fail-fast: false
       matrix:
         variant: [homebrew, appstore]
