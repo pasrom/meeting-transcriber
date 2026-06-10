@@ -10,10 +10,12 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
     AppState.swift         # @Observable @MainActor ViewModel (business state, badge logic, pipeline wiring)
     AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
+    EngineController.swift   # @Observable @MainActor engine selection + model lifecycle controller (language/vocabulary sync, preload)
     AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
     MenuBarView.swift      # Menu bar dropdown UI
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
     ChannelHealthMonitor.swift  # Pure state machine for per-channel asymmetric silence detection (mic vs app audio)
+    ChannelHealthController.swift  # @Observable controller polling channel levels and driving ChannelHealthMonitor
     SettingsView.swift     # Settings window (TabView shell hosting six sub-views in Settings/)
     Settings/
       GeneralSettingsView.swift  # Apps to Watch · Detection · Updates
@@ -32,6 +34,10 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     LiveCaptionsState.swift # @Observable live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types
     LiveCaptionsOverlay.swift # SwiftUI caption-bar content (recent finals + per-channel hypotheses) hosted in LiveCaptionsWindow
     LiveCaptionsWindowController.swift # Borderless click-through NSPanel hosting the caption overlay (⌥-drag to reposition; origin persisted)
+    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming)
+    LiveCaptionsGate.swift   # Pure decision logic for live captions routing (which pipeline per channel, shared by AppState + controller)
+    EouStreamingCaptionSession.swift # EOU streaming caption session (FluidAudio end-of-utterance ASR, UtteranceRingBuffer-backed)
+    UtteranceRingBuffer.swift # Rolling 16 kHz sample buffer addressable by absolute timestamp (feeds EOU streaming)
     PairedImportPanelDelegate.swift  # NSOpenPanel delegate + accessory view for paired dual-source file import
     PairedRecordingResolver.swift    # Groups recording URLs into dual-source groups for reimport
     AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
@@ -62,16 +68,20 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PipelineJob.swift      # Pipeline job model
     PipelineSnapshot.swift  # Pure I/O helpers for persisting pipeline queue jobs to disk (atomic rename)
     SnapshotWriterActor.swift  # Actor isolating pipeline queue snapshot writes (prevents main-actor stalls)
+    PipelineController.swift  # @Observable controller owning PipelineQueue lifecycle (wired by AppState)
     LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
+    LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
     ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
     ClaudeCLIProtocolGenerator.swift # Claude CLI subprocess protocol generation (#if !APPSTORE)
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     WatchLoopEndPolicy.swift  # Pure decision logic for WatchLoop.waitForMeetingEnd (grace-period / max-duration)
     WatchLoopState.swift   # Value-type snapshot of WatchLoop's observable fields (for tests and RPC)
+    WatchingController.swift  # @Observable controller owning WatchLoop lifecycle (wired by AppState)
     ManualRecordingMonitorPolicy.swift  # Pure decision logic for manual recording stop conditions (process-died vs max-duration)
     SilentRecordingMonitor.swift  # Pure state machine detecting fully-silent recordings (both channels below threshold)
     DualSourceRecorder.swift  # App audio (AudioTapLib) + mic recording (captures startTime in start())
+    WavHeaderRepair.swift     # Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix)
     MeetingDetecting.swift # MeetingDetecting protocol + DetectedMeeting model
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
     FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
@@ -80,6 +90,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     SampleRateDriftDetector.swift # Watches actual vs declared CATap sample rate (catches USB hot-plug + HFP↔A2DP renegotiation drift)
     MicRecorder.swift      # Microphone recording via AVAudioEngine
     PermissionHealthCheck.swift # Permission health check (TCC verdict + live probe → PermissionStatus)
+    PermissionsController.swift # @Observable controller for permission health checks (wired by AppState)
     PermissionRow.swift    # Permission status row UI component
     Permissions.swift      # Permission checks (mic, screen recording)
     ParticipantReader.swift # Reads meeting participants via accessibility
@@ -87,6 +98,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
     UpdateChecker.swift    # GitHub release update checker
     Bundle+AppVersion.swift # Bundle extension: appVersion + gitCommitHash from Info.plist
+    FileManager+OwnerOnly.swift # FileManager extension: owner-only file permission constant (rw-------, single source of truth)
+    SingleFlight.swift        # Single-flight async deduplication coordinator (concurrent callers await one shared run)
     DiagnosticExporter.swift # Reads log entries → shareable .log file (Settings → Advanced → Export Diagnostics)
     PersistentDiagnosticLog.swift # Persistent log stream subprocess with sliding-window restart policy
     String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
@@ -96,6 +109,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     HTTPResponse.swift     # HTTP/1.1 response serialization for DebugRPCServer (line-cap split)
     RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
     RPCResourceMetrics.swift # Cumulative CPU/RAM/instructions self-report via proc_pid_rusage (#if !APPSTORE, served at GET /metrics)
+    RPCServerController.swift  # @Observable controller owning DebugRPCServer lifecycle (#if !APPSTORE, wired by AppState)
     Assets.xcassets        # App icon assets
     Info.plist             # Bundle metadata
   Entitlements/
@@ -122,6 +136,16 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     OutputDeviceChangeCoordinator.swift # State machine for output device change + tap restart flow
     ProcessTreeEnumerator.swift  # Enumerates all PIDs under an .app bundle (Electron/Teams child-process support)
     SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
+    AVAudioNode+SafeInstallTap.swift  # Safe installTap wrapper catching NSException via CExceptionCatcher (issue #379)
+    AppAudioCapture+Resampling.swift  # Capture-time resampling for CATap buffers (line-cap split)
+    AppAudioCapture+TapError.swift    # Tap-creation error mapping for AppAudioCapture (line-cap split)
+    CExceptionCatcher/               # Obj-C module catching AVFoundation NSException from installTapOnBus
+    DebugTapFault.swift              # Fault-injection configuration for mic device-change E2E (issue #379)
+    MicCaptureHandler+Timeline.swift  # Timeline tracking for MicCaptureHandler across device-change restarts
+    MicRestartRetryPolicy.swift      # Retry/backoff policy for failed mic engine restarts
+    StreamingMonoResampler.swift     # Streaming mono resampler for live 16 kHz audio path
+    TapFormatResolver.swift          # Derives mic tap format from hardware format (prevents installTap channel mismatch)
+    TimelineAnchor.swift             # Wall-clock timeline anchor across device-change restarts (aligns track to real time)
   Tests/
     AudioCaptureResultTests.swift
     HelpersTests.swift
@@ -162,6 +186,9 @@ scripts/
   keychain-prepend.sh       # Idempotent keychain search-list prepend (used by setup-self-hosted-runner.sh)
   generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
   assert-red-pixels.swift   # Visual regression assertion for menu-bar red-tint indicator (counts red pixels in PNG)
+  bless_quality_baseline.sh  # Project quality results into slim baseline JSON for CI regression gate
+  generate_social_preview.py  # Generate GitHub social preview card (docs/social-preview.png)
+  generate_test_audio_en.sh  # Generate English 2-speaker test WAV fixture (two_speakers_en.wav, requires say + sox)
   lib/e2e-helpers.sh        # Shared helpers sourced by e2e-app.sh, e2e-channel-health.sh, e2e-silent-recording.sh
   tests/
     test_build_release_signing.sh  # Regression test for build_release.sh codesign-identity detection
@@ -178,6 +205,9 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
   quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
+  e2e-crash-recovery.yml    # E2E — crash recovery: SIGKILL mid-recording + verify pipeline recovers via WAV header repair
+  e2e-mic-device-change.yml # E2E — mic device-change NSException survival (issue #379, fault-injection build)
+  pages.yml                 # Deploy landing page to GitHub Pages (site/ → GitHub Pages, main push + dispatch)
 docs/
   architecture-macos.md        # High-level architecture quick-reference
   menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol, permission, record-only, channel-silent-app, channel-silent-mic)
