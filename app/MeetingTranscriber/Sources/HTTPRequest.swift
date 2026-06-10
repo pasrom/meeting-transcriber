@@ -38,6 +38,10 @@
             }
 
             let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
+            // Reject a negative Content-Length before it reaches the body range:
+            // `bodyStart ..< bodyStart + contentLength` would otherwise trap on
+            // `lowerBound > upperBound`, aborting the process pre-auth.
+            guard contentLength >= 0 else { return nil }
             let bodyStart = separatorRange.upperBound
             let availableBody = data.count - bodyStart
             guard availableBody >= contentLength else { return nil }
