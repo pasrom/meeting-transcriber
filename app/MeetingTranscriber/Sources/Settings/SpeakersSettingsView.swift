@@ -106,6 +106,12 @@ struct SpeakersSettingsView: View {
                     .font(.caption)
                 }
                 expectedSpeakersRow
+                Label(
+                    "Auto detects the count; a fixed value forces exactly that many speakers (and over-splits a smaller meeting).",
+                    systemImage: "info.circle",
+                )
+                .foregroundStyle(.secondary)
+                .font(.caption)
                 if settings.diarizerMode == .offline {
                     experimentalTuningDisclosure
                 }
