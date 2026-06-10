@@ -62,14 +62,25 @@ enum WavHeaderRepair {
     /// Scans `dir` (non-recursively) for `*.wav` files and repairs any with an
     /// unfinalized header. Returns the number actually repaired. Called at
     /// launch to rescue recordings whose writer was killed mid-stream (#379).
+    ///
+    /// `minAge` skips a WAV still being written by an in-progress recording
+    /// (recent mtime). A live track legitimately has a zero data size until it
+    /// closes; stamping a partial size now would erase that 0-size signature,
+    /// so a later crash of the same file could never be recovered (the `==0`
+    /// guard in `repairIfNeeded` would reject it). The launch queue-build Task
+    /// can fire right as a watch-started recording begins, so the window is
+    /// real. Same guard as `recoverCrashedRecordings` / `cleanupTempFiles`.
     @discardableResult
-    static func repairUnfinalized(in dir: URL) -> Int {
+    static func repairUnfinalized(in dir: URL, minAge: TimeInterval = 30) -> Int {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil,
         ) else { return 0 }
+        let cutoff = Date().addingTimeInterval(-minAge)
         var repaired = 0
         for url in entries where url.pathExtension.lowercased() == "wav" {
+            if let mtime = (try? fm.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,
+               mtime > cutoff { continue }
             if (try? repairIfNeeded(at: url)) == true { repaired += 1 }
         }
         return repaired
