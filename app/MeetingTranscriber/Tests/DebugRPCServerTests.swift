@@ -47,6 +47,15 @@
             XCTAssertNil(HTTPRequest.parse(raw))
         }
 
+        func testParseNegativeContentLengthReturnsNil() {
+            // A negative Content-Length must be rejected outright. Without a
+            // guard, `bodyStart ..< bodyStart + contentLength` builds a Range
+            // whose lowerBound exceeds its upperBound and traps — aborting the
+            // process before the origin/token checks ever run.
+            let raw = Data("GET /healthz HTTP/1.1\r\nContent-Length: -1\r\n\r\n".utf8)
+            XCTAssertNil(HTTPRequest.parse(raw))
+        }
+
         // MARK: - HTTPResponse serialization
 
         func testResponseShape() {
