@@ -273,7 +273,12 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
     static func makeConfig(tuning: OfflineDiarizerTuning, numSpeakers: Int?) -> OfflineDiarizerConfig {
         var config = tuning.apply(to: OfflineDiarizerConfig())
         if let n = numSpeakers, n > 0 {
-            config = config.withSpeakers(min: 1, max: n)
+            // Force EXACTLY n, not merely cap at n. FluidAudio only re-clusters
+            // when the natural detection falls outside the speaker bounds, so a
+            // cap-only constraint left an under-detected count untouched — the
+            // "Expected Speakers" setting and the naming dialog's "Wrong count?"
+            // re-run were silent no-ops whenever the detector found ≤ n.
+            config = config.withSpeakers(exactly: n)
         }
         return config
     }

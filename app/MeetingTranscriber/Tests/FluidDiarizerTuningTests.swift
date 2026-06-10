@@ -86,12 +86,13 @@ final class FluidDiarizerTuningTests: XCTestCase {
         XCTAssertNil(config.clustering.maxSpeakers)
     }
 
-    func testMakeConfigAppliesSpeakerConstraints() {
+    func testMakeConfigForcesExactSpeakerCount() {
+        // Forced exact (numSpeakers), not a cap — see makeConfig for why.
         let config = FluidOfflineProcessor.makeConfig(tuning: .defaults, numSpeakers: 4)
 
-        XCTAssertEqual(config.clustering.minSpeakers, 1)
-        XCTAssertEqual(config.clustering.maxSpeakers, 4)
-        XCTAssertNil(config.clustering.numSpeakers)
+        XCTAssertEqual(config.clustering.numSpeakers, 4)
+        XCTAssertNil(config.clustering.minSpeakers)
+        XCTAssertNil(config.clustering.maxSpeakers)
     }
 
     func testMakeConfigIgnoresZeroOrNegativeSpeakerCount() {
