@@ -235,8 +235,8 @@ public class MicCaptureHandler: @unchecked Sendable {
             self.maybeReportDebugRMS()
             do {
                 if let converter = self.converter {
-                    let outputFrames = AVAudioFrameCount(
-                        Double(buffer.frameLength) * self.resampleRatio,
+                    let outputFrames = resampleOutputCapacity(
+                        inputFrames: buffer.frameLength, ratio: self.resampleRatio,
                     )
                     guard let outputBuffer = AVAudioPCMBuffer(
                         pcmFormat: converter.outputFormat,
