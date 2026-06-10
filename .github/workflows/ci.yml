@@ -82,6 +82,9 @@ jobs:
         run: brew install swiftlint
       - name: Build & Analyze
         run: |
+          # pipefail: without it `xcodebuild ... | tee` masks an xcodebuild
+          # failure, leaving swiftlint analyze to pass against an empty log.
+          set -o pipefail
           cd app/MeetingTranscriber
           xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' build-for-testing 2>&1 | tee /tmp/xcodebuild.log
           cd "$GITHUB_WORKSPACE"
