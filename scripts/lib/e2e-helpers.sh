@@ -198,3 +198,21 @@ restore_float_default() {
         /usr/bin/defaults delete "$bundle" "$key" 2>/dev/null || true
     fi
 }
+
+# Delete the recording artifacts THIS run created — every file under `rec_dir`
+# newer than `marker` (create the marker before the run starts recording).
+# Killing the app mid-recording orphans a raw temp; the next run's app
+# crash-recovers it into a garbage job that, once errored, never enters
+# processed_recordings.json and so re-enqueues on every launch.
+#
+# GUARDED to CI via $GITHUB_ACTIONS (never set in a developer's shell): dev and
+# prod share the recordings dir on a developer machine, so a local sweep could
+# delete a real recording made during the run. Locally the orphans are harmless
+# — the next app launch recovers them. `-newer` leaves pre-existing files alone.
+sweep_run_artifacts() {
+    local rec_dir="$1"
+    local marker="$2"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ] && [ -n "$marker" ] && [ -d "$rec_dir" ]; then
+        find "$rec_dir" -type f -newer "$marker" -delete 2>/dev/null || true
+    fi
+}

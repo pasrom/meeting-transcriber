@@ -264,20 +264,10 @@ on_exit() {
         # abort the trap before the artifact sweep below runs.
         quit_running_app || true
         # The lane's recordings are measurement garbage, and quitting the app
-        # mid-grace orphans raw temps: the NEXT run's app crash-recovers a
-        # stale temp into a garbage job, and an errored recovery job is
-        # re-enqueued on every launch (it never enters
-        # processed_recordings.json). Delete everything this run created;
-        # pre-existing files are older than the marker and stay untouched.
-        # GUARDED to CI via $GITHUB_ACTIONS (same pattern as the queue-snapshot
-        # reset): dev and prod app share the recordings dir on a developer
-        # machine, so a local sweep could catch a real recording made during
-        # the run. Locally the orphans are harmless -- the next app launch
-        # recovers them.
-        if [ "${GITHUB_ACTIONS:-}" = "true" ] \
-            && [ -n "${RUN_START_MARKER:-}" ] && [ -d "$REC_DIR" ]; then
-            find "$REC_DIR" -type f -newer "$RUN_START_MARKER" -delete 2>/dev/null || true
-        fi
+        # mid-grace orphans raw temps. Sweep this run's artifacts so the next
+        # run's app doesn't crash-recover a stale temp into a garbage job (the
+        # rationale + the CI guard live in sweep_run_artifacts).
+        sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
     fi
     rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
 }

@@ -65,6 +65,10 @@ MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
 # `--no-build` rather than rebuilt in debug mode.
 SIM="$ROOT/tools/meeting-simulator/.build/release/meeting-simulator"
 BUNDLE_ID="com.meetingtranscriber.dev"
+REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
+# Anchor for the EXIT-trap artifact sweep: created before any recording, so
+# every file this run produces is newer than it (see sweep_run_artifacts).
+RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-silent-rec-start.XXXXXX")"
 
 # Defaults to restore after the test — empty string means "key wasn't set".
 SAVED_AUTOWATCH=""
@@ -78,6 +82,10 @@ cleanup() {
     if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
         kill -9 "$APP_PID" 2>/dev/null || true
     fi
+    # The app was kill -9'd mid-recording above, orphaning a raw temp; sweep
+    # this run's artifacts so the next run doesn't crash-recover a stale temp.
+    sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
+    rm -f "${RUN_START_MARKER:-}" 2>/dev/null || true
     # Restore defaults to whatever they were before we ran (or delete the
     # keys if they didn't exist).
     restore_bool_default  "$BUNDLE_ID" autoWatch                       "$SAVED_AUTOWATCH"
