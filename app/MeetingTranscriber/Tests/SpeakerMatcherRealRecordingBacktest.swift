@@ -3,9 +3,13 @@ import XCTest
 
 /// Backtest the speaker matcher against real local recordings.
 ///
-/// Loads `_mix.wav` files from `~/Downloads/MeetingTranscriber/recordings/`,
-/// runs FluidDiarizer's offline mode to get fresh embeddings, then matches
-/// against the user's real `speakers.json` using both the **legacy** algorithm
+/// Groups recordings in `~/Downloads/MeetingTranscriber/recordings/` into
+/// dual-source groups via `PairedRecordingResolver` and diarizes the `_app` +
+/// `_mic` tracks separately, mirroring the production dual-track path — a
+/// combined mix often collapses several speakers into one cluster. Groups
+/// with only a `_mix.wav` (recordings predating persisted split tracks) fall
+/// back to diarizing the mix. The fresh embeddings are then matched against
+/// the user's real `speakers.json` using both the **legacy** algorithm
 /// (min-distance over recent samples) and the **hybrid** algorithm (centroid
 /// added as an extra anchor — the production code in this PR).
 ///
@@ -80,23 +84,46 @@ final class SpeakerMatcherRealRecordingBacktest: XCTestCase {
         return b.name
     }
 
+    private func fileSize(_ url: URL?) -> Int {
+        guard let url else { return 0 }
+        return (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+    }
+
+    /// Diarize a recording group the way production does: app + mic tracks
+    /// separately (merged with `R_`/`M_` prefixes) when both exist, the mix
+    /// as a fallback for recordings predating persisted split tracks.
+    /// Unlike production, a failing track skips the whole group (no app-only
+    /// degradation) and micDelay is not applied — the backtest only compares
+    /// matchers on embeddings, so segment timing is irrelevant.
+    private func diarize(
+        group: PairedRecordingResolver.Group, with diarizer: FluidDiarizer,
+    ) async throws -> DiarizationResult {
+        if let app = group.app, let mic = group.mic {
+            let appResult = try await diarizer.run(audioPath: app, numSpeakers: nil, meetingTitle: "")
+            let micResult = try await diarizer.run(audioPath: mic, numSpeakers: nil, meetingTitle: "")
+            return DiarizationProcess.mergeDualTrackDiarization(
+                appDiarization: appResult, micDiarization: micResult,
+            )
+        }
+        // `PairedRecordingResolver.paired` guarantees app+mic or a mix.
+        guard let mix = group.mix else { throw DiarizationError.notAvailable }
+        return try await diarizer.run(audioPath: mix, numSpeakers: nil, meetingTitle: "")
+    }
+
     func testCompareMatchersOnLocalRecordings() async throws {
         let config = try loadConfigOrSkip()
         let dbData = try Data(contentsOf: config.speakersDB)
         let db = try JSONDecoder().decode([StoredSpeaker].self, from: dbData)
 
-        let candidates = try FileManager.default
+        let wavs = try FileManager.default
             .contentsOfDirectory(at: config.recordingsDir, includingPropertiesForKeys: [.fileSizeKey])
-            .filter { $0.lastPathComponent.hasSuffix("_mix.wav") }
-            .sorted { lhs, rhs -> Bool in
-                let lhsSize = (try? lhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                let rhsSize = (try? rhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
-                return lhsSize > rhsSize
-            }
+            .filter { $0.pathExtension == "wav" }
+        let candidates = PairedRecordingResolver.resolve(urls: wavs).paired
+            .sorted { fileSize($0.app ?? $0.mix) > fileSize($1.app ?? $1.mix) }
             .prefix(config.maxFiles)
 
         guard !candidates.isEmpty else {
-            throw XCTSkip("no _mix.wav files found in \(config.recordingsDir.path)")
+            throw XCTSkip("no recording groups found in \(config.recordingsDir.path)")
         }
 
         print("=== Backtest against \(candidates.count) recording(s); DB has \(db.count) speakers ===")
@@ -107,17 +134,18 @@ final class SpeakerMatcherRealRecordingBacktest: XCTestCase {
         var hybridHits = 0
         var diffs: [(file: String, label: String, legacy: String?, hybrid: String?)] = []
 
-        for url in candidates {
-            print("\n>>> \(url.lastPathComponent)")
+        for group in candidates {
+            let isDual = group.app != nil && group.mic != nil
+            print("\n>>> \(group.stem) (\(isDual ? "dual-track" : "mix fallback"))")
             let result: DiarizationResult
             do {
-                result = try await diarizer.run(audioPath: url, numSpeakers: nil, meetingTitle: "")
+                result = try await diarize(group: group, with: diarizer)
             } catch {
                 print("  diarization failed: \(error.localizedDescription)")
                 continue
             }
             let embeddings = result.embeddings ?? [:]
-            print("  speakers in mix: \(embeddings.keys.sorted())")
+            print("  speakers: \(embeddings.keys.sorted())")
 
             for label in embeddings.keys.sorted() {
                 guard let emb = embeddings[label] else { continue }
@@ -128,7 +156,7 @@ final class SpeakerMatcherRealRecordingBacktest: XCTestCase {
                 let mark = legacy != hybrid ? " ← differs" : ""
                 print("  \(label): legacy=\(legacy ?? "nil")  hybrid=\(hybrid ?? "nil")\(mark)")
                 if legacy != hybrid {
-                    diffs.append((file: url.lastPathComponent, label: label, legacy: legacy, hybrid: hybrid))
+                    diffs.append((file: group.stem, label: label, legacy: legacy, hybrid: hybrid))
                 }
             }
         }
