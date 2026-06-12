@@ -34,9 +34,6 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
         // Recorded inputs.
         private(set) var appendedFrameLengths: [Int] = []
         private(set) var appendedFormats: [(sampleRate: Double, channels: AVAudioChannelCount, isFloat: Bool)] = []
-        /// First sample of each appended buffer, in arrival order. Lets the
-        /// concurrency test compare the manager's feed order against the ring.
-        private(set) var appendedFirstSamples: [Float] = []
         private(set) var resetCount = 0
         private(set) var finishCount = 0
         private(set) var loadModelsCount = 0
@@ -50,18 +47,12 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
         private var finishReturn = ""
         /// Error thrown by `loadModels()` (for the prepare()-rethrows test).
         private var loadModelsError: (any Error)?
-        /// When true, `processBufferedAudio()` yields the actor mid-call so
-        /// overlapping ingest tasks get a real suspension window to interleave at
-        /// — without it the concurrency regression test can't bite.
-        private var suspendOnProcess = false
         /// When true, each `processBufferedAudio()` call fires ONE EOU whose
         /// transcript is the accumulated word list `w0 w1 … wK` (K = call index)
         /// and whose timestamp grows by `autoEouStepMs`. Because the manager's
         /// transcript grows across utterances, the session must prefix-strip each
-        /// EOU against the previous one to recover the single new word — a process
-        /// that only works if `handleEou`'s prefix/cursor updates are SERIALIZED.
-        /// Driven entirely by manager-call order, so it's deterministic under
-        /// interleaved ingest tasks.
+        /// EOU against the previous one to recover the single new word — pinning
+        /// that prefix + cursor advance stay in lockstep across utterances.
         private var autoEou = false
         private var autoEouWords: [String] = []
         private var autoEouStepMs = 0
@@ -87,10 +78,6 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
             loadModelsError = error
         }
 
-        func setSuspendOnProcess(_ value: Bool) {
-            suspendOnProcess = value
-        }
-
         func enableAutoEou(words: [String], stepMs: Int) {
             autoEou = true
             autoEouWords = words
@@ -114,26 +101,17 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
                 format.channelCount,
                 format.commonFormat == .pcmFormatFloat32,
             ))
-            if let channel = buffer.floatChannelData, buffer.frameLength > 0 {
-                appendedFirstSamples.append(channel[0][0])
-            }
         }
 
-        func processBufferedAudio() async {
-            if suspendOnProcess { await Task.yield() }
-
+        func processBufferedAudio() {
             if autoEou, autoEouCallCount < autoEouWords.count {
                 // Build the accumulated transcript w0..wK and the matching growing
                 // EOU timestamp, mirroring the real manager (which appends the EOU
-                // ms and fires the callback together). A second yield AFTER
-                // mutating the manager-side accumulators but BEFORE the callback
-                // widens the window for a racing pass to corrupt the session's
-                // prefix/cursor if `handleEou` isn't serialized.
+                // ms and fires the callback together).
                 let k = autoEouCallCount
                 autoEouCallCount += 1
                 let transcript = autoEouWords[0 ... k].joined(separator: " ")
                 eouTimestampsMs.append((k + 1) * autoEouStepMs)
-                if suspendOnProcess { await Task.yield() }
                 eouCallback?(transcript)
                 return
             }
@@ -432,72 +410,34 @@ final class EouStreamingCaptionSessionTests: XCTestCase {
         XCTAssertEqual(loadCount, 1)
     }
 
-    // MARK: - Concurrency regression
+    // MARK: - Sequential multi-EOU integrity
 
-    /// The production driver spawns one unstructured `Task` per captured buffer,
-    /// so many `ingest()` calls can interleave at the session's suspension
-    /// points (`appendAudio`, `processBufferedAudio`, `getEouTimestampsMs`,
-    /// drain). The session's `isIngesting` single-flight guard must collapse them
-    /// into ONE drain pass that handles each EOU and updates the prefix/cursor
-    /// (`lastFinalizedPrefix`, `lastEouMs`) atomically. Without it, two passes
-    /// run `handleEou` concurrently: each reads `getEouTimestampsMs().last` and
-    /// strips against `lastFinalizedPrefix` interleaved with the other's write,
-    /// so deltas and audio slices come out wrong, duplicated, or empty.
-    ///
-    /// Setup: N tasks each ingest one 1600-sample ramp block. The mock fires one
-    /// auto-EOU per process call — accumulated transcript `w0 w1 … wK` with a
-    /// timestamp growing by 100 ms (1600 samples) per call — and yields twice to
-    /// force interleaving. Serialized, the session must emit exactly the words
-    /// `w0, w1, …, w(N-1)` IN ORDER, each carrying its own contiguous
-    /// `[k*1600, (k+1)*1600)` audio slice. The word order pins the manager call
-    /// order, and the per-final slice pins that the cursor advanced in lockstep.
-    func testConcurrentIngestSerializesEouFinalization() async {
-        let taskCount = 32
+    /// Sequential ingest of N ramp blocks, one auto-EOU per process call —
+    /// the session must emit exactly the words `w0 … w(N-1)` in order, each
+    /// carrying its contiguous `[k*1600, (k+1)*1600)` ring slice. Pins that
+    /// prefix stripping and the `lastEouMs` cursor advance in lockstep across
+    /// many utterances. (The driver serializes `ingest` calls by contract —
+    /// see `LiveCaptionPipeline` — ordering under rapid sink delivery is
+    /// pinned at that boundary by `LiveCaptionFeedTests`.)
+    func testSequentialMultiEouAdvancesPrefixAndCursorInLockstep() async {
+        let utterances = 32
         let segment = 1600 // 100 ms at 16 kHz; matches the 100 ms EOU step.
-        let words = (0 ..< taskCount).map { "w\($0)" }
+        let words = (0 ..< utterances).map { "w\($0)" }
         let asr = MockEouStreamingAsrManaging()
-        await asr.setSuspendOnProcess(true)
         await asr.enableAutoEou(words: words, stepMs: segment / Self.samplesPerMs)
         let recorder = EventRecorder()
         let session = makeSession(asr: asr, recorder: recorder)
 
-        await withTaskGroup(of: Void.self) { group in
-            for i in 0 ..< taskCount {
-                let buffer = rampBuffer(base: i * segment, count: segment)
-                group.addTask { await session.ingest(buffer) }
-            }
-            await group.waitForAll()
+        for i in 0 ..< utterances {
+            await session.ingest(rampBuffer(base: i * segment, count: segment))
         }
 
         let finals = recorder.finals
-        // One single-word final per EOU, in manager-call order — proves prefix
-        // stripping ran serialized (a race drops finals, doubles words, or
-        // empties deltas). The mock assigns words by call order and the session
-        // emits one final per EOU in drain order, which equals call order.
         XCTAssertEqual(finals.map(\.text), words, "EOU finals must be the words in order, one per utterance")
-
-        // Each final carries exactly one segment-sized slice; consecutive slices
-        // are adjacent in the ring (the k-th EOU slices the k-th ring block), so
-        // concatenated they tile [0, N*segment) with no gap/overlap — proving
-        // `lastEouMs` advanced exactly one step per serialized EOU. Ring block
-        // order is the (nondeterministic) buffer arrival order, so we assert
-        // every segment appears once and each block is internally contiguous,
-        // not a fixed sequence.
-        for final in finals {
-            XCTAssertEqual(final.audio.count, segment, "each EOU slices exactly one buffer's worth of ring")
+        for (k, final) in finals.enumerated() {
+            let expected = (k * segment ..< (k + 1) * segment).map { Float($0) }
+            XCTAssertEqual(final.audio, expected, "the k-th EOU must slice exactly the k-th ring block")
         }
-        let reconstructed = finals.flatMap(\.audio)
-        XCTAssertEqual(reconstructed.count, taskCount * segment, "slices must tile the ring with no gap/overlap")
-        for blockStart in stride(from: 0, to: reconstructed.count, by: segment) {
-            let base = reconstructed[blockStart]
-            let block = Array(reconstructed[blockStart ..< blockStart + segment])
-            XCTAssertEqual(block, (0 ..< segment).map { base + Float($0) }, "a buffer's samples must stay contiguous")
-        }
-        let bases = Set(stride(from: 0, to: reconstructed.count, by: segment).map { reconstructed[$0] })
-        XCTAssertEqual(
-            bases, Set((0 ..< taskCount).map { Float($0 * segment) }),
-            "every buffer must be sliced exactly once across the EOU finals",
-        )
     }
 
     private static let samplesPerMs = 16

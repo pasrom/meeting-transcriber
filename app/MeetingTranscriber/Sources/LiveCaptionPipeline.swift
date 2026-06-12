@@ -6,8 +6,15 @@ import AudioTapLib
 /// Extracted as a seam so a second strategy (e.g. a native streaming ASR
 /// backend) can slot in alongside the VAD-driven `StreamingTranscriber`
 /// without `LiveTranscriptionController` knowing which concrete strategy it
-/// holds. Behavior of the existing path is unchanged — `StreamingTranscriber`
-/// already exposed `ingest(_:)` with this exact shape.
+/// holds.
+///
+/// **Serialization contract:** the driver serializes all calls.
+/// `LiveTranscriptionController` feeds each pipeline from a single bounded
+/// `AsyncStream` consumer, so `ingest` runs one-at-a-time in capture order,
+/// and `flush` runs only after the feed is retired (every delivered buffer
+/// already ingested). Implementations may rely on this — no interleaved
+/// `ingest`/`flush` callers, no re-entrancy guards needed. Tests driving a
+/// pipeline directly must call sequentially (`await` each call).
 protocol LiveCaptionPipeline: Actor {
     func ingest(_ buffer: LiveAudioBuffer) async
     /// Recording stopped — flush any pending utterance as a final.

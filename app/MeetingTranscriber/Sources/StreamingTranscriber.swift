@@ -6,19 +6,19 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Streami
 
 /// Live transcription for a single audio channel (mic or app).
 ///
-/// PoC scope: ingests 16 kHz mono Float32 buffers (matches `MicCaptureHandler`
+/// Ingests 16 kHz mono Float32 buffers (matches `MicCaptureHandler`
 /// post-resample output), feeds them through `FluidVAD` in streaming mode,
 /// and calls `engine.transcribeSamples` once per ~800 ms while speaking
 /// (partial) and once per detected speech end / 5 s force-flush (final).
 ///
-/// Both mic and app channels are supported. App-channel buffers (typically
-/// interleaved 48 kHz stereo from `CATapDescription`) are downmixed and
-/// resampled to 16 kHz mono upstream in `LiveTranscriptionController` (via
-/// `LiveAudioResampler`) before they reach `ingest`, so this actor always
-/// sees the 16 kHz mono format described above.
+/// Both mic and app channels are supported. App-channel buffers are
+/// normalized to 16 kHz mono upstream (capture-time resampling, plus
+/// `LiveAudioResampler` in the controller's feed for the fallback path)
+/// before they reach `ingest`, so this actor always sees that format.
 ///
 /// Conforms to `LiveCaptionPipeline` — the VAD-driven strategy behind that
-/// seam. `ingest(_:)` is the protocol requirement.
+/// seam. Calls are serialized by the driver (see the protocol contract), so
+/// `ingest`/`flush` never interleave and need no re-entrancy guards.
 actor StreamingTranscriber: LiveCaptionPipeline {
     enum Event {
         case partial(String)
@@ -46,11 +46,6 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     private var isSpeaking = false
     private var lastPartialAt: Date = .distantPast
     private let onEvent: EventSink
-    /// True while a `drainChunks()` pass owns the input accumulator. The actor
-    /// suspends at the VAD and transcribe awaits, so a second caller (another
-    /// `ingest` Task or `flush`) can interleave; without this guard two drain
-    /// loops would fork the VAD stream state and process chunks out of order.
-    private var isDrainingInput = false
 
     /// Silero v6 chunk size at 16 kHz — what FluidVAD expects per call.
     private static let chunkSize = 4096
@@ -97,24 +92,15 @@ actor StreamingTranscriber: LiveCaptionPipeline {
     /// a clean idle state (the controller recreates pipelines per recording, so
     /// this is belt-and-suspenders against any reuse).
     func flush() async {
-        // Ingestion may still be mid-drain (the actor suspends at the VAD and
-        // partial-transcribe awaits) — wait for the active pass to finish and
-        // process any input that accumulated meanwhile, so audio the recorder
-        // already delivered before the stop isn't dropped by stop-timing.
-        while isDrainingInput {
-            await Task.yield()
-        }
+        // The driver retires the channel feed before flushing, so every
+        // buffer delivered before the stop has already been ingested — only
+        // a sub-chunk remainder can still sit in the accumulator.
         if !inputAccumulator.isEmpty { await drainChunks() }
         await commitFinal()
         isSpeaking = false
     }
 
     private func drainChunks() async {
-        // Single-pass guard: the active drain re-checks the accumulator every
-        // iteration, so anything appended while it runs is consumed by it.
-        if isDrainingInput { return }
-        isDrainingInput = true
-        defer { isDrainingInput = false }
         if vadState == nil {
             do {
                 vadState = try await vad.makeStreamState()
