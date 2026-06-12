@@ -17,11 +17,13 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveAud
 /// internal resampling state persists across chunks (no boundary clicks).
 /// A format change mid-session rebuilds the converter and logs a warning.
 ///
-/// Used by `LiveTranscriptionController` to bridge the app-audio sink
-/// (typically 48 kHz interleaved stereo from `CATapDescription`) into the
-/// engine-friendly shape. The mic sink already runs through
-/// `MicCaptureHandler`'s own converter and arrives 16 kHz mono — it
-/// bypasses this resampler entirely.
+/// Used by `LiveTranscriptionController`'s app-channel feed. App buffers
+/// normally arrive already capture-time resampled to 16 kHz mono (via
+/// `AppAudioCapture`'s `StreamingMonoResampler`) and short-circuit through
+/// unchanged; real conversion only happens on the resampler-nil fallback
+/// path, where raw device-rate buffers (e.g. 48 kHz interleaved stereo)
+/// come through. The mic sink runs through `MicCaptureHandler`'s own
+/// converter and bypasses this resampler entirely.
 final class LiveAudioResampler {
     private var converter: AVAudioConverter?
     private var inputFormat: AVAudioFormat?
