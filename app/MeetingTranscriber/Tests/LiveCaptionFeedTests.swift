@@ -146,6 +146,40 @@ final class LiveCaptionFeedTests: XCTestCase {
         )
     }
 
+    // MARK: - 5. Dropping the controller stops the feed
+
+    /// The coordinator drops the controller on a settings change
+    /// (`controller = nil`), possibly mid-recording, while the recorder still
+    /// holds the sink closures. The feed must die with its owner: no further
+    /// deliveries may reach the pipeline (and no orphaned consumer may keep
+    /// burning inference on discarded results). The old Task-per-buffer sinks
+    /// got this via `[weak self]`; the slot-capturing sinks need the feed's
+    /// deinit to cancel the consumer and finish the stream.
+    func testDroppingControllerStopsTheFeed() async {
+        let factory = ChannelMockFactory()
+        var controller: LiveTranscriptionController? = makeController(factory: factory)
+        await controller?.prepare()
+        guard let sink = controller?.micSink else {
+            XCTFail("controller must vend a mic sink after prepare()")
+            return
+        }
+
+        sink(buffer(value: 1))
+        await waitFor { await factory.mic.appendedFirstSamples.count == 1 }
+        let before = await factory.mic.appendedFirstSamples.count
+        XCTAssertEqual(before, 1, "the armed feed must deliver while the controller is alive")
+
+        controller = nil // settings change: coordinator rebuilds the controller
+
+        sink(buffer(value: 2))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        let after = await factory.mic.appendedFirstSamples.count
+        XCTAssertEqual(
+            after, before,
+            "a dropped controller must stop its feed — no further buffers may reach the pipeline",
+        )
+    }
+
     // MARK: - Helpers
 
     private func makeController(factory: ChannelMockFactory) -> LiveTranscriptionController {
