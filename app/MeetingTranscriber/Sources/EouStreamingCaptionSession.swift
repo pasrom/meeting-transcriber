@@ -107,19 +107,6 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
     /// another actor, so we install lazily on first ingest).
     private var callbacksInstalled = false
 
-    /// Captured buffers awaiting processing, oldest first. `ingest` appends here
-    /// SYNCHRONOUSLY (before any `await`) and a single active drain consumes them
-    /// FIFO — that synchronous enqueue is what pins ring/manager ordering even
-    /// when the production driver spawns one unstructured `Task` per buffer.
-    private var pendingBuffers: [[Float]] = []
-    /// True while a drain pass owns `pendingBuffers`. A second `ingest` (or
-    /// `flush`) that arrives mid-drain only enqueues + returns; the active pass
-    /// re-checks the queue each iteration and consumes what was appended. Without
-    /// this, two interleaved drains would fork the ring/manager sample order and
-    /// invalidate the EOU-ms → ring-slice mapping. Mirrors
-    /// `StreamingTranscriber.isDrainingInput`.
-    private var isIngesting = false
-
     private let collector = CallbackCollector()
 
     /// 16 kHz: 1 ms == 16 samples (fixed; the whole live path is 16 kHz mono).
@@ -146,35 +133,43 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
     /// (`LiveTranscriptionController` / `MicCaptureHandler`) normalizes both
     /// channels to that shape, same guard as `StreamingTranscriber.ingest`.
     ///
-    /// The production driver spawns one unstructured `Task` per captured buffer,
-    /// so several `ingest` calls can interleave at this actor's suspension
-    /// points. Enqueue synchronously here (before any `await`) and let a single
-    /// drain pass consume the queue FIFO, so ring order == manager feed order
-    /// regardless of which task wins the actor next.
+    /// Calls are serialized by the driver (one ingest at a time, in capture
+    /// order — see the `LiveCaptionPipeline` contract), which is what keeps
+    /// ring order == manager feed order and the EOU-ms → ring-slice mapping
+    /// valid without any re-entrancy machinery here.
     func ingest(_ buffer: LiveAudioBuffer) async {
         guard buffer.channelCount == 1, buffer.sampleRate == 16000 else { return }
-        pendingBuffers.append(buffer.samples)
-        await drainPending()
+        await installCallbacksIfNeeded()
+        guard let pcm = Self.makeBuffer(buffer.samples) else { return }
+
+        do {
+            // Advance the ring + counter only AFTER the manager accepts the
+            // samples, so a thrown appendAudio can't leave the ring ahead of
+            // the manager and permanently skew the ms timeline. A
+            // processBufferedAudio failure after a successful append is
+            // benign — the manager already holds the samples.
+            try await asr.appendAudio(pcm)
+            ring.append(buffer.samples)
+            ingestedSamples += buffer.samples.count
+            try await asr.processBufferedAudio()
+        } catch {
+            // Never throw out of ingest — log and move on. Transcript text is
+            // never logged; only the (public) channel label and the error.
+            logger.warning("[\(self.channelLabel, privacy: .public)] ingest error: \(error)")
+            return
+        }
+
+        await drainCollector()
     }
 
-    /// Recording stopped — flush any pending input as captions, commit the
-    /// trailing utterance via `finish()` (whose return value carries the
-    /// transcript), then reset all state so a subsequent recording starts clean.
-    /// Idempotent: a second flush (or a flush before any ingest) emits nothing
-    /// and never calls `finish()` again, because the reset zeroes
-    /// `ingestedSamples` and empties the queue.
+    /// Recording stopped — commit the trailing utterance via `finish()`
+    /// (whose return value carries the transcript), then reset all state so a
+    /// subsequent recording starts clean. The driver retires the channel feed
+    /// before flushing, so every buffer delivered before the stop has already
+    /// been ingested when this runs. Idempotent: a second flush (or a flush
+    /// before any ingest) emits nothing and never calls `finish()` again,
+    /// because the reset zeroes `ingestedSamples`.
     func flush() async {
-        // An ingest may be mid-drain (suspended at appendAudio /
-        // processBufferedAudio). Wait for it to finish, then drain anything that
-        // accumulated meanwhile — including audio the recorder delivered in the
-        // last beat before stop — so the tail isn't dropped by stop-timing.
-        while isIngesting {
-            await Task.yield()
-        }
-        if !pendingBuffers.isEmpty {
-            await drainPending()
-        }
-
         guard ingestedSamples > 0 else { return }
 
         do {
@@ -195,42 +190,6 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         lastEouMs = 0
         lastFinalizedPrefix = ""
         ingestedSamples = 0
-    }
-
-    /// Single-flight drain of `pendingBuffers`: feeds each queued buffer through
-    /// ring → manager → callback drain, one at a time. The first caller owns the
-    /// pass; concurrent callers only enqueued and returned, and this loop picks
-    /// up whatever they appended. `isIngesting` is the serialization gate.
-    private func drainPending() async {
-        if isIngesting { return }
-        isIngesting = true
-        defer { isIngesting = false }
-
-        await installCallbacksIfNeeded()
-
-        while !pendingBuffers.isEmpty {
-            let samples = pendingBuffers.removeFirst()
-            guard let pcm = Self.makeBuffer(samples) else { continue }
-
-            do {
-                // Advance the ring + counter only AFTER the manager accepts the
-                // samples, so a thrown appendAudio can't leave the ring ahead of
-                // the manager and permanently skew the ms timeline. A
-                // processBufferedAudio failure after a successful append is
-                // benign — the manager already holds the samples.
-                try await asr.appendAudio(pcm)
-                ring.append(samples)
-                ingestedSamples += samples.count
-                try await asr.processBufferedAudio()
-            } catch {
-                // Never throw out of ingest — log and move on. Transcript text is
-                // never logged; only the (public) channel label and the error.
-                logger.warning("[\(self.channelLabel, privacy: .public)] ingest error: \(error)")
-                continue
-            }
-
-            await drainCollector()
-        }
     }
 
     // MARK: - Callbacks

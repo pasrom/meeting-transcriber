@@ -1,31 +1,40 @@
 import AudioTapLib
 import FluidAudio
 import Foundation
-import os.log
+import os
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTranscription")
 
-/// PoC controller that wires `StreamingTranscriber` actors to both audio
-/// sinks of a `DualSourceRecorder`. Logs partial/final captions via os_log
-/// on subsystem `com.meetingtranscriber.app`, category `LiveTranscription`,
-/// and feeds them into the observable `LiveCaptionsState` that backs the
-/// caption-bar overlay.
+/// Wires the per-channel caption pipelines to both audio sinks of a
+/// `DualSourceRecorder`. Logs partial/final captions via os_log on subsystem
+/// `com.meetingtranscriber.app`, category `LiveTranscription`, and feeds them
+/// into the observable `LiveCaptionsState` that backs the caption-bar overlay.
 ///
-/// PoC scope:
-///   - mic + app channels supported. App-channel buffers (typically 48 kHz
-///     interleaved stereo from `CATapDescription`) are downsampled to
-///     16 kHz mono via `LiveAudioResampler` before reaching the engine.
-///     Mic buffers arrive 16 kHz mono already (post-`MicCaptureHandler`
-///     resample) and pass through unchanged.
+/// Scope:
+///   - mic + app channels supported. Buffers normally arrive 16 kHz mono
+///     from capture-time resampling (mic via `MicCaptureHandler`, app via
+///     `AppAudioCapture`'s `StreamingMonoResampler`); the app feed still runs
+///     `LiveAudioResampler` for the resampler-nil fallback path, where raw
+///     device-rate buffers come through (16 kHz mono passes through unchanged).
 ///   - one engine instance shared by both channels (Parakeet today —
 ///     other engines fall back to `TranscriptionError.streamingNotSupported`).
 ///
+/// Dataflow: each channel is a bounded `AsyncStream<LiveAudioBuffer>` feed.
+/// The sink closure yields into the stream synchronously on the audio
+/// callback thread; a single detached consumer task per channel ingests into
+/// that channel's `LiveCaptionPipeline`. Ordering (single consumer → FIFO)
+/// and backpressure (bounded buffer, newest win) are properties of the
+/// channel — pipelines never see interleaved `ingest` calls.
+///
 /// Lifecycle:
-///   1. `prepare()` warms the engine + VAD model.
+///   1. `prepare()` warms the engine + VAD model, builds the pipelines, and
+///      arms the feeds.
 ///   2. Caller installs `micSink` and `appSink` on the recorder before
 ///      `recorder.start(...)`.
-///   3. `prepareForNextRecording()` clears accumulated state between recordings (keeps models
-///      loaded — re-creating the streaming actors + resampler is cheap).
+///   3. `flush()` retires the feeds (draining everything already delivered)
+///      and flushes the pipelines; `prepareForNextRecording()` re-arms fresh
+///      feeds between recordings (keeps models loaded — re-creating the
+///      streaming actors + feeds is cheap).
 @MainActor
 final class LiveTranscriptionController {
     /// Builds the `EouStreamingAsrManaging` backend for one channel's English
@@ -64,7 +73,28 @@ final class LiveTranscriptionController {
     private let verboseDiagnostics: () -> Bool
     private var micPipeline: (any LiveCaptionPipeline)?
     private var appPipeline: (any LiveCaptionPipeline)?
-    private var appResampler = LiveAudioResampler()
+
+    /// Bounded per-channel feed capacity, in buffers. Capture delivers
+    /// roughly 10–50 buffers/s per channel, so this is tens of seconds of
+    /// headroom — far more than a healthy pipeline ever queues, but a hard
+    /// bound when inference stalls: the stream then drops the OLDEST buffers
+    /// (captions degrade toward the newest audio instead of memory growing
+    /// without limit). Also sized so the fixture-driven E2E tests, which
+    /// feed ~375 buffers much faster than real time, fit without drops.
+    private static let feedCapacity = 512
+
+    /// Cross-thread continuation slots the sink closures yield into. The
+    /// audio callback thread yields under the lock; the main actor swaps
+    /// the continuation per recording (`bindFeeds` / `retireFeeds`). A nil
+    /// slot — before the first bind, or after a flush — drops the buffer,
+    /// matching the recorder lifecycle (nothing should be fed outside a
+    /// recording).
+    private let micFeedSlot = OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>(initialState: nil)
+    private let appFeedSlot = OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>(initialState: nil)
+    /// Single consumer task per channel feed — the serialization that makes
+    /// `LiveCaptionPipeline.ingest` calls ordered by construction.
+    private var micFeedConsumer: Task<Void, Never>?
+    private var appFeedConsumer: Task<Void, Never>?
     /// True once `prepare()` resolved the active strategy to the EOU sessions.
     /// `prepareForNextRecording()` keeps those sessions (already flushed clean at
     /// stop, reloading their models would be wasteful) and only rebuilds the
@@ -86,23 +116,29 @@ final class LiveTranscriptionController {
 
     /// Mic-channel live sink. Hand this to `DualSourceRecorder.micLiveSink`
     /// before `recorder.start(...)`. Buffers arrive on the AVAudioEngine tap
-    /// thread; the closure hops onto an actor task and returns immediately.
+    /// thread; the closure yields into the channel's bounded feed and returns
+    /// immediately — no task spawn, no actor hop on the audio thread.
     var micSink: LiveAudioSink {
-        { [weak self] buffer in
-            guard let self else { return }
-            Task { await self.handleMicBuffer(buffer) }
+        let slot = micFeedSlot
+        return { buffer in
+            slot.withLock { continuation in
+                _ = continuation?.yield(buffer)
+            }
         }
     }
 
     /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
     /// before `recorder.start(...)`. Buffers arrive on the CATap IOProc
-    /// thread at the device's native rate (typically 48 kHz stereo) — the
-    /// closure dispatches onto the actor, where `LiveAudioResampler` brings
-    /// them to 16 kHz mono before the streaming transcriber sees them.
+    /// thread, normally already capture-time resampled to 16 kHz mono (raw
+    /// device rate only on the resampler-nil fallback) — the feed's consumer
+    /// runs them through `LiveAudioResampler`, which passes 16 kHz mono
+    /// through unchanged.
     var appSink: LiveAudioSink {
-        { [weak self] buffer in
-            guard let self else { return }
-            Task { await self.handleAppBuffer(buffer) }
+        let slot = appFeedSlot
+        return { buffer in
+            slot.withLock { continuation in
+                _ = continuation?.yield(buffer)
+            }
         }
     }
 
@@ -154,6 +190,11 @@ final class LiveTranscriptionController {
         await prewarmSpeakerMatcher()
         if micPipeline == nil, appPipeline == nil {
             await buildPipelines()
+            // Arm the feeds here too (not only in `prepareForNextRecording()`)
+            // so the late-resolution ordering — recording already running,
+            // EOU models finishing their first-use load — connects the sinks
+            // mid-recording instead of staying dark until the next one.
+            await bindFeeds()
         }
         strategyResolved = true
         if verboseDiagnostics() {
@@ -220,12 +261,17 @@ final class LiveTranscriptionController {
         }
     }
 
-    /// Recording stopped — flush both channel pipelines so any pending
-    /// tail utterance (speech that was still in progress when the recorder
-    /// stopped, so VAD never emitted a `speechEnd`) is committed as a final.
-    /// Must run at STOP time, before the next recording's
-    /// `prepareForNextRecording()` clears caption state. Awaits both channels
-    /// concurrently.
+    /// Recording stopped — retire the feeds, then flush both channel
+    /// pipelines so any pending tail utterance (speech that was still in
+    /// progress when the recorder stopped, so VAD never emitted a
+    /// `speechEnd`) is committed as a final. Must run at STOP time, before
+    /// the next recording's `prepareForNextRecording()` clears caption state.
+    ///
+    /// Retiring first is the completeness barrier: it stops accepting new
+    /// deliveries and drains everything the recorder already handed over
+    /// into the pipelines, so the pipeline flush below sees the full tail
+    /// instead of racing buffers still in flight. Awaits both channels
+    /// concurrently afterwards.
     ///
     /// The work is wrapped in a stored `pendingFlush` Task so the next
     /// recording's `prepareForNextRecording()` can await it: a kept EOU session
@@ -236,6 +282,7 @@ final class LiveTranscriptionController {
     func flush() async {
         let task = Task { [weak self] in
             guard let self else { return }
+            await self.retireFeeds()
             async let mic: Void? = self.micPipeline?.flush()
             async let app: Void? = self.appPipeline?.flush()
             _ = await (mic, app)
@@ -248,18 +295,26 @@ final class LiveTranscriptionController {
     /// stop-time `flush()` FIRST so a kept EOU session is fully drained before
     /// the new recording reuses it — otherwise the late flush and the new
     /// recording's ingests interleave on the same actor. Keeps engine + VAD
-    /// models loaded; re-creating the re-transcribe actors + resampler is cheap.
+    /// models loaded; re-creating the re-transcribe actors + feeds is cheap.
     ///
     /// Construction is single-owner and branches on the CONFIG flag, not the
     /// resolved strategy, so a reset-before-`prepare()` ordering doesn't build
     /// the wrong pipelines:
     ///   - EOU resolved (English streaming live): keep the sessions (each was
-    ///     drained by its own `flush()`); just clear resampler + captions.
+    ///     drained by its own `flush()`); just re-arm feeds + clear captions.
     ///   - English opt-in but not yet resolved: build nothing — let the pending
-    ///     `prepare()` own EOU/fallback construction.
+    ///     `prepare()` own EOU/fallback construction. With no pipelines there
+    ///     are no feeds either, so sink deliveries are dropped — deliberate:
+    ///     blocking here until the EOU models load (cold first-use download
+    ///     can take ~20 s) would delay recorder.start() and lose actual
+    ///     meeting audio, which is far worse than missing the first caption.
     ///   - Otherwise (re-transcribe path, default OR post-EOU-failure fallback):
     ///     rebuild the cheap re-transcribe actors so no stale VAD/transcriber
     ///     state carries across recordings.
+    ///
+    /// `bindFeeds()` re-arms one fresh feed per existing pipeline (the app
+    /// feed gets a fresh `LiveAudioResampler`, replacing the old per-recording
+    /// reset of a shared instance).
     func prepareForNextRecording() async {
         await pendingFlush?.value
         pendingFlush = nil
@@ -268,19 +323,80 @@ final class LiveTranscriptionController {
             // EOU sessions kept (already drained by flush()).
         } else if englishStreaming, !strategyResolved {
             // EOU opted-in but prepare() hasn't resolved yet → defer to
-            // prepare(). Buffers arriving before it finishes are dropped by
-            // the nil-pipeline guards in handleMic/AppBuffer — deliberate:
-            // blocking here until the EOU models load (cold first-use download
-            // can take ~20 s) would delay recorder.start() and lose actual
-            // meeting audio, which is far worse than missing the first caption.
+            // prepare(), which also arms the feeds once it built the pipelines.
         } else if let engine {
             micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
             appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
         }
-        appResampler = LiveAudioResampler()
+        await bindFeeds()
         captions.clear()
         if verboseDiagnostics() {
             logger.info("Live transcription reset for new recording")
+        }
+    }
+
+    /// Retire both channel feeds: stop accepting sink deliveries, then await
+    /// the consumers so every buffer already delivered is ingested. This is
+    /// the deterministic "all pre-stop audio is in the pipelines" barrier
+    /// that `flush()` and a rebind rely on.
+    private func retireFeeds() async {
+        micFeedSlot.withLock { slot in
+            slot?.finish()
+            slot = nil
+        }
+        appFeedSlot.withLock { slot in
+            slot?.finish()
+            slot = nil
+        }
+        if let consumer = micFeedConsumer { await consumer.value }
+        if let consumer = appFeedConsumer { await consumer.value }
+        micFeedConsumer = nil
+        appFeedConsumer = nil
+    }
+
+    /// (Re)arm one bounded feed per built pipeline, retiring any previous
+    /// feeds first so exactly one consumer per channel exists at all times —
+    /// that single consumer is what makes ingest ordering a property of the
+    /// channel rather than of scheduler luck.
+    private func bindFeeds() async {
+        await retireFeeds()
+        if let micPipeline {
+            micFeedConsumer = Self.makeFeed(into: micPipeline, slot: micFeedSlot, resampling: false)
+        }
+        if let appPipeline {
+            appFeedConsumer = Self.makeFeed(into: appPipeline, slot: appFeedSlot, resampling: true)
+        }
+    }
+
+    /// Build one channel feed: a bounded `AsyncStream` whose continuation is
+    /// installed into `slot` (for the sink closure) plus a single detached
+    /// consumer task that ingests buffers in arrival order. `resampling`
+    /// routes app-channel buffers through a fresh `LiveAudioResampler`
+    /// (confined to the consumer task, fresh per feed == per recording).
+    /// `static` so the consumer captures only the pipeline + stream, never
+    /// the controller.
+    private static func makeFeed(
+        into pipeline: any LiveCaptionPipeline,
+        slot: OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>,
+        resampling: Bool,
+    ) -> Task<Void, Never> {
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: LiveAudioBuffer.self,
+            bufferingPolicy: .bufferingNewest(feedCapacity),
+        )
+        slot.withLock { $0 = continuation }
+        return Task.detached(priority: .userInitiated) {
+            if resampling {
+                let resampler = LiveAudioResampler()
+                for await buffer in stream {
+                    guard let normalized = resampler.resample(buffer) else { continue }
+                    await pipeline.ingest(normalized)
+                }
+            } else {
+                for await buffer in stream {
+                    await pipeline.ingest(buffer)
+                }
+            }
         }
     }
 
@@ -353,18 +469,6 @@ final class LiveTranscriptionController {
                 }
             }
         }
-    }
-
-    private func handleMicBuffer(_ buffer: LiveAudioBuffer) async {
-        guard let micPipeline else { return }
-        await micPipeline.ingest(buffer)
-    }
-
-    private func handleAppBuffer(_ buffer: LiveAudioBuffer) async {
-        guard let appPipeline,
-              let normalized = appResampler.resample(buffer)
-        else { return }
-        await appPipeline.ingest(normalized)
     }
 }
 

@@ -175,10 +175,10 @@ final class LiveCaptionPipelineTests: XCTestCase {
     }
 
     /// Controller-level: `flush()` must reach the APP channel too, mirroring the
-    /// mic-channel test above. App buffers normally arrive 48 kHz stereo and are
-    /// resampled by `LiveAudioResampler`; here the input is already 16 kHz mono
-    /// (the resampler short-circuits and passes it through unchanged), isolating
-    /// the controller's `appSink` → `handleAppBuffer` → `appPipeline` fan-out.
+    /// mic-channel test above. App buffers pass through `LiveAudioResampler` in
+    /// the feed's consumer; here the input is already 16 kHz mono (the resampler
+    /// short-circuits and passes it through unchanged), isolating the
+    /// controller's `appSink` → app feed → `appPipeline` fan-out.
     /// Pins the `async let` symmetry in `LiveTranscriptionController.flush()` —
     /// a regression that only flushed the mic pipeline would leave this empty.
     func testControllerFlushDeliversPendingAppChannelFinal() async throws {
