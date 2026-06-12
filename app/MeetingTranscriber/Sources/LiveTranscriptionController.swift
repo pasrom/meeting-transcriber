@@ -74,27 +74,11 @@ final class LiveTranscriptionController {
     private var micPipeline: (any LiveCaptionPipeline)?
     private var appPipeline: (any LiveCaptionPipeline)?
 
-    /// Bounded per-channel feed capacity, in buffers. Capture delivers
-    /// roughly 10–50 buffers/s per channel, so this is tens of seconds of
-    /// headroom — far more than a healthy pipeline ever queues, but a hard
-    /// bound when inference stalls: the stream then drops the OLDEST buffers
-    /// (captions degrade toward the newest audio instead of memory growing
-    /// without limit). Also sized so the fixture-driven E2E tests, which
-    /// feed ~375 buffers much faster than real time, fit without drops.
-    private static let feedCapacity = 512
-
-    /// Cross-thread continuation slots the sink closures yield into. The
-    /// audio callback thread yields under the lock; the main actor swaps
-    /// the continuation per recording (`bindFeeds` / `retireFeeds`). A nil
-    /// slot — before the first bind, or after a flush — drops the buffer,
-    /// matching the recorder lifecycle (nothing should be fed outside a
-    /// recording).
-    private let micFeedSlot = OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>(initialState: nil)
-    private let appFeedSlot = OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>(initialState: nil)
-    /// Single consumer task per channel feed — the serialization that makes
-    /// `LiveCaptionPipeline.ingest` calls ordered by construction.
-    private var micFeedConsumer: Task<Void, Never>?
-    private var appFeedConsumer: Task<Void, Never>?
+    /// One bounded feed per channel (see `CaptionChannelFeed`). The feeds
+    /// are (re)armed per recording via `bindFeeds()` and retired by
+    /// `flush()`/`retireFeeds()`.
+    private let micFeed = CaptionChannelFeed()
+    private let appFeed = CaptionChannelFeed()
     /// True once `prepare()` resolved the active strategy to the EOU sessions.
     /// `prepareForNextRecording()` keeps those sessions (already flushed clean at
     /// stop, reloading their models would be wasteful) and only rebuilds the
@@ -119,12 +103,7 @@ final class LiveTranscriptionController {
     /// thread; the closure yields into the channel's bounded feed and returns
     /// immediately — no task spawn, no actor hop on the audio thread.
     var micSink: LiveAudioSink {
-        let slot = micFeedSlot
-        return { buffer in
-            slot.withLock { continuation in
-                _ = continuation?.yield(buffer)
-            }
-        }
+        micFeed.sink
     }
 
     /// App-channel live sink. Hand this to `DualSourceRecorder.appLiveSink`
@@ -134,12 +113,7 @@ final class LiveTranscriptionController {
     /// runs them through `LiveAudioResampler`, which passes 16 kHz mono
     /// through unchanged.
     var appSink: LiveAudioSink {
-        let slot = appFeedSlot
-        return { buffer in
-            slot.withLock { continuation in
-                _ = continuation?.yield(buffer)
-            }
-        }
+        appFeed.sink
     }
 
     /// `verboseDiagnostics` stays the LAST parameter so a trailing closure binds
@@ -340,62 +314,24 @@ final class LiveTranscriptionController {
     /// the deterministic "all pre-stop audio is in the pipelines" barrier
     /// that `flush()` and a rebind rely on.
     private func retireFeeds() async {
-        micFeedSlot.withLock { slot in
-            slot?.finish()
-            slot = nil
-        }
-        appFeedSlot.withLock { slot in
-            slot?.finish()
-            slot = nil
-        }
-        if let consumer = micFeedConsumer { await consumer.value }
-        if let consumer = appFeedConsumer { await consumer.value }
-        micFeedConsumer = nil
-        appFeedConsumer = nil
+        await micFeed.retire()
+        await appFeed.retire()
     }
 
     /// (Re)arm one bounded feed per built pipeline, retiring any previous
-    /// feeds first so exactly one consumer per channel exists at all times —
-    /// that single consumer is what makes ingest ordering a property of the
-    /// channel rather than of scheduler luck.
+    /// feeds first (also for channels whose pipeline is nil, so no stale
+    /// consumer survives a build-less reset). The app feed's consumer runs a
+    /// fresh `LiveAudioResampler` per recording, replacing the old shared
+    /// instance + per-recording reset.
     private func bindFeeds() async {
         await retireFeeds()
         if let micPipeline {
-            micFeedConsumer = Self.makeFeed(into: micPipeline, slot: micFeedSlot, resampling: false)
+            await micFeed.bind(to: micPipeline)
         }
         if let appPipeline {
-            appFeedConsumer = Self.makeFeed(into: appPipeline, slot: appFeedSlot, resampling: true)
-        }
-    }
-
-    /// Build one channel feed: a bounded `AsyncStream` whose continuation is
-    /// installed into `slot` (for the sink closure) plus a single detached
-    /// consumer task that ingests buffers in arrival order. `resampling`
-    /// routes app-channel buffers through a fresh `LiveAudioResampler`
-    /// (confined to the consumer task, fresh per feed == per recording).
-    /// `static` so the consumer captures only the pipeline + stream, never
-    /// the controller.
-    private static func makeFeed(
-        into pipeline: any LiveCaptionPipeline,
-        slot: OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>,
-        resampling: Bool,
-    ) -> Task<Void, Never> {
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: LiveAudioBuffer.self,
-            bufferingPolicy: .bufferingNewest(feedCapacity),
-        )
-        slot.withLock { $0 = continuation }
-        return Task.detached(priority: .userInitiated) {
-            if resampling {
+            await appFeed.bind(to: appPipeline) {
                 let resampler = LiveAudioResampler()
-                for await buffer in stream {
-                    guard let normalized = resampler.resample(buffer) else { continue }
-                    await pipeline.ingest(normalized)
-                }
-            } else {
-                for await buffer in stream {
-                    await pipeline.ingest(buffer)
-                }
+                return { resampler.resample($0) }
             }
         }
     }
@@ -469,6 +405,88 @@ final class LiveTranscriptionController {
                 }
             }
         }
+    }
+}
+
+/// One channel's bounded sink → pipeline feed: an `AsyncStream` whose
+/// continuation lives in a lock-guarded slot (the audio callback yields into
+/// it synchronously) plus a single detached consumer task that ingests into
+/// the channel's `LiveCaptionPipeline` in arrival order. Owning slot and
+/// consumer in one type keeps the invariant "exactly one consumer per slot;
+/// retire before rebind" in one place instead of mirrored per channel.
+///
+/// A nil slot — before the first `bind`, or after `retire` — drops yielded
+/// buffers, which is correct in every such window: there is either no
+/// recording, no pipeline yet (EOU models still loading), or the recording
+/// just stopped.
+@MainActor
+private final class CaptionChannelFeed {
+    /// Per-buffer normalization run inside the consumer task. Returning nil
+    /// drops the buffer.
+    typealias Transform = (LiveAudioBuffer) -> LiveAudioBuffer?
+
+    /// Bounded feed capacity, in buffers. Capture delivers roughly 10–50
+    /// buffers/s per channel, so this is tens of seconds of headroom — far
+    /// more than a healthy pipeline ever queues, but a hard bound when
+    /// inference stalls: the stream then drops the OLDEST buffers (captions
+    /// degrade toward the newest audio instead of memory growing without
+    /// limit). Also sized so the fixture-driven E2E tests, which feed ~375
+    /// buffers much faster than real time, fit without drops.
+    private static let capacity = 512
+
+    /// Cross-thread continuation slot the sink closure yields into. The
+    /// audio callback thread yields under the lock; the main actor swaps the
+    /// continuation per recording (`bind` / `retire`).
+    private let slot = OSAllocatedUnfairLock<AsyncStream<LiveAudioBuffer>.Continuation?>(initialState: nil)
+    /// Single consumer task — the serialization that makes
+    /// `LiveCaptionPipeline.ingest` calls ordered by construction.
+    private var consumer: Task<Void, Never>?
+
+    /// Sink closure for the recorder: yields into the currently-armed stream
+    /// and returns immediately — no task spawn, no actor hop on the audio
+    /// thread. Captures only the slot, never the feed or its owner.
+    var sink: LiveAudioSink {
+        let slot = slot
+        return { buffer in
+            slot.withLock { continuation in
+                _ = continuation?.yield(buffer)
+            }
+        }
+    }
+
+    /// Arm a fresh feed into `pipeline`, retiring any previous one first so
+    /// exactly one consumer exists. `makeTransform` is invoked inside the
+    /// consumer task, so a stateful non-Sendable transform (the app channel's
+    /// `LiveAudioResampler`) stays confined to it — and is fresh per feed ==
+    /// per recording.
+    func bind(
+        to pipeline: any LiveCaptionPipeline,
+        makeTransform: @escaping @Sendable () -> Transform = { \.self },
+    ) async {
+        await retire()
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: LiveAudioBuffer.self,
+            bufferingPolicy: .bufferingNewest(Self.capacity),
+        )
+        slot.withLock { $0 = continuation }
+        consumer = Task.detached(priority: .userInitiated) {
+            let transform = makeTransform()
+            for await buffer in stream {
+                guard let normalized = transform(buffer) else { continue }
+                await pipeline.ingest(normalized)
+            }
+        }
+    }
+
+    /// Stop accepting sink deliveries, then await the consumer so every
+    /// buffer already delivered is ingested. Idempotent.
+    func retire() async {
+        slot.withLock { continuation in
+            continuation?.finish()
+            continuation = nil
+        }
+        if let consumer { await consumer.value }
+        consumer = nil
     }
 }
 

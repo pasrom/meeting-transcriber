@@ -113,7 +113,7 @@ final class LiveCaptionFeedTests: XCTestCase {
         // contiguous run — proving drops happened at the old end only.
         let tail = Array(appended.dropFirst())
         if let first = tail.first {
-            let expected = stride(from: first, through: Float(total - 1), by: 1).map(\.self)
+            let expected = Array(stride(from: first, through: Float(total - 1), by: 1))
             XCTAssertEqual(tail, expected, "kept buffers must be the newest contiguous run, in order")
         } else {
             XCTFail("at least the newest buffers must have been ingested after release")
@@ -138,11 +138,7 @@ final class LiveCaptionFeedTests: XCTestCase {
         await controller.prepareForNextRecording()
         controller.micSink(buffer(value: 7))
 
-        let deadline = ContinuousClock.now + .seconds(5)
-        while await factory.mic.appendedFirstSamples.count == before,
-              ContinuousClock.now < deadline {
-            try? await Task.sleep(nanoseconds: 10_000_000)
-        }
+        await waitFor { await factory.mic.appendedFirstSamples.count > before }
         let appended = await factory.mic.appendedFirstSamples
         XCTAssertEqual(
             appended.last, 7,
@@ -200,7 +196,6 @@ private final class ChannelMockFactory {
 private actor MockFeedAsrManager: EouStreamingAsrManaging {
     private(set) var appendedFirstSamples: [Float] = []
     private(set) var appendedCountAtFinish = -1
-    private(set) var finishCount = 0
 
     private var blockNextProcess = false
     private var processContinuation: CheckedContinuation<Void, Never>?
@@ -244,7 +239,6 @@ private actor MockFeedAsrManager: EouStreamingAsrManaging {
     }
 
     func finish() -> String {
-        finishCount += 1
         appendedCountAtFinish = appendedFirstSamples.count
         return ""
     }

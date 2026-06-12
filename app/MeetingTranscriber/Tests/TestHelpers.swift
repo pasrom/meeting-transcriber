@@ -52,6 +52,20 @@ extension XCTestCase {
             await Task.yield()
         }
     }
+
+    /// Async-condition overload for conditions that must `await` (e.g. reading
+    /// actor-isolated test-double state). Polls with a short sleep instead of
+    /// a bare yield so the awaited actor gets real scheduling windows.
+    @MainActor
+    func waitFor(
+        _ condition: () async -> Bool,
+        timeout: Duration = .seconds(5),
+    ) async {
+        let deadline = ContinuousClock.now + timeout
+        while await !condition(), ContinuousClock.now < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
 }
 
 // MARK: - Fixture URL Helper
