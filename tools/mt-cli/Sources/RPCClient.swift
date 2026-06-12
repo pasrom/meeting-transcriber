@@ -40,7 +40,6 @@ struct RPCClient {
     }()
 
     // Hardcoded literal — URL(string:) cannot fail on a constant valid URL.
-    // swiftlint:disable:next force_unwrapping
     static let defaultBaseURL = URL(string: "http://127.0.0.1:9876")!
 
     /// Per-request timeout. Without this the CLI hangs forever against a
