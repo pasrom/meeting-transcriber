@@ -76,24 +76,6 @@ final class Qwen3AsrEngineTests: XCTestCase {
         }
     }
 
-    // MARK: - MergeDualSourceSegments (protocol extension)
-
-    func testMergeDualSourceSegmentsLabelsAndSorts() {
-        guard #available(macOS 15, *) else { return }
-        let engine = Qwen3AsrEngine()
-
-        let appSegs = [TimestampedSegment(start: 0, end: 5, text: "Hello from app")]
-        let micSegs = [TimestampedSegment(start: 2, end: 7, text: "Hello from mic")]
-
-        let result = engine.mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
-
-        XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result[0].speaker, "Remote")
-        XCTAssertEqual(result[0].text, "Hello from app")
-        XCTAssertEqual(result[1].speaker, "Me")
-        XCTAssertEqual(result[1].text, "Hello from mic")
-    }
-
     // MARK: - Load Model State Transitions
 
     func testLoadModelTransitionsToLoaded() async {

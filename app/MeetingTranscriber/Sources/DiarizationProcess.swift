@@ -32,10 +32,48 @@ protocol DiarizationProvider: Sendable {
 /// Speaker assignment utilities.
 enum DiarizationProcess {
     /// Speaker tag carried by app/remote-audio segments in a dual-source mix.
-    /// Written by `TranscribingEngine.mergeDualSourceSegments` and read back
-    /// here when splitting cached segments per track — both sides must agree,
-    /// so the literal lives in one place.
+    /// Written by `mergeDualSourceSegments` and read back here when splitting
+    /// cached segments per track — both sides must agree, so the literal lives
+    /// in one place.
     static let remoteSpeakerLabel = "Remote"
+
+    /// Label and merge pre-transcribed app/mic segments by timestamp: app
+    /// segments become `remoteSpeakerLabel`, mic segments take `micLabel`, the
+    /// mic track is shifted by `micDelay`, and the result is sorted by start
+    /// time. Pure timestamp math over transcript segments — lives here next to
+    /// the diarization assignment that reads `remoteSpeakerLabel` back, rather
+    /// than on the engine protocol (the engine doesn't care about speaker tags).
+    static func mergeDualSourceSegments(
+        appSegments: [TimestampedSegment],
+        micSegments: [TimestampedSegment],
+        micDelay: TimeInterval = 0,
+        micLabel: String = "Me",
+    ) -> [TimestampedSegment] {
+        var app = appSegments
+        var mic = micSegments
+
+        if micDelay != 0 {
+            mic = mic.map { seg in
+                TimestampedSegment(
+                    start: seg.start + micDelay,
+                    end: seg.end + micDelay,
+                    text: seg.text,
+                    speaker: seg.speaker,
+                )
+            }
+        }
+
+        for i in app.indices {
+            app[i].speaker = remoteSpeakerLabel
+        }
+        for i in mic.indices {
+            mic[i].speaker = micLabel
+        }
+
+        var result = app + mic
+        result.sort { $0.start < $1.start }
+        return result
+    }
 
     /// Assign speaker labels to transcript segments by maximum temporal overlap.
     /// Uses `autoNames` to replace raw labels (e.g. "SPEAKER_0") with human names.
@@ -91,7 +129,7 @@ enum DiarizationProcess {
     /// track's diarization onto a different timeline. Used to bring the mic
     /// track's diarization onto the app/canonical timeline by `+micDelay`, so it
     /// aligns with the mic transcript segments — which
-    /// `TranscribingEngine.mergeDualSourceSegments` already shifts by the same
+    /// `mergeDualSourceSegments` already shifts by the same
     /// `+micDelay`. Without this the two are offset and overlap-based speaker
     /// assignment mislabels mic-side segments. `speakingTimes` (durations),
     /// `autoNames`, and `embeddings` are timeline-independent, so they pass

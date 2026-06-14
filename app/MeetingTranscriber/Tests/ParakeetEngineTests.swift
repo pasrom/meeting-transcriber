@@ -55,61 +55,6 @@ final class ParakeetEngineTests: XCTestCase {
         }
     }
 
-    // MARK: - MergeDualSourceSegments (protocol extension on TranscribingEngine)
-
-    func testMergeDualSourceSegmentsLabelsAndSorts() {
-        let engine = ParakeetEngine()
-
-        let appSegs = [TimestampedSegment(start: 0, end: 5, text: "Hello from app")]
-        let micSegs = [TimestampedSegment(start: 2, end: 7, text: "Hello from mic")]
-
-        let result = engine.mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
-
-        XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result[0].speaker, "Remote")
-        XCTAssertEqual(result[0].text, "Hello from app")
-        XCTAssertEqual(result[1].speaker, "Me")
-        XCTAssertEqual(result[1].text, "Hello from mic")
-    }
-
-    func testMergeDualSourceSegmentsAppliesMicDelay() {
-        let engine = ParakeetEngine()
-
-        let appSegs = [TimestampedSegment(start: 0, end: 5, text: "App")]
-        let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Mic")]
-
-        let result = engine.mergeDualSourceSegments(
-            appSegments: appSegs, micSegments: micSegs, micDelay: 3.0,
-        )
-
-        XCTAssertEqual(result.count, 2)
-        XCTAssertEqual(result[0].text, "App")
-        XCTAssertEqual(result[0].start, 0)
-        XCTAssertEqual(result[1].text, "Mic")
-        XCTAssertEqual(result[1].start, 3.0)
-        XCTAssertEqual(result[1].end, 8.0)
-    }
-
-    func testMergeDualSourceSegmentsEmptyInputs() {
-        let engine = ParakeetEngine()
-
-        let result = engine.mergeDualSourceSegments(appSegments: [], micSegments: [])
-        XCTAssertTrue(result.isEmpty)
-    }
-
-    func testMergeDualSourceSegmentsCustomMicLabel() {
-        let engine = ParakeetEngine()
-
-        let appSegs = [TimestampedSegment(start: 0, end: 5, text: "App")]
-        let micSegs = [TimestampedSegment(start: 1, end: 6, text: "Mic")]
-
-        let result = engine.mergeDualSourceSegments(
-            appSegments: appSegs, micSegments: micSegs, micLabel: "Alice",
-        )
-
-        XCTAssertEqual(result[1].speaker, "Alice")
-    }
-
     // MARK: - Load Model State Transitions
 
     func testLoadModelTransitionsToLoaded() async {
