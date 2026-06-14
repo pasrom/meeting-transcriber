@@ -1,7 +1,6 @@
 import AudioTapLib
 @preconcurrency import AVFoundation
 @testable import MeetingTranscriber
-import WhisperKit
 import XCTest
 
 /// Behaviour pins for the English low-latency streaming path on
@@ -39,7 +38,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
     /// Tracks whether the engine's `loadModel()` ran — the tell that the
     /// re-transcribe path was built (the EOU path skips it entirely).
     private final class LoadTrackingEngine: StreamingTranscribingEngine {
-        var modelState: ModelState = .loaded
+        var modelState: EngineModelState = .loaded
         var downloadProgress: Double = 1.0
         var transcriptionProgress: Double = 1.0
         private(set) var loadModelCount = 0

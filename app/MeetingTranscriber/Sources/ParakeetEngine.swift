@@ -1,7 +1,6 @@
 import FluidAudio
 import Foundation
 import os.log
-import WhisperKit
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ParakeetEngine")
 
@@ -13,7 +12,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Parakee
 @MainActor
 @Observable
 final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
-    private(set) var modelState: ModelState = .unloaded
+    private(set) var modelState: EngineModelState = .unloaded
     private(set) var downloadProgress: Double = 0
     private(set) var transcriptionProgress: Double = 0
 

@@ -1,10 +1,9 @@
 import Foundation
-import WhisperKit
 
 /// Common interface for transcription engine implementations (WhisperKit, Parakeet, …).
 @MainActor
 protocol TranscribingEngine: AnyObject {
-    var modelState: ModelState { get }
+    var modelState: EngineModelState { get }
     var downloadProgress: Double { get }
     var transcriptionProgress: Double { get } // swiftlint:disable:this unused_declaration
 

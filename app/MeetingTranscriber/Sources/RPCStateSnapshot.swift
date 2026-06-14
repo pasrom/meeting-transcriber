@@ -102,7 +102,7 @@
             /// `nil` on macOS <15 where `Qwen3AsrEngine` isn't available.
             let qwen3: Qwen3?
 
-            // `modelState` (stringified `ModelState`, e.g. "unloaded"/"loaded")
+            // `modelState` (stringified `EngineModelState`, e.g. "unloaded"/"loaded")
             // lets driver scripts wait for model preload before measuring —
             // pipeline state tracks jobs, not loads (used by e2e-cpu-load.sh).
 

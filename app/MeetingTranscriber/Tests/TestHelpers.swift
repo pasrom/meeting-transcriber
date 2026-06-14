@@ -1,7 +1,6 @@
 @preconcurrency import AVFoundation
 import Foundation
 @testable import MeetingTranscriber
-import WhisperKit
 import XCTest
 
 // MARK: - Temp-Directory / Temp-File Helpers
@@ -403,7 +402,7 @@ class MockProtocolGen: ProtocolGenerating {
 /// Mock transcription engine for pipeline tests.
 @MainActor
 class MockEngine: TranscribingEngine {
-    var modelState: ModelState = .loaded
+    var modelState: EngineModelState = .loaded
     var downloadProgress: Double = 1.0
     var transcriptionProgress: Double = 1.0
     var segmentsToReturn: [TimestampedSegment] = []

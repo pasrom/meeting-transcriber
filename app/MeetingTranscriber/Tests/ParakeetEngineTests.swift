@@ -1,5 +1,4 @@
 @testable import MeetingTranscriber
-import WhisperKit
 import XCTest
 
 @MainActor
@@ -121,7 +120,7 @@ final class ParakeetEngineTests: XCTestCase {
 
         // Model loads successfully from cached CoreML files, or fails and resets to .unloaded.
         // Either way it must not be stuck in .downloading or .loading.
-        let terminalStates: [ModelState] = [.loaded, .unloaded]
+        let terminalStates: [EngineModelState] = [.loaded, .unloaded]
         XCTAssertTrue(
             terminalStates.contains(engine.modelState),
             "Model state should be terminal (.loaded or .unloaded), got: \(engine.modelState)",
@@ -150,7 +149,7 @@ final class ParakeetEngineTests: XCTestCase {
         _ = await (load1, load2)
 
         // Both complete without crash; state is terminal
-        let terminalStates: [ModelState] = [.loaded, .unloaded]
+        let terminalStates: [EngineModelState] = [.loaded, .unloaded]
         XCTAssertTrue(
             terminalStates.contains(engine.modelState),
             "Model state should be terminal after concurrent loads, got: \(engine.modelState)",
