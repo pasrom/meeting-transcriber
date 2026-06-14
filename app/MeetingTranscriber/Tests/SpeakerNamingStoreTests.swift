@@ -105,6 +105,25 @@ final class SpeakerNamingStoreTests: XCTestCase {
         XCTAssertNil(store.load(slug: "does_not_exist"))
     }
 
+    /// Two same-title jobs resolve to distinct slugs and so write coexisting
+    /// sidecars — the survivor's data never shadows the other. Guards the
+    /// no-clobber property end-to-end through the real save/load path.
+    func test_distinctSlugs_writeCoexistingLoadableFiles() throws {
+        let store = SpeakerNamingStore(outputDir: tmpDir)
+        let title = "Daily Standup"
+        let id1 = UUID()
+        let id2 = UUID()
+        let slug1 = SpeakerNamingStore.slug(title: title, jobID: id1)
+        let slug2 = SpeakerNamingStore.slug(title: title, jobID: id2)
+
+        try store.save(makeData(jobID: id1, title: title, mapping: ["SPEAKER_0": "Alice"]), slug: slug1)
+        try store.save(makeData(jobID: id2, title: title, mapping: ["SPEAKER_0": "Bob"]), slug: slug2)
+
+        XCTAssertNotEqual(slug1, slug2)
+        XCTAssertEqual(store.load(slug: slug1)?.mapping["SPEAKER_0"], "Alice")
+        XCTAssertEqual(store.load(slug: slug2)?.mapping["SPEAKER_0"], "Bob")
+    }
+
     func test_save_nilOutputDir_isNoOp() throws {
         let store = SpeakerNamingStore(outputDir: nil)
         // Must neither throw nor crash; load is correspondingly nil.
