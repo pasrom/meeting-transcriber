@@ -17,6 +17,11 @@ final class Qwen3AsrEngine: TranscribingEngine {
     private(set) var downloadProgress: Double = 0
     private(set) var transcriptionProgress: Double = 0
 
+    /// Qwen3 emits a single segment spanning the whole recording (no
+    /// per-utterance timestamps), so diarization can't assign speakers per
+    /// utterance — the pipeline skips it. See `TranscribingEngine`.
+    let providesTimestamps = false
+
     /// Language hint for transcription (ISO 639-1 code, e.g. "de", "en").
     /// nil = auto-detect.
     var language: String?

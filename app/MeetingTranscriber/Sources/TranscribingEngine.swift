@@ -7,8 +7,23 @@ protocol TranscribingEngine: AnyObject {
     var downloadProgress: Double { get }
     var transcriptionProgress: Double { get } // swiftlint:disable:this unused_declaration
 
+    /// Whether `transcribeSegments` returns per-utterance timestamps fine-grained
+    /// enough to drive speaker diarization. WhisperKit and Parakeet do (default
+    /// `true`); Qwen3 emits a single segment spanning the whole recording, so
+    /// diarization would collapse the meeting onto one speaker — it returns
+    /// `false` and the pipeline skips diarization with a warning.
+    var providesTimestamps: Bool { get }
+
     func loadModel() async
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment]
+}
+
+extension TranscribingEngine {
+    /// Most engines produce per-utterance timestamps; only the exceptions
+    /// override this.
+    var providesTimestamps: Bool {
+        true
+    }
 }
 
 /// Engines that can transcribe an already-decoded `[Float]` buffer of
