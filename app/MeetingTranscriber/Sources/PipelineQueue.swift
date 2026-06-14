@@ -746,6 +746,19 @@ class PipelineQueue {
         var finalTranscript = transcription.transcript
 
         guard diarizeEnabled, let diarizationFactory else { return finalTranscript }
+        // An engine without per-utterance timestamps (Qwen3 emits a single
+        // whole-recording segment) can't be diarized — assignSpeakers would
+        // collapse the entire meeting onto one speaker. Skip it and tell the
+        // user why. Dual-source transcripts keep their per-track Remote/mic
+        // labels (set in transcribe()); single-source stays unlabeled.
+        guard engine.providesTimestamps else {
+            logger.info("[\(ctx.shortID, privacy: .public)] diarization_skipped_no_timestamps")
+            addWarning(
+                id: ctx.jobID,
+                "Speaker diarization needs per-utterance timestamps, which the selected transcription engine doesn't produce — speakers not labeled",
+            )
+            return finalTranscript
+        }
         let diarizeProcess = diarizationFactory()
         guard diarizeProcess.isAvailable else {
             logger.info("[\(ctx.shortID, privacy: .public)] diarization_skipped")

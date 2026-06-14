@@ -405,6 +405,7 @@ class MockEngine: TranscribingEngine {
     var modelState: EngineModelState = .loaded
     var downloadProgress: Double = 1.0
     var transcriptionProgress: Double = 1.0
+    var providesTimestamps = true
     var segmentsToReturn: [TimestampedSegment] = []
     var transcribeCallCount = 0
     var shouldThrow = false

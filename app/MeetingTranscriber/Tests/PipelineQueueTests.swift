@@ -846,6 +846,37 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// An engine that doesn't produce per-utterance timestamps (Qwen3 emits one
+    /// segment for the whole recording) must skip diarization entirely — running
+    /// it would collapse the meeting onto a single speaker — and warn the user.
+    func testDiarizeSkippedWhenEngineLacksTimestamps() async throws {
+        let engine = MockEngine()
+        engine.providesTimestamps = false
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 30, text: "Whole meeting in one segment")]
+        let diar = MockDiarization()
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        q.enqueue(PipelineJob(
+            meetingTitle: "NoTimestamps", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+        await q.processNext()
+
+        XCTAssertEqual(diar.runCount, 0, "diarization must not run for a timestamp-less engine")
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        XCTAssertTrue(
+            transcript.contains("Whole meeting in one segment"),
+            "transcript should pass through unlabeled — got: \(transcript)",
+        )
+        let warnings = q.jobs.first?.warnings ?? []
+        XCTAssertTrue(
+            warnings.contains { $0.contains("per-utterance timestamps") },
+            "expected a timestamp-capability warning — got: \(warnings)",
+        )
+    }
+
     func testDiarizeDualTrackLabelsBothTracks() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
