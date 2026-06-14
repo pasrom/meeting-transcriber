@@ -685,7 +685,7 @@ class PipelineQueue {
             let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
 
             // Merge dual-source segments
-            let segments = engine.mergeDualSourceSegments(
+            let segments = DiarizationProcess.mergeDualSourceSegments(
                 appSegments: appSegments,
                 micSegments: micSegments,
                 micDelay: ctx.micDelay,

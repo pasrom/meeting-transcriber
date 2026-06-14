@@ -1,12 +1,10 @@
 @testable import MeetingTranscriber
 import XCTest
 
-@MainActor
-final class TranscribingEngineTests: XCTestCase {
-    private func makeEngine() -> WhisperKitEngine {
-        WhisperKitEngine()
-    }
-
+/// Tests for `DiarizationProcess.mergeDualSourceSegments` — labelling + merging
+/// pre-transcribed app/mic segments by timestamp. Pure static logic; no engine
+/// needed (it used to live on the engine protocol).
+final class DiarizationMergeDualSourceTests: XCTestCase {
     // MARK: - Speaker Labels
 
     func testLabelsAppSegmentsAsRemote() {
@@ -14,7 +12,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 0, end: 5, text: "Hello"),
             TimestampedSegment(start: 5, end: 10, text: "World"),
         ]
-        let result = makeEngine().mergeDualSourceSegments(appSegments: appSegs, micSegments: [])
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: appSegs, micSegments: [])
 
         XCTAssertEqual(result.count, 2)
         XCTAssertTrue(result.allSatisfy { $0.speaker == "Remote" })
@@ -25,7 +23,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 0, end: 5, text: "Hello"),
             TimestampedSegment(start: 5, end: 10, text: "World"),
         ]
-        let result = makeEngine().mergeDualSourceSegments(appSegments: [], micSegments: micSegs)
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: [], micSegments: micSegs)
 
         XCTAssertEqual(result.count, 2)
         XCTAssertTrue(result.allSatisfy { $0.speaker == "Me" })
@@ -35,7 +33,7 @@ final class TranscribingEngineTests: XCTestCase {
         let appSegs = [TimestampedSegment(start: 0, end: 5, text: "App")]
         let micSegs = [TimestampedSegment(start: 1, end: 6, text: "Mic")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: appSegs, micSegments: micSegs, micLabel: "Alice",
         )
 
@@ -55,7 +53,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 6, end: 9, text: "Third"),
         ]
 
-        let result = makeEngine().mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
 
         XCTAssertEqual(result.map(\.text), ["First", "Second", "Third", "Fourth"])
         XCTAssertEqual(result.map(\.start), [0, 3, 6, 10])
@@ -71,7 +69,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 9, end: 12, text: "M2"),
         ]
 
-        let result = makeEngine().mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
 
         XCTAssertEqual(result.map(\.text), ["A1", "M1", "A2", "M2"])
         XCTAssertEqual(result.map(\.speaker), ["Remote", "Me", "Remote", "Me"])
@@ -83,7 +81,7 @@ final class TranscribingEngineTests: XCTestCase {
         let appSegs = [TimestampedSegment(start: 0, end: 5, text: "App")]
         let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Mic")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: appSegs, micSegments: micSegs, micDelay: 3.0,
         )
 
@@ -96,7 +94,7 @@ final class TranscribingEngineTests: XCTestCase {
         let appSegs = [TimestampedSegment(start: 5, end: 10, text: "App")]
         let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Mic")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: appSegs, micSegments: micSegs, micDelay: 2.0,
         )
 
@@ -108,7 +106,7 @@ final class TranscribingEngineTests: XCTestCase {
     func testZeroMicDelayDoesNotModifyTimestamps() {
         let micSegs = [TimestampedSegment(start: 3, end: 8, text: "Mic")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: [], micSegments: micSegs, micDelay: 0,
         )
 
@@ -120,7 +118,7 @@ final class TranscribingEngineTests: XCTestCase {
         let appSegs = [TimestampedSegment(start: 5, end: 10, text: "App")]
         let micSegs = [TimestampedSegment(start: 7, end: 12, text: "Mic")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: appSegs, micSegments: micSegs, micDelay: -2.0,
         )
 
@@ -137,7 +135,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 5, end: 10, text: "Mic2"),
         ]
 
-        let result = makeEngine().mergeDualSourceSegments(appSegments: [], micSegments: micSegs)
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: [], micSegments: micSegs)
 
         XCTAssertEqual(result.count, 2)
         XCTAssertTrue(result.allSatisfy { $0.speaker == "Me" })
@@ -150,7 +148,7 @@ final class TranscribingEngineTests: XCTestCase {
             TimestampedSegment(start: 5, end: 10, text: "App2"),
         ]
 
-        let result = makeEngine().mergeDualSourceSegments(appSegments: appSegs, micSegments: [])
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: appSegs, micSegments: [])
 
         XCTAssertEqual(result.count, 2)
         XCTAssertTrue(result.allSatisfy { $0.speaker == "Remote" })
@@ -158,7 +156,7 @@ final class TranscribingEngineTests: XCTestCase {
     }
 
     func testBothEmptyReturnsEmptyResult() {
-        let result = makeEngine().mergeDualSourceSegments(appSegments: [], micSegments: [])
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: [], micSegments: [])
         XCTAssertTrue(result.isEmpty)
     }
 
@@ -168,7 +166,7 @@ final class TranscribingEngineTests: XCTestCase {
         let appSegs = [TimestampedSegment(start: 0, end: 5, text: "Hello from the app side")]
         let micSegs = [TimestampedSegment(start: 2, end: 7, text: "Hello from the mic side")]
 
-        let result = makeEngine().mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
+        let result = DiarizationProcess.mergeDualSourceSegments(appSegments: appSegs, micSegments: micSegs)
 
         XCTAssertEqual(result[0].text, "Hello from the app side")
         XCTAssertEqual(result[1].text, "Hello from the mic side")
@@ -177,7 +175,7 @@ final class TranscribingEngineTests: XCTestCase {
     func testPreservesTextWithMicDelay() {
         let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Delayed mic text")]
 
-        let result = makeEngine().mergeDualSourceSegments(
+        let result = DiarizationProcess.mergeDualSourceSegments(
             appSegments: [], micSegments: micSegs, micDelay: 10.0,
         )
 
