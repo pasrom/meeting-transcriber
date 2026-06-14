@@ -32,6 +32,10 @@ class PipelineQueue {
 
     let completedJobLifetime: TimeInterval
 
+    /// Disk persistence for speaker-naming sidecars (keyed by per-job slug).
+    /// Pure I/O over `outputDir`; see `SpeakerNamingStore`.
+    private let namingStore: SpeakerNamingStore
+
     /// Cached FluidVAD instance — reused across jobs to avoid model reload.
     private var vad: FluidVAD?
 
@@ -109,16 +113,11 @@ class PipelineQueue {
         return speakerNamingDataByJob[firstPendingJob.id]
     }
 
-    /// Filesystem slug for a job's persisted artefacts (`<slug>_naming.json`,
-    /// `<slug>_16k.wav`, `<slug>_segments.json`, mix/app/mic WAVs). Embedding
-    /// the job's short-id keeps two back-to-back same-title meetings (e.g. a
-    /// recurring "Daily Standup") from clobbering each other on disk and
-    /// confusing snapshot rebuild — without it both jobs would resolve to the
-    /// same `<title>_naming.json` and the second save would overwrite the
-    /// first, then both UUIDs would map to the survivor.
+    /// Filesystem slug for a job's persisted artefacts. Thin alias for
+    /// `SpeakerNamingStore.slug` — kept so existing call sites (`processNext`,
+    /// tests) don't have to reach into the store for a pure helper.
     static func namingSlug(title: String, jobID: UUID) -> String {
-        let titleSlug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
-        return "\(titleSlug)_\(PipelineJob.shortID(for: jobID))"
+        SpeakerNamingStore.slug(title: title, jobID: jobID)
     }
 
     /// Returns naming data for a specific job ID, or the first pending job as fallback.
@@ -283,6 +282,7 @@ class PipelineQueue {
         self.vadConfig = nil
         self.recognitionStatsLog = nil
         self.completedJobLifetime = completedJobLifetime
+        self.namingStore = SpeakerNamingStore(outputDir: nil)
     }
 
     // MARK: - Known speaker names (issue #155)
@@ -368,6 +368,7 @@ class PipelineQueue {
         self.vadConfig = vadConfig
         self.recognitionStatsLog = recognitionStatsLog
         self.completedJobLifetime = completedJobLifetime
+        self.namingStore = SpeakerNamingStore(outputDir: outputDir)
     }
 
     var activeJobs: [PipelineJob] {
@@ -1377,50 +1378,17 @@ class PipelineQueue {
 
     // MARK: - Speaker Naming Persistence
 
-    func saveNamingData(_ data: SpeakerNamingData, slug: String) {
-        guard let outputDir else { return }
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
-        try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
-        let path = recordingsDir.appendingPathComponent("\(slug)_naming.json")
+    /// Persist naming data via `namingStore`, surfacing a per-job warning on
+    /// failure (the store stays I/O-only; the queue owns the job-state side
+    /// effect). A silent failure would mean late-confirm won't work after a
+    /// restart, so make it visible: log + warning on the job.
+    private func saveNamingData(_ data: SpeakerNamingData, slug: String) {
         do {
-            // FluidAudio embeddings can contain NaN/Inf for short or silent
-            // segments. Default JSON encoder rejects them — use the string
-            // round-trip strategy so the data still makes it to disk.
-            let encoder = JSONEncoder()
-            encoder.nonConformingFloatEncodingStrategy = .convertToString(
-                positiveInfinity: "Infinity",
-                negativeInfinity: "-Infinity",
-                nan: "NaN",
-            )
-            let json = try encoder.encode(data)
-            try json.write(to: path, options: .atomic)
-            // Carries per-speaker voice embeddings — restrict to owner-only.
-            try FileManager.default.restrictToOwner(path)
+            try namingStore.save(data, slug: slug)
         } catch {
-            // Silent failure here means late-confirm won't work after a
-            // restart. Make it visible: log + warning on the job.
             logger.error("Failed to save naming data: \(error.localizedDescription)")
             addWarning(id: data.jobID, "Late re-confirm unavailable — naming data could not be persisted")
         }
-    }
-
-    func loadNamingData(slug: String) -> SpeakerNamingData? {
-        guard let outputDir else { return nil }
-        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
-        guard let json = try? Data(contentsOf: path) else { return nil }
-        let decoder = JSONDecoder()
-        decoder.nonConformingFloatDecodingStrategy = .convertFromString(
-            positiveInfinity: "Infinity",
-            negativeInfinity: "-Infinity",
-            nan: "NaN",
-        )
-        return try? decoder.decode(SpeakerNamingData.self, from: json)
-    }
-
-    func deleteNamingData(slug: String?) {
-        guard let slug, let outputDir else { return }
-        let path = outputDir.appendingPathComponent("recordings/\(slug)_naming.json")
-        try? FileManager.default.removeItem(at: path)
     }
 
     /// Remove all naming-related data for a job: RAM caches, disk JSON, and
@@ -1430,19 +1398,8 @@ class PipelineQueue {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         stashedSuggestedAtDialog.removeValue(forKey: jobID)
         stashedTopCandidates.removeValue(forKey: jobID)
-        deleteNamingData(slug: slug)
-        cleanupSidecarFiles(slug: slug)
-    }
-
-    /// Delete 16kHz audio and segment sidecar files for a slug.
-    func cleanupSidecarFiles(slug: String?) {
-        guard let slug, let outputDir else { return }
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
-        let suffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
-        for suffix in suffixes {
-            let path = recordingsDir.appendingPathComponent("\(slug)\(suffix)")
-            try? FileManager.default.removeItem(at: path)
-        }
+        namingStore.deleteNamingJSON(slug: slug)
+        namingStore.cleanupSidecarFiles(slug: slug)
     }
 
     /// Auto-resolve pending naming items older than maxAge (default: 24h).
@@ -1547,7 +1504,7 @@ class PipelineQueue {
 
         // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
         for job in jobs where job.state == .speakerNamingPending {
-            if let slug = job.namingSlug, let data = loadNamingData(slug: slug) {
+            if let slug = job.namingSlug, let data = namingStore.load(slug: slug) {
                 speakerNamingDataByJob[job.id] = data
             } else {
                 // Naming data lost — transition to done
