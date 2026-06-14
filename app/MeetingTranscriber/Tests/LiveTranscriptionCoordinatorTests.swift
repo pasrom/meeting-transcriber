@@ -1,5 +1,4 @@
 @testable import MeetingTranscriber
-import WhisperKit
 import XCTest
 
 /// Unit tests for `LiveTranscriptionCoordinator.attachSinks`'s gate — that live
@@ -129,7 +128,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
 /// build a controller with a nil streaming engine.
 @MainActor
 private final class NonStreamingEngine: TranscribingEngine {
-    var modelState: ModelState = .loaded
+    var modelState: EngineModelState = .loaded
     var downloadProgress: Double = 1.0
     var transcriptionProgress: Double = 1.0
     func loadModel() {}

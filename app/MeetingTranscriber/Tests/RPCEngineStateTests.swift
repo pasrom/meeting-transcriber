@@ -1,6 +1,5 @@
 #if !APPSTORE
     @testable import MeetingTranscriber
-    import WhisperKit
     import XCTest
 
     /// Verifies that `rpcStateSnapshot()` exposes the live engine state so
@@ -103,11 +102,11 @@
         func test_modelStateWireFormat_pinsDescriptionContract() {
             // e2e-cpu-load.sh string-matches `.modelState == "loaded"` to know
             // when model preload is done. The wire value is
-            // `String(describing: ModelState).lowercased()` — pin that mapping
+            // `String(describing: EngineModelState).lowercased()` — pin that mapping
             // here so a WhisperKit upgrade changing the enum's description
             // breaks THIS test, not silently the e2e runner's settle gate.
-            XCTAssertEqual(String(describing: ModelState.loaded).lowercased(), "loaded")
-            XCTAssertEqual(String(describing: ModelState.unloaded).lowercased(), "unloaded")
+            XCTAssertEqual(String(describing: EngineModelState.loaded).lowercased(), "loaded")
+            XCTAssertEqual(String(describing: EngineModelState.unloaded).lowercased(), "unloaded")
         }
 
         func test_snapshot_whisperLanguageNil_surfacesAsNil() {

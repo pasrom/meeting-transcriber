@@ -167,7 +167,7 @@ struct TranscriptionSettingsView: View {
                 .foregroundStyle(.green)
                 .font(.caption)
 
-        case .unloaded, .unloading:
+        case .unloaded:
             Button("Load Model") {
                 if settings.transcriptionEngine == .whisperKit {
                     whisperKitEngine.modelVariant = settings.whisperKitModel
@@ -177,14 +177,6 @@ struct TranscriptionSettingsView: View {
                     qe.language = settings.qwen3LanguageOrNil
                 }
                 Task { await engine.loadModel() }
-            }
-
-        case .prewarming, .prewarmed, .downloaded:
-            HStack {
-                ProgressView().controlSize(.small)
-                Text("Preparing model...")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }

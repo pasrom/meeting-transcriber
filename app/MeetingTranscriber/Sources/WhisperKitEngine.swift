@@ -42,7 +42,7 @@ extension TimestampedSegment {
 final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
     var language: String?
-    private(set) var modelState: ModelState = .unloaded
+    private(set) var modelState: EngineModelState = .unloaded
     private(set) var downloadProgress: Double = 0
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0

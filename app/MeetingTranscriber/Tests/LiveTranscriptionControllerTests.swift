@@ -1,5 +1,4 @@
 @testable import MeetingTranscriber
-import WhisperKit
 import XCTest
 
 /// Behaviour invariants around the `verboseDiagnostics` gate on
@@ -122,7 +121,7 @@ private final class VerboseCounter {
 /// without loading the real Parakeet/WhisperKit CoreML models.
 @MainActor
 final class MockStreamingEngine: StreamingTranscribingEngine {
-    var modelState: ModelState = .loaded
+    var modelState: EngineModelState = .loaded
     var downloadProgress: Double = 1.0
     var transcriptionProgress: Double = 1.0
     var transcribeCallCount = 0
