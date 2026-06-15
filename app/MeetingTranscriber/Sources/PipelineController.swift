@@ -87,6 +87,7 @@ final class PipelineController {
             speakerMatcherFactory: { SpeakerMatcher() },
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(),
+            stageTimingLog: StageTimingLog(),
         )
         q.loadSnapshot()
         // Fire-and-forget: dir scan + per-file attr probes run off-main so app

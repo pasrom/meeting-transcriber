@@ -64,6 +64,23 @@ final class StageTimingStatsTests: XCTestCase {
         XCTAssertTrue(StageTimingStats.aggregate(events: []).isEmpty)
     }
 
+    // MARK: - JobState → StageKind mapping
+
+    func testStageKindMapsOnlyTimedStates() {
+        XCTAssertEqual(StageKind(jobState: .transcribing), .transcribing)
+        XCTAssertEqual(StageKind(jobState: .diarizing), .diarizing)
+        XCTAssertEqual(StageKind(jobState: .generatingProtocol), .generatingProtocol)
+    }
+
+    func testStageKindExcludesNamingAndTerminalStates() {
+        // The naming wait is human-paced and must never be attributed to a
+        // stage; waiting/done/error aren't compute either.
+        XCTAssertNil(StageKind(jobState: .speakerNamingPending))
+        XCTAssertNil(StageKind(jobState: .waiting))
+        XCTAssertNil(StageKind(jobState: .done))
+        XCTAssertNil(StageKind(jobState: .error))
+    }
+
     // MARK: - Log round-trip + window filtering
 
     func testLogAppendThenLoadRecentRoundTrips() async {

@@ -30,6 +30,10 @@ class PipelineQueue {
     /// tests leave it nil unless they explicitly want to assert on the log.
     let recognitionStatsLog: RecognitionStatsLog?
 
+    /// nil disables per-stage timing capture. AppState injects a real instance;
+    /// tests leave it nil unless asserting on the log.
+    let stageTimingLog: StageTimingLog?
+
     let completedJobLifetime: TimeInterval
 
     /// Disk persistence for speaker-naming sidecars (keyed by per-job slug).
@@ -42,6 +46,20 @@ class PipelineQueue {
     /// Elapsed seconds since the current pipeline stage started.
     private(set) var activeJobElapsed: TimeInterval = 0
     private(set) var isProcessing = false
+
+    /// Historical average wall-clock seconds per stage (last 30 days), used by
+    /// the menu to show "live vs. typical". Refreshed from `stageTimingLog` at
+    /// launch and after each stage completes; empty until the log has data.
+    private(set) var stageAverageSeconds: [StageKind: Double] = [:]
+
+    /// When the current `.transcribing`/`.diarizing`/`.generatingProtocol` state
+    /// was entered, per job — so `updateJobState` can record the state's duration
+    /// on exit (keyed by job to stay correct if transitions ever interleave).
+    private var stageStartByJob: [UUID: ContinuousClock.Instant] = [:]
+    /// Audio length (seconds) each job processed, captured when transcription
+    /// completes, so stage durations can be normalised into an RTF.
+    private var jobAudioSeconds: [UUID: Double] = [:]
+
     private var elapsedTimer: Task<Void, Never>?
     private var processTask: Task<Void, Never>?
     private var cancelledJobIDs = Set<UUID>()
@@ -281,6 +299,7 @@ class PipelineQueue {
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
         self.recognitionStatsLog = nil
+        self.stageTimingLog = nil
         self.completedJobLifetime = completedJobLifetime
         self.namingStore = SpeakerNamingStore(outputDir: nil)
     }
@@ -344,6 +363,7 @@ class PipelineQueue {
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
         recognitionStatsLog: RecognitionStatsLog? = nil,
+        stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -367,8 +387,10 @@ class PipelineQueue {
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
         self.recognitionStatsLog = recognitionStatsLog
+        self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.namingStore = SpeakerNamingStore(outputDir: outputDir)
+        refreshStageAverages()
     }
 
     var activeJobs: [PipelineJob] {
@@ -420,6 +442,8 @@ class PipelineQueue {
             markProcessed(mixPath: jobs[index].mixPath)
             jobs.remove(at: index)
         }
+        stageStartByJob.removeValue(forKey: id)
+        jobAudioSeconds.removeValue(forKey: id)
         saveSnapshot()
     }
 
@@ -458,6 +482,7 @@ class PipelineQueue {
         let oldState = jobs[index].state
         jobs[index].state = newState
         if let error { jobs[index].error = error }
+        recordStageTransition(from: oldState, to: newState, jobID: id)
         appendLog(jobID: id, event: "state_change", from: oldState, to: newState)
         saveSnapshot()
         onJobStateChange?(jobs[index], oldState, newState)
@@ -498,6 +523,49 @@ class PipelineQueue {
     private func stopElapsedTimer() {
         elapsedTimer?.cancel()
         elapsedTimer = nil
+    }
+
+    // MARK: - Stage timing metrics
+
+    /// On every state change: if we left a timed stage, log its wall-clock
+    /// duration; if we entered one, stamp its start. Measuring per-state means
+    /// the recorded duration matches exactly what the menu's elapsed timer shows
+    /// and excludes the speaker-naming pause (see `StageKind(jobState:)`).
+    private func recordStageTransition(from oldState: JobState, to newState: JobState, jobID: UUID) {
+        if let leaving = StageKind(jobState: oldState), let start = stageStartByJob.removeValue(forKey: jobID) {
+            let elapsed = ContinuousClock.now - start
+            let seconds = Double(elapsed.components.seconds)
+                + Double(elapsed.components.attoseconds) / 1e18
+            logStageTiming(stage: leaving, wallClock: seconds, jobID: jobID)
+        }
+        if StageKind(jobState: newState) != nil {
+            stageStartByJob[jobID] = ContinuousClock.now
+        }
+    }
+
+    /// Append one stage-timing event (fire-and-forget) and refresh the cached
+    /// averages so the menu reflects the new data point.
+    private func logStageTiming(stage: StageKind, wallClock: Double, jobID: UUID) {
+        guard let stageTimingLog else { return }
+        let event = StageTimingEvent(
+            ts: Date(), jobID: jobID, stage: stage,
+            wallClockSeconds: wallClock, audioSeconds: jobAudioSeconds[jobID] ?? 0,
+            engine: engine.map { String(describing: type(of: $0)) },
+            diarizerMode: usedDiarizerMode(forJobID: jobID)?.rawValue,
+        )
+        Task { await stageTimingLog.append([event]) }
+        refreshStageAverages()
+    }
+
+    /// Reload recent timings and recompute the per-stage average wall-clock.
+    private func refreshStageAverages() {
+        guard let stageTimingLog else { return }
+        Task { [weak self] in
+            let events = await stageTimingLog.loadRecent(within: 30 * 86400)
+            let averages = StageTimingStats.aggregate(events: events)
+                .mapValues(\.avgWallClockSeconds)
+            self?.stageAverageSeconds = averages
+        }
     }
 
     // MARK: - Processing
@@ -727,6 +795,9 @@ class PipelineQueue {
 
         let segCount = cachedSegments?.count ?? 0
         let totalSecs = cachedSegments?.last?.end ?? 0
+        // Stash for stage-timing RTF: diarization/protocol of this job process
+        // the same audio length.
+        jobAudioSeconds[ctx.jobID] = totalSecs
         logger.info(
             "[\(ctx.shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
         )

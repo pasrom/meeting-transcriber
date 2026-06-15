@@ -17,6 +17,19 @@ enum StageKind: String, Codable, CaseIterable {
         case .generatingProtocol: "Protocol"
         }
     }
+
+    /// The timed stage a `JobState` corresponds to, or nil for non-timed states
+    /// (`.waiting`, `.speakerNamingPending`, `.done`, `.error`). The speaker-
+    /// naming wait is its own state, so its human-paced duration is never
+    /// attributed to diarization.
+    init?(jobState: JobState) {
+        switch jobState {
+        case .transcribing: self = .transcribing
+        case .diarizing: self = .diarizing
+        case .generatingProtocol: self = .generatingProtocol
+        default: return nil
+        }
+    }
 }
 
 /// One row in the JSONL stage-timing log: how long a single pipeline stage of a
