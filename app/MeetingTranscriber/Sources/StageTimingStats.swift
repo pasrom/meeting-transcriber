@@ -63,6 +63,15 @@ enum StageTimingStats {
         let avgRTF: Double?
     }
 
+    /// Format a duration as `m:ss` (or `Ns` under a minute) for compact display
+    /// in the menu and Settings. Shared so the live elapsed timer and the
+    /// historical average render identically.
+    static func formatDuration(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        if total < 60 { return "\(total)s" }
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    }
+
     /// Group events by stage and compute per-stage count / average wall-clock /
     /// average RTF. Events whose `audioSeconds <= 0` still count toward
     /// `count` and `avgWallClockSeconds` but are excluded from the RTF ratio so

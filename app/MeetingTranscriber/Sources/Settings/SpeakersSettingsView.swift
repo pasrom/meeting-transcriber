@@ -10,6 +10,7 @@ private struct KnownVoicesSheetItem: Identifiable {
 struct SpeakersSettingsView: View {
     @Bindable var settings: AppSettings
     var recognitionStatsLog: RecognitionStatsLog
+    var stageTimingLog: StageTimingLog
     var enrollmentDiarizerFactory: (() -> any DiarizationProvider)?
     var namingDialogActive: Bool
     var pipelineBusy: Bool
@@ -77,6 +78,8 @@ struct SpeakersSettingsView: View {
             }
 
             RecognitionStatsView(log: recognitionStatsLog)
+
+            ProcessingStatsView(log: stageTimingLog)
         }
         .formStyle(.grouped)
         .sheet(item: $knownVoicesSheet) { item in

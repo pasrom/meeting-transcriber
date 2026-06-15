@@ -9,6 +9,9 @@ struct SettingsView: View {
     /// Required: the same actor instance the pipeline writes to, so the Stats
     /// tab and the pipeline don't race two writers on `recognition_log.jsonl`.
     var recognitionStatsLog: RecognitionStatsLog
+    /// Same actor instance the pipeline writes to, so the Processing Stats tab
+    /// and the pipeline don't race two writers on `stage_timing.jsonl`.
+    var stageTimingLog: StageTimingLog
     /// Factory for the voice-enrollment diarizer. nil → enroll button hidden.
     var enrollmentDiarizerFactory: (() -> any DiarizationProvider)?
     /// True when a meeting is currently waiting on a naming dialog. We gate
@@ -66,6 +69,7 @@ struct SettingsView: View {
             SpeakersSettingsView(
                 settings: settings,
                 recognitionStatsLog: recognitionStatsLog,
+                stageTimingLog: stageTimingLog,
                 enrollmentDiarizerFactory: enrollmentDiarizerFactory,
                 namingDialogActive: namingDialogActive,
                 pipelineBusy: pipelineBusy,
