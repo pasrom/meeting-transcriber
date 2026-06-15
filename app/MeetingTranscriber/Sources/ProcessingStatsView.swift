@@ -17,8 +17,13 @@ struct ProcessingStatsView: View {
 
     enum WindowChoice: Int, CaseIterable, Identifiable {
         case seven = 7, thirty = 30, ninety = 90
-        var id: Int { rawValue }
-        var label: String { "Last \(rawValue) days" }
+        var id: Int {
+            rawValue
+        }
+
+        var label: String {
+            "Last \(rawValue) days"
+        }
     }
 
     var body: some View {

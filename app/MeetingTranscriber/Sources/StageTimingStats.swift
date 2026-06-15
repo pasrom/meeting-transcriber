@@ -3,11 +3,13 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "StageTimingStats")
 
-/// A pipeline stage whose wall-clock duration we track. Raw values match the
-/// corresponding `JobState` cases so the menu can look an average up by state.
+/// A pipeline stage whose wall-clock duration we track. The raw values are the
+/// `stage_timing.jsonl` wire contract; map from a `JobState` via the
+/// `init?(jobState:)` below.
 enum StageKind: String, Codable, CaseIterable {
     case transcribing
     case diarizing
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case generatingProtocol
 
     var label: String {
