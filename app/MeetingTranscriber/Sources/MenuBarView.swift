@@ -237,7 +237,7 @@ struct MenuBarView: View {
     private func jobStateLabel(_ job: PipelineJob) -> some View {
         Group {
             if [.transcribing, .diarizing, .generatingProtocol].contains(job.state) {
-                Text("\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))")
+                Text(stageProgressText(job))
                     .foregroundStyle(.secondary)
             } else if job.state == .error, let msg = job.error {
                 Text(msg)
@@ -251,6 +251,16 @@ struct MenuBarView: View {
             }
         }
         .font(.caption2)
+    }
+
+    /// Live elapsed for the active stage, plus the historical average ("· Ø
+    /// m:ss") when one exists, so the user can tell at a glance whether the
+    /// current run is taking longer than usual.
+    private func stageProgressText(_ job: PipelineJob) -> String {
+        let base = "\(job.state.label) \(formattedElapsed(pipelineQueue.activeJobElapsed))"
+        guard let stage = StageKind(jobState: job.state),
+              let avg = pipelineQueue.stageAverageSeconds[stage], avg > 0 else { return base }
+        return "\(base) · Ø \(formattedElapsed(avg))"
     }
 
     private func formattedElapsed(_ seconds: TimeInterval) -> String {
