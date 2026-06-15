@@ -13,6 +13,9 @@ on:
       alert_pct:
         description: 'Slowdown threshold (percent)'
         default: '20'
+      min_delta_seconds:
+        description: 'Slowdown threshold (absolute seconds floor)'
+        default: '10'
 
 jobs:
   track:
@@ -28,6 +31,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LIMIT: ${{ inputs.limit || '50' }}
           ALERT_PCT: ${{ inputs.alert_pct || '20' }}
+          MIN_DELTA_SECONDS: ${{ inputs.min_delta_seconds || '10' }}
           WORKFLOW: ci.yml
           BRANCH: main
         # pipefail: without it `| tee` masks the report script's exit code, so a

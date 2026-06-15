@@ -62,8 +62,10 @@ jobs:
         run: bash scripts/lint.sh --format-only
       - name: SwiftLint
         run: swiftlint lint --strict --reporter github-actions-logging
-      - name: Build script regression tests
-        run: bash scripts/tests/test_build_release_signing.sh
+      - name: Script regression tests
+        run: |
+          bash scripts/tests/test_build_release_signing.sh
+          bash scripts/tests/test_build_perf_report.sh
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
