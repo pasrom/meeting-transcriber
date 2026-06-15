@@ -43,7 +43,7 @@ struct ProcessingStatsView: View {
                 } else {
                     ForEach(StageKind.allCases, id: \.self) { stage in
                         if let agg = aggregates[stage] {
-                            statRow(agg)
+                            statRow(stage, agg)
                         }
                     }
                 }
@@ -64,10 +64,10 @@ struct ProcessingStatsView: View {
         .task(id: windowDays) { await reload() }
     }
 
-    private func statRow(_ agg: StageTimingStats.StageAggregate) -> some View {
-        LabeledContent(agg.stage.label) {
+    private func statRow(_ stage: StageKind, _ agg: StageTimingStats.StageAggregate) -> some View {
+        LabeledContent(stage.label) {
             HStack(spacing: 8) {
-                Text("Ø \(StageTimingStats.formatDuration(agg.avgWallClockSeconds))")
+                Text("Ø \(formattedTime(agg.avgWallClockSeconds))")
                 if let rtf = agg.avgRTF {
                     // RTF is processing-seconds per audio-second; ×60 reads as
                     // "processing seconds per minute of audio" — the intuitive form.
