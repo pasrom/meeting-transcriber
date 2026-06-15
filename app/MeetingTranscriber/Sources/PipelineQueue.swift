@@ -284,6 +284,7 @@ class PipelineQueue {
         logDir: URL? = nil,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
+        stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
@@ -299,7 +300,7 @@ class PipelineQueue {
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
         self.recognitionStatsLog = nil
-        self.stageTimingLog = nil
+        self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.namingStore = SpeakerNamingStore(outputDir: nil)
     }
@@ -453,6 +454,11 @@ class PipelineQueue {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let state = jobs[index].state
         let slug = jobs[index].namingSlug
+        // cancelJob removes the job directly (not via removeJob) and skips the
+        // normal terminal transition, so reap the stage-timing bookkeeping here
+        // too — otherwise a job cancelled mid-stage leaks these entries.
+        stageStartByJob.removeValue(forKey: id)
+        jobAudioSeconds.removeValue(forKey: id)
         switch state {
         case .waiting:
             jobs.remove(at: index)
@@ -532,6 +538,10 @@ class PipelineQueue {
     /// the recorded duration matches exactly what the menu's elapsed timer shows
     /// and excludes the speaker-naming pause (see `StageKind(jobState:)`).
     private func recordStageTransition(from oldState: JobState, to newState: JobState, jobID: UUID) {
+        // A same-state "transition" (e.g. the inline speaker-count rerun re-enters
+        // .diarizing while already .diarizing) is not a stage boundary — ignore it
+        // so it neither logs a partial event nor resets the start.
+        guard oldState != newState else { return }
         if let leaving = StageKind(jobState: oldState), let start = stageStartByJob.removeValue(forKey: jobID) {
             let elapsed = ContinuousClock.now - start
             let seconds = Double(elapsed.components.seconds)
@@ -543,29 +553,37 @@ class PipelineQueue {
         }
     }
 
-    /// Append one stage-timing event (fire-and-forget) and refresh the cached
-    /// averages so the menu reflects the new data point.
+    /// Append one stage-timing event, then refresh the cached averages from the
+    /// log so the menu reflects the new data point. Append and reload run in one
+    /// Task so the reload is ordered strictly after the append (no race that
+    /// could miss the just-logged event).
     private func logStageTiming(stage: StageKind, wallClock: Double, jobID: UUID) {
         guard let stageTimingLog else { return }
+        // audioSeconds is 0 for stages with no known audio length (e.g. a late
+        // re-diarization with no transcription this session); aggregate() then
+        // excludes it from the RTF but still counts its wall-clock.
         let event = StageTimingEvent(
             ts: Date(), jobID: jobID, stage: stage,
             wallClockSeconds: wallClock, audioSeconds: jobAudioSeconds[jobID] ?? 0,
             engine: engine.map { String(describing: type(of: $0)) },
             diarizerMode: usedDiarizerMode(forJobID: jobID)?.rawValue,
         )
-        Task { await stageTimingLog.append([event]) }
-        refreshStageAverages()
+        Task { [weak self] in
+            await stageTimingLog.append([event])
+            await self?.reloadStageAverages()
+        }
     }
 
     /// Reload recent timings and recompute the per-stage average wall-clock.
     private func refreshStageAverages() {
+        Task { [weak self] in await self?.reloadStageAverages() }
+    }
+
+    private func reloadStageAverages() async {
         guard let stageTimingLog else { return }
-        Task { [weak self] in
-            let events = await stageTimingLog.loadRecent(within: 30 * 86400)
-            let averages = StageTimingStats.aggregate(events: events)
-                .mapValues(\.avgWallClockSeconds)
-            self?.stageAverageSeconds = averages
-        }
+        let events = await stageTimingLog.loadRecent(within: 30 * 86400)
+        stageAverageSeconds = StageTimingStats.aggregate(events: events)
+            .mapValues(\.avgWallClockSeconds)
     }
 
     // MARK: - Processing
