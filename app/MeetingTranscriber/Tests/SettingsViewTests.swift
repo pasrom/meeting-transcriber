@@ -51,6 +51,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
             qwen3Engine: qwen3,
             updateChecker: updateChecker,
             recognitionStatsLog: RecognitionStatsLog(),
+            stageTimingLog: StageTimingLog(),
         )
     }
 
@@ -85,6 +86,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         SpeakersSettingsView(
             settings: settings ?? makeSettings(),
             recognitionStatsLog: RecognitionStatsLog(),
+            stageTimingLog: StageTimingLog(),
             enrollmentDiarizerFactory: nil,
             namingDialogActive: false,
             pipelineBusy: false,

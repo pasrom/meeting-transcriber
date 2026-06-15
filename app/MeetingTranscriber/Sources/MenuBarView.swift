@@ -254,11 +254,7 @@ struct MenuBarView: View {
     }
 
     private func formattedElapsed(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds)
-        if total < 60 {
-            return "\(total)s"
-        }
-        return "\(total / 60):\(String(format: "%02d", total % 60))"
+        StageTimingStats.formatDuration(seconds)
     }
 
     private func jobColor(_ job: PipelineJob) -> Color {

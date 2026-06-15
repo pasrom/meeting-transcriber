@@ -189,6 +189,10 @@ struct MeetingTranscriberApp: App {
                 // the same `recognition_log.jsonl` file. Fallback only fires in the
                 // test-only PipelineQueue init that intentionally leaves it nil.
                 recognitionStatsLog: appState.pipeline.queue.recognitionStatsLog ?? RecognitionStatsLog(),
+                // Same actor instance the pipeline writes to, so both writers
+                // serialise on stage_timing.jsonl. Fallback fires only in the
+                // test-only PipelineQueue init that leaves it nil.
+                stageTimingLog: appState.pipeline.queue.stageTimingLog ?? StageTimingLog(),
                 enrollmentDiarizerFactory: { FluidDiarizer(mode: appState.settings.diarizerMode) },
                 namingDialogActive: appState.pipeline.queue.pendingSpeakerNaming != nil,
                 pipelineBusy: appState.pipeline.queue.isProcessing,
