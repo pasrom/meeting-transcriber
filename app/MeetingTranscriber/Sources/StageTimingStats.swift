@@ -50,9 +50,9 @@ struct StageTimingEvent: Codable, Equatable {
 }
 
 enum StageTimingStats {
-    /// Aggregate of one stage over a set of events.
+    /// Aggregate of one stage over a set of events. Returned keyed by stage, so
+    /// the stage itself is the dictionary key, not a field here.
     struct StageAggregate: Equatable {
-        let stage: StageKind
         let count: Int
         /// Mean wall-clock duration — the intuitive "how long does it usually
         /// take" number shown in the menu and Settings.
@@ -63,15 +63,6 @@ enum StageTimingStats {
         /// "how long will THIS meeting take". `nil` when no event carried a
         /// positive audio duration (can't normalise).
         let avgRTF: Double?
-    }
-
-    /// Format a duration as `m:ss` (or `Ns` under a minute) for compact display
-    /// in the menu and Settings. Shared so the live elapsed timer and the
-    /// historical average render identically.
-    static func formatDuration(_ seconds: Double) -> String {
-        let total = Int(seconds)
-        if total < 60 { return "\(total)s" }
-        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 
     /// Group events by stage and compute per-stage count / average wall-clock /
@@ -95,10 +86,7 @@ enum StageTimingStats {
                 let totalAudio = withAudio.reduce(0.0) { $0 + $1.audioSeconds }
                 avgRTF = totalWall / totalAudio
             }
-            return StageAggregate(
-                stage: stageEvents[0].stage, count: count,
-                avgWallClockSeconds: avgWall, avgRTF: avgRTF,
-            )
+            return StageAggregate(count: count, avgWallClockSeconds: avgWall, avgRTF: avgRTF)
         }
     }
 }

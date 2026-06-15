@@ -64,17 +64,6 @@ final class StageTimingStatsTests: XCTestCase {
         XCTAssertTrue(StageTimingStats.aggregate(events: []).isEmpty)
     }
 
-    // MARK: - Duration formatting
-
-    func testFormatDuration() {
-        XCTAssertEqual(StageTimingStats.formatDuration(0), "0s")
-        XCTAssertEqual(StageTimingStats.formatDuration(45), "45s")
-        XCTAssertEqual(StageTimingStats.formatDuration(59.9), "59s")
-        XCTAssertEqual(StageTimingStats.formatDuration(60), "1:00")
-        XCTAssertEqual(StageTimingStats.formatDuration(530), "8:50")
-        XCTAssertEqual(StageTimingStats.formatDuration(3725), "62:05")
-    }
-
     // MARK: - JobState → StageKind mapping
 
     func testStageKindMapsOnlyTimedStates() {

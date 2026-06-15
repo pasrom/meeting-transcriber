@@ -264,7 +264,7 @@ struct MenuBarView: View {
     }
 
     private func formattedElapsed(_ seconds: TimeInterval) -> String {
-        StageTimingStats.formatDuration(seconds)
+        formattedTime(seconds)
     }
 
     private func jobColor(_ job: PipelineJob) -> Color {
