@@ -4,14 +4,22 @@
 Reads a JSON-lines file of per-job timings (one record per line, with
 ``job``, ``run_created`` ISO-8601 timestamp, and ``duration_seconds``) and
 prints a Markdown summary comparing each job's last-7-day median against its
-prior-28-day median. Flags any job whose recent median is more than
-``alert_pct`` percent slower than its baseline median.
+prior-28-day median.
+
+A job is flagged as a slowdown only when it clears BOTH gates:
+  * relative: the median grew by more than ``alert_pct`` percent, AND
+  * absolute: the median grew by at least ``min_delta_seconds`` seconds.
+
+The absolute floor exists because a percentage on a tiny baseline is
+meaningless — a job that runs in ~3s jitters by a second between runs, which
+is +33% but not a real regression. Without the floor, runner scheduling
+noise on fast jobs reds the whole weekly cron.
 
 Exits 0 normally, 1 when at least one slowdown is detected — so the workflow
 run is visibly red in the Actions list.
 
 Usage:
-    build_perf_report.py <jobs.jsonl> <alert_pct> <branch> <workflow>
+    build_perf_report.py <jobs.jsonl> <alert_pct> <branch> <workflow> <min_delta_seconds>
 
 The clock can be pinned via the ``SOURCE_DATE_EPOCH`` environment variable
 (seconds since the Unix epoch) for deterministic output in tests.
@@ -38,6 +46,7 @@ def main() -> int:
     alert_pct = int(sys.argv[2])
     branch = sys.argv[3]
     workflow = sys.argv[4]
+    min_delta_seconds = float(sys.argv[5])
 
     now = current_time()
     recent_cutoff = now - timedelta(days=7)
@@ -55,7 +64,10 @@ def main() -> int:
 
     print(f"# Build Performance Tracking — `{workflow}` on `{branch}`")
     print()
-    print(f"Generated {now:%Y-%m-%d %H:%M UTC}. Alert threshold: **>{alert_pct}%**.")
+    print(
+        f"Generated {now:%Y-%m-%d %H:%M UTC}. "
+        f"Alert threshold: **>{alert_pct}%** and **≥{min_delta_seconds:g}s** absolute."
+    )
     print()
     print("| Job | n (last 7d) | median (7d) | n (prior 28d) | median (28d) | Δ |")
     print("| --- | ---: | ---: | ---: | ---: | ---: |")
@@ -68,7 +80,7 @@ def main() -> int:
         if bm > 0 and rn > 0:
             delta_pct = (rm - bm) / bm * 100
             delta_str = f"{delta_pct:+.1f}%"
-            if delta_pct > alert_pct:
+            if delta_pct > alert_pct and (rm - bm) >= min_delta_seconds:
                 slowdowns.append((job, rm, bm, delta_pct))
                 delta_str = f"⚠️ {delta_str}"
         else:

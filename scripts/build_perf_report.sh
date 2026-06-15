@@ -9,10 +9,11 @@
 # workflow run is visibly red in the Actions list.
 #
 # Inputs (env vars):
-#   WORKFLOW   default: ci.yml
-#   BRANCH     default: main
-#   LIMIT      default: 50
-#   ALERT_PCT  default: 20
+#   WORKFLOW           default: ci.yml
+#   BRANCH             default: main
+#   LIMIT              default: 50
+#   ALERT_PCT          default: 20
+#   MIN_DELTA_SECONDS  default: 10  (absolute floor; see build_perf_report.py)
 #
 # Requires: gh, jq, python3 (all preinstalled on GitHub-hosted runners).
 
@@ -24,6 +25,7 @@ WORKFLOW="${WORKFLOW:-ci.yml}"
 BRANCH="${BRANCH:-main}"
 LIMIT="${LIMIT:-50}"
 ALERT_PCT="${ALERT_PCT:-20}"
+MIN_DELTA_SECONDS="${MIN_DELTA_SECONDS:-10}"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -74,4 +76,8 @@ while IFS=$'\t' read -r run_id created_at; do
 done < <(jq -r '.[] | "\(.databaseId)\t\(.createdAt)"' "$WORK/runs.json")
 echo "::endgroup::" >&2
 
-python3 "$SCRIPT_DIR/build_perf_report.py" "$WORK/jobs.jsonl" "$ALERT_PCT" "$BRANCH" "$WORKFLOW"
+# Keep this the terminal command and unwrapped (no if/||/pipe): the report
+# module exits 1 on a detected slowdown, and `set -e` + this being the last
+# command is what propagates that exit 1 out to the workflow step.
+python3 "$SCRIPT_DIR/build_perf_report.py" \
+    "$WORK/jobs.jsonl" "$ALERT_PCT" "$BRANCH" "$WORKFLOW" "$MIN_DELTA_SECONDS"
