@@ -47,10 +47,13 @@ class PipelineQueue {
     private(set) var activeJobElapsed: TimeInterval = 0
     private(set) var isProcessing = false
 
-    /// Historical average wall-clock seconds per stage (last 30 days), used by
-    /// the menu to show "live vs. typical". Refreshed from `stageTimingLog` at
-    /// launch and after each stage completes; empty until the log has data.
-    private(set) var stageAverageSeconds: [StageKind: Double] = [:]
+    /// Historical average wall-clock seconds per (stage, engine, diarizer-mode)
+    /// config (last 30 days), used by the menu to show "live vs. typical".
+    /// Keyed by full config so the menu compares a Sortformer run against
+    /// Sortformer history, not a blended offline/Sortformer average. Refreshed
+    /// from `stageTimingLog` at launch and after each stage; empty until the log
+    /// has data. Read via `averageSeconds(forJobID:stage:)`.
+    private(set) var stageAverageByConfig: [StageConfig: Double] = [:]
 
     /// When the current `.transcribing`/`.diarizing`/`.generatingProtocol` state
     /// was entered, per job — so `updateJobState` can record the state's duration
@@ -575,12 +578,24 @@ class PipelineQueue {
     }
 
     /// Concrete transcription-engine type name, the comparability tag stamped on
-    /// logged events and used to filter the menu's average to like-with-like.
+    /// logged events; also used to resolve the active config for the menu.
     private var activeEngineTag: String? {
         engine.map { String(describing: type(of: $0)) }
     }
 
-    /// Reload recent timings and recompute the per-stage average wall-clock.
+    /// The historical average for the config a job is running at a given stage —
+    /// built the same way `logStageTiming` stamps events (engine + the job's
+    /// diarizer mode), so the menu compares like-with-like. nil until that exact
+    /// config has logged data.
+    func averageSeconds(forJobID jobID: UUID, stage: StageKind) -> Double? {
+        let config = StageConfig(
+            stage: stage, engine: activeEngineTag,
+            diarizerMode: usedDiarizerMode(forJobID: jobID)?.rawValue,
+        )
+        return stageAverageByConfig[config]
+    }
+
+    /// Reload recent timings and recompute the per-config average wall-clock.
     private func refreshStageAverages() {
         Task { [weak self] in await self?.reloadStageAverages() }
     }
@@ -588,12 +603,9 @@ class PipelineQueue {
     private func reloadStageAverages() async {
         guard let stageTimingLog else { return }
         let events = await stageTimingLog.loadRecent(within: 30 * 86400)
-        // Match the menu average to the active engine so a WhisperKit run isn't
-        // compared against a Parakeet history (and vice versa). With no engine
-        // configured, fall back to the blended average.
-        let tag = activeEngineTag
-        let matched = tag == nil ? events : events.filter { $0.engine == tag }
-        stageAverageSeconds = StageTimingStats.aggregate(events: matched)
+        // Key by full config (stage + engine + diarizer-mode) so the menu
+        // resolves a like-with-like average per active job; see averageSeconds.
+        stageAverageByConfig = StageTimingStats.aggregateByConfig(events: events)
             .mapValues(\.avgWallClockSeconds)
     }
 

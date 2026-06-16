@@ -83,16 +83,18 @@ struct ProcessingStatsView: View {
     }
 
     /// "Stage · mode · engine" (mode omitted when nil, e.g. transcription);
-    /// the `…Engine` suffix is trimmed for brevity.
+    /// the trailing `Engine` suffix is trimmed for brevity.
     private func configLabel(_ config: StageConfig) -> String {
-        let engine = (config.engine ?? "unknown").replacingOccurrences(of: "Engine", with: "")
+        let raw = config.engine ?? "unknown"
+        let engine = raw.hasSuffix("Engine") ? String(raw.dropLast("Engine".count)) : raw
         var parts = [config.stage.label]
         if let mode = config.diarizerMode { parts.append(mode) }
         parts.append(engine)
         return parts.joined(separator: " · ")
     }
 
-    /// Stage order first (transcribe → diarize → protocol), then label, so rows
+    /// Stage order first (transcribe → diarize → protocol), then engine, then
+    /// mode — a total order over distinct configs (no label rebuilds), so rows
     /// are stable and grouped.
     private func orderedConfigs(
         _ aggs: [StageConfig: StageTimingStats.StageAggregate],
@@ -100,7 +102,9 @@ struct ProcessingStatsView: View {
         aggs.keys.sorted { a, b in
             let ia = StageKind.allCases.firstIndex(of: a.stage) ?? 0
             let ib = StageKind.allCases.firstIndex(of: b.stage) ?? 0
-            return ia != ib ? ia < ib : configLabel(a) < configLabel(b)
+            if ia != ib { return ia < ib }
+            if a.engine != b.engine { return (a.engine ?? "") < (b.engine ?? "") }
+            return (a.diarizerMode ?? "") < (b.diarizerMode ?? "")
         }
     }
 
