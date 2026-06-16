@@ -193,6 +193,7 @@ enum ProtocolError: LocalizedError {
     case emptyProtocol
     case httpError(Int, String)
     case connectionFailed(String)
+    case generationTimedOut(Int)
 
     var errorDescription: String? {
         switch self {
@@ -209,6 +210,8 @@ enum ProtocolError: LocalizedError {
         case let .httpError(code, body): "HTTP \(code)\(body.isEmpty ? "" : ": \(body)")"
 
         case let .connectionFailed(reason): "Connection failed: \(reason)"
+
+        case let .generationTimedOut(seconds): "Protocol generation timed out after \(seconds)s. The LLM endpoint is stuck or too slow — try a smaller model or shorter context."
         }
     }
 }

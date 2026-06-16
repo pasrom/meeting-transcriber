@@ -9,7 +9,15 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     let model: String
     let apiKey: String?
     let language: String
+    /// Idle timeout (`URLRequest.timeoutInterval`): max time *between* received
+    /// bytes. Catches a fully-stalled connection, but does NOT bound total time —
+    /// a slow-but-trickling stream resets it on every byte. See `maxTotalSeconds`.
     let timeoutSeconds: TimeInterval
+    /// Hard wall-clock cap for the whole generation. `timeoutSeconds` alone lets
+    /// a struggling LLM that trickles tokens run for hours (each byte resets the
+    /// idle timer); this deadline ends it regardless. Generous by default so a
+    /// legitimately long protocol isn't cut off.
+    let maxTotalSeconds: TimeInterval
     let session: URLSession
 
     init(
@@ -18,6 +26,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         language: String,
         apiKey: String? = nil,
         timeoutSeconds: TimeInterval = 600,
+        maxTotalSeconds: TimeInterval = 1800,
         session: URLSession = .shared,
     ) {
         self.endpoint = endpoint
@@ -25,6 +34,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.language = language
         self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
+        self.maxTotalSeconds = maxTotalSeconds
         self.session = session
     }
 
@@ -58,12 +68,41 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
         logger.info("Generating protocol via OpenAI-compatible API (\(model))...")
 
+        // Race the streaming consume against a hard total deadline: the idle
+        // timeout above can't end a stream that keeps trickling bytes, so a
+        // struggling endpoint would otherwise hang the pipeline indefinitely.
+        // Capture only immutable Sendable locals so the task closure is safe.
+        let session = self.session
+        let model = self.model
+        let deadline = maxTotalSeconds
+        let finalRequest = request
+        return try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await Self.streamProtocol(session: session, request: finalRequest, requestURL: requestURL, model: model)
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                throw ProtocolError.generationTimedOut(Int(deadline))
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw ProtocolError.connectionFailed("No response")
+            }
+            return result
+        }
+    }
+
+    /// Open the streaming request and accumulate the SSE content deltas. Static
+    /// so the deadline race captures only Sendable locals, not `self`.
+    private static func streamProtocol(
+        session: URLSession, request: URLRequest, requestURL: URL, model: String,
+    ) async throws -> String {
         let (bytes, response): (URLSession.AsyncBytes, URLResponse)
         do {
             (bytes, response) = try await session.bytes(for: request)
         } catch {
             logger.error(
-                "openai_connection_failed endpoint=\(requestURL.absoluteString, privacy: .public) model=\(self.model, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
+                "openai_connection_failed endpoint=\(requestURL.absoluteString, privacy: .public) model=\(model, privacy: .public) error=\(error.localizedDescription, privacy: .public)",
             )
             throw ProtocolError.connectionFailed(error.localizedDescription)
         }
@@ -178,12 +217,5 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         } catch {
             return .failure(ProtocolError.connectionFailed(error.localizedDescription))
         }
-    }
-}
-
-// Private instance helper that delegates to the static method
-private extension OpenAIProtocolGenerator {
-    func parseSSELine(_ line: String) -> String? {
-        Self.parseSSELine(line)
     }
 }

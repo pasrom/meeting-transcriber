@@ -157,6 +157,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         MockURLProtocol.handler = nil
         MockURLProtocol.errorHandler = nil
         MockURLProtocol.rawResponseHandler = nil
+        MockURLProtocol.hangHandler = nil
         super.tearDown()
     }
 
@@ -199,6 +200,35 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         let result = try await gen.generate(transcript: "Test transcript", title: "Test", diarized: false)
         XCTAssertTrue(result.contains("Protocol"))
         XCTAssertTrue(result.contains("Content here"))
+    }
+
+    func testGenerateTimesOutWhenStreamNeverCompletes() async {
+        // Endpoint delivers a chunk then stalls forever (the struggling-LLM
+        // case). request.timeoutInterval is an idle timeout and would never fire
+        // here once bytes arrive; only the total deadline can end it.
+        MockURLProtocol.hangHandler = { request in
+            // swiftlint:disable:next force_unwrapping
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            let chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n"
+            return (response, Data(chunk.utf8))
+        }
+        let gen = OpenAIProtocolGenerator(
+            endpoint: Self.testEndpoint,
+            model: "test-model",
+            language: "German",
+            apiKey: nil,
+            maxTotalSeconds: 0.3,
+            session: makeMockSession(),
+        )
+        do {
+            _ = try await gen.generate(transcript: "x", title: "t", diarized: false)
+            XCTFail("expected a total-deadline timeout")
+        } catch {
+            guard case ProtocolError.generationTimedOut = error else {
+                XCTFail("expected ProtocolError.generationTimedOut, got \(error)")
+                return
+            }
+        }
     }
 
     func testGenerateSetsAuthorizationHeader() async throws {
@@ -529,51 +559,4 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         XCTAssertTrue(result.contains("Ä Ö Ü ß"))
         XCTAssertTrue(result.contains("\"quotes\""))
     }
-}
-
-// MARK: - MockURLProtocol
-
-private final class MockURLProtocol: URLProtocol {
-    // URLSession serialises protocol callbacks per task; the handler is set
-    // before the request is started and cleared in tearDown. No real race.
-    nonisolated(unsafe) static var handler: ((URLRequest) -> (HTTPURLResponse, Data))?
-    // When set, the request fails at the transport layer with this error
-    // (mirrors a connection refused / DNS failure / dropped socket). Takes
-    // precedence over `handler` so the generator's catch path is exercised.
-    nonisolated(unsafe) static var errorHandler: ((URLRequest) -> any Error)?
-    // When set, delivers a NON-HTTP `URLResponse` (takes precedence over
-    // `handler`) so the generator's `response as? HTTPURLResponse` guard fails.
-    nonisolated(unsafe) static var rawResponseHandler: ((URLRequest) -> (URLResponse, Data))?
-
-    override static func canInit(with _: URLRequest) -> Bool {
-        true
-    }
-
-    override static func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {
-        if let errorHandler = Self.errorHandler {
-            client?.urlProtocol(self, didFailWithError: errorHandler(request))
-            return
-        }
-        if let rawResponseHandler = Self.rawResponseHandler {
-            let (response, data) = rawResponseHandler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-            return
-        }
-        guard let handler = Self.handler else {
-            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
-            return
-        }
-        let (response, data) = handler(request)
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
-        client?.urlProtocolDidFinishLoading(self)
-    }
-
-    override func stopLoading() {}
 }
