@@ -18,6 +18,11 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// idle timer); this deadline ends it regardless. Generous by default so a
     /// legitimately long protocol isn't cut off.
     let maxTotalSeconds: TimeInterval
+    /// Output-token cap sent as `max_tokens`. Bounds a runaway/verbose
+    /// generation (the 131k-context case that ground for ~2h) by length rather
+    /// than time. Generous — a meeting protocol is well under this — and a hit
+    /// is surfaced as `protocolTruncated`, never silently presented as complete.
+    let maxOutputTokens: Int
     let session: URLSession
 
     init(
@@ -27,6 +32,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         apiKey: String? = nil,
         timeoutSeconds: TimeInterval = 600,
         maxTotalSeconds: TimeInterval = 1800,
+        maxOutputTokens: Int = 16000,
         session: URLSession = .shared,
     ) {
         self.endpoint = endpoint
@@ -35,6 +41,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.apiKey = apiKey
         self.timeoutSeconds = timeoutSeconds
         self.maxTotalSeconds = maxTotalSeconds
+        self.maxOutputTokens = maxOutputTokens
         self.session = session
     }
 
@@ -50,6 +57,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             "model": model,
             "messages": messages,
             "stream": true,
+            "max_tokens": maxOutputTokens,
         ]
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
@@ -126,10 +134,19 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         }
 
         var parts: [String] = []
+        var finishReason: String?
         for try await line in bytes.lines {
-            if let content = parseSSELine(line) {
-                parts.append(content)
-            }
+            guard let chunk = parseSSELine(line) else { continue }
+            if let content = chunk.content { parts.append(content) }
+            if let reason = chunk.finishReason { finishReason = reason }
+        }
+
+        // "length" = the model hit max_tokens or the context window, so the
+        // protocol is cut off mid-way. Surface it rather than save a partial as
+        // if it finished cleanly (only "stop" is a real completion).
+        guard finishReason != "length" else {
+            logger.error("openai_truncated finish_reason=length model=\(model, privacy: .public)")
+            throw ProtocolError.protocolTruncated
         }
 
         let result = parts.joined().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -140,9 +157,18 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         return result
     }
 
-    /// Parse a single SSE line and extract the content delta.
-    /// Returns `nil` for non-content lines (e.g. `data: [DONE]`, empty lines, comments).
-    static func parseSSELine(_ line: String) -> String? {
+    /// One parsed SSE chunk: the content delta (if any) and the finish reason,
+    /// which is set only on the terminating chunk ("stop" = clean completion,
+    /// "length" = truncated at the output/context limit).
+    struct SSEChunk: Equatable {
+        let content: String?
+        let finishReason: String?
+    }
+
+    /// Parse a single SSE line into its content delta + finish reason. Returns
+    /// `nil` for non-data lines (`data: [DONE]`, comments, empty, unparseable)
+    /// and for chunks carrying neither a content delta nor a finish reason.
+    static func parseSSELine(_ line: String) -> SSEChunk? {
         let trimmed = line.trimmingCharacters(in: .whitespaces)
 
         guard trimmed.hasPrefix("data: ") else { return nil }
@@ -153,12 +179,13 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         guard let data = payload.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = obj["choices"] as? [[String: Any]],
-              let first = choices.first,
-              let delta = first["delta"] as? [String: Any],
-              let content = delta["content"] as? String
+              let first = choices.first
         else { return nil }
 
-        return content
+        let content = (first["delta"] as? [String: Any])?["content"] as? String
+        let finishReason = first["finish_reason"] as? String
+        if content == nil, finishReason == nil { return nil }
+        return SSEChunk(content: content, finishReason: finishReason)
     }
 
     /// Normalize a user-entered endpoint to the OpenAI API *base* URL (e.g.

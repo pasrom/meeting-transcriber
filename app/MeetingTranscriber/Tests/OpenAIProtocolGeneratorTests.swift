@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 @testable import MeetingTranscriber
 import XCTest
 
@@ -6,7 +7,17 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testParseSSELineExtractsContent() {
         let line = #"data: {"choices":[{"delta":{"content":"Hello"}}]}"#
-        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line), "Hello")
+        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line)?.content, "Hello")
+    }
+
+    func testParseSSELineExtractsFinishReason() {
+        let stop = #"data: {"choices":[{"delta":{},"finish_reason":"stop"}]}"#
+        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(stop)?.finishReason, "stop")
+        let length = #"data: {"choices":[{"delta":{},"finish_reason":"length"}]}"#
+        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(length)?.finishReason, "length")
+        // A content-only chunk carries no finish reason.
+        let content = #"data: {"choices":[{"delta":{"content":"x"}}]}"#
+        XCTAssertNil(OpenAIProtocolGenerator.parseSSELine(content)?.finishReason)
     }
 
     func testParseSSELineDoneReturnsNil() {
@@ -37,7 +48,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
     func testParseSSELineMultipleChoices() {
         // Should extract from first choice
         let line = #"data: {"choices":[{"delta":{"content":"A"}},{"delta":{"content":"B"}}]}"#
-        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line), "A")
+        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line)?.content, "A")
     }
 
     func testParseSSELineRoleDelta() {
@@ -48,7 +59,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testParseSSELineEmptyContent() {
         let line = #"data: {"choices":[{"delta":{"content":""}}]}"#
-        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line), "")
+        XCTAssertEqual(OpenAIProtocolGenerator.parseSSELine(line)?.content, "")
     }
 
     // MARK: - Prompt Construction
@@ -105,7 +116,7 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
             #"data: {"choices":[{"delta":{"content":" world"}}]}"#,
             "data: [DONE]",
         ]
-        let parts = lines.compactMap { OpenAIProtocolGenerator.parseSSELine($0) }
+        let parts = lines.compactMap { OpenAIProtocolGenerator.parseSSELine($0)?.content }
         let result = parts.joined()
         XCTAssertEqual(result, "Hello world")
     }
@@ -183,6 +194,31 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         return (response, body)
     }
 
+    /// Decode the JSON request body (empty on failure). URLSession converts
+    /// `httpBody` to an `httpBodyStream` before the protocol sees it, so read
+    /// whichever is set.
+    private func requestBody(_ request: URLRequest) -> [String: Any] {
+        var data = request.httpBody
+        if data == nil, let stream = request.httpBodyStream {
+            stream.open()
+            defer { stream.close() }
+            var collected = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            // Drive by read result, not hasBytesAvailable (which can be false
+            // before the first read on some stream types).
+            while true {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                if read <= 0 { break }
+                collected.append(buffer, count: read)
+            }
+            data = collected
+        }
+        guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return json
+    }
+
     func testGenerateSuccessfulSSEStream() async throws {
         let sseBody = """
         data: {"choices":[{"delta":{"role":"assistant"}}]}
@@ -200,6 +236,55 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         let result = try await gen.generate(transcript: "Test transcript", title: "Test", diarized: false)
         XCTAssertTrue(result.contains("Protocol"))
         XCTAssertTrue(result.contains("Content here"))
+    }
+
+    func testGenerateThrowsProtocolTruncatedOnLengthFinishReason() async {
+        // The model emits content then a terminating chunk with finish_reason
+        // "length" (hit max_tokens/context). The result must NOT be presented as
+        // a clean completion.
+        let sseBody = """
+        data: {"choices":[{"delta":{"content":"# Partial protocol"}}]}
+        data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+        data: [DONE]
+        """
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, body: Data(sseBody.utf8))
+        }
+        let gen = makeGenerator(session: makeMockSession())
+        do {
+            _ = try await gen.generate(transcript: "x", title: "t", diarized: false)
+            XCTFail("expected ProtocolError.protocolTruncated")
+        } catch {
+            guard case ProtocolError.protocolTruncated = error else {
+                XCTFail("expected protocolTruncated, got \(error)")
+                return
+            }
+        }
+    }
+
+    func testGenerateSucceedsOnStopFinishReason() async throws {
+        let sseBody = """
+        data: {"choices":[{"delta":{"content":"# Done"}}]}
+        data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+        data: [DONE]
+        """
+        MockURLProtocol.handler = { request in
+            self.mockResponse(request, body: Data(sseBody.utf8))
+        }
+        let gen = makeGenerator(session: makeMockSession())
+        let result = try await gen.generate(transcript: "x", title: "t", diarized: false)
+        XCTAssertTrue(result.contains("Done"))
+    }
+
+    func testGenerateRequestIncludesMaxTokens() async throws {
+        MockURLProtocol.handler = { request in
+            let body = self.requestBody(request)
+            XCTAssertNotNil(body["max_tokens"], "request must cap output with max_tokens")
+            let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\ndata: [DONE]"
+            return self.mockResponse(request, body: Data(sse.utf8))
+        }
+        let gen = makeGenerator(session: makeMockSession())
+        _ = try await gen.generate(transcript: "x", title: "t", diarized: false)
     }
 
     func testGenerateTimesOutWhenStreamNeverCompletes() async {
