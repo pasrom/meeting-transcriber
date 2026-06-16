@@ -4,12 +4,50 @@ import XCTest
 final class StageTimingStatsTests: XCTestCase {
     private func event(
         _ stage: StageKind, wall: Double, audio: Double, ts: Date = Date(),
+        engine: String? = "parakeet", mode: String? = nil,
     ) -> StageTimingEvent {
         StageTimingEvent(
             ts: ts, jobID: UUID(), stage: stage,
             wallClockSeconds: wall, audioSeconds: audio,
-            engine: "parakeet", diarizerMode: stage == .diarizing ? "offline" : nil,
+            engine: engine, diarizerMode: mode ?? (stage == .diarizing ? "offline" : nil),
         )
+    }
+
+    // MARK: - Per-config aggregation
+
+    func testAggregateByConfigSeparatesEngineAndMode() {
+        let events = [
+            event(.diarizing, wall: 600, audio: 6000, engine: "Parakeet", mode: "offline"),
+            event(.diarizing, wall: 1200, audio: 6000, engine: "Parakeet", mode: "sortformer"),
+            event(.diarizing, wall: 300, audio: 6000, engine: "WhisperKit", mode: "offline"),
+        ]
+        let agg = StageTimingStats.aggregateByConfig(events: events)
+        XCTAssertEqual(agg.count, 3, "three distinct (stage, engine, mode) configs")
+        XCTAssertEqual(
+            agg[StageConfig(stage: .diarizing, engine: "Parakeet", diarizerMode: "offline")]?
+                .avgWallClockSeconds ?? 0, 600, accuracy: 0.001,
+        )
+        XCTAssertEqual(
+            agg[StageConfig(stage: .diarizing, engine: "Parakeet", diarizerMode: "sortformer")]?
+                .avgWallClockSeconds ?? 0, 1200, accuracy: 0.001,
+        )
+    }
+
+    // MARK: - Slower-than-usual decision
+
+    func testIsSlowerThanUsualNeedsBothRatioAndAbsoluteFloor() {
+        // Ratio (>1.5x) and overrun (>=30s) both met.
+        XCTAssertTrue(StageTimingStats.isSlowerThanUsual(elapsed: 80, average: 40))
+        // Floor is inclusive at exactly +30s (still >1.5x: 70 > 60).
+        XCTAssertTrue(StageTimingStats.isSlowerThanUsual(elapsed: 70, average: 40))
+        // Ratio met but overrun 29s < 30s floor → not flagged (tiny-stage noise).
+        XCTAssertFalse(StageTimingStats.isSlowerThanUsual(elapsed: 69, average: 40))
+        // Overrun big but ratio not met (1.25x).
+        XCTAssertFalse(StageTimingStats.isSlowerThanUsual(elapsed: 500, average: 400))
+        // Exactly 1.5x is not "more than" 1.5x.
+        XCTAssertFalse(StageTimingStats.isSlowerThanUsual(elapsed: 60, average: 40))
+        // No norm yet.
+        XCTAssertFalse(StageTimingStats.isSlowerThanUsual(elapsed: 100, average: 0))
     }
 
     // MARK: - Aggregation
