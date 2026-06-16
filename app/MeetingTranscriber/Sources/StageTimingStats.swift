@@ -49,6 +49,16 @@ struct StageTimingEvent: Codable, Equatable {
     let diarizerMode: String?
 }
 
+/// Identifies one configuration whose timings are comparable. Averages only
+/// mean something within a config: a Parakeet transcription is ~10x a WhisperKit
+/// one, and a Sortformer diarization is far slower than an offline one — so the
+/// norm must be per (stage, engine, diarizer-mode).
+struct StageConfig: Hashable {
+    let stage: StageKind
+    let engine: String?
+    let diarizerMode: String?
+}
+
 enum StageTimingStats {
     /// Aggregate of one stage over a set of events. Returned keyed by stage, so
     /// the stage itself is the dictionary key, not a field here.
@@ -65,29 +75,48 @@ enum StageTimingStats {
         let avgRTF: Double?
     }
 
-    /// Group events by stage and compute per-stage count / average wall-clock /
-    /// average RTF. Events whose `audioSeconds <= 0` still count toward
-    /// `count` and `avgWallClockSeconds` but are excluded from the RTF ratio so
-    /// they neither divide by zero nor skew throughput.
+    /// Compute the count / average wall-clock / average RTF for one group of
+    /// events. Events whose `audioSeconds <= 0` still count toward `count` and
+    /// `avgWallClockSeconds` but are excluded from the RTF ratio so they neither
+    /// divide by zero nor skew throughput.
+    private static func aggregateGroup(_ events: [StageTimingEvent]) -> StageAggregate {
+        let count = events.count
+        let avgWall = events.reduce(0.0) { $0 + $1.wallClockSeconds } / Double(count)
+        let withAudio = events.filter { $0.audioSeconds > 0 }
+        let avgRTF: Double?
+        if withAudio.isEmpty {
+            avgRTF = nil
+        } else {
+            let totalWall = withAudio.reduce(0.0) { $0 + $1.wallClockSeconds }
+            let totalAudio = withAudio.reduce(0.0) { $0 + $1.audioSeconds }
+            avgRTF = totalWall / totalAudio
+        }
+        return StageAggregate(count: count, avgWallClockSeconds: avgWall, avgRTF: avgRTF)
+    }
+
+    /// Group events by stage (blending all engines/modes).
     static func aggregate(events: [StageTimingEvent]) -> [StageKind: StageAggregate] {
-        var byStage: [StageKind: [StageTimingEvent]] = [:]
-        for e in events {
-            byStage[e.stage, default: []].append(e)
-        }
-        return byStage.mapValues { stageEvents in
-            let count = stageEvents.count
-            let avgWall = stageEvents.reduce(0.0) { $0 + $1.wallClockSeconds } / Double(count)
-            let withAudio = stageEvents.filter { $0.audioSeconds > 0 }
-            let avgRTF: Double?
-            if withAudio.isEmpty {
-                avgRTF = nil
-            } else {
-                let totalWall = withAudio.reduce(0.0) { $0 + $1.wallClockSeconds }
-                let totalAudio = withAudio.reduce(0.0) { $0 + $1.audioSeconds }
-                avgRTF = totalWall / totalAudio
-            }
-            return StageAggregate(count: count, avgWallClockSeconds: avgWall, avgRTF: avgRTF)
-        }
+        Dictionary(grouping: events, by: \.stage).mapValues(aggregateGroup)
+    }
+
+    /// Group events by full (stage, engine, diarizer-mode) configuration, so the
+    /// Settings view can show comparable per-config numbers.
+    static func aggregateByConfig(events: [StageTimingEvent]) -> [StageConfig: StageAggregate] {
+        Dictionary(grouping: events) { event in
+            StageConfig(stage: event.stage, engine: event.engine, diarizerMode: event.diarizerMode)
+        }.mapValues(aggregateGroup)
+    }
+
+    /// Whether a still-running stage is taking meaningfully longer than its norm
+    /// — for an informational "longer than usual" hint, never an action.
+    /// Requires BOTH a ratio overrun AND an absolute floor, so a tiny stage
+    /// (whose average is a few seconds) doesn't trip on ordinary jitter — the
+    /// same small-denominator guard the build-perf tracker uses.
+    static func isSlowerThanUsual(
+        elapsed: Double, average: Double,
+        marginFactor: Double = 1.5, minOverrunSeconds: Double = 30,
+    ) -> Bool {
+        average > 0 && elapsed > average * marginFactor && (elapsed - average) >= minOverrunSeconds
     }
 }
 
