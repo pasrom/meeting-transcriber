@@ -261,7 +261,7 @@ struct MenuBarView: View {
         let elapsed = pipelineQueue.activeJobElapsed
         let base = "\(job.state.label) \(formattedElapsed(elapsed))"
         guard let stage = StageKind(jobState: job.state),
-              let avg = pipelineQueue.stageAverageSeconds[stage], avg > 0 else { return base }
+              let avg = pipelineQueue.averageSeconds(forJobID: job.id, stage: stage), avg > 0 else { return base }
         let suffix = StageTimingStats.isSlowerThanUsual(elapsed: elapsed, average: avg)
             ? " · longer than usual (Ø \(formattedElapsed(avg)))"
             : " · Ø \(formattedElapsed(avg))"
