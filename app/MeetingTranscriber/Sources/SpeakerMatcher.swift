@@ -53,9 +53,17 @@ class SpeakerMatcher {
     /// Old format: `{ "name": [[float]] }` dict.
     /// New format: `[{ "name": str, "embedding": [float] }]` array.
     static func migrateIfNeeded(dbPath: URL) {
-        guard let data = try? Data(contentsOf: dbPath),
-              let json = try? JSONSerialization.jsonObject(with: data) else { return }
+        guard let data = try? Data(contentsOf: dbPath) else { return }
 
+        // Fast path: the current array format ('[') needs no migration. Skip the
+        // full JSONSerialization parse for it — this runs on every SpeakerMatcher
+        // init, so re-parsing the whole DB each time is pure overhead, and
+        // concurrent inits parsing the same file is a TSan-hostile NSJSONReader
+        // frame. saveDB writes JSONEncoder output, which always begins with '['.
+        // Only the legacy dict format falls through to the parse + backup below.
+        guard data.first != UInt8(ascii: "[") else { return }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return }
         // Old format is a dictionary, new format is an array
         if json is [String: Any] {
             let backup = dbPath.deletingLastPathComponent()
