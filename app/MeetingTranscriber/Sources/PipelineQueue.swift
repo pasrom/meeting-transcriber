@@ -565,13 +565,19 @@ class PipelineQueue {
         let event = StageTimingEvent(
             ts: Date(), jobID: jobID, stage: stage,
             wallClockSeconds: wallClock, audioSeconds: jobAudioSeconds[jobID] ?? 0,
-            engine: engine.map { String(describing: type(of: $0)) },
+            engine: activeEngineTag,
             diarizerMode: usedDiarizerMode(forJobID: jobID)?.rawValue,
         )
         Task { [weak self] in
             await stageTimingLog.append([event])
             await self?.reloadStageAverages()
         }
+    }
+
+    /// Concrete transcription-engine type name, the comparability tag stamped on
+    /// logged events and used to filter the menu's average to like-with-like.
+    private var activeEngineTag: String? {
+        engine.map { String(describing: type(of: $0)) }
     }
 
     /// Reload recent timings and recompute the per-stage average wall-clock.
@@ -582,7 +588,12 @@ class PipelineQueue {
     private func reloadStageAverages() async {
         guard let stageTimingLog else { return }
         let events = await stageTimingLog.loadRecent(within: 30 * 86400)
-        stageAverageSeconds = StageTimingStats.aggregate(events: events)
+        // Match the menu average to the active engine so a WhisperKit run isn't
+        // compared against a Parakeet history (and vice versa). With no engine
+        // configured, fall back to the blended average.
+        let tag = activeEngineTag
+        let matched = tag == nil ? events : events.filter { $0.engine == tag }
+        stageAverageSeconds = StageTimingStats.aggregate(events: matched)
             .mapValues(\.avgWallClockSeconds)
     }
 

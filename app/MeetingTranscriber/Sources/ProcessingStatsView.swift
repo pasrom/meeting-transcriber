@@ -6,7 +6,7 @@ import SwiftUI
 /// The JSONL file remains the source of truth; this view is read-only.
 struct ProcessingStatsView: View {
     // swiftlint:disable:next discouraged_optional_collection
-    @State private var aggregates: [StageKind: StageTimingStats.StageAggregate]?
+    @State private var aggregates: [StageConfig: StageTimingStats.StageAggregate]?
     @State private var windowDays: WindowChoice = .thirty
 
     private let log: StageTimingLog
@@ -41,9 +41,9 @@ struct ProcessingStatsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(StageKind.allCases, id: \.self) { stage in
-                        if let agg = aggregates[stage] {
-                            statRow(stage, agg)
+                    ForEach(orderedConfigs(aggregates), id: \.self) { config in
+                        if let agg = aggregates[config] {
+                            statRow(config, agg)
                         }
                     }
                 }
@@ -64,8 +64,8 @@ struct ProcessingStatsView: View {
         .task(id: windowDays) { await reload() }
     }
 
-    private func statRow(_ stage: StageKind, _ agg: StageTimingStats.StageAggregate) -> some View {
-        LabeledContent(stage.label) {
+    private func statRow(_ config: StageConfig, _ agg: StageTimingStats.StageAggregate) -> some View {
+        LabeledContent(configLabel(config)) {
             HStack(spacing: 8) {
                 Text("Ø \(formattedTime(agg.avgWallClockSeconds))")
                 if let rtf = agg.avgRTF {
@@ -82,9 +82,31 @@ struct ProcessingStatsView: View {
         }
     }
 
+    /// "Stage · mode · engine" (mode omitted when nil, e.g. transcription);
+    /// the `…Engine` suffix is trimmed for brevity.
+    private func configLabel(_ config: StageConfig) -> String {
+        let engine = (config.engine ?? "unknown").replacingOccurrences(of: "Engine", with: "")
+        var parts = [config.stage.label]
+        if let mode = config.diarizerMode { parts.append(mode) }
+        parts.append(engine)
+        return parts.joined(separator: " · ")
+    }
+
+    /// Stage order first (transcribe → diarize → protocol), then label, so rows
+    /// are stable and grouped.
+    private func orderedConfigs(
+        _ aggs: [StageConfig: StageTimingStats.StageAggregate],
+    ) -> [StageConfig] {
+        aggs.keys.sorted { a, b in
+            let ia = StageKind.allCases.firstIndex(of: a.stage) ?? 0
+            let ib = StageKind.allCases.firstIndex(of: b.stage) ?? 0
+            return ia != ib ? ia < ib : configLabel(a) < configLabel(b)
+        }
+    }
+
     private func reload() async {
         let interval = TimeInterval(windowDays.rawValue * 86400)
         let events = await log.loadRecent(within: interval)
-        aggregates = StageTimingStats.aggregate(events: events)
+        aggregates = StageTimingStats.aggregateByConfig(events: events)
     }
 }
