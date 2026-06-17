@@ -82,6 +82,13 @@
         /// Multi-file counterpart for paired-import testing. Returns the number
         /// of URLs that existed on disk and were forwarded to `enqueueFiles`.
         private let enqueueFiles: ([URL]) -> Int
+        /// `POST /v1/jobs` entry point — enqueues the existing files and returns
+        /// the created job IDs so an automation client can poll each one.
+        /// Internal (not private) so the `DebugRPCServer+V1` extension can reach it.
+        let enqueueReturningIDs: ([URL]) -> [UUID]
+        /// `GET /v1/jobs/<id>` lookup — current status of a job (live or a
+        /// persisted terminal record), or nil → 404.
+        let jobStatus: (UUID) -> JobStatusDTO?
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -100,6 +107,8 @@
             skipNaming: @escaping () -> Void = {},
             enqueueFile: @escaping (URL) -> Bool = { _ in false },
             enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
+            enqueueReturningIDs: @escaping ([URL]) -> [UUID] = { _ in [] },
+            jobStatus: @escaping (UUID) -> JobStatusDTO? = { _ in nil },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -108,6 +117,8 @@
             self.skipNaming = skipNaming
             self.enqueueFile = enqueueFile
             self.enqueueFiles = enqueueFiles
+            self.enqueueReturningIDs = enqueueReturningIDs
+            self.jobStatus = jobStatus
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -285,8 +296,10 @@
 
         // MARK: - Routing
 
-        // swiftlint:disable:next cyclomatic_complexity
-        func route(_ request: HTTPRequest) async -> HTTPResponse {
+        /// Origin / Host / bearer-token pre-checks shared by every route.
+        /// Returns a rejection response (403/401) when a check fails, or nil
+        /// when the request may proceed.
+        private func rejectionForFailedGuards(_ request: HTTPRequest) -> HTTPResponse? {
             if let origin = request.headers["origin"], !origin.isEmpty, origin != "null" {
                 return HTTPResponse.forbidden()
             }
@@ -297,6 +310,21 @@
             let provided = request.headers["authorization"] ?? ""
             guard Self.constantTimeEquals(provided, expectedAuth) else {
                 return HTTPResponse.unauthorized()
+            }
+            return nil
+        }
+
+        // swiftlint:disable:next cyclomatic_complexity
+        func route(_ request: HTTPRequest) async -> HTTPResponse {
+            if let rejection = rejectionForFailedGuards(request) { return rejection }
+
+            // Versioned automation API — kept off the debug `/action/*` surface
+            // so it can carry a stability contract independent of the debug
+            // endpoints. Routed before the legacy switch. Strip any query string
+            // so `/v1/jobs/<id>?x=1` still resolves the id rather than 404ing.
+            let v1Path = String(request.path.prefix { $0 != "?" })
+            if v1Path == "/v1/jobs" || v1Path.hasPrefix("/v1/jobs/") {
+                return routeV1(request, path: v1Path)
             }
 
             switch (request.method, request.path) {
@@ -431,7 +459,8 @@
             let path: String
         }
 
-        private struct EnqueueFilesPayload: Decodable {
+        // Internal (not private) so the `DebugRPCServer+V1` extension can decode it.
+        struct EnqueueFilesPayload: Decodable {
             let paths: [String]
         }
 

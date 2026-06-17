@@ -31,6 +31,8 @@
             snapshot: RPCStateSnapshot = .empty,
             enqueueFile: @escaping (URL) -> Bool = { _ in false },
             enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
+            enqueueReturningIDs: @escaping ([URL]) -> [UUID] = { _ in [] },
+            jobStatus: @escaping (UUID) -> JobStatusDTO? = { _ in nil },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
@@ -38,6 +40,8 @@
                 snapshot: { snapshot },
                 enqueueFile: enqueueFile,
                 enqueueFiles: enqueueFiles,
+                enqueueReturningIDs: enqueueReturningIDs,
+                jobStatus: jobStatus,
             )
             self.server = server
             server.start()
@@ -370,6 +374,89 @@
                 served,
                 "a fresh server must bind + serve the port the dropped one held",
             )
+        }
+
+        // MARK: - /v1/jobs
+
+        func testV1JobStatusReturnsJSON() async throws {
+            let id = UUID()
+            let dto = JobStatusDTO(
+                jobID: id.uuidString, state: .done, meetingTitle: "Synced Call",
+                transcriptPath: "/out/call.txt", protocolPath: "/out/call.md",
+                error: nil, warnings: ["Mic track diarization failed"],
+            )
+            let lookup: (UUID) -> JobStatusDTO? = { $0 == id ? dto : nil }
+            let base = try await startServer(jobStatus: lookup)
+
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/jobs/\(id.uuidString)"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(JobStatusDTO.self, from: data)
+            XCTAssertEqual(decoded.state, .done)
+            XCTAssertEqual(decoded.transcriptPath, "/out/call.txt")
+            XCTAssertEqual(decoded.protocolPath, "/out/call.md")
+            // Also exercises the full status contract round-trip (error + warnings),
+            // which the live job-status response carries.
+            XCTAssertNil(decoded.error)
+            XCTAssertEqual(decoded.warnings, ["Mic track diarization failed"])
+        }
+
+        func testV1JobStatusUnknownIDReturns404() async throws {
+            // Default jobStatus closure already returns nil for every ID.
+            let base = try await startServer()
+            let (_, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/jobs/\(UUID().uuidString)"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1JobStatusIgnoresQueryString() async throws {
+            let id = UUID()
+            let dto = JobStatusDTO(
+                jobID: id.uuidString, state: .done, meetingTitle: "Q",
+                transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
+            )
+            let lookup: (UUID) -> JobStatusDTO? = { $0 == id ? dto : nil }
+            let base = try await startServer(jobStatus: lookup)
+
+            let url = try XCTUnwrap(URL(string: "\(base.absoluteString)/v1/jobs/\(id.uuidString)?wait=1"))
+            let (_, response) = try await URLSession.shared.data(for: request("GET", url, headers: authHeader))
+            XCTAssertEqual(
+                (response as? HTTPURLResponse)?.statusCode, 200,
+                "A query string must not turn a valid job ID into a 404",
+            )
+        }
+
+        func testV1JobStatusMalformedIDReturns404() async throws {
+            let base = try await startServer()
+            let (_, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/jobs/not-a-uuid"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1EnqueueReturnsJobIDs() async throws {
+            struct EnqueueResult: Decodable { let jobIDs: [String] }
+            let ids = [UUID(), UUID()]
+            let enqueue: ([URL]) -> [UUID] = { _ in ids }
+            let base = try await startServer(enqueueReturningIDs: enqueue)
+
+            var req = request("POST", base.appendingPathComponent("v1/jobs"), headers: authHeader)
+            req.httpBody = Data(#"{"paths":["/inbox/a.wav","/inbox/b.wav"]}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(EnqueueResult.self, from: data)
+            XCTAssertEqual(decoded.jobIDs, ids.map(\.uuidString))
+        }
+
+        func testV1EnqueueEmptyPathsReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("v1/jobs"), headers: authHeader)
+            req.httpBody = Data(#"{"paths":[]}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)
