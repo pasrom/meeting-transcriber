@@ -71,6 +71,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PipelineController.swift  # @Observable controller owning PipelineQueue lifecycle (wired by AppState)
     TerminalJobStore.swift  # Durable finished-job records (id→state+paths) so the /v1/jobs/<id> automation readback survives the in-memory done-job reaping
     JobStatusDTO.swift      # Wire shape for GET /v1/jobs/<id> (live job or persisted terminal record)
+    NamingStatusDTO.swift   # Wire shape for GET /v1/jobs/<id>/naming (speaker labels + auto-name suggestions, no embeddings)
     LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
     LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
     ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
