@@ -387,6 +387,17 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertEqual(state.pipeline.queue.jobs[0].mixPath?.lastPathComponent, "present.wav")
     }
 
+    #if !APPSTORE
+        func testBuildDebugRPCServerReturnsWiredServer() {
+            let (state, _) = makeState()
+            // Exercises buildDebugRPCServer's wiring, including the /v1 automation
+            // closures (enqueueReturningIDs + jobStatus). Construction does not
+            // start a listener, so boundPort is nil until start() is called.
+            let server = state.buildDebugRPCServer()
+            XCTAssertNil(server.boundPort)
+        }
+    #endif
+
     func testEnqueueFilesAppPlusMicWithoutMixHasNilMixPath() {
         // No `_mix.wav` in selection — job carries nil mixPath; the pipeline
         // mixes app+mic into the workdir cache on the fly, no persistent mix

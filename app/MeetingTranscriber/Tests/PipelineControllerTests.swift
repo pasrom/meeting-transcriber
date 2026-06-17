@@ -88,4 +88,81 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertEqual(pc.queue.jobs.count, 1)
         XCTAssertEqual(pc.queue.jobs[0].meetingTitle, "sprint-review")
     }
+
+    func testEnqueueFilesReturnsCreatedJobIDs() {
+        let pc = makeWiredController()
+
+        let ids = pc.enqueueFiles([URL(fileURLWithPath: "/tmp/sprint-review.wav")])
+
+        XCTAssertEqual(ids, pc.queue.jobs.map(\.id), "Returned IDs must match the enqueued jobs")
+    }
+
+    func testEnqueueExistingFilesReturningIDsFiltersMissingFiles() {
+        let pc = makeWiredController()
+        let existing = tmpDir.appendingPathComponent("real-meeting.wav")
+        FileManager.default.createFile(atPath: existing.path, contents: Data("RIFF".utf8))
+        let missing = URL(fileURLWithPath: "/tmp/no-such-file-\(UUID().uuidString).wav")
+
+        let ids = pc.enqueueExistingFilesReturningIDs([existing, missing])
+
+        XCTAssertEqual(ids.count, 1, "Only the file that exists on disk is enqueued")
+        XCTAssertEqual(ids, pc.queue.jobs.map(\.id))
+    }
+
+    func testEnqueueExistingFilesCountsExistingFilesNotCollapsedJobs() {
+        let pc = makeWiredController()
+        // A paired _app + _mic recording collapses into ONE job, but the
+        // documented `enqueued` count is the number of files that existed.
+        let app = tmpDir.appendingPathComponent("standup_app.wav")
+        let mic = tmpDir.appendingPathComponent("standup_mic.wav")
+        FileManager.default.createFile(atPath: app.path, contents: Data("RIFF".utf8))
+        FileManager.default.createFile(atPath: mic.path, contents: Data("RIFF".utf8))
+
+        let count = pc.enqueueExistingFiles([app, mic])
+
+        XCTAssertEqual(count, 2, "Count reflects files that existed on disk, not collapsed jobs")
+        XCTAssertEqual(pc.queue.jobs.count, 1, "Paired _app + _mic collapse into a single job")
+    }
+
+    // MARK: - jobStatus
+
+    func testJobStatusReturnsLiveJob() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let pc = PipelineController(settings: AppSettings(), notifier: RecordingNotifier(), terminalJobStore: store)
+        pc.queue = PipelineQueue(logDir: tmpDir)
+        var job = PipelineJob(
+            meetingTitle: "Live Sync", appName: "File",
+            mixPath: URL(fileURLWithPath: "/tmp/x.wav"), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.transcriptPath = URL(fileURLWithPath: "/out/x.txt")
+        pc.queue.insertJobForTesting(job)
+
+        let dto = pc.jobStatus(forID: job.id)
+
+        XCTAssertEqual(dto?.state, .waiting)
+        XCTAssertEqual(dto?.meetingTitle, "Live Sync")
+        XCTAssertEqual(dto?.transcriptPath, "/out/x.txt")
+    }
+
+    func testJobStatusFallsBackToTerminalStore() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let pc = PipelineController(settings: AppSettings(), notifier: RecordingNotifier(), terminalJobStore: store)
+        let id = UUID()
+        store.record(JobStatusDTO(
+            jobID: id.uuidString, state: .done, meetingTitle: "Reaped",
+            transcriptPath: "/out/r.txt", protocolPath: nil, error: nil, warnings: [],
+        ))
+
+        let dto = pc.jobStatus(forID: id)
+
+        XCTAssertEqual(dto?.state, .done, "Must read back a job already reaped from the queue")
+        XCTAssertEqual(dto?.meetingTitle, "Reaped")
+        XCTAssertEqual(dto?.transcriptPath, "/out/r.txt")
+    }
+
+    func testJobStatusUnknownReturnsNil() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let pc = PipelineController(settings: AppSettings(), notifier: RecordingNotifier(), terminalJobStore: store)
+        XCTAssertNil(pc.jobStatus(forID: UUID()))
+    }
 }
