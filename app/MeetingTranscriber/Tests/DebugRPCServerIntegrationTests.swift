@@ -38,6 +38,7 @@
             namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
+            transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
@@ -50,6 +51,7 @@
                 namingStatus: namingStatus,
                 confirmNaming: confirmNaming,
                 skipJobNaming: skipJobNaming,
+                transcribe: transcribe,
             )
             self.server = server
             server.start()
@@ -574,6 +576,57 @@
             let bogus = base.appendingPathComponent("v1/jobs/\(id)/bogus")
             let (_, r2) = try await URLSession.shared.data(for: request("GET", bogus, headers: authHeader))
             XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        // MARK: - POST /v1/transcribe (blocking)
+
+        func testV1TranscribeCompletedReturns200() async throws {
+            let dto = JobStatusDTO(
+                jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
+            )
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .completed(dto) }
+            let base = try await startServer(transcribe: transcribe)
+
+            var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
+            req.httpBody = Data(#"{"path":"/inbox/a.wav"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(JobStatusDTO.self, from: data)
+            XCTAssertEqual(decoded.state, .done)
+            XCTAssertEqual(decoded.transcriptPath, "/out/t.txt")
+        }
+
+        func testV1TranscribeTimedOutReturns202() async throws {
+            let dto = JobStatusDTO(
+                jobID: UUID().uuidString, state: .transcribing, meetingTitle: "M",
+                transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
+            )
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .timedOut(dto) }
+            let base = try await startServer(transcribe: transcribe)
+
+            var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
+            req.httpBody = Data(#"{"path":"/inbox/a.wav","maxWaitSeconds":1}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 202)
+        }
+
+        func testV1TranscribeNoFileReturns400() async throws {
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in await Task.yield(); return .noFile }
+            let base = try await startServer(transcribe: transcribe)
+
+            var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
+            req.httpBody = Data(#"{"path":"/inbox/missing.wav"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testV1TranscribeEmptyPathReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
+            req.httpBody = Data(#"{"path":""}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)
