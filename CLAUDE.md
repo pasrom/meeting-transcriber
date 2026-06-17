@@ -69,6 +69,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PipelineSnapshot.swift  # Pure I/O helpers for persisting pipeline queue jobs to disk (atomic rename)
     SnapshotWriterActor.swift  # Actor isolating pipeline queue snapshot writes (prevents main-actor stalls)
     PipelineController.swift  # @Observable controller owning PipelineQueue lifecycle (wired by AppState)
+    TerminalJobStore.swift  # Durable finished-job records (id→state+paths) so the /v1/jobs/<id> automation readback survives the in-memory done-job reaping
+    JobStatusDTO.swift      # Wire shape for GET /v1/jobs/<id> (live job or persisted terminal record)
     LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
     LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
     ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
@@ -105,6 +107,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
     DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
     DebugRPCServer+Metrics.swift # GET /metrics handler (line-cap split from DebugRPCServer.route)
+    DebugRPCServer+V1.swift # /v1/jobs automation-API routing (line-cap split from DebugRPCServer.route)
     HTTPRequest.swift      # HTTP/1.1 request parsing for DebugRPCServer (line-cap split)
     HTTPResponse.swift     # HTTP/1.1 response serialization for DebugRPCServer (line-cap split)
     RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
