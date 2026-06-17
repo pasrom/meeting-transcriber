@@ -165,4 +165,76 @@ final class PipelineControllerTests: XCTestCase {
         let pc = PipelineController(settings: AppSettings(), notifier: RecordingNotifier(), terminalJobStore: store)
         XCTAssertNil(pc.jobStatus(forID: UUID()))
     }
+
+    // MARK: - namingStatus / confirmNaming / skipNaming
+
+    /// Seed a pending-speaker-naming job on the controller's queue, return its id.
+    private func seedPendingNaming(
+        on pc: PipelineController,
+        mapping: [String: String],
+        speakingTimes: [String: TimeInterval] = [:],
+        participants: [String] = [],
+    ) -> UUID {
+        let job = PipelineJob(
+            meetingTitle: "Q3 Sync", appName: "File",
+            mixPath: URL(fileURLWithPath: "/tmp/x.wav"), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pc.queue.insertJobForTesting(job)
+        pc.queue.speakerNamingDataByJob[job.id] = PipelineQueue.SpeakerNamingData(
+            jobID: job.id, meetingTitle: "Q3 Sync",
+            mapping: mapping, speakingTimes: speakingTimes,
+            embeddings: [:], audioPath: nil, segments: [], participants: participants,
+            isDualSource: false,
+        )
+        pc.queue.updateJobState(id: job.id, to: .speakerNamingPending)
+        return job.id
+    }
+
+    func testNamingStatusMapsPendingNamingData() {
+        let pc = makeWiredController()
+        let id = seedPendingNaming(
+            on: pc,
+            mapping: ["Speaker 1": "Roman", "Speaker 2": "Speaker 2"],
+            speakingTimes: ["Speaker 1": 42, "Speaker 2": 7],
+            participants: ["Alice"],
+        )
+
+        let dto = pc.namingStatus(forID: id)
+
+        XCTAssertEqual(dto?.meetingTitle, "Q3 Sync")
+        XCTAssertEqual(dto?.participants, ["Alice"])
+        XCTAssertEqual(dto?.speakers.map(\.label), ["Speaker 1", "Speaker 2"], "speakers sorted by label")
+        XCTAssertEqual(dto?.speakers.first?.suggested, "Roman")
+        XCTAssertEqual(dto?.speakers.first?.speakingSeconds, 42)
+    }
+
+    func testNamingStatusUnknownReturnsNil() {
+        XCTAssertNil(makeWiredController().namingStatus(forID: UUID()))
+    }
+
+    func testConfirmNamingResolvesPendingJobAndRejectsUnknown() {
+        let pc = makeWiredController()
+        let id = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
+
+        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]))
+        XCTAssertFalse(pc.confirmNaming(jobID: UUID(), mapping: [:]), "no pending naming → false")
+    }
+
+    func testConfirmNamingIsIdempotentOnRetry() {
+        let pc = makeWiredController()
+        let id = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
+
+        XCTAssertTrue(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]))
+        // Confirming transitions the job out of .speakerNamingPending, so a
+        // duplicate call (automation retry) is rejected — no double-processing.
+        XCTAssertFalse(pc.confirmNaming(jobID: id, mapping: ["Speaker 1": "Roman"]), "retry rejected")
+    }
+
+    func testSkipNamingResolvesPendingJobAndRejectsUnknown() {
+        let pc = makeWiredController()
+        let id = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
+
+        XCTAssertTrue(pc.skipNaming(jobID: id))
+        XCTAssertFalse(pc.skipNaming(jobID: UUID()), "no pending naming → false")
+    }
 }
