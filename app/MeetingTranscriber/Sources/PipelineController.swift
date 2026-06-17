@@ -34,15 +34,21 @@ final class PipelineController {
     private let settings: AppSettings
     private let notifier: any AppNotifying
 
+    /// Durable finished-job record store, shared across queue rebuilds and read
+    /// by `jobStatus(forID:)` for the automation API. Test-injectable.
+    let terminalJobStore: TerminalJobStore
+
     /// Source of the currently-active engine. Set by `activate`; nil before then
     /// (so `makeQueue()` safely returns the current queue if called early — only
     /// reachable at process teardown, since `rebuild`/`ensureQueue` are driven by
     /// user actions while `AppState` is alive). Captures the owner weakly.
     private var engineProvider: (() -> (any TranscribingEngine)?)?
 
-    init(settings: AppSettings, notifier: any AppNotifying) {
+    init(settings: AppSettings, notifier: any AppNotifying, terminalJobStore: TerminalJobStore? = nil) {
         self.settings = settings
         self.notifier = notifier
+        self.terminalJobStore = terminalJobStore
+            ?? TerminalJobStore(path: AppPaths.ipcDir.appendingPathComponent("terminal_jobs.json"))
         self.queue = PipelineQueue()
     }
 
@@ -88,6 +94,7 @@ final class PipelineController {
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(),
             stageTimingLog: StageTimingLog(),
+            terminalJobStore: terminalJobStore,
         )
         q.loadSnapshot()
         // Fire-and-forget: dir scan + per-file attr probes run off-main so app
@@ -179,8 +186,13 @@ final class PipelineController {
 
     // MARK: - File enqueue
 
-    /// Filters `urls` to files that currently exist on disk, forwards them to
-    /// `enqueueFiles`, and returns the existing count. RPC-friendly entry point.
+    /// Filters `urls` to files that currently exist on disk, enqueues them, and
+    /// returns the count of files that existed. RPC-friendly entry point.
+    ///
+    /// NOTE: this is the count of *files that existed*, not jobs created — a
+    /// paired `_app` + `_mic` import collapses two files into one job. The
+    /// `/action/enqueueFiles` response contract is the file count, so this must
+    /// not be derived from `enqueueExistingFilesReturningIDs(_:).count`.
     @discardableResult
     func enqueueExistingFiles(_ urls: [URL]) -> Int {
         let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -189,10 +201,23 @@ final class PipelineController {
         return existing.count
     }
 
-    func enqueueFiles(_ urls: [URL]) {
+    /// Like `enqueueExistingFiles` but returns the created job IDs so an
+    /// automation client can poll each job's status. `[]` when no URL exists on
+    /// disk. Distinct from the file count above: paired imports yield fewer IDs
+    /// than files.
+    @discardableResult
+    func enqueueExistingFilesReturningIDs(_ urls: [URL]) -> [UUID] {
+        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !existing.isEmpty else { return [] }
+        return enqueueFiles(existing)
+    }
+
+    @discardableResult
+    func enqueueFiles(_ urls: [URL]) -> [UUID] {
         ensureQueue()
 
         let resolution = PairedRecordingResolver.resolve(urls: urls)
+        var ids: [UUID] = []
 
         for group in resolution.paired {
             let sidecar = RecordingSidecar.read(
@@ -213,6 +238,7 @@ final class PipelineController {
                 mixPath: group.mix, appPath: group.app, micPath: group.mic,
                 micDelay: micDelay, participants: participants,
             )
+            ids.append(job.id)
             queue.enqueue(job)
         }
 
@@ -226,7 +252,22 @@ final class PipelineController {
                 micPath: nil,
                 micDelay: 0,
             )
+            ids.append(job.id)
             queue.enqueue(job)
         }
+
+        return ids
+    }
+
+    // MARK: - Job status
+
+    /// Current status of a job for the automation API: the live job if it's
+    /// still in the queue, otherwise the persisted terminal record once the
+    /// queue has reaped it, otherwise nil (unknown ID → the RPC layer 404s).
+    func jobStatus(forID id: UUID) -> JobStatusDTO? {
+        if let job = queue.jobs.first(where: { $0.id == id }) {
+            return JobStatusDTO(job: job)
+        }
+        return terminalJobStore.lookup(jobID: id)
     }
 }

@@ -272,12 +272,23 @@ final class AppState {
             let enqueueFilesRPC: ([URL]) -> Int = { [weak self] urls in
                 self?.pipeline.enqueueExistingFiles(urls) ?? 0
             }
+            // `/v1/jobs` automation surface: enqueue returning the created job
+            // IDs, and per-job status lookup (live job or persisted terminal
+            // record) so a headless client can poll a specific job.
+            let enqueueReturningIDs: ([URL]) -> [UUID] = { [weak self] urls in
+                self?.pipeline.enqueueExistingFilesReturningIDs(urls) ?? []
+            }
+            let jobStatus: (UUID) -> JobStatusDTO? = { [weak self] id in
+                self?.pipeline.jobStatus(forID: id)
+            }
             return DebugRPCServer(
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
                 enqueueFile: enqueueFile,
                 enqueueFiles: enqueueFilesRPC,
+                enqueueReturningIDs: enqueueReturningIDs,
+                jobStatus: jobStatus,
             )
         }
     #endif
