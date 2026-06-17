@@ -110,11 +110,13 @@ struct AdvancedSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                    Toggle("Debug RPC Server", isOn: $settings.debugRPCEnabled)
+                    Toggle("Local Automation API", isOn: $settings.debugRPCEnabled)
                     Text(
-                        "Exposes pipeline state on 127.0.0.1:9876 for `mt-cli`."
-                            + " Localhost-only, bearer-token auth. Off by default;"
-                            + " enable only when you need shell-driven inspection.",
+                        "Exposes the local automation API + pipeline state on"
+                            + " 127.0.0.1:9876 (POST /v1/transcribe, /v1/jobs; also"
+                            + " `mt-cli`). Localhost-only, bearer-token auth. Off by"
+                            + " default; enable for headless automation or"
+                            + " shell-driven inspection.",
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)

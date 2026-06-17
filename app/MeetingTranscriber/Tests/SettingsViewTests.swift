@@ -520,7 +520,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     #if !APPSTORE
         func testDebugRPCToggleExists() throws {
             let body = try makeAdvanced().inspect()
-            XCTAssertNoThrow(try body.find(text: "Debug RPC Server"))
+            XCTAssertNoThrow(try body.find(text: "Local Automation API"))
         }
 
         func testDebugRPCToggleBindsToSetting() throws {
@@ -528,7 +528,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
             settings.debugRPCEnabled = false
             let view = AdvancedSettingsView(settings: settings)
             let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
-                try toggle.labelView().text().string() == "Debug RPC Server"
+                try toggle.labelView().text().string() == "Local Automation API"
             }
             try toggle.tap()
             XCTAssertTrue(settings.debugRPCEnabled)
