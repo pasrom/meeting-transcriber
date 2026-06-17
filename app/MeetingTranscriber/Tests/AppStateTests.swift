@@ -396,6 +396,62 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             let server = state.buildDebugRPCServer()
             XCTAssertNil(server.boundPort)
         }
+
+        /// End-to-end over a real socket: every /v1 closure buildDebugRPCServer
+        /// wires (enqueueReturningIDs, jobStatus, namingStatus, confirmNaming,
+        /// skipJobNaming) is exercised through the actual AppState → pipeline path.
+        func testBuildDebugRPCServerServesV1OverSocket() async throws {
+            let (state, _) = makeState()
+            let token = "appstate-rpc-e2e-token"
+            let server = state.buildDebugRPCServer(port: 0, token: token)
+            server.start()
+            defer { server.stop() }
+
+            var base: URL?
+            for _ in 0 ..< 50 {
+                if let p = server.boundPort { base = URL(string: "http://127.0.0.1:\(p)"); break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let baseURL = try XCTUnwrap(base)
+
+            func send(_ method: String, _ path: String, body: Data? = nil) async throws -> Int {
+                var req = URLRequest(url: baseURL.appendingPathComponent(path))
+                req.httpMethod = method
+                req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                req.httpBody = body
+                if let body { let (_, r) = try await URLSession.shared.upload(for: req, from: body); return code(r) }
+                let (_, r) = try await URLSession.shared.data(for: req)
+                return code(r)
+            }
+            func code(_ r: URLResponse) -> Int {
+                (r as? HTTPURLResponse)?.statusCode ?? 0
+            }
+
+            // Enqueue a real file through the AppState pipeline (enqueueReturningIDs).
+            let tmp = testLogDir.appendingPathComponent("e2e.wav")
+            try Data("RIFF".utf8).write(to: tmp)
+            var enqReq = URLRequest(url: baseURL.appendingPathComponent("v1/jobs"))
+            enqReq.httpMethod = "POST"
+            enqReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let enqBody = Data(#"{"paths":["\#(tmp.path)"]}"#.utf8)
+            let (enqData, enqResp) = try await URLSession.shared.upload(for: enqReq, from: enqBody)
+            XCTAssertEqual(code(enqResp), 200)
+            struct EnqueueResult: Decodable { let jobIDs: [String] }
+            let jobID = try XCTUnwrap(try JSONDecoder().decode(EnqueueResult.self, from: enqData).jobIDs.first)
+
+            // jobStatus closure: the just-enqueued job is live → 200.
+            let statusCode = try await send("GET", "v1/jobs/\(jobID)")
+            XCTAssertEqual(statusCode, 200)
+
+            // namingStatus / confirmNaming / skipJobNaming closures: the job isn't
+            // awaiting naming, so each returns 404 — but the AppState closures run.
+            let naming = try await send("GET", "v1/jobs/\(jobID)/naming")
+            XCTAssertEqual(naming, 404)
+            let confirm = try await send("POST", "v1/jobs/\(jobID)/naming", body: Data(#"{"mapping":{}}"#.utf8))
+            XCTAssertEqual(confirm, 404)
+            let skip = try await send("POST", "v1/jobs/\(jobID)/naming/skip")
+            XCTAssertEqual(skip, 404)
+        }
     #endif
 
     func testEnqueueFilesAppPlusMicWithoutMixHasNilMixPath() {

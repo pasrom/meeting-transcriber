@@ -82,13 +82,13 @@
         /// Multi-file counterpart for paired-import testing. Returns the number
         /// of URLs that existed on disk and were forwarded to `enqueueFiles`.
         private let enqueueFiles: ([URL]) -> Int
-        /// `POST /v1/jobs` entry point — enqueues the existing files and returns
-        /// the created job IDs so an automation client can poll each one.
-        /// Internal (not private) so the `DebugRPCServer+V1` extension can reach it.
-        let enqueueReturningIDs: ([URL]) -> [UUID]
-        /// `GET /v1/jobs/<id>` lookup — current status of a job (live or a
-        /// persisted terminal record), or nil → 404.
-        let jobStatus: (UUID) -> JobStatusDTO?
+        // `/v1` automation closures — internal (not private) so the
+        // `DebugRPCServer+V1` routing extension can reach them. nil/false → 404.
+        let enqueueReturningIDs: ([URL]) -> [UUID] // POST /v1/jobs → job IDs
+        let jobStatus: (UUID) -> JobStatusDTO? // GET /v1/jobs/<id>
+        let namingStatus: (UUID) -> NamingStatusDTO? // GET /v1/jobs/<id>/naming
+        let confirmNaming: (UUID, [String: String]) -> Bool // POST .../naming
+        let skipJobNaming: (UUID) -> Bool // POST .../naming/skip
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -109,6 +109,9 @@
             enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
             enqueueReturningIDs: @escaping ([URL]) -> [UUID] = { _ in [] },
             jobStatus: @escaping (UUID) -> JobStatusDTO? = { _ in nil },
+            namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
+            confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
+            skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -119,6 +122,9 @@
             self.enqueueFiles = enqueueFiles
             self.enqueueReturningIDs = enqueueReturningIDs
             self.jobStatus = jobStatus
+            self.namingStatus = namingStatus
+            self.confirmNaming = confirmNaming
+            self.skipJobNaming = skipJobNaming
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -333,18 +339,18 @@
                 return HTTPResponse.ok(body: json ?? Data(), contentType: "application/json")
 
             case ("GET", "/healthz"):
-                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+                return HTTPResponse.ok()
 
             case ("GET", "/metrics"):
                 return Self.metricsResponse()
 
             case ("POST", "/action/openSettings"):
                 Self.openSettings()
-                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+                return HTTPResponse.ok()
 
             case ("POST", "/action/closeSettings"):
                 Self.closeSettings()
-                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+                return HTTPResponse.ok()
 
             case ("POST", "/action/skipNaming"):
                 // Skips ALL pending speaker-naming jobs in one shot — driver
@@ -352,7 +358,7 @@
                 // blocking on a UI dialog. Fire-and-forget; returns 200 even
                 // if there's nothing pending.
                 skipNaming()
-                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+                return HTTPResponse.ok()
 
             case ("POST", "/action/enqueueFile"):
                 // Enqueues a previously-recorded audio file into the pipeline
@@ -365,7 +371,7 @@
                 else { return HTTPResponse.badRequest() }
                 let url = URL(fileURLWithPath: p.path)
                 guard enqueueFile(url) else { return HTTPResponse.badRequest() }
-                return HTTPResponse.ok(body: Data("ok\n".utf8), contentType: "text/plain")
+                return HTTPResponse.ok()
 
             case ("POST", "/action/enqueueFiles"):
                 // Multi-file variant — drives the same paired-pairing resolver
@@ -457,11 +463,6 @@
 
         private struct EnqueueFilePayload: Decodable {
             let path: String
-        }
-
-        // Internal (not private) so the `DebugRPCServer+V1` extension can decode it.
-        struct EnqueueFilesPayload: Decodable {
-            let paths: [String]
         }
 
         /// Map the action outcome to an HTTP response. `notFound` → 404,
