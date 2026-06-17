@@ -1641,6 +1641,48 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(finalState, .done, "Confirmed naming should end as .done")
     }
 
+    func testPipelineAutoSkipsNamingForHeadlessJob() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Hello"),
+        ]
+        let mockDiar = MockDiarization()
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { mockDiar },
+            diarizeEnabled: true,
+        )
+        // No speakerNamingHandler — the production/headless path. autoSkipNaming
+        // must make the job finish on its own instead of parking at
+        // .speakerNamingPending (which would wedge a headless blocking call).
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        var job = PipelineJob(
+            meetingTitle: "Headless Test",
+            appName: "TestApp",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.autoSkipNaming = true
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertEqual(
+            pQueue.jobs.first?.state, .done,
+            "autoSkipNaming job must complete without parking at .speakerNamingPending",
+        )
+        XCTAssertNil(
+            pQueue.speakerNamingDataByJob[job.id],
+            "Auto-skipped job should not stash naming data awaiting resolution",
+        )
+    }
+
     func testCompleteSpeakerNamingLateConfirmedTransitionsToDone() async {
         let queue = PipelineQueue(logDir: tmpDir)
         var job = PipelineJob(

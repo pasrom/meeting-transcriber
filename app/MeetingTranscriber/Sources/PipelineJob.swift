@@ -67,6 +67,17 @@ struct PipelineJob: Identifiable, Codable {
     /// callers fall back to the current global setting.
     var usedDiarizerMode: DiarizerMode?
 
+    // When true, the pipeline accepts the auto-assigned speaker names instead of
+    // parking at .speakerNamingPending for an interactive client. Set by the
+    // headless blocking-transcribe API path so a multi-speaker job still
+    // completes on its own.
+    //
+    // Optional (not Bool) so a legacy snapshot missing this key decodes as nil:
+    // synthesized Codable throws on a missing non-optional key. nil and false
+    // both mean "keep the interactive pause", so callers read `== true`.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var autoSkipNaming: Bool?
+
     init(
         meetingTitle: String,
         appName: String,
@@ -75,6 +86,7 @@ struct PipelineJob: Identifiable, Codable {
         micPath: URL?,
         micDelay: TimeInterval,
         participants: [String] = [],
+        autoSkipNaming: Bool = false,
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -92,5 +104,6 @@ struct PipelineJob: Identifiable, Codable {
         self.protocolPath = nil
         self.namingSlug = nil
         self.usedDiarizerMode = nil
+        self.autoSkipNaming = autoSkipNaming
     }
 }

@@ -1112,6 +1112,14 @@ class PipelineQueue {
         namingData: SpeakerNamingData, autoNames: [String: String],
         recog: RecognitionContext, ctx: JobContext,
     ) async -> SpeakerNamingOutcome {
+        if jobs.first(where: { $0.id == ctx.jobID })?.autoSkipNaming == true {
+            // Headless blocking-transcribe: accept the auto-assigned names
+            // inline (exactly like a `.skipped` dialog result) so the job
+            // finishes on its own. Don't stash naming data — there is no
+            // interactive client to resolve it, and parking would wedge the
+            // job until the next launch's 24h stale-cleanup.
+            return .finalized(autoNames)
+        }
         guard let handler = speakerNamingHandler else {
             // Production: stash data, don't block the pipeline. The notification
             // is posted later — after the job transitions to
