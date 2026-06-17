@@ -239,8 +239,14 @@ final class AppState {
     #if !APPSTORE
         /// Build a fully-wired debug RPC server (state snapshot + speaker-DB
         /// actions + skip-naming + file-enqueue closures). `RPCServerController`
-        /// owns when to start/stop it; this just constructs it.
-        func buildDebugRPCServer() -> DebugRPCServer {
+        /// owns when to start/stop it; this just constructs it. port/token
+        /// default to production values but are parameterised so a test can
+        /// build the wired server on an OS-assigned port with a known token and
+        /// exercise the injected closures over a real socket.
+        func buildDebugRPCServer(
+            port: UInt16 = DebugRPCServer.defaultPort,
+            token: String = DebugRPCServer.loadOrCreateToken(),
+        ) -> DebugRPCServer {
             let snapshot: () -> RPCStateSnapshot = { [weak self] in
                 self?.rpcStateSnapshot() ?? RPCStateSnapshot.empty
             }
@@ -281,7 +287,20 @@ final class AppState {
             let jobStatus: (UUID) -> JobStatusDTO? = { [weak self] id in
                 self?.pipeline.jobStatus(forID: id)
             }
+            // Per-job speaker-naming over the API: read the pending choice, then
+            // confirm names or skip (accept auto-names) for that one job.
+            let namingStatus: (UUID) -> NamingStatusDTO? = { [weak self] id in
+                self?.pipeline.namingStatus(forID: id)
+            }
+            let confirmNaming: (UUID, [String: String]) -> Bool = { [weak self] id, mapping in
+                self?.pipeline.confirmNaming(jobID: id, mapping: mapping) ?? false
+            }
+            let skipJobNaming: (UUID) -> Bool = { [weak self] id in
+                self?.pipeline.skipNaming(jobID: id) ?? false
+            }
             return DebugRPCServer(
+                port: port,
+                token: token,
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
@@ -289,6 +308,9 @@ final class AppState {
                 enqueueFiles: enqueueFilesRPC,
                 enqueueReturningIDs: enqueueReturningIDs,
                 jobStatus: jobStatus,
+                namingStatus: namingStatus,
+                confirmNaming: confirmNaming,
+                skipJobNaming: skipJobNaming,
             )
         }
     #endif

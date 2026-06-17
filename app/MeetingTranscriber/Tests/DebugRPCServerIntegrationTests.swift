@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 #if !APPSTORE
     @testable import MeetingTranscriber
     import Network
@@ -8,6 +9,7 @@
     /// can't — actual NWListener wiring, header bytes on the wire, the
     /// receive() loop's framing logic.
     @MainActor
+    // swiftlint:disable:next attributes type_body_length
     final class DebugRPCServerIntegrationTests: XCTestCase {
         private static let testToken = "integration-token-deadbeef"
         private var server: DebugRPCServer?
@@ -33,6 +35,9 @@
             enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
             enqueueReturningIDs: @escaping ([URL]) -> [UUID] = { _ in [] },
             jobStatus: @escaping (UUID) -> JobStatusDTO? = { _ in nil },
+            namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
+            confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
+            skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
@@ -42,6 +47,9 @@
                 enqueueFiles: enqueueFiles,
                 enqueueReturningIDs: enqueueReturningIDs,
                 jobStatus: jobStatus,
+                namingStatus: namingStatus,
+                confirmNaming: confirmNaming,
+                skipJobNaming: skipJobNaming,
             )
             self.server = server
             server.start()
@@ -457,6 +465,115 @@
             req.httpBody = Data(#"{"paths":[]}"#.utf8)
             let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        // MARK: - /v1/jobs/<id>/naming
+
+        func testV1NamingStatusReturnsJSON() async throws {
+            let id = UUID()
+            let dto = NamingStatusDTO(
+                jobID: id.uuidString, meetingTitle: "Q3 Sync",
+                speakers: [.init(label: "Speaker 1", suggested: "Roman", speakingSeconds: 42)],
+                participants: ["Alice"],
+            )
+            let lookup: (UUID) -> NamingStatusDTO? = { $0 == id ? dto : nil }
+            let base = try await startServer(namingStatus: lookup)
+
+            let url = base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming")
+            let (data, response) = try await URLSession.shared.data(for: request("GET", url, headers: authHeader))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(NamingStatusDTO.self, from: data)
+            XCTAssertEqual(decoded.jobID, id.uuidString)
+            XCTAssertEqual(decoded.meetingTitle, "Q3 Sync")
+            XCTAssertEqual(decoded.participants, ["Alice"])
+            XCTAssertEqual(decoded.speakers.first?.label, "Speaker 1")
+            XCTAssertEqual(decoded.speakers.first?.suggested, "Roman")
+            XCTAssertEqual(decoded.speakers.first?.speakingSeconds, 42)
+        }
+
+        func testV1NamingStatusUnknownReturns404() async throws {
+            let base = try await startServer()
+            let url = base.appendingPathComponent("v1/jobs/\(UUID().uuidString)/naming")
+            let (_, response) = try await URLSession.shared.data(for: request("GET", url, headers: authHeader))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1ConfirmNamingForwardsMappingAndReturns200() async throws {
+            let id = UUID()
+            actor MappingBox {
+                private(set) var received: [String: String] = [:]
+                func record(_ m: [String: String]) {
+                    received = m
+                }
+            }
+            let box = MappingBox()
+            let confirm: (UUID, [String: String]) -> Bool = { jobID, m in
+                guard jobID == id else { return false }
+                Task { await box.record(m) }
+                return true
+            }
+            let base = try await startServer(confirmNaming: confirm)
+
+            var req = request("POST", base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming"), headers: authHeader)
+            req.httpBody = Data(#"{"mapping":{"Speaker 1":"Roman"}}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+
+            var received: [String: String] = [:]
+            for _ in 0 ..< 20 {
+                received = await box.received
+                if !received.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertEqual(received, ["Speaker 1": "Roman"])
+        }
+
+        func testV1ConfirmNamingUnknownReturns404() async throws {
+            // Default confirmNaming closure returns false for every job → 404.
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("v1/jobs/\(UUID().uuidString)/naming"), headers: authHeader)
+            req.httpBody = Data(#"{"mapping":{}}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1ConfirmNamingMalformedBodyReturns400() async throws {
+            let confirm: (UUID, [String: String]) -> Bool = { _, _ in true }
+            let base = try await startServer(confirmNaming: confirm)
+            var req = request("POST", base.appendingPathComponent("v1/jobs/\(UUID().uuidString)/naming"), headers: authHeader)
+            req.httpBody = Data("{}".utf8) // missing "mapping"
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testV1SkipNamingReturns200() async throws {
+            let id = UUID()
+            let skip: (UUID) -> Bool = { $0 == id }
+            let base = try await startServer(skipJobNaming: skip)
+            let url = base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming/skip")
+            let (_, response) = try await URLSession.shared.data(for: request("POST", url, headers: authHeader))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+
+        func testV1SkipNamingUnknownReturns404() async throws {
+            let base = try await startServer()
+            let url = base.appendingPathComponent("v1/jobs/\(UUID().uuidString)/naming/skip")
+            let (_, response) = try await URLSession.shared.data(for: request("POST", url, headers: authHeader))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1UnknownSubResourceOrMethodReturns404() async throws {
+            let base = try await startServer()
+            let id = UUID().uuidString
+            // Wrong method on a real sub-resource, and an unknown sub-resource,
+            // both fall through routeV1 to 404.
+            let getSkip = base.appendingPathComponent("v1/jobs/\(id)/naming/skip") // skip is POST-only
+            let (_, r1) = try await URLSession.shared.data(for: request("GET", getSkip, headers: authHeader))
+            XCTAssertEqual((r1 as? HTTPURLResponse)?.statusCode, 404)
+
+            let bogus = base.appendingPathComponent("v1/jobs/\(id)/bogus")
+            let (_, r2) = try await URLSession.shared.data(for: request("GET", bogus, headers: authHeader))
+            XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 404)
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)

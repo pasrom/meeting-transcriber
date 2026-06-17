@@ -13,6 +13,11 @@
             Self(status: 200, reason: "OK", body: body, contentType: contentType)
         }
 
+        /// 200 with the plain-text `ok\n` body used by fire-and-forget actions.
+        static func ok() -> Self {
+            ok(body: Data("ok\n".utf8), contentType: "text/plain")
+        }
+
         static func notFound() -> Self {
             Self(status: 404, reason: "Not Found", body: Data(), contentType: "text/plain")
         }
