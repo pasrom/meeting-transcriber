@@ -34,6 +34,13 @@
             Self(status: 400, reason: "Bad Request", body: Data(), contentType: "text/plain")
         }
 
+        /// 409: the job exists but isn't in a state that accepts this action
+        /// (e.g. confirm/skip naming on a job not awaiting naming). Distinct
+        /// from 404 (unknown job id).
+        static func conflict() -> Self {
+            Self(status: 409, reason: "Conflict", body: Data(), contentType: "text/plain")
+        }
+
         func serialize() -> Data {
             var response = "HTTP/1.1 \(status) \(reason)\r\n"
             response += "Content-Type: \(contentType)\r\n"

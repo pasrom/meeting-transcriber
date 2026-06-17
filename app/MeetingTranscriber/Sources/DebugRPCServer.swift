@@ -90,6 +90,7 @@
         let confirmNaming: (UUID, [String: String]) -> Bool // POST .../naming
         let skipJobNaming: (UUID) -> Bool // POST .../naming/skip
         let transcribe: (URL, Double) async -> BlockingTranscribeResult // POST /v1/transcribe
+        var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests

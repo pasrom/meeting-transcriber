@@ -345,7 +345,7 @@ final class PipelineController {
         let deadline = ContinuousClock.now.advanced(by: .seconds(maxWaitSeconds))
         while ContinuousClock.now < deadline {
             if let job = queue.jobs.first(where: { $0.id == jobID }) {
-                if job.state == .done || job.state == .error { return .completed(JobStatusDTO(job: job)) }
+                if job.state.isTerminal { return .completed(JobStatusDTO(job: job)) }
             } else if let record = terminalJobStore.lookup(jobID: jobID) {
                 return .completed(record) // already reaped from the live queue
             }
@@ -355,7 +355,7 @@ final class PipelineController {
         // (or while we were enqueuing with maxWaitSeconds==0) is completed, not
         // timed out.
         let final = jobStatus(forID: jobID)
-        if let final, final.state == .done || final.state == .error { return .completed(final) }
+        if let final, final.state.isTerminal { return .completed(final) }
         return .timedOut(final)
     }
 }
@@ -366,4 +366,14 @@ enum BlockingTranscribeResult {
     case noFile
     case completed(JobStatusDTO)
     case timedOut(JobStatusDTO?)
+
+    /// The job this result refers to, if any (nil only for `.noFile`). Lets the
+    /// RPC layer record the created job under an Idempotency-Key.
+    var jobID: UUID? {
+        switch self {
+        case .noFile: nil
+        case let .completed(dto): UUID(uuidString: dto.jobID)
+        case let .timedOut(dto): dto.flatMap { UUID(uuidString: $0.jobID) }
+        }
+    }
 }
