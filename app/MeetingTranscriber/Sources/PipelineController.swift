@@ -206,14 +206,14 @@ final class PipelineController {
     /// disk. Distinct from the file count above: paired imports yield fewer IDs
     /// than files.
     @discardableResult
-    func enqueueExistingFilesReturningIDs(_ urls: [URL]) -> [UUID] {
+    func enqueueExistingFilesReturningIDs(_ urls: [URL], autoSkipNaming: Bool = false) -> [UUID] {
         let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !existing.isEmpty else { return [] }
-        return enqueueFiles(existing)
+        return enqueueFiles(existing, autoSkipNaming: autoSkipNaming)
     }
 
     @discardableResult
-    func enqueueFiles(_ urls: [URL]) -> [UUID] {
+    func enqueueFiles(_ urls: [URL], autoSkipNaming: Bool = false) -> [UUID] {
         ensureQueue()
 
         let resolution = PairedRecordingResolver.resolve(urls: urls)
@@ -237,6 +237,7 @@ final class PipelineController {
                 meetingTitle: title, appName: appName,
                 mixPath: group.mix, appPath: group.app, micPath: group.mic,
                 micDelay: micDelay, participants: participants,
+                autoSkipNaming: autoSkipNaming,
             )
             ids.append(job.id)
             queue.enqueue(job)
@@ -251,6 +252,7 @@ final class PipelineController {
                 appPath: nil,
                 micPath: nil,
                 micDelay: 0,
+                autoSkipNaming: autoSkipNaming,
             )
             ids.append(job.id)
             queue.enqueue(job)
@@ -323,4 +325,45 @@ final class PipelineController {
         queue.completeSpeakerNaming(jobID: jobID, result: result)
         return true
     }
+
+    // MARK: - Blocking transcribe (one-call automation API)
+
+    /// Enqueue a single file with `autoSkipNaming` so it completes headlessly
+    /// (the queue accepts the auto-assigned speaker names instead of parking at
+    /// `.speakerNamingPending`), then wait until the job reaches a terminal
+    /// state. Returns `.noFile` when the path doesn't exist, `.timedOut` with
+    /// the in-flight status once `maxWaitSeconds` elapses (the job keeps running
+    /// and will still finish on its own), else `.completed` with the terminal
+    /// status.
+    func transcribeAndWait(
+        path: URL,
+        maxWaitSeconds: Double,
+        pollInterval: Duration = .milliseconds(200),
+    ) async -> BlockingTranscribeResult {
+        guard let jobID = enqueueExistingFilesReturningIDs([path], autoSkipNaming: true).first
+        else { return .noFile }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(maxWaitSeconds))
+        while ContinuousClock.now < deadline {
+            if let job = queue.jobs.first(where: { $0.id == jobID }) {
+                if job.state == .done || job.state == .error { return .completed(JobStatusDTO(job: job)) }
+            } else if let record = terminalJobStore.lookup(jobID: jobID) {
+                return .completed(record) // already reaped from the live queue
+            }
+            try? await Task.sleep(for: pollInterval)
+        }
+        // Final read: a job that went terminal in the last sub-interval window
+        // (or while we were enqueuing with maxWaitSeconds==0) is completed, not
+        // timed out.
+        let final = jobStatus(forID: jobID)
+        if let final, final.state == .done || final.state == .error { return .completed(final) }
+        return .timedOut(final)
+    }
+}
+
+/// Outcome of a blocking `transcribeAndWait`. The RPC layer maps `noFile` → 400,
+/// `completed` → 200, `timedOut` → 202.
+enum BlockingTranscribeResult {
+    case noFile
+    case completed(JobStatusDTO)
+    case timedOut(JobStatusDTO?)
 }

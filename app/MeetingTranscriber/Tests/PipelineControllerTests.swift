@@ -237,4 +237,77 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertTrue(pc.skipNaming(jobID: id))
         XCTAssertFalse(pc.skipNaming(jobID: UUID()), "no pending naming → false")
     }
+
+    // MARK: - transcribeAndWait (blocking)
+
+    func testTranscribeAndWaitReturnsNoFileForMissingPath() async {
+        let pc = makeWiredController()
+        let result = await pc.transcribeAndWait(
+            path: URL(fileURLWithPath: "/tmp/missing-\(UUID().uuidString).wav"), maxWaitSeconds: 1,
+        )
+        guard case .noFile = result else { XCTFail("expected .noFile, got \(result)"); return }
+    }
+
+    func testTranscribeAndWaitCompletesJob() async {
+        let pc = makeWiredController()
+        let file = tmpDir.appendingPathComponent("blocking.wav")
+        FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))
+
+        let result = await pc.transcribeAndWait(path: file, maxWaitSeconds: 10, pollInterval: .milliseconds(10))
+
+        guard case let .completed(dto) = result else { XCTFail("expected .completed, got \(result)"); return }
+        XCTAssertTrue(dto.state == .done || dto.state == .error, "wait loop returns on terminal state: \(dto.state)")
+    }
+
+    func testTranscribeAndWaitTimesOutWhileInFlight() async {
+        let pc = makeWiredController()
+        let file = tmpDir.appendingPathComponent("blocking-timeout.wav")
+        FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))
+
+        // maxWaitSeconds 0 → the deadline is already past, so the just-enqueued
+        // (still non-terminal) job yields a timeout with its in-flight status.
+        let result = await pc.transcribeAndWait(path: file, maxWaitSeconds: 0, pollInterval: .milliseconds(10))
+
+        guard case let .timedOut(dto) = result else { XCTFail("expected .timedOut, got \(result)"); return }
+        XCTAssertNotEqual(dto?.state, .done)
+    }
+
+    func testTranscribeAndWaitFallsBackToTerminalStoreWhenJobReaped() async {
+        // A job that completed and was reaped from the live queue before the poll
+        // loop observed it must still resolve via the terminal store (the slow
+        // poller the store exists for). ReapingQueue reproduces that
+        // deterministically: enqueue records a terminal DTO and leaves `jobs`
+        // empty.
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_reap.json"))
+        let pc = PipelineController(settings: AppSettings(), notifier: RecordingNotifier(), terminalJobStore: store)
+        pc.queue = ReapingQueue(store: store)
+
+        let file = tmpDir.appendingPathComponent("reaped.wav")
+        FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))
+
+        let result = await pc.transcribeAndWait(path: file, maxWaitSeconds: 5, pollInterval: .milliseconds(10))
+
+        guard case let .completed(dto) = result else { XCTFail("expected .completed from terminal store, got \(result)"); return }
+        XCTAssertEqual(dto.state, .done)
+    }
+}
+
+/// A `PipelineQueue` whose `enqueue` records a terminal DTO to the store and
+/// never keeps the job in `jobs` — reproduces a job reaped from the live queue
+/// before `transcribeAndWait`'s poll loop observes it.
+@MainActor
+private final class ReapingQueue: PipelineQueue {
+    private let store: TerminalJobStore
+
+    init(store: TerminalJobStore) {
+        self.store = store
+        super.init(terminalJobStore: store)
+    }
+
+    override func enqueue(_ job: PipelineJob) {
+        store.record(JobStatusDTO(
+            jobID: job.id.uuidString, state: .done, meetingTitle: job.meetingTitle,
+            transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
+        ))
+    }
 }
