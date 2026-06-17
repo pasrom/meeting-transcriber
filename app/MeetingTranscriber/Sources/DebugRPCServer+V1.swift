@@ -13,14 +13,27 @@
             let mapping: [String: String]
         }
 
+        private struct TranscribePayload: Decodable {
+            let path: String
+            let maxWaitSeconds: Double?
+        }
+
+        /// Default / hard-cap blocking-transcribe wait (seconds).
+        private static let defaultTranscribeWaitSeconds: Double = 600
+        private static let maxTranscribeWaitSeconds: Double = 1800
+
         /// Route the versioned automation surface. The query string is already
         /// stripped from `path` by the caller. Resources:
+        /// - `POST /v1/transcribe` — enqueue one file, block until terminal
         /// - `POST /v1/jobs` — enqueue file paths, returns created job IDs
         /// - `GET  /v1/jobs/<id>` — job status (live or persisted terminal record)
         /// - `GET  /v1/jobs/<id>/naming` — pending speaker-naming choice
         /// - `POST /v1/jobs/<id>/naming` — confirm speaker names `{mapping}`
         /// - `POST /v1/jobs/<id>/naming/skip` — skip naming for one job
-        func routeV1(_ request: HTTPRequest, path: String) -> HTTPResponse {
+        func routeV1(_ request: HTTPRequest, path: String) async -> HTTPResponse {
+            if request.method == "POST", path == "/v1/transcribe" {
+                return await transcribeResponse(body: request.body)
+            }
             // The caller (DebugRPCServer.route) already gated on the `/v1/jobs`
             // prefix, so comps[0..1] are always ["v1", "jobs"]; the count checks
             // below just keep indexing safe.
@@ -59,6 +72,25 @@
                 return HTTPResponse.badRequest()
             }
             return HTTPResponse.ok(body: body, contentType: "application/json")
+        }
+
+        private func transcribeResponse(body: Data) async -> HTTPResponse {
+            guard let p = try? JSONDecoder().decode(TranscribePayload.self, from: body), !p.path.isEmpty
+            else { return HTTPResponse.badRequest() }
+            let requested = p.maxWaitSeconds ?? Self.defaultTranscribeWaitSeconds
+            let wait = min(max(0, requested), Self.maxTranscribeWaitSeconds)
+            switch await transcribe(URL(fileURLWithPath: p.path), wait) {
+            case .noFile:
+                return HTTPResponse.badRequest()
+
+            case let .completed(dto):
+                return encodedOrNotFound(dto)
+
+            case let .timedOut(dto):
+                // 202 Accepted: still running; client polls GET /v1/jobs/<id>.
+                guard let dto, let body = try? JSONEncoder().encode(dto) else { return HTTPResponse.badRequest() }
+                return HTTPResponse(status: 202, reason: "Accepted", body: body, contentType: "application/json")
+            }
         }
 
         private func confirmNamingResponse(_ jobID: UUID, body: Data) -> HTTPResponse {

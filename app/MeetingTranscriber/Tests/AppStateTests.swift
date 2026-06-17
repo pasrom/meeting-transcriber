@@ -451,6 +451,15 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             XCTAssertEqual(confirm, 404)
             let skip = try await send("POST", "v1/jobs/\(jobID)/naming/skip")
             XCTAssertEqual(skip, 404)
+
+            // transcribe closure (blocking one-call): maxWaitSeconds 0 leaves the
+            // just-enqueued job in-flight at the deadline → 202, exercising the
+            // AppState closure's delegation to pipeline.transcribeAndWait.
+            let txFile = testLogDir.appendingPathComponent("e2e-transcribe.wav")
+            try Data("RIFF".utf8).write(to: txFile)
+            let txBody = Data(#"{"path":"\#(txFile.path)","maxWaitSeconds":0}"#.utf8)
+            let tx = try await send("POST", "v1/transcribe", body: txBody)
+            XCTAssertEqual(tx, 202)
         }
     #endif
 

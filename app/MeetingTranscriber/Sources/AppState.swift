@@ -298,6 +298,12 @@ final class AppState {
             let skipJobNaming: (UUID) -> Bool = { [weak self] id in
                 self?.pipeline.skipNaming(jobID: id) ?? false
             }
+            // Blocking one-call: enqueue + wait until terminal (auto-skipping
+            // the headless naming pause), returning the final status inline.
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { [weak self] url, maxWait in
+                guard let self else { return .noFile }
+                return await pipeline.transcribeAndWait(path: url, maxWaitSeconds: maxWait)
+            }
             return DebugRPCServer(
                 port: port,
                 token: token,
@@ -311,6 +317,7 @@ final class AppState {
                 namingStatus: namingStatus,
                 confirmNaming: confirmNaming,
                 skipJobNaming: skipJobNaming,
+                transcribe: transcribe,
             )
         }
     #endif

@@ -89,6 +89,7 @@
         let namingStatus: (UUID) -> NamingStatusDTO? // GET /v1/jobs/<id>/naming
         let confirmNaming: (UUID, [String: String]) -> Bool // POST .../naming
         let skipJobNaming: (UUID) -> Bool // POST .../naming/skip
+        let transcribe: (URL, Double) async -> BlockingTranscribeResult // POST /v1/transcribe
         private let expectedAuth: String
         private var listener: NWListener?
         /// OS-assigned port once the listener is `.ready`. Useful for tests
@@ -112,6 +113,7 @@
             namingStatus: @escaping (UUID) -> NamingStatusDTO? = { _ in nil },
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
+            transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -125,6 +127,7 @@
             self.namingStatus = namingStatus
             self.confirmNaming = confirmNaming
             self.skipJobNaming = skipJobNaming
+            self.transcribe = transcribe
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -329,8 +332,8 @@
             // endpoints. Routed before the legacy switch. Strip any query string
             // so `/v1/jobs/<id>?x=1` still resolves the id rather than 404ing.
             let v1Path = String(request.path.prefix { $0 != "?" })
-            if v1Path == "/v1/jobs" || v1Path.hasPrefix("/v1/jobs/") {
-                return routeV1(request, path: v1Path)
+            if v1Path == "/v1/jobs" || v1Path.hasPrefix("/v1/jobs/") || v1Path == "/v1/transcribe" {
+                return await routeV1(request, path: v1Path)
             }
 
             switch (request.method, request.path) {
