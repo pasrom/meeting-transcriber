@@ -443,14 +443,15 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             let statusCode = try await send("GET", "v1/jobs/\(jobID)")
             XCTAssertEqual(statusCode, 200)
 
-            // namingStatus / confirmNaming / skipJobNaming closures: the job isn't
-            // awaiting naming, so each returns 404 — but the AppState closures run.
+            // The job exists but isn't awaiting naming, so the AppState closures
+            // run and: GET naming has nothing to return (404), while the
+            // state-changing confirm/skip are a conflict on a live job (409).
             let naming = try await send("GET", "v1/jobs/\(jobID)/naming")
             XCTAssertEqual(naming, 404)
             let confirm = try await send("POST", "v1/jobs/\(jobID)/naming", body: Data(#"{"mapping":{}}"#.utf8))
-            XCTAssertEqual(confirm, 404)
+            XCTAssertEqual(confirm, 409)
             let skip = try await send("POST", "v1/jobs/\(jobID)/naming/skip")
-            XCTAssertEqual(skip, 404)
+            XCTAssertEqual(skip, 409)
 
             // transcribe closure (blocking one-call): maxWaitSeconds 0 leaves the
             // just-enqueued job in-flight at the deadline → 202, exercising the

@@ -11,6 +11,11 @@ enum JobState: String, Codable {
     case done
     case error
 
+    /// A finished state the pipeline won't move out of on its own.
+    var isTerminal: Bool {
+        self == .done || self == .error
+    }
+
     /// Human-readable label for this job state.
     var label: String {
         switch self {

@@ -564,6 +564,35 @@
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
         }
 
+        /// A job that exists but isn't awaiting naming → confirm/skip is a
+        /// state conflict (409), distinct from an unknown id (404).
+        private func wrongStateStatus(_ id: UUID) -> (UUID) -> JobStatusDTO? {
+            { jid in
+                jid == id ? JobStatusDTO(
+                    jobID: jid.uuidString, state: .transcribing, meetingTitle: "M",
+                    transcriptPath: nil, protocolPath: nil, error: nil, warnings: [],
+                ) : nil
+            }
+        }
+
+        func testV1ConfirmNamingWrongStateReturns409() async throws {
+            let id = UUID()
+            // Default confirmNaming returns false; jobStatus says the job exists.
+            let base = try await startServer(jobStatus: wrongStateStatus(id))
+            var req = request("POST", base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming"), headers: authHeader)
+            req.httpBody = Data(#"{"mapping":{}}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 409)
+        }
+
+        func testV1SkipNamingWrongStateReturns409() async throws {
+            let id = UUID()
+            let base = try await startServer(jobStatus: wrongStateStatus(id))
+            let url = base.appendingPathComponent("v1/jobs/\(id.uuidString)/naming/skip")
+            let (_, response) = try await URLSession.shared.data(for: request("POST", url, headers: authHeader))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 409)
+        }
+
         func testV1UnknownSubResourceOrMethodReturns404() async throws {
             let base = try await startServer()
             let id = UUID().uuidString
@@ -627,6 +656,86 @@
             req.httpBody = Data(#"{"path":""}"#.utf8)
             let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        // MARK: - Idempotency-Key
+
+        private func idempotentHeaders(_ key: String) -> [String: String] {
+            authHeader.merging(["Idempotency-Key": key]) { _, new in new }
+        }
+
+        func testV1JobsIdempotencyKeyReturnsSameJobsWithoutNewEnqueue() async throws {
+            // enqueue yields a fresh id every call → identical responses can only
+            // mean the second request was served from the idempotency store.
+            let enqueue: ([URL]) -> [UUID] = { _ in [UUID()] }
+            let base = try await startServer(enqueueReturningIDs: enqueue)
+            let url = base.appendingPathComponent("v1/jobs")
+            let body = Data(#"{"paths":["/inbox/a.wav"]}"#.utf8)
+            let hdrs = idempotentHeaders("jobs-key-1")
+
+            var req1 = request("POST", url, headers: hdrs); req1.httpBody = body
+            let (d1, r1) = try await URLSession.shared.upload(for: req1, from: body)
+            var req2 = request("POST", url, headers: hdrs); req2.httpBody = body
+            let (d2, r2) = try await URLSession.shared.upload(for: req2, from: body)
+
+            XCTAssertEqual((r1 as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 200)
+            struct EnqueueIDs: Decodable { let jobIDs: [String] }
+            let ids1 = try JSONDecoder().decode(EnqueueIDs.self, from: d1).jobIDs
+            let ids2 = try JSONDecoder().decode(EnqueueIDs.self, from: d2).jobIDs
+            XCTAssertFalse(ids1.isEmpty)
+            XCTAssertEqual(ids1, ids2, "same Idempotency-Key returns the original jobIDs, no new job")
+        }
+
+        func testV1JobsDifferentKeysEnqueueSeparately() async throws {
+            let enqueue: ([URL]) -> [UUID] = { _ in [UUID()] }
+            let base = try await startServer(enqueueReturningIDs: enqueue)
+            let url = base.appendingPathComponent("v1/jobs")
+            let body = Data(#"{"paths":["/inbox/a.wav"]}"#.utf8)
+
+            var req1 = request("POST", url, headers: idempotentHeaders("k-a")); req1.httpBody = body
+            let (d1, _) = try await URLSession.shared.upload(for: req1, from: body)
+            var req2 = request("POST", url, headers: idempotentHeaders("k-b")); req2.httpBody = body
+            let (d2, _) = try await URLSession.shared.upload(for: req2, from: body)
+
+            struct EnqueueIDs: Decodable { let jobIDs: [String] }
+            let ids1 = try JSONDecoder().decode(EnqueueIDs.self, from: d1).jobIDs
+            let ids2 = try JSONDecoder().decode(EnqueueIDs.self, from: d2).jobIDs
+            XCTAssertNotEqual(ids1, ids2, "distinct keys create distinct jobs")
+        }
+
+        func testV1TranscribeIdempotencyKeyReturnsExistingJobWithoutReRun() async throws {
+            // transcribe yields a fresh job each call; the repeat path instead
+            // resolves the stored id via jobStatus (echoed here), so identical
+            // jobIDs prove the second request did not re-run transcribe.
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+                await Task.yield()
+                return .completed(JobStatusDTO(
+                    jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                    transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
+                ))
+            }
+            let status: (UUID) -> JobStatusDTO? = { id in
+                JobStatusDTO(
+                    jobID: id.uuidString, state: .done, meetingTitle: "M",
+                    transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
+                )
+            }
+            let base = try await startServer(jobStatus: status, transcribe: transcribe)
+            let url = base.appendingPathComponent("v1/transcribe")
+            let body = Data(#"{"path":"/inbox/a.wav"}"#.utf8)
+            let hdrs = idempotentHeaders("tx-key-1")
+
+            var req1 = request("POST", url, headers: hdrs); req1.httpBody = body
+            let (d1, r1) = try await URLSession.shared.upload(for: req1, from: body)
+            var req2 = request("POST", url, headers: hdrs); req2.httpBody = body
+            let (d2, r2) = try await URLSession.shared.upload(for: req2, from: body)
+
+            XCTAssertEqual((r1 as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 200)
+            let j1 = try JSONDecoder().decode(JobStatusDTO.self, from: d1).jobID
+            let j2 = try JSONDecoder().decode(JobStatusDTO.self, from: d2).jobID
+            XCTAssertEqual(j1, j2, "repeat returns the same job via the idempotency store, no re-run")
         }
 
         // MARK: - M6: Host header allowlist (raw-socket)
