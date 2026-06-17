@@ -40,6 +40,10 @@ class PipelineQueue {
     /// Pure I/O over `outputDir`; see `SpeakerNamingStore`.
     private let namingStore: SpeakerNamingStore
 
+    /// Durable store of finished-job records for the automation API readback.
+    /// nil (default) disables it; production injects one, tests opt in.
+    let terminalJobStore: TerminalJobStore?
+
     /// Cached FluidVAD instance — reused across jobs to avoid model reload.
     private var vad: FluidVAD?
 
@@ -289,6 +293,7 @@ class PipelineQueue {
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
+        terminalJobStore: TerminalJobStore? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.engine = nil
@@ -306,6 +311,7 @@ class PipelineQueue {
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.namingStore = SpeakerNamingStore(outputDir: nil)
+        self.terminalJobStore = terminalJobStore
     }
 
     // MARK: - Known speaker names (issue #155)
@@ -369,6 +375,7 @@ class PipelineQueue {
         recognitionStatsLog: RecognitionStatsLog? = nil,
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
+        terminalJobStore: TerminalJobStore? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.engine = engine
@@ -394,6 +401,7 @@ class PipelineQueue {
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.namingStore = SpeakerNamingStore(outputDir: outputDir)
+        self.terminalJobStore = terminalJobStore
         refreshStageAverages()
     }
 
@@ -498,6 +506,7 @@ class PipelineQueue {
 
         if newState == .done || newState == .error {
             markProcessed(mixPath: jobs[index].mixPath)
+            recordTerminalJob(jobs[index])
         }
         if newState == .done {
             Task { [weak self] in
@@ -505,6 +514,13 @@ class PipelineQueue {
                 self?.removeJob(id: id)
             }
         }
+    }
+
+    /// Persist a durable terminal-state record so the automation API can read
+    /// back a finished job's outcome even after `completedJobLifetime` removes
+    /// it from the in-memory list. No-op when no store is wired.
+    private func recordTerminalJob(_ job: PipelineJob) {
+        terminalJobStore?.record(JobStatusDTO(job: job))
     }
 
     func addWarning(id: UUID, _ message: String) {
