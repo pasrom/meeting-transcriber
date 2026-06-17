@@ -68,6 +68,49 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertLessThan(elapsed, 0.05, "saveSnapshot returned in \(elapsed)s — should be near-instant")
     }
 
+    // MARK: - Terminal job record (durable readback)
+
+    func testTerminalRecordWrittenOnDone() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let q = PipelineQueue(logDir: tmpDir, terminalJobStore: store)
+        var job = makeJob(title: "Synced Call")
+        job.transcriptPath = URL(fileURLWithPath: "/out/call.txt")
+        job.protocolPath = URL(fileURLWithPath: "/out/call.md")
+        q.insertJobForTesting(job)
+
+        q.updateJobState(id: job.id, to: .done)
+
+        let rec = store.lookup(jobID: job.id)
+        XCTAssertEqual(rec?.state, .done)
+        XCTAssertEqual(rec?.meetingTitle, "Synced Call")
+        XCTAssertEqual(rec?.transcriptPath, "/out/call.txt")
+        XCTAssertEqual(rec?.protocolPath, "/out/call.md")
+    }
+
+    func testTerminalRecordWrittenOnError() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let q = PipelineQueue(logDir: tmpDir, terminalJobStore: store)
+        let job = makeJob()
+        q.insertJobForTesting(job)
+
+        q.updateJobState(id: job.id, to: .error, error: "Empty transcript")
+
+        let rec = store.lookup(jobID: job.id)
+        XCTAssertEqual(rec?.state, .error)
+        XCTAssertEqual(rec?.error, "Empty transcript")
+    }
+
+    func testNoTerminalRecordForNonTerminalState() {
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let q = PipelineQueue(logDir: tmpDir, terminalJobStore: store)
+        let job = makeJob()
+        q.insertJobForTesting(job)
+
+        q.updateJobState(id: job.id, to: .transcribing)
+
+        XCTAssertNil(store.lookup(jobID: job.id), "Only terminal states should be recorded")
+    }
+
     func testConsecutiveSnapshotsPersistLastStateOnDisk() async throws {
         // Coalescing: a burst of saves must collapse to a single write of
         // the final state, never an interleaved earlier snapshot.
