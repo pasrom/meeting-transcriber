@@ -23,7 +23,7 @@ Don't use it for production debugging — RPC is `#if !APPSTORE` only.
 
 Either persistent (preferred for repeated dev sessions):
 
-- Settings → Advanced → toggle **Debug RPC Server** on. The server starts
+- Settings → Advanced → toggle **Local Automation API** on. The server starts
   immediately and survives app relaunches.
 
 Or per-session (one-shot, e.g. for `scripts/test_rpc.sh`):
@@ -57,7 +57,7 @@ cd tools/mt-cli && swift build
 
 - **"app is not running on http://127.0.0.1:9876"** → either the dev app
   isn't running, or the toggle / env flag was off when it launched. Ask the
-  user to enable Settings → Advanced → Debug RPC Server, or relaunch with
+  user to enable Settings → Advanced → Local Automation API, or relaunch with
   `MEETINGTRANSCRIBER_DEBUG_RPC=1 ./scripts/run_app.sh`.
 - **"RPC token not found"** → same as above; the token is created on first
   successful start.
