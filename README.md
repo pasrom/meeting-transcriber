@@ -37,6 +37,8 @@ brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
 ```
 
+> Homebrew 6.0+ may flag the third-party tap as untrusted. If so, run `brew trust --tap pasrom/meeting-transcriber` before installing.
+
 The app lives in your menu bar — open it, grant microphone + screen-recording permission, and the first detected Teams/Zoom/Webex call records automatically.
 
 ---
@@ -141,6 +143,8 @@ The app detects ffmpeg automatically. Status is shown in Settings → About.
 brew tap pasrom/meeting-transcriber
 brew install --cask meeting-transcriber
 ```
+
+> **Tap trust:** Homebrew 6.0 added [tap trust](https://docs.brew.sh/Tap-Trust) for third-party taps. During the 6.0.x transition non-official taps are still allowed by default (you may just see a warning); enforcement is opt-in via `HOMEBREW_REQUIRE_TAP_TRUST` and becomes mandatory in a later release. If your Homebrew enforces it, run `brew trust --tap pasrom/meeting-transcriber` before `brew install --cask`.
 
 ### Pre-release (RC) via Homebrew
 
