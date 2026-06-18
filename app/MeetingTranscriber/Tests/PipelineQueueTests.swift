@@ -889,7 +889,7 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
-    /// An engine that doesn't produce per-utterance timestamps (Qwen3 emits one
+    /// An engine that doesn't produce per-utterance timestamps (emitting one
     /// segment for the whole recording) must skip diarization entirely — running
     /// it would collapse the meeting onto a single speaker — and warn the user.
     func testDiarizeSkippedWhenEngineLacksTimestamps() async throws {

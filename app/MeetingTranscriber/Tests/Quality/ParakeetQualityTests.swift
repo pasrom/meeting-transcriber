@@ -7,9 +7,8 @@ import XCTest
 /// the env var.
 ///
 /// Computes WER per fixture and appends rows to `QualityResultsWriter`.
-/// Pairs with `WhisperKitQualityTests` (Whisper) and the future Qwen3
-/// quality class so a single quality artifact contains baselines across
-/// all three ASR engines plus the diarizer DER rows.
+/// Pairs with `WhisperKitQualityTests` (Whisper) so a single quality artifact
+/// contains baselines across the ASR engines plus the diarizer DER rows.
 ///
 /// Parakeet auto-detects language — there's no `engine.language = "de"`
 /// equivalent. As of 2026-05-10, WER on the German fixtures runs ~0.45-0.46

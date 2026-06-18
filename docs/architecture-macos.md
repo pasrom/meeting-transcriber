@@ -58,7 +58,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │ 1. Resample to 16 kHz mono (AudioMixer; AVAsset / ffmpeg fb)   │
         │ 2. (opt) FluidVAD silence-trim + timeline remap                │
         │ 3. Transcribe via active engine                                │
-        │      └─ TranscribingEngine: WhisperKit | Parakeet | Qwen3      │
+        │      └─ TranscribingEngine: WhisperKit | Parakeet             │
         │         (dual-source: each track separately, then merge)       │
         │ 4. (opt) Diarize via FluidDiarizer                             │
         │      └─ Mode: .offline | .sortformer                           │
@@ -101,7 +101,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
-| `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit, Parakeet, and Qwen3 language selectors |
+| `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
 | `LiveCaptionsState.swift` | `@Observable` live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types |
 | `LiveCaptionsOverlay.swift` | SwiftUI caption-bar content (recent finals + per-channel hypotheses) hosted in `LiveCaptionsWindow` |
 | `LiveCaptionsWindowController.swift` | Borderless click-through NSPanel hosting the caption overlay (⌥-drag to reposition; origin persisted) |
@@ -123,8 +123,6 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
 | `ParakeetEngine.swift` | NVIDIA Parakeet TDT v3 via FluidAudio (25 EU languages, ~50 MB, ~10× faster) |
 | `ParakeetTokenGrouping.swift` | Pure token-grouping logic extracted from `ParakeetEngine` (testable) |
-| `Qwen3AsrEngine.swift` | Qwen3-ASR 0.6B via FluidAudio (30 languages, ~1.75 GB, macOS 15+) |
-| `Qwen3AsrChunking.swift` | Pure audio chunking logic extracted from `Qwen3AsrEngine` (testable) |
 | `StreamingTranscriber.swift` | Per-channel live transcription actor (FluidVAD streaming → `engine.transcribeSamples` → partial/final captions) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
@@ -328,15 +326,15 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 
 `TranscribingEngine` protocol abstracts ASR backends. `AppSettings.transcriptionEngine` selects the active engine.
 
-| | WhisperKit | Parakeet TDT v3 | Qwen3-ASR |
-|---|---|---|---|
-| **Languages** | 99+ | 25 European | 30 |
-| **Model size** | ~800 MB–1.5 GB | ~50 MB | ~1.75 GB |
-| **Speed (M4 Pro)** | ~10–20× RTF | ~110× RTF | TBD |
-| **Language selection** | Manual or auto-detect | Auto-detect only | Manual or auto-detect |
-| **Timestamps** | Per-segment | Per-token | None (single segment) |
-| **macOS** | 14+ | 14+ | 15+ |
-| **Hallucinations** | Can occur | Minimal | Minimal |
+| | WhisperKit | Parakeet TDT v3 |
+|---|---|---|
+| **Languages** | 99+ | 25 European |
+| **Model size** | ~800 MB–1.5 GB | ~50 MB |
+| **Speed (M4 Pro)** | ~10–20× RTF | ~110× RTF |
+| **Language selection** | Manual or auto-detect | Auto-detect only |
+| **Timestamps** | Per-segment | Per-token |
+| **macOS** | 14+ | 14+ |
+| **Hallucinations** | Can occur | Minimal |
 
 ### WhisperKit Engine
 
@@ -349,15 +347,6 @@ All recordings are normalized to 16kHz at capture time — no resampling needed 
 - **Model:** NVIDIA Parakeet TDT v3 via FluidAudio (CoreML/ANE)
 - **Pre-loading:** Model downloaded and loaded at app launch (when selected)
 - **Token grouping:** `groupTokensIntoSegments` groups per-token timings into sentence-level segments (split on `. ! ?` or 20 tokens)
-
-### Qwen3-ASR Engine
-
-- **Model:** Qwen3-ASR 0.6B via FluidAudio `Qwen3AsrManager` (CoreML/ANE, macOS 15+)
-- **Pre-loading:** Model downloaded and loaded at app launch (when selected)
-- **Language:** 30 languages via `Qwen3AsrConfig.Language` enum, selectable in Settings. `nil` = auto-detect.
-- **No timestamps:** Returns plain text — emits single `TimestampedSegment` spanning full audio duration
-- **Chunking:** Audio split into <=30s windows (`Qwen3AsrConfig.maxAudioSeconds`), results concatenated
-- **Availability:** `@available(macOS 15, *)` — type-erased via `AnyObject?` in `EngineController` for macOS <15 compatibility
 
 ### Modes
 
@@ -547,7 +536,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 - `noMic` hides the mic-device picker (Audio) and the Speaker Identity section (Speakers)
 - `diarize` hides the diarizer-mode picker and Expected Speakers stepper
 - `vadEnabled` hides the VAD threshold slider
-- `transcriptionEngine` switches between WhisperKit / Parakeet / Qwen3 option panels
+- `transcriptionEngine` switches between WhisperKit / Parakeet option panels
 - `protocolProvider` switches between Claude CLI / OpenAI-compatible / None panels
 - `#if APPSTORE` removes the Claude CLI provider option entirely
 - `updateChecker == nil` hides the entire Updates section
@@ -565,7 +554,7 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 3. **AudioTapLib as SPM library** — Direct in-process audio capture via CATapDescription (App Store compatible)
 4. **Dual-source recording** — Enables speaker separation without diarization (app=Remote, mic=Me)
 5. **Graceful degradation** — Diarization optional, mute detection optional, continues on partial failure
-6. **Pre-loaded model** — Selected engine (WhisperKit, Parakeet, or Qwen3) loaded at app launch, prevents delay on first meeting
+6. **Pre-loaded model** — Selected engine (WhisperKit or Parakeet) loaded at app launch, prevents delay on first meeting
 7. **5s cooldown** — Prevents re-detecting same meeting after handling
 8. **FluidAudio on-device diarization** — Replaces Python pyannote subprocess, no external dependencies
 9. **Dual-track diarization** — App and mic tracks diarized separately, avoiding echo/cross-talk interference

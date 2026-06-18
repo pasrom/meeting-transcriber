@@ -99,8 +99,6 @@
             let active: TranscriptionEngineSetting
             let whisperKit: WhisperKit
             let parakeet: Parakeet
-            /// `nil` on macOS <15 where `Qwen3AsrEngine` isn't available.
-            let qwen3: Qwen3?
 
             // `modelState` (stringified `EngineModelState`, e.g. "unloaded"/"loaded")
             // lets driver scripts wait for model preload before measuring —
@@ -118,16 +116,10 @@
                 let modelState: String
             }
 
-            struct Qwen3: Codable {
-                let language: String?
-                let modelState: String
-            }
-
             static let empty = Self(
                 active: .whisperKit,
                 whisperKit: .init(modelVariant: "", language: nil, modelState: ""),
                 parakeet: .init(customVocabularyPath: "", modelState: ""),
-                qwen3: nil,
             )
         }
 

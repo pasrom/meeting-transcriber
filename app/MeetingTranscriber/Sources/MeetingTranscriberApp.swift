@@ -178,12 +178,6 @@ struct MeetingTranscriberApp: App {
                 settings: appState.settings,
                 whisperKitEngine: appState.engines.whisperKit,
                 parakeetEngine: appState.engines.parakeetEngine,
-                qwen3Engine: {
-                    if #available(macOS 15, *) {
-                        return appState.engines.qwen3Engine
-                    }
-                    return nil
-                }(),
                 updateChecker: appState.updateChecker,
                 // Share the pipeline's actor instance so both writers serialise on
                 // the same `recognition_log.jsonl` file. Fallback only fires in the

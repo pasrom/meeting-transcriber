@@ -42,8 +42,8 @@ final class LiveCaptionsGateTests: XCTestCase {
     }
 
     func testEnglishStreamingOnYieldsEnglishStreamingEvenWhenEngineUnsupported() {
-        // The key bypass: an engine without the re-transcribe hook (e.g. Qwen3)
-        // still gets captions via the engine-independent EOU session.
+        // The key bypass: an engine without the re-transcribe hook still gets
+        // captions via the engine-independent EOU session.
         let strategy = LiveCaptionsGate.strategy(
             liveEnabled: true, englishStreaming: true, engineSupportsLive: false,
         )

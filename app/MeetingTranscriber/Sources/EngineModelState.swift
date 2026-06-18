@@ -3,7 +3,7 @@ import Foundation
 /// App-owned model lifecycle state for a `TranscribingEngine`, decoupled from
 /// any ASR vendor's enum. WhisperKit ships its own `ModelState`; mapping to
 /// this type at the engine boundary keeps the protocol — and the
-/// FluidAudio-backed engines (Parakeet, Qwen3) — from importing WhisperKit
+/// FluidAudio-backed engines (e.g. Parakeet) — from importing WhisperKit
 /// just to report status.
 ///
 /// The case names are the RPC wire contract: `String(describing:).lowercased()`

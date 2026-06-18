@@ -43,7 +43,7 @@
 
   <ul class="plain">
     <li><b>Two separate tracks.</b> It captures the app audio and your microphone separately (the app audio through the CATapDescription API that shipped with macOS 14.2). Diarizing them apart instead of one mixed track keeps the remote side and your own voice from bleeding together.</li>
-    <li><b>Transcription on the Neural Engine.</b> Pick WhisperKit (99 languages), Parakeet (smaller and faster, EU languages), or Qwen3. All on device.</li>
+    <li><b>Transcription on the Neural Engine.</b> Pick WhisperKit (99 languages) or Parakeet (smaller and faster, EU languages). All on device.</li>
     <li><b>Speaker diarization with FluidAudio.</b> Also on device, no Hugging Face token. It remembers voices across meetings, so the same person gets the same label next time.</li>
     <li><b>Your own model for the summary.</b> The summary step goes through the Claude CLI or any OpenAI-compatible endpoint, so you can point it at a local Ollama or LM Studio model and keep the whole thing offline end to end.</li>
   </ul>

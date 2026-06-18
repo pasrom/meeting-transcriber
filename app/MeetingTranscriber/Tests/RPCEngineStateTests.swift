@@ -69,20 +69,6 @@
             )
         }
 
-        func test_snapshot_reflectsActiveEngine_qwen3() throws {
-            guard #available(macOS 15, *) else {
-                throw XCTSkip("Qwen3 requires macOS 15+")
-            }
-            settings.transcriptionEngine = .qwen3
-            let state = AppState(settings: settings)
-            state.engines.qwen3Engine.language = "en"
-
-            let snapshot = state.rpcStateSnapshot()
-
-            XCTAssertEqual(snapshot.engines.active, .qwen3)
-            XCTAssertEqual(snapshot.engines.qwen3?.language, "en")
-        }
-
         func test_snapshot_exposesEngineModelStates() {
             let state = AppState(settings: settings)
 
@@ -94,9 +80,6 @@
             // tracks jobs, not model preloads.
             XCTAssertEqual(snapshot.engines.whisperKit.modelState, "unloaded")
             XCTAssertEqual(snapshot.engines.parakeet.modelState, "unloaded")
-            if #available(macOS 15, *) {
-                XCTAssertEqual(snapshot.engines.qwen3?.modelState, "unloaded")
-            }
         }
 
         func test_modelStateWireFormat_pinsDescriptionContract() {

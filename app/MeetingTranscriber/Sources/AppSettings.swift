@@ -8,23 +8,20 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case whisperKit
     case parakeet
-    case qwen3
 
     var label: String {
         switch self {
         case .whisperKit: "WhisperKit (Whisper)"
         case .parakeet: "Parakeet TDT v3 (NVIDIA)"
-        case .qwen3: "Qwen3-ASR (Alibaba)"
         }
     }
 
-    /// Whether this engine is available on the current macOS version.
+    /// Whether this engine is available on the current platform. Both current
+    /// engines run everywhere the app does; kept as a capability hook for
+    /// engines with stricter OS floors.
     var isAvailable: Bool {
         switch self {
         case .whisperKit, .parakeet: true
-
-        case .qwen3:
-            if #available(macOS 15, *) { true } else { false }
         }
     }
 
@@ -34,13 +31,12 @@ enum TranscriptionEngineSetting: String, CaseIterable, Codable {
     }
 
     /// Whether the engine implements `transcribeSamples([Float])` so the
-    /// live-transcription pipeline can feed it VAD-bounded windows. Qwen3
-    /// today uses a chunked API without a streaming-friendly hook —
-    /// excluded until that's wired up (deferred follow-up).
+    /// live-transcription pipeline can feed it VAD-bounded windows. Both current
+    /// engines do; kept as an exhaustive `switch` (not a stored `true`) so a
+    /// future non-streaming engine is forced to declare its support here.
     var supportsLiveTranscription: Bool {
         switch self {
         case .whisperKit, .parakeet: true
-        case .qwen3: false
         }
     }
 }
@@ -176,8 +172,8 @@ final class AppSettings {
     /// language, so the session language isn't statically knowable, and routing
     /// a German speaker to an English model is worse than opt-in friction. When
     /// on (and `liveTranscriptionEnabled` is on) captions become available even
-    /// for engines that don't support the re-transcribe path (e.g. Qwen3),
-    /// because the streaming session bypasses `TranscribingEngine` entirely.
+    /// for engines that don't support the re-transcribe path, because the
+    /// streaming session bypasses `TranscribingEngine` entirely.
     /// Default: off. Only effective while the live-captions master toggle is on.
     var liveCaptionsEnglishStreaming: Bool {
         didSet { defaults.set(liveCaptionsEnglishStreaming, forKey: "liveCaptionsEnglishStreaming") }
@@ -222,16 +218,6 @@ final class AppSettings {
     /// Language as Optional for WhisperKit. Empty string → nil (auto-detect).
     var whisperLanguageOrNil: String? {
         whisperLanguage.isEmpty ? nil : whisperLanguage
-    }
-
-    /// Qwen3-ASR language hint (ISO 639-1 code). Empty string = auto-detect.
-    var qwen3Language: String {
-        didSet { defaults.set(qwen3Language, forKey: "qwen3Language") }
-    }
-
-    /// Language as Optional for Qwen3. Empty string → nil (auto-detect).
-    var qwen3LanguageOrNil: String? {
-        qwen3Language.isEmpty ? nil : qwen3Language
     }
 
     /// Parakeet language hint (ISO 639-1 code). Empty string = auto-detect.
@@ -498,7 +484,6 @@ final class AppSettings {
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
         whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
-        qwen3Language = defaults.object(forKey: "qwen3Language") as? String ?? ""
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true

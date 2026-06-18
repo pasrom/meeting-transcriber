@@ -9,9 +9,9 @@ protocol TranscribingEngine: AnyObject {
 
     /// Whether `transcribeSegments` returns per-utterance timestamps fine-grained
     /// enough to drive speaker diarization. WhisperKit and Parakeet do (default
-    /// `true`); Qwen3 emits a single segment spanning the whole recording, so
-    /// diarization would collapse the meeting onto one speaker — it returns
-    /// `false` and the pipeline skips diarization with a warning.
+    /// `true`). An engine that emits a single segment spanning the whole
+    /// recording returns `false`, and the pipeline skips diarization with a
+    /// warning (it would otherwise collapse the meeting onto one speaker).
     var providesTimestamps: Bool { get }
 
     func loadModel() async
@@ -30,10 +30,10 @@ extension TranscribingEngine {
 /// 16 kHz mono samples in memory — the API the live-transcription
 /// pipeline feeds with VAD-bounded chunks straight off the audio tap.
 ///
-/// Engines that can't do in-memory transcription (currently Qwen3, whose
-/// FluidAudio backend is chunk-batch-only) simply don't conform. The
-/// caller's `as? StreamingTranscribingEngine` cast is the static
-/// equivalent of `TranscriptionEngineSetting.supportsLiveTranscription`.
+/// Engines that can't do in-memory transcription (e.g. a chunk-batch-only
+/// backend) simply don't conform. The caller's `as? StreamingTranscribingEngine`
+/// cast is the static equivalent of
+/// `TranscriptionEngineSetting.supportsLiveTranscription`.
 @MainActor
 protocol StreamingTranscribingEngine: TranscribingEngine {
     func transcribeSamples(_ samples: [Float]) async throws -> String

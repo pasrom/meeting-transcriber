@@ -1,8 +1,8 @@
-/// Picker entries for the WhisperKit, Parakeet, and Qwen3 language selectors.
-/// All three include a leading `("", "Auto-detect")` sentinel when the engine
+/// Picker entries for the WhisperKit and Parakeet language selectors.
+/// Both include a leading `("", "Auto-detect")` sentinel when the engine
 /// supports nil-language inference. The lists are kept separate because the
-/// engines support different language sets (WhisperKit 99+, Parakeet 18,
-/// Qwen3 30) and are expected to diverge.
+/// engines support different language sets (WhisperKit 99+, Parakeet 18)
+/// and are expected to diverge.
 
 enum PickerLanguages {
     static let whisperKit: [(code: String, label: String)] = [
@@ -64,38 +64,5 @@ enum PickerLanguages {
         ("be", "\u{0411}\u{0435}\u{043B}\u{0430}\u{0440}\u{0443}\u{0441}\u{043A}\u{0430}\u{044F}"),
         ("bg", "\u{0411}\u{044A}\u{043B}\u{0433}\u{0430}\u{0440}\u{0441}\u{043A}\u{0438}"),
         ("sr", "\u{0421}\u{0440}\u{043F}\u{0441}\u{043A}\u{0438}"),
-    ]
-
-    static let qwen3: [(code: String, label: String)] = [
-        ("de", "Deutsch"),
-        ("en", "English"),
-        ("fr", "Fran\u{00E7}ais"),
-        ("es", "Espa\u{00F1}ol"),
-        ("it", "Italiano"),
-        ("nl", "Nederlands"),
-        ("pt", "Portugu\u{00EA}s"),
-        ("ja", "\u{65E5}\u{672C}\u{8A9E}"),
-        ("zh", "\u{4E2D}\u{6587}"),
-        ("ko", "\u{D55C}\u{AD6D}\u{C5B4}"),
-        ("ru", "\u{0420}\u{0443}\u{0441}\u{0441}\u{043A}\u{0438}\u{0439}"),
-        ("ar", "\u{0627}\u{0644}\u{0639}\u{0631}\u{0628}\u{064A}\u{0629}"),
-        ("tr", "T\u{00FC}rk\u{00E7}e"),
-        ("hi", "\u{0939}\u{093F}\u{0928}\u{094D}\u{0926}\u{0940}"),
-        ("th", "\u{0E44}\u{0E17}\u{0E22}"),
-        ("vi", "Ti\u{1EBF}ng Vi\u{1EC7}t"),
-        ("id", "Bahasa Indonesia"),
-        ("ms", "Bahasa Melayu"),
-        ("sv", "Svenska"),
-        ("da", "Dansk"),
-        ("fi", "Suomi"),
-        ("pl", "Polski"),
-        ("cs", "\u{010C}e\u{0161}tina"),
-        ("el", "\u{0395}\u{03BB}\u{03BB}\u{03B7}\u{03BD}\u{03B9}\u{03BA}\u{03AC}"),
-        ("hu", "Magyar"),
-        ("ro", "Rom\u{00E2}n\u{0103}"),
-        ("fa", "\u{0641}\u{0627}\u{0631}\u{0633}\u{06CC}"),
-        ("fil", "Filipino"),
-        ("mk", "\u{041C}\u{0430}\u{043A}\u{0435}\u{0434}\u{043E}\u{043D}\u{0441}\u{043A}\u{0438}"),
-        ("yue", "\u{7CB5}\u{8A9E}"),
     ]
 }
