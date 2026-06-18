@@ -3,8 +3,8 @@ import Observation
 
 // MARK: - EngineController
 
-/// Owns the transcription-engine concern: the three engine instances
-/// (`WhisperKitEngine`, `ParakeetEngine`, and — on macOS 15+ — `Qwen3AsrEngine`),
+/// Owns the transcription-engine concern: the engine instances
+/// (`WhisperKitEngine`, `ParakeetEngine`),
 /// the active-engine selection, and keeping each engine's language / vocabulary
 /// in line with `AppSettings` (both an up-front sync at construction and a
 /// self-rearming reactive observer for runtime changes).
@@ -26,18 +26,8 @@ import Observation
 final class EngineController {
     let whisperKit: WhisperKitEngine
     let parakeetEngine: ParakeetEngine
-    // Only created on macOS 15+ where Qwen3-ASR is available; type-erased so the
-    // stored property is expressible on macOS 14.
-    private let _qwen3Engine: AnyObject?
 
     private let settings: AppSettings
-
-    /// Typed accessor (only callable under `@available(macOS 15, *)` checks).
-    @available(macOS 15, *)
-    var qwen3Engine: Qwen3AsrEngine {
-        // swiftlint:disable:next force_cast
-        _qwen3Engine as! Qwen3AsrEngine
-    }
 
     // Dependency-default factories keep `init`'s body-type-check under the 300 ms
     // budget — an inline `@Observable` engine constructor forces the type-checker
@@ -52,20 +42,10 @@ final class EngineController {
         ParakeetEngine()
     }
 
-    @available(macOS 15, *)
-    private static func makeQwen3() -> Qwen3AsrEngine {
-        Qwen3AsrEngine()
-    }
-
     init(settings: AppSettings) {
         self.settings = settings
         self.whisperKit = Self.makeWhisperKit()
         self.parakeetEngine = Self.makeParakeet()
-        if #available(macOS 15, *) {
-            self._qwen3Engine = Self.makeQwen3()
-        } else {
-            self._qwen3Engine = nil
-        }
 
         // Bring engines in line with the current settings up front so the first
         // transcription doesn't run against stale defaults, then start observing
@@ -79,13 +59,6 @@ final class EngineController {
         switch settings.transcriptionEngine {
         case .parakeet:
             parakeetEngine
-
-        case .qwen3:
-            if #available(macOS 15, *) {
-                qwen3Engine
-            } else {
-                whisperKit // Fallback (should not happen -- UI prevents selection)
-            }
 
         case .whisperKit:
             whisperKit
@@ -104,12 +77,6 @@ final class EngineController {
 
         case .parakeet:
             await parakeetEngine.loadModel()
-
-        case .qwen3:
-            if #available(macOS 15, *) {
-                qwen3Engine.language = settings.qwen3LanguageOrNil
-                await qwen3Engine.loadModel()
-            }
         }
     }
 
@@ -127,12 +94,6 @@ final class EngineController {
             if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
             let nextLang = settings.parakeetLanguageOrNil
             if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
-
-        case .qwen3:
-            if #available(macOS 15, *) {
-                let next = settings.qwen3LanguageOrNil
-                if qwen3Engine.language != next { qwen3Engine.language = next }
-            }
         }
     }
 
@@ -145,7 +106,6 @@ final class EngineController {
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
             _ = settings.parakeetLanguage
-            _ = settings.qwen3Language
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }

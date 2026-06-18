@@ -40,15 +40,10 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings: AppSettings? = nil,
         updateChecker: UpdateChecker? = nil,
     ) -> SettingsView {
-        let qwen3: (any TranscribingEngine)? = {
-            if #available(macOS 15, *) { return Qwen3AsrEngine() }
-            return nil
-        }()
-        return SettingsView(
+        SettingsView(
             settings: settings ?? makeSettings(),
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
-            qwen3Engine: qwen3,
             updateChecker: updateChecker,
             recognitionStatsLog: RecognitionStatsLog(),
             stageTimingLog: StageTimingLog(),
@@ -67,15 +62,10 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
     }
 
     private func makeTranscription(settings: AppSettings? = nil) -> TranscriptionSettingsView {
-        let qwen3: (any TranscribingEngine)? = {
-            if #available(macOS 15, *) { return Qwen3AsrEngine() }
-            return nil
-        }()
-        return TranscriptionSettingsView(
+        TranscriptionSettingsView(
             settings: settings ?? makeSettings(),
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
-            qwen3Engine: qwen3,
         )
     }
 
@@ -239,15 +229,6 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
         XCTAssertNoThrow(try body.find(text: "Language"))
         XCTAssertThrowsError(try body.find(text: "Model"))
-    }
-
-    func testQwen3LanguagePickerShownWhenQwen3Selected() throws {
-        guard #available(macOS 15, *) else { return }
-        let settings = makeSettings()
-        settings.transcriptionEngine = .qwen3
-        let body = try makeTranscription(settings: settings).inspect()
-        XCTAssertNoThrow(try body.find(text: "Language"))
-        XCTAssertNoThrow(try body.find(text: "Auto-detect"))
     }
 
     // MARK: - Speakers tab

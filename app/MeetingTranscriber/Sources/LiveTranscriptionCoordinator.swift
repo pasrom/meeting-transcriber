@@ -170,7 +170,7 @@ final class LiveTranscriptionCoordinator {
     ///
     /// The English-streaming path is engine-independent, so it builds a
     /// controller with a nil streaming engine when the active engine doesn't
-    /// conform to `StreamingTranscribingEngine` (e.g. Qwen3). The re-transcribe
+    /// conform to `StreamingTranscribingEngine`. The re-transcribe
     /// path still requires a streaming engine: it returns nil otherwise, the
     /// static equivalent of the `supportsLiveTranscription` gate (callers already
     /// check `captionsEligible`, so that nil only happens on a regression).

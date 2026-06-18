@@ -78,21 +78,6 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/runtime-vocab.txt")
     }
 
-    func test_runtimeChange_qwen3Language_propagatesToEngine() async throws {
-        guard #available(macOS 15, *) else {
-            throw XCTSkip("Qwen3 requires macOS 15+")
-        }
-        settings.transcriptionEngine = .qwen3
-        settings.qwen3Language = "de"
-        let engines = EngineController(settings: settings)
-        XCTAssertEqual(engines.qwen3Engine.language, "de")
-
-        settings.qwen3Language = "en"
-
-        await waitFor(engines.qwen3Engine.language == "en")
-        XCTAssertEqual(engines.qwen3Engine.language, "en")
-    }
-
     // MARK: - Re-arming
 
     /// `withObservationTracking` is one-shot per registration; the re-arm in

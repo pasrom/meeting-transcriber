@@ -31,13 +31,6 @@ final class ModelPreloadTests: XCTestCase {
         XCTAssertEqual(engine.modelState, .loaded)
     }
 
-    func testPreloadQwen3() async {
-        guard #available(macOS 15, *) else { return }
-        let engine = Qwen3AsrEngine()
-        await engine.loadModel()
-        XCTAssertEqual(engine.modelState, .loaded)
-    }
-
     /// FluidAudio's Silero VAD model lives in a separate HuggingFace repo
     /// from the ASR models, so the engine pre-warms above don't pull it.
     /// Without this, `LiveTranscriptionE2ETests` is the first test to need

@@ -1,6 +1,6 @@
 # Meeting Transcriber
 
-> **The local-first meeting transcriber for macOS.** Records Teams, Zoom, and Webex calls, transcribes them on-device with Whisper / Parakeet / Qwen3, separates speakers, and turns the result into a Markdown protocol using your own Claude CLI or any local LLM. **No cloud. No subscription. No audio ever leaves your Mac.**
+> **The local-first meeting transcriber for macOS.** Records Teams, Zoom, and Webex calls, transcribes them on-device with Whisper / Parakeet, separates speakers, and turns the result into a Markdown protocol using your own Claude CLI or any local LLM. **No cloud. No subscription. No audio ever leaves your Mac.**
 
 <p align="center">
   <img src="docs/hero.gif" alt="Meeting Transcriber turning a Teams call into a Markdown protocol on-device" width="860">
@@ -52,7 +52,6 @@ flowchart TD
     D{"Transcription Engine<br/>CoreML / ANE"}
     D1["WhisperKit<br/>99 languages"]
     D2["Parakeet TDT v3<br/>25 EU languages"]
-    D3["Qwen3-ASR<br/>30 languages · macOS 15+"]
     E["Speaker Diarization<br/>FluidAudio · dual-track + recognition"]
     F["Protocol Generation<br/>Claude CLI · OpenAI-compatible · none"]
     G["Markdown Protocol<br/>Summary · Decisions · Tasks · Transcript"]
@@ -63,10 +62,8 @@ flowchart TD
     C --> D
     D --> D1
     D --> D2
-    D --> D3
     D1 --> E
     D2 --> E
-    D3 --> E
     E --> F
     F --> G
 
@@ -84,10 +81,9 @@ flowchart TD
 
 - **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
-- **On-device transcription** — Three engines, selectable in Settings:
+- **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
   - [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) (NVIDIA) — 25 EU languages, ~50 MB model, ~10× faster, custom vocabulary support (CTC boosting)
-  - [Qwen3-ASR](https://github.com/FluidInference/FluidAudio) (Alibaba) — 30 languages, ~1.75 GB model, macOS 15+
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidInference/FluidAudio) via CoreML/ANE — no HuggingFace token needed; two modes: standard (`OfflineDiarizer`) and overlap-aware (`Sortformer`)
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
 - **Speaker recognition** — Voice embeddings stored across meetings, matched via cosine similarity
@@ -245,7 +241,7 @@ Open Settings via the menu bar item or ⌘,.
 |---|---|
 | **General** | Apps to watch (Teams/Zoom/Webex), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD) |
-| **Transcribe** | ASR engine (WhisperKit / Parakeet / Qwen3) and per-engine options (model, language, custom vocabulary) |
+| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), protocol language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
@@ -273,7 +269,7 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 | No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
 | No app audio | Requires macOS 14.2+ for CATapDescription audio capture |
 | Empty transcription | Check that the file contains an audio track — the app converts to 16 kHz mono automatically |
-| Models not loading | Models download on first run (WhisperKit ~1 GB, Parakeet ~50 MB, Qwen3 ~1.75 GB); check internet connectivity |
+| Models not loading | Models download on first run (WhisperKit ~1 GB, Parakeet ~50 MB); check internet connectivity |
 | OpenAI-compatible API connection failed | Verify the endpoint URL and that the local model server is running |
 
 ### Diagnosing silent app-audio recordings

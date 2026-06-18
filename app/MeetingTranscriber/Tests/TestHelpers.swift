@@ -141,7 +141,7 @@ extension XCTestCase {
     /// Engine instantiation, model load, and `modelState` verification stay
     /// in the calling test method because each engine has different load
     /// semantics and configuration knobs (WhisperKit needs `modelVariant +
-    /// language`; Parakeet auto-detects; Qwen3 is `@available(macOS 15+)`).
+    /// language`; Parakeet auto-detects).
     @MainActor
     func runWERAgainstFixture(
         named fixture: String,

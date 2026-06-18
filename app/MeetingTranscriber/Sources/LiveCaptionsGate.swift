@@ -12,9 +12,9 @@
 /// **`englishStreaming` bypasses the engine-support gate**: the low-latency
 /// English streaming session (`EouStreamingCaptionSession`) drives FluidAudio's
 /// Parakeet EOU model directly and never touches the active `TranscribingEngine`,
-/// so captions become available even for engines without the re-transcribe hook
-/// (e.g. Qwen3). With `englishStreaming` off, captions still require the engine
-/// to support the re-transcribe path (today's behaviour).
+/// so captions become available even for engines without the re-transcribe hook.
+/// With `englishStreaming` off, captions still require the engine to support the
+/// re-transcribe path (today's behaviour).
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {

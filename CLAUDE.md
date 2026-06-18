@@ -25,7 +25,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
       OutputSettingsView.swift   # LLM provider · protocol language · output folder · prompt
       AdvancedSettingsView.swift # Permissions · Diagnostics · About
       View+RecordOnly.swift      # `recordOnlyDisabled(_:)` SwiftUI modifier (dim + disable downstream sections)
-      PickerLanguages.swift      # Language picker entries for WhisperKit, Parakeet, and Qwen3 language selectors
+      PickerLanguages.swift      # Language picker entries for WhisperKit and Parakeet language selectors
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
     KnownVoicesView.swift  # Speaker DB management UI (rename, delete, merge entries)
     RecognitionStatsView.swift # Recognition stats display (aggregate counts from recognition_log.jsonl)
@@ -50,8 +50,6 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     WhisperKitEngine.swift # WhisperKit transcription engine (CoreML/ANE, 99+ languages)
     ParakeetEngine.swift   # NVIDIA Parakeet TDT v3 engine via FluidAudio (CoreML/ANE, 25 EU languages)
     ParakeetTokenGrouping.swift  # Pure token-grouping logic extracted from ParakeetEngine (testable)
-    Qwen3AsrEngine.swift   # Qwen3-ASR 0.6B engine via FluidAudio (CoreML/ANE, 30 languages, macOS 15+)
-    Qwen3AsrChunking.swift  # Pure audio chunking logic extracted from Qwen3AsrEngine (testable)
     StreamingTranscriber.swift # Per-channel live transcription actor (FluidVAD streaming → engine.transcribeSamples → partial/final captions)
     FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
     FluidDiarizer+SortformerEmbeddings.swift  # Post-hoc WeSpeaker embedding extraction for Sortformer mode (feeds SpeakerMatcher)
@@ -243,8 +241,8 @@ speakers.json              # Saved voice profiles (gitignored, created at runtim
 ## Pipeline
 
 ```
-Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet | Qwen3] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
-Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet | Qwen3] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
+Dual-source: AudioTapLib (CATapDescription + AVAudioEngine) → separate 16kHz audio → [WhisperKit | Parakeet] per track → FluidAudio diarization per track (CoreML/ANE) → merge speakers → Claude CLI / OpenAI-compatible API → Markdown protocol
+Single-source: Audio/Video → 16kHz mono (AVAudioFile → AVAsset → ffmpeg fallback) → [WhisperKit | Parakeet] → FluidAudio diarization → Claude CLI / OpenAI-compatible API → Markdown protocol
 ```
 
 ## Setup
@@ -356,19 +354,18 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 ## Architecture Notes
 
 **Transcription engines:**
-- `TranscribingEngine` protocol abstracts ASR backends. Three implementations: `WhisperKitEngine` (99+ languages, ~1 GB model), `ParakeetEngine` (25 EU languages, ~50 MB model, ~10× faster), and `Qwen3AsrEngine` (30 languages, ~1.75 GB model, macOS 15+).
-- `AppSettings.transcriptionEngine` enum (`.whisperKit` / `.parakeet` / `.qwen3`) selects the engine. Settings UI shows engine picker; engine-specific options hidden when not selected. `availableCases` filters by macOS version.
-- Parakeet auto-detects language (no parameter) and supports custom vocabulary via CTC boosting (`ParakeetEngine.customVocabularyPath`). WhisperKit and Qwen3 support explicit language selection.
-- `Qwen3AsrEngine` requires macOS 15+ (`@available`). Returns plain text (no timestamps) — emits single `TimestampedSegment`. Chunks audio into <=30s windows (`Qwen3AsrConfig.maxAudioSeconds`). Type-erased in `EngineController` via `_qwen3Engine: AnyObject?` for macOS <15 compatibility.
-- `EngineController` (`@MainActor`) owns the three engine instances + the active-engine selection (`activeTranscriptionEngine`, used by `PipelineQueue`) + the settings → engine language/vocabulary sync (up-front + reactive) + launch model preload. `AppState` exposes it as `engines`.
+- `TranscribingEngine` protocol abstracts ASR backends. Two implementations: `WhisperKitEngine` (99+ languages, ~1 GB model) and `ParakeetEngine` (25 EU languages, ~50 MB model, ~10× faster).
+- `AppSettings.transcriptionEngine` enum (`.whisperKit` / `.parakeet`) selects the engine. Settings UI shows engine picker; engine-specific options hidden when not selected. `availableCases` (filtered by `isAvailable`) is the picker source — a capability hook kept for engines with stricter OS floors.
+- Parakeet auto-detects language (no parameter) and supports custom vocabulary via CTC boosting (`ParakeetEngine.customVocabularyPath`). WhisperKit supports explicit language selection.
+- `EngineController` (`@MainActor`) owns the engine instances + the active-engine selection (`activeTranscriptionEngine`, used by `PipelineQueue`) + the settings → engine language/vocabulary sync (up-front + reactive) + launch model preload. `AppState` exposes it as `engines`.
 
 **Concurrency:**
 - `WatchLoop` is `@MainActor`. Tests for this class must also be `@MainActor`.
-- All three engine `loadModel()` methods deduplicate concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
+- Both engine `loadModel()` methods deduplicate concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
 - `ClaudeCLIProtocolGenerator` uses async process I/O: the process `terminationHandler` yields into an `AsyncStream<Void>` that the caller awaits, instead of blocking on `process.waitUntilExit()`. The stream is installed before `process.run()` and buffers the yield, so an early exit is never missed. stdin/stdout are written/read in detached `Task`s.
 
 **View architecture:**
-- `SettingsView` receives its dependencies as stored properties (not `@State`): the three engine instances, `updateChecker`, `recognitionStatsLog`, an `enrollmentDiarizerFactory`, the `namingDialogActive`/`pipelineBusy` state flags, and an `onSpeakerMutate` callback. `qwen3Engine` is `(any TranscribingEngine)?` — nil on macOS <15.
+- `SettingsView` receives its dependencies as stored properties (not `@State`): the engine instances, `updateChecker`, `recognitionStatsLog`, an `enrollmentDiarizerFactory`, the `namingDialogActive`/`pipelineBusy` state flags, and an `onSpeakerMutate` callback.
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).
@@ -445,7 +442,7 @@ you're validating:
 
 **Fixture-based xctest E2E (`e2e.yml`)**
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
-  (Parakeet, WhisperKit, Qwen3, WatchLoop) feed pre-recorded `two_speakers_de.wav`
+  (Parakeet, WhisperKit, WatchLoop) feed pre-recorded `two_speakers_de.wav`
   into the components and assert on transcripts.
 - Triggered on `workflow_dispatch` and every push to `main`.
 - No live recording — `DualSourceRecorder` is bypassed; tests substitute

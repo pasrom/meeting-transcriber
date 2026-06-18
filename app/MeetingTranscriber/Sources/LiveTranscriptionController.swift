@@ -47,8 +47,8 @@ final class LiveTranscriptionController {
 
     /// Active engine for the VAD + re-transcribe path. Optional because the
     /// English streaming path is engine-independent: when `englishStreaming` is
-    /// on with a non-streaming active engine (e.g. Qwen3) there is no streaming
-    /// engine to hold, and captions still run via the EOU sessions.
+    /// on with a non-streaming active engine there is no streaming engine to
+    /// hold, and captions still run via the EOU sessions.
     private let engine: (any StreamingTranscribingEngine)?
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
@@ -156,7 +156,7 @@ final class LiveTranscriptionController {
     /// When `englishStreaming` is on, builds the low-latency EOU sessions; if
     /// their model load throws (e.g. first-use download offline) it logs and
     /// degrades to the re-transcribe path when the active engine supports it,
-    /// or to no captions when it doesn't (e.g. Qwen3 active). A failed EOU load
+    /// or to no captions when it doesn't. A failed EOU load
     /// is **not** retried until the controller is rebuilt (a settings change or
     /// relaunch drops + re-creates it) — deliberate, so a failing first-use model
     /// download isn't re-hammered on every recording.

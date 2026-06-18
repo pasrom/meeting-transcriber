@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       engine:
-        description: "Transcription engine filter (WhisperKit, Parakeet, Qwen3, WatchLoop, or all)"
+        description: "Transcription engine filter (WhisperKit, Parakeet, WatchLoop, or all)"
         required: false
         default: "all"
         type: choice
@@ -12,7 +12,6 @@ on:
           - all
           - WhisperKit
           - Parakeet
-          - Qwen3
           - WatchLoop
   push:
     # Trigger on every main push so the engine E2E run produces a status
@@ -38,8 +37,8 @@ concurrency:
 jobs:
   e2e:
     runs-on: [self-hosted, macOS, ARM64]
-    # Cold-cache runs download three multi-GB models (WhisperKit ~1 GB,
-    # Parakeet ~50 MB, Qwen3 ~1.75 GB); hot runs <10 min. 30 min job
+    # Cold-cache runs download multi-GB models (WhisperKit ~1 GB,
+    # Parakeet ~50 MB); hot runs <10 min. 30 min job
     # budget covers worst-case cold download. The `Run E2E tests` step
     # below has a 25 min step-timeout so a hang surfaces as `timed_out`
     # — see docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.

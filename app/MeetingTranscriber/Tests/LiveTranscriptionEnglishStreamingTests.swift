@@ -110,8 +110,8 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
     // MARK: - 3. prepare()-failure with a non-streaming engine → no captions
 
     func testEouLoadFailureWithNoStreamingEngineYieldsNoCaptions() async {
-        // English-streaming opt-in with a non-streaming active engine (e.g.
-        // Qwen3) is constructed with a nil streaming engine. If the EOU models
+        // English-streaming opt-in with a non-streaming active engine is
+        // constructed with a nil streaming engine. If the EOU models
         // fail to load there is nothing to fall back to → captions stay off,
         // and crucially no crash from force-unwrapping a missing engine.
         let probe = EouFactoryProbe(loadError: LoadFailure())

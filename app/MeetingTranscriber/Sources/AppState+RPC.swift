@@ -106,15 +106,7 @@
         /// Read live engine state. Lets `mt-cli state` (and tests) observe
         /// settings → engine propagation without running a transcription.
         private func enginesSnapshot() -> RPCStateSnapshot.Engines {
-            let qwen3State: RPCStateSnapshot.Engines.Qwen3? = if #available(macOS 15, *) {
-                .init(
-                    language: engines.qwen3Engine.language,
-                    modelState: String(describing: engines.qwen3Engine.modelState).lowercased(),
-                )
-            } else {
-                nil
-            }
-            return RPCStateSnapshot.Engines(
+            RPCStateSnapshot.Engines(
                 active: settings.transcriptionEngine,
                 whisperKit: .init(
                     modelVariant: engines.whisperKit.modelVariant,
@@ -125,7 +117,6 @@
                     customVocabularyPath: engines.parakeetEngine.customVocabularyPath,
                     modelState: String(describing: engines.parakeetEngine.modelState).lowercased(),
                 ),
-                qwen3: qwen3State,
             )
         }
 

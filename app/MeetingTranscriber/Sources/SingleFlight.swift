@@ -5,8 +5,8 @@ import Foundation
 /// it is in flight await the same run instead of starting their own. Once the
 /// run finishes the coordinator re-arms, so a later call starts fresh.
 ///
-/// This is the shared scaffolding behind the three ASR engines' `loadModel()`
-/// dedup (WhisperKit / Parakeet / Qwen3), which otherwise repeated the same
+/// This is the shared scaffolding behind the ASR engines' `loadModel()`
+/// dedup (WhisperKit / Parakeet), which otherwise repeated the same
 /// `loadingTask` machinery verbatim. The body owns its own error handling and
 /// state transitions; this type only owns the dedup.
 ///

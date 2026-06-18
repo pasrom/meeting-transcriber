@@ -106,7 +106,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
             verboseDiagnostics: { false },
             makeController: mockControllerFactory(),
         )
-        // Non-streaming engine provider (mirrors Qwen3 active): the EOU path
+        // Non-streaming engine provider: the EOU path
         // builds a controller with a nil streaming engine, so the sinks still
         // install. `nil` here would short-circuit ensureController before the
         // gate, so use a non-streaming stand-in.
@@ -124,8 +124,8 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
 }
 
 /// A `TranscribingEngine` that does NOT conform to `StreamingTranscribingEngine`
-/// — the static equivalent of Qwen3, for which the English-streaming path must
-/// build a controller with a nil streaming engine.
+/// — for which the English-streaming path must build a controller with a nil
+/// streaming engine.
 @MainActor
 private final class NonStreamingEngine: TranscribingEngine {
     var modelState: EngineModelState = .loaded

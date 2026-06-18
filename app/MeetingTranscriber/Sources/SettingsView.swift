@@ -4,7 +4,6 @@ struct SettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
-    var qwen3Engine: (any TranscribingEngine)? // nil on macOS < 15
     var updateChecker: UpdateChecker?
     /// Required: the same actor instance the pipeline writes to, so the Stats
     /// tab and the pipeline don't race two writers on `recognition_log.jsonl`.
@@ -62,7 +61,6 @@ struct SettingsView: View {
                 settings: settings,
                 whisperKitEngine: whisperKitEngine,
                 parakeetEngine: parakeetEngine,
-                qwen3Engine: qwen3Engine,
             )
 
         case .speakers:

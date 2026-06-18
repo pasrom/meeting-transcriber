@@ -6,7 +6,6 @@ struct TranscriptionSettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
-    var qwen3Engine: (any TranscribingEngine)?
 
     private static let whisperKitModels: [(variant: String, label: String)] = [
         ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
@@ -64,15 +63,6 @@ struct TranscriptionSettingsView: View {
                     .help("Text file with one term per line (e.g. company names, product names)")
                 }
 
-                if settings.transcriptionEngine == .qwen3 {
-                    Picker("Language", selection: $settings.qwen3Language) {
-                        Text("Auto-detect").tag("")
-                        ForEach(PickerLanguages.qwen3, id: \.code) { lang in
-                            Text(lang.label).tag(lang.code)
-                        }
-                    }
-                }
-
                 engineStatusView
             }
             .accessibilityIdentifier("transcriptionSection")
@@ -90,7 +80,7 @@ struct TranscriptionSettingsView: View {
             // The toggle stays enabled even for engines without the
             // re-transcribe hook, because the English low-latency sub-toggle
             // below routes captions through an engine-independent streaming
-            // session — so a Qwen3 user can still reach that path.
+            // session.
             Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
 
             Toggle("English low-latency captions", isOn: $settings.liveCaptionsEnglishStreaming)
@@ -115,30 +105,24 @@ struct TranscriptionSettingsView: View {
     }
 
     private var liveTranscriptionFootnote: String {
-        // The "unsupported" message applies only when neither caption path is
-        // available. With the English low-latency opt-in on, captions work even
-        // for an engine without the re-transcribe hook (e.g. Qwen3), so show the
-        // normal overlay explainer instead of contradicting the working state.
-        if settings.transcriptionEngine.supportsLiveTranscription || settings.liveCaptionsEnglishStreaming {
-            "Captions appear in a click-through overlay at the bottom of "
-                + "the screen during recording. Hold ⌥ (Option) to drag "
-                + "it; the position is remembered across sessions. "
-                + "Caption text is **not** logged by default — enable "
-                + "\"Verbose Diagnostic Logging\" in Advanced to see "
-                + "partials + finals in Console.app (subsystem "
-                + "com.meetingtranscriber.app, category LiveTranscription). "
-                + "Engine changes take effect on the next recording — "
-                + "switching mid-recording is not supported."
-        } else {
-            "This engine does not yet support live streaming. "
-                + "Use WhisperKit or Parakeet, or enable English low-latency captions above."
-        }
+        // Both current engines support the re-transcribe caption path, so
+        // captions are always available; this just explains the overlay. If a
+        // future engine returns `supportsLiveTranscription == false`, reintroduce
+        // a conditional "unsupported" message gated on that + `englishStreaming`.
+        "Captions appear in a click-through overlay at the bottom of "
+            + "the screen during recording. Hold ⌥ (Option) to drag "
+            + "it; the position is remembered across sessions. "
+            + "Caption text is **not** logged by default — enable "
+            + "\"Verbose Diagnostic Logging\" in Advanced to see "
+            + "partials + finals in Console.app (subsystem "
+            + "com.meetingtranscriber.app, category LiveTranscription). "
+            + "Engine changes take effect on the next recording — "
+            + "switching mid-recording is not supported."
     }
 
     private var activeEngine: any TranscribingEngine {
         switch settings.transcriptionEngine {
         case .parakeet: parakeetEngine
-        case .qwen3: qwen3Engine ?? whisperKitEngine
         case .whisperKit: whisperKitEngine
         }
     }
@@ -171,10 +155,6 @@ struct TranscriptionSettingsView: View {
             Button("Load Model") {
                 if settings.transcriptionEngine == .whisperKit {
                     whisperKitEngine.modelVariant = settings.whisperKitModel
-                }
-                if #available(macOS 15, *), settings.transcriptionEngine == .qwen3,
-                   let qe = qwen3Engine as? Qwen3AsrEngine {
-                    qe.language = settings.qwen3LanguageOrNil
                 }
                 Task { await engine.loadModel() }
             }
