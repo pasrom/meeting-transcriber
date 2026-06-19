@@ -186,6 +186,14 @@ final class LiveTranscriptionController {
 
     /// Resolve + construct both channel pipelines per the active strategy.
     private func buildPipelines() async {
+        // SPIKE env-gate: force German Nemotron streaming captions whenever live
+        // captions are armed, independent of the English opt-in. Used to measure
+        // CPU/RAM of the Nemotron path; falls through to the normal strategies if
+        // the model load fails.
+        if ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_NEMOTRON_CAPTIONS"] == "1",
+           await buildNemotronPipelines() {
+            return
+        }
         if englishStreaming, await buildEnglishStreamingPipelines() {
             return
         }
@@ -221,6 +229,46 @@ final class LiveTranscriptionController {
             usingEnglishStreaming = false
             return false
         }
+    }
+
+    /// SPIKE: build German Nemotron streaming sessions for both channels,
+    /// sharing one preloaded model set. Returns true on success; false (and
+    /// leaves pipelines nil) on load failure so the caller falls back.
+    private func buildNemotronPipelines() async -> Bool {
+        do {
+            let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+                languageCode: "de-DE", chunkMs: 2240,
+            )
+            let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
+            let mic = makeNemotronPipeline(channel: .mic, shared: shared)
+            try await mic.prepare()
+            let app = makeNemotronPipeline(channel: .app, shared: shared)
+            try await app.prepare()
+            micPipeline = mic
+            appPipeline = app
+            usingEnglishStreaming = true // kept-session path (reused across recordings)
+            logger.info("Nemotron streaming captions active (de-DE, shared models)")
+            return true
+        } catch {
+            logger.warning("Nemotron streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)")
+            micPipeline = nil
+            appPipeline = nil
+            usingEnglishStreaming = false
+            return false
+        }
+    }
+
+    private func makeNemotronPipeline(
+        channel: LiveCaptionChannel,
+        shared: SharedNemotronMultilingualModels,
+    ) -> NemotronStreamingCaptionSession {
+        let logChannel = channel.rawValue
+        return NemotronStreamingCaptionSession(
+            shared: shared,
+            languageCode: "de-DE",
+            channelLabel: logChannel,
+            onEvent: makeEventSink(channel: channel, logChannel: logChannel),
+        )
     }
 
     private func prewarmSpeakerMatcher() async {

@@ -1,15 +1,34 @@
+import AudioTapLib
 import FluidAudio
 import Foundation
 @testable import MeetingTranscriber
 import XCTest
+
+/// Thread-safe collector for caption events emitted by the session's onEvent sink.
+private final class EventBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [StreamingTranscriber.Event] = []
+    func append(_ e: StreamingTranscriber.Event) {
+        lock.lock(); events.append(e); lock.unlock()
+    }
+
+    func drain() -> [StreamingTranscriber.Event] {
+        lock.lock(); defer { lock.unlock() }; return events
+    }
+}
 
 /// Thread-safe holder for the latest partial transcript (the manager fires the
 /// callback off its actor; the test reads it after `finish()`).
 private final class PartialBox: @unchecked Sendable {
     private let lock = NSLock()
     private var value = ""
-    func set(_ s: String) { lock.lock(); value = s; lock.unlock() }
-    var last: String { lock.lock(); defer { lock.unlock() }; return value }
+    func set(_ s: String) {
+        lock.lock(); value = s; lock.unlock()
+    }
+
+    var last: String {
+        lock.lock(); defer { lock.unlock() }; return value
+    }
 }
 
 /// THROWAWAY PoC harness (spike branch only, NOT shipped). Measures
@@ -29,6 +48,49 @@ final class NemotronMultilingualPocTests: XCTestCase {
         let audio: String
     }
 
+    /// Integration check for the live-captions plumbing: feed real 16 kHz audio
+    /// through NemotronStreamingCaptionSession via the LiveCaptionPipeline
+    /// interface (ingest + flush) and assert it emits caption events through the
+    /// onEvent sink. Verifies the session wiring (shared-model load, ingest,
+    /// partial/final emission) on this machine without needing the Mini.
+    func testNemotronCaptionSessionEmitsEvents() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_NEMOTRON_POC"] == "1",
+            "Set RUN_NEMOTRON_POC=1",
+        )
+        let truth = try GroundTruth.load(named: "two_speakers_de")
+        let (samples, sr) = try await AudioMixer.loadAudioAsFloat32(url: truth.audioURL)
+        XCTAssertEqual(sr, 16000)
+
+        let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+            languageCode: "de-DE", chunkMs: 2240,
+        )
+        let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
+        let events = EventBox()
+        let session = NemotronStreamingCaptionSession(
+            shared: shared, languageCode: "de-DE", channelLabel: "test",
+        ) { events.append($0) }
+        try await session.prepare()
+
+        let slice = 8000 // 0.5 s — mimic live buffer cadence
+        var i = 0
+        while i < samples.count {
+            let e = Swift.min(i + slice, samples.count)
+            await session.ingest(LiveAudioBuffer(
+                samples: Array(samples[i ..< e]), channelCount: 1, sampleRate: 16000, hostTime: 0,
+            ))
+            i = e
+        }
+        await session.flush()
+
+        let all = events.drain()
+        let partials = all.filter { if case .partial = $0 { return true }; return false }
+        let finals = all.filter { if case .finalized = $0 { return true }; return false }
+        print("POC-SESSION events=\(all.count) partials=\(partials.count) finals=\(finals.count)")
+        XCTAssertFalse(all.isEmpty, "session emitted no caption events")
+        XCTAssertFalse(partials.isEmpty, "session emitted no partial during ingest")
+    }
+
     /// Single real recording read (no ground truth → judge the transcript by
     /// eye). Feeds the whole file in 60 s blocks like FluidAudio's reference.
     /// Set NEMOTRON_POC_RECORDING=/path/to.wav (16 kHz mono).
@@ -41,7 +103,7 @@ final class NemotronMultilingualPocTests: XCTestCase {
             throw XCTSkip("Set NEMOTRON_POC_RECORDING=/path/to.wav")
         }
         let (samples, sr) = try await AudioMixer.loadAudioAsFloat32(url: URL(fileURLWithPath: path))
-        XCTAssertEqual(sr, 16_000, "recording must be 16 kHz (afconvert otherwise)")
+        XCTAssertEqual(sr, 16000, "recording must be 16 kHz (afconvert otherwise)")
         let secs = Double(samples.count) / Double(sr)
         let peak = samples.map { Swift.abs($0) }.max() ?? 0
 
@@ -52,7 +114,7 @@ final class NemotronMultilingualPocTests: XCTestCase {
         try await manager.loadModels(from: dir)
         await manager.setLanguage("de-DE")
 
-        let block = 16_000 * 60
+        let block = 16000 * 60
         let t0 = Date()
         var i = 0
         while i < samples.count {
@@ -97,27 +159,8 @@ final class NemotronMultilingualPocTests: XCTestCase {
         try await manager.loadModels(from: dir)
         await manager.setLanguage("de-DE")
 
-        // Continuous-feed mode (the live-captions regime): concatenate every
-        // clip into ONE stream with natural 0.3 s gaps, feed in one session
-        // (no per-utterance reset), score the single joined hypothesis.
         if ProcessInfo.processInfo.environment["NEMOTRON_POC_CONTINUOUS"] == "1" {
-            var stream: [Float] = []
-            let gap = [Float](repeating: 0, count: 16_000 * 3 / 10) // 0.3 s
-            for clip in clips {
-                let (s, sr) = try await AudioMixer.loadAudioAsFloat32(url: URL(fileURLWithPath: clip.audio))
-                precondition(sr == 16_000, "continuous mode needs 16 kHz clips")
-                stream += s + gap
-            }
-            let reference = clips.map(\.text).joined(separator: " ")
-            let t0 = Date()
-            _ = try await manager.process(samples: stream)
-            let hyp = try await manager.finish()
-            let secs = Double(stream.count) / 16_000
-            let wer = WERCalculator.wer(reference: reference, hypothesis: hyp)
-            print("=== NEMOTRON-POC CONTINUOUS n=\(clips.count) audio=\(String(format: "%.1f", secs))s "
-                + "WER=\(String(format: "%.4f", wer)) RTFx=\(String(format: "%.1f", secs / Date().timeIntervalSince(t0)))x ===")
-            print("REF: \(reference)")
-            print("HYP: \(hyp)")
+            try await runContinuous(clips: clips, manager: manager)
             return
         }
 
@@ -154,6 +197,32 @@ final class NemotronMultilingualPocTests: XCTestCase {
         XCTAssertFalse(wers.isEmpty, "no clips in manifest")
     }
 
+    /// Continuous-feed mode (the live-captions regime): concatenate every clip
+    /// into ONE stream with natural 0.3 s gaps, feed in one session (no
+    /// per-utterance reset), score the single joined hypothesis.
+    private func runContinuous(
+        clips: [PocClip],
+        manager: StreamingNemotronMultilingualAsrManager,
+    ) async throws {
+        var stream: [Float] = []
+        let gap = [Float](repeating: 0, count: 16000 * 3 / 10) // 0.3 s
+        for clip in clips {
+            let (s, sr) = try await AudioMixer.loadAudioAsFloat32(url: URL(fileURLWithPath: clip.audio))
+            precondition(sr == 16000, "continuous mode needs 16 kHz clips")
+            stream += s + gap
+        }
+        let reference = clips.map(\.text).joined(separator: " ")
+        let t0 = Date()
+        _ = try await manager.process(samples: stream)
+        let hyp = try await manager.finish()
+        let secs = Double(stream.count) / 16000
+        let wer = WERCalculator.wer(reference: reference, hypothesis: hyp)
+        print("=== NEMOTRON-POC CONTINUOUS n=\(clips.count) audio=\(String(format: "%.1f", secs))s "
+            + "WER=\(String(format: "%.4f", wer)) RTFx=\(String(format: "%.1f", secs / Date().timeIntervalSince(t0)))x ===")
+        print("REF: \(reference)")
+        print("HYP: \(hyp)")
+    }
+
     func testNemotronMultilingualGermanFixture() async throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["RUN_NEMOTRON_POC"] == "1",
@@ -162,7 +231,7 @@ final class NemotronMultilingualPocTests: XCTestCase {
 
         let truth = try GroundTruth.load(named: "two_speakers_de")
         let (samples, sampleRate) = try await AudioMixer.loadAudioAsFloat32(url: truth.audioURL)
-        XCTAssertEqual(sampleRate, 16_000, "harness expects 16 kHz mono")
+        XCTAssertEqual(sampleRate, 16000, "harness expects 16 kHz mono")
         let audioSeconds = Double(samples.count) / Double(sampleRate)
 
         // Download + load the German latin/2240 ms variant (de-DE routes to the
