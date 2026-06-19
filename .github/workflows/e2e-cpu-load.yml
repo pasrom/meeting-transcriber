@@ -12,6 +12,11 @@ name: E2E (CPU Load)
 
 on:
   workflow_dispatch:
+    inputs:
+      nemotron:
+        description: "Route live captions through the German Nemotron streaming session (spike)"
+        type: boolean
+        default: false
   schedule:
     # 05:15 UTC — offset from quality-and-safety (03:00) and e2e-app
     # (04:30, ~22 min) so the audio runner is quiet when measurement
@@ -56,6 +61,13 @@ jobs:
         if: steps.dev-id.outputs.keychain-path != ''
         run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
 
+      # SPIKE: route session B's live captions through the Nemotron streaming
+      # session. The dev app reads `nemotronCaptions` (the controller gate);
+      # session A (captions off) is unaffected. Cleaned up in a later always() step.
+      - name: Enable Nemotron captions (spike)
+        if: ${{ inputs.nemotron }}
+        run: defaults write com.meetingtranscriber.dev nemotronCaptions -bool true
+
       - name: Run CPU-load measurement driver
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
@@ -64,6 +76,18 @@ jobs:
         run: |
           set -o pipefail
           bash scripts/e2e-cpu-load.sh | tee /tmp/e2e-cpu-load-run.log
+
+      - name: Disable Nemotron captions (spike cleanup)
+        if: always()
+        run: defaults delete com.meetingtranscriber.dev nemotronCaptions 2>/dev/null || true
+
+      - name: Upload full run log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cpu-load-run.log
+          path: /tmp/e2e-cpu-load-run.log
+          if-no-files-found: ignore
 
       # The RESULT line is the machine-readable summary (idle + active
       # window averages + contamination flag). Collected as an artifact so
