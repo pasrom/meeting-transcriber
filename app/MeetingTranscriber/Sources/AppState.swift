@@ -138,7 +138,7 @@ final class AppState {
             captions: liveCaptions,
             liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
-            englishStreaming: { [settings] in settings.liveCaptionsEnglishStreaming },
+            engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
         )
         self.watching = WatchingController(
@@ -338,7 +338,7 @@ final class AppState {
     var shouldShowLiveCaptions: Bool {
         LiveCaptionsGate.captionsAvailable(
             liveEnabled: settings.liveTranscriptionEnabled,
-            englishStreaming: settings.liveCaptionsEnglishStreaming,
+            engineLanguage: settings.activeEngineLanguageOrNil,
             engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
         ) && watching.watchLoop?.state == .recording
     }

@@ -56,16 +56,20 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.perChannelIndicatorEnabled)
         XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 90.0)
         XCTAssertFalse(settings.liveTranscriptionEnabled)
-        XCTAssertFalse(settings.liveCaptionsEnglishStreaming)
     }
 
-    func test_liveCaptionsEnglishStreaming_defaultsToFalse() {
-        XCTAssertFalse(settings.liveCaptionsEnglishStreaming)
+    func test_activeEngineLanguageOrNil_followsWhisperKitLanguage() {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperLanguage = "de"
+        XCTAssertEqual(settings.activeEngineLanguageOrNil, "de")
+        settings.whisperLanguage = ""
+        XCTAssertNil(settings.activeEngineLanguageOrNil, "empty language = auto-detect → nil")
     }
 
-    func test_liveCaptionsEnglishStreaming_persistsToUserDefaults() {
-        settings.liveCaptionsEnglishStreaming = true
-        XCTAssertTrue(defaults.bool(forKey: "liveCaptionsEnglishStreaming"))
+    func test_activeEngineLanguageOrNil_followsParakeetLanguageWhenParakeetActive() {
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = "en"
+        XCTAssertEqual(settings.activeEngineLanguageOrNil, "en")
     }
 
     // MARK: - Clamping

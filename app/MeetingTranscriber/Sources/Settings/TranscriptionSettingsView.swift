@@ -78,15 +78,12 @@ struct TranscriptionSettingsView: View {
     private var liveTranscriptionSection: some View {
         Section("Live transcription (PoC)") {
             // The toggle stays enabled even for engines without the
-            // re-transcribe hook, because the English low-latency sub-toggle
-            // below routes captions through an engine-independent streaming
-            // session.
+            // re-transcribe hook, because the language-driven streaming
+            // backends (German/English) route captions through an
+            // engine-independent streaming session.
             Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
 
-            Toggle("English low-latency captions", isOn: $settings.liveCaptionsEnglishStreaming)
-                .disabled(!settings.liveTranscriptionEnabled)
-
-            Text(englishStreamingFootnote)
+            Text(captionBackendFootnote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -100,8 +97,25 @@ struct TranscriptionSettingsView: View {
         .recordOnlyDisabled(settings.recordOnly)
     }
 
-    private var englishStreamingFootnote: String {
-        "English-only model; other languages keep the standard caption engine."
+    /// Describes which low-latency backend the current transcription language
+    /// selects. The backend follows the active engine's configured language (no
+    /// toggle): German → Nemotron streaming, English → Parakeet EOU, else →
+    /// the standard re-transcribe engine.
+    private var captionBackendFootnote: String {
+        switch settings.activeEngineLanguageOrNil {
+        case "de":
+            "Caption backend follows your transcription language. German uses the "
+                + "low-latency Nemotron streaming model (~611 MB, downloads on first use)."
+
+        case "en":
+            "Caption backend follows your transcription language. English uses the "
+                + "low-latency Parakeet streaming model."
+
+        default:
+            "Caption backend follows your transcription language. Set German or "
+                + "English for low-latency streaming captions; other languages (or "
+                + "auto-detect) use the standard re-transcribe engine."
+        }
     }
 
     private var liveTranscriptionFootnote: String {

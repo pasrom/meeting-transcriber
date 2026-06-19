@@ -70,7 +70,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -94,7 +94,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -122,7 +122,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -152,7 +152,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: false,
+            engineLanguage: nil,
             eouSessionFactory: eouFactory,
         )
 
@@ -183,7 +183,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -208,7 +208,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -237,7 +237,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
 
@@ -287,7 +287,7 @@ final class LiveTranscriptionEnglishStreamingTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
         await controller.prepare()

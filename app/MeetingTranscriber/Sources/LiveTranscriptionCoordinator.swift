@@ -16,7 +16,7 @@ import Observation
 /// `AppState.init` after stored-property init, where the `[weak self]` engine
 /// closure is valid) rather than captured at construction — so the coordinator
 /// never holds an AppState back-reference. `liveEnabled` / `engineSupportsLive` /
-/// `verboseDiagnostics` are settings-backed closures.
+/// `engineLanguage` / `verboseDiagnostics` are settings-backed closures.
 ///
 /// Not `@Observable` — it exposes no observable state (it drives the controller
 /// + captions imperatively). It still uses `withObservationTracking` internally
@@ -33,33 +33,34 @@ final class LiveTranscriptionCoordinator {
     private let captions: LiveCaptionsState
     private let liveEnabled: () -> Bool
     private let engineSupportsLive: () -> Bool
-    private let englishStreaming: () -> Bool
+    private let engineLanguage: () -> String?
     private let verboseDiagnostics: () -> Bool
     private let makeController: ControllerFactory
 
     /// Builds the streaming controller for the (optional) active engine. The
-    /// engine is nil when the English-streaming opt-in is on with a non-streaming
-    /// active engine — the EOU sessions don't need it. Injectable so tests can
-    /// supply a controller with mock collaborators (no model load); the default
-    /// builds the real one. Takes `captions` + `englishStreaming` +
-    /// `verboseDiagnostics` as parameters (rather than capturing `self`) so the
-    /// default can be a `static` function with no init-ordering dependency.
+    /// engine is nil when a language-driven streaming backend (German/English)
+    /// applies with a non-streaming active engine — those sessions don't need it.
+    /// Injectable so tests can supply a controller with mock collaborators (no
+    /// model load); the default builds the real one. Takes `captions` +
+    /// `engineLanguage` + `verboseDiagnostics` as parameters (rather than
+    /// capturing `self`) so the default can be a `static` function with no
+    /// init-ordering dependency.
     typealias ControllerFactory = @MainActor (
-        (any StreamingTranscribingEngine)?, LiveCaptionsState, Bool, @escaping () -> Bool,
+        (any StreamingTranscribingEngine)?, LiveCaptionsState, String?, @escaping () -> Bool,
     ) -> LiveTranscriptionController
 
     init(
         captions: LiveCaptionsState,
         liveEnabled: @escaping () -> Bool,
         engineSupportsLive: @escaping () -> Bool,
-        englishStreaming: @escaping () -> Bool = { false },
+        engineLanguage: @escaping () -> String? = { nil },
         verboseDiagnostics: @escaping () -> Bool,
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
     ) {
         self.captions = captions
         self.liveEnabled = liveEnabled
         self.engineSupportsLive = engineSupportsLive
-        self.englishStreaming = englishStreaming
+        self.engineLanguage = engineLanguage
         self.verboseDiagnostics = verboseDiagnostics
         self.makeController = makeController
     }
@@ -67,7 +68,7 @@ final class LiveTranscriptionCoordinator {
     private static func makeDefaultController(
         engine: (any StreamingTranscribingEngine)?,
         captions: LiveCaptionsState,
-        englishStreaming: Bool,
+        engineLanguage: String?,
         verboseDiagnostics: @escaping () -> Bool,
     ) -> LiveTranscriptionController {
         // `verboseDiagnostics` passed labeled (not trailing): with two
@@ -78,18 +79,18 @@ final class LiveTranscriptionCoordinator {
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
             captions: captions,
-            englishStreaming: englishStreaming,
+            engineLanguage: engineLanguage,
             verboseDiagnostics: verbose,
         )
     }
 
     /// Whether live captions are eligible to run at all, per the shared gate.
-    /// `englishStreaming` bypasses the engine-support requirement because the
-    /// EOU sessions are engine-independent.
+    /// The language-driven streaming backends (German/English) bypass the
+    /// engine-support requirement because their sessions are engine-independent.
     private var captionsEligible: Bool {
         LiveCaptionsGate.captionsAvailable(
             liveEnabled: liveEnabled(),
-            englishStreaming: englishStreaming(),
+            engineLanguage: engineLanguage(),
             engineSupportsLive: engineSupportsLive(),
         )
     }
@@ -111,7 +112,7 @@ final class LiveTranscriptionCoordinator {
     /// Called by `AppState`'s recorder factory on each recording start.
     ///
     /// `async` because `prepareForNextRecording()` awaits any in-flight stop-time
-    /// flush before reusing a kept EOU session — the deterministic stop→start
+    /// flush before reusing a kept streaming session — the deterministic stop→start
     /// boundary that keeps a slow `asr.finish()` from interleaving with the next
     /// recording's ingests on the same session actor.
     func attachSinks(to recorder: DualSourceRecorder) async {
@@ -147,10 +148,10 @@ final class LiveTranscriptionCoordinator {
         withObservationTracking {
             // Touch the underlying settings via the gate closures so the change
             // tracker observes `liveTranscriptionEnabled` + `transcriptionEngine`
-            // + `liveCaptionsEnglishStreaming`.
+            // + the active engine's language.
             _ = liveEnabled()
             _ = engineSupportsLive()
-            _ = englishStreaming()
+            _ = engineLanguage()
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
@@ -168,20 +169,27 @@ final class LiveTranscriptionCoordinator {
     /// Lazily create + warm the controller against the active engine. Idempotent
     /// — `prepare()` dedupes concurrent `loadModel` calls.
     ///
-    /// The English-streaming path is engine-independent, so it builds a
-    /// controller with a nil streaming engine when the active engine doesn't
-    /// conform to `StreamingTranscribingEngine`. The re-transcribe
-    /// path still requires a streaming engine: it returns nil otherwise, the
-    /// static equivalent of the `supportsLiveTranscription` gate (callers already
-    /// check `captionsEligible`, so that nil only happens on a regression).
+    /// The language-driven streaming backends (German/English) are
+    /// engine-independent, so the controller is built with a nil streaming engine
+    /// when the active engine doesn't conform to `StreamingTranscribingEngine`.
+    /// The re-transcribe path still requires a streaming engine: it returns nil
+    /// otherwise, the static equivalent of the `supportsLiveTranscription` gate
+    /// (callers already check `captionsEligible`, so that nil only happens on a
+    /// regression).
     private func ensureController() -> LiveTranscriptionController? {
         if let existing = controller { return existing }
         guard let engine = engineProvider?() else { return nil }
         let streamingEngine = engine as? any StreamingTranscribingEngine
-        let english = englishStreaming()
-        // Re-transcribe path needs a streaming engine; English streaming doesn't.
-        guard english || streamingEngine != nil else { return nil }
-        let controller = makeController(streamingEngine, captions, english, verboseDiagnostics)
+        let language = engineLanguage()
+        let strategy = LiveCaptionsGate.strategy(
+            liveEnabled: liveEnabled(),
+            engineLanguage: language,
+            engineSupportsLive: engineSupportsLive(),
+        )
+        guard strategy != .none else { return nil }
+        // Re-transcribe needs a streaming engine; the streaming backends don't.
+        guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
+        let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         self.controller = controller
         Task { @MainActor in await controller.prepare() }
         return controller

@@ -2,75 +2,89 @@
 import XCTest
 
 /// Truth table for `LiveCaptionsGate` — the shared decision logic for whether
-/// live captions run and which per-channel pipeline strategy they use. Pure +
-/// value-typed, so the full 2×2×2 input grid is enumerable here without
-/// constructing the coordinator/controller actors.
+/// live captions run and which per-channel streaming backend they use. Pure +
+/// value-typed, so the full input grid is enumerable here without constructing
+/// the coordinator/controller actors.
 ///
-/// The three inputs:
-///   * `liveEnabled` — the master live-captions toggle (gates everything).
-///   * `englishStreaming` — the English low-latency opt-in (bypasses the
-///     engine-support gate, because the EOU session is engine-independent).
-///   * `engineSupportsLive` — whether the active engine implements the
-///     in-memory `transcribeSamples` re-transcribe hook.
+/// **Master toggle (`liveEnabled`) gates everything.** When on, the streaming
+/// backend is chosen from the active engine's EXPLICITLY configured language:
+///   * `de` → `.germanStreaming` (Nemotron multilingual streaming session)
+///   * `en` → `.englishStreaming` (Parakeet EOU streaming session)
+///   * anything else (auto-detect / unsupported) → `.reTranscribe` if the
+///     engine supports the in-memory path, else `.none`.
+///
+/// The two streaming backends bypass the active engine entirely, so they are
+/// available even when `engineSupportsLive` is false. Auto-detect deliberately
+/// does NOT route to a streaming model (the spoken language isn't statically
+/// known) — it falls back to the engine-driven re-transcribe path.
 final class LiveCaptionsGateTests: XCTestCase {
-    // MARK: - Live-enabled toggle gates everything
-
-    func testLiveDisabledYieldsNoneRegardlessOfOtherInputs() {
-        for english in [true, false] {
-            for supports in [true, false] {
-                let strategy = LiveCaptionsGate.strategy(
-                    liveEnabled: false, englishStreaming: english, engineSupportsLive: supports,
-                )
-                XCTAssertEqual(
-                    strategy, .none,
-                    "master off must yield .none (english=\(english), supports=\(supports))",
-                )
-                XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
-                    liveEnabled: false, englishStreaming: english, engineSupportsLive: supports,
-                ))
-            }
+    func testLiveDisabledYieldsNoneRegardlessOfLanguage() {
+        for lang in ["de", "en", nil, "fr"] {
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true),
+                .none, "master off must be .none (lang=\(lang ?? "nil"))",
+            )
         }
     }
 
-    // MARK: - English streaming bypasses the engine-support gate
-
-    func testEnglishStreamingOnYieldsEnglishStreamingEvenWhenEngineSupportsLive() {
-        let strategy = LiveCaptionsGate.strategy(
-            liveEnabled: true, englishStreaming: true, engineSupportsLive: true,
+    func testGermanLanguageYieldsGermanStreaming() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "de", engineSupportsLive: true),
+            .germanStreaming,
         )
-        XCTAssertEqual(strategy, .englishStreaming)
     }
 
-    func testEnglishStreamingOnYieldsEnglishStreamingEvenWhenEngineUnsupported() {
-        // The key bypass: an engine without the re-transcribe hook still gets
-        // captions via the engine-independent EOU session.
-        let strategy = LiveCaptionsGate.strategy(
-            liveEnabled: true, englishStreaming: true, engineSupportsLive: false,
+    func testEnglishLanguageYieldsEnglishStreaming() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true),
+            .englishStreaming,
         )
-        XCTAssertEqual(strategy, .englishStreaming)
+    }
+
+    func testAutoDetectLanguageFallsBackToReTranscribe() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: true),
+            .reTranscribe,
+        )
+    }
+
+    func testAutoDetectWithUnsupportedEngineYieldsNone() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: false),
+            .none,
+        )
+    }
+
+    func testOtherLanguageFallsBackToReTranscribe() {
+        XCTAssertEqual(
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "fr", engineSupportsLive: true),
+            .reTranscribe,
+        )
+    }
+
+    // MARK: - captionsAvailable
+
+    func testStreamingBackendsAvailableEvenWhenEngineUnsupported() {
         XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, englishStreaming: true, engineSupportsLive: false,
-        ), "english streaming makes captions available even for an unsupported engine")
+            liveEnabled: true, engineLanguage: "de", engineSupportsLive: false,
+        ))
+        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: false,
+        ))
     }
 
-    // MARK: - Re-transcribe path requires engine support (unchanged behaviour)
-
-    func testReTranscribeWhenStreamingOffAndEngineSupportsLive() {
-        let strategy = LiveCaptionsGate.strategy(
-            liveEnabled: true, englishStreaming: false, engineSupportsLive: true,
-        )
-        XCTAssertEqual(strategy, .reTranscribe)
-    }
-
-    func testNoneWhenStreamingOffAndEngineUnsupported() {
-        // Today's behaviour: master on but neither the engine supports the
-        // re-transcribe path nor is the English opt-in set → no captions.
-        let strategy = LiveCaptionsGate.strategy(
-            liveEnabled: true, englishStreaming: false, engineSupportsLive: false,
-        )
-        XCTAssertEqual(strategy, .none)
+    func testReTranscribeAvailabilityRequiresEngineSupport() {
+        XCTAssertTrue(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: true, engineLanguage: nil, engineSupportsLive: true,
+        ))
         XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
-            liveEnabled: true, englishStreaming: false, engineSupportsLive: false,
+            liveEnabled: true, engineLanguage: nil, engineSupportsLive: false,
+        ))
+    }
+
+    func testCaptionsUnavailableWhenLiveDisabled() {
+        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: false, engineLanguage: "de", engineSupportsLive: true,
         ))
     }
 }

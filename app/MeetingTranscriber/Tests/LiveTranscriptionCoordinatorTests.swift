@@ -22,7 +22,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// The EOU factory returns a mock manager that never loads real models, so
     /// the English-streaming branch is exercisable without CoreML downloads.
     private func mockControllerFactory() -> LiveTranscriptionCoordinator.ControllerFactory {
-        { engine, captions, englishStreaming, verboseDiagnostics in
+        { engine, captions, engineLanguage, verboseDiagnostics in
             let eouFactory: LiveTranscriptionController.EouSessionFactory = { MockEouManager() }
             let verbose: () -> Bool = { verboseDiagnostics() }
             return LiveTranscriptionController(
@@ -30,7 +30,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
                 vad: FluidVAD(threshold: 0.5),
                 captions: captions,
                 speakerMatcher: FakeLiveSpeakerMatcher(),
-                englishStreaming: englishStreaming,
+                engineLanguage: engineLanguage,
                 eouSessionFactory: eouFactory,
                 verboseDiagnostics: verbose,
             )
@@ -102,7 +102,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
             captions: LiveCaptionsState(),
             liveEnabled: { true },
             engineSupportsLive: { false },
-            englishStreaming: { true },
+            engineLanguage: { "en" },
             verboseDiagnostics: { false },
             makeController: mockControllerFactory(),
         )
