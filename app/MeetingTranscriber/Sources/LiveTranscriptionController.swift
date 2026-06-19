@@ -186,12 +186,13 @@ final class LiveTranscriptionController {
 
     /// Resolve + construct both channel pipelines per the active strategy.
     private func buildPipelines() async {
-        // SPIKE env-gate: force German Nemotron streaming captions whenever live
+        // SPIKE gate: force German Nemotron streaming captions whenever live
         // captions are armed, independent of the English opt-in. Used to measure
         // CPU/RAM of the Nemotron path; falls through to the normal strategies if
-        // the model load fails.
-        if ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_NEMOTRON_CAPTIONS"] == "1",
-           await buildNemotronPipelines() {
+        // the model load fails. Enable via env var (local run_app.sh) OR the
+        // `nemotronCaptions` default (e2e-cpu-load uses `defaults write`, since
+        // `open` doesn't forward env vars to the launched app).
+        if Self.nemotronCaptionsEnabled, await buildNemotronPipelines() {
             return
         }
         if englishStreaming, await buildEnglishStreamingPipelines() {
@@ -229,6 +230,13 @@ final class LiveTranscriptionController {
             usingEnglishStreaming = false
             return false
         }
+    }
+
+    /// SPIKE gate: env var (local) or `nemotronCaptions` UserDefaults key
+    /// (e2e-cpu-load sets it via `defaults write` because `open` drops env vars).
+    private static var nemotronCaptionsEnabled: Bool {
+        ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_NEMOTRON_CAPTIONS"] == "1"
+            || UserDefaults.standard.bool(forKey: "nemotronCaptions")
     }
 
     /// SPIKE: build German Nemotron streaming sessions for both channels,

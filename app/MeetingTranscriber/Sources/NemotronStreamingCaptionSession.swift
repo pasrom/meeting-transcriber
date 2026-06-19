@@ -48,6 +48,14 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
 
     private var callbackInstalled = false
     private var ingestedSamples = 0
+    private var samplesAtLastFinal = 0
+    private var lastFinalizedPrefix = ""
+
+    /// Promote the running partial to a `.finalized` roughly every this many
+    /// ingested samples (~5 s at 16 kHz). Crude stand-in for VAD/EOU
+    /// finalization (the real feature needs VAD here) — keeps finals flowing
+    /// during recording without resetting the model's acoustic context.
+    private static let finalizeEverySamples = 16000 * 5
 
     init(
         shared: SharedNemotronMultilingualModels,
@@ -79,12 +87,20 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
             return
         }
         // The partial callback delivers the FULL running transcript (not a
-        // delta); `applyPartial` replaces the channel's ghost text, so emitting
-        // the latest is correct. Drain after `process()` returns — the callback
-        // fires synchronously on the manager's executor during the call.
-        if let latest = collector.drain().last {
-            let text = latest.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty { onEvent(.partial(text)) }
+        // delta), drained after `process()` returns (callbacks fire
+        // synchronously on the manager's executor during the call). Strip the
+        // already-finalized prefix, emit the tail as a partial, and promote it
+        // to a final every ~5 s so the overlay (and the e2e readiness gate) see
+        // committed text.
+        guard let latest = collector.drain().last else { return }
+        let delta = strippingPrefix(from: latest)
+        guard !delta.isEmpty else { return }
+        if ingestedSamples - samplesAtLastFinal >= Self.finalizeEverySamples {
+            onEvent(.finalized(text: delta, audio: []))
+            lastFinalizedPrefix = latest
+            samplesAtLastFinal = ingestedSamples
+        } else {
+            onEvent(.partial(delta))
         }
     }
 
@@ -92,15 +108,26 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
         guard ingestedSamples > 0 else { return }
         do {
             let transcript = try await manager.finish()
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let delta = strippingPrefix(from: transcript)
             // No per-utterance audio slice (PoC): empty audio → the event sink's
             // speaker match returns nil and falls back to the channel label.
-            if !transcript.isEmpty { onEvent(.finalized(text: transcript, audio: [])) }
+            if !delta.isEmpty { onEvent(.finalized(text: delta, audio: [])) }
         } catch {
             logger.warning("[\(self.channelLabel, privacy: .public)] flush error: \(error)")
         }
         await manager.reset()
         ingestedSamples = 0
+        samplesAtLastFinal = 0
+        lastFinalizedPrefix = ""
+    }
+
+    /// Strip the already-finalized prefix (the manager's transcript accumulates
+    /// across the recording, cleared only by `reset()`) and trim whitespace.
+    private func strippingPrefix(from text: String) -> String {
+        let stripped = text.hasPrefix(lastFinalizedPrefix)
+            ? String(text.dropFirst(lastFinalizedPrefix.count))
+            : text
+        return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func installCallbackIfNeeded() async {
