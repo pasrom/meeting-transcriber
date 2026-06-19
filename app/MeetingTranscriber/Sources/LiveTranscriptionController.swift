@@ -53,11 +53,28 @@ final class LiveTranscriptionController {
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
     private let speakerMatcher: any LiveSpeakerMatching
-    /// Opt-in to the low-latency English streaming session. When true,
-    /// `prepare()` tries to build EOU sessions for both channels; on model-load
-    /// failure it degrades to the re-transcribe path if the engine supports it,
-    /// or to no captions otherwise.
-    private let englishStreaming: Bool
+    /// The active engine's EXPLICITLY-configured language (`de`/`en`/nil), which
+    /// picks the streaming backend via `LiveCaptionsGate` (`de` → Nemotron, `en`
+    /// → EOU, else → re-transcribe). On a streaming-model load failure
+    /// `prepare()` degrades to re-transcribe (if supported) or to no captions.
+    private let engineLanguage: String?
+
+    /// Resolved per-channel strategy (`liveEnabled` is implicit — the controller
+    /// only exists when captions are eligible).
+    private var captionStrategy: LiveCaptionsGate.Strategy {
+        LiveCaptionsGate.strategy(
+            liveEnabled: true,
+            engineLanguage: engineLanguage,
+            engineSupportsLive: engine != nil,
+        )
+    }
+
+    /// True for the engine-independent streaming sessions (German/English), kept
+    /// across recordings vs. the rebuilt re-transcribe actors.
+    private var isStreamingStrategy: Bool {
+        captionStrategy == .germanStreaming || captionStrategy == .englishStreaming
+    }
+
     private let eouSessionFactory: EouSessionFactory
     /// Gate for caption-text logging. Caption strings are spoken user content
     /// — privacy-sensitive — so even with `privacy: .private` on the log
@@ -79,17 +96,12 @@ final class LiveTranscriptionController {
     /// `flush()`/`retireFeeds()`.
     private let micFeed = CaptionChannelFeed()
     private let appFeed = CaptionChannelFeed()
-    /// True once `prepare()` resolved the active strategy to the EOU sessions.
-    /// `prepareForNextRecording()` keeps those sessions (already flushed clean at
-    /// stop, reloading their models would be wasteful) and only rebuilds the
-    /// cheap re-transcribe actors.
-    private var usingEnglishStreaming = false
-    /// True once `prepare()` has finished resolving + building the pipelines.
-    /// Distinguishes "EOU opted-in but `prepare()` hasn't run yet" (pipelines
-    /// nil → let `prepare()` own construction) from "EOU opted-in but load failed
-    /// and we fell back to re-transcribe" (resolved → refresh those actors). The
-    /// two states both have `usingEnglishStreaming == false`; this flag tells
-    /// them apart so a reset-before-prepare ordering doesn't pre-empt the EOU path.
+    /// True once `prepare()` resolved to a kept streaming session (German/English),
+    /// which `prepareForNextRecording()` keeps instead of rebuilding.
+    private var usingStreamingSession = false
+    /// True once `prepare()` built the pipelines — distinguishes "not yet resolved"
+    /// (pipelines nil → let `prepare()` build) from "resolved to re-transcribe
+    /// fallback" (refresh actors), since both have `usingStreamingSession == false`.
     private var strategyResolved = false
     /// The most recent stop-time flush, kept so the NEXT recording's reset can
     /// await it before reusing a kept EOU session. `flush()` is dispatched
@@ -126,7 +138,7 @@ final class LiveTranscriptionController {
         vad: FluidVAD,
         captions: LiveCaptionsState,
         speakerMatcher: any LiveSpeakerMatching = LiveSpeakerMatcher(),
-        englishStreaming: Bool = false,
+        engineLanguage: String? = nil,
         eouSessionFactory: @escaping EouSessionFactory = LiveTranscriptionController.makeDefaultEouManager,
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
@@ -134,7 +146,7 @@ final class LiveTranscriptionController {
         self.vad = vad
         self.captions = captions
         self.speakerMatcher = speakerMatcher
-        self.englishStreaming = englishStreaming
+        self.engineLanguage = engineLanguage
         self.eouSessionFactory = eouSessionFactory
         self.verboseDiagnostics = verboseDiagnostics
     }
@@ -175,8 +187,8 @@ final class LiveTranscriptionController {
             // Strategy named explicitly: with the English opt-in on, a silent
             // fallback to re-transcribe is otherwise indistinguishable from the
             // EOU path in the unified log (live-diagnosis seam, no content).
-            let strategy = usingEnglishStreaming
-                ? "english-streaming"
+            let strategy = usingStreamingSession
+                ? (captionStrategy == .germanStreaming ? "german-streaming" : "english-streaming")
                 : (micPipeline != nil ? "re-transcribe" : "none")
             logger.info(
                 "Live transcription ready (strategy: \(strategy, privacy: .public), engine: \(String(describing: type(of: self.engine)), privacy: .public))",
@@ -184,19 +196,53 @@ final class LiveTranscriptionController {
         }
     }
 
-    /// Resolve + construct both channel pipelines per the active strategy.
+    /// Construct both channel pipelines per the active strategy; a streaming
+    /// backend that fails its model load falls through to re-transcribe.
     private func buildPipelines() async {
-        if englishStreaming, await buildEnglishStreamingPipelines() {
-            return
+        switch captionStrategy {
+        case .germanStreaming:
+            if await buildGermanStreamingPipelines() { return }
+
+        case .englishStreaming:
+            if await buildEnglishStreamingPipelines() { return }
+
+        case .reTranscribe, .none:
+            break
         }
-        // Re-transcribe path (default, or EOU fallback). Needs a streaming
-        // engine; if there is none (English-streaming opt-in with a
-        // non-streaming engine that then failed to load EOU models) captions
-        // stay off for this session.
+        // Re-transcribe path (default or streaming fallback). With no streaming
+        // engine (failed streaming backend on a non-streaming engine) captions stay off.
         guard let engine else { return }
         await engine.loadModel()
         micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
         appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
+    }
+
+    /// Build German Nemotron sessions for both channels off one preloaded model
+    /// set. Returns false (pipelines nil) on load failure so the caller falls
+    /// back. The ~611 MB model downloads on first use.
+    private func buildGermanStreamingPipelines() async -> Bool {
+        do {
+            let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+                languageCode: Self.germanLocale, chunkMs: 2240,
+            )
+            let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
+            let mic = makeNemotronPipeline(channel: .mic, shared: shared)
+            try await mic.prepare()
+            let app = makeNemotronPipeline(channel: .app, shared: shared)
+            try await app.prepare()
+            micPipeline = mic
+            appPipeline = app
+            usingStreamingSession = true
+            return true
+        } catch {
+            logger.warning(
+                "Nemotron streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)",
+            )
+            micPipeline = nil
+            appPipeline = nil
+            usingStreamingSession = false
+            return false
+        }
     }
 
     /// Build EOU sessions for both channels, loading their models. Returns true
@@ -210,7 +256,7 @@ final class LiveTranscriptionController {
             try await app.prepare()
             micPipeline = mic
             appPipeline = app
-            usingEnglishStreaming = true
+            usingStreamingSession = true
             return true
         } catch {
             // Non-fatal: log and let the caller fall back to the re-transcribe
@@ -218,7 +264,7 @@ final class LiveTranscriptionController {
             logger.warning("EOU streaming model load failed, falling back: \(error.localizedDescription, privacy: .public)")
             micPipeline = nil
             appPipeline = nil
-            usingEnglishStreaming = false
+            usingStreamingSession = false
             return false
         }
     }
@@ -293,11 +339,11 @@ final class LiveTranscriptionController {
         await pendingFlush?.value
         pendingFlush = nil
 
-        if usingEnglishStreaming {
-            // EOU sessions kept (already drained by flush()).
-        } else if englishStreaming, !strategyResolved {
-            // EOU opted-in but prepare() hasn't resolved yet → defer to
-            // prepare(), which also arms the feeds once it built the pipelines.
+        if usingStreamingSession {
+            // Streaming sessions kept (already drained by flush()).
+        } else if isStreamingStrategy, !strategyResolved {
+            // A streaming backend was selected but prepare() hasn't resolved yet
+            // → defer to prepare(), which arms the feeds once it built the pipelines.
         } else if let engine {
             micPipeline = makeReTranscribePipeline(channel: .mic, engine: engine)
             appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
@@ -343,6 +389,23 @@ final class LiveTranscriptionController {
         let logChannel = channel.rawValue
         return EouStreamingCaptionSession(
             asr: eouSessionFactory(),
+            channelLabel: logChannel,
+            onEvent: makeEventSink(channel: channel, logChannel: logChannel),
+        )
+    }
+
+    /// Nemotron variant locale for the German streaming backend (`de`).
+    private static let germanLocale = "de-DE"
+
+    /// Build the German Nemotron session for one channel off the shared model set.
+    private func makeNemotronPipeline(
+        channel: LiveCaptionChannel,
+        shared: SharedNemotronMultilingualModels,
+    ) -> NemotronStreamingCaptionSession {
+        let logChannel = channel.rawValue
+        return NemotronStreamingCaptionSession(
+            manager: NemotronAsrManager(shared: shared, languageCode: Self.germanLocale),
+            detector: FluidVADBoundaryDetector(vad: vad),
             channelLabel: logChannel,
             onEvent: makeEventSink(channel: channel, logChannel: logChannel),
         )

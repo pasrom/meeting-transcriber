@@ -189,7 +189,7 @@ final class LiveCaptionFeedTests: XCTestCase {
             vad: FluidVAD(threshold: 0.5),
             captions: LiveCaptionsState(),
             speakerMatcher: FakeLiveSpeakerMatcher(),
-            englishStreaming: true,
+            engineLanguage: "en",
             eouSessionFactory: eouFactory,
         )
     }

@@ -1,5 +1,5 @@
 /// Pure decision logic for whether live captions run, and which per-channel
-/// pipeline strategy they use. Shared single source of truth between
+/// streaming backend they use. Shared single source of truth between
 /// `AppState.shouldShowLiveCaptions` (overlay-window visibility),
 /// `LiveTranscriptionCoordinator` (whether to build + arm the controller), and
 /// `LiveTranscriptionController` (which pipeline each channel gets) so all three
@@ -9,15 +9,19 @@
 /// **Master toggle (`liveEnabled`) gates everything** — off means no captions,
 /// regardless of the other inputs.
 ///
-/// **`englishStreaming` bypasses the engine-support gate**: the low-latency
-/// English streaming session (`EouStreamingCaptionSession`) drives FluidAudio's
-/// Parakeet EOU model directly and never touches the active `TranscribingEngine`,
-/// so captions become available even for engines without the re-transcribe hook.
-/// With `englishStreaming` off, captions still require the engine to support the
-/// re-transcribe path (today's behaviour).
+/// **The backend follows the active engine's EXPLICITLY configured language**
+/// (not auto-detect): `de` → German Nemotron streaming, `en` → English Parakeet
+/// EOU streaming. Both streaming sessions drive their FluidAudio models directly
+/// and never touch the active `TranscribingEngine`, so they are available even
+/// for engines without the re-transcribe hook. Auto-detect (nil language) or any
+/// other language deliberately does NOT route to a streaming model — the spoken
+/// language isn't statically known, and a wrong-language model is worse than the
+/// engine-driven `.reTranscribe` fallback.
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {
+        /// Low-latency German streaming session (Nemotron multilingual). Engine-independent.
+        case germanStreaming
         /// Low-latency English streaming session (Parakeet EOU). Engine-independent.
         case englishStreaming
         /// VAD + re-transcribe via the active engine.
@@ -26,21 +30,25 @@ enum LiveCaptionsGate {
         case none // swiftlint:disable:this discouraged_none_name
     }
 
-    /// Resolve the active strategy from the three gate inputs.
+    /// Resolve the active strategy from the gate inputs.
     ///
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
-    ///   - englishStreaming: the English low-latency opt-in.
+    ///   - engineLanguage: the active engine's explicitly configured language
+    ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect.
     ///   - engineSupportsLive: whether the active engine implements the
     ///     in-memory `transcribeSamples` re-transcribe hook.
     static func strategy(
         liveEnabled: Bool,
-        englishStreaming: Bool,
+        engineLanguage: String?,
         engineSupportsLive: Bool,
     ) -> Strategy {
         guard liveEnabled else { return .none }
-        if englishStreaming { return .englishStreaming }
-        return engineSupportsLive ? .reTranscribe : .none
+        switch engineLanguage {
+        case "de": return .germanStreaming
+        case "en": return .englishStreaming
+        default: return engineSupportsLive ? .reTranscribe : .none
+        }
     }
 
     /// Whether live captions are available at all (any non-`none` strategy).
@@ -48,12 +56,12 @@ enum LiveCaptionsGate {
     /// (the latter ANDs in the recording-in-progress condition separately).
     static func captionsAvailable(
         liveEnabled: Bool,
-        englishStreaming: Bool,
+        engineLanguage: String?,
         engineSupportsLive: Bool,
     ) -> Bool {
         strategy(
             liveEnabled: liveEnabled,
-            englishStreaming: englishStreaming,
+            engineLanguage: engineLanguage,
             engineSupportsLive: engineSupportsLive,
         ) != .none
     }

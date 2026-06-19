@@ -165,20 +165,6 @@ final class AppSettings {
         didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
     }
 
-    /// Opt-in: route live captions through the low-latency English streaming
-    /// session (`EouStreamingCaptionSession`, FluidAudio's Parakeet EOU model)
-    /// instead of the VAD + re-transcribe path. English-only — explicit opt-in
-    /// rather than auto-detect because the batch engine auto-detects the spoken
-    /// language, so the session language isn't statically knowable, and routing
-    /// a German speaker to an English model is worse than opt-in friction. When
-    /// on (and `liveTranscriptionEnabled` is on) captions become available even
-    /// for engines that don't support the re-transcribe path, because the
-    /// streaming session bypasses `TranscribingEngine` entirely.
-    /// Default: off. Only effective while the live-captions master toggle is on.
-    var liveCaptionsEnglishStreaming: Bool {
-        didSet { defaults.set(liveCaptionsEnglishStreaming, forKey: "liveCaptionsEnglishStreaming") }
-    }
-
     /// Seconds of continuous asymmetric silence before the indicator + notification
     /// fire. Clamped to [30, 300] on write — short enough to surface a dead channel
     /// inside a meeting, long enough not to trigger on normal speaking pauses.
@@ -233,6 +219,17 @@ final class AppSettings {
     /// Language as Optional for Parakeet. Empty string → nil (auto-detect).
     var parakeetLanguageOrNil: String? {
         parakeetLanguage.isEmpty ? nil : parakeetLanguage
+    }
+
+    /// The active transcription engine's EXPLICITLY configured language
+    /// (ISO 639-1), or nil for auto-detect. Drives the live-caption streaming
+    /// backend (`LiveCaptionsGate`): `de` → Nemotron German streaming, `en` →
+    /// Parakeet EOU streaming, else → engine-driven re-transcribe.
+    var activeEngineLanguageOrNil: String? {
+        switch transcriptionEngine {
+        case .whisperKit: whisperLanguageOrNil
+        case .parakeet: parakeetLanguageOrNil
+        }
     }
 
     /// Path to a custom vocabulary file for Parakeet CTC boosting (one term per line).
@@ -476,7 +473,7 @@ final class AppSettings {
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
-        (liveTranscriptionEnabled, liveCaptionsEnglishStreaming) = Self.loadLiveCaptionFlags(from: defaults)
+        liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
@@ -543,17 +540,6 @@ final class AppSettings {
         let warmStartFb: Double
         let minSegmentDuration: Double
         let excludeOverlap: Bool
-    }
-
-    /// Reads the two live-caption flags in one call so the init body stays
-    /// under the function-length budget. Both default off (explicit opt-in).
-    private static func loadLiveCaptionFlags(
-        from defaults: UserDefaults,
-    ) -> (liveTranscription: Bool, englishStreaming: Bool) {
-        (
-            defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false,
-            defaults.object(forKey: "liveCaptionsEnglishStreaming") as? Bool ?? false,
-        )
     }
 
     private static func loadDiarizerTuning(from defaults: UserDefaults) -> LoadedDiarizerTuning {
