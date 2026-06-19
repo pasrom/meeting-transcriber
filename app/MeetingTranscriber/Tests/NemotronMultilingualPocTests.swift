@@ -29,6 +29,50 @@ final class NemotronMultilingualPocTests: XCTestCase {
         let audio: String
     }
 
+    /// Single real recording read (no ground truth → judge the transcript by
+    /// eye). Feeds the whole file in 60 s blocks like FluidAudio's reference.
+    /// Set NEMOTRON_POC_RECORDING=/path/to.wav (16 kHz mono).
+    func testNemotronRealRecording() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_NEMOTRON_POC"] == "1",
+            "Set RUN_NEMOTRON_POC=1",
+        )
+        guard let path = ProcessInfo.processInfo.environment["NEMOTRON_POC_RECORDING"] else {
+            throw XCTSkip("Set NEMOTRON_POC_RECORDING=/path/to.wav")
+        }
+        let (samples, sr) = try await AudioMixer.loadAudioAsFloat32(url: URL(fileURLWithPath: path))
+        XCTAssertEqual(sr, 16_000, "recording must be 16 kHz (afconvert otherwise)")
+        let secs = Double(samples.count) / Double(sr)
+        let peak = samples.map { Swift.abs($0) }.max() ?? 0
+
+        let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
+            languageCode: "de-DE", chunkMs: 2240,
+        )
+        let manager = StreamingNemotronMultilingualAsrManager()
+        try await manager.loadModels(from: dir)
+        await manager.setLanguage("de-DE")
+
+        let block = 16_000 * 60
+        let t0 = Date()
+        var i = 0
+        while i < samples.count {
+            let e = Swift.min(i + block, samples.count)
+            _ = try await manager.process(samples: Array(samples[i ..< e]))
+            i = e
+        }
+        let hyp = try await manager.finish()
+        let elapsed = Date().timeIntervalSince(t0)
+        let detected = await manager.detectedLanguage() ?? "?"
+
+        print("=== NEMOTRON-POC RECORDING audio=\(String(format: "%.0f", secs))s "
+            + "peak=\(String(format: "%.3f", peak)) RTFx=\(String(format: "%.1f", secs / elapsed))x "
+            + "detected=\(detected) chars=\(hyp.count) words=\(hyp.split(separator: " ").count) ===")
+        print("TRANSCRIPT-START")
+        print(hyp)
+        print("TRANSCRIPT-END")
+        XCTAssertGreaterThan(hyp.count, 0)
+    }
+
     /// Real-audio quality read: feeds a manifest of real German speech clips
     /// (each with its exact transcript) through the manager and reports per-clip
     /// + average WER. The synthetic fixtures are out-of-distribution for ASR, so
