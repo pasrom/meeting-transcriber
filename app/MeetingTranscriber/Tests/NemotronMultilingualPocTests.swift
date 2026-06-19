@@ -53,6 +53,30 @@ final class NemotronMultilingualPocTests: XCTestCase {
         try await manager.loadModels(from: dir)
         await manager.setLanguage("de-DE")
 
+        // Continuous-feed mode (the live-captions regime): concatenate every
+        // clip into ONE stream with natural 0.3 s gaps, feed in one session
+        // (no per-utterance reset), score the single joined hypothesis.
+        if ProcessInfo.processInfo.environment["NEMOTRON_POC_CONTINUOUS"] == "1" {
+            var stream: [Float] = []
+            let gap = [Float](repeating: 0, count: 16_000 * 3 / 10) // 0.3 s
+            for clip in clips {
+                let (s, sr) = try await AudioMixer.loadAudioAsFloat32(url: URL(fileURLWithPath: clip.audio))
+                precondition(sr == 16_000, "continuous mode needs 16 kHz clips")
+                stream += s + gap
+            }
+            let reference = clips.map(\.text).joined(separator: " ")
+            let t0 = Date()
+            _ = try await manager.process(samples: stream)
+            let hyp = try await manager.finish()
+            let secs = Double(stream.count) / 16_000
+            let wer = WERCalculator.wer(reference: reference, hypothesis: hyp)
+            print("=== NEMOTRON-POC CONTINUOUS n=\(clips.count) audio=\(String(format: "%.1f", secs))s "
+                + "WER=\(String(format: "%.4f", wer)) RTFx=\(String(format: "%.1f", secs / Date().timeIntervalSince(t0)))x ===")
+            print("REF: \(reference)")
+            print("HYP: \(hyp)")
+            return
+        }
+
         var wers: [Double] = []
         var totalAudio = 0.0
         var totalElapsed = 0.0
