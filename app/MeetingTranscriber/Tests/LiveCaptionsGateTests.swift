@@ -8,8 +8,9 @@ import XCTest
 ///
 /// **Master toggle (`liveEnabled`) gates everything.** When on, the streaming
 /// backend is chosen from the active engine's EXPLICITLY configured language:
-///   * `de` → `.germanStreaming` (Nemotron multilingual streaming session)
-///   * `en` → `.englishStreaming` (Parakeet EOU streaming session)
+///   * one of the Nemotron Latin-script languages (de/es/fr/it/pt) →
+///     `.nemotronStreaming` (Nemotron multilingual streaming session)
+///   * `en` → `.englishStreaming` (Parakeet EOU streaming, English-optimized)
 ///   * anything else (auto-detect / unsupported) → `.reTranscribe` if the
 ///     engine supports the in-memory path, else `.none`.
 ///
@@ -19,25 +20,27 @@ import XCTest
 /// known) — it falls back to the engine-driven re-transcribe path.
 final class LiveCaptionsGateTests: XCTestCase {
     func testLiveDisabledYieldsNoneRegardlessOfLanguage() {
-        for lang in ["de", "en", nil, "fr"] {
+        for lang in ["de", "en", "es", nil, "nl"] {
             XCTAssertEqual(
                 LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true),
-                .none, "master off must be .none (lang=\(lang ?? "nil"))",
+                .none, "live disabled must be .none (lang=\(lang ?? "nil"))",
             )
         }
     }
 
-    func testGermanLanguageYieldsGermanStreaming() {
-        XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "de", engineSupportsLive: true),
-            .germanStreaming,
-        )
+    func testNemotronLatinLanguagesYieldNemotronStreaming() {
+        for lang in ["de", "es", "fr", "it", "pt"] {
+            XCTAssertEqual(
+                LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
+                .nemotronStreaming, "\(lang) must route to Nemotron",
+            )
+        }
     }
 
     func testEnglishLanguageYieldsEnglishStreaming() {
         XCTAssertEqual(
             LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "en", engineSupportsLive: true),
-            .englishStreaming,
+            .englishStreaming, "English uses the English-optimized EOU path, not Nemotron",
         )
     }
 
@@ -55,9 +58,10 @@ final class LiveCaptionsGateTests: XCTestCase {
         )
     }
 
-    func testOtherLanguageFallsBackToReTranscribe() {
+    func testNonLatinLanguageFallsBackToReTranscribe() {
+        // Dutch is a picker option but not a Nemotron Latin-model language.
         XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "fr", engineSupportsLive: true),
+            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "nl", engineSupportsLive: true),
             .reTranscribe,
         )
     }
