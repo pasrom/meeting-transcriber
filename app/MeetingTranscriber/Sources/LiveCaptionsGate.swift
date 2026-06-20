@@ -20,8 +20,9 @@
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {
-        /// Low-latency German streaming session (Nemotron multilingual). Engine-independent.
-        case germanStreaming
+        /// Low-latency streaming session via Nemotron multilingual (one of the
+        /// Latin-script languages in `nemotronLanguages`). Engine-independent.
+        case nemotronStreaming
         /// Low-latency English streaming session (Parakeet EOU). Engine-independent.
         case englishStreaming
         /// VAD + re-transcribe via the active engine.
@@ -29,6 +30,12 @@ enum LiveCaptionsGate {
         /// Captions are off — build nothing.
         case none // swiftlint:disable:this discouraged_none_name
     }
+
+    /// Languages the Nemotron multilingual "latin" model transcribes well (its
+    /// vocab is pruned to Latin-script). English is excluded on purpose — it
+    /// routes to the English-optimized EOU streaming path instead. ISO 639-1,
+    /// matching the engine language pickers + the model's prompt dictionary.
+    static let nemotronLanguages: Set<String> = ["de", "es", "fr", "it", "pt"]
 
     /// Resolve the active strategy from the gate inputs.
     ///
@@ -44,11 +51,9 @@ enum LiveCaptionsGate {
         engineSupportsLive: Bool,
     ) -> Strategy {
         guard liveEnabled else { return .none }
-        switch engineLanguage {
-        case "de": return .germanStreaming
-        case "en": return .englishStreaming
-        default: return engineSupportsLive ? .reTranscribe : .none
-        }
+        if engineLanguage == "en" { return .englishStreaming }
+        if let engineLanguage, nemotronLanguages.contains(engineLanguage) { return .nemotronStreaming }
+        return engineSupportsLive ? .reTranscribe : .none
     }
 
     /// Whether live captions are available at all (any non-`none` strategy).

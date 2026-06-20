@@ -72,7 +72,7 @@ final class LiveTranscriptionController {
     /// True for the engine-independent streaming sessions (German/English), kept
     /// across recordings vs. the rebuilt re-transcribe actors.
     private var isStreamingStrategy: Bool {
-        captionStrategy == .germanStreaming || captionStrategy == .englishStreaming
+        captionStrategy == .nemotronStreaming || captionStrategy == .englishStreaming
     }
 
     private let eouSessionFactory: EouSessionFactory
@@ -188,7 +188,7 @@ final class LiveTranscriptionController {
             // fallback to re-transcribe is otherwise indistinguishable from the
             // EOU path in the unified log (live-diagnosis seam, no content).
             let strategy = usingStreamingSession
-                ? (captionStrategy == .germanStreaming ? "german-streaming" : "english-streaming")
+                ? (captionStrategy == .nemotronStreaming ? "nemotron-streaming" : "english-streaming")
                 : (micPipeline != nil ? "re-transcribe" : "none")
             logger.info(
                 "Live transcription ready (strategy: \(strategy, privacy: .public), engine: \(String(describing: type(of: self.engine)), privacy: .public))",
@@ -200,8 +200,8 @@ final class LiveTranscriptionController {
     /// backend that fails its model load falls through to re-transcribe.
     private func buildPipelines() async {
         switch captionStrategy {
-        case .germanStreaming:
-            if await buildGermanStreamingPipelines() { return }
+        case .nemotronStreaming:
+            if await buildNemotronStreamingPipelines() { return }
 
         case .englishStreaming:
             if await buildEnglishStreamingPipelines() { return }
@@ -217,18 +217,20 @@ final class LiveTranscriptionController {
         appPipeline = makeReTranscribePipeline(channel: .app, engine: engine)
     }
 
-    /// Build German Nemotron sessions for both channels off one preloaded model
-    /// set. Returns false (pipelines nil) on load failure so the caller falls
-    /// back. The ~611 MB model downloads on first use.
-    private func buildGermanStreamingPipelines() async -> Bool {
+    /// Build Nemotron sessions for both channels off one preloaded model set, in
+    /// the active engine's language (~611 MB Latin model, shared by de/es/fr/it/pt,
+    /// downloads on first use). Returns false on load failure so the caller falls back.
+    private func buildNemotronStreamingPipelines() async -> Bool {
+        // Reached only via `.nemotronStreaming`, so `engineLanguage` is non-nil.
+        guard let languageCode = engineLanguage else { return false }
         do {
             let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
-                languageCode: Self.germanLocale, chunkMs: 2240,
+                languageCode: languageCode, chunkMs: 2240,
             )
             let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
-            let mic = makeNemotronPipeline(channel: .mic, shared: shared)
+            let mic = makeNemotronPipeline(channel: .mic, shared: shared, languageCode: languageCode)
             try await mic.prepare()
-            let app = makeNemotronPipeline(channel: .app, shared: shared)
+            let app = makeNemotronPipeline(channel: .app, shared: shared, languageCode: languageCode)
             try await app.prepare()
             micPipeline = mic
             appPipeline = app
@@ -394,17 +396,15 @@ final class LiveTranscriptionController {
         )
     }
 
-    /// Nemotron variant locale for the German streaming backend (`de`).
-    private static let germanLocale = "de-DE"
-
-    /// Build the German Nemotron session for one channel off the shared model set.
+    /// Build the Nemotron session for one channel off the shared model set.
     private func makeNemotronPipeline(
         channel: LiveCaptionChannel,
         shared: SharedNemotronMultilingualModels,
+        languageCode: String,
     ) -> NemotronStreamingCaptionSession {
         let logChannel = channel.rawValue
         return NemotronStreamingCaptionSession(
-            manager: NemotronAsrManager(shared: shared, languageCode: Self.germanLocale),
+            manager: NemotronAsrManager(shared: shared, languageCode: languageCode),
             detector: FluidVADBoundaryDetector(vad: vad),
             channelLabel: logChannel,
             onEvent: makeEventSink(channel: channel, logChannel: logChannel),

@@ -99,23 +99,22 @@ struct TranscriptionSettingsView: View {
 
     /// Describes which low-latency backend the current transcription language
     /// selects. The backend follows the active engine's configured language (no
-    /// toggle): German → Nemotron streaming, English → Parakeet EOU, else →
-    /// the standard re-transcribe engine.
+    /// toggle): German/Spanish/French/Italian/Portuguese → Nemotron streaming,
+    /// English → Parakeet EOU, else → the standard re-transcribe engine.
     private var captionBackendFootnote: String {
-        switch settings.activeEngineLanguageOrNil {
-        case "de":
-            "Caption backend follows your transcription language. German uses the "
-                + "low-latency Nemotron streaming model (~611 MB, downloads on first use)."
-
-        case "en":
-            "Caption backend follows your transcription language. English uses the "
-                + "low-latency Parakeet streaming model."
-
-        default:
-            "Caption backend follows your transcription language. Set German or "
-                + "English for low-latency streaming captions; other languages (or "
-                + "auto-detect) use the standard re-transcribe engine."
+        let language = settings.activeEngineLanguageOrNil
+        if let language, LiveCaptionsGate.nemotronLanguages.contains(language) {
+            return "Caption backend follows your transcription language. German, Spanish, "
+                + "French, Italian, and Portuguese use the low-latency Nemotron streaming "
+                + "model (~611 MB, downloads on first use)."
         }
+        if language == "en" {
+            return "Caption backend follows your transcription language. English uses the "
+                + "low-latency Parakeet streaming model."
+        }
+        return "Caption backend follows your transcription language. Set German, Spanish, "
+            + "French, Italian, Portuguese, or English for low-latency streaming captions; "
+            + "other languages (or auto-detect) use the standard re-transcribe engine."
     }
 
     private var liveTranscriptionFootnote: String {
