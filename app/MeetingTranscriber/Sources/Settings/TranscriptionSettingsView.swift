@@ -99,22 +99,23 @@ struct TranscriptionSettingsView: View {
 
     /// Describes which low-latency backend the current transcription language
     /// selects. The backend follows the active engine's configured language (no
-    /// toggle): German/Spanish/French/Italian/Portuguese → Nemotron streaming,
-    /// English → Parakeet EOU, else → the standard re-transcribe engine.
+    /// toggle): English → Parakeet EOU, any other set language → Nemotron
+    /// multilingual streaming, auto-detect → the standard re-transcribe engine.
     private var captionBackendFootnote: String {
-        let language = settings.activeEngineLanguageOrNil
-        if let language, LiveCaptionsGate.nemotronLanguages.contains(language) {
-            return "Caption backend follows your transcription language. German, Spanish, "
-                + "French, Italian, and Portuguese use the low-latency Nemotron streaming "
-                + "model (~611 MB, downloads on first use)."
-        }
-        if language == "en" {
-            return "Caption backend follows your transcription language. English uses the "
+        switch settings.activeEngineLanguageOrNil {
+        case .none:
+            "Caption backend follows your transcription language. Auto-detect uses the "
+                + "standard re-transcribe engine; set a specific language for low-latency "
+                + "streaming captions."
+
+        case "en":
+            "Caption backend follows your transcription language. English uses the "
                 + "low-latency Parakeet streaming model."
+
+        default:
+            "Caption backend follows your transcription language. It uses the low-latency "
+                + "Nemotron multilingual streaming model (~0.6-0.7 GB, downloads on first use)."
         }
-        return "Caption backend follows your transcription language. Set German, Spanish, "
-            + "French, Italian, Portuguese, or English for low-latency streaming captions; "
-            + "other languages (or auto-detect) use the standard re-transcribe engine."
     }
 
     private var liveTranscriptionFootnote: String {

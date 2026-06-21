@@ -20,8 +20,9 @@
 enum LiveCaptionsGate {
     /// Which per-channel pipeline strategy to build, or none.
     enum Strategy: Equatable {
-        /// Low-latency streaming session via Nemotron multilingual (one of the
-        /// Latin-script languages in `nemotronLanguages`). Engine-independent.
+        /// Low-latency streaming session via Nemotron multilingual (any explicitly
+        /// configured non-English language). FluidAudio auto-selects the Latin or
+        /// full multilingual model variant from the language. Engine-independent.
         case nemotronStreaming
         /// Low-latency English streaming session (Parakeet EOU). Engine-independent.
         case englishStreaming
@@ -31,13 +32,13 @@ enum LiveCaptionsGate {
         case none // swiftlint:disable:this discouraged_none_name
     }
 
-    /// Languages the Nemotron multilingual "latin" model transcribes well (its
-    /// vocab is pruned to Latin-script). English is excluded on purpose — it
-    /// routes to the English-optimized EOU streaming path instead. ISO 639-1,
-    /// matching the engine language pickers + the model's prompt dictionary.
-    static let nemotronLanguages: Set<String> = ["de", "es", "fr", "it", "pt"]
-
     /// Resolve the active strategy from the gate inputs.
+    ///
+    /// English routes to the English-optimized EOU path; any other explicitly
+    /// configured language routes to Nemotron multilingual (the manager + its
+    /// `downloadVariant` pick the right model + prompt). Auto-detect (nil) does
+    /// NOT pick a language-specific streaming model — it falls back to the
+    /// engine-driven re-transcribe path.
     ///
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
@@ -51,9 +52,8 @@ enum LiveCaptionsGate {
         engineSupportsLive: Bool,
     ) -> Strategy {
         guard liveEnabled else { return .none }
-        if engineLanguage == "en" { return .englishStreaming }
-        if let engineLanguage, nemotronLanguages.contains(engineLanguage) { return .nemotronStreaming }
-        return engineSupportsLive ? .reTranscribe : .none
+        guard let engineLanguage else { return engineSupportsLive ? .reTranscribe : .none }
+        return engineLanguage == "en" ? .englishStreaming : .nemotronStreaming
     }
 
     /// Whether live captions are available at all (any non-`none` strategy).
