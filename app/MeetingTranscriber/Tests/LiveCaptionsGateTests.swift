@@ -8,11 +8,11 @@ import XCTest
 ///
 /// **Master toggle (`liveEnabled`) gates everything.** When on, the streaming
 /// backend is chosen from the active engine's EXPLICITLY configured language:
-///   * one of the Nemotron Latin-script languages (de/es/fr/it/pt) →
-///     `.nemotronStreaming` (Nemotron multilingual streaming session)
 ///   * `en` → `.englishStreaming` (Parakeet EOU streaming, English-optimized)
-///   * anything else (auto-detect / unsupported) → `.reTranscribe` if the
-///     engine supports the in-memory path, else `.none`.
+///   * any other explicit language → `.nemotronStreaming` (Nemotron multilingual;
+///     FluidAudio auto-selects the Latin or full multilingual model variant)
+///   * auto-detect (nil) → `.reTranscribe` if the engine supports the in-memory
+///     path, else `.none`.
 ///
 /// The two streaming backends bypass the active engine entirely, so they are
 /// available even when `engineSupportsLive` is false. Auto-detect deliberately
@@ -20,7 +20,7 @@ import XCTest
 /// known) — it falls back to the engine-driven re-transcribe path.
 final class LiveCaptionsGateTests: XCTestCase {
     func testLiveDisabledYieldsNoneRegardlessOfLanguage() {
-        for lang in ["de", "en", "es", nil, "nl"] {
+        for lang in ["de", "en", "ru", nil, "zh"] {
             XCTAssertEqual(
                 LiveCaptionsGate.strategy(liveEnabled: false, engineLanguage: lang, engineSupportsLive: true),
                 .none, "live disabled must be .none (lang=\(lang ?? "nil"))",
@@ -28,8 +28,10 @@ final class LiveCaptionsGateTests: XCTestCase {
         }
     }
 
-    func testNemotronLatinLanguagesYieldNemotronStreaming() {
-        for lang in ["de", "es", "fr", "it", "pt"] {
+    func testExplicitNonEnglishLanguagesYieldNemotronStreaming() {
+        // Latin-script (latin model) and non-Latin (multilingual model) both
+        // route to Nemotron; FluidAudio picks the variant from the language code.
+        for lang in ["de", "es", "fr", "it", "pt", "nl", "ru", "zh", "ja"] {
             XCTAssertEqual(
                 LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: lang, engineSupportsLive: true),
                 .nemotronStreaming, "\(lang) must route to Nemotron",
@@ -55,14 +57,6 @@ final class LiveCaptionsGateTests: XCTestCase {
         XCTAssertEqual(
             LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: nil, engineSupportsLive: false),
             .none,
-        )
-    }
-
-    func testNonLatinLanguageFallsBackToReTranscribe() {
-        // Dutch is a picker option but not a Nemotron Latin-model language.
-        XCTAssertEqual(
-            LiveCaptionsGate.strategy(liveEnabled: true, engineLanguage: "nl", engineSupportsLive: true),
-            .reTranscribe,
         )
     }
 
