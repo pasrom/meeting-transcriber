@@ -46,9 +46,9 @@ final class LiveTranscriptionController {
     typealias EouSessionFactory = @MainActor () -> any EouStreamingAsrManaging
 
     /// Active engine for the VAD + re-transcribe path. Optional because the
-    /// English streaming path is engine-independent: when `englishStreaming` is
-    /// on with a non-streaming active engine there is no streaming engine to
-    /// hold, and captions still run via the EOU sessions.
+    /// language-driven streaming backends (Nemotron/EOU) are engine-independent:
+    /// with a non-streaming active engine there is no streaming engine to hold,
+    /// and captions still run via those sessions.
     private let engine: (any StreamingTranscribingEngine)?
     private let vad: FluidVAD
     private let captions: LiveCaptionsState
@@ -165,13 +165,13 @@ final class LiveTranscriptionController {
     /// `LiveTranscriptionCoordinator.ensureController()` — concurrent calls
     /// are not defended against and must not be introduced.
     ///
-    /// When `englishStreaming` is on, builds the low-latency EOU sessions; if
-    /// their model load throws (e.g. first-use download offline) it logs and
-    /// degrades to the re-transcribe path when the active engine supports it,
-    /// or to no captions when it doesn't. A failed EOU load
-    /// is **not** retried until the controller is rebuilt (a settings change or
-    /// relaunch drops + re-creates it) — deliberate, so a failing first-use model
-    /// download isn't re-hammered on every recording.
+    /// When a streaming language is configured, builds the low-latency streaming
+    /// sessions (Nemotron or EOU); if their model load throws (e.g. first-use
+    /// download offline) it logs and degrades to the re-transcribe path when the
+    /// active engine supports it, or to no captions when it doesn't. A failed
+    /// streaming load is **not** retried until the controller is rebuilt (a
+    /// settings change or relaunch drops + re-creates it) — deliberate, so a
+    /// failing first-use model download isn't re-hammered on every recording.
     func prepare() async {
         await prewarmSpeakerMatcher()
         if micPipeline == nil, appPipeline == nil {

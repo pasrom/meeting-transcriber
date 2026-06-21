@@ -9,7 +9,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Nemotro
 
 /// The slice of `StreamingNemotronMultilingualAsrManager` the caption session
 /// drives, behind a protocol so the session is unit-testable without loading
-/// the ~1.5 GB CoreML models. `latestTranscript()` returns the manager's full
+/// the real CoreML models. `latestTranscript()` returns the manager's full
 /// running transcript since the previous call (nil if no new partial fired);
 /// the real implementation drains a callback FIFO, so the session reads it once
 /// per chunk and caches the value for the partial + final reads.
@@ -38,14 +38,15 @@ protocol UtteranceBoundaryDetecting: Actor {
 
 // MARK: - Session
 
-/// Live German captions for one channel via FluidAudio's cache-aware
-/// `StreamingNemotronMultilingualAsrManager`, behind the `LiveCaptionPipeline`
-/// seam. Audio is fed continuously to the manager (it keeps cross-utterance
-/// acoustic context); a `FluidVAD`-backed boundary detector decides when an
-/// utterance ends, at which point the manager's running transcript — prefix-
-/// stripped of everything already finalized — is emitted as a final paired
-/// with the utterance's speech audio (so the controller's event sink can derive
-/// a speaker embedding from the same window, as for the re-transcribe path).
+/// Live captions for one channel via FluidAudio's cache-aware
+/// `StreamingNemotronMultilingualAsrManager` (language set per session), behind
+/// the `LiveCaptionPipeline` seam. Audio is fed continuously to the manager (it
+/// keeps cross-utterance acoustic context); a `FluidVAD`-backed boundary
+/// detector decides when an utterance ends, at which point `finish()`
+/// force-decodes the tail and returns the complete utterance text, emitted as a
+/// final paired with the utterance's speech audio (so the controller's event
+/// sink can derive a speaker embedding from the same window, as for the
+/// re-transcribe path).
 ///
 /// Calls are serialized by the driver (the `LiveCaptionPipeline` contract), so
 /// `ingest`/`flush` never interleave and need no re-entrancy guards.
@@ -63,6 +64,9 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
     /// fired this chunk), so it's read once per chunk and cached for the partial
     /// emit. Reset to empty after each `finish()`.
     private var runningTranscript = ""
+    /// Last partial actually emitted, to skip re-emitting identical text on the
+    /// chunks where no new partial fired (the manager only decodes every ~2.24 s).
+    private var lastEmittedPartial = ""
 
     /// Silero v6 chunk size at 16 kHz — what `FluidVAD` expects per call.
     private static let chunkSize = 4096
@@ -105,7 +109,7 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
         await manager.reset()
         isSpeaking = false
         speechSamples = []
-        runningTranscript = ""
+        resetUtteranceState()
         inputAccumulator = []
     }
 
@@ -115,11 +119,12 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
             inputAccumulator.removeFirst(Self.chunkSize)
             do {
                 try await manager.process(chunk)
+                if let latest = await manager.latestTranscript() { runningTranscript = latest }
             } catch {
+                // Log but keep driving VAD: dropping the chunk's boundary check on a
+                // transient ASR error could lose a `speechEnd` and desync segmentation.
                 logger.warning("[\(self.channelLabel, privacy: .public)] process error: \(error)")
-                continue
             }
-            if let latest = await manager.latestTranscript() { runningTranscript = latest }
             let event: FluidVAD.StreamEvent.Kind?
             do {
                 event = try await detector.boundary(in: chunk)
@@ -151,7 +156,9 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
 
     private func emitPartial() {
         let text = runningTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { onEvent(.partial(text)) }
+        guard !text.isEmpty, text != lastEmittedPartial else { return }
+        lastEmittedPartial = text
+        onEvent(.partial(text))
     }
 
     /// Finalize the current utterance: `finish()` force-decodes the buffered tail
@@ -168,13 +175,22 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
             transcript = try await manager.finish()
         } catch {
             logger.warning("[\(self.channelLabel, privacy: .public)] finish error: \(error)")
-            runningTranscript = ""
+            resetUtteranceState()
             return
         }
-        runningTranscript = ""
+        // `finish()` decodes the padded tail and can push one last partial into
+        // the manager's FIFO; drain + discard it so it can't surface as the next
+        // utterance's first partial.
+        _ = await manager.latestTranscript()
+        resetUtteranceState()
         let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard audio.count >= Self.minFinalSamples, !text.isEmpty else { return }
         onEvent(.finalized(text: text, audio: audio))
+    }
+
+    private func resetUtteranceState() {
+        runningTranscript = ""
+        lastEmittedPartial = ""
     }
 }
 
