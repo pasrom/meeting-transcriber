@@ -76,6 +76,7 @@ final class LiveTranscriptionController {
     }
 
     private let eouSessionFactory: EouSessionFactory
+    private let nemotronPipelineFactory: NemotronPipelineFactory
     /// Gate for caption-text logging. Caption strings are spoken user content
     /// — privacy-sensitive — so even with `privacy: .private` on the log
     /// arguments we don't emit by default. Same `() -> Bool` closure pattern
@@ -140,6 +141,11 @@ final class LiveTranscriptionController {
         speakerMatcher: any LiveSpeakerMatching = LiveSpeakerMatcher(),
         engineLanguage: String? = nil,
         eouSessionFactory: @escaping EouSessionFactory = LiveTranscriptionController.makeDefaultEouManager,
+        nemotronPipelineFactory: @escaping NemotronPipelineFactory = { language, vad, makeSink in
+            try await LiveTranscriptionController.makeDefaultNemotronPipelines(
+                languageCode: language, vad: vad, makeSink: makeSink,
+            )
+        },
         verboseDiagnostics: @escaping () -> Bool = { false },
     ) {
         self.engine = engine
@@ -148,6 +154,7 @@ final class LiveTranscriptionController {
         self.speakerMatcher = speakerMatcher
         self.engineLanguage = engineLanguage
         self.eouSessionFactory = eouSessionFactory
+        self.nemotronPipelineFactory = nemotronPipelineFactory
         self.verboseDiagnostics = verboseDiagnostics
     }
 
@@ -224,14 +231,9 @@ final class LiveTranscriptionController {
         // Reached only via `.nemotronStreaming`, so `engineLanguage` is non-nil.
         guard let languageCode = engineLanguage else { return false }
         do {
-            let dir = try await StreamingNemotronMultilingualAsrManager.downloadVariant(
-                languageCode: languageCode, chunkMs: 2240,
-            )
-            let shared = try await StreamingNemotronMultilingualAsrManager.preloadShared(from: dir)
-            let mic = makeNemotronPipeline(channel: .mic, shared: shared, languageCode: languageCode)
-            try await mic.prepare()
-            let app = makeNemotronPipeline(channel: .app, shared: shared, languageCode: languageCode)
-            try await app.prepare()
+            let (mic, app) = try await nemotronPipelineFactory(languageCode, vad) { channel in
+                self.makeEventSink(channel: channel, logChannel: channel.rawValue)
+            }
             micPipeline = mic
             appPipeline = app
             usingStreamingSession = true
@@ -391,21 +393,6 @@ final class LiveTranscriptionController {
         let logChannel = channel.rawValue
         return EouStreamingCaptionSession(
             asr: eouSessionFactory(),
-            channelLabel: logChannel,
-            onEvent: makeEventSink(channel: channel, logChannel: logChannel),
-        )
-    }
-
-    /// Build the Nemotron session for one channel off the shared model set.
-    private func makeNemotronPipeline(
-        channel: LiveCaptionChannel,
-        shared: SharedNemotronMultilingualModels,
-        languageCode: String,
-    ) -> NemotronStreamingCaptionSession {
-        let logChannel = channel.rawValue
-        return NemotronStreamingCaptionSession(
-            manager: NemotronAsrManager(shared: shared, languageCode: languageCode),
-            detector: FluidVADBoundaryDetector(vad: vad),
             channelLabel: logChannel,
             onEvent: makeEventSink(channel: channel, logChannel: logChannel),
         )
