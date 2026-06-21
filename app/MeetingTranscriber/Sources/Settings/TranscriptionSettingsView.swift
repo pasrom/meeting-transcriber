@@ -7,6 +7,10 @@ struct TranscriptionSettingsView: View {
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
 
+    /// Set when the user flips live captions on while a first-use Nemotron model
+    /// download is pending — defers the actual enable to the consent alert.
+    @State private var pendingCaptionEnable = false
+
     private static let whisperKitModels: [(variant: String, label: String)] = [
         ("openai_whisper-large-v3-v20240930_turbo", "Large V3 Turbo (recommended)"),
         ("openai_whisper-large-v3-v20240930", "Large V3"),
@@ -79,9 +83,28 @@ struct TranscriptionSettingsView: View {
         Section("Live transcription (PoC)") {
             // The toggle stays enabled even for engines without the
             // re-transcribe hook, because the language-driven streaming
-            // backends (German/English) route captions through an
-            // engine-independent streaming session.
-            Toggle("Show partial transcripts during recording", isOn: $settings.liveTranscriptionEnabled)
+            // backends route captions through an engine-independent session.
+            // Enabling it for a Nemotron language whose model isn't downloaded
+            // yet defers to a consent alert (the ~0.6 GB first-use download).
+            Toggle("Show partial transcripts during recording", isOn: Binding(
+                get: { settings.liveTranscriptionEnabled },
+                set: { enabled in
+                    if enabled, needsCaptionModelConsent {
+                        pendingCaptionEnable = true
+                    } else {
+                        settings.liveTranscriptionEnabled = enabled
+                    }
+                },
+            ))
+            .alert("Download caption model?", isPresented: $pendingCaptionEnable) {
+                Button("Cancel", role: .cancel) {}
+                Button("Enable") { settings.liveTranscriptionEnabled = true }
+            } message: {
+                Text(
+                    "Live captions in this language use a roughly 0.6 GB on-device model, "
+                        + "downloaded once on first use.",
+                )
+            }
 
             Text(captionBackendFootnote)
                 .font(.caption)
@@ -95,6 +118,23 @@ struct TranscriptionSettingsView: View {
         }
         .accessibilityIdentifier("liveTranscriptionSection")
         .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    /// True when enabling captions would trigger the first-use Nemotron download:
+    /// the active language routes to Nemotron (set + non-English) and no model
+    /// variant is on disk yet.
+    private var needsCaptionModelConsent: Bool {
+        guard let language = settings.activeEngineLanguageOrNil, language != "en" else { return false }
+        return !nemotronModelDownloaded
+    }
+
+    /// Whether any Nemotron multilingual model variant is already on disk.
+    private var nemotronModelDownloaded: Bool {
+        guard let base = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask,
+        ).first else { return false }
+        let dir = base.appendingPathComponent("FluidAudio/Models/nemotron-multilingual")
+        return FileManager.default.fileExists(atPath: dir.path)
     }
 
     /// Describes which low-latency backend the current transcription language
