@@ -259,6 +259,22 @@ final class PermissionHealthCheckTests: XCTestCase {
         XCTAssertTrue(result.notificationBody.isEmpty)
     }
 
+    // MARK: - Log Summary (public, PII-free)
+
+    func testLogSummaryListsEachProblemAsToken() {
+        let result = PermissionHealthCheck.overallHealth(
+            screenRecording: .denied,
+            microphone: .broken,
+            accessibility: .broken,
+        )
+        XCTAssertEqual(result.logSummary, "screen-recording=denied,microphone=broken,accessibility=broken")
+    }
+
+    func testLogSummaryEmptyWhenHealthy() {
+        let result = PermissionHealthCheck.overallHealth(screenRecording: .healthy, microphone: .healthy)
+        XCTAssertEqual(result.logSummary, "")
+    }
+
     // MARK: - HealthCheckResult Equatable
 
     func testHealthCheckResultEquality() {

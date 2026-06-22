@@ -44,6 +44,18 @@ enum PermissionProblem: Equatable {
             ? "\(permissionName) looks enabled but isn't working — toggle it off and on in System Settings"
             : "\(permissionName) permission denied"
     }
+
+    /// Compact, PII-free token for `os_log` (safe to log with `privacy: .public`):
+    /// e.g. `screen-recording=broken`. The clear-text `description` is user-facing only.
+    var logToken: String {
+        let key: String
+        switch self {
+        case .screenRecordingDenied, .screenRecordingBroken: key = "screen-recording"
+        case .microphoneDenied, .microphoneBroken: key = "microphone"
+        case .accessibilityDenied, .accessibilityBroken: key = "accessibility"
+        }
+        return "\(key)=\(isBroken ? "broken" : "denied")"
+    }
 }
 
 struct HealthCheckResult: Equatable {
@@ -87,6 +99,12 @@ struct HealthCheckResult: Equatable {
 
     var notificationBody: String {
         problems.map(\.description).joined(separator: "\n")
+    }
+
+    /// Comma-joined `logToken`s, safe to log with `privacy: .public`: it names only
+    /// which permission is in which bad state, never any user data. Empty when healthy.
+    var logSummary: String {
+        problems.map(\.logToken).joined(separator: ",")
     }
 }
 
@@ -384,7 +402,7 @@ enum PermissionHealthCheck {
         let ax = checkAccessibilityLive()
         let result = overallHealth(screenRecording: sr, microphone: mic, accessibility: ax)
         if !result.isHealthy {
-            logger.warning("Permission health check failed: \(result.problems)")
+            logger.warning("Permission health check failed: \(result.logSummary, privacy: .public)")
         }
         return result
     }
