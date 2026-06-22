@@ -65,6 +65,18 @@ final class LiveCaptionsState {
     /// silence — the overlay can compare against `Date()` to dim or hide.
     private(set) var lastEventAt: Date = .distantPast
 
+    /// Human label of the resolved live-caption backend, set by the controller
+    /// once it builds the pipelines (e.g. "Nemotron · DE", "Parakeet EOU · EN",
+    /// "Re-transcribe"). Nil when captions aren't active. Surfaced in the overlay
+    /// so the user sees which engine actually drives captions — including a
+    /// silent re-transcribe fallback.
+    private(set) var activeBackend: String?
+
+    /// Set by the controller after it resolves + builds the caption pipelines.
+    func setActiveBackend(_ label: String?) {
+        activeBackend = label
+    }
+
     /// Cap on `recentFinals` length. 2 keeps the bar at most two prior lines
     /// plus the two live hypothesis rows on top.
     static let maxFinalsKept = 2

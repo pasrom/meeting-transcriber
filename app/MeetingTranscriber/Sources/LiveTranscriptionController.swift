@@ -190,15 +190,19 @@ final class LiveTranscriptionController {
             await bindFeeds()
         }
         strategyResolved = true
+        // Resolve the ACTUAL backend (a failed streaming load shows here as the
+        // re-transcribe fallback, not the selected streaming engine) and publish
+        // it for the overlay indicator + the diagnostic log.
+        let engine: String? = usingStreamingSession
+            ? (captionStrategy == .nemotronStreaming ? "Nemotron" : "Parakeet EOU")
+            : (micPipeline != nil ? "Re-transcribe" : nil)
+        let backend = engine.map { name in
+            engineLanguage.map { "\(name) · \($0.uppercased())" } ?? name
+        }
+        captions.setActiveBackend(backend)
         if verboseDiagnostics() {
-            // Strategy named explicitly: with the English opt-in on, a silent
-            // fallback to re-transcribe is otherwise indistinguishable from the
-            // EOU path in the unified log (live-diagnosis seam, no content).
-            let strategy = usingStreamingSession
-                ? (captionStrategy == .nemotronStreaming ? "nemotron-streaming" : "english-streaming")
-                : (micPipeline != nil ? "re-transcribe" : "none")
             logger.info(
-                "Live transcription ready (strategy: \(strategy, privacy: .public), engine: \(String(describing: type(of: self.engine)), privacy: .public))",
+                "Live transcription ready (backend: \(backend ?? "none", privacy: .public))",
             )
         }
     }
