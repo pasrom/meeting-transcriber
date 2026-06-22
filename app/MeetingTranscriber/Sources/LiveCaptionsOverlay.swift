@@ -41,6 +41,12 @@ struct LiveCaptionsOverlay: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let backend = state.activeBackend {
+                Text(backend)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .accessibilityIdentifier("liveCaptionBackend")
+            }
             ForEach(state.recentFinals.suffix(LiveCaptionsState.maxFinalsKept), id: \.self) { line in
                 row(speaker: line.speaker, text: line.text, opacity: 1.0)
             }

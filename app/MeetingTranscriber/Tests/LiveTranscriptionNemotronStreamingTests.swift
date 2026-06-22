@@ -63,11 +63,15 @@ final class LiveTranscriptionNemotronStreamingTests: XCTestCase {
         }
     }
 
-    private func makeController(probe: NemotronFactoryProbe, engine: LoadTrackingEngine) -> LiveTranscriptionController {
+    private func makeController(
+        probe: NemotronFactoryProbe,
+        engine: LoadTrackingEngine,
+        captions: LiveCaptionsState = LiveCaptionsState(),
+    ) -> LiveTranscriptionController {
         LiveTranscriptionController(
             engine: engine,
             vad: FluidVAD(threshold: 0.5),
-            captions: LiveCaptionsState(),
+            captions: captions,
             speakerMatcher: FakeLiveSpeakerMatcher(),
             engineLanguage: "de",
             nemotronPipelineFactory: probe.factory(),
@@ -77,7 +81,8 @@ final class LiveTranscriptionNemotronStreamingTests: XCTestCase {
     func testNemotronLanguageBuildsStreamingSessionsWithoutLoadingEngine() async {
         let probe = NemotronFactoryProbe()
         let engine = LoadTrackingEngine()
-        let controller = makeController(probe: probe, engine: engine)
+        let captions = LiveCaptionsState()
+        let controller = makeController(probe: probe, engine: engine, captions: captions)
 
         await controller.prepare()
 
@@ -86,12 +91,14 @@ final class LiveTranscriptionNemotronStreamingTests: XCTestCase {
             engine.loadModelCount, 0,
             "the engine-independent Nemotron path must NOT load the active engine",
         )
+        XCTAssertEqual(captions.activeBackend, "Nemotron · DE", "the resolved backend is published for the overlay")
     }
 
     func testNemotronLoadFailureFallsBackToReTranscribe() async {
         let probe = NemotronFactoryProbe(loadError: LoadFailure())
         let engine = LoadTrackingEngine()
-        let controller = makeController(probe: probe, engine: engine)
+        let captions = LiveCaptionsState()
+        let controller = makeController(probe: probe, engine: engine, captions: captions)
 
         await controller.prepare()
 
@@ -99,6 +106,10 @@ final class LiveTranscriptionNemotronStreamingTests: XCTestCase {
         XCTAssertEqual(
             engine.loadModelCount, 1,
             "Nemotron load failure must fall back to the re-transcribe path, which loads the engine",
+        )
+        XCTAssertEqual(
+            captions.activeBackend, "Re-transcribe · DE",
+            "a silent fallback must publish the ACTUAL backend, not the selected Nemotron",
         )
     }
 
