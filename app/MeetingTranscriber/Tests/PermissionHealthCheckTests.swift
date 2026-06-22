@@ -3,40 +3,19 @@ import AVFoundation
 import XCTest
 
 final class PermissionHealthCheckTests: XCTestCase {
-    // MARK: - Screen Recording (new split API)
+    // MARK: - Screen Recording (trusts the system TCC verdict)
 
-    func testScreenRecordingHealthy() {
-        let result = PermissionHealthCheck.checkScreenRecording(
-            systemAllowed: true,
-            hasForeignWithTitle: true,
-        )
-        XCTAssertEqual(result, .healthy)
+    func testScreenRecordingHealthyWhenSystemAllows() {
+        // Regression (issue #446): absence of a readable foreign window title is
+        // not proof of a broken grant — on recent macOS the window list omits
+        // foreign titles even when Screen Recording is granted, which produced
+        // false `.broken` verdicts (persistent red error badge). Trust the
+        // system TCC verdict instead.
+        XCTAssertEqual(PermissionHealthCheck.checkScreenRecording(systemAllowed: true), .healthy)
     }
 
     func testScreenRecordingDeniedWhenSystemSaysNo() {
-        let result = PermissionHealthCheck.checkScreenRecording(
-            systemAllowed: false,
-            hasForeignWithTitle: false,
-        )
-        XCTAssertEqual(result, .denied)
-    }
-
-    func testScreenRecordingDeniedEvenWithWindows() {
-        // System says no — we ignore the probe outcome.
-        let result = PermissionHealthCheck.checkScreenRecording(
-            systemAllowed: false,
-            hasForeignWithTitle: true,
-        )
-        XCTAssertEqual(result, .denied)
-    }
-
-    func testScreenRecordingBrokenSystemAllowsButNoTitles() {
-        // TCC says yes but window probe can't see any foreign titles.
-        let result = PermissionHealthCheck.checkScreenRecording(
-            systemAllowed: true,
-            hasForeignWithTitle: false,
-        )
-        XCTAssertEqual(result, .broken)
+        XCTAssertEqual(PermissionHealthCheck.checkScreenRecording(systemAllowed: false), .denied)
     }
 
     // MARK: - Screen Recording (window list parser)

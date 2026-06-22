@@ -48,11 +48,10 @@ enum PermissionProblem: Equatable {
     /// Compact, PII-free token for `os_log` (safe to log with `privacy: .public`):
     /// e.g. `screen-recording=broken`. The clear-text `description` is user-facing only.
     var logToken: String {
-        let key: String
-        switch self {
-        case .screenRecordingDenied, .screenRecordingBroken: key = "screen-recording"
-        case .microphoneDenied, .microphoneBroken: key = "microphone"
-        case .accessibilityDenied, .accessibilityBroken: key = "accessibility"
+        let key = switch self {
+        case .screenRecordingDenied, .screenRecordingBroken: "screen-recording"
+        case .microphoneDenied, .microphoneBroken: "microphone"
+        case .accessibilityDenied, .accessibilityBroken: "accessibility"
         }
         return "\(key)=\(isBroken ? "broken" : "denied")"
     }
@@ -111,23 +110,23 @@ struct HealthCheckResult: Equatable {
 enum PermissionHealthCheck {
     // MARK: - Screen Recording (pure, testable)
 
-    /// Pure decision function: combines the TCC system verdict with a window-title probe.
+    /// Pure decision function for Screen Recording: trusts the TCC system verdict.
     ///
-    /// - `systemAllowed`: whether macOS says the process has the Screen Recording entitlement
-    ///   (via `CGPreflightScreenCaptureAccess()` or equivalent).
-    /// - `hasForeignWithTitle`: whether `CGWindowListCopyWindowInfo` returned at least one
-    ///   window from another process that has a non-empty `kCGWindowName`.
+    /// - `systemAllowed`: whether macOS says the process has the Screen Recording
+    ///   entitlement (via `CGPreflightScreenCaptureAccess()` or equivalent).
     ///
     /// Outcomes:
+    /// - `healthy`: system says yes
     /// - `denied`: system says no
-    /// - `healthy`: system says yes AND we can read foreign window titles
-    /// - `broken`: system says yes BUT we cannot read any foreign window titles (TCC mismatch)
-    static func checkScreenRecording(
-        systemAllowed: Bool,
-        hasForeignWithTitle: Bool,
-    ) -> PermissionStatus {
-        if !systemAllowed { return .denied }
-        return hasForeignWithTitle ? .healthy : .broken
+    ///
+    /// We deliberately do not down-rank to `.broken` when `CGWindowListCopyWindowInfo`
+    /// returns no foreign window title. Absence of a readable foreign title is not proof
+    /// of a broken grant: on recent macOS the window list omits foreign `kCGWindowName`
+    /// values even when Screen Recording is granted, which produced false `.broken`
+    /// verdicts and a persistent red error badge (issue #446). The window-title probe is
+    /// still computed for diagnostic logging in `checkScreenRecordingLive`.
+    static func checkScreenRecording(systemAllowed: Bool) -> PermissionStatus {
+        systemAllowed ? .healthy : .denied
     }
 
     /// Parses a raw window list and reports whether any foreign window has a non-empty title.
@@ -160,10 +159,9 @@ enum PermissionHealthCheck {
         }
         let hasForeignTitle = hasForeignWindowWithTitle(windowList: list, ownPID: ownPID)
 
-        let result = checkScreenRecording(
-            systemAllowed: systemAllowed,
-            hasForeignWithTitle: hasForeignTitle,
-        )
+        // `hasForeignTitle`/`foreignCount`/`windowCount` are no longer part of the
+        // verdict (see `checkScreenRecording`); they stay for diagnostic logging.
+        let result = checkScreenRecording(systemAllowed: systemAllowed)
         debugLog("checkScreenRecordingLive: systemAllowed=\(systemAllowed) ownPID=\(ownPID) " +
             "windows=\(windowCount) foreign=\(foreignCount) hasForeignTitle=\(hasForeignTitle) → \(result)")
         return result
