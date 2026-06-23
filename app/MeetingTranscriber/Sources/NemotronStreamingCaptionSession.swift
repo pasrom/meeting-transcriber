@@ -122,13 +122,13 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
             } catch {
                 // Log but keep driving VAD: dropping the chunk's boundary check on a
                 // transient ASR error could lose a `speechEnd` and desync segmentation.
-                logger.warning("[\(self.channelLabel, privacy: .public)] process error: \(error)")
+                logger.warning("[\(self.channelLabel, privacy: .public)] process error: \(error.localizedDescription, privacy: .public)")
             }
             let event: FluidVAD.StreamEvent.Kind?
             do {
                 event = try await detector.boundary(in: chunk)
             } catch {
-                logger.warning("[\(self.channelLabel, privacy: .public)] vad error: \(error)")
+                logger.warning("[\(self.channelLabel, privacy: .public)] vad error: \(error.localizedDescription, privacy: .public)")
                 event = nil
             }
             await handleEvent(event, chunk: chunk)
@@ -173,7 +173,7 @@ actor NemotronStreamingCaptionSession: LiveCaptionPipeline {
         do {
             transcript = try await manager.finish()
         } catch {
-            logger.warning("[\(self.channelLabel, privacy: .public)] finish error: \(error)")
+            logger.warning("[\(self.channelLabel, privacy: .public)] finish error: \(error.localizedDescription, privacy: .public)")
             resetUtteranceState()
             return
         }
