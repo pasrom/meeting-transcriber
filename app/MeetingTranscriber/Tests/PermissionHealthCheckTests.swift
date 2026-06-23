@@ -93,6 +93,30 @@ final class PermissionHealthCheckTests: XCTestCase {
         XCTAssertEqual(result, .notDetermined)
     }
 
+    // MARK: - Mic probe verdict (issue #446)
+
+    func testMicProbeSucceedsWhenBuffersFlow() {
+        // A flowing mic is healthy even when silent (muted / virtual / quiet room):
+        // silence no longer fails the probe.
+        XCTAssertTrue(PermissionHealthCheck.micProbeSucceeds(bufferCount: 1))
+        XCTAssertTrue(PermissionHealthCheck.micProbeSucceeds(bufferCount: 50))
+    }
+
+    func testMicProbeFailsWhenNoBuffers() {
+        // No buffers at all = genuinely stalled mic → .broken.
+        XCTAssertFalse(PermissionHealthCheck.micProbeSucceeds(bufferCount: 0))
+    }
+
+    func testSilentButFlowingMicIsHealthy() {
+        // Composes the two #446 seams as documentation: buffers flowed (silence is
+        // irrelevant) → probe succeeds → an authorized mic resolves to .healthy.
+        let probe = PermissionHealthCheck.micProbeSucceeds(bufferCount: 5)
+        XCTAssertEqual(
+            PermissionHealthCheck.checkMicrophone(authStatus: .authorized, probeSucceeds: probe),
+            .healthy,
+        )
+    }
+
     // MARK: - Accessibility
 
     func testAccessibilityHealthy() {
@@ -288,8 +312,9 @@ final class PermissionHealthCheckTests: XCTestCase {
         XCTAssertEqual(PermissionHealthCheck.peakAmplitude(of: buffer), 1.0, accuracy: 1e-7)
     }
 
-    func testPeakAmplitudeFloat32BelowThresholdRejected() throws {
-        // Below silentMicPeakThreshold (~−80 dBFS) — typical broken-mic state.
+    func testPeakAmplitudeFloat32BelowThreshold() throws {
+        // Below silentMicPeakThreshold (~−80 dBFS): a sub-floor sample. Since #446 this
+        // only drives the diagnostic `silentDespiteBuffers` flag, not the verdict.
         let tiny = PermissionHealthCheck.silentMicPeakThreshold / 10
         let buffer = try makeFloatBuffer(samples: Array(repeating: tiny, count: 1024))
         XCTAssertLessThan(
@@ -313,10 +338,10 @@ final class PermissionHealthCheckTests: XCTestCase {
         XCTAssertEqual(PermissionHealthCheck.peakAmplitude(of: buffer), 0)
     }
 
-    func testPeakAmplitudeUnknownFormatFallsBackToHealthy() throws {
+    func testPeakAmplitudeUnknownFormatFallsBackToNonSilent() throws {
         // Int32 buffers expose neither floatChannelData nor int16ChannelData.
-        // The fallback returns 1.0 so the silence-threshold check still passes —
-        // preserves pre-cherry-pick semantics (any buffer = live).
+        // The fallback returns 1.0 (treated as non-silent) so an unknown format never
+        // trips the diagnostic `silentDespiteBuffers` flag (any buffer = live).
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatInt32,
             sampleRate: 48000,
@@ -330,10 +355,10 @@ final class PermissionHealthCheckTests: XCTestCase {
         XCTAssertEqual(PermissionHealthCheck.peakAmplitude(of: buffer), 1.0)
     }
 
-    func testPeakAmplitudeAtExactThresholdIsRejected() throws {
-        // The probe check is strict `>`, so a buffer whose peak equals the
-        // threshold counts as silent (broken). Pin this edge case so the
-        // comparison operator can't drift to `>=` unnoticed.
+    func testPeakAmplitudeAtExactThresholdCountsAsSilent() throws {
+        // The `silentDespiteBuffers` check is strict `>`, so a buffer whose peak equals
+        // the threshold counts as silent (diagnostic only since #446). Pin this edge case
+        // so the comparison operator can't drift to `>=` unnoticed.
         let exact = PermissionHealthCheck.silentMicPeakThreshold
         let buffer = try makeFloatBuffer(samples: [exact, -exact, 0])
         let peak = PermissionHealthCheck.peakAmplitude(of: buffer)
@@ -349,22 +374,19 @@ final class PermissionHealthCheckTests: XCTestCase {
     // then complain — disable the former for the whole section.
     // swiftlint:disable trailing_closure
 
-    func testWaitExitsEarlyOncePeakCrossesThreshold() async {
-        // Race-fix regression: previously the loop exited on `count > 0`, so a
-        // warm-up zero buffer (count=1, peak=0) would prematurely return .broken.
-        // The fix waits for peak > threshold instead. Pin that behavior.
+    func testWaitExitsEarlyOnceFirstBufferArrives() async {
+        // Issue #446: any buffer — even an all-zero warm-up — proves the tap is
+        // delivering audio, so the loop exits on the first `count > 0`.
         let snapshots: [(count: Int, maxPeak: Float)] = [
-            (0, 0), // pre-warmup
-            (1, 0), // warm-up zero buffer
-            (2, 0), // still silent
-            (3, 0.5), // real signal arrives — should exit
-            (4, 0.6), // would only see this if loop didn't exit early
+            (0, 0), // pre-warmup, no buffers yet
+            (0, 0), // still nothing
+            (1, 0), // first buffer arrives (silent) — should exit here
+            (2, 0), // only seen if the loop didn't exit early
         ]
         let clock = VirtualClock(start: Date(timeIntervalSince1970: 0))
         let cursor = AtomicCursor()
         let result = await PermissionHealthCheck.waitForProbeSignal(
             deadline: clock.start.addingTimeInterval(1.0),
-            threshold: PermissionHealthCheck.silentMicPeakThreshold,
             pollInterval: 0.02,
             snapshot: {
                 let i = cursor.next()
@@ -373,44 +395,42 @@ final class PermissionHealthCheckTests: XCTestCase {
             now: clock.now,
             sleep: { _ in clock.advance(by: 0.02) },
         )
-        // Loop exited on the 4th snapshot (peak=0.5). The post-loop snapshot is the 5th.
-        XCTAssertEqual(result.stats.count, 4)
-        XCTAssertEqual(result.stats.maxPeak, 0.6, accuracy: 1e-6)
+        // Exited after the 3rd snapshot (count=1); the post-loop snapshot is the 4th.
+        XCTAssertEqual(result.stats.count, 2)
+        XCTAssertLessThan(result.elapsedMs, 1000)
     }
 
-    func testWaitRunsToDeadlineWhenSignalStaysSilent() async {
-        // Broken-mic scenario: buffers arrive but peak never crosses threshold.
-        // Loop should run until the deadline, then return the silent snapshot.
+    func testWaitExitsOnSilentBuffers() async {
+        // Regression (issue #446): silent buffers (peak = 0) still mean the tap is
+        // delivering audio → exit immediately. The loop must NOT wait for non-silence.
+        let clock = VirtualClock(start: Date(timeIntervalSince1970: 0))
+        let result = await PermissionHealthCheck.waitForProbeSignal(
+            deadline: clock.start.addingTimeInterval(1.0),
+            pollInterval: 0.02,
+            snapshot: { (5, 0) }, // buffers flowing, all silent
+            now: clock.now,
+            sleep: { _ in
+                XCTFail("must not poll: a flowing (even silent) buffer is healthy")
+                clock.advance(by: 0.02)
+            },
+        )
+        XCTAssertEqual(result.stats.count, 5)
+        XCTAssertEqual(result.elapsedMs, 0)
+    }
+
+    func testWaitRunsToDeadlineWhenNoBuffers() async {
+        // Genuinely stalled mic: no buffers ever arrive. Loop runs to the deadline,
+        // then returns the empty snapshot → caller treats count == 0 as .broken.
         let clock = VirtualClock(start: Date(timeIntervalSince1970: 0))
         let deadline = clock.start.addingTimeInterval(0.1)
         let result = await PermissionHealthCheck.waitForProbeSignal(
             deadline: deadline,
-            threshold: PermissionHealthCheck.silentMicPeakThreshold,
             pollInterval: 0.02,
-            snapshot: { (10, 0) }, // 10 buffers, all silent
+            snapshot: { (0, 0) }, // no buffers at all
             now: clock.now,
             sleep: { _ in clock.advance(by: 0.02) },
         )
-        XCTAssertEqual(result.stats.count, 10)
-        XCTAssertEqual(result.stats.maxPeak, 0)
-        XCTAssertGreaterThanOrEqual(result.elapsedMs, 100)
-    }
-
-    func testWaitTreatsPeakAtExactThresholdAsSilent() async {
-        // The polling check is strict `>`. A snapshot whose peak EQUALS the
-        // threshold must not cause early exit; the loop continues until either
-        // a higher peak shows up or the deadline elapses. Guards against the
-        // operator drifting to `>=`.
-        let clock = VirtualClock(start: Date(timeIntervalSince1970: 0))
-        let result = await PermissionHealthCheck.waitForProbeSignal(
-            deadline: clock.start.addingTimeInterval(0.1),
-            threshold: PermissionHealthCheck.silentMicPeakThreshold,
-            pollInterval: 0.02,
-            snapshot: { (5, PermissionHealthCheck.silentMicPeakThreshold) },
-            now: clock.now,
-            sleep: { _ in clock.advance(by: 0.02) },
-        )
-        XCTAssertEqual(result.stats.maxPeak, PermissionHealthCheck.silentMicPeakThreshold)
+        XCTAssertEqual(result.stats.count, 0)
         XCTAssertGreaterThanOrEqual(result.elapsedMs, 100)
     }
 
@@ -419,9 +439,8 @@ final class PermissionHealthCheckTests: XCTestCase {
         let clock = VirtualClock(start: Date(timeIntervalSince1970: 100))
         let result = await PermissionHealthCheck.waitForProbeSignal(
             deadline: clock.start.addingTimeInterval(-1.0),
-            threshold: PermissionHealthCheck.silentMicPeakThreshold,
             pollInterval: 0.02,
-            snapshot: { (1, 0.9) }, // would normally cross threshold instantly
+            snapshot: { (1, 0.9) },
             now: clock.now,
             sleep: { _ in
                 XCTFail("sleep must not be called when deadline is in the past")
