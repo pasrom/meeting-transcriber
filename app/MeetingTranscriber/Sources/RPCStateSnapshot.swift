@@ -18,6 +18,11 @@
         /// `asymmetricSilenceWarningSeconds`. E2E drivers poll these to assert
         /// the menu-bar red-tint indicator wiring without screenshot OCR.
         let channelHealth: ChannelHealth
+        /// Permission health: per-permission TCC+probe verdict ("healthy",
+        /// "denied", "broken", "notDetermined", or "unknown" before the first
+        /// check). E2E drivers poll this to assert the probes don't false-flag a
+        /// granted permission (issue #446) without screenshotting the menu bar.
+        let permissionHealth: PermissionHealth
         /// Snapshot of the live-caption overlay state. E2E drivers poll
         /// `recentFinals.count > 0` to assert that the full live-transcription
         /// chain produced text without scraping the OSLog or screenshotting
@@ -81,6 +86,25 @@
             )
         }
 
+        struct PermissionHealth: Codable {
+            let screenRecording: String
+            let microphone: String
+            let accessibility: String
+            /// Mirror of `HealthCheckResult.isHealthy` — true only when every
+            /// permission is healthy. Lets drivers assert the aggregate without
+            /// re-deriving it from the three strings.
+            let isHealthy: Bool
+
+            /// Pre-check placeholder: the health check runs asynchronously at
+            /// launch, so a snapshot taken before it completes reports "unknown".
+            static let unknown = Self(
+                screenRecording: "unknown",
+                microphone: "unknown",
+                accessibility: "unknown",
+                isHealthy: false,
+            )
+        }
+
         struct LastJob: Codable {
             let jobID: String
             let state: JobState
@@ -130,6 +154,7 @@
             engines: Engines = .empty,
             lastJob: LastJob? = nil,
             channelHealth: ChannelHealth = .inactive,
+            permissionHealth: PermissionHealth = .unknown,
             liveCaptions: LiveCaptions = .empty,
             watchState: String? = nil,
         ) {
@@ -139,6 +164,7 @@
             self.engines = engines
             self.lastJob = lastJob
             self.channelHealth = channelHealth
+            self.permissionHealth = permissionHealth
             self.liveCaptions = liveCaptions
             self.watchState = watchState
         }
