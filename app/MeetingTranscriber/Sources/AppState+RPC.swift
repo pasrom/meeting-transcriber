@@ -1,6 +1,18 @@
 #if !APPSTORE
     import Foundation
 
+    extension PermissionStatus {
+        /// Stable wire string for the RPC `/state.permissionHealth` snapshot.
+        var rpcValue: String {
+            switch self {
+            case .healthy: "healthy"
+            case .denied: "denied"
+            case .broken: "broken"
+            case .notDetermined: "notDetermined"
+            }
+        }
+    }
+
     extension PipelineQueue {
         /// Build the RPC pipeline-queue status from inside `PipelineQueue`, so the
         /// counter reads are single-hop `self.` accesses. Constructing this
@@ -51,6 +63,7 @@
                 engines: enginesSnapshot(),
                 lastJob: lastFinishedJobSnapshot(),
                 channelHealth: channelHealthSnapshot(),
+                permissionHealth: permissionHealthSnapshot(),
                 liveCaptions: liveCaptionsSnapshot(),
                 watchState: watching.watchLoop?.state.rawValue,
             )
@@ -77,6 +90,19 @@
                 micSilent: channelHealth.micSilentActive,
                 appSilent: channelHealth.appSilentActive,
                 recordingSilent: channelHealth.recordingSilentActive,
+            )
+        }
+
+        /// Snapshot the permission health verdict. `nil` before the first async
+        /// check completes → `.unknown`. Extracted (like `channelHealthSnapshot`)
+        /// to keep `rpcStateSnapshot`'s literal under the type-check budget.
+        private func permissionHealthSnapshot() -> RPCStateSnapshot.PermissionHealth {
+            guard let health = permissions.health else { return .unknown }
+            return RPCStateSnapshot.PermissionHealth(
+                screenRecording: health.screenRecording.rpcValue,
+                microphone: health.microphone.rpcValue,
+                accessibility: health.accessibility.rpcValue,
+                isHealthy: health.isHealthy,
             )
         }
 
