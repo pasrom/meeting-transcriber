@@ -26,4 +26,12 @@ final class MenuBarIconNextFrameTests: XCTestCase {
         let last = MenuBarIcon.frameCount - 1
         XCTAssertEqual(MenuBarIcon.nextFrame(last, badge: .recording), 0)
     }
+
+    // Regression guard: the animation timer must stay `.default`. `.common`
+    // includes `.eventTracking`, which fires the @MainActor tick inside the
+    // status-bar menu's nested run loop and crashes (EXC_BAD_ACCESS).
+    func testAnimationTimerAvoidsEventTrackingMode() {
+        XCTAssertEqual(MenuBarIcon.animationRunLoopMode, .default)
+        XCTAssertNotEqual(MenuBarIcon.animationRunLoopMode, .common)
+    }
 }

@@ -42,6 +42,16 @@ enum MenuBarIcon {
     /// Number of distinct animation frames. Pure constant.
     nonisolated static let frameCount = 6
 
+    /// Run-loop mode for the menu-bar animation timer (`AnimatedMenuBarIcon`).
+    ///
+    /// `.default`, not `.common`: `.common` includes `.eventTracking`, so the
+    /// timer would fire while the status-bar menu is tracked and deliver its
+    /// `@MainActor` tick from inside that nested run loop — which crashes in the
+    /// Swift concurrency executor check (`swift_task_isCurrentExecutor` →
+    /// EXC_BAD_ACCESS). Trade-off: the badge animation pauses while a menu is
+    /// open (cosmetic, sub-second) and resumes when tracking ends.
+    nonisolated static let animationRunLoopMode: RunLoop.Mode = .default
+
     /// Returns the next animation frame for `badge`, or `current` if `badge`
     /// is non-animated. Static badges (idle, error, …) ignore the timer tick
     /// so the App scene's body does not re-evaluate every 0.4 s. Pure math —

@@ -23,7 +23,11 @@ private struct AnimatedMenuBarIcon: View {
     let appSilentOverlay: Bool
 
     @State private var animationFrame = 0
-    private let iconTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+    // `.default` (not `.common`) so the timer never fires inside the status-bar
+    // menu's tracking loop — see MenuBarIcon.animationRunLoopMode for why.
+    private let iconTimer = Timer.publish(
+        every: 0.4, on: .main, in: MenuBarIcon.animationRunLoopMode,
+    ).autoconnect()
 
     var body: some View {
         Image(nsImage: MenuBarIcon.image(
