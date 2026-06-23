@@ -86,6 +86,19 @@ ignore:
   # xctest suite never executes its init. Exercised by e2e-mic-device-change.yml;
   # a unit test would only pin a struct literal (vacuous).
   - "tools/audiotap/Sources/DebugTapFault.swift"
+  # Real-model Nemotron pipeline builder: downloadVariant + preloadShared +
+  # session construction, only exercisable with the ~0.6 GB CoreML model. The
+  # mockable seam is the injected NemotronPipelineFactory (covered by
+  # LiveTranscriptionNemotronStreamingTests's build/fallback tests); this default
+  # builder is the glue, exercised end-to-end by the gated NemotronFinishDriftTests
+  # and live recording. `\\+` escapes the literal `+` in the filename.
+  - "app/MeetingTranscriber/Sources/LiveTranscriptionController\\+Nemotron.swift"
+  # Real-model seam implementations (NemotronAsrManager / FluidVADBoundaryDetector /
+  # PartialCollector): wrap FluidAudio's Nemotron model + the Silero VAD, only
+  # exercisable with the downloaded CoreML models (gated NemotronFinishDriftTests +
+  # live recording). The session logic that drives them via the seam protocols is
+  # unit-tested in NemotronStreamingCaptionSession.swift.
+  - "app/MeetingTranscriber/Sources/NemotronAsrManager.swift"
   # Thin installTap wrapper bridging the NSException to a throw. The bridging
   # shim itself is unit-tested (CExceptionCatcherTests); the installTap call is
   # hardware-bound (exercised by e2e-app.yml). `+` is a regex metachar — escape
