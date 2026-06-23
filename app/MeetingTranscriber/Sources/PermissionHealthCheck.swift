@@ -188,9 +188,20 @@ enum PermissionHealthCheck {
         }
     }
 
-    /// Peak amplitude (linear, 0…1) below which a mic stream is treated as silence even
-    /// if buffers are flowing — a working mic in any real environment exceeds the
-    /// noise-floor by orders of magnitude. ~−80 dBFS.
+    /// The mic probe succeeds iff the tap delivered at least one audio buffer within the
+    /// timeout. Silence is NOT failure: a granted, working mic that is muted, virtual, or
+    /// in a quiet room delivers all-zero buffers but is perfectly fine. Genuine breakage
+    /// (no input device, `installTap`/`engine.start` throwing) yields zero buffers and is
+    /// caught upstream. Previously the verdict also required a sample above the noise floor,
+    /// which false-flagged silent-but-working mics as `.broken` (issue #446).
+    static func micProbeSucceeds(bufferCount: Int) -> Bool {
+        bufferCount > 0
+    }
+
+    /// Peak amplitude (linear, 0…1) below which a mic stream is considered silent.
+    /// Diagnostic only since issue #446: silence no longer fails the probe (see
+    /// `micProbeSucceeds`); this threshold just drives a `silentDespiteBuffers` log
+    /// breadcrumb that flags a likely muted/virtual input. ~−80 dBFS.
     static let silentMicPeakThreshold: Float = 0.0001
 
     /// Returns the maximum absolute sample amplitude in `buffer` on channel 0, normalized
@@ -238,9 +249,9 @@ enum PermissionHealthCheck {
         }
     }
 
-    /// Maximum time to wait for the mic probe to observe a non-silent sample.
+    /// Maximum time to wait for the mic probe to observe the first audio buffer.
     static let probeTimeout: TimeInterval = 0.5
-    /// Poll interval while waiting for the probe to confirm a healthy signal.
+    /// Poll interval while waiting for the first buffer to arrive.
     static let probePollInterval: TimeInterval = 0.02
 
     static func probeMicrophone() async -> Bool {
@@ -287,7 +298,6 @@ enum PermissionHealthCheck {
 
         let (stats, elapsedMs) = await waitForProbeSignal(
             deadline: Date().addingTimeInterval(probeTimeout),
-            threshold: Self.silentMicPeakThreshold,
             pollInterval: Self.probePollInterval,
             snapshot: counter.snapshot,
         )
@@ -295,20 +305,25 @@ enum PermissionHealthCheck {
         engine.stop()
         inputNode.removeTap(onBus: 0)
 
-        debugLog("probeMicrophone: buffers=\(stats.count) peak=\(stats.maxPeak) elapsed=\(elapsedMs)ms " +
+        // Diagnostic-only (issue #446): buffers flowing but below the noise floor means a
+        // likely muted/virtual input — healthy, not broken, but a useful breadcrumb.
+        let silentDespiteBuffers = micProbeSucceeds(bufferCount: stats.count)
+            && stats.maxPeak <= Self.silentMicPeakThreshold
+        debugLog("probeMicrophone: buffers=\(stats.count) peak=\(stats.maxPeak) " +
+            "silentDespiteBuffers=\(silentDespiteBuffers) elapsed=\(elapsedMs)ms " +
             "sampleRate=\(format.sampleRate) channels=\(format.channelCount)")
-        // swiftformat:disable:next preferIsEmpty
-        return stats.count > 0 && stats.maxPeak > Self.silentMicPeakThreshold // swiftlint:disable:this empty_count
+        return micProbeSucceeds(bufferCount: stats.count)
     }
 
-    /// Polls `snapshot` until peak crosses `threshold` (healthy) or `now()` passes `deadline`
-    /// (broken). Polling on `count > 0` would exit on the first warm-up buffer — which is
-    /// commonly all-zeros — and falsely report `.broken`.
+    /// Polls `snapshot` until the first audio buffer arrives (`count > 0`, healthy — the tap
+    /// is delivering data) or `now()` passes `deadline` (broken — no buffers at all). A
+    /// silent buffer counts: even an all-zero warm-up buffer proves the tap works, and a
+    /// muted/virtual/quiet mic that delivers silent buffers is healthy (issue #446). `maxPeak`
+    /// is still returned for diagnostic logging but no longer gates the verdict.
     ///
     /// `now` and `sleep` are injected so unit tests can drive the loop with a virtual clock.
     static func waitForProbeSignal(
         deadline: Date,
-        threshold: Float,
         pollInterval: TimeInterval,
         snapshot: @Sendable () -> (count: Int, maxPeak: Float),
         now: @Sendable () -> Date = { Date() },
@@ -318,7 +333,7 @@ enum PermissionHealthCheck {
     ) async -> (stats: (count: Int, maxPeak: Float), elapsedMs: Int) {
         let startedAt = now()
         while now() < deadline {
-            if snapshot().maxPeak > threshold { break }
+            if micProbeSucceeds(bufferCount: snapshot().count) { break }
             await sleep(pollInterval)
         }
         let elapsedMs = Int(now().timeIntervalSince(startedAt) * 1000)
