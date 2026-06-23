@@ -239,7 +239,7 @@
                 listener.start(queue: .main)
                 logger.info("DebugRPCServer listening on 127.0.0.1:\(self.port.rawValue, privacy: .public)")
             } catch {
-                logger.error("DebugRPCServer failed to start: \(error.localizedDescription)")
+                logger.error("DebugRPCServer failed to start: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -280,7 +280,7 @@
                 Task { @MainActor in
                     guard let self else { return }
                     if let error {
-                        logger.warning("RPC connection error: \(error.localizedDescription)")
+                        logger.warning("RPC connection error: \(error.localizedDescription, privacy: .public)")
                         connection.cancel()
                         return
                     }

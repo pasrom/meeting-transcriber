@@ -229,7 +229,7 @@ class WatchLoop {
             let recording = try recorder.stop()
             enqueueRecording(title: info.title, appName: info.appName, recording: recording)
         } catch {
-            logger.error("Failed to stop manual recording: \(error)")
+            logger.error("Failed to stop manual recording: \(error.localizedDescription, privacy: .public)")
             failureMessage = error.localizedDescription
         }
 
@@ -284,8 +284,8 @@ class WatchLoop {
                     try await handleMeeting(meeting)
                 } catch {
                     if error is CancellationError { return }
-                    let msg = "Recording error: \(error)"
-                    logger.error("\(msg)")
+                    let msg = "Recording error: \(error.localizedDescription)"
+                    logger.error("\(msg, privacy: .public)")
                     update { next in
                         next.phase = .error
                         next.lastError = error.localizedDescription
@@ -482,6 +482,8 @@ class WatchLoop {
             try sidecar.write(toDirectory: destDir, basename: basename)
             logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title, privacy: .private)")
         } catch {
+            // Error left redacted: a sidecar/WAV write error embeds the
+            // meeting-title-derived basename in its description.
             logger.error("Record-only: \(error.localizedDescription)")
             update { next in
                 next.lastError = "Record-only output failed: \(error.localizedDescription)"

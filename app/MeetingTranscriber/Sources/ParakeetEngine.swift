@@ -70,7 +70,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
                     try await configureVocabulary(from: customVocabularyPath)
                 }
             } catch {
-                logger.error("Parakeet model load failed: \(error)")
+                logger.error("Parakeet model load failed: \(error.localizedDescription, privacy: .public)")
                 modelState = .unloaded
                 downloadProgress = 0
             }
@@ -82,7 +82,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
         logger.info("Parakeet: model not loaded, loading…")
         await loadModel()
         guard asrManager != nil else {
-            logger.error("Parakeet: model load FAILED, state=\(String(describing: self.modelState))")
+            logger.error("Parakeet: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
             throw TranscriptionError.modelNotLoaded
         }
         logger.info("Parakeet: model loaded successfully")
@@ -199,7 +199,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
                 ctcVariant: .ctc110m,
             )
         } catch {
-            logger.warning("Parakeet: failed to load vocabulary from \(path): \(error)")
+            logger.warning("Parakeet: failed to load vocabulary from \(path): \(error.localizedDescription, privacy: .public)")
             return
         }
 

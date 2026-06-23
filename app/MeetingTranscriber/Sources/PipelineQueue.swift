@@ -770,7 +770,7 @@ class PipelineQueue {
             if cancelledJobIDs.remove(ctx.jobID) != nil {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
-                logger.error("Pipeline error for job \(ctx.jobID): \(error)")
+                logger.error("Pipeline error for job \(ctx.jobID): \(error.localizedDescription, privacy: .public)")
                 updateJobState(id: ctx.jobID, to: .error, error: error.localizedDescription)
             }
         }
@@ -1365,7 +1365,7 @@ class PipelineQueue {
                     )
                 }
             } catch {
-                logger.error("Failed to re-apply speaker names: \(error)")
+                logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -1453,7 +1453,7 @@ class PipelineQueue {
                 completeSpeakerNaming(jobID: jobID, result: result)
             }
         } catch {
-            logger.error("Late re-diarization failed: \(error)")
+            logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
             stopElapsedTimer()
             updateJobState(id: jobID, to: .speakerNamingPending)
         }
@@ -1535,6 +1535,8 @@ class PipelineQueue {
         do {
             try namingStore.save(data, slug: slug)
         } catch {
+            // Error left redacted: the write target is `<title-slug>_naming.json`,
+            // so a file-write error description would leak the meeting title.
             logger.error("Failed to save naming data: \(error.localizedDescription)")
             addWarning(id: data.jobID, "Late re-confirm unavailable — naming data could not be persisted")
         }
@@ -1615,7 +1617,7 @@ class PipelineQueue {
             }
             loaded = decoded
         } catch {
-            logger.error("Failed to load pipeline snapshot: \(error)")
+            logger.error("Failed to load pipeline snapshot: \(error.localizedDescription, privacy: .public)")
             return
         }
 
@@ -1728,6 +1730,9 @@ class PipelineQueue {
                 try fm.moveItem(at: src, to: dst)
                 logger.info("Audio moved: \(name, privacy: .private)")
             } catch {
+                // Error left redacted: a file-move CocoaError embeds the
+                // meeting-title-derived filename in its description (the same
+                // data the sibling .private annotation hides).
                 logger.warning("Failed to move audio \(name, privacy: .private): \(error.localizedDescription)")
             }
         }
@@ -1761,7 +1766,7 @@ class PipelineQueue {
                 try data.write(to: processedRecordingsPath, options: .atomic)
                 logger.info("Migration: seeded \(paths.count) existing recordings as processed")
             } catch {
-                logger.error("Migration failed: \(error)")
+                logger.error("Migration failed: \(error.localizedDescription, privacy: .public)")
             }
         }.value
     }
@@ -1869,7 +1874,7 @@ class PipelineQueue {
             let data = try JSONEncoder().encode(Array(paths))
             try data.write(to: processedRecordingsPath, options: .atomic)
         } catch {
-            logger.error("Failed to write processed recordings: \(error)")
+            logger.error("Failed to write processed recordings: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -1978,7 +1983,7 @@ class PipelineQueue {
                 try FileManager.default.restrictToOwner(logPath)
             }
         } catch {
-            logger.error("Failed to append pipeline log: \(error)")
+            logger.error("Failed to append pipeline log: \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -563,7 +563,7 @@ extension AppAudioCapture {
             try startCapture()
             event = .startSucceeded(rate: actualSampleRate)
         } catch {
-            logger.error("Failed to restart app audio capture: \(error)")
+            logger.error("Failed to restart app audio capture: \(error.localizedDescription, privacy: .public)")
             event = .startFailed
         }
         applyAction(deviceChangeCoordinator.handle(event))

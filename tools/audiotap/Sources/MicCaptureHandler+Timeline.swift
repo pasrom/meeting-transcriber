@@ -44,7 +44,7 @@ extension MicCaptureHandler {
             try file.write(from: silentBuffer)
             logger.info("Mic: filled \(frames) silent frames for a device-restart gap")
         } catch {
-            logger.warning("Mic timeline gap-fill write error: \(error)")
+            logger.warning("Mic timeline gap-fill write error: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

@@ -163,7 +163,7 @@ actor StageTimingLog {
             }
             try handle.synchronize()
         } catch {
-            logger.error("Failed to append stage-timing events: \(error.localizedDescription)")
+            logger.error("Failed to append stage-timing events: \(error.localizedDescription, privacy: .public)")
         }
     }
 

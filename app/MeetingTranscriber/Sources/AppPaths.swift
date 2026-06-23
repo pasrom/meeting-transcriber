@@ -77,7 +77,7 @@ enum AppPaths {
             } catch CocoaError.fileReadNoSuchFile {
                 // Source doesn't exist — skip
             } catch {
-                logger.error("Failed to migrate \(name): \(error.localizedDescription)")
+                logger.error("Failed to migrate \(name): \(error.localizedDescription, privacy: .public)")
             }
         }
     }

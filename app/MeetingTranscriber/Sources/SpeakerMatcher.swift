@@ -450,7 +450,7 @@ class SpeakerMatcher {
             // chmod applied pre-rename, so set it on the final path.
             try FileManager.default.restrictToOwner(dbPath)
         } catch {
-            logger.error("Failed to save speaker DB: \(error)")
+            logger.error("Failed to save speaker DB: \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -98,7 +98,7 @@ public class AudioCaptureSession {
                 try mic.start(deviceUID: micDeviceUID)
                 micCapture = mic
             } catch {
-                logger.error("Failed to start mic capture: \(error). Continuing with app audio only.")
+                logger.error("Failed to start mic capture: \(error.localizedDescription, privacy: .public). Continuing with app audio only.")
             }
         }
 

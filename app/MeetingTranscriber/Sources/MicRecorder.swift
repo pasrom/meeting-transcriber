@@ -77,7 +77,7 @@ class MicRecorder {
             do {
                 try file.write(from: buffer)
             } catch {
-                logger.error("Failed to write mic buffer: \(error)")
+                logger.error("Failed to write mic buffer: \(error.localizedDescription, privacy: .public)")
             }
         }
 
