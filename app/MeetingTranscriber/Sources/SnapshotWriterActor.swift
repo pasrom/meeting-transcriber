@@ -21,7 +21,7 @@ actor SnapshotWriterActor {
         do {
             try writer(jobs, dir)
         } catch {
-            logger.error("Failed to write queue snapshot: \(error)")
+            logger.error("Failed to write queue snapshot: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

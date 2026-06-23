@@ -171,7 +171,7 @@ actor RecognitionStatsLog {
             }
             try handle.synchronize()
         } catch {
-            logger.error("Failed to append recognition events: \(error.localizedDescription)")
+            logger.error("Failed to append recognition events: \(error.localizedDescription, privacy: .public)")
         }
     }
 

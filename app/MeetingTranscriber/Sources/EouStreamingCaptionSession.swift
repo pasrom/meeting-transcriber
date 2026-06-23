@@ -155,7 +155,7 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         } catch {
             // Never throw out of ingest — log and move on. Transcript text is
             // never logged; only the (public) channel label and the error.
-            logger.warning("[\(self.channelLabel, privacy: .public)] ingest error: \(error)")
+            logger.warning("[\(self.channelLabel, privacy: .public)] ingest error: \(error.localizedDescription, privacy: .public)")
             return
         }
 
@@ -182,7 +182,7 @@ actor EouStreamingCaptionSession: LiveCaptionPipeline {
         } catch {
             // Never throw out of flush — log and still reset below so the next
             // recording starts clean. Transcript text is never logged.
-            logger.warning("[\(self.channelLabel, privacy: .public)] flush finish error: \(error)")
+            logger.warning("[\(self.channelLabel, privacy: .public)] flush finish error: \(error.localizedDescription, privacy: .public)")
         }
 
         await asr.reset()

@@ -216,7 +216,7 @@ enum AudioMixer {
         }
 
         if let error {
-            logger.warning("AVAudioConverter failed: \(error.localizedDescription), falling back")
+            logger.warning("AVAudioConverter failed: \(error.localizedDescription, privacy: .public), falling back")
             return resampleLinear(samples, from: sourceRate, to: targetRate)
         }
 
@@ -264,7 +264,10 @@ enum AudioMixer {
                 return try await loadAudioFromAVAsset(url: url)
             } catch {
                 // Fallback 2: ffmpeg for unsupported formats
-                logger.info("AVAsset failed for \(url.lastPathComponent, privacy: .private): \(error.localizedDescription), trying ffmpeg fallback")
+                logger
+                    .info(
+                        "AVAsset failed for \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public), trying ffmpeg fallback",
+                    )
                 return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
             }
         }

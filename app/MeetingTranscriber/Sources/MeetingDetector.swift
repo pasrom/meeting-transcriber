@@ -35,7 +35,7 @@ class MeetingDetector: MeetingDetecting {
                 do {
                     return try NSRegularExpression(pattern: pattern)
                 } catch {
-                    logger.error("Invalid meeting regex for \(p.appName): \(pattern) — \(error.localizedDescription)")
+                    logger.error("Invalid meeting regex for \(p.appName): \(pattern) — \(error.localizedDescription, privacy: .public)")
                     return nil
                 }
             }
@@ -43,7 +43,7 @@ class MeetingDetector: MeetingDetecting {
                 do {
                     return try NSRegularExpression(pattern: pattern)
                 } catch {
-                    logger.error("Invalid idle regex for \(p.appName): \(pattern) — \(error.localizedDescription)")
+                    logger.error("Invalid idle regex for \(p.appName): \(pattern) — \(error.localizedDescription, privacy: .public)")
                     return nil
                 }
             }

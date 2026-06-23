@@ -237,6 +237,8 @@ class DualSourceRecorder: RecordingProvider {
                 logger.info("Recovered crashed recording: \(mix.lastPathComponent)")
                 recovered += 1
             } catch {
+                // Error left redacted: for re-imports the stem is title-derived,
+                // and a recovery file error embeds that filename in its description.
                 logger.warning("Could not recover crashed recording \(stem): \(error.localizedDescription)")
             }
         }

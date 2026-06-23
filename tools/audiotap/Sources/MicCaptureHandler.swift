@@ -248,7 +248,7 @@ public class MicCaptureHandler: @unchecked Sendable {
                         feed.next(outStatus)
                     }
                     if let error {
-                        logger.warning("Mic resample error: \(error)")
+                        logger.warning("Mic resample error: \(error.localizedDescription, privacy: .public)")
                     } else {
                         self.fillTimelineGap(before: when, outputFrames: Int(outputBuffer.frameLength))
                         try self.outputFile?.write(from: outputBuffer)
@@ -260,14 +260,14 @@ public class MicCaptureHandler: @unchecked Sendable {
                     self.forwardToLiveSink(buffer: buffer)
                 }
             } catch {
-                logger.warning("Mic write error: \(error)")
+                logger.warning("Mic write error: \(error.localizedDescription, privacy: .public)")
             }
         }
 
         do {
             try inputNode.safeInstallTap(onBus: 0, bufferSize: 4096, format: installFormat, block: tapBlock)
         } catch {
-            logger.error("Mic: installTap failed (\(error.localizedDescription)) — restart will retry")
+            logger.error("Mic: installTap failed (\(error.localizedDescription, privacy: .public)) — restart will retry")
             throw error
         }
 
@@ -384,7 +384,7 @@ public class MicCaptureHandler: @unchecked Sendable {
             // A transient invalid format / installTap raise (issue #379) is
             // recoverable: the device usually settles within a few hundred ms.
             // Keep recording and retry with backoff instead of killing it.
-            logger.error("Failed to restart mic after device change: \(error) — scheduling retry")
+            logger.error("Failed to restart mic after device change: \(error.localizedDescription, privacy: .public) — scheduling retry")
             scheduleRestartRetry(deviceUID: deviceUID)
         }
     }

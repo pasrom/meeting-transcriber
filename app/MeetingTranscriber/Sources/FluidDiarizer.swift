@@ -108,7 +108,7 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
             }
 
             logger.warning(
-                "Diarization failed with numSpeakers=\(numSpeakers), retrying with auto-detect: \(error.localizedDescription)",
+                "Diarization failed with numSpeakers=\(numSpeakers), retrying with auto-detect: \(error.localizedDescription, privacy: .public)",
             )
 
             try await offlineProcessor.prepare(numSpeakers: nil)

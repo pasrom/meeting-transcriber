@@ -106,7 +106,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
                 vadState = try await vad.makeStreamState()
             } catch {
                 logger.error(
-                    "[\(self.channelLabel, privacy: .public)] vad init failed: \(error)",
+                    "[\(self.channelLabel, privacy: .public)] vad init failed: \(error.localizedDescription, privacy: .public)",
                 )
                 return
             }
@@ -122,7 +122,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
                 await handleEvent(result.event, chunk: chunk)
             } catch {
                 logger.warning(
-                    "[\(self.channelLabel, privacy: .public)] vad chunk error: \(error)",
+                    "[\(self.channelLabel, privacy: .public)] vad chunk error: \(error.localizedDescription, privacy: .public)",
                 )
             }
         }
@@ -163,7 +163,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
             }
         } catch {
             logger.warning(
-                "[\(self.channelLabel, privacy: .public)] partial transcribe error: \(error)",
+                "[\(self.channelLabel, privacy: .public)] partial transcribe error: \(error.localizedDescription, privacy: .public)",
             )
         }
     }
@@ -191,7 +191,7 @@ actor StreamingTranscriber: LiveCaptionPipeline {
             }
         } catch {
             logger.warning(
-                "[\(self.channelLabel, privacy: .public)] final transcribe error: \(error)",
+                "[\(self.channelLabel, privacy: .public)] final transcribe error: \(error.localizedDescription, privacy: .public)",
             )
         }
     }
