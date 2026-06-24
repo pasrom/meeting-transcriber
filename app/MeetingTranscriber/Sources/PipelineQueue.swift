@@ -1461,8 +1461,13 @@ class PipelineQueue {
                 isDualSource: namingData.isDualSource, slug: slug, jobID: jobID,
             )
             // Track which mode produced this fresh naming data so the next
-            // dialog open initialises the mode picker correctly.
-            jobs[jobIndex].usedDiarizerMode = diarizeProcess.mode
+            // dialog open initialises the mode picker correctly. Re-resolve the
+            // index by id: the diarization await can outlive another finished
+            // job's `completedJobLifetime` eviction, which shifts the array and
+            // would invalidate the `jobIndex` captured before the await.
+            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+                jobs[idx].usedDiarizerMode = diarizeProcess.mode
+            }
 
             updateJobState(id: jobID, to: .speakerNamingPending)
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
