@@ -862,6 +862,41 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// Drive a single-source job through the pipeline to `.speakerNamingPending`
+    /// with a one-speaker initial diarization, returning the queue, the mock
+    /// diarizer (set `resultToReturn` to a multi-speaker result for the re-run),
+    /// and the job id. Shared setup for the late-rerun re-segmentation tests.
+    private func makeSingleSourceJobAtNamingPending(
+        title: String, transcriptSegments: [TimestampedSegment],
+    ) async throws -> (PipelineQueue, MockDiarization, UUID) {
+        let engine = MockEngine()
+        engine.segmentsToReturn = transcriptSegments
+        let mockDiar = MockDiarization()
+        let span = transcriptSegments.last?.end ?? 0
+        // Initial diarization collapses everything onto one speaker.
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [.init(start: transcriptSegments.first?.start ?? 0, end: span, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": span],
+            autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        )
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine, diarizationFactory: { mockDiar }, diarizeEnabled: true,
+        )
+        let job = try PipelineJob(
+            meetingTitle: title, appName: "Teams",
+            mixPath: createTestAudioFile(in: tmpDir), appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        let pending = XCTestExpectation(description: "speakerNamingPending")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .speakerNamingPending { pending.fulfill() }
+        }
+        await pQueue.processNext()
+        await fulfillment(of: [pending], timeout: 10)
+        return (pQueue, mockDiar, job.id)
+    }
+
     func testDiarizeSingleSourceLabelsTranscriptWithAutoNames() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello world")]
@@ -2052,41 +2087,14 @@ final class PipelineQueueTests: XCTestCase {
     /// (shown in the dialog), but Confirm only string-replaced the single label
     /// present in the saved transcript — so the .txt still had one speaker.
     func testLateRerunConfirmRebuildsTranscriptWithNewSpeakers() async throws {
-        let engine = MockEngine()
-        engine.segmentsToReturn = [
-            TimestampedSegment(start: 0, end: 5, text: "Hello"),
-            TimestampedSegment(start: 5, end: 10, text: "How are you"),
-            TimestampedSegment(start: 10, end: 15, text: "Goodbye"),
-        ]
-        let mockDiar = MockDiarization()
-        // Initial diarization collapses everything onto one speaker.
-        mockDiar.resultToReturn = DiarizationResult(
-            segments: [.init(start: 0, end: 15, speaker: "SPEAKER_0")],
-            speakingTimes: ["SPEAKER_0": 15],
-            autoNames: [:],
-            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        let (pQueue, mockDiar, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Rerun Rebuild Test",
+            transcriptSegments: [
+                TimestampedSegment(start: 0, end: 5, text: "Hello"),
+                TimestampedSegment(start: 5, end: 10, text: "How are you"),
+                TimestampedSegment(start: 10, end: 15, text: "Goodbye"),
+            ],
         )
-        let (pQueue, _) = makeMockProcessingQueue(
-            engine: engine,
-            diarizationFactory: { mockDiar },
-            diarizeEnabled: true,
-        )
-
-        let audioPath = try createTestAudioFile(in: tmpDir)
-        let job = PipelineJob(
-            meetingTitle: "Rerun Rebuild Test",
-            appName: "Teams",
-            mixPath: audioPath,
-            appPath: nil, micPath: nil, micDelay: 0,
-        )
-        pQueue.enqueue(job)
-
-        let pendingExpectation = XCTestExpectation(description: "speakerNamingPending")
-        pQueue.onJobStateChange = { _, _, newState in
-            if newState == .speakerNamingPending { pendingExpectation.fulfill() }
-        }
-        await pQueue.processNext()
-        await fulfillment(of: [pendingExpectation], timeout: 10)
 
         // Sanity: the initial transcript really did collapse to one speaker.
         let initialPath = try XCTUnwrap(pQueue.jobs.first?.transcriptPath)
@@ -2113,7 +2121,7 @@ final class PipelineQueueTests: XCTestCase {
         pQueue.onJobStateChange = { _, _, newState in
             if newState == .done { doneExpectation.fulfill() }
         }
-        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(3))
         await fulfillment(of: [doneExpectation], timeout: 60)
 
         let finalPath = try XCTUnwrap(pQueue.jobs.first?.transcriptPath)
@@ -2190,32 +2198,14 @@ final class PipelineQueueTests: XCTestCase {
     /// segmentation into the saved transcript — the rewrite must not depend on
     /// a confirm mapping.
     func testLateRerunSkipKeepsRebuiltSegmentation() async throws {
-        let engine = MockEngine()
-        engine.segmentsToReturn = [
-            TimestampedSegment(start: 0, end: 5, text: "Hello"),
-            TimestampedSegment(start: 5, end: 10, text: "How are you"),
-            TimestampedSegment(start: 10, end: 15, text: "Goodbye"),
-        ]
-        let mockDiar = MockDiarization()
-        mockDiar.resultToReturn = DiarizationResult(
-            segments: [.init(start: 0, end: 15, speaker: "SPEAKER_0")],
-            speakingTimes: ["SPEAKER_0": 15], autoNames: [:],
-            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        let (pQueue, mockDiar, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Rerun Skip Test",
+            transcriptSegments: [
+                TimestampedSegment(start: 0, end: 5, text: "Hello"),
+                TimestampedSegment(start: 5, end: 10, text: "How are you"),
+                TimestampedSegment(start: 10, end: 15, text: "Goodbye"),
+            ],
         )
-        let (pQueue, _) = makeMockProcessingQueue(
-            engine: engine, diarizationFactory: { mockDiar }, diarizeEnabled: true,
-        )
-        let job = try PipelineJob(
-            meetingTitle: "Rerun Skip Test", appName: "Teams",
-            mixPath: createTestAudioFile(in: tmpDir), appPath: nil, micPath: nil, micDelay: 0,
-        )
-        pQueue.enqueue(job)
-        let pending = XCTestExpectation(description: "speakerNamingPending")
-        pQueue.onJobStateChange = { _, _, newState in
-            if newState == .speakerNamingPending { pending.fulfill() }
-        }
-        await pQueue.processNext()
-        await fulfillment(of: [pending], timeout: 10)
 
         mockDiar.resultToReturn = DiarizationResult(
             segments: [
@@ -2231,7 +2221,7 @@ final class PipelineQueueTests: XCTestCase {
         pQueue.onJobStateChange = { _, _, newState in
             if newState == .done { done.fulfill() }
         }
-        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(3))
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(3))
         await fulfillment(of: [done], timeout: 60)
 
         let finalTranscript = try String(contentsOf: XCTUnwrap(pQueue.jobs.first?.transcriptPath), encoding: .utf8)
@@ -2244,31 +2234,13 @@ final class PipelineQueueTests: XCTestCase {
     /// it does NOT wipe the transcript, and surfaces a warning so the user
     /// isn't silently misled into thinking the new speakers were applied.
     func testLateRerunWithoutPersistedSegmentsWarnsAndKeepsTranscript() async throws {
-        let engine = MockEngine()
-        engine.segmentsToReturn = [
-            TimestampedSegment(start: 0, end: 5, text: "Hello"),
-            TimestampedSegment(start: 5, end: 10, text: "World"),
-        ]
-        let mockDiar = MockDiarization()
-        mockDiar.resultToReturn = DiarizationResult(
-            segments: [.init(start: 0, end: 10, speaker: "SPEAKER_0")],
-            speakingTimes: ["SPEAKER_0": 10], autoNames: [:],
-            embeddings: ["SPEAKER_0": [1, 0, 0]],
+        let (pQueue, mockDiar, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "No Segments Test",
+            transcriptSegments: [
+                TimestampedSegment(start: 0, end: 5, text: "Hello"),
+                TimestampedSegment(start: 5, end: 10, text: "World"),
+            ],
         )
-        let (pQueue, _) = makeMockProcessingQueue(
-            engine: engine, diarizationFactory: { mockDiar }, diarizeEnabled: true,
-        )
-        let job = try PipelineJob(
-            meetingTitle: "No Segments Test", appName: "Teams",
-            mixPath: createTestAudioFile(in: tmpDir), appPath: nil, micPath: nil, micDelay: 0,
-        )
-        pQueue.enqueue(job)
-        let pending = XCTestExpectation(description: "speakerNamingPending")
-        pQueue.onJobStateChange = { _, _, newState in
-            if newState == .speakerNamingPending { pending.fulfill() }
-        }
-        await pQueue.processNext()
-        await fulfillment(of: [pending], timeout: 10)
 
         let transcriptPath = try XCTUnwrap(pQueue.jobs.first?.transcriptPath)
         let before = try String(contentsOf: transcriptPath, encoding: .utf8)
@@ -2291,7 +2263,7 @@ final class PipelineQueueTests: XCTestCase {
         pQueue.onJobStateChange = { _, _, newState in
             if newState == .done { done.fulfill() }
         }
-        pQueue.completeSpeakerNaming(jobID: job.id, result: .rerun(2))
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(2))
         await fulfillment(of: [done], timeout: 60)
 
         let after = try String(contentsOf: transcriptPath, encoding: .utf8)
