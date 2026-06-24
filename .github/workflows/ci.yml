@@ -30,7 +30,7 @@ jobs:
       # workspace; the action otherwise hits the GitHub API for the file
       # list but still needs the filter definition locally.
       - if: github.event_name == 'pull_request'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4
         id: filter
@@ -52,7 +52,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install tools
         run: brew install swiftformat swiftlint
       # SwiftFormat path list lives in scripts/lint.sh; calling it keeps CI and
@@ -79,7 +79,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install SwiftLint
         run: brew install swiftlint
       - name: Build & Analyze
@@ -124,7 +124,7 @@ jobs:
             swift-flags: "-Xswiftc -DAPPSTORE"
     name: test (${{ matrix.variant }})
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # 20 min covers SPM + ML cache restore plus the cold-cache pre-warm
       # download; well below the 25 min job timeout so a hung download
       # surfaces as a step failure, not a job-timeout.
@@ -169,7 +169,7 @@ jobs:
       contents: read
       actions: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # No ML model dependencies — a plain SPM cache keyed off the
       # manifest is enough to drop cold-compile cost on repeat runs.
       - uses: actions/cache@v5
