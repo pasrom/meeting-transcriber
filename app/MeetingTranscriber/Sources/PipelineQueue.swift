@@ -1179,26 +1179,42 @@ class PipelineQueue {
         from run: DiarizationRun, autoNames: [String: String],
         transcription: TranscriptionOutput, engine: any TranscribingEngine, mix16k: URL,
     ) async throws -> String? {
-        let cachedSegments = transcription.cachedSegments
-        let useDualTrack = transcription.isDualSource
+        // cachedSegments is set by the transcribe stage in practice; the
+        // single-source branch re-transcribes defensively if it's somehow nil.
+        let cachedSegments: [TimestampedSegment]
+        if let cached = transcription.cachedSegments {
+            cachedSegments = cached
+        } else if transcription.isDualSource {
+            return nil
+        } else {
+            cachedSegments = try await engine.transcribeSegments(audioPath: mix16k)
+        }
+        return renderLabeledTranscript(
+            run: run, cachedSegments: cachedSegments,
+            isDualSource: transcription.isDualSource, autoNames: autoNames,
+        )
+    }
 
+    /// Render the speaker-labeled transcript text from a diarization run +
+    /// transcript segments: pick the topology, assign speakers, merge
+    /// consecutive blocks, and format. Shared by the batch path
+    /// (`labeledTranscript`) and the late re-diarization rewrite
+    /// (`rewriteTranscriptFromLateRun`) so both re-segment identically. Returns
+    /// nil when the run carries no usable diarization.
+    private func renderLabeledTranscript(
+        run: DiarizationRun, cachedSegments: [TimestampedSegment],
+        isDualSource: Bool, autoNames: [String: String],
+    ) -> String? {
         let topology: DiarizationProcess.LabelingTopology?
-        if useDualTrack, let appDiar = run.app, let micDiar = run.mic, let cached = cachedSegments {
-            topology = .dualTrack(cached: cached, micLabel: micLabel, app: appDiar, mic: micDiar)
-        } else if useDualTrack, let appDiar = run.app, let cached = cachedSegments {
+        if isDualSource, let appDiar = run.app, let micDiar = run.mic {
+            topology = .dualTrack(cached: cachedSegments, micLabel: micLabel, app: appDiar, mic: micDiar)
+        } else if isDualSource, let appDiar = run.app {
             // Mic diarization failed (silent track / no input device). Keep the
             // mic transcript with its raw `micLabel` — better than emitting
             // "speakers not identified" on a recording with good remote audio.
-            topology = .dualTrackAppOnly(cached: cached, micLabel: micLabel, app: appDiar)
-        } else if let currentDiarization = run.combined {
-            // Single-source: standard assignment. cachedSegments is set by the
-            // transcribe stage in practice; re-transcribe defensively.
-            let segments = if let cached = cachedSegments {
-                cached
-            } else {
-                try await engine.transcribeSegments(audioPath: mix16k)
-            }
-            topology = .single(segments: segments, diarization: currentDiarization)
+            topology = .dualTrackAppOnly(cached: cachedSegments, micLabel: micLabel, app: appDiar)
+        } else if let combined = run.combined {
+            topology = .single(segments: cachedSegments, diarization: combined)
         } else {
             return nil
         }
@@ -1401,17 +1417,7 @@ class PipelineQueue {
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
-        let diarizeProcess: any DiarizationProvider = {
-            if let mode, let factory = diarizationFactoryWithMode {
-                return factory(mode)
-            }
-            if let mode {
-                logger.warning(
-                    "Late re-diarize requested mode=\(mode.rawValue, privacy: .public) but no mode-aware factory wired; falling back to global setting",
-                )
-            }
-            return diarizationFactory()
-        }()
+        let diarizeProcess = resolveLateDiarizer(mode: mode, defaultFactory: diarizationFactory)
         guard diarizeProcess.isAvailable else {
             logger.warning("Diarization not available for late re-run")
             return
@@ -1422,7 +1428,7 @@ class PipelineQueue {
 
         do {
             let title = jobs[jobIndex].meetingTitle
-            let diarization = try await runLateDiarization(
+            let run = try await runLateDiarization(
                 diarizer: diarizeProcess,
                 recording: (dir: recordingsDir, slug: slug, jobID: jobID, micDelay: jobs[jobIndex].micDelay),
                 isDualSource: namingData.isDualSource,
@@ -1430,9 +1436,12 @@ class PipelineQueue {
             )
             stopElapsedTimer()
 
+            // Dual-track always yields a combined result (the merge or the
+            // app-only fallback); single-source sets it directly.
+            guard let combined = run.combined else { throw DiarizationError.notAvailable }
             guard let newNamingData = buildNamingData(
                 jobID: jobID, title: title,
-                diarization: diarization, prior: namingData,
+                diarization: combined, prior: namingData,
             ) else {
                 logger.warning("Late re-diarization produced no embeddings")
                 updateJobState(id: jobID, to: .speakerNamingPending)
@@ -1441,6 +1450,16 @@ class PipelineQueue {
 
             speakerNamingDataByJob[jobID] = newNamingData
             saveNamingData(newNamingData, slug: slug)
+            // Re-segment the saved transcript to match the fresh diarization.
+            // A re-run can change the speaker count and segment boundaries, but
+            // the late-confirm path only renames labels already present in the
+            // .txt — so without this rewrite any speakers the re-run adds never
+            // reach the transcript. Mirrors the batch path, which renders the
+            // transcript from its final run.
+            rewriteTranscriptFromLateRun(
+                run: run, autoNames: newNamingData.mapping,
+                isDualSource: namingData.isDualSource, slug: slug, jobID: jobID,
+            )
             // Track which mode produced this fresh naming data so the next
             // dialog open initialises the mode picker correctly.
             jobs[jobIndex].usedDiarizerMode = diarizeProcess.mode
@@ -1459,6 +1478,23 @@ class PipelineQueue {
         }
     }
 
+    /// Resolve the diarizer for a late re-run: a mode override uses the
+    /// mode-aware factory (falling back to `defaultFactory` plus a warning when
+    /// none is wired); `nil` keeps the current global setting.
+    private func resolveLateDiarizer(
+        mode: DiarizerMode?, defaultFactory: () -> any DiarizationProvider,
+    ) -> any DiarizationProvider {
+        if let mode, let factory = diarizationFactoryWithMode {
+            return factory(mode)
+        }
+        if let mode {
+            logger.warning(
+                "Late re-diarize requested mode=\(mode.rawValue, privacy: .public) but no mode-aware factory wired; falling back to global setting",
+            )
+        }
+        return defaultFactory()
+    }
+
     /// Re-diarize the persisted 16 kHz audio for a job. Dispatches between
     /// dual-source (separate app + mic tracks merged) and single-source
     /// (mix only). Pure I/O helper extracted from `lateDiarization` to
@@ -1469,14 +1505,14 @@ class PipelineQueue {
         isDualSource: Bool,
         speakerCount: Int,
         title: String,
-    ) async throws -> DiarizationResult {
+    ) async throws -> DiarizationRun {
         let (recordingsDir, slug, jobID, micDelay) = recording
         if isDualSource {
             // Mirror the batch path's mic-fail fallback (via the shared helper):
             // a silent/failing mic track must degrade to the unprefixed app-only
             // diarization, not throw (a no-op re-run) or emit prefixed keys the
             // persisted app-only transcript can't match.
-            let run = try await runDualTrackDiarization(
+            return try await runDualTrackDiarization(
                 diarizeProcess: diarizer,
                 tracks: (
                     app: recordingsDir.appendingPathComponent("\(slug)_app_16k.wav"),
@@ -1485,16 +1521,12 @@ class PipelineQueue {
                 ),
                 speakerCount: speakerCount, title: title, jobID: jobID,
             )
-            // Dual-track always yields a combined result (the merge or the
-            // app-only fallback); the optional is only the diarize-loop
-            // placeholder's concern.
-            guard let combined = run.combined else { throw DiarizationError.notAvailable }
-            return combined
         }
         let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
-        return try await diarizer.run(
+        let diarization = try await diarizer.run(
             audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
         )
+        return DiarizationRun(app: nil, mic: nil, combined: diarization)
     }
 
     /// Build SpeakerNamingData from fresh diarization, reusing context from prior naming data.
@@ -1523,6 +1555,58 @@ class PipelineQueue {
             },
             participants: prior.participants, isDualSource: prior.isDualSource,
         )
+    }
+
+    /// Rewrite the persisted transcript so its speaker segmentation reflects a
+    /// fresh late re-diarization. Re-labels the cached transcript segments
+    /// (persisted as `<slug>_segments.json`) against the new run with the new
+    /// auto-names. A no-op when the cached segments are missing (older
+    /// recordings predating segment persistence) — the late-confirm rename then
+    /// falls back to the prior behaviour rather than wiping the transcript.
+    private func rewriteTranscriptFromLateRun(
+        run: DiarizationRun, autoNames: [String: String],
+        isDualSource: Bool, slug: String, jobID: UUID,
+    ) {
+        guard let outputDir,
+              let transcriptPath = jobs.first(where: { $0.id == jobID })?.transcriptPath else { return }
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        guard let cachedSegments = loadCachedSegments(dir: recordingsDir, slug: slug) else {
+            logger.warning("Late re-diarization: no persisted transcript segments — speaker labels not re-segmented")
+            // Don't let the re-run silently appear to succeed: an older recording
+            // (predating segment persistence) can't be re-segmented, so any
+            // speakers the re-run added won't reach the transcript.
+            addWarning(
+                id: jobID,
+                "This recording has no saved transcript segments, so the re-run's speaker changes could not be applied to the transcript",
+            )
+            return
+        }
+        guard let rebuilt = renderLabeledTranscript(
+            run: run, cachedSegments: cachedSegments,
+            isDualSource: isDualSource, autoNames: autoNames,
+        ) else { return }
+        do {
+            try rebuilt.write(to: transcriptPath, atomically: true, encoding: .utf8)
+            // Keep the rewritten transcript owner-only, matching the original save.
+            try FileManager.default.restrictToOwner(transcriptPath)
+        } catch {
+            // Error left redacted: the write target is `<title>_transcript.txt`,
+            // so a file-write error description would leak the meeting title.
+            logger.error("Late re-diarization: failed to rewrite transcript: \(error.localizedDescription)")
+        }
+    }
+
+    /// Load the transcript segments persisted by `generateAndSaveProtocol`
+    /// (`<slug>_segments.json`). Returns nil when the file is absent or
+    /// undecodable.
+    private func loadCachedSegments(dir: URL, slug: String)
+        -> [TimestampedSegment]? { // swiftlint:disable:this discouraged_optional_collection
+        let segPath = dir.appendingPathComponent("\(slug)_segments.json")
+        guard let data = try? Data(contentsOf: segPath),
+              let segments = try? JSONDecoder().decode([TimestampedSegment].self, from: data) else {
+            return nil
+        }
+        return segments
     }
 
     // MARK: - Speaker Naming Persistence
