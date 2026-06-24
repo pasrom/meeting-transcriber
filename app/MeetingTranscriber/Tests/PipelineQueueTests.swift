@@ -2275,6 +2275,53 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// A transcript-write failure during the re-run rewrite (e.g. the output
+    /// directory vanished) must degrade gracefully: the rewrite's catch swallows
+    /// it and the job still reaches a terminal state rather than wedging.
+    func testLateRerunTranscriptWriteFailureIsNonFatal() async throws {
+        let (pQueue, mockDiar, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Write Fail Test",
+            transcriptSegments: [
+                TimestampedSegment(start: 0, end: 5, text: "Hello"),
+                TimestampedSegment(start: 5, end: 10, text: "World"),
+            ],
+        )
+
+        // Force the rewrite's write to fail: delete the protocols directory so
+        // the atomic write to the job's transcriptPath has no parent. The
+        // persisted segments live in recordings/, so loadCachedSegments still
+        // succeeds and the failure lands in the write (not the no-segments early
+        // return). Confirm (not skip) so the job still reaches .done despite the
+        // now-missing transcript file.
+        try FileManager.default.removeItem(at: tmpDir.appendingPathComponent("protocols"))
+
+        mockDiar.resultToReturn = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_0"),
+                .init(start: 5, end: 10, speaker: "SPEAKER_1"),
+            ],
+            speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5], autoNames: [:],
+            embeddings: ["SPEAKER_0": [1, 0, 0], "SPEAKER_1": [0, 1, 0]],
+        )
+        pQueue.speakerNamingHandler = { _ in .confirmed([:]) }
+        let done = XCTestExpectation(description: "done despite write failure")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { done.fulfill() }
+        }
+        let transcriptPath = try XCTUnwrap(pQueue.jobs.first?.transcriptPath)
+        pQueue.completeSpeakerNaming(jobID: jobID, result: .rerun(2))
+        await fulfillment(of: [done], timeout: 60)
+
+        XCTAssertEqual(pQueue.jobs.first?.state, .done, "Write failure during re-segmentation must not wedge the job")
+        // Proves the write genuinely failed (exercising the rewrite's catch):
+        // the atomic write can't recreate the deleted parent directory, so no
+        // transcript file exists afterwards.
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: transcriptPath.path),
+            "The rewrite write must have failed (no parent dir), exercising the catch path",
+        )
+    }
+
     /// Factory helper for the mode-override integration tests. Returns a
     /// `MockDiarization` with `.mode` set + a small fixture result keyed off
     /// the mode, so the two test bodies can verify which provider was used.
