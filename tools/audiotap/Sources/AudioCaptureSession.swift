@@ -15,9 +15,29 @@ public class AudioCaptureSession {
     private let micDeviceUID: String?
     private let debugLogging: Bool
 
-    private var appCapture: AppAudioCapture?
+    private var appCapture: (any AppAudioCapturing)?
     private var micCapture: MicCaptureHandler?
     private var appFileHandle: FileHandle?
+
+    /// Selects the system/app-audio capture backend.
+    enum AudioBackend {
+        /// ScreenCaptureKit — captures conferencing apps (Teams/Zoom) correctly.
+        case screenCaptureKit
+        /// CoreAudio process tap — lighter, but misses Teams/Zoom downlink.
+        case processTap
+    }
+
+    /// Backend resolved from `MEETINGTRANSCRIBER_AUDIO_BACKEND`. Defaults to
+    /// ScreenCaptureKit because the process tap captures only silence for
+    /// Teams/Zoom calls; set `catap` to opt back into the process tap.
+    static var selectedBackend: AudioBackend {
+        switch ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_AUDIO_BACKEND"]?.lowercased() {
+        case "catap", "processtap", "tap":
+            .processTap
+        default:
+            .screenCaptureKit
+        }
+    }
 
     public init(
         pid: pid_t,
@@ -48,17 +68,32 @@ public class AudioCaptureSession {
         )
         let handle = try FileHandle(forWritingTo: appOutputURL)
 
-        let capture = AppAudioCapture(
-            pid: pid,
-            outputFileDescriptor: handle.fileDescriptor,
-            sampleRate: sampleRate,
-            channels: channels,
-            debugLogging: debugLogging,
-        )
+        let capture: any AppAudioCapturing
+        switch Self.selectedBackend {
+        case .screenCaptureKit:
+            capture = SCKAudioCapture(
+                outputFileDescriptor: handle.fileDescriptor,
+                sampleRate: sampleRate,
+                channels: channels,
+                debugLogging: debugLogging,
+            )
+        case .processTap:
+            capture = AppAudioCapture(
+                pid: pid,
+                outputFileDescriptor: handle.fileDescriptor,
+                sampleRate: sampleRate,
+                channels: channels,
+                debugLogging: debugLogging,
+            )
+        }
         do {
             try capture.start()
         } catch {
             try? handle.close()
+            // Don't leave a 0-byte temp file behind when tap creation fails
+            // (e.g. -12988 permission denied) — DualSourceRecorder's stop()
+            // cleanup path doesn't run because start() threw.
+            try? FileManager.default.removeItem(at: appOutputURL)
             throw error
         }
         appFileHandle = handle

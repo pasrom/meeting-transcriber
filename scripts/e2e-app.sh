@@ -195,6 +195,7 @@ require_command curl
 require_command jq
 require_command swift
 require_command codesign
+require_command python3  # scripts/wav_rms.py — app-track silence guard
 
 [ -f "$SIMULATOR_FIXTURE" ] || fail "simulator fixture not found: $SIMULATOR_FIXTURE"
 
@@ -493,6 +494,29 @@ run_one_record_only_meeting() {
     # → expect > 64 KB even after worst-case truncation.
     [ "$mix_size" -gt 65536 ] || fail "$label: mix WAV suspiciously small: $mix_size bytes (expected > 64 KB)"
     log "$label: mix WAV $mix_path ($mix_size bytes)"
+
+    # The mix-size check above only proves bytes were written — a fully silent
+    # app track (the Teams/Zoom "all-zeros capture" failure mode) is byte-for-
+    # byte the same size as a good one, and the mic can mask it in the mix via
+    # speaker bleed. So assert the *app* track itself carries energy: the
+    # simulator plays the fixture for the whole meeting, so a silent app track
+    # means system-audio capture is broken (e.g. wrong/regressed backend).
+    local app_filename app_path app_dbfs app_min
+    app_min="${E2E_APP_TRACK_MIN_DBFS:--60}"
+    app_filename="$(jq -r '.files.app // empty' "$sidecar")"
+    if [ -n "$app_filename" ]; then
+        app_path="$sidecar_dir/$app_filename"
+        [ -f "$app_path" ] || fail "$label: app track WAV not found: $app_path"
+        app_dbfs="$(python3 "$SCRIPT_DIR/wav_rms.py" "$app_path")" \
+            || fail "$label: could not measure app track RMS ($app_path)"
+        if awk -v v="$app_dbfs" -v t="$app_min" 'BEGIN { exit !(v > t) }'; then
+            log "$label: app track $app_filename energy ${app_dbfs} dBFS (> ${app_min}) — capture OK"
+        else
+            fail "$label: app track $app_filename is SILENT (${app_dbfs} dBFS ≤ ${app_min} dBFS) — system-audio capture produced no signal. Conferencing apps (Teams/Zoom) are silent under the CATapDescription process tap; the SCK backend is required. Check AudioCaptureSession.selectedBackend / MEETINGTRANSCRIBER_AUDIO_BACKEND."
+        fi
+    else
+        log "$label: sidecar has no app track (.files.app null) — skipping app-track energy check"
+    fi
 
     # Negative: record-only short-circuits before VAD/transcription/protocol.
     # No `.txt`/`.md` files from THIS meeting should exist in recordings/.

@@ -134,7 +134,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
 | `FluidVAD.swift` | VAD preprocessing via FluidAudio Silero v6 — silence trimming + `VadSegmentMap` timeline remapping |
-| `tools/audiotap/Sources/` | AudioTapLib — CATapDescription-based app audio capture (SPM library) |
+| `tools/audiotap/Sources/` | AudioTapLib — app audio capture (SPM library); ScreenCaptureKit default + CATapDescription fallback |
 
 ### Support
 
@@ -234,14 +234,24 @@ Configurable in **Settings → Audio → Per-Channel Indicator**: master toggle 
 ### Capture
 
 ```
-AudioTapLib (CATapDescription)
-├─ Input: App PID → CoreAudio process tap → aggregate device
+AudioTapLib (default: ScreenCaptureKit; fallback: CATapDescription)
+├─ Input: system audio mix (all apps − self) → SCStream(capturesAudio)
 ├─ Output: Interleaved float32 (mono or stereo) → FileHandle (raw PCM)
 ├─ Mic: AVAudioEngine → mono WAV file (MicCaptureHandler)
 └─ Metadata: micDelay, actualSampleRate, actualChannels via AudioCaptureResult
 ```
 
-**Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
+**Backends** (`AppAudioCapturing`, selected by `AudioCaptureSession`):
+
+- **`SCKAudioCapture` (default)** — ScreenCaptureKit. Captures conferencing apps
+  (Microsoft Teams, Zoom) whose call audio is rendered through WebRTC /
+  Voice-Processing pipelines a process tap reads back as zero-filled silence.
+  Follows output-device changes automatically. Requires Screen Recording
+  permission.
+- **`AppAudioCapture`** — CoreAudio `CATapDescription` global process tap. Lower
+  overhead but silent for Teams/Zoom; opt back in with
+  `MEETINGTRANSCRIBER_AUDIO_BACKEND=catap`. Recreates the tap on output-device
+  changes.
 
 ### Processing (DualSourceRecorder.stop())
 
