@@ -11,6 +11,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     AppState.swift         # @Observable @MainActor composition root: wires the concern controllers (engines/watching/pipeline/permissions/channelHealth/liveTranscription/rpc) + exposes derived UI props (badge, status label)
     AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
     EngineController.swift   # @Observable @MainActor engine selection + model lifecycle controller (language/vocabulary sync, preload)
+    EngineModelState.swift  # App-owned model lifecycle state enum (unloaded/downloading/loading/loaded), decoupled from WhisperKit's ModelState; RPC wire contract
     AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
     MenuBarView.swift      # Menu bar dropdown UI
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
@@ -27,16 +28,20 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
       View+RecordOnly.swift      # `recordOnlyDisabled(_:)` SwiftUI modifier (dim + disable downstream sections)
       PickerLanguages.swift      # Language picker entries for WhisperKit and Parakeet language selectors
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
+    SpeakerNamingStore.swift # Disk persistence for per-job speaker-naming sidecars (extracted from PipelineQueue; keyed by per-job slug under outputDir/recordings/)
     KnownVoicesView.swift  # Speaker DB management UI (rename, delete, merge entries)
     RecognitionStatsView.swift # Recognition stats display (aggregate counts from recognition_log.jsonl)
+    ProcessingStatsView.swift  # Processing stats display (per-stage wall-clock durations from stage_timing.jsonl)
     VoiceEnrollmentView.swift  # Voice enrollment sheet (seed speakers.json from audio file)
     AppPickerView.swift    # App picker for manual recording
     LiveCaptionsState.swift # @Observable live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types
     LiveCaptionsOverlay.swift # SwiftUI caption-bar content (recent finals + per-channel hypotheses) hosted in LiveCaptionsWindow
     LiveCaptionsWindowController.swift # Borderless click-through NSPanel hosting the caption overlay (⌥-drag to reposition; origin persisted)
-    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming)
+    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming | Nemotron multilingual streaming)
     LiveCaptionsGate.swift   # Pure decision logic for live captions routing (which pipeline per channel, shared by AppState + controller)
     EouStreamingCaptionSession.swift # EOU streaming caption session (FluidAudio end-of-utterance ASR, UtteranceRingBuffer-backed)
+    NemotronStreamingCaptionSession.swift # Nemotron multilingual streaming caption session (FluidAudio Nemotron ASR + Silero VAD, language-driven backend for non-English and Latin-script languages)
+    NemotronAsrManager.swift  # Production FluidAudio Nemotron model + Silero VAD wrapper used by NemotronStreamingCaptionSession
     UtteranceRingBuffer.swift # Rolling 16 kHz sample buffer addressable by absolute timestamp (feeds EOU streaming)
     PairedImportPanelDelegate.swift  # NSOpenPanel delegate + accessory view for paired dual-source file import
     PairedRecordingResolver.swift    # Groups recording URLs into dual-source groups for reimport
@@ -59,6 +64,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     LiveSpeakerMatcher.swift  # Actor for real-time speaker matching in live captions overlay (same WeSpeaker model as batch path)
     StoredSpeaker.swift    # Codable speaker DB entry model (centroid + FIFO embeddings + metadata)
     RecognitionStats.swift # Recognition event logging + aggregate stats model (recognition_log.jsonl)
+    StageTimingStats.swift # Pipeline stage timing stats model + StageKind enum + stage_timing.jsonl read/write (backs ProcessingStatsView)
     RecordingSidecar.swift # Metadata sidecar written next to dual-source recordings in record-only mode
     RecordingFileSuffix.swift  # Filename suffixes for dual-source recordings (_app.wav, _mic.wav, _mix.wav)
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
@@ -71,6 +77,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     JobStatusDTO.swift      # Wire shape for GET /v1/jobs/<id> (live job or persisted terminal record)
     NamingStatusDTO.swift   # Wire shape for GET /v1/jobs/<id>/naming (speaker labels + auto-name suggestions, no embeddings)
     LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
+    LiveTranscriptionController+Nemotron.swift # Injectable Nemotron pipeline factory for LiveTranscriptionController (file-length split; tests substitute a fake factory for model-load-failure fallback coverage)
     LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
     ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
     ClaudeCLIProtocolGenerator.swift # Claude CLI subprocess protocol generation (#if !APPSTORE)
@@ -105,6 +112,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     PersistentDiagnosticLog.swift # Persistent log stream subprocess with sliding-window restart policy
     String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
     DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
+    IdempotencyStore.swift # Bounded FIFO Idempotency-Key→job-IDs dedup map for the /v1 automation API (#if !APPSTORE)
     DebugRPCServer+Metrics.swift # GET /metrics handler (line-cap split from DebugRPCServer.route)
     DebugRPCServer+V1.swift # /v1/jobs automation-API routing (line-cap split from DebugRPCServer.route)
     HTTPRequest.swift      # HTTP/1.1 request parsing for DebugRPCServer (line-cap split)
@@ -190,12 +198,14 @@ scripts/
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
   e2e-live-captions.sh     # E2E driver asserting on in-flight liveCaptions.recentFinals RPC state (complements e2e-app.sh)
   e2e-cpu-load.sh          # E2E resource measurement: idle + recording-without-captions + recording-with-live-captions CPU/RAM of the deployed app via RPC /metrics deltas (logs trends, gates only a generous idle-CPU catastrophe bound)
+  e2e-permission-health.sh # E2E test for permission-health probes: asserts Screen Recording + Microphone probes report "healthy" via RPC /state on a correctly-configured runner
   setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + manual TCC grants keyed on cert SHA-1 (needed before e2e-app.sh works)
   generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
   generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
   generate_test_audio_with_silence.sh # Generate 2-speaker fixture with engineered silence block for VAD E2E tests
   generate_quality_fixtures.sh # Generate WER/DER quality ground-truth fixtures (WAV + truth JSON, requires sox)
-  build_perf_report.sh     # Build performance analysis: CI run history → job duration trends + slowdown alerts
+  build_perf_report.py     # Python implementation of the build performance trend analyzer (reads per-job timing JSONL, emits Markdown report; used by build-perf-tracking.yml)
+  build_perf_report.sh     # Build performance analysis wrapper: CI run history → job duration trends + slowdown alerts
   configure-tag-ruleset.sh  # Configure/update GitHub Tag Ruleset for stable-tag protection (idempotent)
   lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
   test_rpc.sh               # Live smoketest for DebugRPCServer (build + launch + drive via mt-cli + assert)

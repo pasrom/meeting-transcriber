@@ -97,8 +97,10 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics · About |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `SpeakerNamingStore.swift` | Disk persistence for per-job speaker-naming sidecars (naming JSON, 16 kHz WAVs, segments JSON) — extracted from `PipelineQueue`; keyed by per-job slug |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
+| `ProcessingStatsView.swift` | Processing stats display — per-stage wall-clock durations from `stage_timing.jsonl`; helps users understand whether a long-running job is normal |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
 | `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
@@ -129,12 +131,16 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `PipelineSnapshot.swift` | Pure I/O helpers for persisting `PipelineQueue` jobs to disk (atomic rename) |
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
 | `LiveTranscriptionController.swift` | Wires `StreamingTranscriber` to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` (PoC) |
+| `LiveTranscriptionController+Nemotron.swift` | Injectable Nemotron pipeline factory for `LiveTranscriptionController` (file-length split; tests substitute a fake factory for model-load-failure fallback coverage) |
 | `LiveTranscriptionCoordinator.swift` | `@Observable` coordinator: builds + arms `LiveTranscriptionController`, feeds `LiveCaptionsState` |
-| `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (WhisperKit word-level \| EOU streaming) |
+| `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (WhisperKit word-level \| EOU streaming \| Nemotron multilingual streaming) |
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing — which pipeline per channel; shared by `AppState`, coordinator, and controller |
 | `EouStreamingCaptionSession.swift` | EOU streaming caption session via FluidAudio end-of-utterance ASR, backed by `UtteranceRingBuffer` |
+| `NemotronStreamingCaptionSession.swift` | Nemotron multilingual streaming caption session (FluidAudio Nemotron ASR + Silero VAD); language-driven backend for non-English and Latin-script languages |
+| `NemotronAsrManager.swift` | Production FluidAudio Nemotron model + Silero VAD wrapper used by `NemotronStreamingCaptionSession`; split into its own file so real CoreML models are not pulled into unit tests |
 | `UtteranceRingBuffer.swift` | Rolling 16 kHz sample buffer addressable by absolute ms timestamp (feeds EOU streaming session) |
 | `EngineController.swift` | `@Observable @MainActor` engine selection + model lifecycle controller (language/vocabulary sync, preload) |
+| `EngineModelState.swift` | App-owned model lifecycle state enum (`unloaded`/`downloading`/`loading`/`loaded`), decoupled from WhisperKit's `ModelState`; RPC wire contract (lowercased string) |
 | `PipelineController.swift` | `@Observable` controller owning `PipelineQueue` lifecycle (wired by `AppState`) |
 | `WatchingController.swift` | `@Observable` controller owning `WatchLoop` lifecycle (wired by `AppState`) |
 | `WavHeaderRepair.swift` | Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix) |
@@ -203,11 +209,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `NotificationManager.swift` | macOS notifications |
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
 | `RecognitionStats.swift` | Recognition event model + `recognition_log.jsonl` reader/writer — backs `RecognitionStatsView` |
+| `StageTimingStats.swift` | Pipeline stage timing stats model + `StageKind` enum + `stage_timing.jsonl` read/write — backs `ProcessingStatsView` |
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 | `DebugRPCServer.swift` | Embedded HTTP RPC server for shell-driven inspection. `#if !APPSTORE`, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`. Bearer-token + Origin reject; binds 127.0.0.1 only |
+| `IdempotencyStore.swift` | Bounded FIFO `Idempotency-Key`→job-IDs dedup map for the `/v1` automation API; in-memory per `DebugRPCServer` instance. `#if !APPSTORE` |
 | `AppState+RPC.swift` | Builds `RPCStateSnapshot` from live `AppState` for the `/state` endpoint (`#if !APPSTORE`) |
 | `RPCStateSnapshot.swift` | JSON-serializable RPC state snapshot type (`#if !APPSTORE`) |
 | `Bundle+AppVersion.swift` | Bundle extension: `appVersion` + `gitCommitHash` from `Info.plist` |
