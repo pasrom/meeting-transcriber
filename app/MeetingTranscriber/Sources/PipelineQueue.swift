@@ -672,24 +672,6 @@ class PipelineQueue {
         let combined: DiarizationResult?
     }
 
-    /// What the speaker-naming step decided for one diarization result: either
-    /// re-run diarization with a new speaker count, or finalize with this
-    /// speaker→name mapping.
-    private enum SpeakerNamingOutcome {
-        case rerun(Int)
-        case finalized([String: String])
-    }
-
-    /// Per-run matcher outputs needed to update the speaker DB and write
-    /// recognition forensics once the user confirms the naming dialog.
-    private struct RecognitionContext {
-        let matcher: SpeakerMatcher
-        let embeddings: [String: [Float]]
-        let speakingTimes: [String: TimeInterval]
-        let suggested: [String: String]
-        let topCandidates: [String: [TopCandidate]]
-    }
-
     /// Typed errors thrown by the pipeline stages.
     enum PipelineError: LocalizedError {
         case missingMixPath
@@ -898,31 +880,23 @@ class PipelineQueue {
         let mix16k = try await ensureMixAudio(workDir: workDir, ctx: ctx)
 
         do {
-            // Diarization + naming loop: re-runs if the user requests a
-            // different speaker count.
-            var speakerCount = numSpeakers > 0 ? numSpeakers : nil
+            let speakerCount = numSpeakers > 0 ? numSpeakers : nil
+            let run = try await runDiarization(
+                diarizeProcess: diarizeProcess, useDualTrack: transcription.isDualSource,
+                speakerCount: speakerCount, workDir: workDir, ctx: ctx,
+            )
+            // Match against the speaker DB and park the job for the (possibly
+            // late) naming dialog. A speaker-count/mode re-run is no longer an
+            // in-line loop here; it's driven after the job reaches
+            // `.speakerNamingPending` via `completeSpeakerNaming`, so both the
+            // interactive UI and the test handler take the same path.
             var autoNames: [String: String] = [:]
-            var run = DiarizationRun(app: nil, mic: nil, combined: nil)
-
-            namingLoop: while true {
-                run = try await runDiarization(
-                    diarizeProcess: diarizeProcess, useDualTrack: transcription.isDualSource,
-                    speakerCount: speakerCount, workDir: workDir, ctx: ctx,
-                )
-                guard let currentDiarization = run.combined else { break }
-                switch await resolveSpeakerNames(
+            if let currentDiarization = run.combined {
+                autoNames = resolveSpeakerNames(
                     diarization: currentDiarization, ctx: ctx,
                     diarizeProcess: diarizeProcess, isDualSource: transcription.isDualSource,
                     outputDir: outputDir,
-                ) {
-                case let .rerun(count):
-                    speakerCount = count
-                    continue namingLoop
-
-                case let .finalized(names):
-                    autoNames = names
-                }
-                break namingLoop
+                )
             }
 
             if let labeled = try await labeledTranscript(
@@ -1036,15 +1010,18 @@ class PipelineQueue {
     }
 
     /// Match a diarization result against the speaker DB, persist naming data +
-    /// recognition forensics, and drive the speaker-naming dialog. Returns
-    /// `.rerun` when the user asks for a different speaker count (the caller
-    /// loops), or `.finalized` with the speaker→name mapping to apply.
+    /// recognition forensics, and return the auto-name mapping to apply to the
+    /// transcript. Parks the job for the (possibly late) naming dialog by
+    /// stashing `SpeakerNamingData`; the dialog is driven later by
+    /// `completeSpeakerNaming`, so this stage never blocks the pipeline. A job
+    /// that opts out via `autoSkipNaming` (headless blocking-transcribe)
+    /// finishes on the auto-names without a dialog.
     private func resolveSpeakerNames(
         diarization: DiarizationResult, ctx: JobContext,
         diarizeProcess: any DiarizationProvider, isDualSource: Bool, outputDir: URL,
-    ) async -> SpeakerNamingOutcome {
+    ) -> [String: String] {
         // No embeddings → no matching or dialog; keep the diarizer's own names.
-        guard let embeddings = diarization.embeddings else { return .finalized(diarization.autoNames) }
+        guard let embeddings = diarization.embeddings else { return diarization.autoNames }
 
         let matcher = speakerMatcherFactory()
         let verbose = matcher.matchVerbose(embeddings: embeddings)
@@ -1096,78 +1073,20 @@ class PipelineQueue {
         stashedSuggestedAtDialog[ctx.jobID] = suggestedAtDialog
         stashedTopCandidates[ctx.jobID] = topCandidates
 
-        let recog = RecognitionContext(
-            matcher: matcher, embeddings: embeddings, speakingTimes: diarization.speakingTimes,
-            suggested: suggestedAtDialog, topCandidates: topCandidates,
-        )
-        return await applyNamingHandler(namingData: namingData, autoNames: autoNames, recog: recog, ctx: ctx)
-    }
-
-    /// Run the speaker-naming dialog (if a handler is installed) and turn its
-    /// result into a `SpeakerNamingOutcome`. With no handler (production), stash
-    /// the data and finalize on the auto-names without blocking; the re-openable
-    /// dialog confirms later. `.confirmed` updates the speaker DB + records
-    /// recognition forensics from `recog`.
-    private func applyNamingHandler(
-        namingData: SpeakerNamingData, autoNames: [String: String],
-        recog: RecognitionContext, ctx: JobContext,
-    ) async -> SpeakerNamingOutcome {
         if jobs.first(where: { $0.id == ctx.jobID })?.autoSkipNaming == true {
             // Headless blocking-transcribe: accept the auto-assigned names
-            // inline (exactly like a `.skipped` dialog result) so the job
-            // finishes on its own. Don't stash naming data — there is no
-            // interactive client to resolve it, and parking would wedge the
-            // job until the next launch's 24h stale-cleanup.
-            return .finalized(autoNames)
+            // (exactly like a `.skipped` dialog result) so the job finishes on
+            // its own. Don't stash naming data: there is no interactive client
+            // to resolve it, and parking would wedge the job until the next
+            // launch's 24h stale-cleanup.
+            return autoNames
         }
-        guard let handler = speakerNamingHandler else {
-            // Production: stash data, don't block the pipeline. The notification
-            // is posted later — after the job transitions to
-            // .speakerNamingPending — so the window's onAppear doesn't auto-close
-            // it on a state mismatch.
-            speakerNamingDataByJob[ctx.jobID] = namingData
-            return .finalized(autoNames)
-        }
-
-        switch await handler(namingData) {
-        case let .confirmed(userMapping):
-            var confirmed = autoNames
-            for (label, name) in userMapping where !name.isEmpty {
-                confirmed[label] = name
-            }
-            updateSpeakerDB(
-                matcher: recog.matcher, mapping: confirmed,
-                embeddings: recog.embeddings, speakingTimes: recog.speakingTimes,
-            )
-            recordRecognition(
-                suggested: recog.suggested, userMapping: userMapping,
-                topCandidates: recog.topCandidates, jobID: ctx.jobID, title: ctx.title,
-            )
-            removeNamingData(jobID: ctx.jobID, slug: nil)
-            return .finalized(confirmed)
-
-        case let .rerun(count):
-            return beginRerun(count: count, jobID: ctx.jobID)
-
-        case let .rerunWithMode(_, count):
-            // Mode override is only honoured by the production
-            // completeSpeakerNaming -> lateDiarization path. The inline
-            // test-handler loop can't swap providers mid-iteration without
-            // rebuilding the factory; treat as a same-mode re-run.
-            return beginRerun(count: count, jobID: ctx.jobID, logSuffix: " (mode override ignored in inline path)")
-
-        case .skipped:
-            return .finalized(autoNames)
-        }
-    }
-
-    /// Transition back to diarizing for a speaker-count re-run and return the
-    /// `.rerun` outcome the naming loop acts on.
-    private func beginRerun(count: Int, jobID: UUID, logSuffix: String = "") -> SpeakerNamingOutcome {
-        updateJobState(id: jobID, to: .diarizing)
-        startElapsedTimer()
-        logger.info("Re-running diarization with \(count) speakers\(logSuffix)")
-        return .rerun(count)
+        // Production/interactive: stash the naming data so `generateAndSaveProtocol`
+        // parks the job at `.speakerNamingPending` and pops the (re-openable)
+        // dialog. The pipeline continues with the auto-names; the dialog confirms
+        // later via `completeSpeakerNaming` without blocking.
+        speakerNamingDataByJob[ctx.jobID] = namingData
+        return autoNames
     }
 
     /// Apply speaker names to the transcript for whichever topology the run
@@ -1282,13 +1201,25 @@ class PipelineQueue {
         }
 
         stopElapsedTimer()
-        if speakerNamingDataByJob[ctx.jobID] != nil {
+        if let namingData = speakerNamingDataByJob[ctx.jobID] {
             updateJobState(id: ctx.jobID, to: .speakerNamingPending)
             // Auto-pop the dialog now that the job is in the right state.
             // The window's onAppear guard reads pendingSpeakerNamingJobs,
             // which only includes .speakerNamingPending jobs, so the
             // notification has to come after the transition above.
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+            // Tests drive naming through an injected handler instead of the UI.
+            // Re-invoke it here, after the `.speakerNamingPending` transition,
+            // mirroring the late-rerun re-invocation, so the test path runs the
+            // exact same `completeSpeakerNaming` flow the production UI does
+            // (rerun/mode-override/skip cleanup all included) rather than a
+            // divergent in-line state machine.
+            if let handler = speakerNamingHandler {
+                Task {
+                    let result = await handler(namingData)
+                    self.completeSpeakerNaming(jobID: ctx.jobID, result: result)
+                }
+            }
         } else {
             updateJobState(id: ctx.jobID, to: .done)
         }
@@ -1353,6 +1284,12 @@ class PipelineQueue {
             matcher: matcher,
             mapping: fullMapping,
             embeddings: namingData.embeddings,
+            // Thread the per-speaker speaking times so the matcher's
+            // centroid-quality filter (short segments stay as fallback samples,
+            // long ones seed the centroid) sees real durations. The now-deleted
+            // in-line confirm path passed these; production dropped them. Keep
+            // the richer signal.
+            speakingTimes: namingData.speakingTimes,
         )
 
         if let transcriptPath = jobs[jobIndex].transcriptPath {

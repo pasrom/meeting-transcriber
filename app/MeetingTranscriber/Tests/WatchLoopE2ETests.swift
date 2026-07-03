@@ -404,8 +404,17 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
 
         XCTAssertEqual(queue.jobs.count, 1)
 
+        // The naming handler now runs after the job reaches
+        // `.speakerNamingPending`, in a detached Task that outlives
+        // `processNext()`, so wait for the terminal state before asserting.
+        let done = XCTestExpectation(description: "job reaches a terminal state")
+        queue.onJobStateChange = { _, _, newState in
+            if newState == .done || newState == .error { done.fulfill() }
+        }
+
         // Process the job (real transcription + real diarization)
         await queue.processNext()
+        await fulfillment(of: [done], timeout: 120)
 
         // Verify protocol was generated
         XCTAssertTrue(mockProtocol.generateCalled, "Protocol generator should have been called")

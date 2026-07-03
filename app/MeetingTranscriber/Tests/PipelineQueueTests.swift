@@ -1126,6 +1126,14 @@ final class PipelineQueueTests: XCTestCase {
             return .skipped
         }
 
+        // The handler now runs after the job reaches `.speakerNamingPending`
+        // (the production flow), in a detached Task that outlives
+        // `processNext()`, so wait for the terminal state before asserting.
+        let done = XCTestExpectation(description: "job reaches done")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { done.fulfill() }
+        }
+
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Naming Test",
@@ -1135,6 +1143,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         pQueue.enqueue(job)
         await pQueue.processNext()
+        await fulfillment(of: [done], timeout: 10)
 
         XCTAssertTrue(handlerCalled)
     }
@@ -1159,6 +1168,11 @@ final class PipelineQueueTests: XCTestCase {
 
         pQueue.speakerNamingHandler = { _ in .skipped }
 
+        let done = XCTestExpectation(description: "job reaches a terminal state")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done || newState == .error { done.fulfill() }
+        }
+
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Skip Test",
@@ -1168,6 +1182,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         pQueue.enqueue(job)
         await pQueue.processNext()
+        await fulfillment(of: [done], timeout: 10)
 
         // Should complete without error (auto names used)
         let finalState = pQueue.jobs.first?.state
@@ -1201,6 +1216,14 @@ final class PipelineQueueTests: XCTestCase {
             return .skipped
         }
 
+        // First handler call (`.rerun`) drives a late re-diarization; the second
+        // (`.skipped`) finishes the job. All of that runs in detached Tasks after
+        // `processNext()` returns, so wait for the terminal state.
+        let done = XCTestExpectation(description: "job done after rerun")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { done.fulfill() }
+        }
+
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Rerun Test",
@@ -1210,6 +1233,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         pQueue.enqueue(job)
         await pQueue.processNext()
+        await fulfillment(of: [done], timeout: 60)
 
         // Handler should be called twice (first returns rerun, second returns skipped)
         XCTAssertEqual(callCount, 2)
@@ -1217,6 +1241,62 @@ final class PipelineQueueTests: XCTestCase {
         // run uses the default (nil → auto), second uses the rerun's count (3).
         XCTAssertEqual(mockDiar.runCount, 2)
         XCTAssertEqual(mockDiar.receivedNumSpeakers, [nil, 3])
+    }
+
+    /// The batch pipeline reaches `.speakerNamingPending`, then the injected
+    /// naming handler returns `.rerunWithMode`. The mode override must be
+    /// honoured end-to-end: routed through the mode-aware factory and written
+    /// back onto the job's `usedDiarizerMode`. The now-deleted in-line handler
+    /// path silently downgraded this to a same-mode re-run and had zero
+    /// coverage; converging both paths onto `completeSpeakerNaming` fixes it.
+    func testSpeakerNamingRerunWithModeThroughHandlerHonorsMode() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let offlineDiar = makeModeOverrideDiar(.offline)
+        let sortformerDiar = makeModeOverrideDiar(.sortformer)
+        let modeOverrideCalls = OSAllocatedUnfairLock<[DiarizerMode]>(initialState: [])
+        let (pQueue, _) = makeMockProcessingQueue(
+            engine: engine,
+            diarizationFactory: { offlineDiar },
+            diarizationFactoryWithMode: { mode in
+                modeOverrideCalls.withLock { $0.append(mode) }
+                return mode == .sortformer ? sortformerDiar : offlineDiar
+            },
+            diarizeEnabled: true,
+        )
+
+        var callCount = 0
+        pQueue.speakerNamingHandler = { _ in
+            callCount += 1
+            // First presentation: ask to re-run in Sortformer mode. Second
+            // presentation (after the mode-override re-diarization): accept.
+            return callCount == 1 ? .rerunWithMode(.sortformer, 4) : .confirmed([:])
+        }
+
+        let done = XCTestExpectation(description: "job done after mode-override rerun")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { done.fulfill() }
+        }
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Handler Mode Override", appName: "TestApp",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+        await fulfillment(of: [done], timeout: 60)
+
+        XCTAssertEqual(callCount, 2, "handler is re-invoked after the mode-override re-diarization")
+        XCTAssertEqual(
+            modeOverrideCalls.withLock(\.self), [.sortformer],
+            "the handler's mode override must route through the mode-aware factory",
+        )
+        XCTAssertEqual(
+            pQueue.jobs.first?.usedDiarizerMode, .sortformer,
+            "the honoured mode must be recorded on the job",
+        )
+        XCTAssertEqual(pQueue.jobs.first?.state, .done)
     }
 
     func testCompleteSpeakerNamingDoubleResumeIsNoOp() {
@@ -1662,6 +1742,13 @@ final class PipelineQueueTests: XCTestCase {
 
         pQueue.speakerNamingHandler = { _ in .confirmed(["SPEAKER_0": "Alice"]) }
 
+        // Confirm runs after `.speakerNamingPending`, in a detached Task that
+        // outlives `processNext()`, so wait for the terminal state.
+        let done = XCTestExpectation(description: "job done after confirm")
+        pQueue.onJobStateChange = { _, _, newState in
+            if newState == .done { done.fulfill() }
+        }
+
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Confirm Test",
@@ -1671,6 +1758,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         pQueue.enqueue(job)
         await pQueue.processNext()
+        await fulfillment(of: [done], timeout: 60)
 
         let finalState = pQueue.jobs.first?.state
         XCTAssertEqual(finalState, .done, "Confirmed naming should end as .done")
