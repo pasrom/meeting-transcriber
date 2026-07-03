@@ -557,9 +557,9 @@ class PipelineQueue {
     /// the recorded duration matches exactly what the menu's elapsed timer shows
     /// and excludes the speaker-naming pause (see `StageKind(jobState:)`).
     private func recordStageTransition(from oldState: JobState, to newState: JobState, jobID: UUID) {
-        // A same-state "transition" (e.g. the inline speaker-count rerun re-enters
-        // .diarizing while already .diarizing) is not a stage boundary — ignore it
-        // so it neither logs a partial event nor resets the start.
+        // A same-state "transition" (e.g. the confirm path re-enters
+        // .generatingProtocol while already .generatingProtocol) is not a stage
+        // boundary; ignore it so it neither logs a partial event nor resets the start.
         guard oldState != newState else { return }
         if let leaving = StageKind(jobState: oldState), let start = stageStartByJob.removeValue(forKey: jobID) {
             let elapsed = ContinuousClock.now - start
