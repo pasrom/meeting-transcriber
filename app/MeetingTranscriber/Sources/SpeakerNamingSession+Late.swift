@@ -13,8 +13,12 @@ extension SpeakerNamingSession {
     /// labels with user-provided names, update the matcher DB, regenerate the
     /// protocol with the correct names.
     func reapplySpeakerNames(jobID: UUID, mapping: [String: String]) async {
-        guard let namingData = speakerNamingDataByJob[jobID],
-              let job = delegate?.job(withID: jobID) else { return }
+        // Strong per-flow delegate capture (see `delegate`): keeps the queue
+        // alive until the transcript rewrite, protocol regeneration, and the
+        // final `.done` all land, even if the controller swaps queues mid-flow.
+        guard let delegate,
+              let namingData = speakerNamingDataByJob[jobID],
+              let job = delegate.job(withID: jobID) else { return }
 
         let slug = job.namingSlug
 
@@ -24,7 +28,7 @@ extension SpeakerNamingSession {
         for (label, name) in mapping where !name.isEmpty {
             fullMapping[label] = name
         }
-        delegate?.updateSpeakerDB(
+        delegate.updateSpeakerDB(
             matcher: matcher,
             mapping: fullMapping,
             embeddings: namingData.embeddings,
@@ -52,7 +56,7 @@ extension SpeakerNamingSession {
                 try FileManager.default.restrictToOwner(transcriptPath)
 
                 if let outputDir {
-                    await delegate?.generateProtocol(
+                    await delegate.generateProtocol(
                         jobID: jobID,
                         transcript: transcript,
                         title: job.meetingTitle,
@@ -65,7 +69,7 @@ extension SpeakerNamingSession {
         }
 
         removeNamingData(jobID: jobID, slug: slug)
-        delegate?.updateJobState(id: jobID, to: .done)
+        delegate.updateJobState(id: jobID, to: .done)
     }
 
     // MARK: - Late Re-diarization
@@ -86,8 +90,13 @@ extension SpeakerNamingSession {
         speakerCount: Int,
         mode: DiarizerMode? = nil,
     ) async {
-        guard let namingData = speakerNamingDataByJob[jobID],
-              let job = delegate?.job(withID: jobID),
+        // Strong per-flow delegate capture (see `delegate`): keeps the queue
+        // alive across the re-diarization await so the rewrite, metadata, and
+        // the return to `.speakerNamingPending` land even if the controller
+        // swaps queues mid-flow.
+        guard let delegate,
+              let namingData = speakerNamingDataByJob[jobID],
+              let job = delegate.job(withID: jobID),
               let diarizationFactory,
               let slug = job.namingSlug,
               let outputDir else {
@@ -102,7 +111,7 @@ extension SpeakerNamingSession {
             return
         }
 
-        delegate?.namingStageDidStart(jobID: jobID)
+        delegate.namingStageDidStart(jobID: jobID)
 
         do {
             let title = job.meetingTitle
@@ -112,7 +121,7 @@ extension SpeakerNamingSession {
                 isDualSource: namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
-            delegate?.namingStageDidEnd()
+            delegate.namingStageDidEnd()
 
             // Dual-track always yields a combined result (the merge or the
             // app-only fallback); single-source sets it directly.
@@ -122,7 +131,7 @@ extension SpeakerNamingSession {
                 diarization: combined, prior: namingData,
             ) else {
                 logger.warning("Late re-diarization produced no embeddings")
-                delegate?.updateJobState(id: jobID, to: .speakerNamingPending)
+                delegate.updateJobState(id: jobID, to: .speakerNamingPending)
                 return
             }
 
@@ -143,9 +152,9 @@ extension SpeakerNamingSession {
             // `setNamingMetadata` re-resolves the job by id, so the diarization
             // await outliving another job's `completedJobLifetime` eviction
             // (which shifts the queue's array) can't corrupt a stale index.
-            delegate?.setNamingMetadata(jobID: jobID, slug: nil, usedDiarizerMode: diarizeProcess.mode)
+            delegate.setNamingMetadata(jobID: jobID, slug: nil, usedDiarizerMode: diarizeProcess.mode)
 
-            delegate?.updateJobState(id: jobID, to: .speakerNamingPending)
+            delegate.updateJobState(id: jobID, to: .speakerNamingPending)
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
 
             if let handler = speakerNamingHandler {
@@ -154,8 +163,8 @@ extension SpeakerNamingSession {
             }
         } catch {
             logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
-            delegate?.namingStageDidEnd()
-            delegate?.updateJobState(id: jobID, to: .speakerNamingPending)
+            delegate.namingStageDidEnd()
+            delegate.updateJobState(id: jobID, to: .speakerNamingPending)
         }
     }
 
@@ -191,9 +200,10 @@ extension SpeakerNamingSession {
             // Mirror the batch path's mic-fail fallback: a silent/failing mic
             // track must degrade to the unprefixed app-only diarization, not
             // throw (a no-op re-run) or emit prefixed keys the persisted
-            // app-only transcript can't match. A deallocated delegate can't run
-            // the stage → surface it as `notAvailable` so `lateDiarization`
-            // rolls the job back to `.speakerNamingPending`.
+            // app-only transcript can't match. The weak var still resolves here
+            // because `lateDiarization`'s strong per-flow capture keeps the
+            // queue alive; the guard is defensive for any future non-flow
+            // caller → `notAvailable` rolls back to `.speakerNamingPending`.
             guard let delegate else { throw DiarizationError.notAvailable }
             return try await delegate.runDualTrackDiarization(
                 diarizeProcess: diarizer,

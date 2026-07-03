@@ -8,9 +8,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Speaker
 /// stale across an `await` when another finished job is evicted by
 /// `completedJobLifetime`, a documented past bug — so the session only ever
 /// addresses a job by its `UUID`. The queue owns the session strongly
-/// (`let naming`); the session holds this delegate weakly, so a deallocated
-/// queue turns every delegate call into a harmless no-op (optional chaining)
-/// instead of a crash or a retain cycle.
+/// (`let naming`); the session holds this delegate weakly at rest (no retain
+/// cycle) but captures it strongly per async flow, so an in-flight naming flow
+/// keeps the queue alive to completion while a flow started against an
+/// already-gone queue no-ops harmlessly. See `SpeakerNamingSession.delegate`.
 @MainActor
 protocol SpeakerNamingSessionDelegate: AnyObject {
     /// A value copy of the job, or nil if it is no longer tracked.
@@ -69,8 +70,20 @@ final class SpeakerNamingSession {
     typealias SpeakerNamingData = PipelineQueue.SpeakerNamingData
     typealias SpeakerNamingResult = PipelineQueue.SpeakerNamingResult
 
-    /// The queue. Weak so the queue can own the session strongly with no cycle;
-    /// a nil delegate makes every callback a no-op.
+    /// The queue. Weak *at rest* so the queue can own the session strongly with
+    /// no retain cycle; a nil delegate makes the synchronous callbacks no-ops.
+    ///
+    /// Long-running async flows (`reapplySpeakerNames`, `lateDiarization`,
+    /// `generateProtocolForExistingJob`) capture this strongly ONCE at flow
+    /// start and use the local reference throughout. The strong local keeps the
+    /// queue alive for the flow's duration, exactly like the pre-extraction
+    /// `self` capture on the queue's own Tasks did, so an in-flight confirm or
+    /// re-run survives a `PipelineController.rebuild()` queue swap instead of
+    /// dying half-way (transcript rewritten and sidecar deleted, but the
+    /// protocol and `.done` never landing, so the new queue re-processes the
+    /// job from auto-names and drops the user's corrections). The strong local
+    /// also keeps this weak var resolving for any helper that still reads it
+    /// mid-flow. Flows that start with an already-nil delegate no-op harmlessly.
     weak var delegate: (any SpeakerNamingSessionDelegate)?
 
     /// Disk persistence for speaker-naming sidecars (keyed by per-job slug).
@@ -191,27 +204,35 @@ final class SpeakerNamingSession {
 
         removeNamingData(jobID: jobID, slug: slug)
 
-        if canGenerateProtocol {
-            Task { await generateProtocolForExistingJob(jobID: jobID) }
+        // `canGenerateProtocol == true` implies the delegate was alive above
+        // (it resolved the job's transcriptPath); binding it here lets the Task
+        // closure hold the queue strongly from spawn (see `delegate`).
+        if canGenerateProtocol, let delegate {
+            Task { await generateProtocolForExistingJob(jobID: jobID, delegate: delegate) }
         } else if delegate?.job(withID: jobID)?.state == .speakerNamingPending {
             delegate?.updateJobState(id: jobID, to: .done)
         }
     }
 
-    private func generateProtocolForExistingJob(jobID: UUID) async {
-        guard let job = delegate?.job(withID: jobID),
+    /// Takes the delegate as a strong parameter (captured by the spawning Task
+    /// in `acceptAutoNames`) so the queue stays alive across the LLM-generation
+    /// await; see `delegate` for the keep-alive rationale.
+    private func generateProtocolForExistingJob(
+        jobID: UUID, delegate: any SpeakerNamingSessionDelegate,
+    ) async {
+        guard let job = delegate.job(withID: jobID),
               let transcriptPath = job.transcriptPath,
               let outputDir,
               let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8)
         else { return }
-        await delegate?.generateProtocol(
+        await delegate.generateProtocol(
             jobID: jobID,
             transcript: transcript,
             title: job.meetingTitle,
             protocolsDir: outputDir.appendingPathComponent("protocols"),
         )
-        if delegate?.job(withID: jobID)?.state == .generatingProtocol {
-            delegate?.updateJobState(id: jobID, to: .done)
+        if delegate.job(withID: jobID)?.state == .generatingProtocol {
+            delegate.updateJobState(id: jobID, to: .done)
         }
     }
 
