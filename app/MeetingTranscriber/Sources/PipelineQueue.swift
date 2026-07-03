@@ -4,6 +4,18 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "PipelineQueue")
 
+/// Raw diarization output for one run of the diarize loop. `combined` is the
+/// result fed into speaker naming (the prefixed dual-track merge, the app-only
+/// fallback, or the single-source result); `app`/`mic` are retained for the
+/// dual-track assignment step. Internal top-level (not `PipelineQueue`-nested)
+/// because it crosses the queue ↔ `SpeakerNamingSession` boundary in both
+/// directions via `SpeakerNamingSessionDelegate`.
+struct DiarizationRun {
+    let app: DiarizationResult?
+    let mic: DiarizationResult?
+    let combined: DiarizationResult?
+}
+
 @MainActor
 @Observable
 // swiftlint:disable:next attributes type_body_length
@@ -35,10 +47,6 @@ class PipelineQueue {
     let stageTimingLog: StageTimingLog?
 
     let completedJobLifetime: TimeInterval
-
-    /// Disk persistence for speaker-naming sidecars (keyed by per-job slug).
-    /// Pure I/O over `outputDir`; see `SpeakerNamingStore`.
-    private let namingStore: SpeakerNamingStore
 
     /// Durable store of finished-job records for the automation API readback.
     /// nil (default) disables it; production injects one, tests opt in.
@@ -76,61 +84,28 @@ class PipelineQueue {
 
     // MARK: - Speaker Naming
 
-    /// Data for the speaker naming popup.
-    struct SpeakerNamingData: Codable {
-        let jobID: UUID
-        let meetingTitle: String
-        let mapping: [String: String] // label → auto-matched name or label
-        let speakingTimes: [String: TimeInterval]
-        let embeddings: [String: [Float]]
-        let audioPath: URL? // 16kHz mix for playback
-        let segments: [Segment] // for extracting speaker snippets
-        let participants: [String] // Teams participant names as suggestions
-        let isDualSource: Bool
-        /// Per-instance identity for SwiftUI `.onChange` change-detection.
-        /// Late re-diarization can produce a `mapping`/`speakingTimes` set
-        /// that compares byte-equal to the previous run (same speaker count,
-        /// same matcher output) — without a fresh marker, the naming view's
-        /// per-presentation reset never fires and consecutive Re-run clicks
-        /// are silently swallowed by the `completedJobID` guard. Excluded
-        /// from CodingKeys so disk reloads regenerate it.
-        var revision: UUID = .init()
+    /// Owns the speaker-naming session (dialog, sidecars, recognition
+    /// forensics, late re-run). Held strongly; the session holds this queue as
+    /// a *weak* delegate, so there's no retain cycle. Exposed as a stored
+    /// property so SwiftUI observation follows into the nested `@Observable`
+    /// when the UI reads the forwarders below.
+    let naming: SpeakerNamingSession
 
-        private enum CodingKeys: String, CodingKey {
-            case jobID, meetingTitle, mapping, speakingTimes, embeddings,
-                 audioPath, segments, participants, isDualSource
-        }
-
-        struct Segment: Codable {
-            let start: TimeInterval
-            let end: TimeInterval
-            let speaker: String
-        }
+    /// RAM cache of naming data, owned by `naming`. Forwarded (get + set) so the
+    /// direct-dict reads at `PipelineController` / `AppState+RPC` and the tests
+    /// keep working AND keep observing the session's storage.
+    var speakerNamingDataByJob: [UUID: SpeakerNamingData] {
+        get { naming.speakerNamingDataByJob }
+        set { naming.speakerNamingDataByJob = newValue }
     }
 
-    /// Result from the speaker naming popup.
-    enum SpeakerNamingResult {
-        case confirmed([String: String]) // user confirmed with mapping
-        case rerun(Int) // re-run diarization with N speakers (current mode)
-        /// Re-run diarization with a different mode AND speaker count. New in
-        /// the Mode↔Count-coupling follow-up: lets the user recover from a
-        /// wrong-mode-at-recording-time (e.g. Sortformer's 4-speaker cap hit
-        /// on a 6-speaker meeting) without leaving the naming dialog.
-        case rerunWithMode(DiarizerMode, Int)
-        case skipped // user skipped
+    /// Handler for speaker naming, owned by `naming`. Forwarded so tests can set
+    /// it on the queue as before. When set, called instead of the default
+    /// continuation-based popup.
+    var speakerNamingHandler: ((SpeakerNamingData) async -> SpeakerNamingResult)? {
+        get { naming.speakerNamingHandler }
+        set { naming.speakerNamingHandler = newValue }
     }
-
-    /// RAM cache of naming data, rebuilt from disk on loadSnapshot().
-    /// Internal setter allows test access via @testable import.
-    var speakerNamingDataByJob: [UUID: SpeakerNamingData] = [:]
-
-    /// Per-job snapshot of the auto-name suggestions shown in the dialog,
-    /// kept until the user confirms/skips so `recordRecognition` can write
-    /// the JSONL row. Cleared on completion. Not persisted across launches —
-    /// if the user confirms in a fresh session, the recognition log row will
-    /// have nil/empty `autoName` (acceptable; user data is the real signal).
-    private var stashedSuggestedAtDialog: [UUID: [String: String]] = [:]
-    private var stashedTopCandidates: [UUID: [String: [TopCandidate]]] = [:]
 
     /// The currently displayed naming data (first pending item).
     var pendingSpeakerNaming: SpeakerNamingData? {
@@ -163,113 +138,21 @@ class PipelineQueue {
         jobs.filter { $0.state == .speakerNamingPending }
     }
 
-    /// Called by the UI when the user confirms, skips, or re-runs speaker naming.
-    /// Always handles "late" completion — the pipeline never blocks on naming.
+    /// Called by the UI (and the test handler) when the user confirms, skips, or
+    /// re-runs speaker naming. Thin forwarder to the naming session, which
+    /// always handles "late" completion — the pipeline never blocks on naming.
     func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
-        guard let data = speakerNamingDataByJob[jobID] else { return }
-        let slug = jobs.first { $0.id == jobID }?.namingSlug
-
-        switch result {
-        case let .confirmed(userMapping):
-            recordRecognition(
-                jobID: jobID, title: data.meetingTitle,
-                userMapping: userMapping, fallback: data.mapping,
-            )
-            // Transition out of .speakerNamingPending synchronously so the
-            // UI's close-when-empty check sees the change immediately. The
-            // transcript rewrite + protocol generation happens async below.
-            if let idx = jobs.firstIndex(where: { $0.id == jobID }),
-               jobs[idx].state == .speakerNamingPending {
-                updateJobState(id: jobID, to: .generatingProtocol)
-            }
-            Task { await reapplySpeakerNames(jobID: jobID, mapping: userMapping) }
-
-        case let .rerun(count):
-            Task { await lateDiarization(jobID: jobID, speakerCount: count) }
-
-        case let .rerunWithMode(mode, count):
-            Task { await lateDiarization(jobID: jobID, speakerCount: count, mode: mode) }
-
-        case .skipped:
-            recordRecognition(
-                jobID: jobID, title: data.meetingTitle,
-                userMapping: nil, fallback: data.mapping,
-            )
-            acceptAutoNames(jobID: jobID, slug: slug)
-        }
+        naming.completeSpeakerNaming(jobID: jobID, result: result)
     }
 
-    /// Pull stashed forensics for a job and write the recognition-stats row.
-    /// Falls back to the original SpeakerNamingData mapping when the stash is
-    /// missing (e.g. the user confirmed in a fresh app session).
-    private func recordRecognition(
-        jobID: UUID, title: String,
-        // swiftlint:disable:next discouraged_optional_collection
-        userMapping: [String: String]?, fallback: [String: String],
-    ) {
-        recordRecognition(
-            suggested: stashedSuggestedAtDialog[jobID] ?? fallback,
-            userMapping: userMapping,
-            topCandidates: stashedTopCandidates[jobID] ?? [:],
-            jobID: jobID,
-            title: title,
-        )
-    }
-
-    /// Skipped or stale-cleanup path: the user accepted (implicitly or by
-    /// timeout) the auto-names. Drops sidecar files synchronously, transitions
-    /// to .done. If a protocol generator is configured AND the transcript file
-    /// exists, fires off protocol generation in the background; the job
-    /// transitions through .generatingProtocol → .done as that completes.
-    private func acceptAutoNames(jobID: UUID, slug: String?) {
-        // Probe the factory's actual output, not just its existence — the
-        // closure is wired even when protocolProvider is `.none`, but
-        // returns nil. Without this, the Task path below fizzles silently
-        // (generateProtocol guards on factory()) and the job sits in
-        // .speakerNamingPending forever.
-        let canGenerateProtocol = (protocolGeneratorFactory?() != nil)
-            && outputDir != nil
-            && jobs.first { $0.id == jobID }?.transcriptPath != nil
-
-        removeNamingData(jobID: jobID, slug: slug)
-
-        if canGenerateProtocol {
-            Task { await generateProtocolForExistingJob(jobID: jobID) }
-        } else if let idx = jobs.firstIndex(where: { $0.id == jobID }),
-                  jobs[idx].state == .speakerNamingPending {
-            updateJobState(id: jobID, to: .done)
-        }
-    }
-
-    private func generateProtocolForExistingJob(jobID: UUID) async {
-        guard let jobIndex = jobs.firstIndex(where: { $0.id == jobID }),
-              let transcriptPath = jobs[jobIndex].transcriptPath,
-              let outputDir,
-              let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8)
-        else { return }
-        await generateProtocol(
-            jobID: jobID,
-            transcript: transcript,
-            title: jobs[jobIndex].meetingTitle,
-            protocolsDir: outputDir.appendingPathComponent("protocols"),
-        )
-        if let idx = jobs.firstIndex(where: { $0.id == jobID }),
-           jobs[idx].state == .generatingProtocol {
-            updateJobState(id: jobID, to: .done)
-        }
-    }
-
-    /// Called by the UI when the user confirms or skips speaker naming.
+    /// Called by the UI when the user confirms or skips speaker naming without a
+    /// specific job in hand — resolves the first pending job (or any stashed
+    /// naming data) and forwards to the session.
     func completeSpeakerNaming(result: SpeakerNamingResult) {
-        if let jobID = pendingSpeakerNamingJobs.first?.id ?? speakerNamingDataByJob.keys.first {
-            completeSpeakerNaming(jobID: jobID, result: result)
+        if let jobID = pendingSpeakerNamingJobs.first?.id ?? naming.speakerNamingDataByJob.keys.first {
+            naming.completeSpeakerNaming(jobID: jobID, result: result)
         }
     }
-
-    /// Handler for speaker naming. When set, called instead of the default
-    /// continuation-based popup. Receives naming data, returns result.
-    /// Used by tests to auto-complete without UI interaction.
-    var speakerNamingHandler: ((SpeakerNamingData) async -> SpeakerNamingResult)?
 
     /// Default factory for `speakerMatcherFactory`: a matcher that writes to a
     /// throwaway tmp path. Production callers (AppState) MUST inject an explicit
@@ -310,8 +193,12 @@ class PipelineQueue {
         self.recognitionStatsLog = nil
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
-        self.namingStore = SpeakerNamingStore(outputDir: nil)
         self.terminalJobStore = terminalJobStore
+        naming = SpeakerNamingSession(
+            namingStore: SpeakerNamingStore(outputDir: nil),
+            speakerMatcherFactory: speakerMatcherFactory,
+        )
+        naming.delegate = self
     }
 
     // MARK: - Known speaker names (issue #155)
@@ -344,7 +231,10 @@ class PipelineQueue {
     /// Apply a speaker DB update via the matcher AND refresh the cached
     /// names in one step. Use instead of calling `matcher.updateDB(...)` +
     /// `refreshKnownSpeakerNames()` separately at internal pipeline sites.
-    private func updateSpeakerDB(
+    /// Internal (not private) because it is the `SpeakerNamingSessionDelegate`
+    /// witness the session calls from `reapplySpeakerNames`; keeping the
+    /// write+refresh pairing here preserves its atomicity (issue #155).
+    func updateSpeakerDB(
         matcher: SpeakerMatcher,
         mapping: [String: String],
         embeddings: [String: [Float]],
@@ -400,8 +290,17 @@ class PipelineQueue {
         self.recognitionStatsLog = recognitionStatsLog
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
-        self.namingStore = SpeakerNamingStore(outputDir: outputDir)
         self.terminalJobStore = terminalJobStore
+        naming = SpeakerNamingSession(
+            namingStore: SpeakerNamingStore(outputDir: outputDir),
+            speakerMatcherFactory: speakerMatcherFactory,
+            diarizationFactory: diarizationFactory,
+            diarizationFactoryWithMode: diarizationFactoryWithMode,
+            protocolGeneratorFactory: protocolGeneratorFactory,
+            outputDir: outputDir,
+            recognitionStatsLog: recognitionStatsLog,
+        )
+        naming.delegate = self
         refreshStageAverages()
     }
 
@@ -478,14 +377,14 @@ class PipelineQueue {
         case .transcribing, .diarizing, .generatingProtocol:
             cancelledJobIDs.insert(id)
             processTask?.cancel()
-            removeNamingData(jobID: id, slug: slug)
+            naming.removeNamingData(jobID: id, slug: slug)
             jobs.remove(at: index)
             saveSnapshot()
 
         case .speakerNamingPending:
             // User cancelled while waiting for late-confirm — drop the sidecar
             // files and the in-memory state so it doesn't sit around.
-            removeNamingData(jobID: id, slug: slug)
+            naming.removeNamingData(jobID: id, slug: slug)
             jobs.remove(at: index)
             saveSnapshot()
 
@@ -660,16 +559,6 @@ class PipelineQueue {
         /// Segments cached for diarization reuse (avoids double transcription).
         let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
-    }
-
-    /// Raw diarization output for one run of the diarize loop. `combined` is the
-    /// result fed into speaker naming (the prefixed dual-track merge, the
-    /// app-only fallback, or the single-source result); `app`/`mic` are retained
-    /// for the dual-track assignment step.
-    private struct DiarizationRun {
-        let app: DiarizationResult?
-        let mic: DiarizationResult?
-        let combined: DiarizationResult?
     }
 
     /// Typed errors thrown by the pipeline stages.
@@ -892,8 +781,9 @@ class PipelineQueue {
             // interactive UI and the test handler take the same path.
             var autoNames: [String: String] = [:]
             if let currentDiarization = run.combined {
-                autoNames = resolveSpeakerNames(
-                    diarization: currentDiarization, ctx: ctx,
+                autoNames = naming.resolveSpeakerNames(
+                    diarization: currentDiarization,
+                    job: (jobID: ctx.jobID, title: ctx.title, slug: ctx.slug, participants: ctx.participants),
                     diarizeProcess: diarizeProcess, isDualSource: transcription.isDualSource,
                     outputDir: outputDir,
                 )
@@ -970,10 +860,10 @@ class PipelineQueue {
     /// required; on mic failure the `combined` result is the *unprefixed* app
     /// diarization — so downstream naming keys stay consistent with the
     /// persisted app-only transcript — rather than the `R_`/`M_`-prefixed merge.
-    /// Shared by the batch (`runDiarization`) and late re-run
-    /// (`runLateDiarization`) paths so the mic-fail fallback can't diverge
-    /// between them.
-    private func runDualTrackDiarization(
+    /// Shared by the batch (`runDiarization`) and the session's late re-run so
+    /// the mic-fail fallback can't diverge between them. Internal (not private)
+    /// because it is a `SpeakerNamingSessionDelegate` witness.
+    func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
         tracks: (app: URL, mic: URL, micDelay: TimeInterval),
         speakerCount: Int?, title: String, jobID: UUID,
@@ -1009,86 +899,6 @@ class PipelineQueue {
         return DiarizationRun(app: appDiarization, mic: micDiarization, combined: combined)
     }
 
-    /// Match a diarization result against the speaker DB, persist naming data +
-    /// recognition forensics, and return the auto-name mapping to apply to the
-    /// transcript. Parks the job for the (possibly late) naming dialog by
-    /// stashing `SpeakerNamingData`; the dialog is driven later by
-    /// `completeSpeakerNaming`, so this stage never blocks the pipeline. A job
-    /// that opts out via `autoSkipNaming` (headless blocking-transcribe)
-    /// finishes on the auto-names without a dialog.
-    private func resolveSpeakerNames(
-        diarization: DiarizationResult, ctx: JobContext,
-        diarizeProcess: any DiarizationProvider, isDualSource: Bool, outputDir: URL,
-    ) -> [String: String] {
-        // No embeddings → no matching or dialog; keep the diarizer's own names.
-        guard let embeddings = diarization.embeddings else { return diarization.autoNames }
-
-        let matcher = speakerMatcherFactory()
-        let verbose = matcher.matchVerbose(embeddings: embeddings)
-        let matched = verbose.mapValues(\.assignedName)
-        var autoNames = matched
-        let topCandidates = verbose.mapValues(\.topCandidates)
-
-        // Pre-match participants to remaining speakers.
-        if !ctx.participants.isEmpty {
-            autoNames = SpeakerMatcher.preMatchParticipants(
-                mapping: autoNames,
-                speakingTimes: diarization.speakingTimes,
-                participants: ctx.participants,
-            )
-        }
-
-        let suggestedAtDialog = autoNames
-        let autoMatched = matched.count { $0.key != $0.value }
-        logger.info("[recognition] \(matched.count) speakers, \(autoMatched) auto, \(matched.count - autoMatched) unknown")
-
-        // Use persisted 16kHz path (survives workDir cleanup).
-        let persistedAudioPath = outputDir.appendingPathComponent("recordings")
-            .appendingPathComponent("\(ctx.slug)_16k.wav")
-        let namingData = SpeakerNamingData(
-            jobID: ctx.jobID,
-            meetingTitle: ctx.title,
-            mapping: autoNames,
-            speakingTimes: diarization.speakingTimes,
-            embeddings: embeddings,
-            audioPath: persistedAudioPath,
-            segments: diarization.segments.map { seg in
-                SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
-            },
-            participants: ctx.participants,
-            isDualSource: isDualSource,
-        )
-
-        // Persist naming data and set slug early.
-        saveNamingData(namingData, slug: ctx.slug)
-        if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
-            jobs[idx].namingSlug = ctx.slug
-            jobs[idx].usedDiarizerMode = diarizeProcess.mode
-        }
-        stopElapsedTimer()
-
-        // Stash recognition forensics so the late-confirm path can write the
-        // JSONL row when the user actually confirms (possibly later, via the
-        // re-openable dialog).
-        stashedSuggestedAtDialog[ctx.jobID] = suggestedAtDialog
-        stashedTopCandidates[ctx.jobID] = topCandidates
-
-        if jobs.first(where: { $0.id == ctx.jobID })?.autoSkipNaming == true {
-            // Headless blocking-transcribe: accept the auto-assigned names
-            // (exactly like a `.skipped` dialog result) so the job finishes on
-            // its own. Don't stash naming data: there is no interactive client
-            // to resolve it, and parking would wedge the job until the next
-            // launch's 24h stale-cleanup.
-            return autoNames
-        }
-        // Production/interactive: stash the naming data so `generateAndSaveProtocol`
-        // parks the job at `.speakerNamingPending` and pops the (re-openable)
-        // dialog. The pipeline continues with the auto-names; the dialog confirms
-        // later via `completeSpeakerNaming` without blocking.
-        speakerNamingDataByJob[ctx.jobID] = namingData
-        return autoNames
-    }
-
     /// Apply speaker names to the transcript for whichever topology the run
     /// produced (dual-track, mic-fail app-only fallback, or single-source),
     /// returning the labeled transcript — or `nil` when no diarization is
@@ -1118,9 +928,11 @@ class PipelineQueue {
     /// transcript segments: pick the topology, assign speakers, merge
     /// consecutive blocks, and format. Shared by the batch path
     /// (`labeledTranscript`) and the late re-diarization rewrite
-    /// (`rewriteTranscriptFromLateRun`) so both re-segment identically. Returns
-    /// nil when the run carries no usable diarization.
-    private func renderLabeledTranscript(
+    /// (the session's `rewriteTranscriptFromLateRun`) so both re-segment
+    /// identically. Returns nil when the run carries no usable diarization.
+    /// Internal (not private) because it is a `SpeakerNamingSessionDelegate`
+    /// witness.
+    func renderLabeledTranscript(
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
         isDualSource: Bool, autoNames: [String: String],
     ) -> String? {
@@ -1193,7 +1005,7 @@ class PipelineQueue {
         // confirm (with the right names) or on skip/stale-cleanup (with
         // the current auto-names). Saves an LLM call we'd otherwise
         // have to redo.
-        if speakerNamingDataByJob[ctx.jobID] == nil {
+        if naming.speakerNamingDataByJob[ctx.jobID] == nil {
             await generateProtocol(
                 jobID: ctx.jobID, transcript: finalTranscript, title: ctx.title,
                 protocolsDir: protocolsDir,
@@ -1201,7 +1013,7 @@ class PipelineQueue {
         }
 
         stopElapsedTimer()
-        if let namingData = speakerNamingDataByJob[ctx.jobID] {
+        if let namingData = naming.speakerNamingDataByJob[ctx.jobID] {
             updateJobState(id: ctx.jobID, to: .speakerNamingPending)
             // Auto-pop the dialog now that the job is in the right state.
             // The window's onAppear guard reads pendingSpeakerNamingJobs,
@@ -1213,13 +1025,9 @@ class PipelineQueue {
             // mirroring the late-rerun re-invocation, so the test path runs the
             // exact same `completeSpeakerNaming` flow the production UI does
             // (rerun/mode-override/skip cleanup all included) rather than a
-            // divergent in-line state machine.
-            if let handler = speakerNamingHandler {
-                Task {
-                    let result = await handler(namingData)
-                    self.completeSpeakerNaming(jobID: ctx.jobID, result: result)
-                }
-            }
+            // divergent in-line state machine. The session captures `self`
+            // (the session) strongly for the op duration, never the delegate.
+            naming.invokeHandler(jobID: ctx.jobID, data: namingData)
         } else {
             updateJobState(id: ctx.jobID, to: .done)
         }
@@ -1229,9 +1037,10 @@ class PipelineQueue {
 
     /// Run the LLM protocol generator over a transcript, save the .md file,
     /// stash its path on the job. No-op if no protocol generator is configured.
-    /// Used by: main pipeline (if no naming pending), reapplySpeakerNames
-    /// (after confirm), skipped/stale paths (with current auto-names).
-    private func generateProtocol(
+    /// Used by: main pipeline (if no naming pending) and the session's
+    /// reapplySpeakerNames / skipped / stale paths. Internal (not private)
+    /// because it is a `SpeakerNamingSessionDelegate` witness.
+    func generateProtocol(
         jobID: UUID, transcript: String, title: String, protocolsDir: URL,
     ) async {
         guard let protocolGeneratorFactory, let generator = protocolGeneratorFactory() else {
@@ -1263,335 +1072,14 @@ class PipelineQueue {
         }
     }
 
-    // MARK: - Late re-apply speaker names
-
-    /// Late-confirm path: read the saved transcript, replace generic speaker
-    /// labels with user-provided names, update the matcher DB, regenerate the
-    /// protocol with the correct names.
-    private func reapplySpeakerNames(jobID: UUID, mapping: [String: String]) async {
-        guard let namingData = speakerNamingDataByJob[jobID],
-              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }) else { return }
-
-        let slug = jobs[jobIndex].namingSlug
-
-        // Update speaker matcher DB
-        let matcher = speakerMatcherFactory()
-        var fullMapping = namingData.mapping
-        for (label, name) in mapping where !name.isEmpty {
-            fullMapping[label] = name
-        }
-        updateSpeakerDB(
-            matcher: matcher,
-            mapping: fullMapping,
-            embeddings: namingData.embeddings,
-            // Thread the per-speaker speaking times so the matcher's
-            // centroid-quality filter (short segments stay as fallback samples,
-            // long ones seed the centroid) sees real durations. The now-deleted
-            // in-line confirm path passed these; production dropped them. Keep
-            // the richer signal.
-            speakingTimes: namingData.speakingTimes,
-        )
-
-        if let transcriptPath = jobs[jobIndex].transcriptPath {
-            do {
-                var transcript = try String(contentsOf: transcriptPath, encoding: .utf8)
-                // Format from `TimestampedSegment.formattedLine`: `[MM:SS] Speaker: text`.
-                // Anchor the replace on `] ` + label + `:` so we hit the speaker
-                // slot and not a substring inside the spoken text.
-                for (label, name) in mapping where !name.isEmpty {
-                    transcript = transcript.replacingOccurrences(of: "] \(label):", with: "] \(name):")
-                    if let autoName = namingData.mapping[label], autoName != label, autoName != name {
-                        transcript = transcript.replacingOccurrences(of: "] \(autoName):", with: "] \(name):")
-                    }
-                }
-                try transcript.write(to: transcriptPath, atomically: true, encoding: .utf8)
-                // Re-applying speaker names rewrites the transcript — keep it
-                // owner-only (the original save in saveTranscript already is).
-                try FileManager.default.restrictToOwner(transcriptPath)
-
-                if let outputDir {
-                    await generateProtocol(
-                        jobID: jobID,
-                        transcript: transcript,
-                        title: jobs[jobIndex].meetingTitle,
-                        protocolsDir: outputDir.appendingPathComponent("protocols"),
-                    )
-                }
-            } catch {
-                logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
-            }
-        }
-
-        removeNamingData(jobID: jobID, slug: slug)
-        updateJobState(id: jobID, to: .done)
-    }
-
-    // MARK: - Late Re-diarization
-
-    /// Re-run diarization from persisted 16kHz audio after pipeline completed.
-    ///
-    /// - Parameters:
-    ///   - jobID: the job to re-diarize.
-    ///   - speakerCount: target speaker count (ignored by Sortformer mode).
-    ///   - mode: optional override for the diarizer mode. `nil` (default)
-    ///     keeps the original behaviour — re-instantiate the diarizer with
-    ///     the current global setting via `diarizationFactory()`. Non-nil
-    ///     uses `diarizationFactoryWithMode` to instantiate a one-off
-    ///     diarizer in the requested mode, so the user can recover from a
-    ///     wrong-mode-at-recording-time without leaving the naming dialog.
-    private func lateDiarization(
-        jobID: UUID,
-        speakerCount: Int,
-        mode: DiarizerMode? = nil,
-    ) async {
-        guard let namingData = speakerNamingDataByJob[jobID],
-              let jobIndex = jobs.firstIndex(where: { $0.id == jobID }),
-              let diarizationFactory,
-              let slug = jobs[jobIndex].namingSlug,
-              let outputDir else {
-            logger.warning("Cannot re-diarize: missing data or configuration")
-            return
-        }
-
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
-        let diarizeProcess = resolveLateDiarizer(mode: mode, defaultFactory: diarizationFactory)
-        guard diarizeProcess.isAvailable else {
-            logger.warning("Diarization not available for late re-run")
-            return
-        }
-
-        updateJobState(id: jobID, to: .diarizing)
-        startElapsedTimer()
-
-        do {
-            let title = jobs[jobIndex].meetingTitle
-            let run = try await runLateDiarization(
-                diarizer: diarizeProcess,
-                recording: (dir: recordingsDir, slug: slug, jobID: jobID, micDelay: jobs[jobIndex].micDelay),
-                isDualSource: namingData.isDualSource,
-                speakerCount: speakerCount, title: title,
-            )
-            stopElapsedTimer()
-
-            // Dual-track always yields a combined result (the merge or the
-            // app-only fallback); single-source sets it directly.
-            guard let combined = run.combined else { throw DiarizationError.notAvailable }
-            guard let newNamingData = buildNamingData(
-                jobID: jobID, title: title,
-                diarization: combined, prior: namingData,
-            ) else {
-                logger.warning("Late re-diarization produced no embeddings")
-                updateJobState(id: jobID, to: .speakerNamingPending)
-                return
-            }
-
-            speakerNamingDataByJob[jobID] = newNamingData
-            saveNamingData(newNamingData, slug: slug)
-            // Re-segment the saved transcript to match the fresh diarization.
-            // A re-run can change the speaker count and segment boundaries, but
-            // the late-confirm path only renames labels already present in the
-            // .txt — so without this rewrite any speakers the re-run adds never
-            // reach the transcript. Mirrors the batch path, which renders the
-            // transcript from its final run.
-            rewriteTranscriptFromLateRun(
-                run: run, autoNames: newNamingData.mapping,
-                isDualSource: namingData.isDualSource, slug: slug, jobID: jobID,
-            )
-            // Track which mode produced this fresh naming data so the next
-            // dialog open initialises the mode picker correctly. Re-resolve the
-            // index by id: the diarization await can outlive another finished
-            // job's `completedJobLifetime` eviction, which shifts the array and
-            // would invalidate the `jobIndex` captured before the await.
-            if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
-                jobs[idx].usedDiarizerMode = diarizeProcess.mode
-            }
-
-            updateJobState(id: jobID, to: .speakerNamingPending)
-            NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
-
-            if let handler = speakerNamingHandler {
-                let result = await handler(newNamingData)
-                completeSpeakerNaming(jobID: jobID, result: result)
-            }
-        } catch {
-            logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
-            stopElapsedTimer()
-            updateJobState(id: jobID, to: .speakerNamingPending)
-        }
-    }
-
-    /// Resolve the diarizer for a late re-run: a mode override uses the
-    /// mode-aware factory (falling back to `defaultFactory` plus a warning when
-    /// none is wired); `nil` keeps the current global setting.
-    private func resolveLateDiarizer(
-        mode: DiarizerMode?, defaultFactory: () -> any DiarizationProvider,
-    ) -> any DiarizationProvider {
-        if let mode, let factory = diarizationFactoryWithMode {
-            return factory(mode)
-        }
-        if let mode {
-            logger.warning(
-                "Late re-diarize requested mode=\(mode.rawValue, privacy: .public) but no mode-aware factory wired; falling back to global setting",
-            )
-        }
-        return defaultFactory()
-    }
-
-    /// Re-diarize the persisted 16 kHz audio for a job. Dispatches between
-    /// dual-source (separate app + mic tracks merged) and single-source
-    /// (mix only). Pure I/O helper extracted from `lateDiarization` to
-    /// keep its function body under the lint cap.
-    private func runLateDiarization(
-        diarizer: any DiarizationProvider,
-        recording: (dir: URL, slug: String, jobID: UUID, micDelay: TimeInterval),
-        isDualSource: Bool,
-        speakerCount: Int,
-        title: String,
-    ) async throws -> DiarizationRun {
-        let (recordingsDir, slug, jobID, micDelay) = recording
-        if isDualSource {
-            // Mirror the batch path's mic-fail fallback (via the shared helper):
-            // a silent/failing mic track must degrade to the unprefixed app-only
-            // diarization, not throw (a no-op re-run) or emit prefixed keys the
-            // persisted app-only transcript can't match.
-            return try await runDualTrackDiarization(
-                diarizeProcess: diarizer,
-                tracks: (
-                    app: recordingsDir.appendingPathComponent("\(slug)_app_16k.wav"),
-                    mic: recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav"),
-                    micDelay: micDelay,
-                ),
-                speakerCount: speakerCount, title: title, jobID: jobID,
-            )
-        }
-        let mix16k = recordingsDir.appendingPathComponent("\(slug)_16k.wav")
-        let diarization = try await diarizer.run(
-            audioPath: mix16k, numSpeakers: speakerCount, meetingTitle: title,
-        )
-        return DiarizationRun(app: nil, mic: nil, combined: diarization)
-    }
-
-    /// Build SpeakerNamingData from fresh diarization, reusing context from prior naming data.
-    private func buildNamingData(
-        jobID: UUID, title: String,
-        diarization: DiarizationResult, prior: SpeakerNamingData,
-    ) -> SpeakerNamingData? {
-        guard let embeddings = diarization.embeddings else { return nil }
-
-        let matcher = speakerMatcherFactory()
-        var autoNames = matcher.match(embeddings: embeddings)
-        if !prior.participants.isEmpty {
-            autoNames = SpeakerMatcher.preMatchParticipants(
-                mapping: autoNames,
-                speakingTimes: diarization.speakingTimes,
-                participants: prior.participants,
-            )
-        }
-
-        return SpeakerNamingData(
-            jobID: jobID, meetingTitle: title, mapping: autoNames,
-            speakingTimes: diarization.speakingTimes, embeddings: embeddings,
-            audioPath: prior.audioPath,
-            segments: diarization.segments.map { seg in
-                SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
-            },
-            participants: prior.participants, isDualSource: prior.isDualSource,
-        )
-    }
-
-    /// Rewrite the persisted transcript so its speaker segmentation reflects a
-    /// fresh late re-diarization. Re-labels the cached transcript segments
-    /// (persisted as `<slug>_segments.json`) against the new run with the new
-    /// auto-names. A no-op when the cached segments are missing (older
-    /// recordings predating segment persistence) — the late-confirm rename then
-    /// falls back to the prior behaviour rather than wiping the transcript.
-    private func rewriteTranscriptFromLateRun(
-        run: DiarizationRun, autoNames: [String: String],
-        isDualSource: Bool, slug: String, jobID: UUID,
-    ) {
-        guard let outputDir,
-              let transcriptPath = jobs.first(where: { $0.id == jobID })?.transcriptPath else { return }
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
-        guard let cachedSegments = loadCachedSegments(dir: recordingsDir, slug: slug) else {
-            logger.warning("Late re-diarization: no persisted transcript segments — speaker labels not re-segmented")
-            // Don't let the re-run silently appear to succeed: an older recording
-            // (predating segment persistence) can't be re-segmented, so any
-            // speakers the re-run added won't reach the transcript.
-            addWarning(
-                id: jobID,
-                "This recording has no saved transcript segments, so the re-run's speaker changes could not be applied to the transcript",
-            )
-            return
-        }
-        guard let rebuilt = renderLabeledTranscript(
-            run: run, cachedSegments: cachedSegments,
-            isDualSource: isDualSource, autoNames: autoNames,
-        ) else { return }
-        do {
-            try rebuilt.write(to: transcriptPath, atomically: true, encoding: .utf8)
-            // Keep the rewritten transcript owner-only, matching the original save.
-            try FileManager.default.restrictToOwner(transcriptPath)
-        } catch {
-            // Error left redacted: the write target is `<title>_transcript.txt`,
-            // so a file-write error description would leak the meeting title.
-            logger.error("Late re-diarization: failed to rewrite transcript: \(error.localizedDescription)")
-        }
-    }
-
-    /// Load the transcript segments persisted by `generateAndSaveProtocol`
-    /// (`<slug>_segments.json`). Returns nil when the file is absent or
-    /// undecodable.
-    private func loadCachedSegments(dir: URL, slug: String)
-        -> [TimestampedSegment]? { // swiftlint:disable:this discouraged_optional_collection
-        let segPath = dir.appendingPathComponent("\(slug)_segments.json")
-        guard let data = try? Data(contentsOf: segPath),
-              let segments = try? JSONDecoder().decode([TimestampedSegment].self, from: data) else {
-            return nil
-        }
-        return segments
-    }
-
-    // MARK: - Speaker Naming Persistence
-
-    /// Persist naming data via `namingStore`, surfacing a per-job warning on
-    /// failure (the store stays I/O-only; the queue owns the job-state side
-    /// effect). A silent failure would mean late-confirm won't work after a
-    /// restart, so make it visible: log + warning on the job.
-    private func saveNamingData(_ data: SpeakerNamingData, slug: String) {
-        do {
-            try namingStore.save(data, slug: slug)
-        } catch {
-            // Error left redacted: the write target is `<title-slug>_naming.json`,
-            // so a file-write error description would leak the meeting title.
-            logger.error("Failed to save naming data: \(error.localizedDescription)")
-            addWarning(id: data.jobID, "Late re-confirm unavailable — naming data could not be persisted")
-        }
-    }
-
-    /// Remove all naming-related data for a job: RAM caches, disk JSON, and
-    /// sidecar files. Also clears the recognition-stats stash dicts so they
-    /// don't leak across rerun / stale-cleanup paths.
-    private func removeNamingData(jobID: UUID, slug: String?) {
-        speakerNamingDataByJob.removeValue(forKey: jobID)
-        stashedSuggestedAtDialog.removeValue(forKey: jobID)
-        stashedTopCandidates.removeValue(forKey: jobID)
-        namingStore.deleteNamingJSON(slug: slug)
-        namingStore.cleanupSidecarFiles(slug: slug)
-    }
+    // MARK: - Speaker Naming forwarders
 
     /// Auto-resolve pending naming items older than maxAge (default: 24h).
-    /// Generates the protocol with auto-names, transitions them to .done,
-    /// deletes sidecar files.
+    /// Thin forwarder passing the queue's already-filtered
+    /// `.speakerNamingPending` list to the session, which generates the protocol
+    /// with auto-names, transitions them to .done, and deletes sidecar files.
     func cleanupStalePending(maxAge: TimeInterval = 86400) {
-        let now = Date()
-        for job in jobs where job.state == .speakerNamingPending {
-            if now.timeIntervalSince(job.enqueuedAt) > maxAge {
-                logger.info("Auto-resolving stale pending naming for \(job.meetingTitle, privacy: .private)")
-                let jobID = job.id
-                let slug = job.namingSlug
-                acceptAutoNames(jobID: jobID, slug: slug)
-            }
-        }
+        naming.cleanupStalePending(pendingJobs: pendingSpeakerNamingJobs, maxAge: maxAge)
     }
 
     // MARK: - VAD Preprocessing
@@ -1679,16 +1167,16 @@ class PipelineQueue {
 
         jobs = loaded
 
-        // Rebuild speaker naming cache from disk for .speakerNamingPending jobs
+        // Rebuild the session's naming cache from disk for
+        // .speakerNamingPending jobs.
         for job in jobs where job.state == .speakerNamingPending {
-            if let slug = job.namingSlug, let data = namingStore.load(slug: slug) {
-                speakerNamingDataByJob[job.id] = data
-            } else {
-                // Naming data lost — transition to done
-                logger.warning("Naming data not found for job \(job.id), marking as done")
-                if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
-                    jobs[idx].state = .done
-                }
+            if let slug = job.namingSlug, naming.restore(jobID: job.id, slug: slug) {
+                continue
+            }
+            // Naming data lost — transition to done
+            logger.warning("Naming data not found for job \(job.id), marking as done")
+            if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                jobs[idx].state = .done
             }
         }
 
@@ -2012,32 +1500,34 @@ class PipelineQueue {
             logger.error("Failed to append pipeline log: \(error.localizedDescription, privacy: .public)")
         }
     }
+}
 
-    /// Build recognition events and persist them off the pipeline path. Logs
-    /// outcome counts immediately; JSONL append runs in a detached Task.
-    private func recordRecognition(
-        suggested: [String: String],
-        // swiftlint:disable:next discouraged_optional_collection
-        userMapping: [String: String]?,
-        topCandidates: [String: [TopCandidate]],
-        jobID: UUID,
-        title: String,
-    ) {
-        let events = RecognitionStats.buildEvents(
-            suggested: suggested, userMapping: userMapping,
-            topCandidates: topCandidates,
-            jobID: jobID, meetingTitle: title,
-        )
-        var counts: [RecognitionAction: Int] = [:]
-        for e in events {
-            counts[e.action, default: 0] += 1
-        }
-        let parts = RecognitionAction.allCases
-            .map { "\($0.rawValue)=\(counts[$0] ?? 0)" }
-            .joined(separator: " ")
-        logger.info("[recognition] outcome \(parts, privacy: .public)")
-        if let recognitionStatsLog {
-            Task { await recognitionStatsLog.append(events) }
-        }
+// MARK: - SpeakerNamingSessionDelegate
+
+extension PipelineQueue: SpeakerNamingSessionDelegate {
+    /// A value copy of the tracked job, addressed by id (never by a stale index).
+    func job(withID id: UUID) -> PipelineJob? {
+        jobs.first { $0.id == id }
+    }
+
+    /// Persist the per-job naming metadata on the (queue-owned) job. `nil` for
+    /// either field means "leave unchanged". Mutates `jobs` in place (no
+    /// snapshot write — matches the previous inline mutations).
+    func setNamingMetadata(jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?) {
+        guard let idx = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        if let slug { jobs[idx].namingSlug = slug }
+        if let usedDiarizerMode { jobs[idx].usedDiarizerMode = usedDiarizerMode }
+    }
+
+    /// Enter the diarizing stage for a late re-run: transition + start the
+    /// menu's elapsed timer (in that order, matching the original inline flow).
+    func namingStageDidStart(jobID: UUID) {
+        updateJobState(id: jobID, to: .diarizing)
+        startElapsedTimer()
+    }
+
+    /// Leave a timed naming stage.
+    func namingStageDidEnd() {
+        stopElapsedTimer()
     }
 }
