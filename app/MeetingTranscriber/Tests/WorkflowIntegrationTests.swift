@@ -102,6 +102,19 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
     }
 
+    /// Wait until the (single) job reaches a terminal state. Speaker naming was
+    /// converged onto the async production flow: the injected handler now runs
+    /// after the job reaches `.speakerNamingPending`, in a detached Task that
+    /// outlives `processNext()`. Tests asserting on the final state must wait
+    /// for it rather than reading it right after `processNext()` returns.
+    private func awaitJobTerminalState(_ queue: PipelineQueue, timeout: TimeInterval = 10) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let state = queue.jobs.first?.state, state == .done || state == .error { return }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     // MARK: - Happy Path: Single-Source, No Diarization
 
     func testWorkflowSingleSourceNoDiarization() async throws {
@@ -150,11 +163,21 @@ final class WorkflowIntegrationTests: XCTestCase {
         let job = makeJob(audioPath: h.audioPath)
         h.queue.enqueue(job)
         await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
 
-        // State transitions: waiting → transcribing → diarizing → generatingProtocol → done
+        // State transitions: waiting → transcribing → diarizing →
+        // speakerNamingPending → generatingProtocol → done. The confirm path
+        // re-enters .generatingProtocol (completeSpeakerNaming transitions the
+        // pending job, then the transcript-rewrite calls generateProtocol),
+        // which fires an identical consecutive state-change. Collapse those
+        // before comparing so the assertion pins the stage ORDER, not the
+        // production path's internal re-entry.
+        let stageOrder = collector.transitions.map(\.1).reduce(into: [JobState]()) { acc, state in
+            if acc.last != state { acc.append(state) }
+        }
         XCTAssertEqual(
-            collector.transitions.map(\.1),
-            [.transcribing, .diarizing, .generatingProtocol, .done],
+            stageOrder,
+            [.transcribing, .diarizing, .speakerNamingPending, .generatingProtocol, .done],
         )
 
         // Diarization called once, protocol generated
@@ -265,6 +288,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
         h.queue.enqueue(job)
         await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
         XCTAssertTrue(FileManager.default.fileExists(atPath: appURL.path), "user app source preserved")
@@ -400,6 +424,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         let job = try makeDualSourceJob(audioPath: h.audioPath)
         h.queue.enqueue(job)
         await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
 
         let finalJob = try XCTUnwrap(h.queue.jobs.first)
         XCTAssertEqual(finalJob.state, .done, "Pipeline must complete when only mic diarization fails")
@@ -443,6 +468,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         let job = makeJob(audioPath: h.audioPath)
         h.queue.enqueue(job)
         await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
 
         // Still completes even when naming is skipped
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
@@ -461,8 +487,11 @@ final class WorkflowIntegrationTests: XCTestCase {
         let job = makeJob(audioPath: h.audioPath)
         h.queue.enqueue(job)
         await h.queue.processNext()
+        await awaitJobTerminalState(h.queue, timeout: 30)
 
-        // Handler called twice (first rerun, then confirm), diarization ran twice
+        // Handler called twice (first rerun, then confirm), diarization ran twice.
+        // The rerun now routes through the late-diarization path
+        // (completeSpeakerNaming → lateDiarization), which re-diarizes once more.
         XCTAssertEqual(callCount, 2)
         XCTAssertGreaterThanOrEqual(h.diarization.runCount, 2)
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
