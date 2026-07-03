@@ -199,6 +199,118 @@ final class SpeakerNamingSessionTests: XCTestCase {
         XCTAssertNil(session.speakerNamingDataByJob[jobID])
     }
 
+    // MARK: - In-flight keep-alive
+
+    /// Records delegate activity into a box the test holds separately from the
+    /// mock, so assertions survive the mock itself being released mid-flow.
+    private final class FlowRecorder {
+        var jobs: [UUID: PipelineJob] = [:]
+        var transitions: [JobState] = []
+        var generateProtocolEntered = 0
+        var protocolGate: CheckedContinuation<Void, Never>?
+    }
+
+    /// Mock whose `generateProtocol` parks on a continuation, so the test can
+    /// deterministically release its own reference while the flow is in-flight.
+    private final class GatedMockDelegate: SpeakerNamingSessionDelegate {
+        let recorder: FlowRecorder
+
+        init(recorder: FlowRecorder) {
+            self.recorder = recorder
+        }
+
+        func job(withID id: UUID) -> PipelineJob? {
+            recorder.jobs[id]
+        }
+
+        func updateJobState(id: UUID, to newState: JobState, error _: String?) {
+            recorder.jobs[id]?.state = newState
+            recorder.transitions.append(newState)
+        }
+
+        func addWarning(id _: UUID, _: String) {}
+
+        func setNamingMetadata(jobID _: UUID, slug _: String?, usedDiarizerMode _: DiarizerMode?) {}
+
+        func updateSpeakerDB(
+            matcher _: SpeakerMatcher, mapping _: [String: String],
+            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval],
+        ) {}
+
+        func generateProtocol(jobID _: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
+            recorder.generateProtocolEntered += 1
+            await withCheckedContinuation { recorder.protocolGate = $0 }
+        }
+
+        func runDualTrackDiarization(
+            diarizeProcess _: any DiarizationProvider,
+            tracks _: (app: URL, mic: URL, micDelay: TimeInterval),
+            speakerCount _: Int?, title _: String, jobID _: UUID,
+        ) throws -> DiarizationRun {
+            throw DiarizationError.notAvailable
+        }
+
+        func renderLabeledTranscript(
+            run _: DiarizationRun, cachedSegments _: [TimestampedSegment],
+            isDualSource _: Bool, autoNames _: [String: String],
+        ) -> String? {
+            nil
+        }
+
+        func namingStageDidStart(jobID _: UUID) {}
+        func namingStageDidEnd() {}
+    }
+
+    /// Pins the strong per-flow delegate capture: the delegate is weak *at
+    /// rest*, but an in-flight confirm flow must keep the queue alive to
+    /// completion (pre-extraction, the queue's own Tasks captured `self`
+    /// strongly). Without the capture, a `PipelineController.rebuild()` queue
+    /// swap mid-flow would strand the job after the transcript rewrite +
+    /// sidecar deletion, and the rebuilt queue would re-process it from
+    /// auto-names, dropping the user's corrections.
+    func testInFlightConfirmFlowKeepsDelegateAliveAcrossRelease() async throws {
+        let tmp = try makeTempDirectory(prefix: "SpeakerNamingSessionTests")
+        let transcriptPath = tmp.appendingPathComponent("transcript.txt")
+        try "] SPEAKER_0: hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let session = makeSession(outputDir: tmp)
+        let recorder = FlowRecorder()
+        var mock: GatedMockDelegate? = GatedMockDelegate(recorder: recorder)
+        weak let weakMock = mock
+        session.delegate = mock
+
+        let job = pendingJob(namingSlug: "standup_abcd1234", transcriptPath: transcriptPath)
+        recorder.jobs[job.id] = job
+        session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
+
+        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]))
+
+        // Wait until the re-apply flow is provably in-flight (parked inside the
+        // delegate's generateProtocol, i.e. mid-"LLM generation").
+        await waitUntil { recorder.generateProtocolEntered == 1 }
+        XCTAssertEqual(recorder.generateProtocolEntered, 1)
+
+        // Release the test's only strong reference — models the controller
+        // swapping queues mid-flow. The flow's strong capture must keep the
+        // delegate (the queue) alive.
+        mock = nil
+        XCTAssertNotNil(weakMock, "in-flight flow holds the delegate strongly")
+        XCTAssertNotNil(session.delegate)
+
+        // Let the protocol generation finish: the flow completes against the
+        // captured delegate, landing the final `.done`.
+        recorder.protocolGate?.resume()
+        recorder.protocolGate = nil
+        await waitUntil { recorder.transitions.contains(.done) }
+        XCTAssertEqual(recorder.transitions, [.generatingProtocol, .done])
+
+        // Once the flow ends, the weak-at-rest delegate zeroes — the per-flow
+        // capture is bounded, not a leak.
+        await waitUntil { weakMock == nil }
+        XCTAssertNil(weakMock, "delegate released once the flow completes")
+        XCTAssertNil(session.delegate)
+    }
+
     // MARK: - No-arg forwarder resolution
 
     func testHandlerIsInvokedAfterParking() async {
