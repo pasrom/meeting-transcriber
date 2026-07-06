@@ -5,6 +5,16 @@ name: E2E (Production App)
 
 on:
   workflow_dispatch:
+  # Label-gated PR runs. Deliberately `pull_request`, NOT
+  # `pull_request_target`: this workflow checks out and executes the PR head
+  # on a self-hosted Mac mini with a real signing identity and TCC grants, so
+  # untrusted fork code must never run automatically. Under `pull_request` a
+  # fork PR only reaches the runner when a maintainer consciously applies the
+  # `run-e2e` label (the job `if:` below is the gate); the label IS the
+  # human approval step. `pull_request_target` would run in the base-repo
+  # context with a writable token and is unsafe for a code-executing lane.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
     # No paths-filter. Stable-tag ruleset requires a *push*-event check-run
     # on the SHA; `workflow_dispatch`-created check-runs don't satisfy the
@@ -21,12 +31,23 @@ on:
 # Live-recording E2E mutates host state (deploys the bundle, runs the
 # meeting-simulator which plays audio through the speakers). Two parallel
 # runs would race for the recorder; serialise.
+#
+# Non-PR events keep the existing behaviour exactly: the group falls back to
+# github.ref (refs/heads/main for push/schedule/dispatch), so those runs share
+# one group and queue rather than race, and cancel-in-progress stays false so
+# main-push and nightly runs are never cancelled. PR events group per PR number
+# and set cancel-in-progress true, so pushing new commits to a labeled PR
+# supersedes its own in-flight run without disturbing main/nightly.
 concurrency:
-  group: e2e-app-${{ github.ref }}
-  cancel-in-progress: false
+  group: e2e-app-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-app:
+    # Non-PR events (push/schedule/dispatch) always run; PR events run only
+    # when a maintainer applied the `run-e2e` label (see the pull_request
+    # trigger comment for why the label is the fork-execution approval gate).
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
     # `audio` label pins the job to the runner that has exclusive access
     # to the BlackHole virtual input device. A second runner on the same
     # Mini handles other self-hosted workloads in parallel without
