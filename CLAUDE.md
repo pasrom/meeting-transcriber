@@ -445,7 +445,8 @@ you're validating:
   (Parakeet, WhisperKit, WatchLoop) feed pre-recorded `two_speakers_de.wav`
   into the components and assert on transcripts.
 - Triggered on `workflow_dispatch`, every push to `main`, and label-gated
-  PR runs (apply the `run-e2e` label to a PR).
+  PR runs (apply the `run-e2e` label to a same-repo PR; fork PRs are
+  excluded from the self-hosted lanes).
 - No live recording — `DualSourceRecorder` is bypassed; tests substitute
   fixture WAVs at the same point the recorder would emit them.
 - Strengths: fast, deterministic, isolates engine logic; runs in xctest's
@@ -461,8 +462,10 @@ you're validating:
 - Triggered on `workflow_dispatch`, every `push` to main (no paths-filter
   — so the stable-tag ruleset always has a push-event check-run on the
   SHA), a nightly cron at 04:30 UTC, and label-gated PR runs (apply the
-  `run-e2e` label; on a fork PR the label is the maintainer approval gate,
-  since this lane executes PR code on the self-hosted Mac mini).
+  `run-e2e` label; same-repo branches only — fork PRs never execute on
+  the self-hosted Mac mini, and a fork run would fail anyway because fork
+  runs get no signing secrets and thus no TCC mic grant; to E2E a fork
+  contribution, push it to a same-repo branch and label that PR).
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.

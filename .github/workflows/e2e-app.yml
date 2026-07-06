@@ -5,14 +5,17 @@ name: E2E (Production App)
 
 on:
   workflow_dispatch:
-  # Label-gated PR runs. Deliberately `pull_request`, NOT
-  # `pull_request_target`: this workflow checks out and executes the PR head
-  # on a self-hosted Mac mini with a real signing identity and TCC grants, so
-  # untrusted fork code must never run automatically. Under `pull_request` a
-  # fork PR only reaches the runner when a maintainer consciously applies the
-  # `run-e2e` label (the job `if:` below is the gate); the label IS the
-  # human approval step. `pull_request_target` would run in the base-repo
-  # context with a writable token and is unsafe for a code-executing lane.
+  # Label-gated PR runs, same-repo branches only. Deliberately
+  # `pull_request`, NOT `pull_request_target`: this workflow checks out and
+  # executes the PR head on a self-hosted Mac mini with a real signing
+  # identity and TCC grants. Fork PRs are excluded entirely (the job `if:`
+  # checks head.repo): a label would be a STANDING approval — every later
+  # fork push would re-run unreviewed code on the runner — and a fork run
+  # would fail anyway, since fork `pull_request` runs get no secrets, the
+  # bundle falls back to the self-signed cert, which lacks the Mini's TCC
+  # microphone grant, and the leftover consent prompt poisons later runs.
+  # To E2E a fork contribution, push it to a same-repo branch and label
+  # that PR.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   push:
@@ -32,22 +35,31 @@ on:
 # meeting-simulator which plays audio through the speakers). Two parallel
 # runs would race for the recorder; serialise.
 #
-# Non-PR events keep the existing behaviour exactly: the group falls back to
-# github.ref (refs/heads/main for push/schedule/dispatch), so those runs share
-# one group and queue rather than race, and cancel-in-progress stays false so
-# main-push and nightly runs are never cancelled. PR events group per PR number
-# and set cancel-in-progress true, so pushing new commits to a labeled PR
-# supersedes its own in-flight run without disturbing main/nightly.
+# cancel-in-progress stays false for ALL events, including PR runs: the dev
+# app is launched detached (`open`), so a cancelled run cannot clean it up —
+# the app would keep recording, hold port 9876, and leave orphaned WAVs that
+# crash-recovery feeds into the NEXT run's pipeline assertions. PR runs
+# therefore queue instead of superseding. PR events group per PR number so a
+# labeled PR never sits in front of a main-push/nightly run (github.ref
+# group); mutual exclusion ACROSS groups relies on there being exactly ONE
+# `audio`-labeled runner — do not register a second audio runner.
 concurrency:
   group: e2e-app-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   e2e-app:
-    # Non-PR events (push/schedule/dispatch) always run; PR events run only
-    # when a maintainer applied the `run-e2e` label (see the pull_request
-    # trigger comment for why the label is the fork-execution approval gate).
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
+    # Non-PR events (push/schedule/dispatch) always run. PR events run only
+    # for same-repo branches carrying the `run-e2e` label (fork PRs never
+    # reach the runner — see the trigger comment). The label-name check keeps
+    # `labeled` events for any OTHER label from queueing a duplicate run.
+    if: |
+      github.event_name != 'pull_request' ||
+      (
+        contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
+      )
     # `audio` label pins the job to the runner that has exclusive access
     # to the BlackHole virtual input device. A second runner on the same
     # Mini handles other self-hosted workloads in parallel without
