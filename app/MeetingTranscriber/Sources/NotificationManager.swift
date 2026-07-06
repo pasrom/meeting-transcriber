@@ -17,6 +17,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
     private(set) var isSetUp = false
 
+    /// Bounded in-memory log of every notification posted through `notify(...)`,
+    /// read by the dev-only debug RPC `/state.notifications` snapshot. Always
+    /// present (cheap array + trim); only read in the non-App-Store variant.
+    let recentNotificationsLog = NotificationRingBuffer()
+
     override init() {
         super.init()
     }
@@ -44,6 +49,13 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     }
 
     func notify(title: String, body: String) {
+        // Record before the delivery guard: this captures the app's decision to
+        // notify at the single chokepoint. In production `setUp()` always ran, so
+        // the log equals what was delivered; recording ahead of the guard also
+        // keeps the log observable in headless / test contexts where
+        // `UNUserNotificationCenter` (which needs a real app bundle) is absent.
+        recentNotificationsLog.record(title: title, body: body)
+
         guard isSetUp, Bundle.main.bundleIdentifier != nil else { return }
 
         let content = UNMutableNotificationContent()
