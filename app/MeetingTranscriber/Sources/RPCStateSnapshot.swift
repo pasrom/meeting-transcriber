@@ -40,6 +40,14 @@
         /// permission problems, sidecar-write failures) actually fired, which is
         /// otherwise unobservable from outside the process.
         let notifications: [Notification]
+        /// Read-only projection of the app's EFFECTIVE settings — the values the
+        /// running process actually resolved from UserDefaults. E2E driver
+        /// scripts configure the app by writing UserDefaults blind (`defaults
+        /// write` / CFPreferences) and otherwise can't confirm what the app
+        /// sees; `defaults read` is unreliable for the dev bundle (container-plist
+        /// redirect). Secrets (OpenAI API key, any Keychain value) are never
+        /// included — see `AppSettings.rpcSettingsSnapshot()`.
+        let settings: Settings
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -165,6 +173,140 @@
             )
         }
 
+        /// Read-only projection of the non-secret `AppSettings` scalars, enum
+        /// raw values, and paths. Grouped into sub-objects that mirror the
+        /// Settings-window tabs. Built by `AppSettings.rpcSettingsSnapshot()`.
+        /// NEVER carries secrets: the OpenAI API key and any other
+        /// Keychain-backed value are deliberately excluded.
+        struct Settings: Codable {
+            let detection: Detection
+            let recording: Recording
+            let transcription: Transcription
+            let diarization: Diarization
+            let protocolGeneration: ProtocolGeneration
+            let output: Output
+            let diagnostics: Diagnostics
+            let updates: Updates
+
+            struct Detection: Codable {
+                let watchTeams: Bool
+                let watchZoom: Bool
+                let watchWebex: Bool
+                let autoWatch: Bool
+                let pollIntervalSeconds: Double
+
+                static let empty = Self(
+                    watchTeams: false, watchZoom: false, watchWebex: false,
+                    autoWatch: false, pollIntervalSeconds: 0,
+                )
+            }
+
+            struct Recording: Codable {
+                let endGraceSeconds: Double
+                let noMic: Bool
+                let recordOnly: Bool
+                /// CoreAudio device UID; empty string = system default.
+                let micDeviceUID: String
+                let micName: String
+                let perChannelIndicatorEnabled: Bool
+                let liveTranscriptionEnabled: Bool
+                let asymmetricSilenceWarningSeconds: Double
+
+                static let empty = Self(
+                    endGraceSeconds: 0, noMic: false, recordOnly: false,
+                    micDeviceUID: "", micName: "", perChannelIndicatorEnabled: false,
+                    liveTranscriptionEnabled: false, asymmetricSilenceWarningSeconds: 0,
+                )
+            }
+
+            struct Transcription: Codable {
+                /// `TranscriptionEngineSetting` raw value ("whisperKit" | "parakeet").
+                let engine: String
+                let whisperKitModel: String
+                /// Empty string = auto-detect (mirrors the UserDefaults sentinel).
+                let whisperLanguage: String
+                let parakeetLanguage: String
+                let customVocabularyPath: String
+
+                static let empty = Self(
+                    engine: "", whisperKitModel: "", whisperLanguage: "",
+                    parakeetLanguage: "", customVocabularyPath: "",
+                )
+            }
+
+            struct Diarization: Codable {
+                let diarize: Bool
+                /// `DiarizerMode` raw value ("offline" | "sortformer").
+                let mode: String
+                /// 0 = auto-detect speaker count.
+                let numSpeakers: Int
+                let vadEnabled: Bool
+                let vadThreshold: Float
+                let clusterThreshold: Double
+                let warmStartFa: Double
+                let warmStartFb: Double
+                let minSegmentDurationSeconds: Double
+                let excludeOverlap: Bool
+
+                static let empty = Self(
+                    diarize: false, mode: "", numSpeakers: 0, vadEnabled: false,
+                    vadThreshold: 0, clusterThreshold: 0, warmStartFa: 0,
+                    warmStartFb: 0, minSegmentDurationSeconds: 0, excludeOverlap: false,
+                )
+            }
+
+            struct ProtocolGeneration: Codable {
+                /// `ProtocolProvider` raw value ("claudeCLI" | "openAICompatible" | "none").
+                let provider: String
+                let language: String
+                let openAIEndpoint: String
+                let openAIModel: String
+                /// Claude CLI binary name/path (non-secret). The App Store build
+                /// never compiles this file (`#if !APPSTORE`).
+                let claudeBin: String
+
+                static let empty = Self(
+                    provider: "", language: "", openAIEndpoint: "",
+                    openAIModel: "", claudeBin: "",
+                )
+            }
+
+            struct Output: Codable {
+                /// Effective output directory the app writes to.
+                let directory: String
+                /// A user-picked custom output dir (security-scoped bookmark) is
+                /// set, vs the default ~/Downloads/MeetingTranscriber.
+                let hasCustomDirectory: Bool
+                /// A custom protocol-prompt file exists on disk. The content is
+                /// intentionally not exposed (potentially large / user-authored).
+                let hasCustomPrompt: Bool
+
+                static let empty = Self(directory: "", hasCustomDirectory: false, hasCustomPrompt: false)
+            }
+
+            struct Diagnostics: Codable {
+                let verboseDiagnostics: Bool
+                let debugRPCEnabled: Bool
+
+                static let empty = Self(verboseDiagnostics: false, debugRPCEnabled: false)
+            }
+
+            struct Updates: Codable {
+                let checkForUpdates: Bool
+                let includePreReleases: Bool
+
+                static let empty = Self(checkForUpdates: false, includePreReleases: false)
+            }
+
+            /// Placeholder for snapshots built without a live `AppSettings`
+            /// (test fixtures, `RPCStateSnapshot.empty`).
+            static let empty = Self(
+                detection: .empty, recording: .empty, transcription: .empty,
+                diarization: .empty, protocolGeneration: .empty, output: .empty,
+                diagnostics: .empty, updates: .empty,
+            )
+        }
+
         init(
             pipeline: Pipeline,
             speakerDB: SpeakerDB,
@@ -176,6 +318,7 @@
             liveCaptions: LiveCaptions = .empty,
             watchState: String? = nil,
             notifications: [Notification] = [],
+            settings: Settings = .empty,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -187,6 +330,7 @@
             self.liveCaptions = liveCaptions
             self.watchState = watchState
             self.notifications = notifications
+            self.settings = settings
         }
 
         func jsonData() throws -> Data {

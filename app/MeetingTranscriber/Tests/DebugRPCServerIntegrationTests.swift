@@ -158,6 +158,40 @@
             )
         }
 
+        /// End-to-end wire check for the effective-settings readback: build an
+        /// AppState on an isolated settings suite, tweak a few values across
+        /// sub-objects, project through the REAL `AppState.rpcStateSnapshot()`,
+        /// and assert `GET /state.settings` returns them over a real socket.
+        /// This is the surface E2E drivers use to confirm a blind `defaults
+        /// write` actually took effect (`defaults read` is unreliable for the
+        /// dev bundle's container-plist redirect).
+        func testStateExposesEffectiveSettings() async throws {
+            let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = AppSettings(defaults: defaults)
+            settings.recordOnly = true
+            settings.transcriptionEngine = .parakeet
+            settings.numSpeakers = 4
+            settings.diarizerMode = .sortformer
+            settings.liveTranscriptionEnabled = true
+            let state = AppState(settings: settings)
+            defer { state.liveCaptions.clear() }
+
+            let base = try await startServer(snapshot: state.rpcStateSnapshot())
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("state"), headers: authHeader),
+            )
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: data)
+            XCTAssertTrue(decoded.settings.recording.recordOnly)
+            XCTAssertTrue(decoded.settings.recording.liveTranscriptionEnabled)
+            XCTAssertEqual(decoded.settings.transcription.engine, "parakeet")
+            XCTAssertEqual(decoded.settings.diarization.numSpeakers, 4)
+            XCTAssertEqual(decoded.settings.diarization.mode, "sortformer")
+        }
+
         func testMetricsReturnsLiveResourceSnapshot() async throws {
             let base = try await startServer()
             let (data, response) = try await URLSession.shared.data(
