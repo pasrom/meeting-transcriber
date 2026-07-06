@@ -125,32 +125,21 @@
         }
 
         /// End-to-end wire check for the notification ring buffer: post through
-        /// the production notifier chokepoint, project its buffer into the
-        /// snapshot exactly as `AppState.rpcStateSnapshot()` does, and assert the
-        /// `{title, body, postedAt}` rows come back over a real socket in
-        /// chronological order. A fresh `NotificationManager` (not `.shared`)
-        /// keeps the buffer isolated from other tests.
+        /// the production notifier chokepoint, project it through the REAL
+        /// `AppState.rpcStateSnapshot()` (injected notifier, no re-implemented
+        /// mapping), and assert the `{title, body, postedAt, delivered}` rows
+        /// come back over a real socket in chronological order. A fresh
+        /// `NotificationManager` (not `.shared`) keeps the buffer isolated.
         func testStateExposesPostedNotifications() async throws {
             let manager = NotificationManager()
+            let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let state = AppState(settings: AppSettings(defaults: defaults), notifier: manager)
+            defer { state.liveCaptions.clear() }
             manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
             manager.notify(title: "Silent Recording", body: "Both channels silent")
 
-            let iso = ISO8601DateFormatter()
-            let notifications = manager.recentNotificationsLog.entries.map { entry in
-                RPCStateSnapshot.Notification(
-                    title: entry.title,
-                    body: entry.body,
-                    postedAt: iso.string(from: entry.postedAt),
-                )
-            }
-            let snapshot = RPCStateSnapshot(
-                pipeline: .init(isProcessing: false, activeJobCount: 0, waitingJobCount: 0, pendingNamingJobCount: 0),
-                speakerDB: .init(count: 0, recentNames: [], knownSpeakerNames: []),
-                pendingNamingJobs: [],
-                notifications: notifications,
-            )
-
-            let base = try await startServer(snapshot: snapshot)
+            let base = try await startServer(snapshot: state.rpcStateSnapshot())
             let (data, response) = try await URLSession.shared.data(
                 for: request("GET", base.appendingPathComponent("state"), headers: authHeader),
             )
@@ -159,8 +148,14 @@
             let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: data)
             XCTAssertEqual(decoded.notifications.map(\.title), ["Meeting Detected", "Silent Recording"])
             XCTAssertEqual(decoded.notifications.map(\.body), ["Recording: Standup (Teams)", "Both channels silent"])
+            // Test host has no app bundle, so the delivery guard fails: the wire
+            // must report the entries as NOT delivered.
+            XCTAssertEqual(decoded.notifications.map(\.delivered), [false, false])
             let first = try XCTUnwrap(decoded.notifications.first)
-            XCTAssertNotNil(iso.date(from: first.postedAt), "postedAt should be ISO-8601, got \(first.postedAt)")
+            XCTAssertNotNil(
+                ISO8601DateFormatter().date(from: first.postedAt),
+                "postedAt should be ISO-8601, got \(first.postedAt)",
+            )
         }
 
         func testMetricsReturnsLiveResourceSnapshot() async throws {

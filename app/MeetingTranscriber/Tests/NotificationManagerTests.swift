@@ -62,23 +62,39 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertIdentical(a, b)
     }
 
-    // MARK: - notify records into the ring buffer (RPC observability chokepoint)
+    #if !APPSTORE
 
-    /// The buffer records ahead of the delivery guard, so a notify() call is
-    /// captured even when `setUp()` never ran (no app bundle in the test host).
-    /// This is the single chokepoint the debug RPC `/state.notifications`
-    /// snapshot reads, so every caller is observable without touching call sites.
-    func testNotifyRecordsIntoRingBufferEvenWithoutSetUp() {
-        let manager = NotificationManager()
-        XCTAssertFalse(manager.isSetUp)
+        // MARK: - notify records into the ring buffer (RPC observability chokepoint)
 
-        manager.notify(title: "Silent Recording", body: "Both channels silent")
-        manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
+        /// The buffer records ahead of the delivery guard, so a notify() call is
+        /// captured even when `setUp()` never ran (no app bundle in the test host)
+        /// BUT is marked undelivered — the entry means "the app decided to
+        /// notify", not "the user saw it". This is the single chokepoint the
+        /// debug RPC `/state.notifications` snapshot reads, so every caller is
+        /// observable without touching call sites.
+        func testNotifyRecordsUndeliveredEntryWhenSetUpNeverRan() {
+            let manager = NotificationManager()
+            XCTAssertFalse(manager.isSetUp)
 
-        let entries = manager.recentNotificationsLog.entries
-        XCTAssertEqual(entries.map(\.title), ["Silent Recording", "Meeting Detected"])
-        XCTAssertEqual(entries.map(\.body), ["Both channels silent", "Recording: Standup (Teams)"])
-    }
+            manager.notify(title: "Silent Recording", body: "Both channels silent")
+            manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
+
+            let entries = manager.recentNotificationsLog.entries
+            XCTAssertEqual(entries.map(\.title), ["Silent Recording", "Meeting Detected"])
+            XCTAssertEqual(entries.map(\.body), ["Both channels silent", "Recording: Standup (Teams)"])
+            XCTAssertEqual(entries.map(\.delivered), [false, false], "delivery guard failed, so entries must be marked undelivered")
+        }
+
+        /// The `AppNotifying.recentNotifications` conformance exposes the same
+        /// entries the buffer holds — this is what `AppState.rpcStateSnapshot()`
+        /// reads through the injected notifier.
+        func testRecentNotificationsConformanceMirrorsBuffer() {
+            let manager = NotificationManager()
+            manager.notify(title: "Silent Recording", body: "Both channels silent")
+
+            XCTAssertEqual(manager.recentNotifications, manager.recentNotificationsLog.entries)
+        }
+    #endif
 
     // MARK: - notificationContent (pure helper)
 

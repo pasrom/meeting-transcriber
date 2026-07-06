@@ -11,7 +11,24 @@ import os.log
 /// Test implementation: `RecordingNotifier` (records calls, no side effects).
 protocol AppNotifying {
     func notify(title: String, body: String)
+
+    #if !APPSTORE
+        /// Recently posted notifications, oldest first, for the debug RPC
+        /// `/state.notifications` snapshot. Defaults to empty — only the
+        /// production `NotificationManager` keeps a log.
+        var recentNotifications: [NotificationRingBuffer.Entry] {
+            get
+        }
+    #endif
 }
+
+#if !APPSTORE
+    extension AppNotifying {
+        var recentNotifications: [NotificationRingBuffer.Entry] {
+            []
+        }
+    }
+#endif
 
 // MARK: - AppState
 
@@ -30,7 +47,9 @@ final class AppState {
     // MARK: - Dependencies
 
     let settings: AppSettings
-    private let notifier: any AppNotifying
+    // Internal (not private): the RPC snapshot extension (AppState+RPC.swift)
+    // reads `notifier.recentNotifications`, and file-private wouldn't reach.
+    let notifier: any AppNotifying
 
     // MARK: - State
 
@@ -406,7 +425,9 @@ final class AppState {
         channelHealth.appSilentActive || channelHealth.recordingSilentActive
     }
 
-    private static let isoFormatter = ISO8601DateFormatter()
+    // Internal (not private): also formats `postedAt` in the RPC snapshot
+    // extension (AppState+RPC.swift), where file-private wouldn't reach.
+    static let isoFormatter = ISO8601DateFormatter()
 
     var currentStatus: TranscriberStatus? {
         guard let loop = watching.watchLoop, loop.isActive else { return nil }

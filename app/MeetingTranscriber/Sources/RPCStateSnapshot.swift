@@ -116,6 +116,11 @@
             let body: String
             /// ISO-8601 wall-clock time the notification was posted.
             let postedAt: String
+            /// Whether it passed the delivery guard and reached
+            /// `UNUserNotificationCenter`. Assertions about user-VISIBLE
+            /// warnings must require `true`; `false` means the app only
+            /// *decided* to notify (headless context, setup not run).
+            let delivered: Bool
         }
 
         struct LastJob: Codable {
