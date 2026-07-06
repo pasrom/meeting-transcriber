@@ -89,10 +89,34 @@
 
         private func rpcOutputSettings() -> RPCStateSnapshot.Settings.Output {
             RPCStateSnapshot.Settings.Output(
-                directory: effectiveOutputDir.path,
+                directory: rpcOutputDirPath(),
                 hasCustomDirectory: customOutputDirBookmark != nil,
                 hasCustomPrompt: FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path),
             )
+        }
+
+        /// Read-only, fail-fast resolution of the effective output dir for the
+        /// snapshot. Deliberately NOT `effectiveOutputDir`: that resolves the
+        /// bookmark with `.withSecurityScope`, which can block the main actor
+        /// while a detached network volume is contacted (the RPC snapshot runs
+        /// MainActor-isolated on every `GET /state` poll), and on a stale
+        /// bookmark it WRITES a re-created bookmark back to UserDefaults, a
+        /// persisted mutation from a read-only debug GET. Here we resolve with
+        /// `.withoutUI`/`.withoutMounting` (fails fast instead of mounting),
+        /// ignore staleness, and report nil when the custom dir is currently
+        /// unresolvable.
+        private func rpcOutputDirPath() -> String? {
+            guard let data = customOutputDirBookmark else {
+                return AppPaths.downloadsProtocolsDir.path
+            }
+            var isStale = false
+            guard let url = try? URL(
+                resolvingBookmarkData: data,
+                options: [.withoutUI, .withoutMounting],
+                relativeTo: nil,
+                bookmarkDataIsStale: &isStale,
+            ) else { return nil }
+            return url.path
         }
 
         private func rpcDiagnosticsSettings() -> RPCStateSnapshot.Settings.Diagnostics {

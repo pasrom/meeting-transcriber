@@ -174,7 +174,11 @@
             settings.transcriptionEngine = .parakeet
             settings.numSpeakers = 4
             settings.diarizerMode = .sortformer
-            settings.liveTranscriptionEnabled = true
+            // Deliberately NOT liveTranscriptionEnabled: with it on,
+            // AppState.init's prewarm builds the real live-transcription
+            // controller and kicks off actual CoreML/VAD model loads (network
+            // download on a cold CI runner) in an unawaited background Task.
+            settings.vadEnabled = true
             let state = AppState(settings: settings)
             defer { state.liveCaptions.clear() }
 
@@ -186,7 +190,7 @@
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
             let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: data)
             XCTAssertTrue(decoded.settings.recording.recordOnly)
-            XCTAssertTrue(decoded.settings.recording.liveTranscriptionEnabled)
+            XCTAssertTrue(decoded.settings.diarization.vadEnabled)
             XCTAssertEqual(decoded.settings.transcription.engine, "parakeet")
             XCTAssertEqual(decoded.settings.diarization.numSpeakers, 4)
             XCTAssertEqual(decoded.settings.diarization.mode, "sortformer")

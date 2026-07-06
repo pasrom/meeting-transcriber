@@ -163,12 +163,55 @@
             XCTAssertTrue(json.contains("sentinel-endpoint.example"))
             XCTAssertTrue(json.contains("sentinel-model-name"))
 
-            // No secret-bearing field name / marker may appear anywhere.
+            // The one secret-bearing field name must never appear.
             XCTAssertFalse(json.contains("openAIAPIKey"), "secret field name leaked")
-            let lower = json.lowercased()
-            for needle in ["apikey", "api_key", "secret", "keychain", "bearer", "password"] {
-                XCTAssertFalse(lower.contains(needle), "settings JSON leaked secret marker: \(needle)")
+        }
+
+        /// Exact key allowlist: the settings wire shape may only ever contain
+        /// these leaf fields. Any new field must be consciously added here (and
+        /// consciously judged non-secret); a secret slipping into the projection
+        /// under ANY name fails this test, which generic substring scans can't
+        /// guarantee.
+        func test_snapshot_settingsKeysAreExactlyTheAllowlist() throws {
+            let data = try JSONEncoder().encode(settings.rpcSettingsSnapshot())
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+            var keys = Set<String>()
+            func collect(_ dict: [String: Any], prefix: String) {
+                for (key, value) in dict {
+                    let path = prefix.isEmpty ? key : "\(prefix).\(key)"
+                    if let nested = value as? [String: Any] {
+                        collect(nested, prefix: path)
+                    } else {
+                        keys.insert(path)
+                    }
+                }
             }
+            collect(object, prefix: "")
+
+            let allowlist: Set = [
+                "detection.watchTeams", "detection.watchZoom", "detection.watchWebex",
+                "detection.autoWatch", "detection.pollIntervalSeconds",
+                "recording.endGraceSeconds", "recording.noMic", "recording.recordOnly",
+                "recording.micDeviceUID", "recording.micName",
+                "recording.perChannelIndicatorEnabled", "recording.liveTranscriptionEnabled",
+                "recording.asymmetricSilenceWarningSeconds",
+                "transcription.engine", "transcription.whisperKitModel",
+                "transcription.whisperLanguage", "transcription.parakeetLanguage",
+                "transcription.customVocabularyPath",
+                "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
+                "diarization.vadEnabled", "diarization.vadThreshold",
+                "diarization.clusterThreshold", "diarization.warmStartFa",
+                "diarization.warmStartFb", "diarization.minSegmentDurationSeconds",
+                "diarization.excludeOverlap",
+                "protocolGeneration.provider", "protocolGeneration.language",
+                "protocolGeneration.openAIEndpoint", "protocolGeneration.openAIModel",
+                "protocolGeneration.claudeBin",
+                "output.directory", "output.hasCustomDirectory", "output.hasCustomPrompt",
+                "diagnostics.verboseDiagnostics", "diagnostics.debugRPCEnabled",
+                "updates.checkForUpdates", "updates.includePreReleases",
+            ]
+            XCTAssertEqual(keys, allowlist)
         }
 
         // MARK: - JSON round-trip

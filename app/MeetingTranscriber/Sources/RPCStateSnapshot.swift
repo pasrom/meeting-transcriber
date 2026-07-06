@@ -272,8 +272,11 @@
             }
 
             struct Output: Codable {
-                /// Effective output directory the app writes to.
-                let directory: String
+                /// Effective output directory the app writes to. `nil` when a
+                /// custom bookmark is set but not cheaply resolvable right now
+                /// (e.g. the volume is detached) — the snapshot never mounts,
+                /// never repairs bookmarks, and never blocks on I/O for this.
+                let directory: String?
                 /// A user-picked custom output dir (security-scoped bookmark) is
                 /// set, vs the default ~/Downloads/MeetingTranscriber.
                 let hasCustomDirectory: Bool
@@ -281,7 +284,7 @@
                 /// intentionally not exposed (potentially large / user-authored).
                 let hasCustomPrompt: Bool
 
-                static let empty = Self(directory: "", hasCustomDirectory: false, hasCustomPrompt: false)
+                static let empty = Self(directory: nil, hasCustomDirectory: false, hasCustomPrompt: false)
             }
 
             struct Diagnostics: Codable {
