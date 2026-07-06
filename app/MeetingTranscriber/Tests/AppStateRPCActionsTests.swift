@@ -234,23 +234,36 @@
 
         // MARK: - notifications mapping in rpcStateSnapshot
 
-        /// `rpcStateSnapshot()` reads the production notifier
-        /// (`NotificationManager.shared`), so a notification posted through it
-        /// surfaces in `snapshot.notifications` with the ISO-8601 `postedAt`
-        /// wire shape. A UUID-tagged title keeps the assertion robust against the
-        /// shared singleton's cross-test accumulation.
-        func test_snapshot_notifications_readsSharedNotifierWithISOTimestamp() throws {
-            let tag = "rpc-notif-\(UUID().uuidString)"
-            NotificationManager.shared.notify(title: tag, body: "silent recording")
+        /// `rpcStateSnapshot()` reads the notifier the AppState was constructed
+        /// with, so notifications posted through THAT instance surface in
+        /// `snapshot.notifications` with the ISO-8601 `postedAt` wire shape and
+        /// the delivered flag (false here: `setUp()` never ran in the test host).
+        func test_snapshot_notifications_readsInjectedNotifier() throws {
+            let manager = NotificationManager()
+            let notifierState = AppState(settings: state.settings, notifier: manager)
+            defer { notifierState.liveCaptions.clear() }
+            manager.notify(title: "Silent Recording", body: "Both channels silent")
+            manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
 
-            let snapshot = state.rpcStateSnapshot()
+            let snapshot = notifierState.rpcStateSnapshot()
 
-            let posted = try XCTUnwrap(snapshot.notifications.last { $0.title == tag })
-            XCTAssertEqual(posted.body, "silent recording")
+            XCTAssertEqual(snapshot.notifications.map(\.title), ["Silent Recording", "Meeting Detected"])
+            XCTAssertEqual(snapshot.notifications.map(\.body), ["Both channels silent", "Recording: Standup (Teams)"])
+            XCTAssertEqual(snapshot.notifications.map(\.delivered), [false, false])
+            let posted = try XCTUnwrap(snapshot.notifications.first)
             XCTAssertNotNil(
                 ISO8601DateFormatter().date(from: posted.postedAt),
                 "postedAt should be a parseable ISO-8601 timestamp, got \(posted.postedAt)",
             )
+        }
+
+        /// The snapshot must NOT read through any global: an AppState built with
+        /// a different notifier (the fixture's default `SilentNotifier`) stays
+        /// empty even while other instances post.
+        func test_snapshot_notifications_ignoresOtherNotifierInstances() {
+            NotificationManager().notify(title: "elsewhere", body: "not ours")
+
+            XCTAssertTrue(state.rpcStateSnapshot().notifications.isEmpty)
         }
 
         // MARK: - Helpers

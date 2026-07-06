@@ -17,10 +17,17 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
     private(set) var isSetUp = false
 
-    /// Bounded in-memory log of every notification posted through `notify(...)`,
-    /// read by the dev-only debug RPC `/state.notifications` snapshot. Always
-    /// present (cheap array + trim); only read in the non-App-Store variant.
-    let recentNotificationsLog = NotificationRingBuffer()
+    #if !APPSTORE
+        /// Bounded in-memory log of every notification posted through
+        /// `notify(...)`, read by the dev-only debug RPC `/state.notifications`
+        /// snapshot (via the `AppNotifying.recentNotifications` conformance).
+        /// Gated out of the App Store variant, which has no RPC reader.
+        let recentNotificationsLog = NotificationRingBuffer()
+
+        var recentNotifications: [NotificationRingBuffer.Entry] {
+            recentNotificationsLog.entries
+        }
+    #endif
 
     override init() {
         super.init()
@@ -49,14 +56,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     }
 
     func notify(title: String, body: String) {
-        // Record before the delivery guard: this captures the app's decision to
-        // notify at the single chokepoint. In production `setUp()` always ran, so
-        // the log equals what was delivered; recording ahead of the guard also
-        // keeps the log observable in headless / test contexts where
-        // `UNUserNotificationCenter` (which needs a real app bundle) is absent.
-        recentNotificationsLog.record(title: title, body: body)
+        let deliverable = isSetUp && Bundle.main.bundleIdentifier != nil
 
-        guard isSetUp, Bundle.main.bundleIdentifier != nil else { return }
+        #if !APPSTORE
+            // Record before the delivery guard so the app's *decision* to notify
+            // is captured even in headless/test contexts where
+            // `UNUserNotificationCenter` (which needs a real app bundle) is
+            // absent. The `delivered` flag preserves the distinction: RPC
+            // consumers asserting a user-VISIBLE warning must check it.
+            recentNotificationsLog.record(title: title, body: body, delivered: deliverable)
+        #endif
+
+        guard deliverable else { return }
 
         let content = UNMutableNotificationContent()
         content.title = title

@@ -70,23 +70,22 @@
             )
         }
 
-        /// Snapshot the recently-posted notifications. Reads the production
-        /// notifier — `NotificationManager.shared` is what `@main` injects into
-        /// `AppState`, and its ring buffer accumulates across the whole app
-        /// lifetime — and maps each entry to the wire shape with an ISO-8601
-        /// `postedAt`. Extracted (like the other `*Snapshot` helpers) to keep
-        /// `rpcStateSnapshot`'s literal under the type-check budget.
+        /// Snapshot the recently-posted notifications from the notifier this
+        /// AppState was actually constructed with (the `@main` wiring passes
+        /// `NotificationManager.shared`; other notifiers default to an empty log
+        /// via the protocol extension) and map each entry to the wire shape with
+        /// an ISO-8601 `postedAt`. Extracted (like the other `*Snapshot` helpers)
+        /// to keep `rpcStateSnapshot`'s literal under the type-check budget.
         private func notificationsSnapshot() -> [RPCStateSnapshot.Notification] {
-            NotificationManager.shared.recentNotificationsLog.entries.map { entry in
+            notifier.recentNotifications.map { entry in
                 RPCStateSnapshot.Notification(
                     title: entry.title,
                     body: entry.body,
-                    postedAt: Self.rpcISOFormatter.string(from: entry.postedAt),
+                    postedAt: Self.isoFormatter.string(from: entry.postedAt),
+                    delivered: entry.delivered,
                 )
             }
         }
-
-        private static let rpcISOFormatter = ISO8601DateFormatter()
 
         /// Snapshot the live-caption overlay state. `LiveCaptionLine`'s
         /// `Codable` conformance encodes each entry as
