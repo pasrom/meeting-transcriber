@@ -34,6 +34,12 @@
         /// `watchState == "recording"` when no caption signal is available
         /// (live transcription off — the default user profile).
         let watchState: String?
+        /// Recently-posted macOS notifications (capped ring buffer, oldest
+        /// dropped), chronological — newest last. E2E drivers poll this to
+        /// assert user-facing warning paths (meeting detected, silent recording,
+        /// permission problems, sidecar-write failures) actually fired, which is
+        /// otherwise unobservable from outside the process.
+        let notifications: [Notification]
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -105,6 +111,13 @@
             )
         }
 
+        struct Notification: Codable {
+            let title: String
+            let body: String
+            /// ISO-8601 wall-clock time the notification was posted.
+            let postedAt: String
+        }
+
         struct LastJob: Codable {
             let jobID: String
             let state: JobState
@@ -157,6 +170,7 @@
             permissionHealth: PermissionHealth = .unknown,
             liveCaptions: LiveCaptions = .empty,
             watchState: String? = nil,
+            notifications: [Notification] = [],
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -167,6 +181,7 @@
             self.permissionHealth = permissionHealth
             self.liveCaptions = liveCaptions
             self.watchState = watchState
+            self.notifications = notifications
         }
 
         func jsonData() throws -> Data {

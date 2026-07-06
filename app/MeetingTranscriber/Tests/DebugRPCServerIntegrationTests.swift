@@ -124,6 +124,45 @@
             XCTAssertEqual(decoded.speakerDB.count, 7)
         }
 
+        /// End-to-end wire check for the notification ring buffer: post through
+        /// the production notifier chokepoint, project its buffer into the
+        /// snapshot exactly as `AppState.rpcStateSnapshot()` does, and assert the
+        /// `{title, body, postedAt}` rows come back over a real socket in
+        /// chronological order. A fresh `NotificationManager` (not `.shared`)
+        /// keeps the buffer isolated from other tests.
+        func testStateExposesPostedNotifications() async throws {
+            let manager = NotificationManager()
+            manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
+            manager.notify(title: "Silent Recording", body: "Both channels silent")
+
+            let iso = ISO8601DateFormatter()
+            let notifications = manager.recentNotificationsLog.entries.map { entry in
+                RPCStateSnapshot.Notification(
+                    title: entry.title,
+                    body: entry.body,
+                    postedAt: iso.string(from: entry.postedAt),
+                )
+            }
+            let snapshot = RPCStateSnapshot(
+                pipeline: .init(isProcessing: false, activeJobCount: 0, waitingJobCount: 0, pendingNamingJobCount: 0),
+                speakerDB: .init(count: 0, recentNames: [], knownSpeakerNames: []),
+                pendingNamingJobs: [],
+                notifications: notifications,
+            )
+
+            let base = try await startServer(snapshot: snapshot)
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("state"), headers: authHeader),
+            )
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(RPCStateSnapshot.self, from: data)
+            XCTAssertEqual(decoded.notifications.map(\.title), ["Meeting Detected", "Silent Recording"])
+            XCTAssertEqual(decoded.notifications.map(\.body), ["Recording: Standup (Teams)", "Both channels silent"])
+            let first = try XCTUnwrap(decoded.notifications.first)
+            XCTAssertNotNil(iso.date(from: first.postedAt), "postedAt should be ISO-8601, got \(first.postedAt)")
+        }
+
         func testMetricsReturnsLiveResourceSnapshot() async throws {
             let base = try await startServer()
             let (data, response) = try await URLSession.shared.data(

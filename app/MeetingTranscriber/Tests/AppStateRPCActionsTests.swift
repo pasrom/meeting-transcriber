@@ -232,6 +232,27 @@
             XCTAssertEqual(snapshot.liveCaptions.recentFinals[1].text, "guten morgen")
         }
 
+        // MARK: - notifications mapping in rpcStateSnapshot
+
+        /// `rpcStateSnapshot()` reads the production notifier
+        /// (`NotificationManager.shared`), so a notification posted through it
+        /// surfaces in `snapshot.notifications` with the ISO-8601 `postedAt`
+        /// wire shape. A UUID-tagged title keeps the assertion robust against the
+        /// shared singleton's cross-test accumulation.
+        func test_snapshot_notifications_readsSharedNotifierWithISOTimestamp() throws {
+            let tag = "rpc-notif-\(UUID().uuidString)"
+            NotificationManager.shared.notify(title: tag, body: "silent recording")
+
+            let snapshot = state.rpcStateSnapshot()
+
+            let posted = try XCTUnwrap(snapshot.notifications.last { $0.title == tag })
+            XCTAssertEqual(posted.body, "silent recording")
+            XCTAssertNotNil(
+                ISO8601DateFormatter().date(from: posted.postedAt),
+                "postedAt should be a parseable ISO-8601 timestamp, got \(posted.postedAt)",
+            )
+        }
+
         // MARK: - Helpers
 
         private func makeJob(title: String) -> PipelineJob {
