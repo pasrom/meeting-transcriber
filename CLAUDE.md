@@ -216,12 +216,12 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
   release.yml              # CI: build DMG + GitHub Release on tag push
   pr-labels.yml            # Automatic PR labeling
-  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push)
-  e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly)
+  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push + label-gated PR runs via `run-e2e`)
+  e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly + label-gated PR runs via `run-e2e`)
   e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch + nightly trend cron, RESULT artifact)
   appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
-  quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch)
+  quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch + label-gated PR runs via `run-quality`)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
   e2e-crash-recovery.yml    # E2E — crash recovery: SIGKILL mid-recording + verify pipeline recovers via WAV header repair
   e2e-mic-device-change.yml # E2E — mic device-change NSException survival (issue #379, fault-injection build)
@@ -444,7 +444,8 @@ you're validating:
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
   (Parakeet, WhisperKit, WatchLoop) feed pre-recorded `two_speakers_de.wav`
   into the components and assert on transcripts.
-- Triggered on `workflow_dispatch` and every push to `main`.
+- Triggered on `workflow_dispatch`, every push to `main`, and label-gated
+  PR runs (apply the `run-e2e` label to a PR).
 - No live recording — `DualSourceRecorder` is bypassed; tests substitute
   fixture WAVs at the same point the recorder would emit them.
 - Strengths: fast, deterministic, isolates engine logic; runs in xctest's
@@ -459,7 +460,9 @@ you're validating:
   `lastJob.state == .done`, asserts on the resulting transcript file.
 - Triggered on `workflow_dispatch`, every `push` to main (no paths-filter
   — so the stable-tag ruleset always has a push-event check-run on the
-  SHA), and a nightly cron at 04:30 UTC.
+  SHA), a nightly cron at 04:30 UTC, and label-gated PR runs (apply the
+  `run-e2e` label; on a fork PR the label is the maintainer approval gate,
+  since this lane executes PR code on the self-hosted Mac mini).
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.
