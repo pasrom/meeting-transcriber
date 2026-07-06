@@ -29,13 +29,27 @@ on:
     # would fire a duplicate engine E2E run that the tag ruleset already
     # has covered via the main-push check-run.
     branches: [main]
+  # Label-gated PR runs: opening/updating a PR triggers this workflow, but
+  # the job below only executes when the `run-e2e` label is present. This
+  # lets a maintainer pull pre-merge feedback from the fixture E2E lane
+  # without waiting for the post-merge main-push run. `labeled` is included
+  # so applying the label to an already-open PR starts the run immediately.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
 
+# PR runs land in their own group (github.ref = refs/pull/<n>/merge), so
+# cancel-in-progress supersedes stale runs of the same PR while never
+# touching main-push or nightly runs (github.ref = refs/heads/main is a
+# distinct group). No change needed to serve label-gated PRs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   e2e:
+    # Non-PR events (push/schedule/dispatch) always run; PR events run only
+    # when a maintainer applied the `run-e2e` label.
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e') }}
     runs-on: [self-hosted, macOS, ARM64]
     # Cold-cache runs download multi-GB models (WhisperKit ~1 GB,
     # Parakeet ~50 MB); hot runs <10 min. 30 min job

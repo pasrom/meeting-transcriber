@@ -8,11 +8,20 @@ name: Quality & Safety
 #     runs real ASR, then diffs the result against the committed baseline
 #     in Tests/Fixtures/quality/quality-baseline.json; fails on regression).
 #
-# Triggers: push to main, nightly cron, and explicit manual dispatch.
-# Never runs on pull requests — review iteration stays fast.
+# Triggers: push to main, nightly cron, explicit manual dispatch, and
+# label-gated PR runs. Unlabeled PRs skip every job, so day-to-day review
+# iteration stays fast; applying the `run-quality` label runs the same job
+# set a push to main runs (both the sanitizer matrix and the quality gate),
+# giving pre-merge feedback on demand.
 on:
   push:
     branches: [main]
+  # Label-gated PR runs: opening/updating a PR triggers the workflow, but the
+  # jobs below gate on the `run-quality` label so nothing heavy runs until a
+  # maintainer opts the PR in. `labeled` lets the label start the run on an
+  # already-open PR.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
   schedule:
     - cron: "0 3 * * *"  # 03:00 UTC = 05:00 CEST
   workflow_dispatch:
@@ -31,16 +40,24 @@ on:
 # lose those baselines, so we don't cancel — let runs accumulate. Manual
 # back-to-back dispatches are rare enough that the wasted time isn't
 # worth a more complex carve-out.
+#
+# Non-PR events keep this exactly: the group falls back to github.ref and
+# cancel-in-progress stays false, so no push/schedule/dispatch run is ever
+# cancelled. PR events group per PR number and set cancel-in-progress true,
+# so a new commit on a labeled PR supersedes that PR's in-flight run (the
+# sanitizer leg shares the scarce self-hosted Mini) without touching any
+# main/nightly run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test-sanitizer:
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer)
+      (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-quality'))
     # Self-hosted Mini absorbs sanitizer instrumentation 4× better than
     # macos-26 GH-hosted (TSan ~6:41 vs ~25 min) and avoids the CoreML
     # model-load assertion race that flaked WhisperKitEngineTests on
@@ -113,7 +130,8 @@ jobs:
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run-quality)
+      (github.event_name == 'workflow_dispatch' && inputs.run-quality) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-quality'))
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
