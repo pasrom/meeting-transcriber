@@ -469,6 +469,13 @@ you're validating:
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.
+- The `--naming-confirm` lane additionally drives the speaker-naming CONFIRM
+  path end-to-end (enqueue a 2-speaker fixture, park at naming instead of
+  auto-skipping, `POST /v1/jobs/<id>/naming` an anonymous mapping, then assert
+  the confirmed names replace the raw diarization labels in the transcript and
+  the speaker DB learns the voices); it snapshots + restores the runner's real
+  `speakers.json`/`recognition_log.jsonl` (`$GITHUB_ACTIONS`-gated) so the
+  confirm never pollutes the persistent speaker DB.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.

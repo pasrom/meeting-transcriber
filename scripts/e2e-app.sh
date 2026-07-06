@@ -35,6 +35,7 @@ KEEP_RECORDINGS=false    # leave record-only output on disk for a follow-up --re
 MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert the app survives it
 CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered into the pipeline on relaunch (issue #379 part 3)
 REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle and exit — restores a clean bundle after --mic-device-change
+NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via POST /v1/jobs/<id>/naming (see run_naming_confirm)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -50,11 +51,12 @@ while [ $# -gt 0 ]; do
         --mic-device-change) MIC_DEVICE_CHANGE=true ;;
         --crash-recovery)   CRASH_RECOVERY=true ;;
         --redeploy-only)    REDEPLOY_ONLY=true ;;
+        --naming-confirm)   NAMING_CONFIRM=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
-                  [--fixture path/to.wav]
+                  [--naming-confirm] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -103,6 +105,20 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        clean bundle (that run leaves a deliberately-crashing
                        fault-injection build deployed). Requires a build
                        (incompatible with --no-build and --mic-device-change).
+  --naming-confirm     Drive the speaker-naming CONFIRM path end-to-end. Enqueues
+                       the 2-speaker fixture with diarization on and expected
+                       speakers = 2 via POST /v1/jobs, waits for the job to park
+                       at speaker-naming (does NOT auto-skip like the other
+                       lanes), reads GET /v1/jobs/<id>/naming, POSTs an anonymous
+                       Speaker A / Speaker B mapping, then asserts the confirmed
+                       names land as transcript speaker labels, the raw
+                       diarization labels are gone, and the speaker DB learned the
+                       voices. Standalone lane (incompatible with the other lane
+                       flags). Under CI it snapshots + restores the runner's real
+                       speakers.json / recognition_log.jsonl so confirming never
+                       pollutes the persistent speaker DB; that snapshot/restore
+                       is $GITHUB_ACTIONS-gated, so a LOCAL run enrolls voices
+                       into your real speaker DB (a warning is printed).
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -117,6 +133,24 @@ done
 # through to whichever branch the dispatch chain checks first.
 if [ "$REIMPORT_RECORDED" = true ] && [ "$REIMPORT_LATEST" = true ]; then
     echo "Error: --reimport-recorded and --reimport-latest are mutually exclusive" >&2
+    exit 2
+fi
+
+# --naming-confirm is a standalone lane (its own enqueue + poll + confirm flow).
+# Reject combinations up-front so a typo can't silently fall through to another
+# lane's branch in the dispatch chain below.
+if [ "$NAMING_CONFIRM" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] \
+    || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
+    || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ]; }; then
+    echo "Error: --naming-confirm is a standalone lane; incompatible with the other lane flags" >&2
+    exit 2
+fi
+# --naming-confirm always enqueues the known 2-speaker fixture, so a custom
+# --fixture would be silently ignored. Reject the combination rather than
+# mislead. (SIMULATOR_FIXTURE is only non-empty here when --fixture was passed;
+# it defaults to the 2-speaker fixture further below.)
+if [ "$NAMING_CONFIRM" = true ] && [ -n "$SIMULATOR_FIXTURE" ]; then
+    echo "Error: --naming-confirm ignores --fixture (it always uses the 2-speaker fixture)" >&2
     exit 2
 fi
 
@@ -343,13 +377,23 @@ fi
 _CONTAINER_PLIST="$HOME/Library/Containers/com.meetingtranscriber.dev/Data/Library/Preferences/com.meetingtranscriber.dev.plist"
 _set_dev_default() {
     local key="$1" value="$2" type="${3:-string}"
-    if [ "$type" = "bool" ]; then
-        defaults write com.meetingtranscriber.dev "$key" -bool "$value" 2>/dev/null || true
-        [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
-    else
-        defaults write com.meetingtranscriber.dev "$key" "$value" 2>/dev/null || true
-        [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" "$value" 2>/dev/null || true
-    fi
+    # `numSpeakers` is read as `defaults.object(forKey:) as? Int`, so it must be
+    # written with `-int`; a string-typed write would fail the `as? Int` cast
+    # and silently fall back to the auto-detect sentinel (0).
+    case "$type" in
+        bool)
+            defaults write com.meetingtranscriber.dev "$key" -bool "$value" 2>/dev/null || true
+            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
+            ;;
+        int)
+            defaults write com.meetingtranscriber.dev "$key" -int "$value" 2>/dev/null || true
+            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -int "$value" 2>/dev/null || true
+            ;;
+        *)
+            defaults write com.meetingtranscriber.dev "$key" "$value" 2>/dev/null || true
+            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" "$value" 2>/dev/null || true
+            ;;
+    esac
 }
 _delete_dev_default() {
     local key="$1"
@@ -361,6 +405,177 @@ if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
     _set_dev_default diarizerMode "$MTT_DIARIZER_MODE"
 else
     _delete_dev_default diarizerMode
+fi
+
+# --- speaker-DB snapshot/restore (naming-confirm lane, CI ONLY) -----------
+#
+# Confirming speaker names enrolls the voices into the real
+# `speakers.json` and appends a row to `recognition_log.jsonl` (both under
+# Application Support, via AppPaths). Left unmanaged that would permanently
+# pollute the Mac mini runner's persistent speaker DB, which the
+# Sortformer-naming lane's recognition expectations depend on. Snapshot both
+# files before the lane and restore them from the exit trap (success AND
+# failure). The snapshot also resets speakers.json to empty so the fixture's
+# voices are guaranteed UNMATCHED, the clean precondition the transcript
+# relabel assertion relies on (auto-name == raw SPEAKER_n label).
+#
+# GUARDED to CI via `$GITHUB_ACTIONS` (never set in a developer's shell), like
+# the pipeline-queue reset above: the destructive reset/restore machinery must
+# never touch a developer's real speaker DB. A LOCAL run therefore does NOT
+# snapshot, so the confirm will enroll into your real DB (warned below).
+_APP_SUPPORT_DIR="$HOME/Library/Application Support/MeetingTranscriber"
+# Durable, DETERMINISTIC backup siblings (not a random /tmp dir): a hard kill
+# between the reset and the trap-restore would strand a random mktemp backup
+# nothing ever finds again, losing the runner's real DB. Deterministic sibling
+# paths let _naming_confirm_self_heal_db (run at every CI lane's startup) detect
+# and restore a dead run's DB.
+_NC_DB_FILES=(speakers.json recognition_log.jsonl)
+_NC_DB_BACKUP_SUFFIX=".e2e-nc-backup"
+_NC_DB_ABSENT_SUFFIX=".e2e-nc-absent"
+# Per-domain (standard + container) pre-lane values of the settings this lane
+# overrides, so cleanup restores EACH domain to exactly its own snapshot. A
+# container-first read paired with a both-domain delete would wipe a
+# standard-domain value that was never snapshotted. Initialised empty so the
+# exit trap is `set -u`-safe even if it fires before the snapshot ran.
+_NC_PRE_DIARIZE_STD=""
+_NC_PRE_DIARIZE_CTR=""
+_NC_PRE_NUMSPK_STD=""
+_NC_PRE_NUMSPK_CTR=""
+# Temp dir holding this lane's private COPY of the fixture (see run_naming_confirm
+# for why a copy is mandatory). Cleaned up by _naming_confirm_cleanup on any exit.
+_NC_FIXTURE_DIR=""
+
+# True when any durable backup / absent marker exists on disk.
+_naming_confirm_backup_present() {
+    local f
+    for f in "${_NC_DB_FILES[@]}"; do
+        [ -f "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" ] && return 0
+        [ -f "$_APP_SUPPORT_DIR/$f$_NC_DB_ABSENT_SUFFIX" ] && return 0
+    done
+    return 1
+}
+
+_naming_confirm_snapshot_db() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+    local f
+    for f in "${_NC_DB_FILES[@]}"; do
+        rm -f "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" "$_APP_SUPPORT_DIR/$f$_NC_DB_ABSENT_SUFFIX"
+        if [ -f "$_APP_SUPPORT_DIR/$f" ]; then
+            # `|| true` so a copy failure falls through to the verify below (which
+            # fails with a clear message) instead of a raw abort mid-loop.
+            cp -p "$_APP_SUPPORT_DIR/$f" "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" || true
+        else
+            : >"$_APP_SUPPORT_DIR/$f$_NC_DB_ABSENT_SUFFIX"
+        fi
+    done
+    # NEVER destroy the live DB until its durable backup verifiably exists.
+    if [ -f "$_APP_SUPPORT_DIR/speakers.json" ] \
+        && [ ! -f "$_APP_SUPPORT_DIR/speakers.json$_NC_DB_BACKUP_SUFFIX" ]; then
+        fail "[naming-confirm] durable speaker-DB backup failed; refusing to reset the live speakers.json"
+    fi
+    rm -f "$_APP_SUPPORT_DIR/speakers.json"
+    log "[naming-confirm] CI: durable speaker-DB backup written; reset speakers.json to empty"
+}
+
+# Restore from the durable backup + clear the markers, verifying byte-identity.
+# Shared by the exit-trap cleanup AND the startup self-heal, so a run that died
+# mid-lane is recovered on the next lane's startup. Idempotent: no markers = no-op.
+_naming_confirm_restore_db() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+    _naming_confirm_backup_present || return 0
+    local f mismatch=""
+    for f in "${_NC_DB_FILES[@]}"; do
+        # cp guarded (this runs from a trap; a failed cp must log, not abort the
+        # rest of cleanup). cmp confirms the restore is byte-identical.
+        if [ -f "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" ]; then
+            if cp -p "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" "$_APP_SUPPORT_DIR/$f"; then
+                cmp -s "$_APP_SUPPORT_DIR/$f" "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" || mismatch="$mismatch $f"
+            else
+                mismatch="$mismatch $f(copy-failed)"
+            fi
+        elif [ -f "$_APP_SUPPORT_DIR/$f$_NC_DB_ABSENT_SUFFIX" ]; then
+            rm -f "$_APP_SUPPORT_DIR/$f"
+        fi
+        rm -f "$_APP_SUPPORT_DIR/$f$_NC_DB_BACKUP_SUFFIX" "$_APP_SUPPORT_DIR/$f$_NC_DB_ABSENT_SUFFIX"
+    done
+    # Log a diff rather than fail: this runs from a trap, and a restore warning
+    # must not mask the run's real exit status.
+    if [ -n "$mismatch" ]; then
+        log "[naming-confirm] WARNING: speaker-DB restore diff:$mismatch"
+    else
+        log "[naming-confirm] CI: speaker DB restored from durable backup (verified)"
+    fi
+}
+
+# Startup self-heal: if a prior naming-confirm run died between the reset and its
+# restore, its durable backup is still on disk. Restore it before anything else
+# touches the DB. Runs for EVERY lane (CI-gated) so a different lane following a
+# dead naming-confirm run still recovers the real DB. Logs even when clean, so
+# its execution is visible in the run log.
+_naming_confirm_self_heal_db() {
+    [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+    if _naming_confirm_backup_present; then
+        log "[naming-confirm] CI: leftover durable speaker-DB backup from a prior run detected; self-healing"
+        _naming_confirm_restore_db
+    else
+        log "[naming-confirm] CI: no leftover speaker-DB backup to self-heal"
+    fi
+}
+
+# Full naming-confirm teardown: restore the DB + the lane's diarize/numSpeakers
+# overrides (per domain, to their exact pre-lane values), then log the restored
+# effective values. Registered as the naming-confirm hook of the single on_exit
+# trap (no second trap arming); idempotent (DB restore no-ops once markers clear,
+# a re-restore of an already-restored default is a harmless re-write/delete).
+_naming_confirm_cleanup() {
+    # Remove the lane's private fixture copy (our own mktemp dir; not CI-gated).
+    if [ -n "${_NC_FIXTURE_DIR:-}" ] && [ -d "$_NC_FIXTURE_DIR" ]; then
+        rm -rf "$_NC_FIXTURE_DIR"
+        _NC_FIXTURE_DIR=""
+    fi
+    _naming_confirm_restore_db
+    # Restore each domain to exactly its own snapshot. The shared restore_*_default
+    # helpers translate `defaults read`'s 1/0 into the -bool true/false tokens and
+    # write -int for numSpeakers (a raw 1/0 into `-bool` errors; see the helpers).
+    restore_bool_default com.meetingtranscriber.dev diarize "$_NC_PRE_DIARIZE_STD"
+    restore_int_default com.meetingtranscriber.dev numSpeakers "$_NC_PRE_NUMSPK_STD"
+    if [ -f "$_CONTAINER_PLIST" ]; then
+        restore_bool_default "$_CONTAINER_PLIST" diarize "$_NC_PRE_DIARIZE_CTR"
+        restore_int_default "$_CONTAINER_PLIST" numSpeakers "$_NC_PRE_NUMSPK_CTR"
+    fi
+    local now_diarize now_num
+    now_diarize="$(read_dev_default_effective com.meetingtranscriber.dev "$_CONTAINER_PLIST" diarize)"
+    now_num="$(read_dev_default_effective com.meetingtranscriber.dev "$_CONTAINER_PLIST" numSpeakers)"
+    log "[naming-confirm] settings restored (effective diarize='$now_diarize' numSpeakers='$now_num')"
+}
+
+# Self-heal a dead prior run's DB before anything touches it (CI-gated, all lanes).
+_naming_confirm_self_heal_db
+
+if [ "$NAMING_CONFIRM" = true ]; then
+    log "Enabling naming-confirm lane (diarize on, expected speakers = 2)"
+    # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
+    # restores each domain to exactly its own pre-lane state.
+    _NC_PRE_DIARIZE_STD="$(snapshot_default com.meetingtranscriber.dev diarize)"
+    _NC_PRE_NUMSPK_STD="$(snapshot_default com.meetingtranscriber.dev numSpeakers)"
+    if [ -f "$_CONTAINER_PLIST" ]; then
+        _NC_PRE_DIARIZE_CTR="$(snapshot_default "$_CONTAINER_PLIST" diarize)"
+        _NC_PRE_NUMSPK_CTR="$(snapshot_default "$_CONTAINER_PLIST" numSpeakers)"
+    fi
+    log "[naming-confirm] pre-lane diarize(std='$_NC_PRE_DIARIZE_STD' ctr='$_NC_PRE_DIARIZE_CTR') numSpeakers(std='$_NC_PRE_NUMSPK_STD' ctr='$_NC_PRE_NUMSPK_CTR')"
+    _set_dev_default diarize true bool
+    _set_dev_default numSpeakers 2 int
+    if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+        log "[naming-confirm] WARNING: not running under CI. The speaker-DB"
+        log "[naming-confirm] snapshot/restore is \$GITHUB_ACTIONS-gated, so this run"
+        log "[naming-confirm] WILL enroll the fixture voices into your real"
+        log "[naming-confirm] $_APP_SUPPORT_DIR/speakers.json (+ recognition_log.jsonl)."
+    fi
+    # Durably back up + reset the DB. No interim trap here (one-trap design): the
+    # window before on_exit is armed is covered by _naming_confirm_self_heal_db
+    # (called above), which restores a dead run's durable backup at the next
+    # lane's startup, and the snapshot verifies the backup exists before the reset.
+    _naming_confirm_snapshot_db
 fi
 
 # LaunchServices' `open` routes to the WindowServer of the *foreground* Aqua
@@ -409,7 +624,13 @@ log "RPC up"
 # any exit path (success, fail, signal). Set before the first `&` line so
 # a kill between fork and the trap line doesn't orphan the subprocess.
 SIM_PID=""
+_ON_EXIT_RAN=""
 on_exit() {
+    # Run exactly once. The INT/TERM traps below run on_exit then `exit`, and
+    # that exit re-fires the EXIT trap, and without this guard on_exit would run
+    # twice on a signal (harmless because every step is idempotent, but noisy).
+    [ -n "$_ON_EXIT_RAN" ] && return 0
+    _ON_EXIT_RAN=1
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
     if [ "$RECORD_ONLY" = true ]; then
         defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
@@ -437,8 +658,21 @@ on_exit() {
         rm -f "$CRASH_RECORDINGS/${CRASH_STEM}"* 2>/dev/null || true
         [ -n "${CRASH_MARKER:-}" ] && rm -f "$CRASH_MARKER"
     fi
+    # Naming-confirm: restore the runner's real speaker DB (CI-gated, no-op
+    # locally) and the lane's diarize/numSpeakers overrides so a later run on
+    # this host starts from the AppSettings defaults.
+    if [ "$NAMING_CONFIRM" = true ]; then
+        _naming_confirm_cleanup
+    fi
 }
-trap on_exit EXIT INT TERM
+# Single cleanup hook, but the signal paths must EXIT after cleaning up: a
+# trapped INT/TERM otherwise returns into the interrupted command and execution
+# continues (e.g. the confirm would re-pollute a just-restored DB). Only the
+# EXIT trap runs cleanup-without-exit (the shell is already leaving). 130 = 128+SIGINT,
+# 143 = 128+SIGTERM, the conventional shell exit codes for those signals.
+trap on_exit EXIT
+trap 'on_exit; exit 130' INT
+trap 'on_exit; exit 143' TERM
 
 # Trigger one meeting, poll until a new pipeline job reaches a terminal
 # state, assert it landed in `done` with a non-trivial transcript. Reads
@@ -851,6 +1085,219 @@ run_crash_recovery() {
     log "$label: recovered recording transcribed (lastJob done) ✅"
 }
 
+# Speaker-naming CONFIRM lane. Every other lane's shared poll loop auto-skips
+# each naming dialog (POST /action/skipNaming), so the confirm path (assign
+# names → the names land as transcript speaker labels → the speaker DB learns
+# the voices) has ZERO live coverage. That path is exactly the bug family the
+# late-rerun transcript-rebuild fix addressed (a confirm that renamed labels but
+# never re-segmented the persisted .txt), so it needs a standing regression net.
+#
+# Suppression of the auto-skip is scoped to this lane BY CONSTRUCTION: it drives
+# the whole flow itself (enqueue → poll pendingNamingJobs → GET/POST
+# /v1/jobs/<id>/naming → poll the job to done) and never calls
+# `_poll_for_new_lastjob_terminal`, so the global auto-skip other lanes rely on
+# is untouched.
+run_naming_confirm() {
+    local label="[naming-confirm]"
+    [ -f "$DEFAULT_FIXTURE" ] || fail "$label: 2-speaker fixture not found: $DEFAULT_FIXTURE"
+
+    # Confirm the app actually resolved the diarization settings the lane
+    # configured via `defaults write`; /state.settings is the running
+    # process's effective view (a blind `defaults read` is unreliable for the
+    # dev bundle's container-plist redirect). Read the DB baseline from the
+    # same snapshot.
+    local snap diarize num_speakers record_only pre_db_count
+    snap="$(rpc /state)"
+    [ -n "$snap" ] || fail "$label: /state returned empty (RPC down?)"
+    diarize="$(jq -r '.settings.diarization.diarize' <<<"$snap")"
+    num_speakers="$(jq -r '.settings.diarization.numSpeakers' <<<"$snap")"
+    record_only="$(jq -r '.settings.recording.recordOnly' <<<"$snap")"
+    pre_db_count="$(jq -r '.speakerDB.count // 0' <<<"$snap")"
+    log "$label: resolved settings diarize=$diarize numSpeakers=$num_speakers recordOnly=$record_only; speakerDB.count=$pre_db_count"
+    [ "$diarize" = "true" ] || fail "$label: settings.diarization.diarize is '$diarize', expected true"
+    [ "$num_speakers" = "2" ] || fail "$label: settings.diarization.numSpeakers is '$num_speakers', expected 2"
+    [ "$record_only" = "false" ] || fail "$label: settings.recording.recordOnly is '$record_only', expected false"
+
+    # Enqueue a PRIVATE COPY of the fixture, never the shared Tests/Fixtures
+    # path. The pipeline's copyAudioToOutput MOVES (renames in place) the
+    # enqueued audio into the output dir once the job finishes, which would
+    # destroy the shared fixture for every later lane in this checkout (a
+    # documented PipelineQueue-consumer trap; the unit suite hit the same bug
+    # once). Copy into a temp dir cleaned up on exit by _naming_confirm_cleanup.
+    _NC_FIXTURE_DIR="$(mktemp -d /tmp/e2e-naming-confirm-fixture.XXXXXX)"
+    local fixture_copy="$_NC_FIXTURE_DIR/two_speakers_de.wav"
+    cp "$DEFAULT_FIXTURE" "$fixture_copy" || fail "$label: could not copy fixture to $fixture_copy"
+
+    # Enqueue on the /v1 automation surface (returns the job id). autoSkipNaming
+    # is false on this path, so the job parks at speaker-naming.
+    log "$label: POST /v1/jobs paths=[$fixture_copy]"
+    local enq job_id
+    enq="$(curl --silent --show-error --max-time 10 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -nc --arg p "$fixture_copy" '{paths: [$p]}')" \
+        "$RPC_BASE/v1/jobs" 2>/dev/null || echo '{}')"
+    job_id="$(jq -r '.jobIDs[0] // empty' <<<"$enq")"
+    [ -n "$job_id" ] || fail "$label: POST /v1/jobs did not return a job id (response: $enq)"
+    log "$label: enqueued job $job_id"
+
+    # Poll /state.pendingNamingJobs until OUR job parks at speaker-naming. No
+    # /action/skipNaming here; driving the confirm is the whole point.
+    local pending_count=""
+    _naming_pending() {
+        assert_app_alive
+        pending_count="$(rpc /state | jq -r --arg id "$job_id" \
+            '[.pendingNamingJobs[] | select(.jobID == $id)] | .[0].speakerCount // empty')"
+        [ -n "$pending_count" ]
+    }
+    log "$label: waiting for job $job_id to reach speaker-naming (timeout ${PIPELINE_TIMEOUT_S}s)"
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _naming_pending \
+        || fail "$label: job $job_id never reached speaker-naming within ${PIPELINE_TIMEOUT_S}s (diarization produced no naming dialog?)"
+    log "$label: job parked at naming with speakerCount=$pending_count"
+    [ "${pending_count:-0}" -ge 2 ] 2>/dev/null \
+        || fail "$label: naming dialog speakerCount=$pending_count, expected >= 2 (numSpeakers=2 on a 2-speaker fixture)"
+
+    # Read the naming choice: raw labels + auto-name suggestions + speaking time.
+    local naming speaker_count
+    naming="$(curl --silent --show-error --max-time 10 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/v1/jobs/$job_id/naming" 2>/dev/null || echo '{}')"
+    echo "$naming" | jq '.' | sed 's/^/    /'
+    speaker_count="$(jq -r '.speakers | length' <<<"$naming")"
+    [ "${speaker_count:-0}" -ge 2 ] 2>/dev/null \
+        || fail "$label: GET naming returned $speaker_count speakers, expected >= 2"
+
+    # Build a mapping assigning ANONYMOUS names (Speaker A, Speaker B, …).
+    # Repo rule: never real first names. Keys MUST be the DTO's raw labels so
+    # the confirm relabel anchors on the right transcript slots. The parallel
+    # arrays (labels, in-transcript suggestions, assigned names) feed the
+    # post-confirm assertions.
+    local mapping labels_json suggested_json names_json
+    mapping="$(jq -c '[.speakers[].label]
+        | to_entries
+        | map({key: .value, value: ("Speaker " + ([65 + .key] | implode))})
+        | from_entries' <<<"$naming")"
+    labels_json="$(jq -c '[.speakers[].label]' <<<"$naming")"
+    suggested_json="$(jq -c '[.speakers[].suggested]' <<<"$naming")"
+    names_json="$(jq -c '[.speakers[].label] | to_entries | map("Speaker " + ([65 + .key] | implode))' <<<"$naming")"
+    log "$label: confirming mapping: $mapping"
+
+    local confirm_status
+    confirm_status="$(curl --silent --show-error --max-time 10 -o /dev/null -w '%{http_code}' \
+        -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -nc --argjson m "$mapping" '{mapping: $m}')" \
+        "$RPC_BASE/v1/jobs/$job_id/naming" 2>/dev/null || echo '000')"
+    [ "$confirm_status" = "200" ] || fail "$label: POST naming returned HTTP $confirm_status (expected 200)"
+    log "$label: naming confirmed; polling job to a terminal state"
+
+    # Poll GET /v1/jobs/<id> (never /state → no auto-skip) until terminal.
+    local state=""
+    _job_terminal() {
+        assert_app_alive
+        state="$(curl --silent --show-error --max-time 10 \
+            --header "Authorization: Bearer $RPC_TOKEN" \
+            "$RPC_BASE/v1/jobs/$job_id" 2>/dev/null | jq -r '.state // empty')"
+        [ "$state" = "done" ] || [ "$state" = "error" ]
+    }
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _job_terminal \
+        || fail "$label: job $job_id did not reach a terminal state within ${PIPELINE_TIMEOUT_S}s"
+
+    local final transcript_path
+    final="$(curl --silent --show-error --max-time 10 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/v1/jobs/$job_id" 2>/dev/null || echo '{}')"
+    echo "$final" | jq '.' | sed 's/^/    /'
+    [ "$state" = "done" ] || fail "$label: job state=$state, expected done. Error: $(jq -r '.error // "<none>"' <<<"$final")"
+    transcript_path="$(jq -r '.transcriptPath // empty' <<<"$final")"
+    [ -n "$transcript_path" ] || fail "$label: job has no transcriptPath"
+    [ -f "$transcript_path" ] || fail "$label: transcript file missing: $transcript_path"
+    log "$label: transcript $transcript_path"
+    head -c 600 "$transcript_path" | sed 's/^/    /'
+    echo
+
+    # --- Assertion 1: the confirmed names landed as speaker labels ---
+    # A transcript line is "[MM:SS] Speaker: text"; the confirm relabel anchors
+    # on "] <label>:", so assert on that exact slot form (fixed-string grep).
+    local names_present=0 name
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        if grep -Fq "] $name:" "$transcript_path"; then
+            names_present=$((names_present + 1))
+        fi
+    done < <(jq -r '.[]' <<<"$names_json")
+    [ "$names_present" -ge 2 ] \
+        || fail "$label: only $names_present assigned name(s) present as speaker labels; expected >= 2 (confirm did not relabel the transcript, the late-rerun rebuild regression)"
+    log "$label: $names_present confirmed speaker names present in transcript ✅"
+
+    # --- Assertion 2: raw diarization labels no longer appear ---
+    # Both the DTO raw label (SPEAKER_n / R_/M_-prefixed) and its pre-confirm
+    # in-transcript suggestion must be gone from every speaker slot.
+    local leaked="" raw
+    while IFS= read -r raw; do
+        [ -n "$raw" ] || continue
+        if grep -Fq "] $raw:" "$transcript_path"; then
+            leaked="$leaked $raw"
+        fi
+    done < <(jq -r '.[]' <<<"$labels_json"; jq -r '.[]' <<<"$suggested_json")
+    [ -z "$leaked" ] \
+        || fail "$label: raw diarization label(s) still present as speaker slots after confirm:$leaked"
+    log "$label: no raw diarization labels remain in transcript ✅"
+
+    # --- Assertion 3 (CI only): the speaker DB learned the confirmed voices ---
+    # Reliable only against the empty baseline the CI snapshot reset guarantees;
+    # a local run starts from the dev's real DB (voices may already match, so a
+    # confirm updates in place with no count change). Locally, just log.
+    # Retry the readback: a single transient RPC hiccup would leave post_db_count
+    # empty and turn the integer comparison into a misleading red.
+    local post_db_count="" _i
+    for _i in 1 2 3 4 5; do
+        post_db_count="$(rpc /state | jq -r '.speakerDB.count // empty' 2>/dev/null || true)"
+        [ -n "$post_db_count" ] && break
+        sleep 1
+    done
+    [ -n "$post_db_count" ] || post_db_count=0
+    log "$label: speakerDB.count after confirm: $post_db_count (was $pre_db_count)"
+    if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        [ "$post_db_count" -gt "$pre_db_count" ] 2>/dev/null \
+            || fail "$label: speakerDB.count did not grow ($pre_db_count → $post_db_count); confirm did not enroll the named voices"
+        log "$label: speaker DB learned the confirmed voices ✅"
+    fi
+
+    # --- Runtime settings readback ---
+    # Re-read /state.settings and confirm the lane didn't drift the app's
+    # effective settings mid-run vs the lane-start values. The app instance is
+    # stable, so these must match; a diff would mean the pipeline mutated
+    # settings unexpectedly. Log-only (a standing lane must not go red on a
+    # diagnostic); the exit-trap cleanup separately verifies the persisted
+    # UserDefaults + speakers.json are restored to their pre-lane state.
+    local end_snap
+    end_snap="$(rpc /state)"
+    if [ -n "$end_snap" ]; then
+        local end_diarize end_num end_record
+        end_diarize="$(jq -r '.settings.diarization.diarize' <<<"$end_snap")"
+        end_num="$(jq -r '.settings.diarization.numSpeakers' <<<"$end_snap")"
+        end_record="$(jq -r '.settings.recording.recordOnly' <<<"$end_snap")"
+        if [ "$end_diarize" = "$diarize" ] && [ "$end_num" = "$num_speakers" ] && [ "$end_record" = "$record_only" ]; then
+            log "$label: /state.settings unchanged across the lane (diarize=$end_diarize numSpeakers=$end_num recordOnly=$end_record) ✅"
+        else
+            log "$label: WARNING: /state.settings drifted during the lane: diarize $diarize->$end_diarize, numSpeakers $num_speakers->$end_num, recordOnly $record_only->$end_record"
+        fi
+    else
+        log "$label: (could not re-read /state.settings for the runtime readback)"
+    fi
+
+    # Guard against a future regression that enqueues the shared fixture path
+    # directly: the pipeline would MOVE it out of Tests/Fixtures and poison
+    # every later lane in this checkout. Assert it still exists here so such a
+    # bug fails loudly in THIS lane instead of surfacing as a cryptic
+    # "fixture not found" in a downstream lane.
+    [ -f "$DEFAULT_FIXTURE" ] \
+        || fail "$label: shared fixture $DEFAULT_FIXTURE no longer exists after this lane; a consumer moved it. Enqueue a COPY, never the shared Tests/Fixtures path."
+    log "$label: shared fixture intact after the lane ✅"
+}
+
 if [ "$REIMPORT_LATEST" = true ]; then
     # Skip the live-record phase and reuse a WAV produced by an earlier
     # `--record-only --keep-recordings` run on this host. Picks the
@@ -912,6 +1359,8 @@ elif [ "$MIC_DEVICE_CHANGE" = true ]; then
     log "[mic-device-change] app survived the injected device-change restart ✅"
 elif [ "$CRASH_RECOVERY" = true ]; then
     run_crash_recovery
+elif [ "$NAMING_CONFIRM" = true ]; then
+    run_naming_confirm
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"

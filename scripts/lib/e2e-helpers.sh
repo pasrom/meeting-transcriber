@@ -199,6 +199,44 @@ restore_float_default() {
     fi
 }
 
+# Integer companion to restore_bool_default / restore_float_default. Empty
+# `saved` deletes the key; anything else is written as `-int`. Keys like
+# `numSpeakers` are read by the app as `defaults.object(forKey:) as? Int`, so
+# they must round-trip through `-int` (a `-float` or bare-string write would
+# fail the cast and silently fall back to the default sentinel).
+restore_int_default() {
+    local bundle="$1"
+    local key="$2"
+    local saved="$3"
+    if [ -n "$saved" ]; then
+        /usr/bin/defaults write "$bundle" "$key" -int "$saved"
+    else
+        /usr/bin/defaults delete "$bundle" "$key" 2>/dev/null || true
+    fi
+}
+
+# Read the EFFECTIVE value of a dev-bundle default the way the app resolves it.
+# The dev `.app` has a pre-existing container at
+# `~/Library/Containers/<bundle>/…`, and macOS routes the app's UserDefaults
+# reads there regardless of whether the current binary is sandboxed, so a plain
+# `defaults read <bundle> <key>` (standard domain) can disagree with what the
+# app actually sees. When the container plist exists it wins; else fall back to
+# the standard domain. Empty when unset. Shared so e2e-app.sh / e2e-live-captions.sh
+# / e2e-cpu-load.sh read their blind `defaults write`s back consistently instead
+# of each re-deriving the container redirect. NOTE: mutating a dev default still
+# needs BOTH domains written (see the per-domain snapshot/restore in e2e-app.sh);
+# this reader is for verification/readback only.
+read_dev_default_effective() {
+    local bundle="$1"
+    local container_plist="$2"
+    local key="$3"
+    if [ -f "$container_plist" ]; then
+        /usr/bin/defaults read "$container_plist" "$key" 2>/dev/null || true
+    else
+        /usr/bin/defaults read "$bundle" "$key" 2>/dev/null || true
+    fi
+}
+
 # Delete the recording artifacts THIS run created — every file under `rec_dir`
 # newer than `marker` (create the marker before the run starts recording).
 # Killing the app mid-recording orphans a raw temp; the next run's app

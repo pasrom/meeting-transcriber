@@ -67,14 +67,18 @@ jobs:
     # `gh api /repos/{owner}/{repo}/actions/runners`.
     runs-on: [self-hosted, macOS, ARM64, audio]
     # Three transcript lanes (transcript, record-only, reimport) at
-    # ~4–6 min each → ~14 min observed. Plus channel-health (~30 s),
-    # silent-recording (~45 s), live-captions (~2 min), crash-recovery
-    # (~5 min: record → kill → relaunch → recover → transcribe) → ~22 min
-    # wall. 32 min job budget gives honest margin; each lane has its own
-    # step-timeout below so a hang in lane N surfaces as `timed_out`
-    # on that step (not as an opaque job-level `cancelled`). See
-    # docs/plans/.local/open/2026-05-11-job-timeout-visibility.md.
-    timeout-minutes: 32
+    # ~4–6 min each → ~14 min observed. Plus Sortformer naming-dialog
+    # (~30 s), channel-health (~30 s), silent-recording (~45 s), live-captions
+    # (~2 min), naming-confirm (~4 min typical, up to ~10 min worst case: two
+    # 240 s polls + RPC-ready + baseline), crash-recovery (~5 min: record →
+    # kill → relaunch → recover → transcribe) → ~26 min wall. The level-sensitive
+    # lanes (channel-health, silent-recording, live-captions) run before
+    # naming-confirm so its transcribe/diarize load stays off their tight
+    # timing windows; crash-recovery stays last. 44 min job budget gives
+    # honest margin; each lane has its own step-timeout below so a hang in
+    # lane N surfaces as `timed_out` on that step (not as an opaque job-level
+    # `cancelled`).
+    timeout-minutes: 44
 
     steps:
       - uses: actions/checkout@v7
@@ -273,6 +277,33 @@ jobs:
           name: live-captions-simulator.log
           path: /tmp/e2e-live-captions-sim.log
           if-no-files-found: ignore
+
+      # Speaker-naming CONFIRM lane: enqueues the 2-speaker fixture with
+      # diarization on and expected speakers = 2, waits for the job to park at
+      # speaker-naming (this lane does NOT auto-skip the dialog like every other
+      # lane does), then drives GET/POST /v1/jobs/<id>/naming with an anonymous
+      # Speaker A / Speaker B mapping and asserts the confirmed names land as
+      # transcript speaker labels, the raw diarization labels are gone, and the
+      # speaker DB learned the voices. This is the one user flow the other lanes
+      # never exercise end-to-end; the confirm path is exactly the bug family
+      # the late-rerun transcript-rebuild fix addressed (rename-without-
+      # re-segment). Under CI the driver snapshots + restores the runner's real
+      # speakers.json / recognition_log.jsonl around the run ($GITHUB_ACTIONS-
+      # gated) and verifies the restore, so confirming never pollutes the
+      # persistent speaker DB the Sortformer-naming lane depends on.
+      # PLACEMENT: this lane runs a full transcribe + diarize + confirm + relabel
+      # cycle, so it is deliberately kept AFTER the level-sensitive lanes
+      # (channel-health, silent-recording, live-captions) to leave their tight
+      # dBFS-timing windows on a quiet machine, and BEFORE crash-recovery so the
+      # SIGKILL-and-relaunch teardown stays the final lane (repo policy).
+      # `--no-build` reuses the dev bundle the earlier lanes built + signed.
+      - name: Run live-recording E2E driver (speaker-naming confirm)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # 12 min covers the script's own worst case (two 240 s polls + RPC-ready
+        # + baseline + overhead); a tighter budget would SIGKILL through cleanup.
+        timeout-minutes: 12
+        run: bash scripts/e2e-app.sh --no-build --naming-confirm
 
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
       # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +
