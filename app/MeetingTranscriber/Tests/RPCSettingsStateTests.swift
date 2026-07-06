@@ -133,6 +133,36 @@
             XCTAssertEqual(s.output.directory, AppPaths.downloadsProtocolsDir.path)
         }
 
+        func test_snapshot_output_resolvesCustomBookmark() throws {
+            let dir = try makeTempDirectory(prefix: "RPCSettingsOutput")
+            // Plain (non-security-scoped) bookmark data resolves fine under the
+            // snapshot's `.withoutUI/.withoutMounting` read-only options.
+            settings.customOutputDirBookmark = try dir.bookmarkData()
+
+            let s = settings.rpcSettingsSnapshot()
+
+            XCTAssertTrue(s.output.hasCustomDirectory)
+            let reported = try XCTUnwrap(s.output.directory)
+            // Normalise /var vs /private/var so the symlinked temp dir compares.
+            XCTAssertEqual(
+                URL(fileURLWithPath: reported).resolvingSymlinksInPath().path,
+                dir.resolvingSymlinksInPath().path,
+            )
+        }
+
+        func test_snapshot_output_unresolvableBookmarkIsNilAndNotRepaired() {
+            let garbage = Data([0xDE, 0xAD, 0xBE, 0xEF])
+            settings.customOutputDirBookmark = garbage
+
+            let s = settings.rpcSettingsSnapshot()
+
+            XCTAssertTrue(s.output.hasCustomDirectory)
+            XCTAssertNil(s.output.directory, "unresolvable custom dir must report null, not a wrong fallback")
+            // Read-only guarantee: the snapshot must never rewrite the persisted
+            // bookmark (unlike `effectiveOutputDir`'s stale-repair path).
+            XCTAssertEqual(settings.customOutputDirBookmark, garbage)
+        }
+
         // MARK: - Secrets never reach the wire
 
         /// The ONLY secret `AppSettings` holds is the OpenAI API key, stored in
