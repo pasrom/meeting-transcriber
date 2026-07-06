@@ -9,10 +9,13 @@ name: Quality & Safety
 #     in Tests/Fixtures/quality/quality-baseline.json; fails on regression).
 #
 # Triggers: push to main, nightly cron, explicit manual dispatch, and
-# label-gated PR runs. Unlabeled PRs skip every job, so day-to-day review
-# iteration stays fast; applying the `run-quality` label runs the same job
-# set a push to main runs (both the sanitizer matrix and the quality gate),
-# giving pre-merge feedback on demand.
+# label-gated PR runs for SAME-REPO branches only. Fork PR code never runs
+# here: the sanitizer leg executes on the self-hosted Mini right next to an
+# unlocked CI keychain, and fork `pull_request` tokens are read-only, which
+# would also break the cancel-on-failure step. Unlabeled PRs skip every job,
+# so day-to-day review iteration stays fast; applying the `run-quality`
+# label runs the same job set a push to main runs (both the sanitizer
+# matrix and the quality gate), giving pre-merge feedback on demand.
 on:
   push:
     branches: [main]
@@ -43,21 +46,30 @@ on:
 #
 # Non-PR events keep this exactly: the group falls back to github.ref and
 # cancel-in-progress stays false, so no push/schedule/dispatch run is ever
-# cancelled. PR events group per PR number and set cancel-in-progress true,
-# so a new commit on a labeled PR supersedes that PR's in-flight run (the
-# sanitizer leg shares the scarce self-hosted Mini) without touching any
-# main/nightly run.
+# cancelled. PR events group per PR number, never touching any main/nightly
+# run, and only a `synchronize` event (new commits) supersedes that PR's
+# in-flight run: `labeled` fires for ANY label addition, so cancelling on it
+# would kill a long in-flight quality run just because an unrelated label
+# arrived.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
   test-sanitizer:
+    # PR leg: same-repo branches with the `run-quality` label only (see the
+    # trigger comment); the label-name check keeps `labeled` events for any
+    # OTHER label from starting a duplicate run.
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-quality'))
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-quality') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-quality')
+      )
     # Self-hosted Mini absorbs sanitizer instrumentation 4× better than
     # macos-26 GH-hosted (TSan ~6:41 vs ~25 min) and avoids the CoreML
     # model-load assertion race that flaked WhisperKitEngineTests on
@@ -127,11 +139,19 @@ jobs:
           job-name: sanitizers (${{ matrix.variant }})
 
   quality-baseline:
+    # Same PR gate as test-sanitizer: this job is GH-hosted, but the fork
+    # token would be read-only (403 on cancel-on-failure), and one label
+    # driving both jobs must mean one consistent audience.
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run-quality) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-quality'))
+      (
+        github.event_name == 'pull_request' &&
+        contains(github.event.pull_request.labels.*.name, 'run-quality') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-quality')
+      )
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
