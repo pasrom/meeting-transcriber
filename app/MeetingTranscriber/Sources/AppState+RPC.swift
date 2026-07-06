@@ -67,6 +67,9 @@
                 liveCaptions: liveCaptionsSnapshot(),
                 watchState: watching.watchLoop?.state.rawValue,
                 notifications: notificationsSnapshot(),
+                // Built inside AppSettings (single-hop `self.` reads) to stay
+                // under the type-check budget — see `rpcSettingsSnapshot`.
+                settings: settings.rpcSettingsSnapshot(),
             )
         }
 
