@@ -1,15 +1,25 @@
 import AppKit
 
 /// Badge overlay kind for the menu bar icon.
-enum BadgeKind: CaseIterable {
+///
+/// `String`-backed + `Codable` so the RPC `/state` snapshot can expose the
+/// current badge directly (it encodes to the case-name raw value), letting a
+/// driver script assert the menu-bar state deterministically instead of
+/// pixel-matching a screenshot.
+enum BadgeKind: String, CaseIterable, Codable {
     case inactive
     case recording
     case transcribing
     case diarizing
     case processing
+    // SwiftFormat strips a redundant `= "userAction"`, which then trips the
+    // camel-cased-Codable rule; the implicit rawValue already matches, so
+    // disable rather than fight the formatter (same as JobState / AppSettings).
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case userAction
     case done
     case error
+    // swiftlint:disable:next raw_value_for_camel_cased_codable_enum
     case updateAvailable
 
     /// Whether this badge kind uses animation.
