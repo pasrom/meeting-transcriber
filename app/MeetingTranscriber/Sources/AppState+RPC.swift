@@ -66,6 +66,7 @@
                 permissionHealth: permissionHealthSnapshot(),
                 liveCaptions: liveCaptionsSnapshot(),
                 watchState: watching.watchLoop?.state.rawValue,
+                isManualRecording: isManualRecording,
                 notifications: notificationsSnapshot(),
                 // Built inside AppSettings (single-hop `self.` reads) to stay
                 // under the type-check budget — see `rpcSettingsSnapshot`.
