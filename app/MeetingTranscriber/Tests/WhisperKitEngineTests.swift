@@ -39,6 +39,21 @@ final class WhisperKitEngineTests: XCTestCase {
         XCTAssertEqual(engine.modelState, .unloaded)
     }
 
+    func testApplyModelVariant_updatesVariant() {
+        let engine = WhisperKitEngine()
+        engine.applyModelVariant("openai_whisper-small")
+        XCTAssertEqual(engine.modelVariant, "openai_whisper-small")
+    }
+
+    func testApplyModelVariant_unchanged_isNoOp() {
+        let engine = WhisperKitEngine()
+        let original = engine.modelVariant
+        engine.applyModelVariant(original)
+        XCTAssertEqual(engine.modelVariant, original)
+        // No load ever happened, so the no-op must leave the state untouched.
+        XCTAssertEqual(engine.modelState, .unloaded)
+    }
+
     func testDownloadProgressStartsAtZero() {
         let engine = WhisperKitEngine()
         XCTAssertEqual(engine.downloadProgress, 0, accuracy: 0.001)

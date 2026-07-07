@@ -53,6 +53,13 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/init-vocab.txt")
     }
 
+    func test_initialSync_propagatesWhisperKitModelToEngine() {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitModel = "openai_whisper-small"
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.modelVariant, "openai_whisper-small")
+    }
+
     // MARK: - Runtime propagation
 
     func test_runtimeChange_whisperLanguage_propagatesToEngine() async {
@@ -65,6 +72,22 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
         await waitFor(engines.whisperKit.language == "en")
         XCTAssertEqual(engines.whisperKit.language, "en")
+    }
+
+    /// The model variant was the one engine-config key missing from the
+    /// reactive observer: changing it in Settings only reached the engine via
+    /// the explicit "Load Model" button or a relaunch, so a user who picked a
+    /// new model and started a meeting silently transcribed with the old one.
+    func test_runtimeChange_whisperKitModel_propagatesToEngine() async {
+        settings.transcriptionEngine = .whisperKit
+        let engines = EngineController(settings: settings)
+        let original = engines.whisperKit.modelVariant
+
+        settings.whisperKitModel = "openai_whisper-small"
+
+        await waitFor(engines.whisperKit.modelVariant == "openai_whisper-small")
+        XCTAssertEqual(engines.whisperKit.modelVariant, "openai_whisper-small")
+        XCTAssertNotEqual(engines.whisperKit.modelVariant, original)
     }
 
     func test_runtimeChange_customVocabularyPath_propagatesToParakeet() async {

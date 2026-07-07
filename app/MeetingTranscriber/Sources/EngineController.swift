@@ -5,9 +5,9 @@ import Observation
 
 /// Owns the transcription-engine concern: the engine instances
 /// (`WhisperKitEngine`, `ParakeetEngine`),
-/// the active-engine selection, and keeping each engine's language / vocabulary
-/// in line with `AppSettings` (both an up-front sync at construction and a
-/// self-rearming reactive observer for runtime changes).
+/// the active-engine selection, and keeping each engine's model / language /
+/// vocabulary in line with `AppSettings` (both an up-front sync at construction
+/// and a self-rearming reactive observer for runtime changes).
 ///
 /// Extracted from `AppState` as the final concern-specific controller in the
 /// god-class split. Unlike the other controllers it is fully self-contained — it
@@ -15,7 +15,7 @@ import Observation
 /// own `init` (no post-init `activate` wiring). `AppState` exposes it as
 /// `engines` and the pipeline / live-transcription coordinators read
 /// `engines.activeTranscriptionEngine`; the watch-start path calls
-/// `engines.syncLanguageSettings()` for its belt-and-suspenders up-front sync.
+/// `engines.syncEngineSettings()` for its belt-and-suspenders up-front sync.
 ///
 /// Not `@Observable` — its stored engine references are `let`s and consumers
 /// observe the engine instances themselves (each is `@Observable`), so the
@@ -50,7 +50,7 @@ final class EngineController {
         // Bring engines in line with the current settings up front so the first
         // transcription doesn't run against stale defaults, then start observing
         // for runtime changes.
-        syncLanguageSettings()
+        syncEngineSettings()
         observeEngineSettings()
     }
 
@@ -80,12 +80,14 @@ final class EngineController {
         }
     }
 
-    /// Push current language/vocabulary settings into the active engine.
-    /// Idempotent — each branch only writes when the value actually differs,
-    /// so unchanged settings don't churn the engine's `@Observable` watchers.
-    func syncLanguageSettings() {
+    /// Push current model / language / vocabulary settings into the active
+    /// engine. Idempotent — each branch only writes when the value actually
+    /// differs, so unchanged settings don't churn the engine's `@Observable`
+    /// watchers (`applyModelVariant` self-guards the same way).
+    func syncEngineSettings() {
         switch settings.transcriptionEngine {
         case .whisperKit:
+            whisperKit.applyModelVariant(settings.whisperKitModel)
             let next = settings.whisperLanguageOrNil
             if whisperKit.language != next { whisperKit.language = next }
 
@@ -103,13 +105,14 @@ final class EngineController {
     private func observeEngineSettings() {
         withObservationTracking {
             _ = settings.transcriptionEngine
+            _ = settings.whisperKitModel
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
             _ = settings.parakeetLanguage
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                self.syncLanguageSettings()
+                self.syncEngineSettings()
                 self.observeEngineSettings()
             }
         }

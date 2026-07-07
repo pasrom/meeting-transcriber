@@ -51,12 +51,18 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 
     func loadModel() async {
         await modelLoad.run { [self] in
+            // Snapshot the requested variant once. `modelVariant` is `@MainActor`
+            // mutable (the reactive settings sync calls `applyModelVariant`), so
+            // reading it separately for the download and the init could tear
+            // across these awaits — downloading one variant's folder but
+            // initialising WhisperKit under another variant's name.
+            let variant = modelVariant
             modelState = .downloading
             downloadProgress = 0
             do {
                 // Step 1: Download with progress tracking
                 let modelFolder = try await WhisperKit.download(
-                    variant: modelVariant,
+                    variant: variant,
                 ) { progress in
                     Task { @MainActor in
                         self.downloadProgress = progress.fractionCompleted
@@ -68,17 +74,44 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                 downloadProgress = 1.0
                 pipe = try await WhisperKit(
                     WhisperKitConfig(
-                        model: modelVariant,
+                        model: variant,
                         modelFolder: modelFolder.path(),
                     ),
                 )
                 modelState = .loaded
+
+                // A model change that landed mid-load set `modelVariant` but saw
+                // a nil `pipe`, so `applyModelVariant` couldn't drop it. Reconcile
+                // here so the next transcription lazily reloads the now-current
+                // variant instead of silently serving this stale one.
+                if modelVariant != variant {
+                    pipe = nil
+                    modelState = .unloaded
+                    downloadProgress = 0
+                }
             } catch {
                 logger.error("WhisperKit model load failed: \(error.localizedDescription, privacy: .public)")
                 modelState = .unloaded
                 downloadProgress = 0
             }
         }
+    }
+
+    /// Apply a model-variant change coming from settings. Updates `modelVariant`
+    /// and, if a model is already loaded, drops it so the next transcription
+    /// lazily reloads with the new variant — `ensureModel()` short-circuits on a
+    /// non-nil `pipe`, so without this drop a settings change would never reach
+    /// an already-loaded (e.g. launch-preloaded) engine. Safe against an
+    /// in-flight transcription: `transcribeSegments` holds its own local `pipe`
+    /// reference, so clearing this one only affects the *next* load. No-op when
+    /// the variant is unchanged.
+    func applyModelVariant(_ variant: String) {
+        guard variant != modelVariant else { return }
+        modelVariant = variant
+        guard pipe != nil else { return }
+        pipe = nil
+        modelState = .unloaded
+        downloadProgress = 0
     }
 
     /// Ensure model is loaded, loading it if necessary.
