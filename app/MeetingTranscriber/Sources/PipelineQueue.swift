@@ -396,6 +396,13 @@ class PipelineQueue {
     func updateJobState(id: UUID, to newState: JobState, error: String? = nil) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let oldState = jobs[index].state
+        // Skip a true no-op: same state AND no error to record. Without this,
+        // re-entering the same state (e.g. the confirm path enters
+        // `.generatingProtocol` twice) fires a redundant log line, snapshot
+        // write, and `onJobStateChange` callback, and would latently schedule a
+        // second `removeJob` cleanup Task on a re-`.done`. An error-only update
+        // (same state, new message) must still apply and persist.
+        guard oldState != newState || error != nil else { return }
         jobs[index].state = newState
         if let error { jobs[index].error = error }
         recordStageTransition(from: oldState, to: newState, jobID: id)
