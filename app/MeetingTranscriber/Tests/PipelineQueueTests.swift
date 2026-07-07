@@ -225,6 +225,74 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(content.contains("enqueued"))
     }
 
+    // MARK: - updateJobState no-op guard
+
+    /// Count non-empty lines in the pipeline log (one JSON entry per line).
+    private func logLineCount(_ url: URL) throws -> Int {
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        let content = try String(contentsOf: url, encoding: .utf8)
+        return content.split(separator: "\n", omittingEmptySubsequences: true).count
+    }
+
+    func testUpdateJobStateSameStateIsNoOp() throws {
+        var job = makeJob()
+        job.state = .transcribing
+        queue.enqueue(job)
+
+        let logPath = tmpDir.appendingPathComponent("pipeline_log.jsonl")
+        let baseline = try logLineCount(logPath)
+
+        var callbackCount = 0
+        queue.onJobStateChange = { _, _, _ in callbackCount += 1 }
+
+        queue.updateJobState(id: job.id, to: .transcribing)
+
+        XCTAssertEqual(callbackCount, 0, "same-state update must not fire onJobStateChange")
+        XCTAssertEqual(
+            try logLineCount(logPath), baseline,
+            "same-state update must not append a redundant state_change log line",
+        )
+    }
+
+    func testUpdateJobStateRealTransitionFiresCallbackOnce() {
+        var job = makeJob()
+        job.state = .transcribing
+        queue.enqueue(job)
+
+        var callbackCount = 0
+        var observed: (old: JobState, new: JobState)?
+        queue.onJobStateChange = { _, old, new in
+            callbackCount += 1
+            observed = (old, new)
+        }
+
+        queue.updateJobState(id: job.id, to: .diarizing)
+
+        XCTAssertEqual(callbackCount, 1, "a real transition must fire onJobStateChange exactly once")
+        XCTAssertEqual(observed?.old, .transcribing)
+        XCTAssertEqual(observed?.new, .diarizing)
+    }
+
+    func testUpdateJobStateSameStateWithErrorStillApplies() {
+        var job = makeJob()
+        job.state = .transcribing
+        queue.enqueue(job)
+
+        var callbackCount = 0
+        queue.onJobStateChange = { _, _, _ in callbackCount += 1 }
+
+        queue.updateJobState(id: job.id, to: .transcribing, error: "boom")
+
+        XCTAssertEqual(
+            queue.jobs.first?.error, "boom",
+            "a same-state update carrying an error must still persist it",
+        )
+        XCTAssertEqual(
+            callbackCount, 1,
+            "an error-bearing update must still notify even when the state is unchanged",
+        )
+    }
+
     func testActiveJobs() {
         var job1 = makeJob(title: "Active")
         job1.state = .transcribing
