@@ -58,6 +58,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     SpeakerMatcher+Logging.swift # Forensic match-decision logging (pseudonymized speaker names)
     LiveSpeakerMatcher.swift  # Actor for real-time speaker matching in live captions overlay (same WeSpeaker model as batch path)
     StoredSpeaker.swift    # Codable speaker DB entry model (centroid + FIFO embeddings + metadata)
+    SpeakerKey.swift       # Speaker-track identity value type (track + raw id); single serialization boundary for the R_/M_ prefix strings
     RecognitionStats.swift # Recognition event logging + aggregate stats model (recognition_log.jsonl)
     RecordingSidecar.swift # Metadata sidecar written next to dual-source recordings in record-only mode
     RecordingFileSuffix.swift  # Filename suffixes for dual-source recordings (_app.wav, _mic.wav, _mix.wav)
