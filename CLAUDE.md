@@ -63,6 +63,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     RecordingFileSuffix.swift  # Filename suffixes for dual-source recordings (_app.wav, _mic.wav, _mix.wav)
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
+    PipelineQueue+Stages.swift  # Pipeline-stage execution methods (processNext/transcribe/diarize/render/protocol/VAD/copyAudioToOutput) split out to shrink the PipelineQueue class body (line-cap split)
     ProcessedRecordingsLedger.swift  # File-backed skip-list of successfully-processed mix paths (backs PipelineQueue orphan recovery)
     PipelineEventLog.swift  # Appends per-job state transitions to pipeline_log.jsonl (owner-only; extracted from PipelineQueue)
     PipelineJob.swift      # Pipeline job model
