@@ -23,6 +23,11 @@ class PipelineQueue {
     private(set) var jobs: [PipelineJob] = []
     private let logDir: URL
 
+    /// File-backed skip list of already-processed recordings, consulted by
+    /// `recoverOrphanedRecordings` so completed jobs aren't re-queued as
+    /// orphans on the next launch.
+    let processedLedger: ProcessedRecordingsLedger
+
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
     let diarizationFactory: (() -> any DiarizationProvider)?
@@ -179,6 +184,7 @@ class PipelineQueue {
         terminalJobStore: TerminalJobStore? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
+        self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         self.engine = nil
         self.diarizationFactory = nil
         self.diarizationFactoryWithMode = nil
@@ -268,6 +274,7 @@ class PipelineQueue {
         terminalJobStore: TerminalJobStore? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
+        self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         self.engine = engine
         self.diarizationFactory = diarizationFactory
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
@@ -350,7 +357,7 @@ class PipelineQueue {
 
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
-            markProcessed(mixPath: jobs[index].mixPath)
+            processedLedger.markProcessed(mixPath: jobs[index].mixPath)
             jobs.remove(at: index)
         }
         stageStartByJob.removeValue(forKey: id)
@@ -411,7 +418,7 @@ class PipelineQueue {
         onJobStateChange?(jobs[index], oldState, newState)
 
         if newState == .done || newState == .error {
-            markProcessed(mixPath: jobs[index].mixPath)
+            processedLedger.markProcessed(mixPath: jobs[index].mixPath)
             recordTerminalJob(jobs[index])
         }
         if newState == .done {
@@ -1261,37 +1268,6 @@ class PipelineQueue {
 
     // MARK: - Orphaned Recording Recovery
 
-    /// One-time migration: if no processed_recordings.json exists yet, seed it with
-    /// all existing `_mix.wav` files so they don't get recovered on first launch after update.
-    ///
-    /// Dir scan + JSON encode + atomic write run on a detached task. The
-    /// guard + `ensureLogDir` stay on the main actor so the migration is a
-    /// no-op (no detached task spawned) when the processed file already
-    /// exists — which is the steady-state case.
-    func migrateProcessedRecordings(recordingsDir: URL) async {
-        guard !FileManager.default.fileExists(atPath: processedRecordingsPath.path) else { return }
-        ensureLogDir()
-        let processedRecordingsPath = self.processedRecordingsPath
-        await Task.detached(priority: .utility) {
-            let fm = FileManager.default
-            guard let entries = try? fm.contentsOfDirectory(
-                at: recordingsDir, includingPropertiesForKeys: nil,
-            ) else { return }
-            var paths = Set<String>()
-            for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mix) {
-                paths.insert(file.standardizedFileURL.path)
-            }
-            guard !paths.isEmpty else { return }
-            do {
-                let data = try JSONEncoder().encode(Array(paths))
-                try data.write(to: processedRecordingsPath, options: .atomic)
-                logger.info("Migration: seeded \(paths.count) existing recordings as processed")
-            } catch {
-                logger.error("Migration failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }.value
-    }
-
     /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
     /// Creates recovery jobs for untracked recordings younger than `maxAge`.
     /// Skips files that were already successfully processed (tracked in processed_recordings.json).
@@ -1307,11 +1283,11 @@ class PipelineQueue {
         // One-time migration: seed processed list with existing recordings
         // Only for the default recordings directory (not test overrides)
         if recordingsDir == AppPaths.recordingsDir {
-            await migrateProcessedRecordings(recordingsDir: recordingsDir)
+            await processedLedger.migrate(recordingsDir: recordingsDir)
         }
 
         let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
-        let processedRecordingsPath = self.processedRecordingsPath
+        let ledger = processedLedger
 
         // Off-main: directory scan + processed-list read + per-file
         // attributesOfItem probes + filtering all happen here.
@@ -1321,12 +1297,7 @@ class PipelineQueue {
                 at: recordingsDir,
                 includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
             ) else { return [] }
-            let processedPaths: Set<String> = {
-                guard let data = try? Data(contentsOf: processedRecordingsPath),
-                      let paths = try? JSONDecoder().decode([String].self, from: data)
-                else { return [] }
-                return Set(paths)
-            }()
+            let processedPaths = ledger.load()
             let now = Date()
             return PairedRecordingResolver.resolve(urls: entries).paired.filter { group in
                 // Groups without a real mix file (app+mic-only paired imports)
@@ -1366,37 +1337,6 @@ class PipelineQueue {
         saveSnapshot()
         logger.info("Recovered \(candidates.count) orphaned recording(s)")
         triggerProcessing()
-    }
-
-    // MARK: - Processed Recordings Tracking
-
-    private var processedRecordingsPath: URL {
-        logDir.appendingPathComponent("processed_recordings.json")
-    }
-
-    /// Load the set of mix paths that completed successfully.
-    private func loadProcessedPaths() -> Set<String> {
-        guard let data = try? Data(contentsOf: processedRecordingsPath),
-              let paths = try? JSONDecoder().decode([String].self, from: data) else {
-            return []
-        }
-        return Set(paths)
-    }
-
-    /// Record that a job's mix file was successfully processed. Nil mixPath
-    /// (paired imports without a `_mix.wav` source) is a no-op — there's no
-    /// path to track for orphan recovery.
-    func markProcessed(mixPath: URL?) {
-        guard let mixPath else { return }
-        var paths = loadProcessedPaths()
-        paths.insert(mixPath.standardizedFileURL.path)
-        do {
-            ensureLogDir()
-            let data = try JSONEncoder().encode(Array(paths))
-            try data.write(to: processedRecordingsPath, options: .atomic)
-        } catch {
-            logger.error("Failed to write processed recordings: \(error.localizedDescription, privacy: .public)")
-        }
     }
 
     // MARK: - JSON Logging
