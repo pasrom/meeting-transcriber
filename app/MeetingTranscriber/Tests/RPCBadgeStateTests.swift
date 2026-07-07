@@ -31,7 +31,7 @@
         // MARK: - Wiring: snapshot.badge follows currentBadge (non-vacuous)
 
         func testSnapshotBadgeReflectsCurrentBadge() throws {
-            let state = makeState()
+            let state = makeRPCTestState()
 
             // Fresh idle app -> inactive, on both the computed property and the wire.
             XCTAssertEqual(state.currentBadge, .inactive)
@@ -72,20 +72,6 @@
             // jsonData() is pretty-printed with sorted keys -> `"key" : "value"`;
             // a String-raw Codable enum encodes to its raw value.
             XCTAssertTrue(json.contains("\"badge\" : \"recording\""), json)
-        }
-
-        // MARK: - Helpers
-
-        private func makeState() -> AppState {
-            let suite = "RPCBadgeStateTests-\(getpid())-\(UUID().uuidString)"
-            guard let defaults = UserDefaults(suiteName: suite) else {
-                fatalError("Could not create test UserDefaults suite")
-            }
-            // Per-call unique volatile suite — remove it after the test so repeated
-            // runs don't accumulate orphaned preference domains (mirrors the sibling
-            // RPC test classes' tearDown). Capture only the Sendable suite name.
-            addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
-            return AppState(settings: AppSettings(defaults: defaults))
         }
     }
 #endif
