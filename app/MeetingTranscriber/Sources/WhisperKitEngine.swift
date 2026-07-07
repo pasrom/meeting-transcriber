@@ -85,9 +85,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                 // here so the next transcription lazily reloads the now-current
                 // variant instead of silently serving this stale one.
                 if modelVariant != variant {
-                    pipe = nil
-                    modelState = .unloaded
-                    downloadProgress = 0
+                    unloadModel()
                 }
             } catch {
                 logger.error("WhisperKit model load failed: \(error.localizedDescription, privacy: .public)")
@@ -109,6 +107,14 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         guard variant != modelVariant else { return }
         modelVariant = variant
         guard pipe != nil else { return }
+        unloadModel()
+    }
+
+    /// Reset to the unloaded state: drop the loaded pipe and its progress. Shared
+    /// by `applyModelVariant` and `loadModel`'s mid-load reconcile. The load
+    /// `catch` deliberately does NOT call this — a failed *reload* keeps the
+    /// prior pipe rather than clobbering a still-good model.
+    private func unloadModel() {
         pipe = nil
         modelState = .unloaded
         downloadProgress = 0

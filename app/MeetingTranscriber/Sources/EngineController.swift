@@ -69,15 +69,12 @@ final class EngineController {
     /// first) so the first transcription doesn't pay the cold-load cost. Called
     /// from the menu-bar `.task` at launch.
     func preloadActiveModel() async {
-        switch settings.transcriptionEngine {
-        case .whisperKit:
-            whisperKit.modelVariant = settings.whisperKitModel
-            whisperKit.language = settings.whisperLanguageOrNil
-            await whisperKit.loadModel()
-
-        case .parakeet:
-            await parakeetEngine.loadModel()
-        }
+        // Push settings into the active engine through the one canonical sync
+        // (idempotent — it already ran at init), then load it. Routing the
+        // variant/language writes through `syncEngineSettings` keeps a single
+        // settings→engine path instead of re-inlining a whisperKit-only subset.
+        syncEngineSettings()
+        await activeTranscriptionEngine.loadModel()
     }
 
     /// Push current model / language / vocabulary settings into the active
