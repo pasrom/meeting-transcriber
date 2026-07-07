@@ -71,6 +71,22 @@
                 // under the type-check budget — see `rpcSettingsSnapshot`.
                 settings: settings.rpcSettingsSnapshot(),
                 badge: currentBadge,
+                updateStatus: updateStatusSnapshot(),
+            )
+        }
+
+        /// Snapshot the update-checker status. Extracted (like the other
+        /// `*Snapshot` helpers) to keep `rpcStateSnapshot`'s literal under the
+        /// type-check budget. Only the release identity + check status — no
+        /// download URLs.
+        private func updateStatusSnapshot() -> RPCStateSnapshot.UpdateStatus {
+            let update = updateChecker.availableUpdate
+            return RPCStateSnapshot.UpdateStatus(
+                available: update != nil,
+                availableVersion: update?.tagName,
+                isPrerelease: update?.prerelease ?? false,
+                isChecking: updateChecker.isChecking,
+                lastError: updateChecker.lastError,
             )
         }
 

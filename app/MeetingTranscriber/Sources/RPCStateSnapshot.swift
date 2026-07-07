@@ -55,6 +55,31 @@
         /// raw value (e.g. "recording"). Record-only mode is a separate
         /// persistent overlay; derive it from `settings.recording.recordOnly`.
         let badge: BadgeKind
+        /// Update-checker runtime status. E2E drivers assert the update-check flow
+        /// (the found version, an in-flight check, a check error) that the badge
+        /// only summarises as the boolean `.updateAvailable`. Named `updateStatus`
+        /// (not `updates`) to avoid clashing with `settings.updates`, the user's
+        /// update *preferences* — mirroring the `permissionHealth` status family.
+        /// Contains no secrets.
+        let updateStatus: UpdateStatus
+
+        struct UpdateStatus: Codable {
+            /// True when a release newer than the running version was found.
+            let available: Bool
+            /// The available release's tag (e.g. "v1.2.3"); nil when none.
+            let availableVersion: String?
+            /// Whether the available release is a pre-release; false when none.
+            let isPrerelease: Bool
+            /// True while an update check is in flight.
+            let isChecking: Bool
+            /// The last check's error message; nil on success / not-yet-checked.
+            let lastError: String?
+
+            static let empty = Self(
+                available: false, availableVersion: nil, isPrerelease: false,
+                isChecking: false, lastError: nil,
+            )
+        }
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -330,6 +355,7 @@
             notifications: [Notification] = [],
             settings: Settings = .empty,
             badge: BadgeKind = .inactive,
+            updateStatus: UpdateStatus = .empty,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -343,6 +369,7 @@
             self.notifications = notifications
             self.settings = settings
             self.badge = badge
+            self.updateStatus = updateStatus
         }
 
         func jsonData() throws -> Data {
