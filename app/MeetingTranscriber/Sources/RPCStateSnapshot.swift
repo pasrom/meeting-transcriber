@@ -48,6 +48,13 @@
         /// redirect). Secrets (OpenAI API key, any Keychain value) are never
         /// included — see `AppSettings.rpcSettingsSnapshot()`.
         let settings: Settings
+        /// The current menu-bar `BadgeKind` — the single glanceable summary a
+        /// human reads off the menu bar. Exposing it lets a driver script assert
+        /// the app reflects the right state deterministically instead of counting
+        /// red pixels in a `/screenshot`. Serialises to the `BadgeKind` case-name
+        /// raw value (e.g. "recording"). Record-only mode is a separate
+        /// persistent overlay; derive it from `settings.recording.recordOnly`.
+        let badge: BadgeKind
 
         struct Pipeline: Codable {
             let isProcessing: Bool
@@ -322,6 +329,7 @@
             watchState: String? = nil,
             notifications: [Notification] = [],
             settings: Settings = .empty,
+            badge: BadgeKind = .inactive,
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -334,6 +342,7 @@
             self.watchState = watchState
             self.notifications = notifications
             self.settings = settings
+            self.badge = badge
         }
 
         func jsonData() throws -> Data {
