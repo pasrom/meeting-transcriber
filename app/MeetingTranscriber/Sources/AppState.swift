@@ -183,7 +183,7 @@ final class AppState {
         // reach the active engine and re-sync before the first transcription.
         liveTranscription.beginPrewarm { [weak self] in self?.engines.activeTranscriptionEngine }
         pipeline.activate { [weak self] in self?.engines.activeTranscriptionEngine }
-        watching.activate { [weak self] in self?.engines.syncLanguageSettings() }
+        watching.activate { [weak self] in self?.engines.syncEngineSettings() }
 
         #if !APPSTORE
             applyForcedChannelFlagsFromEnvironment()

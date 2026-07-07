@@ -21,7 +21,7 @@ import Observation
 /// to the production `Permissions.ensureMicrophoneAccess` / `PowerAssertionDetector`)
 /// so `toggleWatching` can be exercised without real TCC or IOKit. `syncEngines`
 /// is wired post-init via `activate(syncEngines:)`: it bridges to
-/// `EngineController.syncLanguageSettings()` (held by `AppState`, not injected
+/// `EngineController.syncEngineSettings()` (held by `AppState`, not injected
 /// here as a sibling) and the closure must capture `self` after stored-property
 /// init — the same post-init wiring idiom the other controllers use.
 @Observable
@@ -53,7 +53,7 @@ final class WatchingController {
     private let makeDetector: () -> any MeetingDetecting
 
     /// Engine-sync hook, wired by `activate`. Bridges to
-    /// `EngineController.syncLanguageSettings()`; nil until `activate` runs, in
+    /// `EngineController.syncEngineSettings()`; nil until `activate` runs, in
     /// which case the up-front sync is skipped (EngineController's own reactive
     /// observer still keeps the engines in line).
     private var syncEngines: (() -> Void)?
