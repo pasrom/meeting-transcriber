@@ -13,7 +13,13 @@ enum RecognitionTrack: String, Codable {
     case app, mic, single
 
     init(label: String) {
-        if label.hasPrefix("R_") { self = .app } else if label.hasPrefix("M_") { self = .mic } else { self = .single }
+        // Delegate prefix parsing to SpeakerKey, the single home for the
+        // R_/M_ track-prefix knowledge.
+        switch SpeakerKey(encoded: label).track {
+        case .app: self = .app
+        case .mic: self = .mic
+        case .single: self = .single
+        }
     }
 }
 
