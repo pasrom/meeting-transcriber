@@ -154,11 +154,19 @@ enum DiarizationProcess {
     ) -> DiarizationResult {
         // Prefix app segments with R_
         let appSegments = appDiarization.segments.map { seg in
-            DiarizationResult.Segment(start: seg.start, end: seg.end, speaker: "R_\(seg.speaker)")
+            DiarizationResult.Segment(
+                start: seg.start,
+                end: seg.end,
+                speaker: SpeakerKey(track: .app, id: seg.speaker).encoded,
+            )
         }
         // Prefix mic segments with M_
         let micSegments = micDiarization.segments.map { seg in
-            DiarizationResult.Segment(start: seg.start, end: seg.end, speaker: "M_\(seg.speaker)")
+            DiarizationResult.Segment(
+                start: seg.start,
+                end: seg.end,
+                speaker: SpeakerKey(track: .mic, id: seg.speaker).encoded,
+            )
         }
 
         // Merge and sort by start time
@@ -168,10 +176,10 @@ enum DiarizationProcess {
         // Merge speaking times with prefixed keys
         var speakingTimes: [String: TimeInterval] = [:]
         for (key, value) in appDiarization.speakingTimes {
-            speakingTimes["R_\(key)"] = value
+            speakingTimes[SpeakerKey(track: .app, id: key).encoded] = value
         }
         for (key, value) in micDiarization.speakingTimes {
-            speakingTimes["M_\(key)"] = value
+            speakingTimes[SpeakerKey(track: .mic, id: key).encoded] = value
         }
 
         // Merge embeddings with prefixed keys
@@ -179,20 +187,20 @@ enum DiarizationProcess {
         if appDiarization.embeddings != nil || micDiarization.embeddings != nil {
             embeddings = [:]
             for (key, value) in appDiarization.embeddings ?? [:] {
-                embeddings?["R_\(key)"] = value
+                embeddings?[SpeakerKey(track: .app, id: key).encoded] = value
             }
             for (key, value) in micDiarization.embeddings ?? [:] {
-                embeddings?["M_\(key)"] = value
+                embeddings?[SpeakerKey(track: .mic, id: key).encoded] = value
             }
         }
 
         // Merge autoNames with prefixed keys
         var autoNames: [String: String] = [:]
         for (key, value) in appDiarization.autoNames {
-            autoNames["R_\(key)"] = value
+            autoNames[SpeakerKey(track: .app, id: key).encoded] = value
         }
         for (key, value) in micDiarization.autoNames {
-            autoNames["M_\(key)"] = value
+            autoNames[SpeakerKey(track: .mic, id: key).encoded] = value
         }
 
         return DiarizationResult(
@@ -203,14 +211,21 @@ enum DiarizationProcess {
         )
     }
 
-    /// Strip a track prefix (e.g. `"R_"` or `"M_"`) from a `[speakerID: name]`
-    /// dictionary, dropping entries whose key doesn't carry the prefix.
-    /// Inverse of the prefixing done in `mergeDualTrackDiarization`.
-    static func unprefixNames(_ autoNames: [String: String], prefix: String) -> [String: String] {
-        autoNames.reduce(into: [:]) { acc, kv in
-            guard kv.key.hasPrefix(prefix) else { return }
-            acc[String(kv.key.dropFirst(prefix.count))] = kv.value
+    /// Strip a track prefix from a `[speakerID: name]` dictionary, keeping only
+    /// entries whose key belongs to `track` and re-keying them to the raw
+    /// diarizer id. Routes through `SpeakerKey`'s serialization boundary rather
+    /// than duplicating the prefix strings, so a key like `R_SPEAKER_0` maps to
+    /// `SPEAKER_0` under `.app`, while non-matching keys (other track, or a raw
+    /// unprefixed id that parses as `.single`) are excluded. Inverse of the
+    /// prefixing done in `mergeDualTrackDiarization`.
+    static func unprefixNames(_ autoNames: [String: String], track: SpeakerKey.Track) -> [String: String] {
+        var out: [String: String] = [:]
+        for (label, name) in autoNames {
+            let key = SpeakerKey(encoded: label)
+            guard key.track == track else { continue }
+            out[key.id] = name
         }
+        return out
     }
 
     /// Maximum silence gap (seconds) before breaking a same-speaker block.
@@ -299,13 +314,13 @@ extension DiarizationProcess {
             let namedApp = DiarizationResult(
                 segments: app.segments,
                 speakingTimes: app.speakingTimes,
-                autoNames: unprefixNames(autoNames, prefix: "R_"),
+                autoNames: unprefixNames(autoNames, track: .app),
                 embeddings: app.embeddings,
             )
             let namedMic = DiarizationResult(
                 segments: mic.segments,
                 speakingTimes: mic.speakingTimes,
-                autoNames: unprefixNames(autoNames, prefix: "M_"),
+                autoNames: unprefixNames(autoNames, track: .mic),
                 embeddings: mic.embeddings,
             )
             let appSegs = cached.filter { $0.speaker == remoteSpeakerLabel }
