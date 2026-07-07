@@ -582,7 +582,7 @@ final class PipelineQueueTests: XCTestCase {
 
         // Mark it as already processed
         let freshQueue = PipelineQueue(logDir: tmpDir)
-        freshQueue.markProcessed(mixPath: mixFile)
+        freshQueue.processedLedger.markProcessed(mixPath: mixFile)
 
         await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
         XCTAssertEqual(freshQueue.jobs.count, 0)
@@ -612,97 +612,11 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(freshQueue.jobs.isEmpty, "Failed recording should not be re-queued")
     }
 
-    func testMarkProcessedPersists() throws {
-        let mixPath = tmpDir.appendingPathComponent("test_mix.wav")
-
-        let q1 = PipelineQueue(logDir: tmpDir)
-        q1.markProcessed(mixPath: mixPath)
-
-        // New queue instance should see the processed path
-        _ = PipelineQueue(logDir: tmpDir)
-        let recDir = tmpDir.appendingPathComponent("recordings")
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        // Create a file with the same standardized name
-        try Data(repeating: 0xFF, count: 100).write(to: mixPath)
-
-        // Won't find it if the path is in processed list — but the file is in tmpDir not recDir
-        // So test directly via the processed set behavior
-        let processedPath = tmpDir.appendingPathComponent("processed_recordings.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: processedPath.path))
-        let data = try Data(contentsOf: processedPath)
-        let paths = try JSONDecoder().decode([String].self, from: data)
-        XCTAssertTrue(paths.contains(mixPath.standardizedFileURL.path))
-    }
-
     func testRecoverEmptyDirIsNoOp() async {
         let recDir = tmpDir.appendingPathComponent("nonexistent_recordings")
         let freshQueue = PipelineQueue(logDir: tmpDir)
         await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
         XCTAssertTrue(freshQueue.jobs.isEmpty)
-    }
-
-    func testMigrateSeedsProcessedRecordingsFromExistingMixFiles() async throws {
-        let recDir = tmpDir.appendingPathComponent("recordings")
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        let mixA = recDir.appendingPathComponent("20260101_100000_mix.wav")
-        let mixB = recDir.appendingPathComponent("20260102_100000_mix.wav")
-        try Data(repeating: 0xFF, count: 100).write(to: mixA)
-        try Data(repeating: 0xFF, count: 100).write(to: mixB)
-        // Non-mix file must be ignored.
-        try Data(repeating: 0xFF, count: 100).write(to: recDir.appendingPathComponent("notes.txt"))
-
-        let freshQueue = PipelineQueue(logDir: tmpDir)
-        await freshQueue.migrateProcessedRecordings(recordingsDir: recDir)
-
-        let processedPath = tmpDir.appendingPathComponent("processed_recordings.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: processedPath.path))
-        let paths = try JSONDecoder().decode([String].self, from: Data(contentsOf: processedPath))
-        XCTAssertEqual(Set(paths), Set([
-            mixA.standardizedFileURL.path,
-            mixB.standardizedFileURL.path,
-        ]))
-    }
-
-    func testMigrateIsNoOpWhenProcessedFileAlreadyExists() async throws {
-        let recDir = tmpDir.appendingPathComponent("recordings")
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        try Data(repeating: 0xFF, count: 100).write(to: recDir.appendingPathComponent("20260101_mix.wav"))
-
-        // Pre-create the processed file with a sentinel value; migration must
-        // not overwrite it.
-        let processedPath = tmpDir.appendingPathComponent("processed_recordings.json")
-        let sentinel = try JSONEncoder().encode(["/preexisting/path/mix.wav"])
-        try sentinel.write(to: processedPath)
-
-        let freshQueue = PipelineQueue(logDir: tmpDir)
-        await freshQueue.migrateProcessedRecordings(recordingsDir: recDir)
-
-        let paths = try JSONDecoder().decode([String].self, from: Data(contentsOf: processedPath))
-        XCTAssertEqual(paths, ["/preexisting/path/mix.wav"])
-    }
-
-    func testMigrateRunsOffMainActor() async throws {
-        // Smoke test parity with testRecoverRunsDirScanOffMainActor:
-        // verify the dir scan + JSON write don't starve main-actor work.
-        let recDir = tmpDir.appendingPathComponent("recordings")
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
-        for i in 0 ..< 50 {
-            let mixFile = recDir.appendingPathComponent("20260311_10000\(i)_mix.wav")
-            try Data(repeating: 0xFF, count: 100).write(to: mixFile)
-        }
-
-        let freshQueue = PipelineQueue(logDir: tmpDir)
-        async let migration: Void = freshQueue.migrateProcessedRecordings(recordingsDir: recDir)
-
-        var counter = 0
-        for _ in 0 ..< 10000 {
-            counter += 1
-        }
-        XCTAssertEqual(counter, 10000)
-
-        await migration
-        let processedPath = tmpDir.appendingPathComponent("processed_recordings.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: processedPath.path))
     }
 
     func testRecoverRunsDirScanOffMainActor() async throws {
