@@ -72,4 +72,36 @@ final class DiarizationLabelSegmentsTests: XCTestCase {
         XCTAssertEqual(result.map(\.speaker), ["Alice", "Me"])
         XCTAssertEqual(result.map(\.text), ["app line", "mic line"])
     }
+
+    // MARK: - unprefixNames
+
+    /// `unprefixNames` keeps only the keys belonging to the requested track and
+    /// re-keys them to the raw diarizer id, silently excluding the other track
+    /// and any unprefixed (single-source) key. Pins the parse side of the
+    /// `SpeakerKey` boundary: the literal `R_`/`M_` prefixes must still be
+    /// recognised, so this fails if the prefix strings ever change.
+    func testUnprefixNamesFiltersAndRekeysByTrack() {
+        let autoNames = ["R_SPEAKER_0": "Alice", "M_SPEAKER_1": "Bob", "SPEAKER_2": "Carol"]
+
+        XCTAssertEqual(DiarizationProcess.unprefixNames(autoNames, track: .app), ["SPEAKER_0": "Alice"])
+        XCTAssertEqual(DiarizationProcess.unprefixNames(autoNames, track: .mic), ["SPEAKER_1": "Bob"])
+    }
+
+    /// Producing (`mergeDualTrackDiarization`) then parsing (`unprefixNames`)
+    /// round-trips each track's `autoNames` back to their raw ids, proving the
+    /// prefix production and parsing agree byte-for-byte through `SpeakerKey`.
+    func testMergeThenUnprefixNamesRoundTrips() {
+        let appDiar = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5], autoNames: ["SPEAKER_0": "Alice"], embeddings: nil,
+        )
+        let micDiar = DiarizationResult(
+            segments: [.init(start: 0, end: 3, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 3], autoNames: ["SPEAKER_0": "Bob"], embeddings: nil,
+        )
+        let merged = DiarizationProcess.mergeDualTrackDiarization(appDiarization: appDiar, micDiarization: micDiar)
+
+        XCTAssertEqual(DiarizationProcess.unprefixNames(merged.autoNames, track: .app), ["SPEAKER_0": "Alice"])
+        XCTAssertEqual(DiarizationProcess.unprefixNames(merged.autoNames, track: .mic), ["SPEAKER_0": "Bob"])
+    }
 }
