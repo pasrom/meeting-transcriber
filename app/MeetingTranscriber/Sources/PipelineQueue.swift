@@ -28,6 +28,11 @@ class PipelineQueue {
     /// orphans on the next launch.
     let processedLedger: ProcessedRecordingsLedger
 
+    /// Append-only JSONL log of job state transitions (`pipeline_log.jsonl`).
+    /// Self-ensures its own dir, so it doesn't share the queue's cached
+    /// `logDirCreated` flag.
+    let eventLog: PipelineEventLog
+
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
     let diarizationFactory: (() -> any DiarizationProvider)?
@@ -185,6 +190,7 @@ class PipelineQueue {
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
+        eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = nil
         self.diarizationFactory = nil
         self.diarizationFactoryWithMode = nil
@@ -275,6 +281,7 @@ class PipelineQueue {
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
+        eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = engine
         self.diarizationFactory = diarizationFactory
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
@@ -325,7 +332,7 @@ class PipelineQueue {
 
     func enqueue(_ job: PipelineJob) {
         jobs.append(job)
-        appendLog(jobID: job.id, event: "enqueued", from: nil, to: job.state)
+        eventLog.append(jobID: job.id, event: "enqueued", from: nil, to: job.state)
         saveSnapshot()
         logger.info("Enqueued job: \(job.meetingTitle, privacy: .private) (\(job.id))")
         triggerProcessing()
@@ -413,7 +420,7 @@ class PipelineQueue {
         jobs[index].state = newState
         if let error { jobs[index].error = error }
         recordStageTransition(from: oldState, to: newState, jobID: id)
-        appendLog(jobID: id, event: "state_change", from: oldState, to: newState)
+        eventLog.append(jobID: id, event: "state_change", from: oldState, to: newState)
         saveSnapshot()
         onJobStateChange?(jobs[index], oldState, newState)
 
@@ -1332,16 +1339,15 @@ class PipelineQueue {
                 micDelay: 0,
             )
             jobs.append(job)
-            appendLog(jobID: job.id, event: "recovered", from: nil, to: .waiting)
+            eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)
         }
         saveSnapshot()
         logger.info("Recovered \(candidates.count) orphaned recording(s)")
         triggerProcessing()
     }
 
-    // MARK: - JSON Logging
+    // MARK: - Log Directory
 
-    private static let isoFormatter = ISO8601DateFormatter()
     private var logDirCreated = false
 
     private func ensureLogDir() {
@@ -1414,38 +1420,6 @@ class PipelineQueue {
     /// Lets tests assert the worker drains and clears itself.
     var isSnapshotWorkerActive: Bool {
         snapshotWorker != nil
-    }
-
-    private func appendLog(jobID: UUID, event: String, from: JobState?, to: JobState) {
-        let entry: [String: String] = [
-            "timestamp": Self.isoFormatter.string(from: Date()),
-            "job_id": jobID.uuidString,
-            "event": event,
-            "from": from?.rawValue ?? "-",
-            "to": to.rawValue,
-        ]
-        do {
-            ensureLogDir()
-            let data = try JSONEncoder().encode(entry)
-            let logPath = logDir.appendingPathComponent("pipeline_log.jsonl")
-            // swiftlint:disable:next force_unwrapping
-            let line = String(data: data, encoding: .utf8)! + "\n"
-            if FileManager.default.fileExists(atPath: logPath.path) {
-                let handle = try FileHandle(forWritingTo: logPath)
-                defer { handle.closeFile() }
-                handle.seekToEndOfFile()
-                // swiftlint:disable:next force_unwrapping
-                handle.write(line.data(using: .utf8)!)
-            } else {
-                try line.write(to: logPath, atomically: true, encoding: .utf8)
-                // First write creates the file — restrict it to owner-only so
-                // the meeting log isn't world-readable. Subsequent appends go
-                // through the FileHandle branch and inherit these permissions.
-                try FileManager.default.restrictToOwner(logPath)
-            }
-        } catch {
-            logger.error("Failed to append pipeline log: \(error.localizedDescription, privacy: .public)")
-        }
     }
 }
 
