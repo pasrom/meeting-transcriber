@@ -23,7 +23,7 @@
         // MARK: - Wiring: snapshot.updateStatus follows updateChecker (non-vacuous)
 
         func testSnapshotUpdatesReflectAvailableUpdate() throws {
-            let state = makeState()
+            let state = makeRPCTestState()
 
             // Fresh app: no update, not checking, no error.
             let idle = state.rpcStateSnapshot().updateStatus
@@ -77,20 +77,6 @@
             XCTAssertTrue(json.contains("\"updateStatus\""), json)
             XCTAssertTrue(json.contains("\"available\" : true"), json)
             XCTAssertTrue(json.contains("\"availableVersion\" : \"v1.2.3\""), json)
-        }
-
-        // MARK: - Helpers
-
-        private func makeState() -> AppState {
-            let suite = "RPCUpdateStatusTests-\(getpid())-\(UUID().uuidString)"
-            guard let defaults = UserDefaults(suiteName: suite) else {
-                fatalError("Could not create test UserDefaults suite")
-            }
-            // Per-call unique volatile suite — remove it after the test so repeated
-            // runs don't accumulate orphaned preference domains. Capture only the
-            // Sendable suite name.
-            addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
-            return AppState(settings: AppSettings(defaults: defaults))
         }
     }
 #endif
