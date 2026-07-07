@@ -64,6 +64,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     DiarizationProcess.swift  # DiarizationProvider protocol + result types
     PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
     ProcessedRecordingsLedger.swift  # File-backed skip-list of successfully-processed mix paths (backs PipelineQueue orphan recovery)
+    PipelineEventLog.swift  # Appends per-job state transitions to pipeline_log.jsonl (owner-only; extracted from PipelineQueue)
     PipelineJob.swift      # Pipeline job model
     PipelineSnapshot.swift  # Pure I/O helpers for persisting pipeline queue jobs to disk (atomic rename)
     SnapshotWriterActor.swift  # Actor isolating pipeline queue snapshot writes (prevents main-actor stalls)
