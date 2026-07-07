@@ -34,6 +34,11 @@
         /// `watchState == "recording"` when no caption signal is available
         /// (live transcription off — the default user profile).
         let watchState: String?
+        /// True while the active recording is a manual (app-picker) recording
+        /// rather than an auto-detected meeting. `watchState` reads "recording"
+        /// for both, so this is the only wire signal that distinguishes the
+        /// manual-recording path — letting a driver assert it took that path.
+        let isManualRecording: Bool
         /// Recently-posted macOS notifications (capped ring buffer, oldest
         /// dropped), chronological — newest last. E2E drivers poll this to
         /// assert user-facing warning paths (meeting detected, silent recording,
@@ -352,6 +357,7 @@
             permissionHealth: PermissionHealth = .unknown,
             liveCaptions: LiveCaptions = .empty,
             watchState: String? = nil,
+            isManualRecording: Bool = false,
             notifications: [Notification] = [],
             settings: Settings = .empty,
             badge: BadgeKind = .inactive,
@@ -366,6 +372,7 @@
             self.permissionHealth = permissionHealth
             self.liveCaptions = liveCaptions
             self.watchState = watchState
+            self.isManualRecording = isManualRecording
             self.notifications = notifications
             self.settings = settings
             self.badge = badge
