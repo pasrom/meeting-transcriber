@@ -269,6 +269,15 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertNil(SpeakerMatcher.updateCentroid(current: [1, 2], count: 1, with: [1, 2, 3]))
     }
 
+    func testUpdateCentroidEmptySampleReturnsNil() {
+        // An empty sample must never seed a centroid: without the guard, a nil
+        // current + empty sample would seed an empty [] centroid with count 1,
+        // permanently corrupting the entry. Only the nil-current path isolates
+        // this guard; with a non-nil current an empty sample already returns nil
+        // via the dimension-mismatch guard, so that case would not pin it.
+        XCTAssertNil(SpeakerMatcher.updateCentroid(current: nil, count: 0, with: []))
+    }
+
     // MARK: - applyConfirmation / newSpeaker
 
     func testNewSpeakerWithSufficientDurationSeedsCentroid() {
@@ -327,6 +336,29 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(updated.centroid, [1, 0], "short snippet must not pollute centroid")
         XCTAssertEqual(updated.centroidSampleCount, 1)
         XCTAssertEqual(updated.embeddings.count, 2, "but is still kept as fallback sample")
+    }
+
+    func testApplyConfirmationDimMismatchWhileQualifyingKeepsCentroid() {
+        // A qualifying (long) confirmation whose embedding dimensionality does
+        // not match the stored centroid must not corrupt or crash it:
+        // updateCentroid returns nil on the mismatch and applyConfirmation
+        // keeps the old centroid + count, while still appending the sample to
+        // the FIFO and bumping useCount. Distinct from the short-snippet case,
+        // which skips the centroid via the duration gate, not the dim guard.
+        let speaker = StoredSpeaker(
+            name: "Speaker B",
+            embeddings: [[1, 0]],
+            centroid: [1, 0],
+            centroidSampleCount: 1,
+            useCount: 2,
+        )
+        let updated = SpeakerMatcher.applyConfirmation(
+            to: speaker, embedding: [9, 9, 9], duration: 5, now: Self.testEpoch,
+        )
+        XCTAssertEqual(updated.centroid, [1, 0], "dim-mismatched embedding must not move the centroid")
+        XCTAssertEqual(updated.centroidSampleCount, 1, "centroid sample count must not advance on a rejected fold")
+        XCTAssertEqual(updated.embeddings, [[1, 0], [9, 9, 9]], "the sample is still kept as a fallback")
+        XCTAssertEqual(updated.useCount, 3, "a confirmation still bumps useCount")
     }
 
     // MARK: - updateDB recency tracking with quality filter
