@@ -107,6 +107,41 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertEqual(result?.pattern.appName, "Zoom")
     }
 
+    func testDetectsZoomPlaceholderAssertion() {
+        // Field data (macOS 26, Zoom Workplace, issue #446): the in-call assertion
+        // is a display-sleep assertion whose name is Apple's sample-code placeholder,
+        // so the "zoom" keyword never appears. Detection must fall back to the
+        // display-sleep assertion *type* for zoom.us.
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 65978,
+                processName: "zoom.us",
+                assertName: "Describe Activity Type",
+                assertType: "NoDisplaySleepAssertion",
+            )
+        }
+        let result = detector.checkOnce()
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.pattern.appName, "Zoom")
+    }
+
+    func testIgnoresZoomSystemSleepAssertion() {
+        // Only display-sleep assertion types count as an active Zoom call. A
+        // system-sleep assertion with the same placeholder name (e.g. during a
+        // recording conversion or update) must NOT trigger detection.
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 65978,
+                processName: "zoom.us",
+                assertName: "Describe Activity Type",
+                assertType: "PreventUserIdleSystemSleep",
+            )
+        }
+        XCTAssertNil(detector.checkOnce())
+    }
+
     func testDetectsWebexCall() {
         let detector = makeDetector()
         detector.assertionProvider = {
@@ -278,6 +313,22 @@ final class PowerAssertionDetectorTests: XCTestCase {
         detector.assertionProvider = { assertions }
         let meeting = try XCTUnwrap(detector.checkOnce())
 
+        XCTAssertTrue(detector.isMeetingActive(meeting))
+    }
+
+    func testIsMeetingActiveDetectsZoomPlaceholder() throws {
+        // End-of-meeting detection shares the matcher, so the placeholder
+        // assertion must keep the Zoom meeting alive too.
+        let detector = makeDetector()
+        detector.assertionProvider = {
+            makeAssertionDict(
+                pid: 65978,
+                processName: "zoom.us",
+                assertName: "Describe Activity Type",
+                assertType: "NoDisplaySleepAssertion",
+            )
+        }
+        let meeting = try XCTUnwrap(detector.checkOnce())
         XCTAssertTrue(detector.isMeetingActive(meeting))
     }
 

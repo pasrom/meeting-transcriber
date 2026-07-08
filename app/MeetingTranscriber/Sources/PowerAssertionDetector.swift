@@ -17,6 +17,21 @@ class PowerAssertionDetector: MeetingDetecting {
         let appName: String
         let processNames: [String]
         let keywords: [String]
+        /// Display-sleep assertion *types* that count as an active call for this
+        /// app even when the assertion name carries no keyword. Newer Zoom builds
+        /// name their in-call display-sleep assertion with Apple's sample-code
+        /// placeholder ("Describe Activity Type"), so "zoom" never appears in the
+        /// name; matching the type recovers detection (issue #446). Left empty for
+        /// Teams, whose WebView holds a display-sleep "Video Wake Lock" even with
+        /// no call in progress, so it must stay keyword-only.
+        let assertionTypes: [String]
+
+        init(appName: String, processNames: [String], keywords: [String], assertionTypes: [String] = []) {
+            self.appName = appName
+            self.processNames = processNames
+            self.keywords = keywords
+            self.assertionTypes = assertionTypes
+        }
     }
 
     static let defaultPatterns: [AssertionPattern] = [
@@ -27,8 +42,9 @@ class PowerAssertionDetector: MeetingDetecting {
         ),
         AssertionPattern(
             appName: "Zoom",
-            processNames: ["zoom.us", "CptHost"],
+            processNames: ["zoom.us"],
             keywords: ["zoom"],
+            assertionTypes: ["PreventUserIdleDisplaySleep", "NoDisplaySleepAssertion"],
         ),
         AssertionPattern(
             appName: "Webex",
@@ -75,6 +91,7 @@ class PowerAssertionDetector: MeetingDetecting {
                       let assertName = assertion["AssertName"] as? String else {
                     continue
                 }
+                let assertType = assertion["AssertType"] as? String ?? ""
 
                 for pattern in patterns {
                     // Skip apps in cooldown
@@ -85,7 +102,7 @@ class PowerAssertionDetector: MeetingDetecting {
                     // Only count each pattern once per poll
                     guard !hitsThisRound.contains(pattern.appName) else { continue }
 
-                    if matchAssertion(processName: processName, assertName: assertName, pattern: pattern) {
+                    if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
                         hitsThisRound.insert(pattern.appName)
                         firstMatch[pattern.appName] = (pid, processName, assertName)
                         consecutiveHits[pattern.appName, default: 0] += 1
@@ -128,8 +145,9 @@ class PowerAssertionDetector: MeetingDetecting {
                       let assertName = assertion["AssertName"] as? String else {
                     continue
                 }
+                let assertType = assertion["AssertType"] as? String ?? ""
                 for pattern in patterns where pattern.appName == meeting.pattern.appName {
-                    if matchAssertion(processName: processName, assertName: assertName, pattern: pattern) {
+                    if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
                         return true
                     }
                 }
@@ -168,10 +186,13 @@ class PowerAssertionDetector: MeetingDetecting {
 
     // MARK: - Private
 
-    private func matchAssertion(processName: String, assertName: String, pattern: AssertionPattern) -> Bool {
+    private func matchAssertion(processName: String, assertName: String, assertType: String, pattern: AssertionPattern) -> Bool {
         guard pattern.processNames.contains(processName) else { return false }
         let lowerAssert = assertName.lowercased()
-        return pattern.keywords.contains { lowerAssert.contains($0.lowercased()) }
+        if pattern.keywords.contains(where: { lowerAssert.contains($0.lowercased()) }) {
+            return true
+        }
+        return pattern.assertionTypes.contains(assertType)
     }
 
     /// Default assertion provider using IOPMCopyAssertionsByProcess.
