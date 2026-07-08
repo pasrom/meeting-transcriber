@@ -1009,6 +1009,60 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    func testDiarizeDualTrackAppFailFallsBackToMicOnly() async throws {
+        // Symmetric to the mic-fail fallback: when the app (remote) track
+        // diarization fails — e.g. a silent remote side in a solo meeting, where
+        // the app audio is at the noise floor while the mic has real speech — the
+        // stage must fall back to mic-only instead of aborting the whole
+        // diarization with "speakers not identified".
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.throwOnPathSuffix = "app_16k.wav" // app diarization fails → mic-only fallback
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: ["SPEAKER_0": "Bob"],
+            embeddings: nil,
+        )
+        let protocolGen = MockProtocolGen()
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen)
+
+        try q.enqueue(makeDualSourceJob(title: "Dual AppFail"))
+        await q.processNext()
+
+        let warnings = try XCTUnwrap(q.jobs.first?.warnings)
+        XCTAssertTrue(
+            warnings.contains { $0.contains("App track diarization failed") },
+            "app-fail should fall back to mic-only with a warning — got: \(warnings)",
+        )
+        XCTAssertFalse(
+            warnings.contains { $0.contains("speakers not identified") },
+            "app-fail must NOT surface a total diarization failure when the mic track is fine — got: \(warnings)",
+        )
+
+        // Mirror of the mic-fail content assertions: the mic track is still
+        // diarized + named, and the app segments keep their raw 'Remote' tag
+        // (not force-matched) rather than surfacing the raw diarizer ID.
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        XCTAssertTrue(
+            transcript.contains("Bob:"),
+            "mic-only fallback: mic segments keep their matched name; got: \(transcript)",
+        )
+        XCTAssertTrue(
+            transcript.contains("] Remote:"),
+            "mic-only fallback: app segments keep their raw 'Remote' tag; got: \(transcript)",
+        )
+        XCTAssertFalse(
+            transcript.contains("] Me:"),
+            "mic-only fallback: mic segments must be diarized, not keep the raw mic label; got: \(transcript)",
+        )
+        XCTAssertFalse(
+            transcript.contains("SPEAKER_0:"),
+            "mic-only fallback: mic segments must not surface the raw diarizer ID; got: \(transcript)",
+        )
+    }
+
     /// Dual-track diarization must shift the mic track's diarization by
     /// `micDelay` so it lands on the same (app/canonical) timeline as the mic
     /// transcript segments — which `mergeDualSourceSegments` already shifted by
