@@ -900,6 +900,89 @@
             XCTAssertEqual(j1, j2, "repeat returns the same job via the idempotency store, no re-run")
         }
 
+        // MARK: - POST /v1/transcribe?include=transcript (inline text)
+
+        /// Issue #431: a headless remote consumer with no shared filesystem
+        /// can't read `transcriptPath`. `?include=transcript` inlines the file's
+        /// text into the response body so the agent gets the transcript directly.
+        func testV1TranscribeIncludeTranscriptInlinesFileText() async throws {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mt-inline-\(UUID().uuidString).txt")
+            let text = "[00:00] S1: Hallo, dies ist ein Test.\n[00:04] S2: Alles klar."
+            try Data(text.utf8).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+
+            let dto = JobStatusDTO(
+                jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                transcriptPath: file.path, protocolPath: nil, error: nil, warnings: [],
+            )
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+                await Task.yield(); return .completed(dto)
+            }
+            let base = try await startServer(transcribe: transcribe)
+
+            let url = try XCTUnwrap(URL(string: "\(base.absoluteString)/v1/transcribe?include=transcript"))
+            var req = request("POST", url, headers: authHeader)
+            let body = Data(#"{"path":"/inbox/a.wav"}"#.utf8)
+            req.httpBody = body
+            let (data, response) = try await URLSession.shared.upload(for: req, from: body)
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(JobStatusResponse.self, from: data)
+            XCTAssertEqual(decoded.transcript, text)
+            XCTAssertEqual(decoded.status.transcriptPath, file.path, "the path stays alongside the inline text")
+        }
+
+        /// Without the opt-in, the response is metadata-only — no `transcript`
+        /// key at all, so the default wire shape is unchanged.
+        func testV1TranscribeWithoutIncludeOmitsTranscript() async throws {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mt-inline-\(UUID().uuidString).txt")
+            try Data("[00:00] S1: text".utf8).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+
+            let dto = JobStatusDTO(
+                jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                transcriptPath: file.path, protocolPath: nil, error: nil, warnings: [],
+            )
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, _ in
+                await Task.yield(); return .completed(dto)
+            }
+            let base = try await startServer(transcribe: transcribe)
+
+            var req = request("POST", base.appendingPathComponent("v1/transcribe"), headers: authHeader)
+            let body = Data(#"{"path":"/inbox/a.wav"}"#.utf8)
+            req.httpBody = body
+            let (data, response) = try await URLSession.shared.upload(for: req, from: body)
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let raw = try XCTUnwrap(String(data: data, encoding: .utf8))
+            XCTAssertFalse(raw.contains("\"transcript\""), "no include → no inline transcript key: \(raw)")
+        }
+
+        /// The poll-based flow (`GET /v1/jobs/<id>`) supports the same opt-in.
+        func testV1JobStatusIncludeTranscriptInlinesFileText() async throws {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mt-inline-\(UUID().uuidString).txt")
+            let text = "[00:00] S1: polled transcript"
+            try Data(text.utf8).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+
+            let id = UUID()
+            let dto = JobStatusDTO(
+                jobID: id.uuidString, state: .done, meetingTitle: "M",
+                transcriptPath: file.path, protocolPath: nil, error: nil, warnings: [],
+            )
+            let lookup: (UUID) -> JobStatusDTO? = { $0 == id ? dto : nil }
+            let base = try await startServer(jobStatus: lookup)
+
+            let url = try XCTUnwrap(URL(string: "\(base.absoluteString)/v1/jobs/\(id.uuidString)?include=transcript"))
+            let (data, response) = try await URLSession.shared.data(for: request("GET", url, headers: authHeader))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(try JSONDecoder().decode(JobStatusResponse.self, from: data).transcript, text)
+        }
+
         // MARK: - M6: Host header allowlist (raw-socket)
 
         /// `URLRequest.setValue(_:forHTTPHeaderField: "Host")` is silently
