@@ -149,4 +149,78 @@ final class WavHeaderRepairTests: XCTestCase {
         XCTAssertEqual(count, 0, "a recently-modified (possibly live) WAV must be skipped")
         XCTAssertEqual(readableFrames(liveURL), 0, "the live WAV's header must be left untouched")
     }
+
+    // MARK: - Chunk-walk edges (byte-level, no AVAudioFile)
+
+    private func fourCC(_ s: String) -> Data {
+        Data(s.utf8)
+    }
+
+    private func leU32(_ v: UInt32) -> Data {
+        withUnsafeBytes(of: v.littleEndian) { Data($0) }
+    }
+
+    private func readU32LE(_ d: Data, _ offset: Int) -> UInt32 {
+        d.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) }
+    }
+
+    /// A chunk with an ODD payload size is padded to an even boundary on disk
+    /// (RIFF spec). The walk must add that pad byte via `size & 1`, or the next
+    /// read lands one byte early — mid-chunk — and never finds `data`. Craft an
+    /// odd-sized prelude chunk followed by an unfinalized `data` chunk and assert
+    /// the repair still finds and rewrites it.
+    func testRepairWalksPastOddSizedChunkToDataChunk() throws {
+        var wav = Data()
+        wav.append(fourCC("RIFF"))
+        wav.append(leU32(4)) // placeholder RIFF size (unfinalized)
+        wav.append(fourCC("WAVE"))
+        // Odd-sized prelude chunk: 3-byte payload → 1 pad byte on disk.
+        wav.append(fourCC("JUNK"))
+        wav.append(leU32(3))
+        wav.append(Data([0xAA, 0xBB, 0xCC]))
+        wav.append(Data([0x00])) // pad to even length
+        // Unfinalized data chunk: size 0 is the killed-writer signature.
+        wav.append(fourCC("data"))
+        wav.append(leU32(0))
+        let pcm = Data([1, 2, 3, 4, 5, 6, 7, 8])
+        wav.append(pcm)
+
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try wav.write(to: url)
+
+        let repaired = try WavHeaderRepair.repairIfNeeded(at: url)
+        XCTAssertTrue(repaired, "must walk past the padded odd-sized chunk and repair the data size")
+
+        let out = try Data(contentsOf: url)
+        let dataRange = try XCTUnwrap(out.range(of: fourCC("data")), "data chunk id must survive the rewrite")
+        XCTAssertEqual(
+            readU32LE(out, dataRange.upperBound), UInt32(pcm.count),
+            "data size rewritten to the actual PCM byte count",
+        )
+        XCTAssertEqual(
+            readU32LE(out, 4), UInt32(out.count - 8),
+            "RIFF size rewritten to fileSize - 8",
+        )
+    }
+
+    /// No `data` chunk at all → the walk exhausts and `repairIfNeeded` must bail
+    /// without touching the file.
+    func testReturnsFalseWhenNoDataChunkPresent() throws {
+        var wav = Data()
+        wav.append(fourCC("RIFF"))
+        wav.append(leU32(4))
+        wav.append(fourCC("WAVE"))
+        wav.append(fourCC("fmt "))
+        wav.append(leU32(4))
+        wav.append(Data([0, 0, 0, 0]))
+
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try wav.write(to: url)
+        let before = try Data(contentsOf: url)
+
+        XCTAssertFalse(try WavHeaderRepair.repairIfNeeded(at: url), "no data chunk → nothing to repair")
+        XCTAssertEqual(try Data(contentsOf: url), before, "file must be untouched when no data chunk is found")
+    }
 }
