@@ -149,6 +149,12 @@ jobs:
         # bumps the SHA + comment in lockstep.
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd  # v1.21.0
         with:
+          # Idempotent re-runs: a partially-succeeded release job (e.g. the
+          # tap-update step failing on an expired token) leaves this release
+          # already created, so a `--failed` re-run would otherwise abort here
+          # with `422 already_exists`. Updating instead lets the re-run reach the
+          # downstream tap step. First runs have nothing to update.
+          allowUpdates: true
           artifacts: .build/release/${{ matrix.dmg-prefix }}-${{ steps.version.outputs.version }}.dmg
           generateReleaseNotes: true
           generateReleaseNotesPreviousTag: ${{ steps.prev.outputs.tag }}
