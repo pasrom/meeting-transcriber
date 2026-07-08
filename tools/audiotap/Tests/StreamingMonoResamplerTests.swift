@@ -64,4 +64,36 @@ final class StreamingMonoResamplerTests: XCTestCase {
             "1 s of mono must still map to 1 s after a channel-count change",
         )
     }
+
+    // MARK: - Stream conservation (issue #379 backlog drift)
+
+    /// Feeding a long same-rate stream as many small buffers must produce the same
+    /// total sample count as feeding it as a single buffer: the reused converter
+    /// keeps resampling state continuous across calls, so no per-buffer fractional
+    /// sample loss accumulates into drift (the issue #379 backlog class). The
+    /// existing tests only feed 1 s single buffers, so a future change to the
+    /// capacity math that dropped a sample per call would pass them while re-drifting
+    /// recordings. Comparing the streamed total against the single-shot total cancels
+    /// AVAudioConverter's one-time (OS-version-dependent) filter latency, so the tight
+    /// bound catches per-call drift without flaking across macOS releases.
+    func testConservesTotalSampleCountAcrossManySmallBuffers() throws {
+        let totalFrames = 48000 // 1 s @ 48 kHz mono
+        let chunkSize = 480 // 10 ms
+        let signal = [Float](repeating: 0.3, count: totalFrames)
+
+        let singleShot = try XCTUnwrap(StreamingMonoResampler(targetRate: 16000))
+            .process(signal, inputRate: 48000, inputChannels: 1).count
+
+        let streamer = try XCTUnwrap(StreamingMonoResampler(targetRate: 16000))
+        var streamed = 0
+        for start in stride(from: 0, to: totalFrames, by: chunkSize) {
+            let chunk = Array(signal[start ..< min(start + chunkSize, totalFrames)])
+            streamed += streamer.process(chunk, inputRate: 48000, inputChannels: 1).count
+        }
+
+        // Same 48000 input frames + same converter config, so the two paths differ
+        // only by per-call drift; a 1-sample-per-call loss would open a ~100-frame gap.
+        // The absolute count and its OS-dependent filter latency cancel out.
+        XCTAssertEqual(streamed, singleShot, accuracy: 10)
+    }
 }
