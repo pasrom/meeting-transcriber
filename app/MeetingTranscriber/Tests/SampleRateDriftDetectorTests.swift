@@ -109,6 +109,25 @@ final class SampleRateDriftDetectorTests: XCTestCase {
         XCTAssertNil(detector.observe(empty))
     }
 
+    func testNoReportWhenClaimedRateIsZero() {
+        // A buffer header claiming 0 Hz (seen mid CoreAudio renegotiation) must
+        // not divide by zero into a spurious drift warning: the claimedRate
+        // guard bails to nil even though the observed frame rate is non-zero.
+        var detector = SampleRateDriftDetector()
+        var report: SampleRateDriftDetector.Report?
+        for i in 0 ..< 5 {
+            let buf = buffer(
+                claimedRate: 0,
+                actualFramesPerCallback: 26000,
+                atSeconds: Double(i) * 0.5,
+            )
+            if let r = detector.observe(buf, now: Date(timeIntervalSince1970: Double(i))) {
+                report = r
+            }
+        }
+        XCTAssertNil(report, "a zero claimed rate must not produce a drift report")
+    }
+
     // MARK: - mach-tick helpers (pure)
 
     /// Round-trip across the helper pair must be exact to within the
