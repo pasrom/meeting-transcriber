@@ -263,4 +263,51 @@ final class ChannelHealthIntegrationTests: XCTestCase {
             "60s under new threshold should fire — confirms threshold = 60",
         )
     }
+
+    // MARK: - stop() teardown
+
+    func testStopClearsLatchedMicSilentFlagAndResetsMonitor() {
+        let (controller, recorder, _, _) = makeController()
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -25
+        _ = controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30)) // mic .started
+        XCTAssertTrue(controller.micSilentActive, "precondition: mic-silent is latched")
+
+        controller.stop()
+        XCTAssertFalse(controller.micSilentActive, "stop() must clear the latched mic-silent flag")
+        XCTAssertFalse(controller.appSilentActive)
+        XCTAssertFalse(controller.recordingSilentActive)
+
+        // Monitor was reset: replaying the same silence needs a FRESH full
+        // debounce before it re-fires (a non-reset monitor stays latched and
+        // never re-fires the .started event).
+        let t1 = t0.addingTimeInterval(200)
+        _ = controller.applyTick(recorder: recorder, now: t1) // warmup on the fresh monitor
+        let reFired = controller.applyTick(recorder: recorder, now: t1.addingTimeInterval(30))
+        XCTAssertEqual(
+            reFired, .started(channel: .mic, quietSince: t1),
+            "a reset monitor starts a new episode and re-fires after a full debounce",
+        )
+        XCTAssertTrue(controller.micSilentActive)
+    }
+
+    func testStopClearsLatchedRecordingSilentFlagAndResetsSiblingMonitor() {
+        let (controller, recorder, _, _) = makeController()
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -80
+        _ = controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertTrue(controller.recordingSilentActive, "precondition: symmetric-silence is latched")
+
+        controller.stop()
+        XCTAssertFalse(controller.recordingSilentActive, "stop() must clear the latched recording-silent flag")
+
+        // The sibling SilentRecordingMonitor is reset too: a fresh silent window
+        // re-fires after a full debounce (a non-reset monitor stays latched).
+        let t1 = t0.addingTimeInterval(200)
+        _ = controller.applyTick(recorder: recorder, now: t1)
+        _ = controller.applyTick(recorder: recorder, now: t1.addingTimeInterval(30))
+        XCTAssertTrue(controller.recordingSilentActive, "reset sibling monitor re-fires on a fresh silent window")
+    }
 }
