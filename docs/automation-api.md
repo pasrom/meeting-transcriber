@@ -65,7 +65,8 @@ per connection; exceeding it closes the connection without sending a response.
 | `POST` | `/v1/jobs/<id>/naming/skip` | Skip naming for a job (accept auto-assigned names). |
 
 A query string is stripped before routing, so `/v1/jobs/<id>?foo=bar` still
-resolves the id.
+resolves the id. The one query parameter with meaning is `include=transcript`
+on `POST /v1/transcribe` and `GET /v1/jobs/<id>` (see [Inline transcript](#inline-transcript)).
 
 ### POST /v1/transcribe
 
@@ -99,6 +100,27 @@ curl -sS -X POST "$BASE/v1/transcribe" \
   -H "Content-Type: application/json" \
   -d '{"path":"/Users/me/Recordings/standup.wav","maxWaitSeconds":900}'
 ```
+
+#### Inline transcript
+
+By default the response carries only metadata and a `transcriptPath` — fine when
+the client shares a filesystem with the app, useless for a remote agent that
+cannot read that path. Add `?include=transcript` to fold the transcript text into
+the response as a `transcript` field:
+
+```bash
+curl -sS -X POST "$BASE/v1/transcribe?include=transcript" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"path":"/Users/me/Recordings/standup.wav"}'
+```
+
+- Opt-in only. Without the parameter the wire shape is unchanged (no `transcript`
+  key), so existing clients are unaffected.
+- Populated on the terminal `200` response (and on `GET /v1/jobs/<id>?include=transcript`).
+  A `202` (still running) has no transcript yet, so the field is absent.
+- Best-effort: if the transcript file is missing or unreadable the field is
+  omitted and `transcriptPath` is still returned — opting in never turns a
+  finished job into an error.
 
 ### POST /v1/jobs
 
@@ -229,6 +251,9 @@ Scope and limits:
 - `error`: a message string when `state == "error"`, else `null`.
 - `warnings`: zero or more non-fatal warning strings (for example a partial
   diarization failure on one track).
+- `transcript`: the transcript text, present **only** when the request opted in
+  via `?include=transcript` (see [Inline transcript](#inline-transcript)). Absent
+  otherwise, so the default shape is unchanged.
 
 ### NamingStatusDTO
 
