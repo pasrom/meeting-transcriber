@@ -1005,6 +1005,60 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result.count, 4)
     }
 
+    func testMergeCentroidsDimMismatchKeepsLargerCountSide() {
+        // A dimension mismatch must never be averaged element-wise (that would
+        // corrupt the centroid). The larger-count side is kept verbatim.
+        let aWins = SpeakerMatcher.mergeCentroids(a: [1, 0, 0], aCount: 5, b: [0, 1], bCount: 2)
+        XCTAssertEqual(aWins.centroid, [1, 0, 0])
+        XCTAssertEqual(aWins.count, 7)
+
+        // When the smaller-dim side carries the larger count, it wins instead.
+        let bWins = SpeakerMatcher.mergeCentroids(a: [1, 0, 0], aCount: 1, b: [0, 1], bCount: 9)
+        XCTAssertEqual(bWins.centroid, [0, 1])
+        XCTAssertEqual(bWins.count, 10)
+    }
+
+    func testMergedPromotesSyntheticToRealWhenEitherSideIsReal() {
+        // isSynthetic stays true only when BOTH sides are synthetic; merging a real
+        // entry in flips the result back to real, keeping RPC-seeded random-vector
+        // entries from silently becoming permanent synthetic-only speakers.
+        let synthetic = StoredSpeaker(name: "A", embeddings: [[1, 0, 0]], isSynthetic: true)
+        let real = StoredSpeaker(name: "B", embeddings: [[0, 1, 0]], isSynthetic: false)
+
+        XCTAssertFalse(SpeakerMatcher.merged(into: synthetic, from: real).isSynthetic)
+        XCTAssertFalse(SpeakerMatcher.merged(into: real, from: synthetic).isSynthetic)
+
+        let bothSynthetic = SpeakerMatcher.merged(
+            into: synthetic,
+            from: StoredSpeaker(name: "C", embeddings: [[0, 0, 1]], isSynthetic: true),
+        )
+        XCTAssertTrue(bothSynthetic.isSynthetic)
+    }
+
+    func testMergedDerivesCentroidFromSamplesWhenNeitherSideHasCentroid() {
+        // With no persisted centroid on either side, merged() falls back to the
+        // element-wise mean of the combined recent samples.
+        let a = StoredSpeaker(name: "A", embeddings: [[1, 0]])
+        let b = StoredSpeaker(name: "B", embeddings: [[0, 1]])
+
+        let result = SpeakerMatcher.merged(into: a, from: b)
+        // mean of (1,0) and (0,1) = (0.5, 0.5)
+        XCTAssertEqual(result.centroid?[0] ?? 0, 0.5, accuracy: 0.001)
+        XCTAssertEqual(result.centroid?[1] ?? 0, 0.5, accuracy: 0.001)
+    }
+
+    func testMergedTrimsCombinedSamplesToMostRecent() {
+        // dst.embeddings + src.embeddings can exceed maxRecentSamples; merged() drops
+        // the oldest from the front and keeps the most recent maxRecentSamples.
+        let dst = StoredSpeaker(name: "A", embeddings: [[1, 0, 0], [2, 0, 0]])
+        let src = StoredSpeaker(name: "B", embeddings: [[3, 0, 0], [4, 0, 0]])
+
+        // The exact 3-element array pins both the count (maxRecentSamples == 3) and
+        // that the oldest sample is dropped from the front.
+        let result = SpeakerMatcher.merged(into: dst, from: src)
+        XCTAssertEqual(result.embeddings, [[2, 0, 0], [3, 0, 0], [4, 0, 0]])
+    }
+
     // MARK: - Synthetic speaker marker
 
     /// Legacy entries written before the `isSynthetic` field existed must
