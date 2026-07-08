@@ -100,6 +100,37 @@ final class SpeakerMatcherTests: XCTestCase {
         XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
     }
 
+    func testMatchRejectsWhenBestDistanceExactlyEqualsThreshold() {
+        // `best.hybrid < threshold` is strict: a candidate sitting exactly ON the
+        // threshold must be rejected. Orthogonal unit vectors give an exact 1.0
+        // cosine distance (norms are exactly 1), so the best candidate lands
+        // precisely on the threshold. A `<`→`<=` mutation would accept here; the
+        // existing tests all use comfortably-separated distances and can't catch it.
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 1.0)
+        matcher.saveDB([StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])])
+
+        let embeddings: [String: [Float]] = ["SPEAKER_0": [0, 1, 0]] // distance exactly 1.0
+        let result = matcher.match(embeddings: embeddings)
+        XCTAssertEqual(result["SPEAKER_0"], "SPEAKER_0")
+    }
+
+    func testMatchAcceptsWhenConfidenceMarginExactlyMet() {
+        // The confidence-margin check `second - best >= margin` is inclusive: a gap
+        // exactly equal to the margin must still accept. Unit basis vectors give
+        // exact distances (identical → 0.0, orthogonal → 1.0), so the best-to-second
+        // gap is exactly 1.0 here. A `>=`→`>` mutation would reject.
+        let matcher = SpeakerMatcher(dbPath: dbPath, threshold: 0.5, confidenceMargin: 1.0)
+        matcher.saveDB([
+            StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]]),
+            StoredSpeaker(name: "Speaker B", embeddings: [[0, 1, 0]]),
+        ])
+
+        // Identical to A (distance 0.0), orthogonal to B (distance 1.0) → gap exactly 1.0.
+        let embeddings: [String: [Float]] = ["SPEAKER_0": [1, 0, 0]]
+        let result = matcher.match(embeddings: embeddings)
+        XCTAssertEqual(result["SPEAKER_0"], "Speaker A")
+    }
+
     // MARK: - Save/Load
 
     func testSaveAndLoadDB() {
