@@ -303,10 +303,11 @@ extension PipelineQueue {
     }
 
     /// Run diarization for one loop iteration. Dual-track diarizes the app and
-    /// mic tracks separately and tolerates a mic-track failure (silent track on
-    /// hosts without a real input device) by falling back to app-only; the
-    /// `combined` result is the prefixed merge (or the app-only result) fed into
-    /// speaker naming. Single-source diarizes the mix directly.
+    /// mic tracks separately and tolerates either track failing (a silent track
+    /// on a host without a real input device, or a silent remote side in a solo
+    /// meeting) by falling back to the surviving track; the `combined` result is
+    /// the prefixed merge, or the single-track fallback, fed into speaker naming.
+    /// Single-source diarizes the mix directly.
     private func runDiarization(
         diarizeProcess: any DiarizationProvider, useDualTrack: Bool,
         speakerCount: Int?, workDir: URL, ctx: JobContext,
@@ -330,23 +331,34 @@ extension PipelineQueue {
         )
     }
 
-    /// Diarize the app + mic tracks separately, tolerating a mic-track failure
-    /// (silent track on a host without a real input device). The app track is
-    /// required; on mic failure the `combined` result is the *unprefixed* app
-    /// diarization — so downstream naming keys stay consistent with the
-    /// persisted app-only transcript — rather than the `R_`/`M_`-prefixed merge.
-    /// Shared by the batch (`runDiarization`) and the session's late re-run so
-    /// the mic-fail fallback can't diverge between them. Internal (not private)
-    /// because it is a `SpeakerNamingSessionDelegate` witness.
+    /// Diarize the app + mic tracks separately, tolerating either track failing
+    /// (a silent mic on a host without a real input device, or a silent remote
+    /// side in a solo meeting) by falling back to the surviving track; only a
+    /// both-track failure propagates. On a single-track fallback the `combined`
+    /// result is that track's *unprefixed* diarization, so downstream naming keys
+    /// stay consistent with the persisted single-track transcript, rather than the
+    /// `R_`/`M_`-prefixed merge. Shared by the batch (`runDiarization`) and the
+    /// session's late re-run so the fallback can't diverge between them. Internal
+    /// (not private) because it is a `SpeakerNamingSessionDelegate` witness.
     func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
         tracks: (app: URL, mic: URL, micDelay: TimeInterval),
         speakerCount: Int?, title: String, jobID: UUID,
     ) async throws -> DiarizationRun {
-        let appDiarization = try await diarizeProcess.run(
-            audioPath: tracks.app, numSpeakers: speakerCount, meetingTitle: title,
-        )
+        let sid = PipelineJob.shortID(for: jobID)
+
+        var appDiarization: DiarizationResult?
+        var appError: (any Error)?
+        do {
+            appDiarization = try await diarizeProcess.run(
+                audioPath: tracks.app, numSpeakers: speakerCount, meetingTitle: title,
+            )
+        } catch {
+            appError = error
+        }
+
         var micDiarization: DiarizationResult?
+        var micError: (any Error)?
         do {
             let rawMic = try await diarizeProcess.run(
                 audioPath: tracks.mic,
@@ -358,27 +370,47 @@ extension PipelineQueue {
             // `mergeDualSourceSegments` already shifted by `+micDelay`.
             micDiarization = DiarizationProcess.shiftSegments(rawMic, by: tracks.micDelay)
         } catch {
-            logger.warning(
-                "[\(PipelineJob.shortID(for: jobID), privacy: .public)] mic_diarization_failed error=\(error.localizedDescription, privacy: .public) — falling back to app-only diarization",
-            )
-            addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
-            micDiarization = nil
+            micError = error
         }
 
-        // App-only fallback (mic nil) feeds the speaker-naming loop with the
-        // app diarization; the dual-track-app-only assignment branch then keeps
-        // mic segments with their raw `micLabel` instead of force-matching them.
-        let combined = micDiarization.map { mic in
-            DiarizationProcess.mergeDualTrackDiarization(appDiarization: appDiarization, micDiarization: mic)
-        } ?? appDiarization
+        // Tolerate one silent/failed track and fall back to the other: a silent
+        // local mic on a host without a real input device (app-only), or a silent
+        // remote side in a solo meeting (mic-only). Each fallback keeps the other
+        // track's segments with their raw tag instead of force-matching them; only
+        // a both-track failure is a genuine diarization failure that propagates.
+        let combined: DiarizationResult
+        switch (appDiarization, micDiarization) {
+        case let (app?, mic?):
+            combined = DiarizationProcess.mergeDualTrackDiarization(appDiarization: app, micDiarization: mic)
+
+        case let (app?, nil):
+            logger.warning(
+                "[\(sid, privacy: .public)] mic_diarization_failed error=\(micError?.localizedDescription ?? "unknown", privacy: .public) — falling back to app-only diarization",
+            )
+            addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+            combined = app
+
+        case let (nil, mic?):
+            logger.warning(
+                "[\(sid, privacy: .public)] app_diarization_failed error=\(appError?.localizedDescription ?? "unknown", privacy: .public) — falling back to mic-only diarization",
+            )
+            addWarning(id: jobID, "App track diarization failed — speaker labels reflect local mic only")
+            combined = mic
+
+        case (nil, nil):
+            logger.warning(
+                "[\(sid, privacy: .public)] diarization_failed_both app=\(appError?.localizedDescription ?? "unknown", privacy: .public) mic=\(micError?.localizedDescription ?? "unknown", privacy: .public)",
+            )
+            throw appError ?? micError ?? DiarizationError.notAvailable
+        }
         return DiarizationRun(app: appDiarization, mic: micDiarization, combined: combined)
     }
 
     /// Apply speaker names to the transcript for whichever topology the run
-    /// produced (dual-track, mic-fail app-only fallback, or single-source),
-    /// returning the labeled transcript — or `nil` when no diarization is
-    /// available, leaving the caller's transcript unchanged. The three
-    /// topologies share the merge + format tail, applied once here.
+    /// produced (dual-track, mic-fail app-only fallback, app-fail mic-only
+    /// fallback, or single-source), returning the labeled transcript, or `nil`
+    /// when no diarization is available, leaving the caller's transcript
+    /// unchanged. The topologies share the merge + format tail, applied once here.
     private func labeledTranscript(
         from run: DiarizationRun, autoNames: [String: String],
         transcription: TranscriptionOutput, engine: any TranscribingEngine, mix16k: URL,
@@ -419,6 +451,12 @@ extension PipelineQueue {
             // mic transcript with its raw `micLabel` — better than emitting
             // "speakers not identified" on a recording with good remote audio.
             topology = .dualTrackAppOnly(cached: cachedSegments, micLabel: micLabel, app: appDiar)
+        } else if isDualSource, let micDiar = run.mic {
+            // App diarization failed (silent remote side / solo meeting). Keep the
+            // app transcript with its raw `Remote` tag and diarize the mic track —
+            // better than emitting "speakers not identified" on a recording with
+            // good local audio. Mirror of the app-only fallback above.
+            topology = .dualTrackMicOnly(cached: cachedSegments, micLabel: micLabel, mic: micDiar)
         } else if let combined = run.combined {
             topology = .single(segments: cachedSegments, diarization: combined)
         } else {

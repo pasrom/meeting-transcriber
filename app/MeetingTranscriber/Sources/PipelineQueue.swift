@@ -6,8 +6,8 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 
 /// Raw diarization output for one run of the diarize loop. `combined` is the
 /// result fed into speaker naming (the prefixed dual-track merge, the app-only
-/// fallback, or the single-source result); `app`/`mic` are retained for the
-/// dual-track assignment step. Internal top-level (not `PipelineQueue`-nested)
+/// or mic-only single-track fallback, or the single-source result); `app`/`mic`
+/// are retained for the dual-track assignment step. Internal top-level (not `PipelineQueue`-nested)
 /// because it crosses the queue ↔ `SpeakerNamingSession` boundary in both
 /// directions via `SpeakerNamingSessionDelegate`.
 struct DiarizationRun {

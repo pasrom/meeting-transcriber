@@ -277,11 +277,12 @@ enum DiarizationProcess {
 }
 
 extension DiarizationProcess {
-    /// The three diarization topologies the pipeline produces, each carrying
-    /// the data its speaker assignment needs. `labelSegments` collapses what
-    /// used to be three near-duplicate inline assignment blocks in
-    /// `PipelineQueue.diarize` — the merge + formatting tail they all shared is
-    /// now applied once at the call site.
+    /// The diarization topologies the pipeline produces, each carrying the data
+    /// its speaker assignment needs (single-source, dual-track, and the app-only
+    /// and mic-only single-track fallbacks). `labelSegments` collapses what used
+    /// to be near-duplicate inline assignment blocks in `PipelineQueue.diarize`;
+    /// the merge + formatting tail they all shared is now applied once at the
+    /// call site.
     enum LabelingTopology {
         /// Single mixed track: every transcript segment is assigned against one
         /// diarization.
@@ -294,6 +295,11 @@ extension DiarizationProcess {
         /// the app diarization; mic segments keep their raw `micLabel` rather
         /// than being force-matched.
         case dualTrackAppOnly(cached: [TimestampedSegment], micLabel: String, app: DiarizationResult)
+        /// Dual track, app diarization failed (e.g. a silent remote side in a
+        /// solo meeting): mic segments are assigned against the mic diarization;
+        /// app segments keep their raw `remoteSpeakerLabel` tag rather than being
+        /// force-matched. Mirror of `dualTrackAppOnly`.
+        case dualTrackMicOnly(cached: [TimestampedSegment], micLabel: String, mic: DiarizationResult)
     }
 
     /// Apply speaker labels for any diarization topology, returning segments
@@ -348,6 +354,22 @@ extension DiarizationProcess {
             let labeledApp = assignSpeakers(transcript: appSegs, diarization: namedApp)
             // micSegs keep their original micLabel speaker tag.
             return (labeledApp + micSegs).sorted { $0.start < $1.start }
+
+        case let .dualTrackMicOnly(cached, micLabel, mic):
+            // App diarization failed, so `combined` is the *unprefixed* mic
+            // diarization — autoNames keys are raw ("SPEAKER_0"), not "M_"-prefixed.
+            // Pass them through directly (mirror of the app-only fallback above).
+            let namedMic = DiarizationResult(
+                segments: mic.segments,
+                speakingTimes: mic.speakingTimes,
+                autoNames: autoNames,
+                embeddings: mic.embeddings,
+            )
+            let appSegs = cached.filter { $0.speaker == remoteSpeakerLabel }
+            let micSegs = cached.filter { $0.speaker == micLabel }
+            let labeledMic = assignSpeakers(transcript: micSegs, diarization: namedMic)
+            // appSegs keep their original remoteSpeakerLabel tag.
+            return (labeledMic + appSegs).sorted { $0.start < $1.start }
         }
     }
 }

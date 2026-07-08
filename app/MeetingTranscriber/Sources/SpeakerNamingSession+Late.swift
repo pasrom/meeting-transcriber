@@ -123,8 +123,9 @@ extension SpeakerNamingSession {
             )
             delegate.namingStageDidEnd()
 
-            // Dual-track always yields a combined result (the merge or the
-            // app-only fallback); single-source sets it directly.
+            // Dual-track always yields a combined result (the merge, or the
+            // app-only / mic-only single-track fallback); single-source sets it
+            // directly. Only a both-track failure throws before a run exists.
             guard let combined = run.combined else { throw DiarizationError.notAvailable }
             guard let newNamingData = buildNamingData(
                 jobID: jobID, title: title,
@@ -197,10 +198,11 @@ extension SpeakerNamingSession {
     ) async throws -> DiarizationRun {
         let (recordingsDir, slug, jobID, micDelay) = recording
         if isDualSource {
-            // Mirror the batch path's mic-fail fallback: a silent/failing mic
-            // track must degrade to the unprefixed app-only diarization, not
-            // throw (a no-op re-run) or emit prefixed keys the persisted
-            // app-only transcript can't match. The weak var still resolves here
+            // Mirror the batch path's single-track fallback: a silent/failing
+            // track must degrade to the unprefixed surviving-track diarization
+            // (app-only on mic failure, mic-only on app failure), not throw (a
+            // no-op re-run) or emit prefixed keys the persisted single-track
+            // transcript can't match. The weak var still resolves here
             // because `lateDiarization`'s strong per-flow capture keeps the
             // queue alive; the guard is defensive for any future non-flow
             // caller → `notAvailable` rolls back to `.speakerNamingPending`.

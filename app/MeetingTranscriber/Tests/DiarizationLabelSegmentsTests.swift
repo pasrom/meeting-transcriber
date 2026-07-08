@@ -73,6 +73,29 @@ final class DiarizationLabelSegmentsTests: XCTestCase {
         XCTAssertEqual(result.map(\.text), ["app line", "mic line"])
     }
 
+    func testLabelSegmentsDualTrackMicOnlyKeepsRawRemoteLabel() {
+        // Mirror of the app-only fallback for the opposite failure: the app
+        // (remote) track diarization failed (e.g. a silent remote side in a
+        // solo meeting), so diarize() passes the *unprefixed* mic diarization
+        // (`diarization = micDiarization`); autoNames keys are raw ("SPEAKER_0").
+        let cached = [
+            TimestampedSegment(start: 0, end: 5, text: "app line", speaker: "Remote"),
+            TimestampedSegment(start: 5, end: 10, text: "mic line", speaker: "Me"),
+        ]
+        let mic = DiarizationResult(
+            segments: [.init(start: 5, end: 10, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5], autoNames: [:], embeddings: nil,
+        )
+        let result = DiarizationProcess.labelSegments(
+            .dualTrackMicOnly(cached: cached, micLabel: "Me", mic: mic),
+            autoNames: ["SPEAKER_0": "Bob"],
+        )
+        // Mic segments get their matched name; app segments keep their raw
+        // "Remote" tag (the app track wasn't diarized).
+        XCTAssertEqual(result.map(\.speaker), ["Remote", "Bob"])
+        XCTAssertEqual(result.map(\.text), ["app line", "mic line"])
+    }
+
     // MARK: - unprefixNames
 
     /// `unprefixNames` keeps only the keys belonging to the requested track and

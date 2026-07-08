@@ -29,8 +29,9 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     )
     /// Run the LLM protocol generator over a transcript (a queue pipeline stage).
     func generateProtocol(jobID: UUID, transcript: String, title: String, protocolsDir: URL) async
-    /// Diarize app + mic tracks separately with the shared mic-fail fallback
-    /// (a queue pipeline stage, reused by the late re-run).
+    /// Diarize app + mic tracks separately with the shared single-track fallback
+    /// (app-only on mic failure, mic-only on app failure; a queue pipeline stage,
+    /// reused by the late re-run).
     func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
         tracks: (app: URL, mic: URL, micDelay: TimeInterval),
