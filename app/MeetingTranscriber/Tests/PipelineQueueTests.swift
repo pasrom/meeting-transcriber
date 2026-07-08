@@ -483,6 +483,77 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.count, 0)
     }
 
+    func testLoadSnapshotKeepsNamingPendingJobWhenMixAudioMissing() throws {
+        // A .speakerNamingPending job keeps its own slug-based `_16k.wav` sidecar
+        // and doesn't need the original mix.wav. loadSnapshot must NOT discard it
+        // just because mixPath is gone; this guards the
+        // `state != .speakerNamingPending` exception in the missing-audio removeAll.
+        // (testLoadSnapshotDiscardsMissingAudio writes a real mix file, so it can't
+        // catch a regression that drops the naming exception.)
+        // mixPath deliberately points at a file that does NOT exist on disk.
+        var job = PipelineJob(
+            meetingTitle: "Naming Ghost",
+            appName: "App",
+            mixPath: URL(fileURLWithPath: "/tmp/nonexistent_\(UUID().uuidString).wav"),
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "naming_ghost"
+        let snapshotData = try JSONEncoder().encode([job])
+        try snapshotData.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        // Sidecar present so the rebuild loop keeps the job in .speakerNamingPending
+        // rather than falling to .done. Content is irrelevant (restore only stashes
+        // it), so use the minimal shape and the same writer loadSnapshot pairs with.
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Naming Ghost",
+            mapping: [:],
+            speakingTimes: [:],
+            embeddings: [:],
+            audioPath: nil,
+            segments: [],
+            participants: [],
+            isDualSource: false,
+        )
+        try SpeakerNamingStore(outputDir: tmpDir).save(namingData, slug: "naming_ghost")
+
+        let (freshQueue, _) = makeMockProcessingQueue()
+        freshQueue.loadSnapshot()
+
+        // The job survives despite the missing mix, and stays pending.
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
+    }
+
+    func testLoadSnapshotKeepsPairedImportJobWithNilMixPath() throws {
+        // Paired imports carry a nil mixPath; appPath is the ground-truth source,
+        // checked at processNext time. loadSnapshot must keep them, which guards the
+        // `guard let mixPath = job.mixPath else { return false }` in the
+        // missing-audio removeAll.
+        let appPath = tmpDir.appendingPathComponent("meeting_app.wav")
+        try Data("fake audio".utf8).write(to: appPath)
+
+        let job = PipelineJob(
+            meetingTitle: "Paired Import",
+            appName: "Zoom",
+            mixPath: nil,
+            appPath: appPath,
+            micPath: nil,
+            micDelay: 0,
+        )
+        let data = try JSONEncoder().encode([job])
+        try data.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs.first?.state, .waiting)
+    }
+
     func testLoadSnapshotNoFileIsNoOp() {
         let freshQueue = PipelineQueue(logDir: tmpDir)
         freshQueue.loadSnapshot()
