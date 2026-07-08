@@ -776,6 +776,96 @@
             XCTAssertNotEqual(ids1, ids2, "distinct keys create distinct jobs")
         }
 
+        func testV1JobsIdempotencyRemembersEmptyResult() async throws {
+            // An enqueue that matched no files stores [] under the key. A retry
+            // must return that [] from the store, not treat the empty result as
+            // "key unseen" and re-enqueue (the nil-vs-[] distinction the store
+            // documents). The enqueue yields [] first and a fresh id after, so a
+            // wrongful re-enqueue would surface that id on the retry.
+            let sequencer = EnqueueSequencer()
+            // Typed local (not a trailing closure) so SwiftFormat can't restyle
+            // it into a trailing closure that binds to the wrong parameter.
+            let enqueue: ([URL]) -> [UUID] = { _ in sequencer.next() }
+            let base = try await startServer(enqueueReturningIDs: enqueue)
+            let url = base.appendingPathComponent("v1/jobs")
+            let body = Data(#"{"paths":["/inbox/a.wav"]}"#.utf8)
+            let hdrs = idempotentHeaders("jobs-empty-key")
+
+            var req1 = request("POST", url, headers: hdrs); req1.httpBody = body
+            let (d1, r1) = try await URLSession.shared.upload(for: req1, from: body)
+            var req2 = request("POST", url, headers: hdrs); req2.httpBody = body
+            let (d2, r2) = try await URLSession.shared.upload(for: req2, from: body)
+
+            XCTAssertEqual((r1 as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual((r2 as? HTTPURLResponse)?.statusCode, 200)
+            struct EnqueueIDs: Decodable { let jobIDs: [String] }
+            let ids1 = try JSONDecoder().decode(EnqueueIDs.self, from: d1).jobIDs
+            let ids2 = try JSONDecoder().decode(EnqueueIDs.self, from: d2).jobIDs
+            XCTAssertEqual(ids1, [], "first enqueue matched no files → empty result")
+            XCTAssertEqual(ids2, [], "retry with the same key returns the stored empty result, no re-enqueue")
+        }
+
+        // MARK: - transcribe wait clamping
+
+        func testV1TranscribeClampsAndDefaultsWait() async throws {
+            // The blocking-transcribe wait is min(max(0, requested), 1800) with a
+            // 600s default. Record the value the transcribe closure actually
+            // receives and assert all three boundary points.
+            let recorder = WaitRecorder()
+            let dto = JobStatusDTO(
+                jobID: UUID().uuidString, state: .done, meetingTitle: "M",
+                transcriptPath: "/out/t.txt", protocolPath: nil, error: nil, warnings: [],
+            )
+            // Bind the closure to a typed local (not a trailing closure) so its
+            // two-arg shape can't be mis-inferred against the sibling 2-arg
+            // confirmNaming parameter, and SwiftFormat can't restyle it.
+            let transcribe: (URL, Double) async -> BlockingTranscribeResult = { _, wait in
+                await recorder.record(wait)
+                return .completed(dto)
+            }
+            let base = try await startServer(transcribe: transcribe)
+            let url = base.appendingPathComponent("v1/transcribe")
+
+            func postWait(_ jsonBody: String) async throws -> Double? {
+                var req = request("POST", url, headers: authHeader)
+                let payload = Data(jsonBody.utf8)
+                req.httpBody = payload
+                _ = try await URLSession.shared.upload(for: req, from: payload)
+                return await recorder.last
+            }
+
+            let capped = try await postWait(#"{"path":"/inbox/a.wav","maxWaitSeconds":99999}"#)
+            XCTAssertEqual(capped, 1800, "a maxWaitSeconds above the cap must clamp to 1800")
+            let floored = try await postWait(#"{"path":"/inbox/a.wav","maxWaitSeconds":-5}"#)
+            XCTAssertEqual(floored, 0, "a negative maxWaitSeconds must clamp to 0")
+            let defaulted = try await postWait(#"{"path":"/inbox/a.wav"}"#)
+            XCTAssertEqual(defaulted, 600, "an omitted maxWaitSeconds must use the 600s default")
+        }
+
+        // MARK: - V1 test helpers
+
+        /// Sync, thread-safe enqueue stub: first call returns [] (no files
+        /// matched), later calls return a fresh id. Lets a test prove the
+        /// idempotency store dedups an empty result instead of re-enqueuing.
+        private final class EnqueueSequencer: @unchecked Sendable {
+            private let lock = NSLock()
+            private var calls = 0
+            func next() -> [UUID] {
+                lock.lock()
+                defer { lock.unlock() }
+                calls += 1
+                return calls == 1 ? [] : [UUID()]
+            }
+        }
+
+        /// Records the wait the transcribe closure was last invoked with.
+        private actor WaitRecorder {
+            private(set) var last: Double?
+            func record(_ value: Double) {
+                last = value
+            }
+        }
+
         func testV1TranscribeIdempotencyKeyReturnsExistingJobWithoutReRun() async throws {
             // transcribe yields a fresh job each call; the repeat path instead
             // resolves the stored id via jobStatus (echoed here), so identical
