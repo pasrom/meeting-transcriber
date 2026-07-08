@@ -220,6 +220,48 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
+    // MARK: - Unmatched-App Diagnostics
+
+    func testUnmatchedWatchedAssertionKeysReportsRunningUnmatchedApp() {
+        // A watched meeting app is running but its assertion matches no pattern
+        // this round — the diagnostic must surface it so a "stopped detecting"
+        // report has a log line instead of needing manual pmset (issue #446).
+        let assertions = makeAssertionDict(
+            pid: 4211,
+            processName: "MSTeams",
+            assertName: "Downloading update",
+            assertType: "PreventUserIdleSystemSleep",
+        )
+        let keys = PowerAssertionDetector.unmatchedWatchedAssertionKeys(
+            assertions: assertions,
+            patterns: PowerAssertionDetector.defaultPatterns,
+            hits: [],
+        )
+        XCTAssertEqual(keys, ["MSTeams|Downloading update|PreventUserIdleSystemSleep"])
+    }
+
+    func testUnmatchedWatchedAssertionKeysSkipsMatchedAndUnwatched() {
+        // Zoom matched this round (in hits) → not reported; Safari isn't a
+        // watched meeting app → not reported.
+        var assertions = makeAssertionDict(
+            pid: 65978,
+            processName: "zoom.us",
+            assertName: "Describe Activity Type",
+            assertType: "NoDisplaySleepAssertion",
+        )
+        assertions[9999] = [[
+            "Process Name": "Safari",
+            "AssertName": "Playing video",
+            "AssertType": "PreventUserIdleDisplaySleep",
+        ]]
+        let keys = PowerAssertionDetector.unmatchedWatchedAssertionKeys(
+            assertions: assertions,
+            patterns: PowerAssertionDetector.defaultPatterns,
+            hits: ["Zoom"],
+        )
+        XCTAssertTrue(keys.isEmpty)
+    }
+
     // MARK: - Confirmation Threshold
 
     func testConfirmationThreshold() {
