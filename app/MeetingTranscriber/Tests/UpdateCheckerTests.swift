@@ -56,6 +56,16 @@ final class UpdateCheckerTests: XCTestCase {
         XCTAssertNil(UpdateChecker.parseVersion("v"))
     }
 
+    func testParseVersionDropsBuildMetadata() {
+        // Semver build-metadata ("1.2.3+build42") is not handled: only the "-"
+        // pre-release suffix is stripped, so "3+build42" fails Int parsing, the
+        // part count drops below 3, and the whole string is rejected → the app
+        // silently reports "no update". Pinned so a future "support build
+        // metadata" change is a deliberate, tested choice rather than a surprise.
+        XCTAssertNil(UpdateChecker.parseVersion("1.2.3+build42"))
+        XCTAssertNil(UpdateChecker.parseVersion("v1.2.3+build42"))
+    }
+
     // MARK: - Version Comparison
 
     func testIsNewerMajor() {
