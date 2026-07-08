@@ -84,6 +84,23 @@ final class DiarizationProcessTests: XCTestCase { // swiftlint:disable:this type
         XCTAssertTrue(result.isEmpty)
     }
 
+    func testAssignSpeakersEqualOverlapKeepsFirstSegment() {
+        // Equal overlap on two segments: the strict `>` keeps the FIRST seen;
+        // a `>=` slip would flip the label to the last. Pins the tie-break.
+        let transcript = [TimestampedSegment(start: 0, end: 10, text: "Split evenly")]
+        let diarization = DiarizationResult(
+            segments: [
+                .init(start: 0, end: 5, speaker: "SPEAKER_0"), // overlap 5
+                .init(start: 5, end: 10, speaker: "SPEAKER_1"), // overlap 5
+            ],
+            speakingTimes: ["SPEAKER_0": 5, "SPEAKER_1": 5],
+            autoNames: [:],
+            embeddings: nil,
+        )
+        let result = DiarizationProcess.assignSpeakers(transcript: transcript, diarization: diarization)
+        XCTAssertEqual(result[0].speaker, "SPEAKER_0", "equal overlap keeps the first segment (strict >)")
+    }
+
     // MARK: - Nearest Fallback
 
     func testAssignSpeakersNearestFallback() {
