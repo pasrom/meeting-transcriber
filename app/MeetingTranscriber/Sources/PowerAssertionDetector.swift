@@ -2,7 +2,6 @@ import Foundation
 import IOKit.pwr_mgt
 import os.log
 
-// swiftlint:disable:next unused_declaration
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "PowerAssertionDetector")
 
 /// Detects active meetings via IOKit power assertions.
@@ -63,6 +62,9 @@ class PowerAssertionDetector: MeetingDetecting {
     private var consecutiveHits: [String: Int] = [:]
     private var cooldownUntil: [String: Date] = [:]
     private let cooldownDuration: TimeInterval = 5
+    /// Diagnostic dedup: (process|name|type) keys already logged as unmatched,
+    /// so a persistently-running unmatched meeting app logs once per session.
+    private var loggedMissKeys: Set<String> = []
 
     /// Closure that provides assertion data. Defaults to IOPMCopyAssertionsByProcess.
     /// Override in tests to inject mock data.
@@ -110,6 +112,8 @@ class PowerAssertionDetector: MeetingDetecting {
                 }
             }
         }
+
+        logUnmatchedWatchedAssertions(assertions, hits: hitsThisRound)
 
         // Check confirmation threshold
         for (appName, hits) in consecutiveHits {
@@ -193,6 +197,48 @@ class PowerAssertionDetector: MeetingDetecting {
             return true
         }
         return pattern.assertionTypes.contains(assertType)
+    }
+
+    /// Keys ("process|name|type") for assertions from a watched meeting app that
+    /// produced no match this round. Pure so the selection logic is unit-testable;
+    /// the caller dedupes for the detector's lifetime and emits one log line each.
+    static func unmatchedWatchedAssertionKeys(
+        assertions: [Int32: [[String: Any]]],
+        patterns: [AssertionPattern],
+        hits: Set<String>,
+    ) -> [String] {
+        let watched = Set(patterns.flatMap(\.processNames))
+        var keys: [String] = []
+        for pidAssertions in assertions.values {
+            for assertion in pidAssertions {
+                guard let processName = assertion["Process Name"] as? String,
+                      watched.contains(processName),
+                      let pattern = patterns.first(where: { $0.processNames.contains(processName) }),
+                      !hits.contains(pattern.appName) else {
+                    continue
+                }
+                let assertName = assertion["AssertName"] as? String ?? ""
+                let assertType = assertion["AssertType"] as? String ?? ""
+                keys.append("\(processName)|\(assertName)|\(assertType)")
+            }
+        }
+        return keys
+    }
+
+    /// Log, once per distinct key, that a watched meeting app is running but its
+    /// assertion matched nothing this round — the "detection silently not firing"
+    /// signal from issue #446, previously visible only via manual pmset. The
+    /// names are app/OS-generated metadata (no user content), logged `.public`
+    /// so a reporter's diagnostic export names the actual assertion.
+    private func logUnmatchedWatchedAssertions(_ assertions: [Int32: [[String: Any]]], hits: Set<String>) {
+        for key in Self.unmatchedWatchedAssertionKeys(assertions: assertions, patterns: patterns, hits: hits) {
+            guard loggedMissKeys.insert(key).inserted else { continue }
+            logger.info("""
+            Watched meeting app is running but its power assertion did not match \
+            (process|name|type = \(key, privacy: .public)); \
+            if a meeting is active, detection is not firing.
+            """)
+        }
     }
 
     /// Default assertion provider using IOPMCopyAssertionsByProcess.
