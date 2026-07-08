@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Accelerate
 import AVFoundation
 @testable import MeetingTranscriber
@@ -81,6 +82,87 @@ final class AudioMixerTests: XCTestCase {
 
         // Mic should be untouched
         XCTAssertTrue(micSamples.allSatisfy { $0 == 0.5 })
+    }
+
+    /// Places app energy in exactly one window (index 20), so the gate mask covers
+    /// app windows [20 - marginBefore, 20 + marginAfter] = [18, 30], then asserts
+    /// which mic windows the delay-shifted gate silences. Mic window i is gated iff
+    /// (i + delayWindows) lands in [18, 30], so `gatedWindows` is that range shifted
+    /// by -delayWindows. Boundaries just outside the range must stay untouched.
+    private func assertEchoGateShiftedBy(
+        micDelay: TimeInterval,
+        gatedWindows: ClosedRange<Int>,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+    ) {
+        let sampleRate = 1000 // 20-sample / 20 ms windows
+        let windowSize = 20
+        let windowCount = 40
+
+        var appSamples = [Float](repeating: 0, count: windowCount * windowSize)
+        let energyWindow = 20
+        for j in (energyWindow * windowSize) ..< ((energyWindow + 1) * windowSize) {
+            appSamples[j] = 1.0
+        }
+        var micSamples = [Float](repeating: 0.5, count: windowCount * windowSize)
+
+        AudioMixer.suppressEcho(
+            appSamples: appSamples,
+            micSamples: &micSamples,
+            sampleRate: sampleRate,
+            micDelay: micDelay,
+        )
+
+        func micWindow(_ w: Int) -> Float {
+            micSamples[w * windowSize]
+        }
+        XCTAssertEqual(micWindow(gatedWindows.lowerBound - 1), 0.5, "just below the shifted gate stays untouched", file: file, line: line)
+        XCTAssertEqual(micWindow(gatedWindows.lowerBound), 0.0, "first gated mic window", file: file, line: line)
+        XCTAssertEqual(micWindow(gatedWindows.upperBound), 0.0, "last gated mic window", file: file, line: line)
+        XCTAssertEqual(micWindow(gatedWindows.upperBound + 1), 0.5, "just above the shifted gate stays untouched", file: file, line: line)
+    }
+
+    func testEchoSuppressionShiftsGateByPositiveMicDelay() {
+        // delayWindows = Int(0.1 * 1000) / 20 = 5, so the [18, 30] app gate lands on
+        // mic windows [13, 25]. The existing echo tests only cover micDelay == 0, so
+        // this offset branch (appIdx = i + delayWindows) was unexercised; a sign flip
+        // would silence the wrong mic windows.
+        assertEchoGateShiftedBy(micDelay: 0.1, gatedWindows: 13 ... 25)
+    }
+
+    func testEchoSuppressionShiftsGateByNegativeMicDelay() {
+        // A negative micDelay shifts the gate the other way (delayWindows = -5 → mic
+        // windows [23, 35]). The appIdx < 0 lower-bound guard is covered separately by
+        // testEchoSuppressionGuardsAgainstNegativeGateIndex.
+        assertEchoGateShiftedBy(micDelay: -0.1, gatedWindows: 23 ... 35)
+    }
+
+    func testEchoSuppressionGuardsAgainstNegativeGateIndex() {
+        // With a negative micDelay the earliest mic windows map to appIdx < 0
+        // (window i → i + delayWindows, delayWindows = -5). The `appIdx >= 0` guard
+        // must skip them; without it, gateMask[negative] is an out-of-bounds access.
+        // App energy fills every window so, absent the guard, every in-range appIdx
+        // would gate, isolating the guard as the only reason an early window survives.
+        let sampleRate = 1000
+        let windowSize = 20
+        let windowCount = 40
+
+        let appSamples = [Float](repeating: 1.0, count: windowCount * windowSize)
+        var micSamples = [Float](repeating: 0.5, count: windowCount * windowSize)
+
+        AudioMixer.suppressEcho(
+            appSamples: appSamples,
+            micSamples: &micSamples,
+            sampleRate: sampleRate,
+            micDelay: -0.1, // delayWindows = -5 → mic windows 0...4 have appIdx < 0
+        )
+
+        func micWindow(_ w: Int) -> Float {
+            micSamples[w * windowSize]
+        }
+        // Window 4 → appIdx -1 → guarded (untouched). Window 5 → appIdx 0 → gated.
+        XCTAssertEqual(micWindow(4), 0.5, "window 4 (appIdx -1) is skipped by the appIdx >= 0 guard")
+        XCTAssertEqual(micWindow(5), 0.0, "window 5 (appIdx 0) is gated")
     }
 
     // MARK: - Resampling
