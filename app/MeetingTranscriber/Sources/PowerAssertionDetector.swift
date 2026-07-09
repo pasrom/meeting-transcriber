@@ -57,6 +57,21 @@ class PowerAssertionDetector: MeetingDetecting {
         ),
     ]
 
+    /// The `defaultPatterns` subset to watch given the user's "Apps to Watch"
+    /// toggles (`AppSettings.watchApps`). A user-facing meeting app is kept only
+    /// when its name is in `watchedAppNames`; the internal meeting-simulator
+    /// pattern is always retained (it is an e2e/test hook, never user-toggleable,
+    /// so automated detection keeps working regardless of the toggles). With all
+    /// toggles on — the default — this returns every pattern, i.e. unchanged
+    /// behaviour; with an empty selection only the simulator remains, so no
+    /// user-facing app auto-detects (the user opted them all out).
+    static func patterns(watching watchedAppNames: [String]) -> [AssertionPattern] {
+        let watched = Set(watchedAppNames)
+        return defaultPatterns.filter { pattern in
+            pattern.appName == AppMeetingPattern.simulator.appName || watched.contains(pattern.appName)
+        }
+    }
+
     private let patterns: [AssertionPattern]
     private let confirmationCount: Int
     private var consecutiveHits: [String: Int] = [:]

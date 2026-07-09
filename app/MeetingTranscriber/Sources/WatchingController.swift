@@ -66,7 +66,7 @@ final class WatchingController {
         permissions: PermissionsController,
         liveTranscription: LiveTranscriptionCoordinator,
         ensureMicAccess: @escaping () async -> Bool = { await Permissions.ensureMicrophoneAccess() },
-        makeDetector: @escaping () -> any MeetingDetecting = { PowerAssertionDetector() },
+        makeDetector: (() -> any MeetingDetecting)? = nil,
     ) {
         self.settings = settings
         self.notifier = notifier
@@ -75,7 +75,18 @@ final class WatchingController {
         self.permissions = permissions
         self.liveTranscription = liveTranscription
         self.ensureMicAccess = ensureMicAccess
-        self.makeDetector = makeDetector
+        // Tests inject a deterministic detector; production defaults to one
+        // filtered by the "Apps to Watch" toggles, re-read at each watch start.
+        self.makeDetector = makeDetector ?? { [settings] in
+            Self.defaultDetector(settings: settings)
+        }
+    }
+
+    /// The auto-detect detector, filtered by the user's "Apps to Watch" toggles
+    /// (`settings.watchApps`). Extracted so the toggle → detection wiring is
+    /// unit-testable without spinning up a watch loop.
+    static func defaultDetector(settings: AppSettings) -> any MeetingDetecting {
+        PowerAssertionDetector(patterns: PowerAssertionDetector.patterns(watching: settings.watchApps))
     }
 
     /// Wire the engine-sync hook. Called once from `AppState.init` after its
@@ -152,6 +163,10 @@ final class WatchingController {
 
             pipeline.ensureQueue()
 
+            // Manual recording never polls the detector, so WatchLoop's default
+            // (unfiltered) detector here is inert. If this path ever gains
+            // auto-detection, route it through `makeDetector()` like toggleWatching
+            // so the "Apps to Watch" filter still applies.
             let loop = WatchLoop(
                 recorderFactory: makeRecorderFactory(),
                 pipelineQueue: pipeline.queue,
