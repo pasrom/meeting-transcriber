@@ -507,11 +507,26 @@ class DualSourceRecorder: RecordingProvider {
     /// prepending the root if enumeration somehow missed it — order matters
     /// for the aggregate device's cosmetic name tag (root first).
     static func resolveTapPIDs(rootPID: pid_t) -> [pid_t] {
-        guard let bundleURL = NSRunningApplication(processIdentifier: rootPID)?.bundleURL else {
-            return [rootPID]
-        }
-        let enumerated = ProcessTreeEnumerator.pidsRooted(in: bundleURL)
-        guard !enumerated.isEmpty else { return [rootPID] }
+        resolveTapPIDs(
+            rootPID: rootPID,
+            bundleURL: NSRunningApplication(processIdentifier: rootPID)?.bundleURL,
+            enumerate: ProcessTreeEnumerator.pidsRooted(in:),
+        )
+    }
+
+    /// Test seam — same PID-set decision as `resolveTapPIDs(rootPID:)` but with
+    /// the running-app bundle lookup + child-PID enumeration injected, so the
+    /// empty-enumeration fallback, the already-includes-root passthrough, and the
+    /// load-bearing root-prepend ordering (aggregate device name tag; #84) are
+    /// unit-testable without real running processes.
+    static func resolveTapPIDs(
+        rootPID: pid_t,
+        bundleURL: URL?,
+        enumerate: (URL) -> [pid_t],
+    ) -> [pid_t] {
+        guard let bundleURL else { return [rootPID] }
+        let enumerated = enumerate(bundleURL)
+        // Empty `enumerated` needs no guard: it falls through to `[rootPID] + []`, the root alone.
         return enumerated.contains(rootPID) ? enumerated : [rootPID] + enumerated
     }
 

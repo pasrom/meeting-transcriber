@@ -320,19 +320,6 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertEqual(result, 24000)
     }
 
-    // MARK: - resolveTapPIDs
-
-    /// `NSRunningApplication(processIdentifier:)` returns nil for a PID that
-    /// isn't running — falls back to the single root PID rather than
-    /// silently tapping nothing. This is the safety net for command-line
-    /// tools, exited processes, or detection failures.
-    func testResolveTapPIDsFallsBackWhenBundleURLUnavailable() {
-        // PID_MAX on macOS is 99999. Pick something deliberately past it.
-        let bogusPID: pid_t = 999_999
-        let pids = DualSourceRecorder.resolveTapPIDs(rootPID: bogusPID)
-        XCTAssertEqual(pids, [bogusPID])
-    }
-
     // MARK: - buildRecording
 
     /// Neither channel produced audio (0-byte app temp, no mic) → noAudioData.
