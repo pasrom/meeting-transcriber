@@ -30,3 +30,47 @@ public struct AudioCaptureResult: Sendable {
         self.micDelay = micDelay
     }
 }
+
+extension AudioCaptureResult {
+    /// First-frame + output-format readings from the app-audio track at stop().
+    struct AppReadings {
+        let firstFrameTicks: UInt64
+        let sampleRate: Int
+        let channels: Int
+    }
+
+    /// Mic-track reading at stop(): whether a mic was actually recorded (mic
+    /// start can fail, leaving app-audio only) plus its first-frame ticks.
+    struct MicReadings {
+        let recorded: Bool
+        let firstFrameTicks: UInt64
+    }
+
+    /// Builds the `AudioCaptureSession.stop()` result from the two tracks' raw
+    /// readings, split out of the hardware glue so the delay / rate / channel
+    /// arithmetic is unit-testable. Ticks are `mach_absolute_time` values (0 when
+    /// that track never delivered a frame). `micDelay` is the mic-minus-app
+    /// first-frame delta in seconds — positive when the mic started later — and is
+    /// only non-zero when a mic was recorded AND both tracks produced a frame.
+    /// Sample rate / channels fall back to `configured` when the app track
+    /// reported 0 (never wrote output).
+    static func make(
+        appOutputURL: URL,
+        micOutputURL: URL?,
+        configured: (sampleRate: Int, channels: Int),
+        app: AppReadings,
+        mic: MicReadings,
+    ) -> AudioCaptureResult {
+        var micDelay: TimeInterval = 0
+        if mic.recorded, app.firstFrameTicks > 0, mic.firstFrameTicks > 0 {
+            micDelay = machTicksToSeconds(mic.firstFrameTicks) - machTicksToSeconds(app.firstFrameTicks)
+        }
+        return AudioCaptureResult(
+            appAudioFileURL: appOutputURL,
+            micAudioFileURL: mic.recorded ? micOutputURL : nil,
+            actualSampleRate: app.sampleRate > 0 ? app.sampleRate : configured.sampleRate,
+            actualChannels: app.channels > 0 ? app.channels : configured.channels,
+            micDelay: micDelay,
+        )
+    }
+}

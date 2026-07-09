@@ -122,33 +122,27 @@ public class AudioCaptureSession {
         appCapture?.stop()
         micCapture?.stop()
 
-        // Compute mic delay
-        var micDelay: TimeInterval = 0
-        if let app = appCapture, let mic = micCapture {
-            let appTime = app.appFirstFrameTime
-            let micTime = mic.firstFrameTime
-            if appTime > 0 && micTime > 0 {
-                micDelay = machTicksToSeconds(micTime) - machTicksToSeconds(appTime)
-            }
-        }
-
-        // The app file is what `AppAudioCapture` actually WROTE — 16 kHz mono
-        // after the in-IOProc resample, not the device's raw capture format.
-        let actualRate = appCapture?.outputSampleRate ?? 0
-        let actualChannels = appCapture?.outputChannels ?? 0
-
-        // Close file handle
-        try? appFileHandle?.close()
-        appFileHandle = nil
-
-        let result = AudioCaptureResult(
-            appAudioFileURL: appOutputURL,
-            micAudioFileURL: micCapture != nil ? micOutputURL : nil,
-            actualSampleRate: actualRate > 0 ? actualRate : sampleRate,
-            actualChannels: actualChannels > 0 ? actualChannels : channels,
-            micDelay: micDelay,
+        // Gather the raw per-track readings and hand the delay/rate/channel
+        // arithmetic to a pure, unit-tested builder. The app file is what
+        // `AppAudioCapture` actually WROTE — 16 kHz mono after the in-IOProc
+        // resample, not the device's raw capture format.
+        let result = AudioCaptureResult.make(
+            appOutputURL: appOutputURL,
+            micOutputURL: micOutputURL,
+            configured: (sampleRate: sampleRate, channels: channels),
+            app: .init(
+                firstFrameTicks: appCapture?.appFirstFrameTime ?? 0,
+                sampleRate: appCapture?.outputSampleRate ?? 0,
+                channels: appCapture?.outputChannels ?? 0,
+            ),
+            mic: .init(
+                recorded: micCapture != nil,
+                firstFrameTicks: micCapture?.firstFrameTime ?? 0,
+            ),
         )
 
+        try? appFileHandle?.close()
+        appFileHandle = nil
         appCapture = nil
         micCapture = nil
 
