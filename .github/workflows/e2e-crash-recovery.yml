@@ -8,13 +8,38 @@ name: E2E (Crash Recovery)
 # into its workdir within seconds). Pre-fix the launch cleanup deletes the temp
 # first → no recovery (RED); the fix re-mixes + enqueues it (GREEN).
 #
-# Kept out of the always-run e2e-app.yml sequence: it SIGKILLs + relaunches the
-# shared bundle mid-run, which would disrupt the other lanes. Dispatch-only: run
-# manually when touching the recovery / recorder-teardown path or before a
-# release. GitHub indexes workflow_dispatch from the default branch, so this is
-# dispatchable once merged: gh workflow run e2e-crash-recovery.yml
+# Kept out of the always-run e2e-app.yml step sequence because it SIGKILLs and
+# relaunches the shared bundle mid-run, which would disrupt that workflow's other
+# lanes; running it as its own serialized workflow keeps the disruption contained.
+# It still needs automatic coverage against silent rot in the recovery /
+# recorder-teardown path, so it now runs nightly (its own late UTC slot, see the
+# schedule below) and on the `run-e2e` label for same-repo PRs, while staying
+# manually dispatchable when touching that path or before a release. GitHub
+# indexes workflow_dispatch from the default branch, so this is dispatchable once
+# merged: gh workflow run e2e-crash-recovery.yml
 on:
   workflow_dispatch:
+  # Label-gated PR runs, same-repo branches only. Deliberately
+  # `pull_request`, NOT `pull_request_target`: this workflow checks out and
+  # executes the PR head on a self-hosted Mac mini with a real signing
+  # identity and TCC grants. Fork PRs are excluded entirely (the job `if:`
+  # checks head.repo): a label would be a STANDING approval — every later
+  # fork push would re-run unreviewed code on the runner — and a fork run
+  # would fail anyway, since fork `pull_request` runs get no secrets, the
+  # bundle falls back to the self-signed cert, which lacks the Mini's TCC
+  # microphone grant, and the leftover consent prompt poisons later runs.
+  # To E2E a fork contribution, push it to a same-repo branch and label
+  # that PR. `run-e2e` is the same label the other heavy E2E lanes use.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # 06:15 UTC = 08:15 CEST. Deliberately the latest nightly slot. Every
+    # self-hosted audio lane (quality-and-safety 03:00, e2e-app 04:30,
+    # e2e-cpu-load 05:15, e2e-mic-device-change 05:30 UTC) serializes on the
+    # single `[self-hosted, macOS, ARM64, audio]` Mac mini, so starting after
+    # the last of them minimizes queueing and contention for the BlackHole
+    # input device and the deployed bundle.
+    - cron: '15 6 * * *'
 
 # Shares e2e-app.yml's concurrency group so the two never race for the
 # BlackHole input device / RPC port / deployed bundle on the Mini.
@@ -24,6 +49,17 @@ concurrency:
 
 jobs:
   e2e-crash-recovery:
+    # Non-PR events (schedule/dispatch) always run. PR events run only for
+    # same-repo branches carrying the `run-e2e` label (fork PRs never reach the
+    # runner, see the trigger comment). The label-name check keeps `labeled`
+    # events for any OTHER label from queueing a duplicate run.
+    if: |
+      github.event_name != 'pull_request' ||
+      (
+        contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
+      )
     runs-on: [self-hosted, macOS, ARM64, audio]
     timeout-minutes: 15
 
