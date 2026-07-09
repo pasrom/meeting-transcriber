@@ -78,6 +78,53 @@ final class PipelineControllerTests: XCTestCase {
         )
     }
 
+    // MARK: - rebuild() double-processing guard
+
+    func testRebuildSkippedWhileQueueIsProcessing() {
+        let pc = makeWiredController()
+        // Provider wired → without the guard, rebuild() WOULD build a fresh queue
+        // (otherwise makeQueue's own engine-provider guard would no-op for an
+        // unrelated reason and the test would be vacuous).
+        pc.activate { MockEngine() }
+        pc.queue.isProcessing = true
+        let before = pc.queue
+
+        pc.rebuild()
+
+        XCTAssertIdentical(
+            pc.queue, before,
+            "rebuild must not swap a queue mid-job: the running job's queue owns it to completion, "
+                + "while a replacement would loadSnapshot() the same in-flight job and process it twice",
+        )
+    }
+
+    // The idle case (rebuild DOES replace an idle queue, so the guard can't
+    // over-fire into never rebuilding) is already characterized by
+    // `testEnsureQueueRebuildsBareQueueUsingProviderEngine` above, which drives
+    // ensureQueue() -> rebuild() on an idle queue and asserts the provider's
+    // engine got wired in. Re-asserting it here would only add a second test that
+    // runs the production makeQueue() against the real data directories.
+
+    func testRebuildSkippedWhileSpeakerNamingPending() {
+        let pc = makeWiredController()
+        pc.activate { MockEngine() }
+        // A parked naming job: not processing (isProcessing stays false once
+        // processNext returns), so only the pendingSpeakerNamingJobs half of the
+        // guard keeps the queue — the naming session's data lives only here and a
+        // fresh queue would restore the job from the snapshot without it.
+        _ = seedPendingNaming(on: pc, mapping: ["Speaker 1": "Speaker 1"])
+        XCTAssertFalse(pc.queue.isProcessing, "precondition: parked at naming, not processing")
+        let before = pc.queue
+
+        pc.rebuild()
+
+        XCTAssertIdentical(
+            pc.queue, before,
+            "rebuild must not swap a queue with a job awaiting speaker naming: its in-memory "
+                + "naming session can't be reconstructed on a fresh queue",
+        )
+    }
+
     // MARK: - enqueueFiles (bare controller)
 
     func testEnqueueFilesCreatesJobOnBareController() {
