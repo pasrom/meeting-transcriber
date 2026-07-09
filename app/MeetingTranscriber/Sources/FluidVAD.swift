@@ -181,28 +181,13 @@ final class FluidVAD: @unchecked Sendable {
     /// Convert per-chunk VAD results into merged, filtered speech regions.
     private func buildSegmentMap(from results: [VadResult]) -> VadSegmentMap {
         let chunkDuration = Double(VadManager.chunkSize) / Double(VadManager.sampleRate) // ~0.256s
-        var regions: [SpeechRegion] = []
-        var speechStart: TimeInterval?
-
-        for (index, result) in results.enumerated() {
-            let chunkTime = Double(index) * chunkDuration
-            if result.probability >= threshold {
-                if speechStart == nil {
-                    speechStart = chunkTime
-                }
-            } else if let start = speechStart {
-                regions.append(SpeechRegion(start: start, end: chunkTime))
-                speechStart = nil
-            }
-        }
-        // Close any open region
-        if let start = speechStart {
-            let endTime = Double(results.count) * chunkDuration
-            regions.append(SpeechRegion(start: start, end: endTime))
-        }
-
-        regions = mergeCloseRegions(regions, maxGap: Self.mergeGapSeconds)
-        regions = regions.filter { $0.duration >= Self.minRegionSeconds }
+        let regions = Self.speechRegions(
+            fromProbabilities: results.map(\.probability),
+            threshold: threshold,
+            chunkDuration: chunkDuration,
+            mergeGap: Self.mergeGapSeconds,
+            minRegion: Self.minRegionSeconds,
+        )
 
         let totalDuration = Double(results.count) * chunkDuration
         let speechDuration = regions.reduce(0.0) { $0 + $1.duration }
@@ -290,8 +275,47 @@ final class FluidVAD: @unchecked Sendable {
         return (result.state, event)
     }
 
+    /// Pure core of `buildSegmentMap`: turn a stream of per-chunk speech
+    /// probabilities into merged, duration-filtered speech regions. Extracted as
+    /// a static over `[Float]` so the hysteresis + merge + min-duration math (the
+    /// logic that decides which audio ever reaches transcription/diarization) is
+    /// unit-testable without a loaded VAD model. `chunkDuration` is each chunk's
+    /// wall-clock length; a chunk counts as speech when its probability is `>=`
+    /// `threshold`; an open region is closed at the end of the stream; regions
+    /// closer than `mergeGap` are merged, then any shorter than `minRegion` are
+    /// dropped.
+    static func speechRegions(
+        fromProbabilities probabilities: [Float],
+        threshold: Float,
+        chunkDuration: TimeInterval,
+        mergeGap: TimeInterval,
+        minRegion: TimeInterval,
+    ) -> [SpeechRegion] {
+        var regions: [SpeechRegion] = []
+        var speechStart: TimeInterval?
+
+        for (index, probability) in probabilities.enumerated() {
+            let chunkTime = Double(index) * chunkDuration
+            if probability >= threshold {
+                if speechStart == nil {
+                    speechStart = chunkTime
+                }
+            } else if let start = speechStart {
+                regions.append(SpeechRegion(start: start, end: chunkTime))
+                speechStart = nil
+            }
+        }
+        // Close any open region at the end of the stream.
+        if let start = speechStart {
+            regions.append(SpeechRegion(start: start, end: Double(probabilities.count) * chunkDuration))
+        }
+
+        regions = mergeCloseRegions(regions, maxGap: mergeGap)
+        return regions.filter { $0.duration >= minRegion }
+    }
+
     /// Merge regions that are closer together than maxGap seconds.
-    private func mergeCloseRegions(_ regions: [SpeechRegion], maxGap: TimeInterval) -> [SpeechRegion] {
+    private static func mergeCloseRegions(_ regions: [SpeechRegion], maxGap: TimeInterval) -> [SpeechRegion] {
         guard !regions.isEmpty else { return [] }
         var merged: [SpeechRegion] = [regions[0]]
         for region in regions.dropFirst() {

@@ -233,6 +233,110 @@ final class FluidVADTests: XCTestCase {
         XCTAssertEqual(remapped[1].end, 4.0, accuracy: 1e-9)
     }
 
+    // MARK: - speechRegions (segment-map core: hysteresis + merge + filter)
+
+    // These pin the pure math that decides which audio survives VAD trimming.
+    // chunkDuration is 1.0s throughout so region times equal chunk indices, and
+    // mergeGap/minRegion are set per-test to isolate one rule at a time.
+
+    func testSpeechRegionsOpensAndClosesOnThresholdCrossing() throws {
+        // Above threshold for chunks 0–1, drops at chunk 2 → region [0, 2).
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.6, 0.6, 0.2],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 0, minRegion: 0,
+        )
+
+        XCTAssertEqual(regions.count, 1)
+        let region = try XCTUnwrap(regions.first)
+        XCTAssertEqual(region.start, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(region.end, 2.0, accuracy: 1e-9)
+    }
+
+    func testSpeechRegionsClosesOpenRegionAtStreamEnd() throws {
+        // Speech starts at chunk 1 and never drops → region closes at stream end
+        // (count * chunkDuration = 3.0), not left dangling.
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.2, 0.6, 0.6],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 0, minRegion: 0,
+        )
+
+        XCTAssertEqual(regions.count, 1)
+        let region = try XCTUnwrap(regions.first)
+        XCTAssertEqual(region.start, 1.0, accuracy: 1e-9)
+        XCTAssertEqual(region.end, 3.0, accuracy: 1e-9)
+    }
+
+    func testSpeechRegionsTreatsExactThresholdAsSpeech() throws {
+        // Probability exactly at the threshold counts as speech (`>=`, not `>`).
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.5],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 0, minRegion: 0,
+        )
+
+        XCTAssertEqual(regions.count, 1, "prob == threshold must open a region")
+        let region = try XCTUnwrap(regions.first)
+        XCTAssertEqual(region.start, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(region.end, 1.0, accuracy: 1e-9)
+    }
+
+    func testSpeechRegionsMergesRegionsCloserThanMergeGap() throws {
+        // Two regions [0,1) and [2,3) with a 1.0s gap; mergeGap 1.5 > gap → merge.
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.6, 0.2, 0.6],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 1.5, minRegion: 0,
+        )
+
+        XCTAssertEqual(regions.count, 1, "gap 1.0 < mergeGap 1.5 must merge")
+        let region = try XCTUnwrap(regions.first)
+        XCTAssertEqual(region.start, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(region.end, 3.0, accuracy: 1e-9)
+    }
+
+    func testSpeechRegionsKeepsRegionsAtOrBeyondMergeGap() {
+        // Same 1.0s gap, but mergeGap == gap. Merge is strict `<`, so a gap equal
+        // to mergeGap must NOT merge.
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.6, 0.2, 0.6],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 1.0, minRegion: 0,
+        )
+
+        XCTAssertEqual(regions.count, 2, "gap == mergeGap must stay separate")
+    }
+
+    func testSpeechRegionsFiltersRegionsShorterThanMinRegion() throws {
+        // One 0.1s region (below minRegion) and one 0.3s region (at/above it).
+        // chunkDuration 0.1: chunk 0 speech → [0, 0.1); chunks 2–4 speech → [0.2, 0.5).
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.6, 0.2, 0.6, 0.6, 0.6],
+            threshold: 0.5, chunkDuration: 0.1, mergeGap: 0, minRegion: 0.15,
+        )
+
+        XCTAssertEqual(regions.count, 1, "the 0.1s region is dropped, the 0.3s region survives")
+        let region = try XCTUnwrap(regions.first)
+        XCTAssertEqual(region.start, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(region.end, 0.5, accuracy: 1e-9)
+    }
+
+    func testSpeechRegionsKeepsRegionExactlyAtMinRegion() {
+        // A region whose duration equals minRegion survives (the filter is `>=`,
+        // not `>`). chunkDuration 0.15, one speech chunk → region [0, 0.15).
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.6],
+            threshold: 0.5, chunkDuration: 0.15, mergeGap: 0, minRegion: 0.15,
+        )
+
+        XCTAssertEqual(regions.count, 1, "duration == minRegion must be kept")
+    }
+
+    func testSpeechRegionsEmptyWhenAllBelowThreshold() {
+        let regions = FluidVAD.speechRegions(
+            fromProbabilities: [0.1, 0.2, 0.3],
+            threshold: 0.5, chunkDuration: 1.0, mergeGap: 0, minRegion: 0,
+        )
+
+        XCTAssertTrue(regions.isEmpty)
+    }
+
     // MARK: - Streaming API (pure value-type behavior)
 
     func testStreamEventStartConstruction() {
