@@ -25,6 +25,27 @@ public enum CrossValidationResult: Equatable, Sendable {
     case neitherAvailable
 }
 
+/// Which rung of the sample-rate priority ladder produced the resolved rate.
+/// Lets the caller emit the same diagnostics after delegating the decision.
+public enum RateSource: Equatable, Sendable {
+    case tap // authoritative tap format rate
+    case consistent // nominal == stream
+    case mismatchPreferNominal // nominal != stream, nominal chosen (BT HFP guard, #379)
+    case onlyNominal
+    case onlyStream
+    case requestedFallback // nothing queryable, requested rate used verbatim
+}
+
+/// Outcome of the sample-rate priority ladder.
+public struct ResolvedRate: Equatable, Sendable {
+    public let rate: Int
+    public let source: RateSource
+    /// The queried rate the ladder picked was valid but differed from the
+    /// requested rate (drives the "differs from requested" warnings). Always
+    /// false for `.requestedFallback`.
+    public let differsFromRequested: Bool
+}
+
 /// Pure functions for sample rate detection and validation.
 /// No CoreAudio dependency — testable without hardware.
 public enum SampleRateQuery {
@@ -70,6 +91,58 @@ public enum SampleRateQuery {
         case (false, false):
             return .neitherAvailable
         }
+    }
+
+    /// Sample-rate priority ladder: tap > nominal > stream > requested. The
+    /// mismatch rung prefers nominal over stream because an output-scope stream
+    /// can report a Bluetooth HFP rate (#379 family). Composes `validateSampleRate`
+    /// + `crossValidateRate`; the returned `source` mirrors the rung taken so the
+    /// CoreAudio caller can emit the same diagnostics. Pass 0 for any rate that
+    /// could not be queried.
+    public static func chooseRate(
+        tapRate: Int,
+        nominalRate: Int,
+        streamRate: Int,
+        requestedRate: Int,
+    ) -> ResolvedRate {
+        // 1. Tap rate is most authoritative.
+        if tapRate > 0 {
+            let validated = validateSampleRate(queriedRate: tapRate, requestedRate: requestedRate)
+            return ResolvedRate(
+                rate: validated.rate, source: .tap,
+                differsFromRequested: validated.source == .queriedDiffersFromRequested,
+            )
+        }
+
+        // 2. Fall back to nominal + stream cross-validation.
+        let bestRate: Int
+        let source: RateSource
+        switch crossValidateRate(nominalRate: nominalRate, streamRate: streamRate) {
+        case let .consistent(rate):
+            bestRate = rate
+            source = .consistent
+
+        case let .mismatch(nominal, _):
+            bestRate = nominal
+            source = .mismatchPreferNominal
+
+        case let .onlyNominal(rate):
+            bestRate = rate
+            source = .onlyNominal
+
+        case let .onlyStream(rate):
+            bestRate = rate
+            source = .onlyStream
+
+        case .neitherAvailable:
+            return ResolvedRate(rate: requestedRate, source: .requestedFallback, differsFromRequested: false)
+        }
+
+        let validated = validateSampleRate(queriedRate: bestRate, requestedRate: requestedRate)
+        return ResolvedRate(
+            rate: validated.rate, source: source,
+            differsFromRequested: validated.source == .queriedDiffersFromRequested,
+        )
     }
 
     /// Standard audio sample rates for snap-to-nearest matching.
