@@ -183,7 +183,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
 
     private func loadModels() async throws -> LoadedModels {
         // `DiarizerModels.defaultModelsDirectory()` returns the model-bundle
-        // dir (`…/Models/diarizer-coreml`); `DownloadUtils` appends
+        // dir (`…/Models/diarizer-coreml`); `ModelHub` appends
         // `repo.folderName` itself, so we strip the trailing component to
         // give it the parent (`…/Models`).
         let directory = DiarizerModels.defaultModelsDirectory()
@@ -199,7 +199,7 @@ actor LiveSpeakerMatcher: LiveSpeakerMatching {
         if let cachedFrameCount = readCachedFrameCount() {
             // Cache hit: load only the embedding model. The savings vs.
             // the first-launch path are documented in the type docstring.
-            let modelsByName = try await DownloadUtils.loadModels(
+            let modelsByName = try await ModelHub.loadModels(
                 .diarizer,
                 modelNames: [ModelNames.Diarizer.embeddingFile],
                 directory: directory,

@@ -78,7 +78,7 @@ final class LiveSpeakerMatcherTests: XCTestCase {
     /// (cache stays untouched). Verifies the fast path doesn't crash or
     /// overwrite a valid value — the visible cost saving (skipping the
     /// segmentation load) is verified by inspection of the loader code
-    /// path, not directly testable without instrumenting `DownloadUtils`.
+    /// path, not directly testable without instrumenting `ModelHub`.
     func testSecondLaunchUsesCachedFrameCount() async throws {
         let seeded = 589
         let (matcher, cache) = makeMatcher(slug: "hit", prepopulate: seeded)
