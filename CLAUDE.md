@@ -228,7 +228,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
   quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch + label-gated PR runs via `run-quality`)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
-  e2e-crash-recovery.yml    # E2E — crash recovery: SIGKILL mid-recording + verify pipeline recovers via WAV header repair
+  e2e-crash-recovery.yml    # E2E — crash recovery: SIGKILL mid-recording + verify pipeline recovers via WAV header repair (dispatch + nightly + label-gated PR runs via `run-e2e`)
   e2e-mic-device-change.yml # E2E — mic device-change NSException survival (issue #379, fault-injection build)
   pages.yml                 # Deploy landing page to GitHub Pages (site/ → GitHub Pages, main push + dispatch)
 docs/
@@ -444,6 +444,15 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 Two complementary E2E approaches, run by different workflows. Pick by what
 you're validating:
+
+**CI trigger labels:** the heavy self-hosted lanes stay off ordinary PRs (only
+`ci.yml` runs there) and otherwise fire post-merge or nightly. Two opt-in PR
+labels start them pre-merge, on same-repo branches only (fork PRs never run on
+the Mac mini): `run-e2e` gates `e2e.yml`, `e2e-app.yml`, and
+`e2e-crash-recovery.yml`; `run-quality` gates `quality-and-safety.yml` (TSan/ASan
+plus WER/DER). Apply with `gh pr edit <n> --add-label run-e2e`. Each lane's
+job-level `if:` guard checks `head.repo.full_name == github.repository`, so fork
+PRs are excluded from the self-hosted runner.
 
 **Fixture-based xctest E2E (`e2e.yml`)**
 - Engine + pipeline tests in `app/MeetingTranscriber/Tests/*E2ETests.swift`
