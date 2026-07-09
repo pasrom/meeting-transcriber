@@ -61,9 +61,29 @@ final class PipelineController {
     // MARK: - Queue lifecycle
 
     /// Rebuild the queue against the current settings + active engine and
-    /// re-install the job-state callbacks. Unconditional — the watch-start path
-    /// always rebuilds so a fresh session picks up the latest settings/engine.
+    /// re-install the job-state callbacks. The watch-start path calls this so a
+    /// fresh session picks up the latest settings/engine, but it must not swap the
+    /// queue while that queue still owns unfinished work. Two hazards:
+    ///
+    /// 1. An in-flight job (`isProcessing`): the running job's `processTask` holds
+    ///    the current queue alive to completion, so a replacement would
+    ///    `loadSnapshot()` the same job (reset from `.transcribing`/`.diarizing`/
+    ///    `.generatingProtocol` back to `.waiting`) and process it a second time.
+    /// 2. A job parked at `.speakerNamingPending`: `isProcessing` is already false
+    ///    (`processNext` returned), but the naming session's in-memory data lives
+    ///    only on the current queue. A fresh queue restores the parked job from
+    ///    the snapshot without that data, orphaning the user's pending naming.
+    ///
+    /// When either holds, keep the existing queue and let it drain. Note this
+    /// defers queue-captured settings (engine choice, output dir, diarization,
+    /// VAD, numSpeakers) to the next idle watch-start rather than refreshing them
+    /// automatically; live engine language/vocabulary still sync separately onto
+    /// the shared engine instances meanwhile.
     func rebuild() {
+        guard !queue.isProcessing, queue.pendingSpeakerNamingJobs.isEmpty else {
+            logger.info("Skipping queue rebuild: a job is in flight or awaiting speaker naming")
+            return
+        }
         queue = makeQueue()
         configureCallbacks()
     }
