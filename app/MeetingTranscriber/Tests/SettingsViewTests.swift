@@ -107,6 +107,25 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertNoThrow(try body.find(text: "Webex"))
     }
 
+    func testAppsToWatchTogglesBindToSettings() throws {
+        // Each toggle flips its OWN setting (the UI end of the watchApps wiring).
+        let settings = makeSettings()
+        let view = makeGeneral(settings: settings)
+        let cases: [(label: String, get: () -> Bool)] = [
+            ("Microsoft Teams", { settings.watchTeams }),
+            ("Zoom", { settings.watchZoom }),
+            ("Webex", { settings.watchWebex }),
+        ]
+        for (label, get) in cases {
+            XCTAssertTrue(get(), "precondition: \(label) defaults on")
+            let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
+                try toggle.labelView().text().string() == label
+            }
+            try toggle.tap()
+            XCTAssertFalse(get(), "tapping the \(label) toggle must turn its own setting off")
+        }
+    }
+
     func testPollIntervalFieldExists() throws {
         let body = try makeGeneral().inspect()
         XCTAssertNoThrow(try body.find(text: "Poll Interval"))
