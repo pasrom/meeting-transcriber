@@ -27,9 +27,8 @@ extension MicCaptureHandler {
     }
 
     /// Write `frames` zeroed frames to `file` in its processing format. Static
-    /// and engine-free so it is unit-testable without instantiating the handler
-    /// (whose deinit touches `AVAudioEngine.inputNode` — fatal on input-less CI
-    /// hosts, see the `noInputDevice` guard in `startEngine`).
+    /// (engine-free) so it can be unit-tested directly against an `AVAudioFile`
+    /// without any engine setup.
     static func writeSilence(frames: Int, to file: AVAudioFile) {
         guard frames > 0, let silentBuffer = AVAudioPCMBuffer(
             pcmFormat: file.processingFormat,

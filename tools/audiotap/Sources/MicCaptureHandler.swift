@@ -29,6 +29,12 @@ public class MicCaptureHandler: @unchecked Sendable {
     // build's composition root injects one (DualSourceRecorder, gated by
     // #if E2E_FAULT_INJECTION) to verify the installTap NSException recovery.
     private let debugFault: DebugTapFault?
+    /// Removes the engine's input tap in `stop()`. Injectable so a test can
+    /// assert the teardown is skipped when no tap was installed (reading
+    /// `AVAudioEngine.inputNode` throws an uncatchable NSException on an input-less host).
+    private let removeInputTap: (AVAudioEngine) -> Void
+    /// True once a tap is attached to the current engine's inputNode; gates the `inputNode` teardown in `stop()`.
+    private var tapInstalled = false
     private var isRecording = false
     private var isRestarting = false
     // Bounded retry for transient restart failures (issue #379): a device
@@ -81,11 +87,13 @@ public class MicCaptureHandler: @unchecked Sendable {
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
         debugFault: DebugTapFault? = nil,
+        removeInputTap: @escaping (AVAudioEngine) -> Void = { $0.inputNode.removeTap(onBus: 0) },
     ) {
         self.outputURL = outputURL
         self.debugLogging = debugLogging
         self.liveSink = liveSink
         self.debugFault = debugFault
+        self.removeInputTap = removeInputTap
     }
 
     deinit {
@@ -137,6 +145,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     // swiftlint:disable:next function_body_length
     private func startEngine(deviceUID: String? = nil) throws {
+        tapInstalled = false // reset per attempt; re-set once safeInstallTap attaches a tap
         // No input device available (e.g. Mac Mini server without mic hardware) —
         // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
         guard AVCaptureDevice.default(for: .audio) != nil else {
@@ -270,6 +279,7 @@ public class MicCaptureHandler: @unchecked Sendable {
             logger.error("Mic: installTap failed (\(error.localizedDescription, privacy: .public)) — restart will retry")
             throw error
         }
+        tapInstalled = true // inputNode accessed + tap attached; stop() must remove it even if start() throws
 
         engine.prepare()
         try engine.start()
@@ -430,7 +440,11 @@ public class MicCaptureHandler: @unchecked Sendable {
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
-        engine.inputNode.removeTap(onBus: 0)
+        // Skip the inputNode teardown when no tap was installed — the getter
+        // raises an uncatchable NSException on an input-less host (deinit path).
+        if tapInstalled {
+            removeInputTap(engine)
+        }
         engine.stop()
         engine.reset()
         outputFile = nil
