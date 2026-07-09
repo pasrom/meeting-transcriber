@@ -448,6 +448,10 @@ final class AppSettings {
 
     // MARK: - Computed
 
+    /// The meeting apps the user opted to watch. Drives auto-detection: the
+    /// `WatchingController` default detector keeps only the assertion patterns
+    /// whose app is listed here (`PowerAssertionDetector.patterns(watching:)`),
+    /// read at each watch start. Freshness: FROZEN per watch session.
     var watchApps: [String] {
         var apps: [String] = []
         if watchTeams { apps.append("Microsoft Teams") }
