@@ -228,23 +228,25 @@ public class AppAudioCapture: @unchecked Sendable {
                 logger.warning("Tap rate \(tapRate) Hz differs from requested \(requestedRate) Hz")
             }
             logger.info("Using tap format rate: \(tapRate) Hz")
+            return decision.rate
+
+        case .requestedFallback:
+            logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
+            return decision.rate
 
         case .mismatchPreferNominal:
             // Prefer nominal over stream — stream on output scope can return BT HFP rate
             logger.warning("Rate mismatch: nominal=\(nominalRate), stream=\(streamRate) — using nominal rate (stream scope may reflect BT HFP)")
-            if decision.differsFromRequested {
-                logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
-            }
 
         case .consistent, .onlyNominal, .onlyStream:
-            if decision.differsFromRequested {
-                logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
-            }
-
-        case .requestedFallback:
-            logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
+            break
         }
 
+        // Cross-validated rungs (consistent / mismatch / onlyNominal / onlyStream):
+        // flag when the queried rate the ladder picked differs from requested.
+        if decision.differsFromRequested {
+            logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
+        }
         return decision.rate
     }
 
