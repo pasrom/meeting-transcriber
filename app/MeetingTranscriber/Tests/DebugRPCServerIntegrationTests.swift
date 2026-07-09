@@ -1003,7 +1003,7 @@
                 "Authorization: Bearer \(Self.testToken)\r\n" +
                 "\r\n"
 
-            let response = try await sendRawHTTP(toPort: UInt16(port), bytes: Data(raw.utf8))
+            let response = try await sendRawHTTPBounded(toPort: UInt16(port), bytes: Data(raw.utf8), timeout: 5)
             let firstLine = response.split(separator: "\n").first ?? ""
             XCTAssertTrue(
                 firstLine.contains("403"),
@@ -1024,7 +1024,7 @@
                 "Authorization: Bearer \(Self.testToken)\r\n" +
                 "\r\n"
 
-            let response = try await sendRawHTTP(toPort: UInt16(port), bytes: Data(raw.utf8))
+            let response = try await sendRawHTTPBounded(toPort: UInt16(port), bytes: Data(raw.utf8), timeout: 5)
             let firstLine = response.split(separator: "\n").first ?? ""
             XCTAssertTrue(
                 firstLine.contains("200"),
@@ -1032,10 +1032,71 @@
             )
         }
 
-        /// Open a TCP connection to `port`, write `bytes`, read response,
-        /// return as String. Used by the raw-socket Host tests because
-        /// URLSession reserves the `Host` header.
-        private func sendRawHTTP(toPort port: UInt16, bytes: Data) async throws -> String {
+        /// A request streamed past the 64 KiB per-connection cap
+        /// (`maxRequestBytes`) without ever forming a parseable request must be
+        /// dropped: `receive` accumulates until the cap, then cancels the
+        /// connection with no response. This is the server's only DoS guard and is
+        /// invisible to the URLSession tests (which deliver whole requests). The
+        /// bounded reader turns a mutation that removes the cap (the server would
+        /// accumulate forever) into a fast timeout failure rather than a hung test.
+        func testRawSocketDropsRequestExceedingSizeCap() async throws {
+            let base = try await startServer()
+            guard let port = base.port else { XCTFail("no port"); return }
+
+            // 70 KiB with no CRLFCRLF → never parses, so the server accumulates (in
+            // 4 KiB reads) until it crosses the 64 KiB cap and closes with no
+            // response. Paired with the under-cap test below this brackets the cap
+            // in (60, 70] KiB: a cap raised past 70 KiB (guard defeated) times out
+            // here, a cap lowered below 60 KiB fails the under-cap test.
+            let oversize = Data(repeating: UInt8(ascii: "A"), count: 70 * 1024)
+            let result = try await sendRawHTTPBounded(toPort: UInt16(port), bytes: oversize, timeout: 10)
+
+            XCTAssertNotEqual(result, Self.timeoutSentinel, "the 64 KiB cap must close the connection; a timeout means it never fired")
+            XCTAssertFalse(result.contains("HTTP/"), "the cap path must close without sending a response, got: \(result.prefix(40))")
+        }
+
+        /// A valid request just under the cap (~60 KiB, padded with a long header)
+        /// must be accepted, not dropped. The server reads it in ~15 sequential
+        /// 4 KiB chunks — each `HTTPRequest.parse` fails until the final chunk
+        /// completes the CRLFCRLF — so this exercises the accumulate-and-recurse
+        /// loop structurally (no client-side flush timing) and pins that the cap
+        /// sits above 60 KiB. A mutation that resets the accumulator per read never
+        /// reassembles the request and times out here.
+        func testRawSocketAcceptsLargeRequestUnderCap() async throws {
+            let base = try await startServer()
+            guard let port = base.port else { XCTFail("no port"); return }
+
+            let padding = String(repeating: "x", count: 60 * 1024)
+            let raw =
+                "GET /healthz HTTP/1.1\r\n" +
+                "Host: 127.0.0.1:\(port)\r\n" +
+                "Authorization: Bearer \(Self.testToken)\r\n" +
+                "X-Padding: \(padding)\r\n" +
+                "\r\n"
+            let response = try await sendRawHTTPBounded(toPort: UInt16(port), bytes: Data(raw.utf8), timeout: 10)
+
+            XCTAssertNotEqual(response, Self.timeoutSentinel, "a 60 KiB valid request (under the cap) must be answered, not dropped or hung")
+            XCTAssertTrue(response.contains("200"), "large-but-under-cap request must reach 200, got: \(response.prefix(40))")
+        }
+
+        /// Returned by `sendRawHTTPBounded` when the server neither responds nor
+        /// closes within the deadline — distinguishes "the cap / framing worked"
+        /// (a fast close or a response) from "the test hung", so a guard-removing
+        /// mutation fails fast instead of blocking forever.
+        nonisolated private static let timeoutSentinel = "<<TIMEOUT>>"
+
+        /// Open a TCP connection, write `bytes`, and return the server's response
+        /// (up to the blank line), the empty string if the server closed without
+        /// responding, or `timeoutSentinel` if neither happened within `timeout`.
+        ///
+        /// Any mid-stream failure (a `.failed` state or a send error, e.g. the
+        /// server cancelling the connection the instant the size cap fires, which
+        /// can race the client's write) resolves as an empty-string close, not a
+        /// thrown error: for the cap test that close IS the pass, and for the
+        /// response tests an empty result simply fails their `contains(...)` check.
+        /// Used by every raw-socket test (URLSession reserves the `Host` header and
+        /// cannot stream an oversize request).
+        private func sendRawHTTPBounded(toPort port: UInt16, bytes: Data, timeout: TimeInterval) async throws -> String {
             let connection = NWConnection(
                 host: "127.0.0.1",
                 port: NWEndpoint.Port(rawValue: port) ?? .any,
@@ -1043,17 +1104,15 @@
             )
             return try await withCheckedThrowingContinuation { continuation in
                 let resumer = OneShotResumer(continuation, connection: connection)
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    resumer.succeed(Self.timeoutSentinel)
+                }
                 connection.stateUpdateHandler = { state in
-                    if case let .failed(error) = state {
-                        resumer.fail(error)
-                    }
+                    if case .failed = state { resumer.succeed("") }
                 }
                 connection.start(queue: .global())
                 connection.send(content: bytes, completion: .contentProcessed { error in
-                    if let error {
-                        resumer.fail(error)
-                        return
-                    }
+                    if error != nil { resumer.succeed(""); return }
                     receiveUntilHeadersComplete(connection: connection, resumer: resumer)
                 })
             }
@@ -1101,14 +1160,6 @@
             guard !done else { return }
             done = true
             continuation.resume(returning: body)
-            connection.cancel()
-        }
-
-        func fail(_ error: any Error) {
-            lock.lock(); defer { lock.unlock() }
-            guard !done else { return }
-            done = true
-            continuation.resume(throwing: error)
             connection.cancel()
         }
     }
