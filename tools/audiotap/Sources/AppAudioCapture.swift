@@ -211,56 +211,41 @@ public class AppAudioCapture: @unchecked Sendable {
         tapID: AudioObjectID,
         requestedRate: Int,
     ) -> Int {
-        // 1. Query the tap directly — most authoritative
+        // Query the tap directly first — most authoritative. Only cross-validate
+        // nominal + stream when the tap has no rate, preserving the original
+        // short-circuit (no extra hardware queries when the tap answers).
         let tapRate = queryTapSampleRate(tapID: tapID)
-        if tapRate > 0 {
-            let validated = SampleRateQuery.validateSampleRate(
-                queriedRate: tapRate, requestedRate: requestedRate,
-            )
-            if validated.source == .queriedDiffersFromRequested {
+        let nominalRate = tapRate > 0 ? 0 : queryNominalSampleRate(deviceID: deviceID)
+        let streamRate = tapRate > 0 ? 0 : queryStreamSampleRate(deviceID: deviceID)
+
+        let decision = SampleRateQuery.chooseRate(
+            tapRate: tapRate, nominalRate: nominalRate, streamRate: streamRate, requestedRate: requestedRate,
+        )
+
+        switch decision.source {
+        case .tap:
+            if decision.differsFromRequested {
                 logger.warning("Tap rate \(tapRate) Hz differs from requested \(requestedRate) Hz")
             }
             logger.info("Using tap format rate: \(tapRate) Hz")
-            return validated.rate
-        }
 
-        // 2. Fallback: nominal + stream cross-validation
-        let nominalRate = queryNominalSampleRate(deviceID: deviceID)
-        let streamRate = queryStreamSampleRate(deviceID: deviceID)
-
-        let crossCheck = SampleRateQuery.crossValidateRate(
-            nominalRate: nominalRate,
-            streamRate: streamRate,
-        )
-
-        let bestRate: Int
-        switch crossCheck {
-        case let .consistent(rate):
-            bestRate = rate
-
-        case let .mismatch(nominal, stream):
+        case .mismatchPreferNominal:
             // Prefer nominal over stream — stream on output scope can return BT HFP rate
-            logger.warning("Rate mismatch: nominal=\(nominal), stream=\(stream) — using nominal rate (stream scope may reflect BT HFP)")
-            bestRate = nominal
+            logger.warning("Rate mismatch: nominal=\(nominalRate), stream=\(streamRate) — using nominal rate (stream scope may reflect BT HFP)")
+            if decision.differsFromRequested {
+                logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
+            }
 
-        case let .onlyNominal(rate):
-            bestRate = rate
+        case .consistent, .onlyNominal, .onlyStream:
+            if decision.differsFromRequested {
+                logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
+            }
 
-        case let .onlyStream(rate):
-            bestRate = rate
-
-        case .neitherAvailable:
+        case .requestedFallback:
             logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
-            return requestedRate
         }
 
-        let validated = SampleRateQuery.validateSampleRate(
-            queriedRate: bestRate, requestedRate: requestedRate,
-        )
-        if validated.source == .queriedDiffersFromRequested {
-            logger.warning("Aggregate device rate \(bestRate) Hz differs from requested \(requestedRate) Hz")
-        }
-        return validated.rate
+        return decision.rate
     }
 
     // swiftlint:disable:next function_body_length
