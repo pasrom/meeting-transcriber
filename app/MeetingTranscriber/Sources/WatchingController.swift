@@ -101,6 +101,12 @@ final class WatchingController {
         watchLoop?.isActive == true && watchLoop?.isManualRecording == false
     }
 
+    /// Whether a recording is currently in progress (the watch loop is in its
+    /// `.recording` state).
+    var isRecording: Bool {
+        watchLoop?.state == .recording
+    }
+
     // MARK: - Start / Stop
 
     func toggleWatching() {
