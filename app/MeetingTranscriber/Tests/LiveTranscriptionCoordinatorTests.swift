@@ -37,6 +37,20 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         }
     }
 
+    /// Same as `mockControllerFactory` but counts how many controllers it builds,
+    /// so tests can assert whether a code path (re)builds a controller (a proxy
+    /// for a cold CoreML model load) or reuses the warmed one.
+    private func countingControllerFactory()
+        -> (LiveTranscriptionCoordinator.ControllerFactory, () -> Int) {
+        let counter = BuildCounter()
+        let base = mockControllerFactory()
+        let factory: LiveTranscriptionCoordinator.ControllerFactory = { engine, captions, lang, verbose in
+            counter.count += 1
+            return base(engine, captions, lang, verbose)
+        }
+        return (factory, { counter.count })
+    }
+
     func testAttachSinksInstallsWhenGateOpenAndControllerReady() async {
         let coordinator = LiveTranscriptionCoordinator(
             captions: LiveCaptionsState(),
@@ -121,6 +135,74 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         )
         XCTAssertNotNil(recorder.appLiveSink)
     }
+
+    // MARK: - No cold-build at the recording edge
+
+    /// `attachSinks` runs at recording start. It must NOT cold-build the
+    /// controller there — a cold build kicks a heavy CoreML model load
+    /// (Nemotron ~584 MB) from the recorder-start path, landing the compile on
+    /// the meeting edge and starving the system. The controller is warmed at
+    /// launch/idle instead; if it isn't warmed yet, this recording simply gets
+    /// no captions (they come online at the next idle prewarm).
+    ///
+    /// Non-vacuity: the engine provider IS set (via `beginPrewarm`) and captions
+    /// ARE eligible when `attachSinks` runs, so the pre-fix `ensureController()`
+    /// path would build one (proven by reverting `attachSinks` to `ensureController`).
+    func testAttachSinksDoesNotColdBuildControllerAtRecordingStart() async {
+        var enabled = false
+        let (factory, buildCount) = countingControllerFactory()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { enabled },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            makeController: factory,
+        )
+        // Prewarm while captions are disabled: engine provider is wired, but
+        // nothing is built (not eligible). Plain-`var` toggles don't fire the
+        // @Observable re-warm observer, so the controller stays nil.
+        coordinator.beginPrewarm { MockStreamingEngine() }
+        XCTAssertEqual(buildCount(), 0, "prewarm with captions disabled must not build a controller")
+
+        enabled = true // captions now eligible, controller still nil
+
+        let recorder = DualSourceRecorder()
+        await coordinator.attachSinks(to: recorder)
+
+        XCTAssertEqual(buildCount(), 0, "attachSinks must not cold-build the controller at the recording edge")
+        XCTAssertNil(recorder.micLiveSink, "no warmed controller → no sinks this recording")
+        XCTAssertNil(recorder.appLiveSink)
+    }
+
+    /// The warm path: once the controller is prewarmed, repeated recordings reuse
+    /// the SAME instance and never trigger a rebuild (which would recompile models).
+    func testWarmedControllerIsReusedAcrossRecordingsWithoutRebuild() async {
+        let (factory, buildCount) = countingControllerFactory()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            makeController: factory,
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() }
+        XCTAssertEqual(buildCount(), 1, "prewarm builds the controller once")
+
+        for _ in 0 ..< 3 {
+            let recorder = DualSourceRecorder()
+            await coordinator.attachSinks(to: recorder)
+            XCTAssertNotNil(recorder.micLiveSink)
+        }
+
+        XCTAssertEqual(buildCount(), 1, "warm controller must be reused across recordings, never rebuilt")
+    }
+}
+
+/// Mutable reference counter for `countingControllerFactory` (all accesses are
+/// `@MainActor`-isolated via the test case).
+@MainActor
+private final class BuildCounter {
+    var count = 0
 }
 
 /// A `TranscribingEngine` that does NOT conform to `StreamingTranscribingEngine`
