@@ -116,7 +116,16 @@ final class LiveTranscriptionCoordinator {
     /// boundary that keeps a slow `asr.finish()` from interleaving with the next
     /// recording's ingests on the same session actor.
     func attachSinks(to recorder: DualSourceRecorder) async {
-        guard captionsEligible, let controller = ensureController() else { return }
+        // Existing-only: never cold-build the controller here. A cold build kicks
+        // a heavy CoreML model load (Nemotron ~584 MB) from the recorder-start
+        // path, landing the compile on the meeting edge and saturating the ANE /
+        // compiler daemons system-wide. The controller is warmed at launch/idle
+        // via `prewarmIfEligible()`; if its models are still loading its object
+        // already exists (built synchronously in `ensureController` before the
+        // async `prepare()`), so sinks attach and captions light up when the load
+        // finishes. If it was never warmed, this recording gets no captions and
+        // they come online at the next idle prewarm.
+        guard captionsEligible, let controller else { return }
         await controller.prepareForNextRecording()
         recorder.micLiveSink = controller.micSink
         recorder.appLiveSink = controller.appSink
