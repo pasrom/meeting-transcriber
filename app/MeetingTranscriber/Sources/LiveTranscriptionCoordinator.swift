@@ -37,6 +37,12 @@ final class LiveTranscriptionCoordinator {
     private let verboseDiagnostics: () -> Bool
     private let makeController: ControllerFactory
 
+    /// Shared serial warm-up queue. The controller's `prepare()` (the heavy
+    /// Nemotron / WeSpeaker load) runs through it so it doesn't compile
+    /// concurrently with the ASR engine preload. Defaulted so tests get an
+    /// isolated queue.
+    private let warmupQueue: ModelWarmupQueue
+
     /// Builds the streaming controller for the (optional) active engine. The
     /// engine is nil when a language-driven streaming backend (German/English)
     /// applies with a non-streaming active engine — those sessions don't need it.
@@ -56,6 +62,7 @@ final class LiveTranscriptionCoordinator {
         engineLanguage: @escaping () -> String? = { nil },
         verboseDiagnostics: @escaping () -> Bool,
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
+        warmupQueue: ModelWarmupQueue = ModelWarmupQueue(),
     ) {
         self.captions = captions
         self.liveEnabled = liveEnabled
@@ -63,6 +70,7 @@ final class LiveTranscriptionCoordinator {
         self.engineLanguage = engineLanguage
         self.verboseDiagnostics = verboseDiagnostics
         self.makeController = makeController
+        self.warmupQueue = warmupQueue
     }
 
     private static func makeDefaultController(
@@ -200,7 +208,10 @@ final class LiveTranscriptionCoordinator {
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         self.controller = controller
-        Task { @MainActor in await controller.prepare() }
+        // Route `prepare()` through the shared warm-up queue (see `warmupQueue`).
+        // Bind it locally so the fire-and-forget Task doesn't capture `self`.
+        let queue = warmupQueue
+        Task { @MainActor in await queue.run { await controller.prepare() } }
         return controller
     }
 }

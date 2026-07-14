@@ -29,6 +29,12 @@ final class EngineController {
 
     private let settings: AppSettings
 
+    /// Shared serial warm-up queue. The launch model preload runs through it so
+    /// it doesn't compile concurrently with the live-caption models (the
+    /// simultaneous ANE / CoreML-compiler peak that starves the system on a
+    /// meeting join). Defaulted so tests get an isolated queue.
+    private let warmupQueue: ModelWarmupQueue
+
     // Dependency-default factories keep `init`'s body-type-check under the 300 ms
     // budget — an inline `@Observable` engine constructor forces the type-checker
     // to re-solve that engine's own init constraints at this call site (the same
@@ -42,8 +48,9 @@ final class EngineController {
         ParakeetEngine()
     }
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, warmupQueue: ModelWarmupQueue = ModelWarmupQueue()) {
         self.settings = settings
+        self.warmupQueue = warmupQueue
         self.whisperKit = Self.makeWhisperKit()
         self.parakeetEngine = Self.makeParakeet()
 
@@ -74,7 +81,10 @@ final class EngineController {
         // variant/language writes through `syncEngineSettings` keeps a single
         // settings→engine path instead of re-inlining a whisperKit-only subset.
         syncEngineSettings()
-        await activeTranscriptionEngine.loadModel()
+        // Serialize against the live-caption model warm-up so the two big CoreML
+        // loads don't compile at once. `run` awaits the load, so the caller still
+        // returns only after the model is loaded.
+        await warmupQueue.run { [self] in await activeTranscriptionEngine.loadModel() }
     }
 
     /// Push current model / language / vocabulary settings into the active

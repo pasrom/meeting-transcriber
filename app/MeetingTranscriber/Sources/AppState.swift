@@ -144,7 +144,12 @@ final class AppState {
         // inference here to a plain function reference. Behaviour is identical.
         self.settings = settings
         self.notifier = notifier
-        self.engines = EngineController(settings: settings)
+        // One shared serial warm-up queue: the ASR engine preload and the
+        // live-caption model prewarm both route their loads through it so the
+        // two big CoreML loads don't compile concurrently at launch (the
+        // simultaneous ANE / compiler peak that starves the system on a join).
+        let warmupQueue = ModelWarmupQueue()
+        self.engines = EngineController(settings: settings, warmupQueue: warmupQueue)
         self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
         self.pipeline = PipelineController(settings: settings, notifier: notifier)
@@ -159,6 +164,7 @@ final class AppState {
             engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
             engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
+            warmupQueue: warmupQueue,
         )
         self.watching = WatchingController(
             settings: settings,

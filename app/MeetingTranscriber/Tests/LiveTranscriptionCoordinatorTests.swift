@@ -42,13 +42,13 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// for a cold CoreML model load) or reuses the warmed one.
     private func countingControllerFactory()
         -> (LiveTranscriptionCoordinator.ControllerFactory, () -> Int) {
-        let counter = BuildCounter()
+        let counter = ManagedCounter()
         let base = mockControllerFactory()
         let factory: LiveTranscriptionCoordinator.ControllerFactory = { engine, captions, lang, verbose in
-            counter.count += 1
+            _ = counter.increment()
             return base(engine, captions, lang, verbose)
         }
-        return (factory, { counter.count })
+        return (factory, { counter.value })
     }
 
     func testAttachSinksInstallsWhenGateOpenAndControllerReady() async {
@@ -196,13 +196,72 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(buildCount(), 1, "warm controller must be reused across recordings, never rebuilt")
     }
+
+    // MARK: - Warm-up queue routing
+
+    /// The controller's `prepare()` (its heavy model load) must run through the
+    /// injected shared `ModelWarmupQueue`, so it serializes against the ASR
+    /// engine preload rather than compiling concurrently.
+    ///
+    /// Proven by occupying the queue with a blocker: while the blocker holds the
+    /// queue, `prepare()` cannot run (no backend published); it only completes
+    /// once the blocker is released. If `prepare()` bypassed the queue it would
+    /// publish a backend immediately, failing the mid-test `XCTAssertNil`.
+    func testControllerPrepareRunsThroughTheSharedWarmupQueue() async {
+        let queue = ModelWarmupQueue()
+        let captions = LiveCaptionsState()
+        let gate = TestGate()
+        let blocker = Task { @MainActor in await queue.run { await gate.wait() } }
+        // Let the blocker take the queue head before anything is enqueued behind it.
+        for _ in 0 ..< 5 {
+            await Task.yield()
+        }
+
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: captions,
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            verboseDiagnostics: { false },
+            makeController: mockControllerFactory(),
+            warmupQueue: queue,
+        )
+        coordinator.beginPrewarm { MockStreamingEngine() } // enqueues prepare() behind the blocker
+
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+        XCTAssertNil(
+            captions.activeBackend,
+            "prepare() must wait behind the queued blocker — proves it routes through the shared queue",
+        )
+
+        gate.release()
+        var settled = false
+        for _ in 0 ..< 500 where !settled {
+            if captions.activeBackend != nil { settled = true } else { await Task.yield() }
+        }
+        XCTAssertTrue(settled, "prepare() should complete and publish its backend once the queue drains")
+        _ = await blocker.value
+    }
 }
 
-/// Mutable reference counter for `countingControllerFactory` (all accesses are
-/// `@MainActor`-isolated via the test case).
+/// Manual gate: an enqueued op awaits `wait()` until the test calls `release()`,
+/// letting a test hold the warm-up queue head to observe what queues behind it.
 @MainActor
-private final class BuildCounter {
-    var count = 0
+private final class TestGate {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func wait() async {
+        if released { return }
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
 }
 
 /// A `TranscribingEngine` that does NOT conform to `StreamingTranscribingEngine`
