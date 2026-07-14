@@ -1,3 +1,4 @@
+import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
@@ -242,6 +243,82 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         }
         XCTAssertTrue(settled, "prepare() should complete and publish its backend once the queue drains")
         _ = await blocker.value
+    }
+
+    // MARK: - Mid-recording settings-change defer
+
+    /// Builds a `LiveTranscriptionCoordinator` wired to a real @Observable
+    /// `AppSettings` (on a volatile suite) that makes live captions eligible via
+    /// the re-transcribe path. Deliberately nil-language so the mock controller's
+    /// `prepare()` stays on the re-transcribe branch (the mock engine's no-op
+    /// `loadModel`) and never loads a real streaming model. A real settings
+    /// mutation drives the coordinator's `withObservationTracking`. Returns the
+    /// coordinator, its settings (mutate to fire the observer), and a
+    /// controller-build counter.
+    private func makeEligibleCoordinator(_ suiteName: String, isRecording: @escaping () -> Bool)
+        -> (LiveTranscriptionCoordinator, AppSettings, () -> Int) {
+        // swiftlint:disable:next force_unwrapping
+        let settings = AppSettings(defaults: UserDefaults(suiteName: suiteName)!)
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = ""
+        settings.whisperLanguage = ""
+        settings.liveTranscriptionEnabled = true
+        let (factory, buildCount) = countingControllerFactory()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { settings.liveTranscriptionEnabled },
+            engineSupportsLive: { settings.transcriptionEngine.supportsLiveTranscription },
+            engineLanguage: { settings.activeEngineLanguageOrNil },
+            verboseDiagnostics: { false },
+            makeController: factory,
+        )
+        let makeEngine: () -> (any TranscribingEngine)? = { MockStreamingEngine() }
+        coordinator.beginPrewarm(engineProvider: makeEngine, isRecording: isRecording)
+        return (coordinator, settings, buildCount)
+    }
+
+    /// A settings change (here: engine) DURING a recording must not drop and
+    /// rebuild the controller — that would recompile a model mid-meeting and
+    /// black out the overlay. The re-warm is deferred and applied at the next idle
+    /// `flush()`, so the current meeting keeps its warm controller and the new
+    /// settings take effect on the next recording.
+    ///
+    /// Non-vacuity: against the pre-change "always rebuild on change" behavior the
+    /// mid-recording assertion sees a rebuild (count 2) and fails.
+    func testSettingsChangeDuringRecordingDefersRebuildUntilIdle() async {
+        let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        var recording = true
+        let (coordinator, settings, buildCount) = makeEligibleCoordinator(suiteName) { recording }
+        XCTAssertEqual(buildCount(), 1, "prewarm builds the controller once")
+
+        // Settings change (engine) while recording → deferred, controller kept.
+        settings.transcriptionEngine = .whisperKit
+        for _ in 0 ..< 50 {
+            await Task.yield()
+        }
+        XCTAssertEqual(buildCount(), 1, "a mid-recording settings change must not rebuild the controller")
+
+        // Back to idle + flush → the deferred rebuild applies.
+        recording = false
+        await coordinator.flush()
+        XCTAssertEqual(buildCount(), 2, "the deferred rebuild applies at the next idle flush")
+    }
+
+    /// The idle path is unchanged: a settings change while NOT recording rebuilds
+    /// the controller immediately (so it re-warms against the new engine).
+    func testSettingsChangeWhileIdleRebuildsImmediately() async {
+        let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        let (coordinator, settings, buildCount) = makeEligibleCoordinator(suiteName) { false }
+        XCTAssertEqual(buildCount(), 1)
+
+        settings.transcriptionEngine = .whisperKit
+        for _ in 0 ..< 50 {
+            await Task.yield()
+        }
+        XCTAssertEqual(buildCount(), 2, "an idle settings change rebuilds the controller immediately")
+        _ = coordinator // retain through the observer fire above
     }
 }
 

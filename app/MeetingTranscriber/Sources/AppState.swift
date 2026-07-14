@@ -187,7 +187,10 @@ final class AppState {
         // `EngineController` does its own up-front sync + reactive observe in its
         // init; these hooks let the pipeline / live-transcription / watch paths
         // reach the active engine and re-sync before the first transcription.
-        liveTranscription.beginPrewarm { [weak self] in self?.engines.activeTranscriptionEngine }
+        liveTranscription.beginPrewarm(
+            engineProvider: { [weak self] in self?.engines.activeTranscriptionEngine },
+            isRecording: { [weak self] in self?.watching.isRecording == true },
+        )
         pipeline.activate { [weak self] in self?.engines.activeTranscriptionEngine }
         watching.activate { [weak self] in self?.engines.syncEngineSettings() }
 
@@ -365,7 +368,7 @@ final class AppState {
             liveEnabled: settings.liveTranscriptionEnabled,
             engineLanguage: settings.activeEngineLanguageOrNil,
             engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
-        ) && watching.watchLoop?.state == .recording
+        ) && watching.isRecording
     }
 
     var currentBadge: BadgeKind {

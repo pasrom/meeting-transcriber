@@ -12,9 +12,9 @@ import Observation
 /// caption-overlay window + RPC snapshot) and injects it here; the coordinator
 /// only owns the streaming `LiveTranscriptionController` and its warm-up.
 ///
-/// The active engine is supplied via `beginPrewarm(engineProvider:)` (called from
-/// `AppState.init` after stored-property init, where the `[weak self]` engine
-/// closure is valid) rather than captured at construction — so the coordinator
+/// The active engine + the `isRecording` probe are supplied via
+/// `beginPrewarm(engineProvider:isRecording:)` (called from `AppState.init` after
+/// stored-property init, where the `[weak self]` closures are valid) rather than captured at construction — so the coordinator
 /// never holds an AppState back-reference. `liveEnabled` / `engineSupportsLive` /
 /// `engineLanguage` / `verboseDiagnostics` are settings-backed closures.
 ///
@@ -29,6 +29,22 @@ final class LiveTranscriptionCoordinator {
     /// then (so `ensureController` safely no-ops if called early). Captures the
     /// owner weakly, so it returns nil once the owner is gone.
     private var engineProvider: (() -> (any TranscribingEngine)?)?
+
+    /// Whether a recording is currently in progress. Set by `beginPrewarm`;
+    /// defaults to "not recording". Drives the mid-recording re-warm defer in
+    /// `handleSettingsChange`.
+    private var isRecording: () -> Bool = { false }
+
+    /// Set when a settings change arrived during a recording and its re-warm was
+    /// deferred; applied at the next idle `flush()`.
+    private var needsRewarmWhenIdle = false
+
+    /// True while `attachSinks` is mid-flight (it awaits `prepareForNextRecording()`
+    /// between reading the controller and installing its sinks). The deferred
+    /// re-warm in `flush()` must not swap the controller out during that window,
+    /// or a fast manual stop→restart could leave the new recording feeding an
+    /// orphaned controller the coordinator no longer owns.
+    private var attachInFlight = false
 
     private let captions: LiveCaptionsState
     private let liveEnabled: () -> Bool
@@ -110,8 +126,12 @@ final class LiveTranscriptionCoordinator {
     /// calls in the AppState init body) to keep that init's type-check under the
     /// 300 ms budget — the compiler's constraint solver slows with every method
     /// call inside a long initializer.
-    func beginPrewarm(engineProvider: @escaping () -> (any TranscribingEngine)?) {
+    func beginPrewarm(
+        engineProvider: @escaping () -> (any TranscribingEngine)?,
+        isRecording: @escaping () -> Bool = { false },
+    ) {
         self.engineProvider = engineProvider
+        self.isRecording = isRecording
         prewarmAndObserve()
     }
 
@@ -134,6 +154,8 @@ final class LiveTranscriptionCoordinator {
         // finishes. If it was never warmed, this recording gets no captions and
         // they come online at the next idle prewarm.
         guard captionsEligible, let controller else { return }
+        attachInFlight = true
+        defer { attachInFlight = false }
         await controller.prepareForNextRecording()
         recorder.micLiveSink = controller.micSink
         recorder.appLiveSink = controller.appSink
@@ -144,24 +166,33 @@ final class LiveTranscriptionCoordinator {
     /// engine / never warmed). Called at STOP time — before any `prepareForNextRecording()` that
     /// clears caption state on the next recording — so the user sees the final
     /// caption of the last utterance. Idempotent: a second call after the
-    /// pipelines already flushed finds nothing pending and emits nothing.
+    /// pipelines already flushed finds nothing pending and emits nothing. Also
+    /// applies any re-warm deferred by a mid-recording settings change (see
+    /// `handleSettingsChange`), now that we are idle.
     func flush() async {
         await controller?.flush()
+        // Now idle: apply any re-warm deferred by a mid-recording settings change.
+        // Skip while an `attachSinks` is mid-flight — swapping the controller then
+        // would orphan the one it is binding (fast manual stop→restart).
+        if needsRewarmWhenIdle, !isRecording(), !attachInFlight {
+            needsRewarmWhenIdle = false
+            controller = nil
+            prewarmIfEligible()
+        }
     }
 
     /// Eagerly load the VAD + engine models when the toggle is on (or already on
     /// at launch with a streaming engine) so the first utterance after the
-    /// recorder starts doesn't pay the cold-load cost. Plus a re-arming
-    /// `withObservationTracking` watcher on the toggle + engine setting: on every
-    /// change, drop the cached controller so the next `ensureController()` rebuilds
-    /// against the (possibly new) active engine and re-warms it.
-    ///
-    /// Engine changes take effect on the **next** recording. Switching the engine
-    /// mid-recording deallocates the controller, buffers from the running recorder
-    /// no longer reach any engine, and the live overlay goes silent until the next
-    /// recording. Live mid-recording engine swap is a deferred follow-up.
+    /// recorder starts doesn't pay the cold-load cost, then arm the settings
+    /// observer.
     private func prewarmAndObserve() {
         prewarmIfEligible()
+        observeSettings()
+    }
+
+    /// Arm a one-shot `withObservationTracking` watcher on the toggle + engine
+    /// settings and route each change through `handleSettingsChange`.
+    private func observeSettings() {
         withObservationTracking {
             // Touch the underlying settings via the gate closures so the change
             // tracker observes `liveTranscriptionEnabled` + `transcriptionEngine`
@@ -170,12 +201,25 @@ final class LiveTranscriptionCoordinator {
             _ = engineSupportsLive()
             _ = engineLanguage()
         } onChange: { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.controller = nil
-                self.prewarmAndObserve()
-            }
+            Task { @MainActor in self?.handleSettingsChange() }
         }
+    }
+
+    /// React to a toggle / engine / language change. While idle, drop the cached
+    /// controller and rebuild against the new settings immediately. While a
+    /// recording is in progress, DEFER: keep the current meeting's warm
+    /// controller (so no CoreML recompile lands mid-recording and the overlay
+    /// stays live on the current engine), re-arm the observer, and apply the
+    /// rebuild at the next idle `flush()`. Either way the engine change takes
+    /// effect on the next recording.
+    private func handleSettingsChange() {
+        guard !isRecording() else {
+            needsRewarmWhenIdle = true
+            observeSettings()
+            return
+        }
+        controller = nil
+        prewarmAndObserve()
     }
 
     private func prewarmIfEligible() {
