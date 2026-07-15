@@ -22,9 +22,12 @@ struct SpeakerNamingStore {
     /// rebuild — without it both jobs would resolve to the same
     /// `<title>_naming.json` and the second save would overwrite the first,
     /// then both UUIDs would map to the survivor.
-    static func slug(title: String, jobID: UUID) -> String {
-        let titleSlug = String(ProtocolGenerator.filename(title: title, ext: "").dropLast())
-        return "\(titleSlug)_\(PipelineJob.shortID(for: jobID))"
+    static func slug(title: String, jobID: UUID, startTime: Date) -> String {
+        ProtocolGenerator.basename(
+            title: title,
+            startTime: startTime,
+            shortID: PipelineJob.shortID(for: jobID),
+        )
     }
 
     private var recordingsDir: URL? {

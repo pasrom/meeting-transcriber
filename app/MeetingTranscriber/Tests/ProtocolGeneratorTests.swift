@@ -73,6 +73,43 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(note.contains("[Remote]"))
     }
 
+    // MARK: - Basename (meeting-start anchored)
+
+    func testBasenameUsesInjectedStartTimeNotNow() throws {
+        let name = try ProtocolGenerator.basename(
+            title: "Daily Standup",
+            startTime: localDate(2026, 7, 15, 18, 30),
+            shortID: "a1b2c3d4",
+        )
+        // Stamp reflects the meeting start (18:30), not the wall clock now.
+        XCTAssertEqual(name, "20260715_1830_daily_standup_a1b2c3d4")
+    }
+
+    func testBasenameOmitsEmptyShortID() throws {
+        let name = try ProtocolGenerator.basename(
+            title: "Daily Standup",
+            startTime: localDate(2026, 7, 15, 18, 30),
+            shortID: "",
+        )
+        // Empty shortID must not leave a trailing separator.
+        XCTAssertEqual(name, "20260715_1830_daily_standup")
+        XCTAssertFalse(name.hasSuffix("_"))
+    }
+
+    func testBasenameShortIDSuffixSurvivesReimportRoundTrip() throws {
+        // Re-importing feeds a prior basename back in as a title. The leading
+        // timestamp must be stripped (no compounding) but the trailing shortID
+        // must be preserved as slug content, not mistaken for a stamp.
+        let prior = "20260715_1830_daily_standup_a1b2c3d4"
+        let reimported = try ProtocolGenerator.basename(
+            title: prior,
+            startTime: localDate(2026, 8, 1, 9, 0),
+            shortID: "e5f6a7b8",
+        )
+        XCTAssertEqual(reimported, "20260801_0900_daily_standup_a1b2c3d4_e5f6a7b8")
+        XCTAssertFalse(reimported.contains("20260715_1830"), "old leading stamp must be stripped")
+    }
+
     // MARK: - Filename Generation
 
     func testFilenameFormat() {
@@ -194,10 +231,10 @@ final class ProtocolGeneratorTests: XCTestCase {
         let tmpDir = try makeTempDirectory(prefix: "proto_test")
 
         let text = "[00:00] Hello\n[00:05] World"
-        let url = try ProtocolGenerator.saveTranscript(text, title: "Test", dir: tmpDir)
+        let url = try ProtocolGenerator.saveTranscript(text, basename: "20260101_0000_test", dir: tmpDir)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
-        XCTAssertTrue(url.lastPathComponent.hasSuffix("_test.txt"))
+        XCTAssertEqual(url.lastPathComponent, "20260101_0000_test.txt")
 
         let loaded = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(loaded, text)
@@ -207,13 +244,30 @@ final class ProtocolGeneratorTests: XCTestCase {
         let tmpDir = try makeTempDirectory(prefix: "proto_test")
 
         let markdown = "# Meeting Protocol\n\n## Summary\nTest meeting."
-        let url = try ProtocolGenerator.saveProtocol(markdown, title: "Standup", dir: tmpDir)
+        let url = try ProtocolGenerator.saveProtocol(markdown, basename: "20260101_0000_standup", dir: tmpDir)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
-        XCTAssertTrue(url.lastPathComponent.hasSuffix("_standup.md"))
+        XCTAssertEqual(url.lastPathComponent, "20260101_0000_standup.md")
 
         let loaded = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(loaded, markdown)
+    }
+
+    /// The transcript and protocol of one job must land on the identical stem
+    /// (only the extension differs) when handed the same basename — the fix for
+    /// the old cross-artifact minute drift, where each save re-derived its own
+    /// `Date()`-stamped name.
+    func testSaveTranscriptAndProtocolShareBasename() throws {
+        let tmpDir = try makeTempDirectory(prefix: "shared_basename")
+        let base = "20260715_1830_daily_standup_a1b2c3d4"
+        let txt = try ProtocolGenerator.saveTranscript("t", basename: base, dir: tmpDir)
+        let md = try ProtocolGenerator.saveProtocol("# m", basename: base, dir: tmpDir)
+        XCTAssertEqual(txt.lastPathComponent, "\(base).txt")
+        XCTAssertEqual(md.lastPathComponent, "\(base).md")
+        XCTAssertEqual(
+            txt.deletingPathExtension().lastPathComponent,
+            md.deletingPathExtension().lastPathComponent,
+        )
     }
 
     func testSaveCreatesDirectory() throws {
@@ -222,7 +276,7 @@ final class ProtocolGeneratorTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmpDir.path))
 
-        let url = try ProtocolGenerator.saveTranscript("test", title: "X", dir: tmpDir)
+        let url = try ProtocolGenerator.saveTranscript("test", basename: "x", dir: tmpDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
@@ -438,7 +492,7 @@ final class ProtocolGeneratorTests: XCTestCase {
     /// (0600), not world-readable from the inherited umask.
     func testSaveTranscriptWritesOwnerOnlyPermissions() throws {
         let dir = try makeTempDirectory(prefix: "ProtocolGenSaveTranscript")
-        let url = try ProtocolGenerator.saveTranscript("hello world", title: "Standup", dir: dir)
+        let url = try ProtocolGenerator.saveTranscript("hello world", basename: "standup", dir: dir)
 
         let mode = try XCTUnwrap(
             FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int,
@@ -449,7 +503,7 @@ final class ProtocolGeneratorTests: XCTestCase {
     /// Protocol markdown summarises the meeting — same owner-only requirement.
     func testSaveProtocolWritesOwnerOnlyPermissions() throws {
         let dir = try makeTempDirectory(prefix: "ProtocolGenSaveProtocol")
-        let url = try ProtocolGenerator.saveProtocol("# Notes", title: "Standup", dir: dir)
+        let url = try ProtocolGenerator.saveProtocol("# Notes", basename: "standup", dir: dir)
 
         let mode = try XCTUnwrap(
             FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int,
