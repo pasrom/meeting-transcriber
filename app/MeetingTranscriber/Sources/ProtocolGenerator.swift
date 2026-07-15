@@ -104,12 +104,15 @@ enum ProtocolGenerator {
 
     /// Save a transcript to a text file.
     ///
+    /// `basename` is the job's precomputed, meeting-start-anchored stem (shared
+    /// with the protocol and audio artifacts); the `.txt` extension is appended.
+    ///
     /// - Returns: URL of the saved file
-    static func saveTranscript(_ text: String, title: String, dir: URL) throws -> URL {
+    static func saveTranscript(_ text: String, basename: String, dir: URL) throws -> URL {
         let accessing = dir.startAccessingSecurityScopedResource()
         defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(filename(title: title, ext: "txt"))
+        let url = dir.appendingPathComponent("\(basename).txt")
         try text.write(to: url, atomically: true, encoding: .utf8)
         // Transcripts contain verbatim meeting speech — restrict to owner-only.
         try FileManager.default.restrictToOwner(url)
@@ -119,12 +122,15 @@ enum ProtocolGenerator {
 
     /// Save a protocol to a Markdown file.
     ///
+    /// `basename` is the job's precomputed, meeting-start-anchored stem (shared
+    /// with the transcript and audio artifacts); the `.md` extension is appended.
+    ///
     /// - Returns: URL of the saved file
-    static func saveProtocol(_ markdown: String, title: String, dir: URL) throws -> URL {
+    static func saveProtocol(_ markdown: String, basename: String, dir: URL) throws -> URL {
         let accessing = dir.startAccessingSecurityScopedResource()
         defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(filename(title: title, ext: "md"))
+        let url = dir.appendingPathComponent("\(basename).md")
         try markdown.write(to: url, atomically: true, encoding: .utf8)
         // Protocol markdown summarises the meeting — restrict to owner-only.
         try FileManager.default.restrictToOwner(url)
@@ -132,11 +138,7 @@ enum ProtocolGenerator {
         return url
     }
 
-    private static let filenameFormatter: DateFormatter = {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyyMMdd_HHmm"
-        return fmt
-    }()
+    private static let filenameFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmm")
 
     /// Sanitize a title into a safe filename slug (path-traversal safe).
     /// Falls back to `"meeting"` if no allowed characters remain.
@@ -176,11 +178,24 @@ enum ProtocolGenerator {
         return result.isEmpty ? title : result
     }
 
-    /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`
-    static func filename(title: String, ext: String) -> String {
-        let date = filenameFormatter.string(from: Date())
+    /// Build a filesystem basename: `{yyyyMMdd_HHmm}_{slug}[_{shortID}]`.
+    ///
+    /// The timestamp is anchored on `startTime` (the meeting start) so the name
+    /// reflects when the meeting happened, not when the pipeline processed it.
+    /// The trailing `shortID` (when non-empty) is a per-job collision guard so
+    /// two same-title meetings can't clobber each other's files. Empty
+    /// components are dropped, so `shortID: ""` yields the plain
+    /// `{yyyyMMdd_HHmm}_{slug}` shape.
+    static func basename(title: String, startTime: Date, shortID: String) -> String {
+        let date = filenameFormatter.string(from: startTime)
         let slug = sanitizeSlug(title)
-        return "\(date)_\(slug).\(ext)"
+        return [date, slug, shortID].filter { !$0.isEmpty }.joined(separator: "_")
+    }
+
+    /// Generate a filename: `{yyyyMMdd_HHmm}_{slug}.{ext}`, stamped with the
+    /// current time and no collision suffix. Thin wrapper over `basename`.
+    static func filename(title: String, ext: String) -> String {
+        "\(basename(title: title, startTime: Date(), shortID: "")).\(ext)"
     }
 }
 

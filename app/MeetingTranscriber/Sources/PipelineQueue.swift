@@ -140,8 +140,8 @@ class PipelineQueue {
     /// Filesystem slug for a job's persisted artefacts. Thin alias for
     /// `SpeakerNamingStore.slug` — kept so existing call sites (`processNext`,
     /// tests) don't have to reach into the store for a pure helper.
-    static func namingSlug(title: String, jobID: UUID) -> String {
-        SpeakerNamingStore.slug(title: title, jobID: jobID)
+    static func namingSlug(title: String, jobID: UUID, startTime: Date) -> String {
+        SpeakerNamingStore.slug(title: title, jobID: jobID, startTime: startTime)
     }
 
     /// Returns naming data for a specific job ID, or the first pending job as fallback.

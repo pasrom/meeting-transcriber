@@ -23,8 +23,9 @@ extension PipelineQueue {
         let micPath: URL?
         let micDelay: TimeInterval
         let participants: [String]
-        /// Persisted-file basename, computed once from title + jobID so the
-        /// diarization and protocol stages agree on the same `\(slug)_16k.wav`.
+        /// Persisted-file basename, computed once from title + jobID + the
+        /// meeting-start time so the transcript, protocol, diarization and
+        /// audio stages all agree on the same `\(slug)` stem.
         let slug: String
     }
 
@@ -71,7 +72,9 @@ extension PipelineQueue {
             micPath: job.micPath,
             micDelay: job.micDelay,
             participants: job.participants,
-            slug: Self.namingSlug(title: job.meetingTitle, jobID: job.id),
+            // Anchor the basename on the meeting start; reimport/orphan jobs
+            // have no recorded start, so fall back to the enqueue time.
+            slug: Self.namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.meetingStartTime ?? job.enqueuedAt),
         )
 
         do {
@@ -476,7 +479,7 @@ extension PipelineQueue {
     ) async throws {
         // --- Save Transcript & Audio (always) ---
         let protocolsDir = outputDir.appendingPathComponent("protocols")
-        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, title: ctx.title, dir: protocolsDir)
+        let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, basename: ctx.slug, dir: protocolsDir)
         logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
 
         if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
@@ -487,7 +490,7 @@ extension PipelineQueue {
         let recordingsDir = outputDir.appendingPathComponent("recordings")
         Self.copyAudioToOutput(
             mixPath: ctx.mixPath, appPath: ctx.appPath, micPath: ctx.micPath,
-            title: ctx.title, outputDir: recordingsDir,
+            basename: ctx.slug, outputDir: recordingsDir,
         )
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
@@ -560,6 +563,12 @@ extension PipelineQueue {
             return
         }
         let shortID = PipelineJob.shortID(for: jobID)
+        // Reuse the basename fixed when the transcript was saved (persisted as
+        // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
+        // only after a transcript exists, so namingSlug is set on every real
+        // path; the fallback just keeps generation working if the job is gone.
+        let basename = jobs.first { $0.id == jobID }?.namingSlug
+            ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
         do {
             updateJobState(id: jobID, to: .generatingProtocol)
             startElapsedTimer()
@@ -571,7 +580,7 @@ extension PipelineQueue {
             )
             let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
             let mdPath = try ProtocolGenerator.saveProtocol(
-                fullMD, title: title, dir: protocolsDir,
+                fullMD, basename: basename, dir: protocolsDir,
             )
             logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .private)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
@@ -627,7 +636,7 @@ extension PipelineQueue {
     /// is skipped, no persistent mix is written.
     private static func copyAudioToOutput(
         mixPath: URL?, appPath: URL?, micPath: URL?,
-        title: String, outputDir: URL,
+        basename: String, outputDir: URL,
     ) {
         // Each move below renames-in-place — if two of the three URLs point at
         // the same file, the first move destroys the source for the next one.
@@ -648,11 +657,12 @@ extension PipelineQueue {
 
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
-        let slug = ProtocolGenerator.filename(title: title, ext: "").dropLast() // remove trailing "."
+        // Reuse the job's single basename so the audio copies match the
+        // transcript/protocol stems exactly (same meeting-start stamp + shortID).
         let audioPaths: [(URL, String)] = [
-            mixPath.map { ($0, "\(slug)\(RecordingFileSuffix.mix)") },
-            appPath.map { ($0, "\(slug)\(RecordingFileSuffix.app)") },
-            micPath.map { ($0, "\(slug)\(RecordingFileSuffix.mic)") },
+            mixPath.map { ($0, "\(basename)\(RecordingFileSuffix.mix)") },
+            appPath.map { ($0, "\(basename)\(RecordingFileSuffix.app)") },
+            micPath.map { ($0, "\(basename)\(RecordingFileSuffix.mic)") },
         ].compactMap(\.self)
 
         let outputDirStd = outputDir.standardizedFileURL

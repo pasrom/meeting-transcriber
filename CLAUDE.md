@@ -105,6 +105,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     UpdateChecker.swift    # GitHub release update checker
     Bundle+AppVersion.swift # Bundle extension: appVersion + gitCommitHash from Info.plist
     FileManager+OwnerOnly.swift # FileManager extension: owner-only file permission constant (rw-------, single source of truth)
+    DateFormatter+FilenameStamp.swift # Shared Gregorian/POSIX filename-stamp formatter factory (used by ProtocolGenerator + DualSourceRecorder)
     SingleFlight.swift        # Single-flight async deduplication coordinator (concurrent callers await one shared run)
     ModelWarmupQueue.swift    # Serial async gate ordering launch model warm-ups one-at-a-time (avoids the concurrent CoreML compile storm that starves the system on a meeting join)
     DiagnosticExporter.swift # Reads log entries → shareable .log file (Settings → Advanced → Export Diagnostics)

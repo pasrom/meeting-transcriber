@@ -977,6 +977,86 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    // MARK: - One meeting-start-anchored basename per job
+
+    private func makeStraightThroughQueue() -> (PipelineQueue, MockProtocolGen) {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello world")]
+        let diar = MockDiarization()
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: nil, // no matcher/naming pause → job runs straight to .done
+        )
+        let protocolGen = MockProtocolGen()
+        return (makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen), protocolGen)
+    }
+
+    /// Transcript, protocol, and both audio artifacts of one job must all land on
+    /// the identical stem, stamped with the meeting-start time and carrying the
+    /// job shortID. Fails against the old code, which stamped each save with a
+    /// fresh `Date()` (processing time) and omitted the shortID from the
+    /// transcript/protocol/mix names.
+    func testAllArtifactsShareOneMeetingStartAnchoredBasename() async throws {
+        let (q, _) = makeStraightThroughQueue()
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Weekly Sync", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+            meetingStartTime: start,
+        )
+        q.enqueue(job)
+        await q.processNext()
+
+        let stem = "20260304_0915_weekly_sync_\(job.shortID)"
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let fm = FileManager.default
+        XCTAssertTrue(
+            fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(stem).txt").path),
+            "transcript must use the meeting-start + shortID basename",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(stem).md").path),
+            "protocol must share the same basename",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_mix.wav").path),
+            "mix audio copy must share the same basename",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_16k.wav").path),
+            "16k audio must share the same basename",
+        )
+    }
+
+    /// A job with no recorded meeting-start (reimport / orphan recovery) must
+    /// fall back to the enqueue time for the stamp and still produce a valid,
+    /// shortID-carrying basename — never an empty stamp or a crash.
+    func testBasenameFallsBackToEnqueuedAtWhenNoMeetingStart() async throws {
+        let (q, _) = makeStraightThroughQueue()
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Reimport Test", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+            meetingStartTime: nil,
+        )
+        q.enqueue(job)
+        await q.processNext()
+
+        // enqueuedAt is captured in init, so the expected stem is deterministic.
+        let expectedStem = PipelineQueue.namingSlug(
+            title: "Reimport Test", jobID: job.id, startTime: job.enqueuedAt,
+        )
+        let txt = tmpDir.appendingPathComponent("protocols").appendingPathComponent("\(expectedStem).txt")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: txt.path),
+            "reimport job must stamp with enqueuedAt and keep the shortID, got stem: \(expectedStem)",
+        )
+    }
+
     /// An engine that doesn't produce per-utterance timestamps (emitting one
     /// segment for the whole recording) must skip diarization entirely — running
     /// it would collapse the meeting onto a single speaker — and warn the user.
@@ -3105,11 +3185,10 @@ final class PipelineQueueTests: XCTestCase {
     /// second job's `_naming.json` / `_16k.wav` overwrites the first's, and
     /// snapshot rebuild then maps the survivor's data onto both UUIDs.
     /// Embedding the job's short-id keeps each on-disk artefact distinct.
-    func test_namingSlug_differsForSameTitleDifferentJobs() {
-        let id1 = UUID()
-        let id2 = UUID()
-        let slug1 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id1)
-        let slug2 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id2)
+    func test_namingSlug_differsForSameTitleDifferentJobs() throws {
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let slug1 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: UUID(), startTime: start)
+        let slug2 = PipelineQueue.namingSlug(title: "Daily Standup", jobID: UUID(), startTime: start)
         XCTAssertNotEqual(
             slug1, slug2,
             "Identical titles must produce distinct slugs when job IDs differ",
@@ -3118,16 +3197,17 @@ final class PipelineQueueTests: XCTestCase {
 
     /// Determinism: same input → same slug. Snapshot rebuild relies on this
     /// to find a job's persisted `_naming.json` after a relaunch.
-    func test_namingSlug_isDeterministicForSameJob() {
+    func test_namingSlug_isDeterministicForSameJob() throws {
         let id = UUID()
-        let first = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
-        let second = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let first = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id, startTime: start)
+        let second = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id, startTime: start)
         XCTAssertEqual(first, second)
     }
 
-    func test_namingSlug_embedsTitleAndShortID() {
+    func test_namingSlug_embedsTitleAndShortID() throws {
         let id = UUID()
-        let slug = PipelineQueue.namingSlug(title: "Daily Standup", jobID: id)
+        let slug = try PipelineQueue.namingSlug(title: "Daily Standup", jobID: id, startTime: localDate(2026, 3, 4, 9, 15))
         XCTAssertTrue(
             slug.contains(PipelineJob.shortID(for: id)),
             "Slug must include the job short-ID for uniqueness across same-title runs",

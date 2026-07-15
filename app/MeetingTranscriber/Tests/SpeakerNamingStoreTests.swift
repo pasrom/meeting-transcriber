@@ -37,25 +37,38 @@ final class SpeakerNamingStoreTests: XCTestCase {
 
     // MARK: - slug
 
-    func test_slug_differsForSameTitleDifferentJobs() {
-        let slug1 = SpeakerNamingStore.slug(title: "Daily Standup", jobID: UUID())
-        let slug2 = SpeakerNamingStore.slug(title: "Daily Standup", jobID: UUID())
+    func test_slug_differsForSameTitleDifferentJobs() throws {
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let slug1 = SpeakerNamingStore.slug(title: "Daily Standup", jobID: UUID(), startTime: start)
+        let slug2 = SpeakerNamingStore.slug(title: "Daily Standup", jobID: UUID(), startTime: start)
         XCTAssertNotEqual(slug1, slug2)
     }
 
-    func test_slug_isDeterministicForSameJob() {
+    func test_slug_isDeterministicForSameJob() throws {
         let id = UUID()
+        let start = try localDate(2026, 3, 4, 9, 15)
         XCTAssertEqual(
-            SpeakerNamingStore.slug(title: "Daily Standup", jobID: id),
-            SpeakerNamingStore.slug(title: "Daily Standup", jobID: id),
+            SpeakerNamingStore.slug(title: "Daily Standup", jobID: id, startTime: start),
+            SpeakerNamingStore.slug(title: "Daily Standup", jobID: id, startTime: start),
         )
     }
 
-    func test_slug_embedsTitleAndShortID() {
+    func test_slug_embedsTitleAndShortID() throws {
         let id = UUID()
-        let slug = SpeakerNamingStore.slug(title: "Daily Standup", jobID: id)
+        let slug = try SpeakerNamingStore.slug(title: "Daily Standup", jobID: id, startTime: localDate(2026, 3, 4, 9, 15))
         XCTAssertTrue(slug.contains(PipelineJob.shortID(for: id)))
         XCTAssertTrue(slug.lowercased().contains("daily") && slug.lowercased().contains("standup"))
+    }
+
+    func test_slug_anchorsStampOnStartTime() throws {
+        let id = UUID()
+        let start = try localDate(2026, 7, 15, 18, 30)
+        let slug = SpeakerNamingStore.slug(title: "Daily Standup", jobID: id, startTime: start)
+        XCTAssertTrue(
+            slug.hasPrefix("20260715_1830_daily_standup_"),
+            "slug must be stamped with the meeting-start time, got: \(slug)",
+        )
+        XCTAssertTrue(slug.hasSuffix(PipelineJob.shortID(for: id)))
     }
 
     // MARK: - save / load round-trip
@@ -63,7 +76,7 @@ final class SpeakerNamingStoreTests: XCTestCase {
     func test_saveThenLoad_roundTripsMapping() throws {
         let store = SpeakerNamingStore(outputDir: tmpDir)
         let id = UUID()
-        let slug = SpeakerNamingStore.slug(title: "Standup", jobID: id)
+        let slug = try SpeakerNamingStore.slug(title: "Standup", jobID: id, startTime: localDate(2026, 3, 4, 9, 15))
         try store.save(makeData(jobID: id, mapping: ["SPEAKER_0": "Alice"]), slug: slug)
 
         let loaded = try XCTUnwrap(store.load(slug: slug))
@@ -113,8 +126,9 @@ final class SpeakerNamingStoreTests: XCTestCase {
         let title = "Daily Standup"
         let id1 = UUID()
         let id2 = UUID()
-        let slug1 = SpeakerNamingStore.slug(title: title, jobID: id1)
-        let slug2 = SpeakerNamingStore.slug(title: title, jobID: id2)
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let slug1 = SpeakerNamingStore.slug(title: title, jobID: id1, startTime: start)
+        let slug2 = SpeakerNamingStore.slug(title: title, jobID: id2, startTime: start)
 
         try store.save(makeData(jobID: id1, title: title, mapping: ["SPEAKER_0": "Alice"]), slug: slug1)
         try store.save(makeData(jobID: id2, title: title, mapping: ["SPEAKER_0": "Bob"]), slug: slug2)
