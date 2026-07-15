@@ -425,6 +425,7 @@ class WatchLoop {
             micPath: recording.micPath,
             micDelay: recording.micDelay,
             participants: participants,
+            meetingStartTime: wallClockDate(forUptime: recording.recordingStart),
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title, privacy: .private)")

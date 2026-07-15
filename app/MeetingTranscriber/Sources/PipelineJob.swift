@@ -56,6 +56,13 @@ struct PipelineJob: Identifiable, Codable {
     let micDelay: TimeInterval
     let participants: [String]
     let enqueuedAt: Date
+    /// Wall-clock time the recording started (meeting start), derived from the
+    /// recorder's `recordingStart` uptime at enqueue. Used to anchor the
+    /// output-file basename so the filename reflects when the meeting happened,
+    /// not when the pipeline processed it. `nil` for reimport/orphan-recovery
+    /// jobs (no live recording) and for legacy snapshots persisted before this
+    /// field existed — callers fall back to `enqueuedAt`.
+    var meetingStartTime: Date?
     var state: JobState
     var error: String?
     var warnings: [String]
@@ -91,6 +98,7 @@ struct PipelineJob: Identifiable, Codable {
         micPath: URL?,
         micDelay: TimeInterval,
         participants: [String] = [],
+        meetingStartTime: Date? = nil,
         autoSkipNaming: Bool = false,
     ) {
         self.id = UUID()
@@ -102,6 +110,7 @@ struct PipelineJob: Identifiable, Codable {
         self.micDelay = micDelay
         self.participants = participants
         self.enqueuedAt = Date()
+        self.meetingStartTime = meetingStartTime
         self.state = .waiting
         self.error = nil
         self.warnings = []

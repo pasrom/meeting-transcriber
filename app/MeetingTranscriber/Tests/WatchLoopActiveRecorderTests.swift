@@ -36,18 +36,6 @@ private final class CapturingRecorder: RecordingProvider {
     }
 }
 
-private final class ImmediatelyInactiveDetector: MeetingDetecting {
-    func checkOnce() -> DetectedMeeting? {
-        nil
-    }
-
-    func isMeetingActive(_: DetectedMeeting) -> Bool {
-        false
-    }
-
-    func reset(appName _: String?) {}
-}
-
 /// Regression coverage for the bug where `handleMeeting` (auto-watch path)
 /// never assigned `activeRecorder`, leaving `AppState`'s channel-health
 /// polling task reading nil on every tick — the red-tint indicator never

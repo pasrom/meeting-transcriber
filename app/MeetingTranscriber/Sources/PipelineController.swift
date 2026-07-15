@@ -257,6 +257,10 @@ final class PipelineController {
                 meetingTitle: title, appName: appName,
                 mixPath: group.mix, appPath: group.app, micPath: group.mic,
                 micDelay: micDelay, participants: participants,
+                // Record-only fleet flow: a separate host reprocesses recordings
+                // captured elsewhere. Anchor the output basename on the sidecar's
+                // real meeting-start time, not this reprocessing moment.
+                meetingStartTime: sidecar?.startedAt,
                 autoSkipNaming: autoSkipNaming,
             )
             ids.append(job.id)
