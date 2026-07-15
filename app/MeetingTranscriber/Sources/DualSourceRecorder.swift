@@ -571,11 +571,9 @@ class DualSourceRecorder: RecordingProvider {
         return deviceRate
     }
 
-    private static let timestampFormatter: DateFormatter = {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyyMMdd_HHmmss"
-        return fmt
-    }()
+    // Pinned Gregorian/POSIX: these stems are the final user-visible filenames
+    // in record-only mode, so the year must not localize into a regional calendar.
+    private static let timestampFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmmss")
 
     private static func timestamp() -> String {
         timestampFormatter.string(from: Date())
