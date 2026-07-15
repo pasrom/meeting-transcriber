@@ -305,6 +305,11 @@ class MockRecorder: RecordingProvider {
     var micLevelDBFS: Double = -120
     var appLevelDBFS: Double = -120
 
+    /// Overrides the `recordingStart` uptime `stop()` reports. `nil` (default)
+    /// yields the current `systemUptime` at stop time, matching a real recorder;
+    /// set it to pin a specific meeting-start time (e.g. filename-anchoring tests).
+    var recordingStartUptime: TimeInterval?
+
     func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging _: Bool) {
         startCalled = true
         capturedAppPID = appPID
@@ -322,8 +327,37 @@ class MockRecorder: RecordingProvider {
             appPath: appPath,
             micPath: micPath,
             micDelay: 0,
-            recordingStart: ProcessInfo.processInfo.systemUptime,
+            recordingStart: recordingStartUptime ?? ProcessInfo.processInfo.systemUptime,
         )
+    }
+}
+
+/// A `MeetingDetecting` stub that never detects a meeting and reports any given
+/// meeting as inactive — so a `WatchLoop.handleMeeting(...)` ends immediately.
+/// Shared so per-test files don't each redeclare it.
+final class ImmediatelyInactiveDetector: MeetingDetecting {
+    func checkOnce() -> DetectedMeeting? {
+        nil
+    }
+
+    func isMeetingActive(_: DetectedMeeting) -> Bool {
+        false
+    }
+
+    func reset(appName _: String?) {}
+}
+
+extension XCTestCase {
+    /// Build a `Date` from local-time components in the Gregorian calendar,
+    /// matching the app's filename formatter (pinned Gregorian/POSIX, current
+    /// timezone). Using a fixed calendar keeps stamp assertions valid on
+    /// contributor machines whose regional calendar isn't Gregorian.
+    func localDate(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int) throws -> Date {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        var c = DateComponents()
+        c.year = y; c.month = mo; c.day = d; c.hour = h; c.minute = mi
+        return try XCTUnwrap(cal.date(from: c))
     }
 }
 

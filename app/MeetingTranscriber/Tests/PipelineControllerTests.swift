@@ -171,6 +171,33 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertEqual(pc.queue.jobs.count, 1, "Paired _app + _mic collapse into a single job")
     }
 
+    func testPairedReimportAnchorsMeetingStartOnSidecar() throws {
+        let pc = makeWiredController()
+        // A record-only capture reprocessed later on a separate host: paired
+        // app+mic files plus a sidecar recording the real meeting-start time.
+        let app = tmpDir.appendingPathComponent("standup_app.wav")
+        let mic = tmpDir.appendingPathComponent("standup_mic.wav")
+        FileManager.default.createFile(atPath: app.path, contents: Data("RIFF".utf8))
+        FileManager.default.createFile(atPath: mic.path, contents: Data("RIFF".utf8))
+        let meetingStart = try localDate(2026, 3, 4, 9, 15)
+        let sidecar = RecordingSidecar(
+            title: "Weekly Sync", appName: "Teams",
+            startedAt: meetingStart, stoppedAt: meetingStart.addingTimeInterval(1800),
+            participants: [], micDelaySeconds: 0,
+            mixFilename: "standup_mix.wav", appFilename: "standup_app.wav", micFilename: "standup_mic.wav",
+        )
+        try sidecar.write(toDirectory: tmpDir, basename: "standup")
+
+        pc.enqueueExistingFiles([app, mic])
+
+        let job = try XCTUnwrap(pc.queue.jobs.first)
+        XCTAssertEqual(
+            job.meetingStartTime, meetingStart,
+            "reimport must anchor the basename on the sidecar's meeting-start, not the reprocess time",
+        )
+        XCTAssertEqual(job.meetingTitle, "Weekly Sync")
+    }
+
     // MARK: - jobStatus
 
     func testJobStatusReturnsLiveJob() {
