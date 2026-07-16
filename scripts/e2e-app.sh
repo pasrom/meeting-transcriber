@@ -1220,6 +1220,57 @@ run_naming_confirm() {
     [ "${pending_count:-0}" -ge 2 ] 2>/dev/null \
         || fail "$label: naming dialog speakerCount=$pending_count, expected >= 2 (numSpeakers=2 on a 2-speaker fixture)"
 
+    # --- #504 regression net: the speaker-naming window must be PINNED --------
+    # It floats + joins all Spaces + shows over full-screen apps so it stays
+    # reachable when the user switches apps, instead of being swept away by
+    # Stage Manager or a full-screen Space. Assert on the window PROPERTIES, not
+    # mere visibility: an un-pinned NSWindow also stays visible on deactivation,
+    # so a visibility-only check would stay green even with the fix reverted
+    # (vacuous). Reverting NamingWindowPolicy flips floating -> false here, which
+    # is what turns this lane red.
+    local naming_win=""
+    # Capture the speaker-naming window's RPC projection into $naming_win;
+    # non-zero if the window is not present.
+    _naming_window() {
+        assert_app_alive
+        naming_win="$(rpc /state | jq -c '[.windows[] | select(.id == "speaker-naming")] | .[0] // empty')"
+        [ -n "$naming_win" ]
+    }
+    _naming_window_pinned() {
+        _naming_window || return 1
+        jq -e '.floating and .canJoinAllSpaces and .fullScreenAuxiliary' <<<"$naming_win" >/dev/null
+    }
+    # Phase-2 predicate (used after deactivation): present AND on-screen AND
+    # floating. isVisible is the load-bearing new signal a hidesOnDeactivate
+    # regression would flip.
+    _naming_window_visible_pinned() {
+        _naming_window || return 1
+        jq -e '.isVisible and .floating' <<<"$naming_win" >/dev/null
+    }
+    # The window opens asynchronously (.showSpeakerNaming -> bringWindowToFront
+    # on the next runloop), so poll rather than assert once.
+    log "$label: asserting speaker-naming window is pinned (floating + all-Spaces + full-screen)"
+    poll_until 30 2 _naming_window_pinned \
+        || fail "$label: speaker-naming window not pinned (#504 regression): $(rpc /state | jq -c '[.windows[] | select(.id=="speaker-naming")]')"
+    log "$label: naming window pinned OK: $naming_win"
+
+    # And it must SURVIVE the app losing focus: bring another app to the front,
+    # then re-assert. The pin flags are focus-invariant, so the load-bearing new
+    # signal here is isVisible: a "window hides when the app loses focus"
+    # regression (e.g. hidesOnDeactivate flipped back on) flips isVisible to
+    # false only AFTER deactivation, which phase 1 (app still active) cannot see.
+    # RPC + the naming confirm are localhost HTTP, so leaving our menu-bar app
+    # in the background does not block the rest of the lane.
+    osascript -e 'tell application "Finder" to activate' >/dev/null 2>&1 || true
+    sleep 2
+    # Poll rather than single-shot: a transient localhost RPC hiccup at this one
+    # instant would otherwise fail the lane with a misleading "regression"
+    # message. A genuine hide-on-deactivate regression stays red the whole window.
+    poll_until 20 2 _naming_window_visible_pinned \
+        || fail "$label: speaker-naming window not visible + pinned after the app was deactivated (#504 regression): $(rpc /state | jq -c '.windows')"
+    log "$label: naming window still visible + pinned after deactivating the app"
+    # -------------------------------------------------------------------------
+
     # Read the naming choice: raw labels + auto-name suggestions + speaking time.
     local naming speaker_count
     naming="$(curl --silent --show-error --max-time 10 \
