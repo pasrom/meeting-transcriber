@@ -18,6 +18,14 @@
             XCTAssertTrue(DebugRPCServer.wantsInlineTranscript(target: "/v1/transcribe?include=protocol,transcript"))
         }
 
+        func testWantsInlineTranscriptTrueAcrossRepeatedIncludeParams() {
+            // Every `include=` key must be honoured, not just the first — a guard
+            // against the first-match-only regression when parsing was shared.
+            XCTAssertTrue(DebugRPCServer.wantsInlineTranscript(
+                target: "/v1/transcribe?include=protocol&include=transcript",
+            ))
+        }
+
         func testWantsInlineTranscriptTrueAlongsideOtherParams() {
             XCTAssertTrue(DebugRPCServer.wantsInlineTranscript(
                 target: "/v1/jobs/\(UUID().uuidString)?wait=1&include=transcript",

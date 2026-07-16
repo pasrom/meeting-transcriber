@@ -48,5 +48,21 @@
             let body = data.subdata(in: bodyStart ..< bodyStart + contentLength)
             return Self(method: method, path: path, headers: headers, body: body)
         }
+
+        /// All values for a query-parameter key in a raw request target
+        /// (`/path?a=1&b=2`), in order — `["1", "2"]` for `?k=1&k=2`, `[]` when
+        /// absent. Returning every match (not just the first) preserves the
+        /// repeated-key form on the stability-contracted `/v1` surface. Values
+        /// are not percent-decoded — the debug API's parameters are simple
+        /// tokens. Shared by the `/v1` include-opt-in and the `/ui/tree` window
+        /// selector.
+        static func queryValues(target: String, key: String) -> [String] {
+            guard let query = target.split(separator: "?", maxSplits: 1).dropFirst().first else { return [] }
+            return query.split(separator: "&").compactMap { pair in
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                guard kv.count == 2, kv[0] == key else { return nil }
+                return String(kv[1])
+            }
+        }
     }
 #endif
