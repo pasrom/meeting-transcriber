@@ -73,6 +73,10 @@ final class LiveCaptionsWindowController {
             defer: false,
         )
         panel.contentView = host
+        // Stable identifier so the panel is addressable by window-id lookups
+        // (mirrors the SwiftUI `Window(id:)` scenes). Not yet exposed to the
+        // debug `/ui/tree` allowlist — it can surface meeting content.
+        panel.identifier = NSUserInterfaceItemIdentifier("live-captions")
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
