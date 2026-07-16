@@ -81,14 +81,14 @@ final class DualSourceRecorderTests: XCTestCase {
             appPath: URL(fileURLWithPath: "/tmp/app.wav"),
             micPath: URL(fileURLWithPath: "/tmp/mic.wav"),
             micDelay: 0.15,
-            recordingStart: 1000.0,
+            recordingStartDate: Date(timeIntervalSince1970: 1000),
         )
 
         XCTAssertEqual(result.mixPath.lastPathComponent, "mix.wav")
         XCTAssertEqual(result.appPath?.lastPathComponent, "app.wav")
         XCTAssertEqual(result.micPath?.lastPathComponent, "mic.wav")
         XCTAssertEqual(result.micDelay, 0.15)
-        XCTAssertEqual(result.recordingStart, 1000.0)
+        XCTAssertEqual(result.recordingStartDate, Date(timeIntervalSince1970: 1000))
     }
 
     func testRecordingResultNoTracks() {
@@ -97,7 +97,7 @@ final class DualSourceRecorderTests: XCTestCase {
             appPath: nil,
             micPath: nil,
             micDelay: 0,
-            recordingStart: 0,
+            recordingStartDate: .distantPast,
         )
 
         XCTAssertNil(result.appPath)
@@ -341,7 +341,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 from: result,
                 recordingsDir: dir,
                 timestamp: "20260311_100000",
-                recordingStart: 1000,
+                recordingStartDate: Date(timeIntervalSince1970: 1000),
                 format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
             ),
         ) { error in
@@ -364,7 +364,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 appAudioFileURL: appTmp, micAudioFileURL: nil,
                 actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
             ),
-            recordingsDir: dir, timestamp: "20260311_120000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_120000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
         )
 
@@ -388,7 +388,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 appAudioFileURL: appTmp, micAudioFileURL: micWav,
                 actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
             ),
-            recordingsDir: dir, timestamp: "20260311_130000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_130000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
         )
 
@@ -411,7 +411,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 appAudioFileURL: appTmp, micAudioFileURL: micWav,
                 actualSampleRate: 48000, actualChannels: 2, micDelay: 0.1,
             ),
-            recordingsDir: dir, timestamp: "20260311_140000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_140000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
         )
 
@@ -443,7 +443,7 @@ final class DualSourceRecorderTests: XCTestCase {
                     appAudioFileURL: appTmp, micAudioFileURL: badMic,
                     actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
                 ),
-                recordingsDir: dir, timestamp: "20260311_160000", recordingStart: 1000,
+                recordingsDir: dir, timestamp: "20260311_160000", recordingStartDate: Date(timeIntervalSince1970: 1000),
                 format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
             ),
         )
@@ -467,7 +467,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 appAudioFileURL: appTmp, micAudioFileURL: nil,
                 actualSampleRate: 48000, actualChannels: 1, micDelay: 0,
             ),
-            recordingsDir: dir, timestamp: "20260311_150000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_150000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
         )
 
@@ -488,7 +488,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
             ),
             // Requested 44.1 kHz but the device delivered 48 kHz.
-            recordingsDir: dir, timestamp: "20260311_160000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_160000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 2, requestedRate: 44100, targetRate: 16000),
         )
 
@@ -515,7 +515,7 @@ final class DualSourceRecorderTests: XCTestCase {
                 appAudioFileURL: appTmp, micAudioFileURL: micWav,
                 actualSampleRate: 16000, actualChannels: 1, micDelay: 0,
             ),
-            recordingsDir: dir, timestamp: "20260311_180000", recordingStart: 1000,
+            recordingsDir: dir, timestamp: "20260311_180000", recordingStartDate: Date(timeIntervalSince1970: 1000),
             format: CaptureFormat(requestedChannels: 1, requestedRate: 16000, targetRate: 16000),
         )
 

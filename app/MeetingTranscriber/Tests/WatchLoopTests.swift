@@ -328,6 +328,7 @@ final class WatchLoopTests: XCTestCase {
         title: String = "Standup",
         appName: String = "Microsoft Teams",
         notifier: any AppNotifying = SilentNotifier(),
+        recordingStartDate: Date? = nil,
     ) async throws -> WatchLoop {
         let (loop, recorder) = makeTestWatchLoop(
             pipelineQueue: queue,
@@ -338,6 +339,7 @@ final class WatchLoopTests: XCTestCase {
         recorder.mixPath = recorderMix
         recorder.appPath = recorderApp
         recorder.micPath = recorderMic
+        recorder.recordingStartDate = recordingStartDate
         try await loop.startManualRecording(pid: 42, appName: appName, title: title)
         loop.stopManualRecording()
         return loop
@@ -394,6 +396,37 @@ final class WatchLoopTests: XCTestCase {
         // startedAt must precede stoppedAt — we don't pin exact wall-clock
         // values because the manual-recording flow records its own startTime.
         XCTAssertLessThanOrEqual(sidecar.startedAt, sidecar.stoppedAt)
+    }
+
+    /// A backward wall-clock step during the meeting (e.g. NTP correcting a fast
+    /// clock) can make the recorder's captured start `Date` later than the
+    /// `Date()` read at stop. The sidecar must still satisfy
+    /// `startedAt <= stoppedAt` so a downstream fleet consumer never computes a
+    /// negative duration or rejects the JSON as malformed.
+    func test_recordOnly_sidecarStartedAtNeverAfterStoppedAt_onBackwardClockStep() async throws {
+        let queue = PipelineQueue()
+        let tmp = try makeTempDirectory(prefix: "recordOnlyClock")
+        let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
+        try Data().write(to: mixURL)
+        let destDir = tmp.appendingPathComponent("dest", isDirectory: true)
+
+        // Recorder reports a start one hour ahead of the Date() read at stop.
+        _ = try await runManualRecordOnlyRecording(
+            recorderMix: mixURL,
+            outputDir: destDir,
+            queue: queue,
+            recordingStartDate: Date(timeIntervalSinceNow: 3600),
+        )
+
+        let sidecarURL = destDir.appendingPathComponent("20260503_120000_meta.json")
+        let data = try Data(contentsOf: sidecarURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let sidecar = try decoder.decode(RecordingSidecar.self, from: data)
+        XCTAssertLessThanOrEqual(
+            sidecar.startedAt, sidecar.stoppedAt,
+            "sidecar interval must never invert even when the wall clock steps backward mid-recording",
+        )
     }
 
     func test_recordOnly_sidecarWriteFailure_setsLastErrorAndNotifies() async throws {

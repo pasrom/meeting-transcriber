@@ -305,10 +305,10 @@ class MockRecorder: RecordingProvider {
     var micLevelDBFS: Double = -120
     var appLevelDBFS: Double = -120
 
-    /// Overrides the `recordingStart` uptime `stop()` reports. `nil` (default)
-    /// yields the current `systemUptime` at stop time, matching a real recorder;
-    /// set it to pin a specific meeting-start time (e.g. filename-anchoring tests).
-    var recordingStartUptime: TimeInterval?
+    /// Overrides the `recordingStartDate` `stop()` reports. `nil` (default)
+    /// yields `Date()` at stop time, matching a real recorder; set it to pin a
+    /// specific meeting-start time (e.g. filename-anchoring tests).
+    var recordingStartDate: Date?
 
     func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging _: Bool) {
         startCalled = true
@@ -327,7 +327,7 @@ class MockRecorder: RecordingProvider {
             appPath: appPath,
             micPath: micPath,
             micDelay: 0,
-            recordingStart: recordingStartUptime ?? ProcessInfo.processInfo.systemUptime,
+            recordingStartDate: recordingStartDate ?? Date(),
         )
     }
 }

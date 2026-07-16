@@ -31,7 +31,7 @@ private final class CapturingRecorder: RecordingProvider {
             appPath: nil,
             micPath: nil,
             micDelay: 0,
-            recordingStart: ProcessInfo.processInfo.systemUptime,
+            recordingStartDate: Date(),
         )
     }
 }

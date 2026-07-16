@@ -384,7 +384,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Recording:**
 - `DualSourceRecorder` uses `AudioTapLib.AudioCaptureSession` directly (no subprocess). App imports the library via SPM local package dependency.
-- `DualSourceRecorder` captures `recordingStartTime` in `start()`, not in `stop()`.
+- `DualSourceRecorder` captures `recordingStartDate` (wall-clock `Date`) in `start()`, not in `stop()`. It is captured directly, not derived from `systemUptime`, which freezes during sleep and would skew the meeting-start anchor for a meeting spanning a sleep.
 - Grace period minimum is 1 second (enforced in `AppSettings.endGrace` setter).
 
 **Detection:**
@@ -431,7 +431,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Record-only mode:**
 - When `AppSettings.recordOnly` is true, `WatchLoop.enqueueRecording()` moves the dual-source WAVs into `<settings.effectiveOutputDir>/recordings/` and writes a `<basename>_meta.json` `RecordingSidecar` next to them, skipping the entire post-processing pipeline (VAD, transcription, diarization, protocol generation). Both call sites — auto-detected meetings (`handleMeeting`) and manual recordings (`stopManualRecording`) — flow through the same branch. The destination is wrapped in `startAccessingSecurityScopedResource()` to honour user-picked Output Folder bookmarks (relevant for the App Store sandboxed build).
-- Sidecar JSON contains: `version` (currently `RecordingSidecar.currentVersion = 1`), `title`, `appName`, `startedAt`/`stoppedAt` (ISO 8601, reconstructed from `recordingStart` uptime), `participants`, `micDelaySeconds`, `files` (basenames only). Optional `app` / `mic` filenames are omitted when nil. Suffix constants live as static lets: the audio-file suffixes on `RecordingFileSuffix` (`mix = "_mix.wav"`, `app`, `mic`, and the raw-temp `appRaw`/`legacyAppRaw`), and the sidecar suffix on `RecordingSidecar.filenameSuffix = "_meta.json"`.
+- Sidecar JSON contains: `version` (currently `RecordingSidecar.currentVersion = 1`), `title`, `appName`, `startedAt`/`stoppedAt` (ISO 8601; `startedAt` is the recorder's `recordingStartDate` captured at start, `stoppedAt` is `Date()` at stop), `participants`, `micDelaySeconds`, `files` (basenames only). Optional `app` / `mic` filenames are omitted when nil. Suffix constants live as static lets: the audio-file suffixes on `RecordingFileSuffix` (`mix = "_mix.wav"`, `app`, `mic`, and the raw-temp `appRaw`/`legacyAppRaw`), and the sidecar suffix on `RecordingSidecar.filenameSuffix = "_meta.json"`.
 - Intended for fleet topologies where macOS clients capture and a separate machine (e.g. Linux GPU host) processes the audio via Syncthing or similar.
 - Menu bar: the small red dot is rendered as a **persistent overlay** (`MenuBarIcon.image(..., recordOnlyOverlay:)`) on top of *whatever* primary badge `BadgeKind.compute(...)` would otherwise show — idle, recording, transcribing, etc. — so the mode is always visible. Permission overlay (red exclamation) takes precedence when both apply, since a permission problem actually breaks recording. Settings tabs dim Transcription / Protocol / VAD / Diarization sections via `View.recordOnlyDisabled(_:)` and show a banner in the General tab pointing at the active output dir.
 - Sidecar write failures notify the user via `NotificationManager` (injected as `any AppNotifying` on `WatchLoop`) since record-only does not transition state to `.error`.

@@ -425,17 +425,10 @@ class WatchLoop {
             micPath: recording.micPath,
             micDelay: recording.micDelay,
             participants: participants,
-            meetingStartTime: wallClockDate(forUptime: recording.recordingStart),
+            meetingStartTime: recording.recordingStartDate,
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title, privacy: .private)")
-    }
-
-    /// Convert a `ProcessInfo.systemUptime`-based timestamp captured at recording
-    /// start into a wall-clock `Date` by anchoring against "now" (also systemUptime).
-    private func wallClockDate(forUptime uptime: TimeInterval, now: Date = Date()) -> Date {
-        let elapsed = ProcessInfo.processInfo.systemUptime - uptime
-        return now.addingTimeInterval(-elapsed)
     }
 
     private func writeRecordOnlySidecar(
@@ -444,8 +437,12 @@ class WatchLoop {
         recording: RecordingResult,
         participants: [String],
     ) {
-        let stoppedAt = Date()
-        let startedAt = wallClockDate(forUptime: recording.recordingStart, now: stoppedAt)
+        let startedAt = recording.recordingStartDate
+        // Guard the sidecar's startedAt <= stoppedAt invariant against a
+        // backward wall-clock step between start and stop (e.g. NTP correcting a
+        // fast clock): never emit a negative interval for downstream fleet
+        // consumers that compute a duration from the pair.
+        let stoppedAt = max(Date(), startedAt)
 
         let mixName = recording.mixPath.lastPathComponent
         let basename = RecordingFileSuffix.stripSuffix(from: mixName)?.stem
