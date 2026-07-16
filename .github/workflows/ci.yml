@@ -61,17 +61,32 @@ jobs:
       # repo-wide. Pin to the last release whose defaults match the committed
       # style; bump deliberately alongside a matching reformat. Uses the
       # official prebuilt CLI binary from the GitHub release (single-file zip).
+      #
+      # The runner image pre-installs a newer SwiftFormat on the Homebrew path,
+      # which precedes /usr/local/bin, so `mv`-ing the pin there is shadowed.
+      # Prepend the pin dir via $GITHUB_PATH (front of PATH for later steps).
       - name: Install SwiftFormat (pinned)
         env:
           SWIFTFORMAT_VERSION: "0.61.1"
         run: |
-          curl -fsSL -o /tmp/swiftformat.zip \
+          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
             "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip"
-          unzip -o -j /tmp/swiftformat.zip -d /tmp/swiftformat-bin
-          chmod +x /tmp/swiftformat-bin/swiftformat
-          xattr -dr com.apple.quarantine /tmp/swiftformat-bin/swiftformat || true
-          sudo mv /tmp/swiftformat-bin/swiftformat /usr/local/bin/swiftformat
-          swiftformat --version
+          unzip -o -j "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat-bin"
+          chmod +x "$RUNNER_TEMP/swiftformat-bin/swiftformat"
+          xattr -dr com.apple.quarantine "$RUNNER_TEMP/swiftformat-bin/swiftformat" || true
+          echo "$RUNNER_TEMP/swiftformat-bin" >> "$GITHUB_PATH"
+      # Hard-fail loudly if the pin is ever shadowed by a pre-installed
+      # SwiftFormat again, instead of silently reformatting the codebase.
+      - name: Verify SwiftFormat version
+        env:
+          SWIFTFORMAT_VERSION: "0.61.1"
+        run: |
+          got="$(swiftformat --version)"
+          echo "swiftformat resolves to: $(command -v swiftformat) ($got)"
+          if [ "$got" != "$SWIFTFORMAT_VERSION" ]; then
+            echo "::error::Expected pinned SwiftFormat $SWIFTFORMAT_VERSION but got $got (shadowed by a pre-installed binary)."
+            exit 1
+          fi
       # SwiftFormat path list lives in scripts/lint.sh; calling it keeps CI and
       # local lint runs aligned. SwiftLint stays an explicit step to use the
       # github-actions-logging reporter (annotations in the PR diff).
