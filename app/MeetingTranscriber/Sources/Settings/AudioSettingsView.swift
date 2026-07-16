@@ -21,22 +21,7 @@ struct AudioSettingsView: View {
                 }
             }
 
-            Section("Voice Activity Detection") {
-                Toggle("Voice Activity Detection (VAD)", isOn: $settings.vadEnabled)
-                    .help("Remove silence before transcription for better results")
-
-                if settings.vadEnabled {
-                    HStack {
-                        Text("Threshold:")
-                        Slider(value: $settings.vadThreshold, in: 0.3 ... 0.9, step: 0.05)
-                        Text(String(format: "%.2f", settings.vadThreshold))
-                            .monospacedDigit()
-                            .frame(width: 35)
-                    }
-                }
-            }
-            .accessibilityIdentifier("vadSection")
-            .recordOnlyDisabled(settings.recordOnly)
+            VoiceActivityDetectionSection(settings: settings)
 
             PerChannelIndicatorSection(settings: settings)
         }
@@ -53,25 +38,47 @@ struct AudioSettingsView: View {
     }
 }
 
+private struct VoiceActivityDetectionSection: View {
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        Section("Voice Activity Detection") {
+            HelpfulToggle(
+                title: "Voice Activity Detection (VAD)",
+                help: SettingsHelp.vad,
+                isOn: $settings.vadEnabled,
+            )
+
+            if settings.vadEnabled {
+                HStack {
+                    Text("Threshold:")
+                    Slider(value: $settings.vadThreshold, in: 0.3 ... 0.9, step: 0.05)
+                    Text(String(format: "%.2f", settings.vadThreshold))
+                        .monospacedDigit()
+                        .frame(width: 35)
+                }
+            }
+        }
+        .accessibilityIdentifier("vadSection")
+        .recordOnlyDisabled(settings.recordOnly)
+    }
+}
+
 private struct PerChannelIndicatorSection: View {
     @Bindable var settings: AppSettings
 
-    private static let toggleHelp =
-        "Turn the menu bar red when one capture channel goes silent while the other still carries audio. " +
-        "Catches asymmetric capture failures (muted mic, dropped app-audio tap) in real time."
-
-    private static let sliderHelp =
-        "Continuous asymmetric silence required before the indicator and notification fire. " +
-        "Short enough to surface a dead channel during a meeting, long enough to ignore speaking pauses."
-
     var body: some View {
         Section("Per-Channel Indicator") {
-            Toggle("Detect Silent Capture Channel", isOn: $settings.perChannelIndicatorEnabled)
-                .help(Self.toggleHelp)
+            HelpfulToggle(
+                title: "Detect Silent Capture Channel",
+                help: SettingsHelp.silentCaptureChannel,
+                isOn: $settings.perChannelIndicatorEnabled,
+            )
 
             if settings.perChannelIndicatorEnabled {
                 HStack {
                     Text("Warn after:")
+                    HelpBadge(text: SettingsHelp.asymmetricSilenceWarning)
                     Slider(
                         value: $settings.asymmetricSilenceWarningSeconds,
                         in: 30 ... 300,
@@ -81,7 +88,7 @@ private struct PerChannelIndicatorSection: View {
                         .monospacedDigit()
                         .frame(width: 40)
                 }
-                .help(Self.sliderHelp)
+                .help(SettingsHelp.asymmetricSilenceWarning)
             }
         }
         .accessibilityIdentifier("channelIndicatorSection")
