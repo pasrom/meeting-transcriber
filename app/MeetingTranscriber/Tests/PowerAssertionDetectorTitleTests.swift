@@ -105,4 +105,29 @@ final class PowerAssertionDetectorTitleTests: XCTestCase {
         }
         XCTAssertEqual(detector.checkOnce()?.windowTitle, "A | Microsoft Teams")
     }
+
+    // MARK: - Placeholder fallback (this commit)
+
+    func testIdleOnlyWindowsFallBackToPlaceholder() {
+        // Only the Calendar tab is open (idle) — no real meeting window. The
+        // title must not be the Calendar tab nor the raw assertion name.
+        let detector = teamsDetector {
+            [self.win(owner: "Microsoft Teams", title: "Calendar | Contoso | user@contoso.com | Microsoft Teams")]
+        }
+        XCTAssertEqual(detector.checkOnce()?.windowTitle, "Microsoft Teams Call")
+    }
+
+    func testEmptyWindowListFallsBackToPlaceholder() {
+        // Replaces the old assertion-name fallback: no windows (e.g. Screen
+        // Recording denied) must yield a clean placeholder, not the assertName.
+        let detector = teamsDetector { [] }
+        XCTAssertEqual(detector.checkOnce()?.windowTitle, "Microsoft Teams Call")
+    }
+
+    func testMissingWindowNameFallsBackToPlaceholder() {
+        // Field case: Screen Recording denied → kCGWindowName absent; the raw
+        // Zoom assertion name ("Describe Activity Type" in the wild) must not leak.
+        let detector = zoomDetector { [self.win(owner: "zoom.us", title: nil)] }
+        XCTAssertEqual(detector.checkOnce()?.windowTitle, "Zoom Call")
+    }
 }

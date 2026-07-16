@@ -48,7 +48,9 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let result = detector.checkOnce()
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.pattern.appName, "Microsoft Teams")
-        XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call in progress")
+        // No window title available (empty list) → clean placeholder, not the
+        // raw assertion name.
+        XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call")
         XCTAssertEqual(result?.ownerName, "MSTeams")
         XCTAssertEqual(result?.windowPID, 1438)
     }
@@ -401,23 +403,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.checkOnce())
     }
 
-    // MARK: - Window Title Lookup (further title cases in PowerAssertionDetectorTitleTests)
-
-    func testAssertionNameUsedWhenNoWindowFound() {
-        let detector = makeDetector()
-        detector.assertionProvider = {
-            makeAssertionDict(
-                pid: 1438,
-                processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress",
-            )
-        }
-        // No matching windows
-        detector.windowListProvider = { [] }
-        let result = detector.checkOnce()
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call in progress")
-    }
+    // Window-title lookup + placeholder fallback: PowerAssertionDetectorTitleTests.
 
     // MARK: - Reset Without App Name
 
