@@ -14,6 +14,7 @@ machen" / "ist das im Menü sichtbar".
 - You want to know what's in the speaker DB right now → `mt-cli state`
 - You want to verify the app is alive after a code change → `mt-cli healthz`
 - You want to see what the user sees → `mt-cli screenshot /tmp/x.png`, then Read it
+- You want to assert on UI structure (a Settings section exists, a control is enabled) without eyeballing a screenshot → `mt-cli ui-tree --window settings`
 - You're debugging a UI bug and would otherwise have to ask the user to describe state
 - You're verifying a fix end-to-end after editing code
 
@@ -43,6 +44,7 @@ The app writes a 64-hex bearer token to
 | `GET /healthz`      | `mt-cli healthz`    | "ok"                               |
 | `GET /state`        | `mt-cli state`      | Pipeline + speaker DB JSON         |
 | `GET /screenshot`   | `mt-cli screenshot` | PNG of frontmost window            |
+| `GET /ui/tree`      | `mt-cli ui-tree`    | Accessibility tree JSON (allowlisted windows) |
 
 ## Build mt-cli
 
