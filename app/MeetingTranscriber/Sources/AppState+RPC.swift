@@ -1,5 +1,23 @@
 #if !APPSTORE
+    import AppKit
     import Foundation
+
+    extension RPCStateSnapshot.WindowInfo {
+        /// Project an `NSWindow`'s pinning-relevant properties for the RPC
+        /// snapshot. `id` is passed in (the caller already resolved it from the
+        /// window identifier) so this stays a pure value mapping.
+        @MainActor
+        init(window: NSWindow, id: String) {
+            let behavior = window.collectionBehavior
+            self.init(
+                id: id,
+                isVisible: window.isVisible,
+                floating: window.level == .floating,
+                canJoinAllSpaces: behavior.contains(.canJoinAllSpaces),
+                fullScreenAuxiliary: behavior.contains(.fullScreenAuxiliary),
+            )
+        }
+    }
 
     extension PermissionStatus {
         /// Stable wire string for the RPC `/state.permissionHealth` snapshot.
@@ -73,7 +91,24 @@
                 settings: settings.rpcSettingsSnapshot(),
                 badge: currentBadge,
                 updateStatus: updateStatusSnapshot(),
+                windows: windowsSnapshot(),
             )
+        }
+
+        /// Project the pinning-relevant properties of each named scene window.
+        /// Only windows carrying a scene identifier (settings, speaker-naming,
+        /// record-app) are included; transient/system windows are skipped.
+        /// Extracted (like the other `*Snapshot` helpers) to keep the
+        /// `rpcStateSnapshot` literal under the type-check budget.
+        private func windowsSnapshot() -> [RPCStateSnapshot.WindowInfo] {
+            // `NSApp` is an implicitly-unwrapped optional that is nil in an
+            // xctest process (no NSApplication is created), so guard it — the
+            // RPC snapshot is built on the main actor from unit tests too.
+            guard let app = NSApp else { return [] }
+            return app.windows.compactMap { window in
+                guard let id = window.identifier?.rawValue else { return nil }
+                return RPCStateSnapshot.WindowInfo(window: window, id: id)
+            }
         }
 
         /// Snapshot the update-checker status. Extracted (like the other

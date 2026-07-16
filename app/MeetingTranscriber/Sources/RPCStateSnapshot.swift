@@ -67,6 +67,28 @@
         /// update *preferences* — mirroring the `permissionHealth` status family.
         /// Contains no secrets.
         let updateStatus: UpdateStatus
+        /// Pinning-relevant properties of each named scene window (settings,
+        /// speaker-naming, record-app). Lets the e2e-app naming-confirm lane
+        /// assert the speaker-naming window is pinned — floating + joins all
+        /// Spaces + shows over full-screen apps — so it stays reachable when the
+        /// user switches apps (issue #504). Asserting on these properties, not
+        /// mere visibility, is what makes the regression net non-vacuous: an
+        /// un-pinned window also stays visible on deactivation.
+        let windows: [WindowInfo]
+
+        struct WindowInfo: Codable {
+            /// The scene identifier (e.g. "speaker-naming", "settings").
+            let id: String
+            /// Whether the window is on-screen. On deactivation this stays true
+            /// only if `hidesOnDeactivate` is false — so it is the signal that
+            /// catches a "window hides when the app loses focus" regression.
+            let isVisible: Bool
+            /// `level == .floating` — the load-bearing pin property (stays on
+            /// top / above other apps).
+            let floating: Bool
+            let canJoinAllSpaces: Bool
+            let fullScreenAuxiliary: Bool
+        }
 
         struct UpdateStatus: Codable {
             /// True when a release newer than the running version was found.
@@ -362,6 +384,7 @@
             settings: Settings = .empty,
             badge: BadgeKind = .inactive,
             updateStatus: UpdateStatus = .empty,
+            windows: [WindowInfo] = [],
         ) {
             self.pipeline = pipeline
             self.speakerDB = speakerDB
@@ -377,6 +400,7 @@
             self.settings = settings
             self.badge = badge
             self.updateStatus = updateStatus
+            self.windows = windows
         }
 
         func jsonData() throws -> Data {
