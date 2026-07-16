@@ -23,8 +23,14 @@ struct MeetingSimulator: ParsableCommand {
     @Argument(help: "Path to fixture WAV. Defaults to the repo's two_speakers_de.wav.")
     var audioPath: String?
 
-    @Argument(help: "Window title. Must match a MeetingDetector pattern for auto-detect to fire.")
-    var windowTitle: String = "Simulator Meeting | MeetingSimulator"
+    @Option(name: .long, help: """
+    Window title the simulated meeting window shows. Detection fires off the
+    power assertion regardless; this title is what the app's title lookup sees,
+    so it drives the resulting meeting title / output filename. Default matches
+    the MeetingSimulator meeting pattern. Set to "MeetingSimulator" (the app
+    name) to exercise the no-usable-title placeholder path.
+    """)
+    var title: String = "Simulator Meeting | MeetingSimulator"
 
     @Flag(help: """
     Play the fixture at volume=0 so the audio device stays active but produces
@@ -48,11 +54,11 @@ struct MeetingSimulator: ParsableCommand {
 
     func run() {
         let fixturePath = audioPath ?? Self.findFixture()
-        let title = windowTitle
+        let windowTitle = title
         let silentMode = silent
         let dur = duration
         MainActor.assumeIsolated {
-            runSimulator(fixturePath: fixturePath, windowTitle: title, silent: silentMode, duration: dur)
+            runSimulator(fixturePath: fixturePath, windowTitle: windowTitle, silent: silentMode, duration: dur)
         }
     }
 

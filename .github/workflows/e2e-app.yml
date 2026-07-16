@@ -305,6 +305,18 @@ jobs:
         timeout-minutes: 12
         run: bash scripts/e2e-app.sh --no-build --naming-confirm
 
+      # Title-source lane (issue #501): run the simulator with a window title
+      # equal to the app name (no usable meeting-window title), then assert the
+      # detected meeting title is the clean "MeetingSimulator Call" placeholder,
+      # not the raw IOKit assertion name. Fails against the pre-fix detector,
+      # so it guards the real deployed detection → title-selection chain.
+      # `--no-build` reuses the bundle the earlier lanes built + signed.
+      - name: Run title-source placeholder E2E (issue #501)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-app.sh --no-build --title-source
+
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
       # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +
       # unfinalized _mic.wav, no _mix.wav survive), relaunch, and assert the

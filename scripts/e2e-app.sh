@@ -36,6 +36,7 @@ MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert th
 CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered into the pipeline on relaunch (issue #379 part 3)
 REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle and exit — restores a clean bundle after --mic-device-change
 NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via POST /v1/jobs/<id>/naming (see run_naming_confirm)
+TITLE_SOURCE=false       # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -52,6 +53,7 @@ while [ $# -gt 0 ]; do
         --crash-recovery)   CRASH_RECOVERY=true ;;
         --redeploy-only)    REDEPLOY_ONLY=true ;;
         --naming-confirm)   NAMING_CONFIRM=true ;;
+        --title-source)     TITLE_SOURCE=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -119,6 +121,12 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        pollutes the persistent speaker DB; that snapshot/restore
                        is $GITHUB_ACTIONS-gated, so a LOCAL run enrolls voices
                        into your real speaker DB (a warning is printed).
+  --title-source       Issue #501: run meeting-simulator with a window title equal
+                       to the app name (no usable meeting-window title), then assert
+                       the detected meeting title is the clean "MeetingSimulator Call"
+                       placeholder — not the raw IOKit assertion name. Fails against
+                       the pre-fix detector, so it proves the deployed
+                       detection → title-selection chain end-to-end.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -1412,6 +1420,31 @@ run_naming_confirm() {
     log "$label: shared fixture intact after the lane ✅"
 }
 
+# Title-source lane (issue #501): drive the app's window-title lookup with a
+# title that is NOT usable — the window title equals the app name, which the
+# lookup skips — so PowerAssertionDetector finds no meeting-window title and
+# must fall back to the clean "<app> Call" placeholder. Pre-fix the detector
+# leaked the raw IOKit assertion name ("Simulator Meeting Call in progress")
+# instead, so this assertion fails against the old code (non-vacuous). Proves
+# the real deployed detection → title-selection → job-title chain, which the
+# unit tests can only exercise through injected seams.
+run_title_source() {
+    local label="[title-source]"
+    log "$label: starting meeting-simulator --title MeetingSimulator (no usable window title) → $SIMULATOR_FIXTURE"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --title "MeetingSimulator" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
+
+    _poll_for_new_lastjob_terminal "$label" ignore-recovered
+    [ "$POLL_LJ_STATE" = "done" ] || fail "$label: lastJob.state == \"$POLL_LJ_STATE\", expected \"done\""
+
+    local meeting_title
+    meeting_title="$(rpc /state | jq -r '.lastJob.meetingTitle // empty')"
+    log "$label: lastJob.meetingTitle = \"$meeting_title\""
+    [ "$meeting_title" = "MeetingSimulator Call" ] \
+        || fail "$label: meetingTitle == \"$meeting_title\", expected \"MeetingSimulator Call\". The window title equalled the app name, so the title lookup should return nil and the detector substitute the placeholder; a leaked assertion name or window title means the title-source fix regressed."
+    log "$label: PASS — no usable window title fell back to the clean placeholder ✅"
+}
+
 if [ "$REIMPORT_LATEST" = true ]; then
     # Skip the live-record phase and reuse a WAV produced by an earlier
     # `--record-only --keep-recordings` run on this host. Picks the
@@ -1475,6 +1508,8 @@ elif [ "$CRASH_RECOVERY" = true ]; then
     run_crash_recovery
 elif [ "$NAMING_CONFIRM" = true ]; then
     run_naming_confirm
+elif [ "$TITLE_SOURCE" = true ]; then
+    run_title_source
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
