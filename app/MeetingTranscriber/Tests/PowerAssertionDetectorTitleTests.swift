@@ -15,13 +15,7 @@ final class PowerAssertionDetectorTitleTests: XCTestCase {
     private func teamsDetector(windows: @escaping () -> [[String: Any]]) -> PowerAssertionDetector {
         let detector = PowerAssertionDetector(confirmationCount: 1)
         detector.assertionProvider = {
-            [1438: [[
-                "Process Name": "MSTeams",
-                "AssertName": "Microsoft Teams Call in progress",
-                "AssertType": "PreventUserIdleDisplaySleep",
-                "AssertPID": Int32(1438),
-                "AssertLevel": 255,
-            ]]]
+            makeAssertionDict(pid: 1438, processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
         }
         detector.windowListProvider = windows
         return detector
@@ -30,13 +24,7 @@ final class PowerAssertionDetectorTitleTests: XCTestCase {
     private func zoomDetector(windows: @escaping () -> [[String: Any]]) -> PowerAssertionDetector {
         let detector = PowerAssertionDetector(confirmationCount: 1)
         detector.assertionProvider = {
-            [2020: [[
-                "Process Name": "zoom.us",
-                "AssertName": "Zoom Video Communication",
-                "AssertType": "PreventUserIdleDisplaySleep",
-                "AssertPID": Int32(2020),
-                "AssertLevel": 255,
-            ]]]
+            makeAssertionDict(pid: 2020, processName: "zoom.us", assertName: "Zoom Video Communication")
         }
         detector.windowListProvider = windows
         return detector
@@ -74,12 +62,12 @@ final class PowerAssertionDetectorTitleTests: XCTestCase {
         XCTAssertEqual(detector.checkOnce()?.windowTitle, "Sprint Review | Microsoft Teams")
     }
 
-    @MainActor
-    func testOneToOneCallTitleCleansToCallerName() {
+    func testOneToOneCallUsesTheCallerWindowTitle() {
+        // A 1:1 Teams call window is titled with the other person's name; that
+        // becomes the meeting title. The " | Microsoft Teams" suffix is stripped
+        // downstream by WatchLoop.cleanTitle (covered in WatchLoopTests) → "Jane Doe".
         let detector = teamsDetector { [self.win(owner: "Microsoft Teams", title: "Jane Doe | Microsoft Teams")] }
         XCTAssertEqual(detector.checkOnce()?.windowTitle, "Jane Doe | Microsoft Teams")
-        // The suffix is stripped downstream in WatchLoop → filename "Jane Doe".
-        XCTAssertEqual(WatchLoop.cleanTitle("Jane Doe | Microsoft Teams"), "Jane Doe")
     }
 
     func testZoomMeetingWindowUsed() {
@@ -129,5 +117,37 @@ final class PowerAssertionDetectorTitleTests: XCTestCase {
         // Zoom assertion name ("Describe Activity Type" in the wild) must not leak.
         let detector = zoomDetector { [self.win(owner: "zoom.us", title: nil)] }
         XCTAssertEqual(detector.checkOnce()?.windowTitle, "Zoom Call")
+    }
+
+    // MARK: - Pattern-table drift guard
+
+    func testEveryWatchedAssertionAppHasAMeetingPattern() {
+        // The title matcher is built by joining the assertion-pattern table to
+        // the meeting-pattern table on appName. If an app is added to one but
+        // not the other, its titles silently become the placeholder forever —
+        // this pins the two tables together so the drift fails here, not in the field.
+        for pattern in PowerAssertionDetector.defaultPatterns {
+            XCTAssertNotNil(
+                AppMeetingPattern.forAppName(pattern.appName),
+                "\(pattern.appName) has no AppMeetingPattern; its meeting titles would always be the placeholder",
+            )
+        }
+    }
+
+    func testWatchedAppWithoutMeetingPatternFallsBackToPlaceholder() {
+        // The drift the consistency test guards against, exercised: a watched
+        // assertion app with no matching AppMeetingPattern gets no title matcher
+        // (init logs + skips it), so its window title can't be looked up and the
+        // detector substitutes the "<app> Call" placeholder rather than leaking a
+        // window/assertion string. Also covers the synthesized-pattern fallback.
+        let detector = PowerAssertionDetector(
+            patterns: [.init(appName: "Unknown App", processNames: ["unknownproc"], keywords: ["unknownmeeting"])],
+            confirmationCount: 1,
+        )
+        detector.assertionProvider = {
+            makeAssertionDict(pid: 999, processName: "unknownproc", assertName: "unknownmeeting in progress")
+        }
+        detector.windowListProvider = { [self.win(owner: "unknownproc", title: "Some Window", pid: 999)] }
+        XCTAssertEqual(detector.checkOnce()?.windowTitle, "Unknown App Call")
     }
 }
