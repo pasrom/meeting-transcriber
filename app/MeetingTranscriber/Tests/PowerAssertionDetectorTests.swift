@@ -3,23 +3,22 @@ import XCTest
 
 // MARK: - Test Helpers
 
-private func makeAssertionDict(
+/// Builds a single-app IOKit power-assertion dictionary in the shape
+/// `PowerAssertionDetector.assertionProvider` yields. Internal (not private) so
+/// PowerAssertionDetectorTitleTests can reuse it instead of re-declaring it.
+func makeAssertionDict(
     pid: Int32,
     processName: String,
     assertName: String,
     assertType: String = "PreventUserIdleDisplaySleep",
 ) -> [Int32: [[String: Any]]] {
-    [
-        pid: [
-            [
-                "Process Name": processName,
-                "AssertName": assertName,
-                "AssertType": assertType,
-                "AssertPID": pid,
-                "AssertLevel": 255,
-            ],
-        ],
-    ]
+    [pid: [[
+        "Process Name": processName,
+        "AssertName": assertName,
+        "AssertType": assertType,
+        "AssertPID": pid,
+        "AssertLevel": 255,
+    ]]]
 }
 
 private func makeDetector(confirmationCount: Int = 1) -> PowerAssertionDetector {
@@ -402,28 +401,7 @@ final class PowerAssertionDetectorTests: XCTestCase {
         XCTAssertNotNil(detector.checkOnce())
     }
 
-    // MARK: - Window Title Lookup
-
-    func testWindowTitleUsedWhenFound() {
-        let detector = makeDetector()
-        detector.assertionProvider = {
-            makeAssertionDict(
-                pid: 1438,
-                processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress",
-            )
-        }
-        detector.windowListProvider = {
-            [[
-                "kCGWindowOwnerName": "Microsoft Teams",
-                "kCGWindowName": "Sprint Review | Microsoft Teams",
-                "kCGWindowOwnerPID": Int32(1438),
-            ]]
-        }
-        let result = detector.checkOnce()
-        XCTAssertNotNil(result)
-        XCTAssertEqual(result?.windowTitle, "Sprint Review | Microsoft Teams")
-    }
+    // MARK: - Window Title Lookup (further title cases in PowerAssertionDetectorTitleTests)
 
     func testAssertionNameUsedWhenNoWindowFound() {
         let detector = makeDetector()
@@ -439,41 +417,6 @@ final class PowerAssertionDetectorTests: XCTestCase {
         let result = detector.checkOnce()
         XCTAssertNotNil(result)
         XCTAssertEqual(result?.windowTitle, "Microsoft Teams Call in progress")
-    }
-
-    func testWindowTitleSkipsEmptyAndAppNameOnly() {
-        let detector = makeDetector()
-        detector.assertionProvider = {
-            makeAssertionDict(
-                pid: 1438,
-                processName: "MSTeams",
-                assertName: "Microsoft Teams Call in progress",
-            )
-        }
-        detector.windowListProvider = {
-            [
-                // Empty title — should be skipped
-                [
-                    "kCGWindowOwnerName": "Microsoft Teams",
-                    "kCGWindowName": "",
-                    "kCGWindowOwnerPID": Int32(1438),
-                ],
-                // Title equals app name — should be skipped
-                [
-                    "kCGWindowOwnerName": "Microsoft Teams",
-                    "kCGWindowName": "Microsoft Teams",
-                    "kCGWindowOwnerPID": Int32(1438),
-                ],
-                // Real meeting title
-                [
-                    "kCGWindowOwnerName": "Microsoft Teams",
-                    "kCGWindowName": "Daily Standup | Microsoft Teams",
-                    "kCGWindowOwnerPID": Int32(1438),
-                ],
-            ]
-        }
-        let result = detector.checkOnce()
-        XCTAssertEqual(result?.windowTitle, "Daily Standup | Microsoft Teams")
     }
 
     // MARK: - Reset Without App Name
