@@ -179,7 +179,7 @@ tools/audiotap/            # AudioTapLib — CATapDescription-based app audio ca
     StreamingMonoResamplerTests.swift
     TapFormatResolverTests.swift
     TimelineAnchorTests.swift
-tools/meeting-simulator/   # Meeting simulator tool for testing
+tools/meeting-simulator/   # Meeting simulator tool for testing (--title sets the window title the app's title lookup sees → drives the detected meeting title)
   Package.swift
   Sources/main.swift
 tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screenshot, open-settings, …)
