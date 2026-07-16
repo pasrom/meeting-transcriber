@@ -116,6 +116,38 @@ out=$("$MT_CLI_BIN" screenshot /tmp/rpc-smoke-after-close.png 2>&1 || true)
 echo "$out" | grep -q "503" || fail "after-close: expected 503, got: $out"
 ok "close → 503 again"
 
+step "UI tree (accessibility) inspection"
+"$MT_CLI_BIN" open-settings >/dev/null
+sleep 2
+
+# Settings window → a real, non-empty accessibility tree. The identifier
+# count is informational (reveals whether SwiftUI surfaces our
+# .accessibilityIdentifier calls in-process) and never fails the run.
+"$MT_CLI_BIN" ui-tree --window settings | python3 -c "
+import json, sys
+t = json.load(sys.stdin)
+assert isinstance(t, dict), 'tree root must be a JSON object'
+assert 'role' in t and 'children' in t, f'missing keys: {sorted(t)}'
+assert isinstance(t['children'], list) and t['children'], 'settings window tree has no children'
+ids = []
+def walk(n):
+    if n.get('identifier'):
+        ids.append(n['identifier'])
+    for c in n.get('children', []):
+        walk(c)
+walk(t)
+print(f'    ui-tree carries {len(ids)} identifier(s): {sorted(set(ids))[:8]}', file=sys.stderr)
+" || fail "ui-tree settings JSON malformed or empty"
+ok "ui-tree settings → non-empty accessibility tree"
+
+# A PII window stays off the surface (mirrors the /screenshot allowlist).
+out=$("$MT_CLI_BIN" ui-tree --window speaker-naming 2>&1 || true)
+echo "$out" | grep -q "403" || fail "ui-tree disallowed window: expected 403, got: $out"
+ok "ui-tree speaker-naming → 403"
+
+"$MT_CLI_BIN" close-settings >/dev/null
+sleep 1
+
 step "Speaker DB mutation routes"
 
 probe_name="rpc-smoketest-$$"
