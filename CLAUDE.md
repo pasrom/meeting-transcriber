@@ -90,6 +90,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     WavHeaderRepair.swift     # Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix)
     MeetingDetecting.swift # MeetingDetecting protocol + DetectedMeeting model
     MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
+    MeetingTitleMatcher.swift  # Shared compiled idle/meeting title classifier per AppMeetingPattern (used by MeetingDetector + PowerAssertionDetector title lookup)
     FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
     AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback, MKV/WebM/OGG via ffmpeg) + mixing to 16kHz mono
     LiveAudioResampler.swift # Streams live LiveAudioBuffer through AVAudioConverter → 16 kHz mono Float32 (feeds StreamingTranscriber)
