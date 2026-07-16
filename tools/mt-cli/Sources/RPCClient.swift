@@ -78,7 +78,13 @@ struct RPCClient {
     private func request(
         _ method: String, path: String, body: Data?, timeout: TimeInterval,
     ) async throws -> Data {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        // Resolve `path` against `baseURL` so a query string (e.g.
+        // `/ui/tree?window=settings`) survives — `appendingPathComponent`
+        // would percent-encode the `?` into the path. Falls back for any
+        // path that isn't a valid relative URL.
+        let url = URL(string: path, relativeTo: baseURL)?.absoluteURL
+            ?? baseURL.appendingPathComponent(path)
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.timeoutInterval = timeout
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

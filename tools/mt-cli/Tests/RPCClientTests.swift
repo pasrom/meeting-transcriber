@@ -104,6 +104,66 @@ final class RPCClientTests: XCTestCase {
             )
         }
     }
+
+    /// The request target (path + query) must reach the server intact. The URL
+    /// is built with `URL(string:relativeTo:)`, not `appendingPathComponent`,
+    /// which would percent-encode the `?` and break `/ui/tree?window=…`.
+    func testGetPreservesQueryStringInRequestTarget() async throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let held = SilentConnectionHolder()
+        let captured = RequestLineBox()
+        listener.newConnectionHandler = { connection in
+            held.add(connection)
+            connection.start(queue: .global())
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { data, _, _, _ in
+                if let data, let text = String(data: data, encoding: .utf8) {
+                    captured.set(text.components(separatedBy: "\r\n").first ?? "")
+                }
+                // Reply so the client's await returns; capture already happened.
+                let resp = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+                connection.send(content: resp, completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+
+        let portReady = XCTestExpectation(description: "listener bound")
+        let assignedPort = OSPortBox()
+        listener.stateUpdateHandler = { state in
+            if case .ready = state, let port = listener.port?.rawValue {
+                assignedPort.set(port)
+                portReady.fulfill()
+            }
+        }
+        listener.start(queue: .global())
+        defer { listener.cancel() }
+
+        await fulfillment(of: [portReady], timeout: 2)
+        let port = try XCTUnwrap(assignedPort.value)
+        guard let baseURL = URL(string: "http://127.0.0.1:\(port)") else {
+            XCTFail("could not build URL")
+            return
+        }
+        let client = RPCClient(baseURL: baseURL, token: "test-token")
+
+        _ = try await client.get("/ui/tree?window=settings")
+
+        XCTAssertEqual(captured.value, "GET /ui/tree?window=settings HTTP/1.1")
+    }
+}
+
+/// Thread-safe single-shot box for the request line captured by the fake
+/// server in `testGetPreservesQueryStringInRequestTarget`.
+private final class RequestLineBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+    var value: String? {
+        lock.lock(); defer { lock.unlock() }
+        return stored
+    }
+
+    func set(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        stored = line
+    }
 }
 
 /// Thread-safe single-shot box for the OS-assigned listener port — written

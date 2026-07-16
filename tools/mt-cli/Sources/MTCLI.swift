@@ -7,7 +7,7 @@ struct MTCLI: AsyncParsableCommand {
         commandName: "mt-cli",
         abstract: "Thin client for the Meeting Transcriber debug RPC server.",
         subcommands: [
-            State.self, Healthz.self, Screenshot.self,
+            State.self, Healthz.self, Screenshot.self, UITree.self,
             OpenSettings.self, CloseSettings.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
         ],
@@ -134,6 +134,25 @@ struct MergeSpeakers: AsyncParsableCommand {
 
     func run() async throws {
         try await postAction("/action/mergeSpeakers", ["from": from, "into": into])
+    }
+}
+
+struct UITree: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "ui-tree",
+        abstract: "Print the accessibility tree of an allowed app window as JSON. "
+            + "Assert on UI structure (a section exists, a control is enabled) "
+            + "instead of eyeballing a screenshot.",
+    )
+
+    @Option(name: .long, help: "Window identifier to introspect. Defaults to settings.")
+    var window: String = "settings"
+
+    func run() async throws {
+        let client = try RPCClient.loadDefault()
+        let data = try await client.get("/ui/tree?window=\(window)")
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
     }
 }
 
