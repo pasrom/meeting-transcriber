@@ -53,8 +53,25 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - name: Install tools
-        run: brew install swiftformat swiftlint
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      # SwiftFormat is version-pinned: `brew install` always pulls the latest,
+      # and 0.62.0 turned on new default rules (wrapIfStatementBodies /
+      # wrapIfExpressionBodies) that would reformat the committed codebase
+      # repo-wide. Pin to the last release whose defaults match the committed
+      # style; bump deliberately alongside a matching reformat. Uses the
+      # official prebuilt CLI binary from the GitHub release (single-file zip).
+      - name: Install SwiftFormat (pinned)
+        env:
+          SWIFTFORMAT_VERSION: "0.61.1"
+        run: |
+          curl -fsSL -o /tmp/swiftformat.zip \
+            "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip"
+          unzip -o -j /tmp/swiftformat.zip -d /tmp/swiftformat-bin
+          chmod +x /tmp/swiftformat-bin/swiftformat
+          xattr -dr com.apple.quarantine /tmp/swiftformat-bin/swiftformat || true
+          sudo mv /tmp/swiftformat-bin/swiftformat /usr/local/bin/swiftformat
+          swiftformat --version
       # SwiftFormat path list lives in scripts/lint.sh; calling it keeps CI and
       # local lint runs aligned. SwiftLint stays an explicit step to use the
       # github-actions-logging reporter (annotations in the PR diff).
