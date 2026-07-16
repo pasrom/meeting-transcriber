@@ -1,8 +1,5 @@
 import CoreGraphics
 import Foundation
-import os.log
-
-private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MeetingDetector")
 
 /// Polls window list to detect active meeting windows.
 ///
@@ -16,9 +13,9 @@ class MeetingDetector: MeetingDetecting {
     private var cooldownUntil: [String: Date] = [:]
     private let cooldownDuration: TimeInterval = 5 // brief cooldown to avoid re-detecting the same meeting
 
-    /// Pre-compiled regex for each pattern to avoid re-compilation on every poll.
-    private let compiledMeetingPatterns: [String: [NSRegularExpression]]
-    private let compiledIdlePatterns: [String: [NSRegularExpression]]
+    /// Pre-compiled title matcher per app (idle/meeting regexes), so titles are
+    /// classified without re-compiling regexes on every poll.
+    private let matchers: [String: MeetingTitleMatcher]
 
     /// Closure that provides the window list. Defaults to CGWindowListCopyWindowInfo.
     /// Override in tests to inject mock window data.
@@ -27,29 +24,12 @@ class MeetingDetector: MeetingDetecting {
     init(patterns: [AppMeetingPattern], confirmationCount: Int = 2) {
         self.patterns = patterns
         self.confirmationCount = confirmationCount
-
-        var meeting: [String: [NSRegularExpression]] = [:]
-        var idle: [String: [NSRegularExpression]] = [:]
-        for p in patterns {
-            meeting[p.appName] = p.meetingPatterns.compactMap { pattern in
-                do {
-                    return try NSRegularExpression(pattern: pattern)
-                } catch {
-                    logger.error("Invalid meeting regex for \(p.appName): \(pattern) — \(error.localizedDescription, privacy: .public)")
-                    return nil
-                }
-            }
-            idle[p.appName] = p.idlePatterns.compactMap { pattern in
-                do {
-                    return try NSRegularExpression(pattern: pattern)
-                } catch {
-                    logger.error("Invalid idle regex for \(p.appName): \(pattern) — \(error.localizedDescription, privacy: .public)")
-                    return nil
-                }
-            }
+        // reduce(into:) (last-wins), not Dictionary(uniqueKeysWithValues:),
+        // which traps on a duplicate appName. The pre-extraction loop tolerated
+        // duplicates silently; keep that (matches PowerAssertionDetector).
+        matchers = patterns.reduce(into: [:]) { dict, pattern in
+            dict[pattern.appName] = MeetingTitleMatcher(pattern: pattern)
         }
-        self.compiledMeetingPatterns = meeting
-        self.compiledIdlePatterns = idle
     }
 
     /// Single poll: check all windows against all patterns.
@@ -142,22 +122,11 @@ class MeetingDetector: MeetingDetecting {
             }
         }
 
-        // Skip idle patterns (pre-compiled)
-        let range = NSRange(title.startIndex..., in: title)
-        if let idleRegexes = compiledIdlePatterns[pattern.appName] {
-            for regex in idleRegexes where regex.firstMatch(in: title, range: range) != nil {
-                return nil
-            }
-        }
-
-        // Match meeting patterns (pre-compiled)
-        if let meetingRegexes = compiledMeetingPatterns[pattern.appName] {
-            for regex in meetingRegexes where regex.firstMatch(in: title, range: range) != nil {
-                return title
-            }
-        }
-
-        return nil
+        // Skip idle-tab titles before meeting classification (a Calendar-tab
+        // title matches both), then require a meeting-pattern match.
+        guard let matcher = matchers[pattern.appName] else { return nil }
+        if matcher.isIdleTitle(title) { return nil }
+        return matcher.isMeetingTitle(title) ? title : nil
     }
 
     /// Default window list provider using CGWindowListCopyWindowInfo.
