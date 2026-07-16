@@ -47,6 +47,30 @@ private struct AnimatedMenuBarIcon: View {
     }
 }
 
+/// Bridges a SwiftUI `Window` scene down to its hosting `NSWindow` so
+/// window-level AppKit properties can be configured. macOS 14 (our deployment
+/// target) has no scene-level `.windowLevel` / collection-behavior modifiers
+/// (those are macOS 15+), so a zero-size representable placed in the content's
+/// `.background` is the idiomatic way to reach the window. Mirrors the
+/// `AccessibleTextField` `NSViewRepresentable` idiom already used in the naming
+/// UI. `configure` runs once the view is attached and on subsequent updates;
+/// the window properties it sets are sticky and idempotent.
+private struct WindowAccessor: NSViewRepresentable {
+    let configure: (NSWindow) -> Void
+
+    func makeNSView(context _: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { [weak view] in
+            if let window = view?.window { configure(window) }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context _: Context) {
+        if let window = nsView.window { configure(window) }
+    }
+}
+
 @main
 struct MeetingTranscriberApp: App {
     @State private var appState = AppState(notifier: NotificationManager.shared)
@@ -160,6 +184,11 @@ struct MeetingTranscriberApp: App {
 
         Window("Name Speakers", id: "speaker-naming") {
             speakerNamingContent
+                // Pin the naming window so it stays visible + on top while the
+                // user works in other apps instead of vanishing on focus loss
+                // (issue #504). Applied via the hosting NSWindow because macOS 14
+                // has no scene-level window-level / collection-behavior modifier.
+                .background(WindowAccessor { NamingWindowPolicy.apply(to: $0) })
                 .onAppear {
                     // Close restored window if no naming data available (macOS state restoration)
                     if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
