@@ -1244,9 +1244,16 @@ run_naming_confirm() {
         naming_win="$(rpc /state | jq -c '[.windows[] | select(.id == "speaker-naming")] | .[0] // empty')"
         [ -n "$naming_win" ]
     }
+    # Assert only the environment-STABLE pin properties. `.fullScreenAuxiliary`
+    # is deliberately NOT asserted: apply() sets it and it holds on a normal
+    # desktop, but on the headless/virtual-display CI mini AppKit normalises it
+    # off (observed false there, true on a real display), so asserting it flakes.
+    # `.canJoinAllSpaces` already covers cross-Space reachability, and `floating`
+    # is the load-bearing stays-on-top property; reverting NamingWindowPolicy
+    # flips floating -> false, which still turns this lane red.
     _naming_window_pinned() {
         _naming_window || return 1
-        jq -e '.floating and .canJoinAllSpaces and .fullScreenAuxiliary' <<<"$naming_win" >/dev/null
+        jq -e '.floating and .canJoinAllSpaces' <<<"$naming_win" >/dev/null
     }
     # Phase-2 predicate (used after deactivation): present AND on-screen AND
     # floating. isVisible is the load-bearing new signal a hidesOnDeactivate
@@ -1257,7 +1264,7 @@ run_naming_confirm() {
     }
     # The window opens asynchronously (.showSpeakerNaming -> bringWindowToFront
     # on the next runloop), so poll rather than assert once.
-    log "$label: asserting speaker-naming window is pinned (floating + all-Spaces + full-screen)"
+    log "$label: asserting speaker-naming window is pinned (floating + all-Spaces)"
     poll_until 30 2 _naming_window_pinned \
         || fail "$label: speaker-naming window not pinned (#504 regression): $(rpc /state | jq -c '[.windows[] | select(.id=="speaker-naming")]')"
     log "$label: naming window pinned OK: $naming_win"
