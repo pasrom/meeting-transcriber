@@ -3,8 +3,8 @@
     import XCTest
 
     /// Unit tests for the read-only `GET /ui/tree` accessibility-tree endpoint.
-    /// The pure builder / param-parser / allowlist are exercised with an
-    /// in-memory source; the AppKit walk (the 200 path) is validated live by
+    /// The pure builder / param-parser / allowlist / redaction are exercised with
+    /// an in-memory source; the AppKit walk (the 200 path) is validated live by
     /// `scripts/test_rpc.sh`, mirroring how `/screenshot` is tested.
     final class DebugRPCServerUITreeTests: XCTestCase {
         private static let testToken = "testtoken1234"
@@ -15,17 +15,19 @@
         private final class FakeSource: UITreeNodeSource {
             var uiRole: String?
             var uiIdentifier: String?
+            var uiTitle: String?
             var uiFrame: CGRect
             var uiEnabled: Bool
             var uiChildren: [any UITreeNodeSource]
 
             init(
-                role: String? = nil, identifier: String? = nil,
+                role: String? = nil, identifier: String? = nil, title: String? = nil,
                 frame: CGRect = .zero, enabled: Bool = true,
                 children: [any UITreeNodeSource] = [],
             ) {
                 uiRole = role
                 uiIdentifier = identifier
+                uiTitle = title
                 uiFrame = frame
                 uiEnabled = enabled
                 uiChildren = children
@@ -37,11 +39,11 @@
         @MainActor
         func testBuildUITreeMapsFieldsAndChildren() {
             let child = FakeSource(
-                role: "AXCheckBox", identifier: "recordOnlyToggle",
+                role: "AXCheckBox", identifier: "recordOnlyToggle", title: "Record Only",
                 frame: CGRect(x: 10, y: 20, width: 30, height: 40), enabled: false,
             )
             let root = FakeSource(
-                role: "AXWindow", identifier: nil,
+                role: "AXWindow", identifier: nil, title: "Settings",
                 frame: CGRect(x: 0, y: 0, width: 800, height: 600),
                 enabled: true, children: [child],
             )
@@ -50,6 +52,7 @@
 
             XCTAssertEqual(tree.role, "AXWindow")
             XCTAssertNil(tree.identifier)
+            XCTAssertEqual(tree.title, "Settings")
             XCTAssertEqual(tree.frame.width, 800)
             XCTAssertTrue(tree.enabled)
             XCTAssertEqual(tree.children.count, 1)
@@ -57,6 +60,7 @@
             let mapped = tree.children[0]
             XCTAssertEqual(mapped.role, "AXCheckBox")
             XCTAssertEqual(mapped.identifier, "recordOnlyToggle")
+            XCTAssertEqual(mapped.title, "Record Only")
             XCTAssertEqual(mapped.frame.x, 10)
             XCTAssertEqual(mapped.frame.height, 40)
             XCTAssertFalse(mapped.enabled)
@@ -116,6 +120,33 @@
             XCTAssertFalse(DebugRPCServer.isWindowAllowedForUITree(identifier: "live-captions"))
             XCTAssertFalse(DebugRPCServer.isWindowAllowedForUITree(identifier: ""))
             XCTAssertFalse(DebugRPCServer.isWindowAllowedForUITree(identifier: nil))
+        }
+
+        // MARK: - redaction (pure)
+
+        func testRedactUITreeStringAbbreviatesHomeAtPathBoundary() {
+            XCTAssertEqual(
+                DebugRPCServer.redactUITreeString("/Users/roman/Documents/out.md", homeDirectory: "/Users/roman"),
+                "~/Documents/out.md",
+            )
+            // A displayed path mid-string is abbreviated too.
+            XCTAssertEqual(
+                DebugRPCServer.redactUITreeString("Saving to /Users/roman/x", homeDirectory: "/Users/roman"),
+                "Saving to ~/x",
+            )
+            // The bare home path collapses to "~".
+            XCTAssertEqual(DebugRPCServer.redactUITreeString("/Users/roman", homeDirectory: "/Users/roman"), "~")
+            // A longer sibling must NOT be mangled (path-boundary guard).
+            XCTAssertEqual(
+                DebugRPCServer.redactUITreeString("/Users/romantic/file", homeDirectory: "/Users/roman"),
+                "/Users/romantic/file",
+            )
+            XCTAssertNil(DebugRPCServer.redactUITreeString(nil, homeDirectory: "/Users/roman"))
+            XCTAssertEqual(
+                DebugRPCServer.redactUITreeString("/Users/roman/x", homeDirectory: ""),
+                "/Users/roman/x",
+                "an empty home directory must leave the string untouched",
+            )
         }
 
         // MARK: - route

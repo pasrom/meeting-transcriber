@@ -3,15 +3,17 @@
     import Foundation
 
     /// One node of the serialized accessibility tree — the Codable wire shape of
-    /// `GET /ui/tree`. Structure and our developer-assigned identifiers only
-    /// (role / identifier / frame / enabled) plus the recursive children.
+    /// `GET /ui/tree`: role / identifier / title / frame / enabled plus the
+    /// recursive children.
     ///
-    /// The endpoint's contract is deliberately "structure, not content": neither
-    /// a control's `title`/`label` nor its `value` is exposed, because both can
-    /// carry user-visible content (a mic name, an endpoint URL, a path) that the
-    /// window allowlist alone doesn't scrub. Drivers assert on `identifier`
-    /// (which the app sets, never user input) and `enabled`; add labels/values
-    /// later behind field-level gating if a use case needs them.
+    /// `title` is the control's label — a static string for most controls
+    /// ("Record Only", "Microphone Name"). It is home-directory redacted so a
+    /// displayed path can't leak the account name; the Settings window is the
+    /// only allowlisted window and its content is already exposed via
+    /// `/screenshot`, so labels here don't widen the surface. A control's
+    /// `value` (a text field's typed contents — mic name, endpoint URL) is
+    /// deliberately NOT exposed: that is user-entered content, and drivers
+    /// assert on `identifier` (app-set, never user input) and `enabled` anyway.
     struct UITreeNode: Codable, Equatable {
         struct Frame: Codable, Equatable {
             let x: Double
@@ -22,6 +24,7 @@
 
         let role: String?
         let identifier: String?
+        let title: String?
         let frame: Frame
         let enabled: Bool
         let children: [Self]
@@ -35,6 +38,7 @@
     protocol UITreeNodeSource {
         var uiRole: String? { get }
         var uiIdentifier: String? { get }
+        var uiTitle: String? { get }
         var uiFrame: CGRect { get }
         var uiEnabled: Bool { get }
         var uiChildren: [any UITreeNodeSource] { get }
@@ -73,6 +77,17 @@
             HTTPRequest.queryValues(target: target, key: "window").first ?? defaultUITreeWindow
         }
 
+        /// Replace a home-directory prefix in a title/label with `~` so a
+        /// displayed folder or URL can't leak the account name. Anchored on the
+        /// path separator (`home + "/"`) so a longer sibling like
+        /// `/Users/romantic` is never mangled; a bare home path collapses to `~`.
+        /// Pure so it is unit-testable; the adapter passes `NSHomeDirectory()`.
+        nonisolated static func redactUITreeString(_ value: String?, homeDirectory: String) -> String? {
+            guard let value, !homeDirectory.isEmpty else { return value }
+            let abbreviated = value.replacingOccurrences(of: homeDirectory + "/", with: "~/")
+            return abbreviated == homeDirectory ? "~" : abbreviated
+        }
+
         /// Recursively convert an accessibility source into the Codable wire
         /// shape, capping recursion at `maxDepth` levels of descendants.
         static func buildUITree(from source: any UITreeNodeSource, maxDepth: Int) -> UITreeNode {
@@ -83,6 +98,7 @@
             return UITreeNode(
                 role: source.uiRole,
                 identifier: source.uiIdentifier,
+                title: source.uiTitle,
                 frame: .init(
                     x: Double(frame.origin.x), y: Double(frame.origin.y),
                     width: Double(frame.size.width), height: Double(frame.size.height),
@@ -125,8 +141,9 @@
     /// Adapter bridging one AppKit accessibility element to `UITreeNodeSource`.
     /// Only children conforming to the umbrella `NSAccessibility` protocol are
     /// followed; an element exposing just the base element protocol is dropped
-    /// (it carries no `accessibilityChildren` anyway). Reads only structural
-    /// attributes — no title/label or value (see `UITreeNode`).
+    /// (it carries no `accessibilityChildren` anyway). Reads role / identifier /
+    /// title / frame / enabled; the title is home-directory redacted and the
+    /// control's `value` is deliberately not read (see `UITreeNode`).
     @MainActor
     private struct AXElementSource: UITreeNodeSource {
         let element: any NSAccessibilityProtocol
@@ -138,6 +155,11 @@
         var uiIdentifier: String? {
             guard let identifier = element.accessibilityIdentifier(), !identifier.isEmpty else { return nil }
             return identifier
+        }
+
+        var uiTitle: String? {
+            let title = element.accessibilityTitle() ?? element.accessibilityLabel()
+            return DebugRPCServer.redactUITreeString(title, homeDirectory: NSHomeDirectory())
         }
 
         var uiFrame: CGRect {
