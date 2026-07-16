@@ -15,7 +15,10 @@ struct RecordingResult {
     let appPath: URL?
     let micPath: URL?
     let micDelay: TimeInterval
-    let recordingStart: TimeInterval // ProcessInfo.systemUptime
+    /// Wall-clock time recording started, captured directly in `start()`.
+    /// Not derived from `systemUptime` (which doesn't advance during sleep, so
+    /// a meeting spanning a sleep would skew the anchor) — this is exact.
+    let recordingStartDate: Date
 }
 
 /// The format `buildRecording` should expect the app track to arrive in, passed
@@ -70,7 +73,7 @@ class DualSourceRecorder: RecordingProvider {
     // Type-erased storage to avoid @available on stored properties
     private var _captureSession: AnyObject?
     private(set) var isRecording = false
-    private(set) var recordingStartTime: TimeInterval = 0
+    private(set) var recordingStartDate: Date = .distantPast
     private var startTimestamp: String?
 
     var appLevelDBFS: Double {
@@ -198,7 +201,7 @@ class DualSourceRecorder: RecordingProvider {
             from: result,
             recordingsDir: recDir,
             timestamp: stem,
-            recordingStart: 0,
+            recordingStartDate: .distantPast,
             format: CaptureFormat(
                 requestedChannels: channels,
                 requestedRate: rate,
@@ -308,7 +311,7 @@ class DualSourceRecorder: RecordingProvider {
         captureSession = session
 
         isRecording = true
-        recordingStartTime = ProcessInfo.processInfo.systemUptime
+        recordingStartDate = Date()
 
         logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
     }
@@ -324,7 +327,6 @@ class DualSourceRecorder: RecordingProvider {
             throw RecorderError.unsupportedOS
         }
 
-        let recordingStart = recordingStartTime
         isRecording = false
 
         // Stop capture session and get result
@@ -345,7 +347,7 @@ class DualSourceRecorder: RecordingProvider {
             from: captureResult,
             recordingsDir: Self.recordingsDir,
             timestamp: ts,
-            recordingStart: recordingStart,
+            recordingStartDate: recordingStartDate,
             format: CaptureFormat(requestedChannels: 1, requestedRate: targetRate, targetRate: targetRate),
         )
     }
@@ -359,7 +361,7 @@ class DualSourceRecorder: RecordingProvider {
         from captureResult: AudioCaptureResult,
         recordingsDir recDir: URL,
         timestamp ts: String,
-        recordingStart: TimeInterval,
+        recordingStartDate: Date,
         format: CaptureFormat,
     ) throws -> RecordingResult {
         let micDelay = captureResult.micDelay
@@ -495,7 +497,7 @@ class DualSourceRecorder: RecordingProvider {
             appPath: appPath,
             micPath: micPath,
             micDelay: micDelay,
-            recordingStart: recordingStart,
+            recordingStartDate: recordingStartDate,
         )
     }
 

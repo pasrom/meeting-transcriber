@@ -56,9 +56,10 @@ struct PipelineJob: Identifiable, Codable {
     let micDelay: TimeInterval
     let participants: [String]
     let enqueuedAt: Date
-    /// Wall-clock time the recording started (meeting start), derived from the
-    /// recorder's `recordingStart` uptime at enqueue. Used to anchor the
-    /// output-file basename so the filename reflects when the meeting happened,
+    /// Wall-clock time the recording started (meeting start), captured directly
+    /// by the recorder at start (`RecordingResult.recordingStartDate`), not
+    /// derived from `systemUptime` (which freezes during sleep). Used to anchor
+    /// the output-file basename so the filename reflects when the meeting happened,
     /// not when the pipeline processed it. `nil` for reimport/orphan-recovery
     /// jobs (no live recording) and for legacy snapshots persisted before this
     /// field existed — callers fall back to `enqueuedAt`.
