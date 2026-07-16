@@ -56,15 +56,12 @@
         /// `?include=transcript`. Comma-separated include values are honoured
         /// (`?include=protocol,transcript`); the value match is case-insensitive.
         nonisolated static func wantsInlineTranscript(target: String) -> Bool {
-            guard let query = target.split(separator: "?", maxSplits: 1).dropFirst().first else { return false }
-            for pair in query.split(separator: "&") {
-                let kv = pair.split(separator: "=", maxSplits: 1)
-                guard kv.count == 2, kv[0] == "include" else { continue }
-                if kv[1].split(separator: ",").contains(where: { $0.lowercased() == "transcript" }) {
-                    return true
-                }
-            }
-            return false
+            // Honour every `include=` param and each comma-separated value
+            // within them (`?include=protocol&include=transcript` and
+            // `?include=protocol,transcript` both opt in).
+            HTTPRequest.queryValues(target: target, key: "include")
+                .flatMap { $0.split(separator: ",") }
+                .contains { $0.lowercased() == "transcript" }
         }
 
         /// Route the versioned automation surface. The query string is already

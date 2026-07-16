@@ -41,6 +41,18 @@
             Self(status: 409, reason: "Conflict", body: Data(), contentType: "text/plain")
         }
 
+        /// 503: the endpoint is valid but the resource it needs isn't available
+        /// right now (e.g. no qualifying window to screenshot or introspect).
+        static func serviceUnavailable(_ message: String) -> Self {
+            Self(status: 503, reason: "Service Unavailable", body: Data(message.utf8), contentType: "text/plain")
+        }
+
+        /// 500: a server-side fault the request couldn't have prevented (e.g. a
+        /// response failed to encode). Distinct from 400, which blames the caller.
+        static func internalServerError() -> Self {
+            Self(status: 500, reason: "Internal Server Error", body: Data(), contentType: "text/plain")
+        }
+
         func serialize() -> Data {
             var response = "HTTP/1.1 \(status) \(reason)\r\n"
             response += "Content-Type: \(contentType)\r\n"
