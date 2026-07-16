@@ -155,7 +155,7 @@ class PowerAssertionDetector: MeetingDetecting {
                     ownerNames: [match.processName],
                     meetingPatterns: [],
                 )
-                let title = lookupWindowTitle(appName: appName) ?? match.assertName
+                let title = lookupWindowTitle(appName: appName) ?? Self.placeholderTitle(appName: appName)
                 return DetectedMeeting(
                     pattern: meetingPattern,
                     windowTitle: title,
@@ -200,6 +200,14 @@ class PowerAssertionDetector: MeetingDetecting {
     }
 
     // MARK: - Window Title Lookup
+
+    /// Clean fallback title when no usable window title is found (e.g. Screen
+    /// Recording denied, or the app exposes only idle windows). Preferred over
+    /// the raw assertion name, which is often an internal placeholder
+    /// (Zoom's "Describe Activity Type") or a status string.
+    static func placeholderTitle(appName: String) -> String {
+        "\(appName) Call"
+    }
 
     /// Look up the actual meeting-window title for a detected app via
     /// CGWindowListCopyWindowInfo. Prefers a meeting-pattern window (a 1:1 call
