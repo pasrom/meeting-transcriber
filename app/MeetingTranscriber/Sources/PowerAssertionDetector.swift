@@ -89,12 +89,29 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Override in tests to inject mock data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
 
+    /// Compiled title matcher per watched app, so the window-title lookup
+    /// classifies titles the same way `MeetingDetector` does (idle-tab titles
+    /// skipped, meeting-pattern titles preferred).
+    private let matchers: [String: MeetingTitleMatcher]
+
     init(
         patterns: [AssertionPattern] = PowerAssertionDetector.defaultPatterns,
         confirmationCount: Int = 2,
     ) {
         self.patterns = patterns
         self.confirmationCount = confirmationCount
+        matchers = patterns.reduce(into: [:]) { dict, pattern in
+            guard let meetingPattern = AppMeetingPattern.forAppName(pattern.appName) else {
+                // Drift guard: a watched assertion app with no matching
+                // AppMeetingPattern would silently title every meeting with the
+                // placeholder. Surface it (a consistency test also pins this).
+                logger.error(
+                    "No AppMeetingPattern for watched app \(pattern.appName, privacy: .public); its meeting titles fall back to the placeholder",
+                )
+                return
+            }
+            dict[pattern.appName] = MeetingTitleMatcher(pattern: meetingPattern)
+        }
     }
 
     func checkOnce() -> DetectedMeeting? {
@@ -184,23 +201,13 @@ class PowerAssertionDetector: MeetingDetecting {
 
     // MARK: - Window Title Lookup
 
-    /// Look up the actual window title for a detected meeting app via CGWindowListCopyWindowInfo.
-    /// Returns the first non-empty, non-idle window title matching the app's owner names.
+    /// Look up the actual meeting-window title for a detected app via
+    /// CGWindowListCopyWindowInfo. Prefers a meeting-pattern window (a 1:1 call
+    /// window carries the other person's name), skips idle-tab titles (Teams'
+    /// Calendar tab etc.), and returns nil when nothing usable is found so the
+    /// caller can substitute a placeholder instead of the raw assertion name.
     private func lookupWindowTitle(appName: String) -> String? {
-        guard let meetingPattern = AppMeetingPattern.forAppName(appName) else { return nil }
-        let windows = windowListProvider()
-
-        for window in windows {
-            guard let owner = window["kCGWindowOwnerName"] as? String,
-                  meetingPattern.ownerNames.contains(owner),
-                  let title = window["kCGWindowName"] as? String,
-                  !title.isEmpty,
-                  title != appName else {
-                continue
-            }
-            return title
-        }
-        return nil
+        matchers[appName]?.selectWindowTitle(from: windowListProvider())
     }
 
     // MARK: - Private

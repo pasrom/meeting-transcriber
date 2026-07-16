@@ -38,6 +38,38 @@ struct MeetingTitleMatcher {
         Self.anyMatch(meetingRegexes, title)
     }
 
+    /// Pick the best usable window title for this app from a `CGWindowList`
+    /// snapshot. Skips windows whose owner isn't ours, and titles that are
+    /// empty, equal to the app name, or idle-tab titles. Then, tiered:
+    /// 1. the first surviving title that matches a meeting pattern (the call
+    ///    window — for a 1:1 Teams call that is the other person's name);
+    /// 2. else the first surviving (non-idle) title, so an unrecognised-but-real
+    ///    title still surfaces rather than being over-filtered;
+    /// 3. else `nil` — the caller substitutes a clean placeholder.
+    /// No minimum-size gate here: a snapshot missing `kCGWindowBounds` must not
+    /// degrade a real title to the placeholder (title source only).
+    /// Idle-skip takes priority over the meeting match by design: never leaking
+    /// a Teams tab title is the goal, so a real meeting whose subject happens to
+    /// equal a tab name (e.g. a call literally titled "Files") degrades to the
+    /// placeholder. The opposite priority would re-leak the Calendar tab. This
+    /// matches `MeetingDetector`'s long-standing idle-before-meeting order.
+    func selectWindowTitle(from windows: [[String: Any]]) -> String? {
+        var firstNonIdle: String?
+        for window in windows {
+            guard let owner = window["kCGWindowOwnerName"] as? String,
+                  ownerNames.contains(owner),
+                  let title = window["kCGWindowName"] as? String,
+                  !title.isEmpty,
+                  title != appName,
+                  !isIdleTitle(title) else {
+                continue
+            }
+            if isMeetingTitle(title) { return title }
+            if firstNonIdle == nil { firstNonIdle = title }
+        }
+        return firstNonIdle
+    }
+
     private static func anyMatch(_ regexes: [NSRegularExpression], _ title: String) -> Bool {
         let range = NSRange(title.startIndex..., in: title)
         return regexes.contains { $0.firstMatch(in: title, range: range) != nil }
