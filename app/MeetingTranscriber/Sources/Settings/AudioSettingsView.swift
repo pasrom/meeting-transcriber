@@ -59,7 +59,7 @@ private struct VoiceActivityDetectionSection: View {
                 }
             }
         }
-        .accessibilityIdentifier("vadSection")
+        .accessibilityIdentifier(A11yID.vadSection)
         .recordOnlyDisabled(settings.recordOnly)
     }
 }
@@ -91,6 +91,6 @@ private struct PerChannelIndicatorSection: View {
                 .help(SettingsHelp.asymmetricSilenceWarning)
             }
         }
-        .accessibilityIdentifier("channelIndicatorSection")
+        .accessibilityIdentifier(A11yID.channelIndicatorSection)
     }
 }

@@ -49,7 +49,7 @@ struct SpeakersSettingsView: View {
     var body: some View {
         Form {
             diarizationSection
-                .accessibilityIdentifier("diarizationSection")
+                .accessibilityIdentifier(A11yID.diarizationSection)
                 .recordOnlyDisabled(settings.recordOnly)
 
             if !settings.noMic {
@@ -160,7 +160,7 @@ struct SpeakersSettingsView: View {
         } label: {
             tuningDisclosureLabel
         }
-        .accessibilityIdentifier("experimentalTuningDisclosure")
+        .accessibilityIdentifier(A11yID.experimentalTuningDisclosure)
     }
 
     private var tuningDisclosureLabel: some View {

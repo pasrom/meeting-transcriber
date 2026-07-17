@@ -174,14 +174,14 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                     in: Self.rerunCountRange(for: rerunMode),
                 )
                 .font(.caption)
-                .accessibilityIdentifier("rerun-stepper")
+                .accessibilityIdentifier(A11yID.rerunStepper)
                 rerunButton
             }
             if currentDiarizerMode != nil, rerunMode == .sortformer {
                 Text("Sortformer caps at \(DiarizerMode.sortformer.speakerCap) speakers — switch to Offline for larger meetings.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("sortformer-cap-hint")
+                    .accessibilityIdentifier(A11yID.sortformerCapHint)
             }
         }
     }
@@ -194,7 +194,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         .pickerStyle(.segmented)
         .frame(width: 200)
         .font(.caption)
-        .accessibilityIdentifier("rerun-mode-picker")
+        .accessibilityIdentifier(A11yID.rerunModePicker)
         .onChange(of: rerunMode) { _, newMode in
             rerunCount = Self.clampCount(rerunCount, for: newMode)
         }
@@ -221,7 +221,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             }
         }
         .font(.caption)
-        .accessibilityIdentifier("rerun-button")
+        .accessibilityIdentifier(A11yID.rerunButton)
     }
 
     static func computeSpeakers(
@@ -266,7 +266,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 }
                 .keyboardShortcut(.escape)
                 .disabled(keyboardGracePeriodActive)
-                .accessibilityIdentifier("skip-button")
+                .accessibilityIdentifier(A11yID.skipButton)
 
                 Button("Confirm") {
                     guard completedJobID != data.jobID else { return }
@@ -276,7 +276,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 .keyboardShortcut(.return)
                 .buttonStyle(.borderedProminent)
                 .disabled(keyboardGracePeriodActive)
-                .accessibilityIdentifier("confirm-button")
+                .accessibilityIdentifier(A11yID.confirmButton)
             }
             .padding(.bottom, 8)
         }
@@ -356,7 +356,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                                 .foregroundStyle(.blue)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityIdentifier("play-\(speaker.label)")
+                        .accessibilityIdentifier(A11yID.play(speaker.label))
                     }
 
                     Spacer()
@@ -407,7 +407,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     private func participantChips(for index: Int, query: String) -> some View {
         let participants = Self.filterByQuery(names: data.participants, query: query)
         if !participants.isEmpty {
-            chipRow(names: participants, idPrefix: "participant-name-") { names[index] = $0 }
+            chipRow(names: participants, idPrefix: A11yID.participantNamePrefix) { names[index] = $0 }
         }
     }
 
@@ -433,19 +433,19 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                     .foregroundStyle(.secondary)
                 ChipFlowLayout(spacing: 4) {
                     ForEach(visible, id: \.self) { name in
-                        chipButton(label: name, identifier: "known-name-\(name)") {
+                        chipButton(label: name, identifier: A11yID.knownName(name)) {
                             names[index] = name
                         }
                     }
                     if hidden > 0 {
                         chipMoreButton(
                             label: "More (\(hidden))…",
-                            identifier: "known-more-\(speakerLabel)",
+                            identifier: A11yID.knownMore(speakerLabel),
                         ) { knownExpanded.insert(index) }
                     } else if expanded, ranked.count > Self.knownChipsCollapsedLimit {
                         chipMoreButton(
                             label: "Less",
-                            identifier: "known-less-\(speakerLabel)",
+                            identifier: A11yID.knownLess(speakerLabel),
                         ) { knownExpanded.remove(index) }
                     }
                 }

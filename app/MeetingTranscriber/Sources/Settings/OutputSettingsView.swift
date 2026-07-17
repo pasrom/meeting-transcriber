@@ -75,7 +75,7 @@ struct OutputSettingsView: View {
                     Spacer()
                 }
             }
-            .accessibilityIdentifier("outputFolderSection")
+            .accessibilityIdentifier(A11yID.outputFolderSection)
 
             Section("Protocol Generation") {
                 Picker("LLM Provider", selection: $settings.protocolProvider) {
@@ -94,7 +94,7 @@ struct OutputSettingsView: View {
 
                 promptControls
             }
-            .accessibilityIdentifier("protocolSection")
+            .accessibilityIdentifier(A11yID.protocolSection)
             .recordOnlyDisabled(settings.recordOnly)
         }
         .formStyle(.grouped)

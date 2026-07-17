@@ -69,7 +69,7 @@ struct TranscriptionSettingsView: View {
 
                 engineStatusView
             }
-            .accessibilityIdentifier("transcriptionSection")
+            .accessibilityIdentifier(A11yID.transcriptionSection)
             .recordOnlyDisabled(settings.recordOnly)
 
             liveTranscriptionSection
@@ -116,7 +116,7 @@ struct TranscriptionSettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .accessibilityIdentifier("liveTranscriptionSection")
+        .accessibilityIdentifier(A11yID.liveTranscriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
     }
 

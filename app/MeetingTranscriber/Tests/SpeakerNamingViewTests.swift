@@ -786,7 +786,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         let sut = SpeakerNamingView(data: makeData(), gracePeriod: 0) { _ in }
         let body = try sut.inspect()
         XCTAssertThrowsError(
-            try body.find(viewWithAccessibilityIdentifier: "rerun-mode-picker"),
+            try body.find(viewWithAccessibilityIdentifier: A11yID.rerunModePicker),
             "Mode picker must not render when currentDiarizerMode is nil",
         )
     }
@@ -799,7 +799,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         ) { _ in }
         let body = try sut.inspect()
         XCTAssertNoThrow(
-            try body.find(viewWithAccessibilityIdentifier: "rerun-mode-picker"),
+            try body.find(viewWithAccessibilityIdentifier: A11yID.rerunModePicker),
         )
     }
 
