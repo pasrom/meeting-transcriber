@@ -39,20 +39,15 @@
     /// allowlisted window, so a driver can flip a control and then assert the
     /// resulting state change via `GET /state` instead of only reading structure.
     ///
-    /// Like `GET /ui/tree`, the press runs in-process against the app's own
-    /// self-pid `AXUIElement` tree (see the `DebugRPCServer.ax*` helpers in
-    /// `DebugRPCServer+AXElement.swift`), which needs NO Accessibility TCC grant
-    /// (self-inspection is exempt). The control is located by `AXIdentifier` and
-    /// fired with `AXUIElementPerformAction(kAXPressAction)`.
+    /// Like `GET /ui/tree`, the press runs against the app's own self-pid
+    /// `AXUIElement` tree via the shared `DebugRPCServer.ax*` helpers (see
+    /// `DebugRPCServer+AXElement.swift` for the no-TCC / main-actor / why-not-NSView
+    /// rationale). The control is located by `AXIdentifier` and fired with
+    /// `AXUIElementPerformAction(kAXPressAction)`.
     ///
-    /// This was validated end-to-end: pressing `recordOnlyToggle` flips
-    /// `settings.recording.recordOnly` in `/state` (`scripts/test_rpc.sh`
-    /// asserts the effect, not the returned flag). An earlier attempt using the
-    /// in-process `NSView.accessibilityChildren()` walk failed because SwiftUI's
-    /// accessibility tree does not surface via that path; the self-pid AX tree
-    /// does. The press must run on the main actor (self-pid AX dispatches on the
-    /// calling thread and SwiftUI action handlers assert `MainActor`);
-    /// `DebugRPCServer` is `@MainActor`, so that holds.
+    /// Validated end-to-end: pressing `recordOnlyToggle` flips
+    /// `settings.recording.recordOnly` in `/state` (`scripts/test_rpc.sh` asserts
+    /// the effect, not the returned flag).
     extension DebugRPCServer {
         /// Windows a press may target. Same allowlist rationale as `/ui/tree`:
         /// only the Settings window, which is already exposed via `/screenshot`.
