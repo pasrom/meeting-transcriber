@@ -458,8 +458,9 @@ Rule: test each behavior at the cheapest layer that can falsify it.
    (`BadgeKind.compute`, `LiveCaptionsGate`, `WatchLoopEndPolicy` pattern) and put
    the bulk of assertions there.
 2. **ViewInspector** (`swift test`, every PR): exactly one wiring test per control —
-   find by an `A11yID` constant, drive (`.tap()`/`.select()`/`.increment()`), assert
-   the `AppSettings` write-back. Don't enumerate logic states through the view;
+   find by its `A11yID` constant (or by label, for `Picker`/`Stepper`, which expose
+   no findable one — see Identifiers), drive (`.tap()`/`.select()`/`.increment()`),
+   assert the `AppSettings` write-back. Don't enumerate logic states through the view;
    that's layer 1's job. (ViewInspector is reflection over undocumented SwiftUI
    internals — keep to the boring primitives; breakage is loud since it runs on
    every PR.)
@@ -475,8 +476,13 @@ Rule: test each behavior at the cheapest layer that can falsify it.
 **Identifiers:** add `.accessibilityIdentifier` on demand via the shared `A11yID`
 namespace (`Sources/A11yID.swift`) — the view modifier, the ViewInspector `find`, and
 the `/ui/press` allowlist all reference the constant so the compiler catches drift.
-Interaction tests never locate by display label; `find(text:)` only when the label
-itself is the behavior under test. An identifier makes a control tree-visible;
+Interaction tests locate by the `A11yID` constant wherever a control exposes a
+findable one. Accepted exception: SwiftUI `Picker` and `Stepper` don't surface a
+ViewInspector-findable `.accessibilityIdentifier`, so those are located by label or
+document-order index (see `SettingsInteractionTests`) — the one sanctioned fallback,
+not a licence to skip identifiers where they work. `find(text:)` for a bare label
+only when the label itself is the behavior under test. An identifier makes a control
+tree-visible;
 press-drivable *additionally* requires a `/ui/press` allowlist entry — never allowlist
 a control whose action opens a menu/popover/sheet/panel (a nested runloop wedges the
 app, see `DebugRPCServer+UIPress.swift`). Never widen the window allowlist to PII
