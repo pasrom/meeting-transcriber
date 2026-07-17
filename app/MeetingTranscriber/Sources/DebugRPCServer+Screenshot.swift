@@ -37,6 +37,18 @@
             return allowed.contains(identifier)
         }
 
+        /// The content view of a currently-visible window with the given
+        /// identifier, or nil when no such window is open. Shared window→view
+        /// resolution for the in-process accessibility endpoints (`/ui/tree`,
+        /// `/ui/press`) so they can't drift; each wraps the returned view in its
+        /// own adapter. Walks `NSApplication.shared.windows` the same way
+        /// `/screenshot` selects a window.
+        static func visibleWindowContentView(identifier: String) -> NSView? {
+            NSApplication.shared.windows.first { window in
+                window.identifier?.rawValue == identifier && window.isVisible
+            }?.contentView
+        }
+
         /// PNG of the largest visible content window from the screenshot
         /// allowlist, or nil when none qualifies. Uses ScreenCaptureKit
         /// (`SCScreenshotManager.captureImage`) — the non-deprecated successor
