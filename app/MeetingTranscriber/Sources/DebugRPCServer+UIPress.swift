@@ -1,5 +1,5 @@
 #if !APPSTORE
-    import AppKit
+    @preconcurrency import ApplicationServices
     import Foundation
 
     /// Request body for `POST /ui/press`: the accessibility `identifier` of the
@@ -10,9 +10,9 @@
     }
 
     /// The outcome of resolving and pressing a control inside a window's
-    /// accessibility tree. `pressed` carries what `accessibilityPerformPress()`
-    /// reported (the PoC unknown — see the extension header); the driver asserts
-    /// on the *effect* via `/state`, not on this boolean.
+    /// accessibility tree. `pressed` carries whether the AX press action reported
+    /// it ran; the driver asserts on the *effect* via `/state`, not on this
+    /// boolean.
     enum UIPressOutcome: Equatable {
         case pressed(Bool)
         case notFound
@@ -24,15 +24,14 @@
     /// Separate from `UITreeNodeSource` (which is read-only and carries
     /// role/title/frame for serialization) because the press concern only needs
     /// identity + enabled + the press action, and its children must themselves be
-    /// pressable. `@MainActor` because the production adapter reads AppKit
-    /// accessibility state.
+    /// pressable. `@MainActor` because the production adapter reads self-pid AX
+    /// state and fires the press, both of which must run on the main actor.
     @MainActor
     protocol UIPressTarget {
         var uiIdentifier: String? { get }
         var uiEnabled: Bool { get }
         var uiChildren: [any UIPressTarget] { get }
-        /// Perform the accessibility press. Returns what the underlying
-        /// `accessibilityPerformPress()` reports (whether the action ran).
+        /// Fire the element's AX press action. Returns whether it reported running.
         func uiPress() -> Bool
     }
 
@@ -41,22 +40,19 @@
     /// resulting state change via `GET /state` instead of only reading structure.
     ///
     /// Like `GET /ui/tree`, the press runs in-process against the app's own
-    /// `NSAccessibility` hierarchy, which needs NO Accessibility TCC grant: TCC
-    /// gates only cross-process AX (the `AXUIElement` C API `ParticipantReader`
-    /// uses against other apps). `accessibilityPerformPress()` is a plain method
-    /// call on our own element.
+    /// self-pid `AXUIElement` tree (see the `DebugRPCServer.ax*` helpers in
+    /// `DebugRPCServer+AXElement.swift`), which needs NO Accessibility TCC grant
+    /// (self-inspection is exempt). The control is located by `AXIdentifier` and
+    /// fired with `AXUIElementPerformAction(kAXPressAction)`.
     ///
-    /// PoC decision: this uses `accessibilityPerformPress()`, the in-process
-    /// equivalent of what XCUITest does out-of-process. Whether it actually fires
-    /// the SwiftUI action behind an AppKit-bridged control is the one unknown this
-    /// slice answers — `scripts/test_rpc.sh` presses `recordOnlyToggle` and
-    /// asserts `settings.recording.recordOnly` flips in `/state`. If a control ever
-    /// reports `pressed:true` yet leaves `/state` unchanged, the documented
-    /// fallback is synthesizing an in-process `NSEvent` mouse-down/up at the
-    /// element's `accessibilityFrame` and routing it through `window.sendEvent`
-    /// (also TCC-free); never `CGEvent` posting, which would need an Accessibility
-    /// grant. The fallback is intentionally not built until the press path is
-    /// proven insufficient.
+    /// This was validated end-to-end: pressing `recordOnlyToggle` flips
+    /// `settings.recording.recordOnly` in `/state` (`scripts/test_rpc.sh`
+    /// asserts the effect, not the returned flag). An earlier attempt using the
+    /// in-process `NSView.accessibilityChildren()` walk failed because SwiftUI's
+    /// accessibility tree does not surface via that path; the self-pid AX tree
+    /// does. The press must run on the main actor (self-pid AX dispatches on the
+    /// calling thread and SwiftUI action handlers assert `MainActor`);
+    /// `DebugRPCServer` is `@MainActor`, so that holds.
     extension DebugRPCServer {
         /// Windows a press may target. Same allowlist rationale as `/ui/tree`:
         /// only the Settings window, which is already exposed via `/screenshot`.
@@ -76,11 +72,17 @@
 
         /// Controls a press may target, by accessibility identifier. Deliberately
         /// narrow: without it the endpoint could press *any* current-or-future
-        /// control in an allowed window — including one whose action opens a modal
-        /// panel (`NSOpenPanel.runModal()` etc.) that would block the main-actor
-        /// RPC server, and any destructive control the UI later grows. Each entry
-        /// is a reviewed, non-modal control; extend explicitly as a driver needs
-        /// to drive more. Seeded with the record-only toggle (the PoC target).
+        /// control in an allowed window, including any destructive control the UI
+        /// later grows. Seeded with the record-only toggle (the PoC target); extend
+        /// explicitly per control as a driver needs to drive more.
+        ///
+        /// INVARIANT — never allowlist a control whose action can enter a nested
+        /// runloop or modal session (menu tracking, popover, sheet, `NSAlert`,
+        /// `NSOpenPanel.runModal()`): `kAXPressAction` runs synchronously in the
+        /// RPC handler on the main actor, so such a press would never return and
+        /// would wedge the server and UI. This invariant, not the (localhost +
+        /// token + env-gated + `#if !APPSTORE`) security margin, is the allowlist's
+        /// real justification.
         nonisolated static let uiPressAllowedIdentifiers: Set<String> = ["recordOnlyToggle"]
 
         nonisolated static func isIdentifierAllowedForUIPress(_ identifier: String) -> Bool {
@@ -108,10 +110,10 @@
         }
 
         /// Resolve the accessibility root for an allowed, currently-open window,
-        /// or nil when no matching visible window exists. Shares `/ui/tree`'s
-        /// window→contentView resolution; only the adapter differs.
+        /// or nil when no matching open window exists. Shares `/ui/tree`'s self-pid
+        /// window resolution; only the adapter differs.
         static func uiPressTarget(forWindowIdentifier identifier: String) -> (any UIPressTarget)? {
-            visibleWindowContentView(identifier: identifier).map { AXPressTarget(element: $0) }
+            axWindowElement(forIdentifier: identifier).map { AXPressSource(element: $0) }
         }
 
         /// Map a press outcome to its HTTP response. Pure so the 200/404/409
@@ -151,31 +153,27 @@
         }
     }
 
-    /// Adapter bridging one AppKit accessibility element to `UIPressTarget`. Only
-    /// children conforming to the umbrella `NSAccessibility` protocol are followed
-    /// (mirrors `AXElementSource` in `+UITree.swift`).
+    /// Adapter bridging one self-pid `AXUIElement` to `UIPressTarget` via the
+    /// shared `DebugRPCServer.ax*` plumbing (mirrors `AXTreeSource` in
+    /// `+UITree.swift`).
     @MainActor
-    private struct AXPressTarget: UIPressTarget {
-        let element: any NSAccessibilityProtocol
+    private struct AXPressSource: UIPressTarget {
+        let element: AXUIElement
 
         var uiIdentifier: String? {
-            guard let identifier = element.accessibilityIdentifier(), !identifier.isEmpty else { return nil }
-            return identifier
+            DebugRPCServer.axIdentifier(element)
         }
 
         var uiEnabled: Bool {
-            element.isAccessibilityEnabled()
+            DebugRPCServer.axEnabled(element)
         }
 
         var uiChildren: [any UIPressTarget] {
-            (element.accessibilityChildren() ?? []).compactMap { child -> (any UIPressTarget)? in
-                guard let ax = child as? any NSAccessibilityProtocol else { return nil }
-                return Self(element: ax)
-            }
+            DebugRPCServer.axChildren(element).map { Self(element: $0) }
         }
 
         func uiPress() -> Bool {
-            element.accessibilityPerformPress()
+            DebugRPCServer.axPress(element)
         }
     }
 #endif
