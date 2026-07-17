@@ -14,15 +14,19 @@ name: E2E — UI Smoke (self-pid /ui/* canary)
 on:
   workflow_dispatch:
   pull_request:
-    # Self-validate only PRs that touch the harness or this lane; unrelated PRs
-    # aren't burdened with a full release build on the macos-26 runner budget.
+    # Self-validate only PRs that touch the harness, its request/response + routing
+    # layer, the build path it drives, or this lane. Unrelated PRs aren't burdened
+    # with a full release build on the macos-26 runner budget.
     paths:
       - '.github/workflows/e2e-ui-smoke.yml'
       - 'scripts/e2e-settings-smoke.sh'
+      - 'scripts/build_release.sh'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer+AXElement.swift'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+      - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
+      - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
   push:
     branches: [main]
     paths:
@@ -30,7 +34,10 @@ on:
       - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
       - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+      - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
+      - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
       - 'scripts/e2e-settings-smoke.sh'
+      - 'scripts/build_release.sh'
       - '.github/workflows/e2e-ui-smoke.yml'
   schedule:
     # 04:00 UTC — after quality-and-safety (03:00) and appstore (03:30), before
@@ -43,6 +50,10 @@ on:
 concurrency:
   group: ui-smoke-${{ github.ref }}
   cancel-in-progress: true
+
+# Least privilege: the job only reads the repo and uploads an artifact; no writes.
+permissions:
+  contents: read
 
 jobs:
   smoke:
