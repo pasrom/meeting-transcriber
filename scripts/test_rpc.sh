@@ -145,6 +145,46 @@ out=$("$MT_CLI_BIN" ui-tree --window speaker-naming 2>&1 || true)
 echo "$out" | grep -q "403" || fail "ui-tree disallowed window: expected 403, got: $out"
 ok "ui-tree speaker-naming → 403"
 
+step "UI press (accessibility action) — the PoC verification"
+
+# Read record-only, press the toggle, assert /state flips. This is the whole
+# point of the slice: does an in-process accessibilityPerformPress() actually
+# fire the SwiftUI action behind the AppKit-bridged toggle? The assertion is the
+# effect in /state, not the returned `pressed` flag.
+read_record_only() {
+    "$MT_CLI_BIN" state \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['settings']['recording']['recordOnly'])"
+}
+before=$(read_record_only)
+[ -n "$before" ] || fail "could not read settings.recording.recordOnly from /state"
+"$MT_CLI_BIN" ui-press recordOnlyToggle --window settings >/dev/null \
+    || fail "ui-press recordOnlyToggle failed"
+sleep 1
+after=$(read_record_only)
+[ "$before" != "$after" ] \
+    || fail "ui-press did not flip recordOnly (before=$before after=$after) — in-process press did not fire the SwiftUI action"
+ok "ui-press recordOnlyToggle → recordOnly $before → $after (in-process press fires the SwiftUI action)"
+
+# Press again to restore the original state — leave no persistent side effect.
+"$MT_CLI_BIN" ui-press recordOnlyToggle --window settings >/dev/null \
+    || fail "ui-press restore failed"
+sleep 1
+restored=$(read_record_only)
+[ "$restored" = "$before" ] \
+    || fail "ui-press restore did not return recordOnly to $before (got $restored)"
+ok "ui-press restore → recordOnly back to $before"
+
+# An identifier off the press allowlist → 403 (the pressable surface is a
+# reviewed allowlist, not "any control in the window").
+out=$("$MT_CLI_BIN" ui-press someOtherControl --window settings 2>&1 || true)
+echo "$out" | grep -q "403" || fail "ui-press disallowed id: expected 403, got: $out"
+ok "ui-press disallowed id → 403"
+
+# A PII window stays off the surface (mirrors the /ui/tree allowlist).
+out=$("$MT_CLI_BIN" ui-press recordOnlyToggle --window speaker-naming 2>&1 || true)
+echo "$out" | grep -q "403" || fail "ui-press disallowed window: expected 403, got: $out"
+ok "ui-press speaker-naming → 403"
+
 "$MT_CLI_BIN" close-settings >/dev/null
 sleep 1
 
