@@ -7,7 +7,7 @@ struct MTCLI: AsyncParsableCommand {
         commandName: "mt-cli",
         abstract: "Thin client for the Meeting Transcriber debug RPC server.",
         subcommands: [
-            State.self, Healthz.self, Screenshot.self, UITree.self,
+            State.self, Healthz.self, Screenshot.self, UITree.self, UIPress.self,
             OpenSettings.self, CloseSettings.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
         ],
@@ -153,6 +153,25 @@ struct UITree: AsyncParsableCommand {
         let data = try await client.get("/ui/tree?window=\(window)")
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+}
+
+struct UIPress: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "ui-press",
+        abstract: "Press a control (by accessibility identifier) in an allowed app window. "
+            + "Drives a real in-process UI action — assert the effect via `state`, "
+            + "not the returned `pressed` flag.",
+    )
+
+    @Argument(help: "Accessibility identifier of the control to press.")
+    var identifier: String
+
+    @Option(name: .long, help: "Window identifier the control lives in. Defaults to settings.")
+    var window: String = "settings"
+
+    func run() async throws {
+        try await postAction("/ui/press", ["window": window, "identifier": identifier])
     }
 }
 
