@@ -108,7 +108,7 @@ final class SettingsInteractionTests: XCTestCase {
         // No active backend → the backend label (inside the TimelineView) is absent.
         XCTAssertThrowsError(
             try LiveCaptionsOverlay(state: state).inspect()
-                .find(viewWithAccessibilityIdentifier: "liveCaptionBackend"),
+                .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionBackend),
             "with no active backend the label must not render",
         )
 
@@ -116,7 +116,7 @@ final class SettingsInteractionTests: XCTestCase {
         state.setActiveBackend("Parakeet EOU")
         XCTAssertNoThrow(
             try LiveCaptionsOverlay(state: state).inspect()
-                .find(viewWithAccessibilityIdentifier: "liveCaptionBackend"),
+                .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionBackend),
             "an active backend must render the label",
         )
     }

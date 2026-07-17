@@ -78,7 +78,7 @@
         /// would wedge the server and UI. This invariant, not the (localhost +
         /// token + env-gated + `#if !APPSTORE`) security margin, is the allowlist's
         /// real justification.
-        nonisolated static let uiPressAllowedIdentifiers: Set<String> = ["recordOnlyToggle"]
+        nonisolated static let uiPressAllowedIdentifiers: Set<String> = [A11yID.recordOnlyToggle]
 
         nonisolated static func isIdentifierAllowedForUIPress(_ identifier: String) -> Bool {
             uiPressAllowedIdentifiers.contains(identifier)

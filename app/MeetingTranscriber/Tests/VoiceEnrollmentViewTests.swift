@@ -176,7 +176,7 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
         // SpeakerNamingView's "Re-run" button which fires `onComplete(.rerun(N))`.
         let view = makeView(initialStage: .naming(makeNamingPayload()))
         let body = try view.inspect()
-        let rerun = try body.find(viewWithAccessibilityIdentifier: "rerun-button")
+        let rerun = try body.find(viewWithAccessibilityIdentifier: A11yID.rerunButton)
         XCTAssertNoThrow(try rerun.button().tap())
     }
 

@@ -10,7 +10,7 @@ struct GeneralSettingsView: View {
         Form {
             Section("Mode") {
                 Toggle("Record-only mode", isOn: $settings.recordOnly)
-                    .accessibilityIdentifier("recordOnlyToggle")
+                    .accessibilityIdentifier(A11yID.recordOnlyToggle)
                 if settings.recordOnly {
                     recordOnlyBanner
                 }
@@ -76,7 +76,7 @@ struct GeneralSettingsView: View {
         }
         .padding(8)
         .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-        .accessibilityIdentifier("recordOnlyBanner")
+        .accessibilityIdentifier(A11yID.recordOnlyBanner)
     }
 
     private func updatesSection(updateChecker: UpdateChecker) -> some View {
