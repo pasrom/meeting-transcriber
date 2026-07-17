@@ -43,6 +43,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
     AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
     AXHelper.swift         # Shared accessibility API helper
+    A11yID.swift           # Single source of truth for accessibility identifiers used as automation handles (ViewInspector find + /ui/press allowlist reference the constants → compiler catches drift)
     NotificationManager.swift # macOS notifications
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
@@ -448,6 +449,55 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
 - Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
 - FluidAudio models are downloaded automatically on first run (~50 MB)
+
+## GUI Testing
+
+Rule: test each behavior at the cheapest layer that can falsify it.
+
+1. **Pure logic first.** Extract decision logic into a value type
+   (`BadgeKind.compute`, `LiveCaptionsGate`, `WatchLoopEndPolicy` pattern) and put
+   the bulk of assertions there.
+2. **ViewInspector** (`swift test`, every PR): exactly one wiring test per control —
+   find by an `A11yID` constant, drive (`.tap()`/`.select()`/`.increment()`), assert
+   the `AppSettings` write-back. Don't enumerate logic states through the view;
+   that's layer 1's job. (ViewInspector is reflection over undocumented SwiftUI
+   internals — keep to the boring primitives; breakage is loud since it runs on
+   every PR.)
+3. **`/state` (live RPC):** first choice for live assertions, including window/scene
+   behavior via `/state.windows` (`isVisible` after deactivate, `floating`,
+   `canJoinAllSpaces` — how #509/#511 guard the naming-window pin).
+4. **`/ui/tree` + `/ui/press`** (live, Settings window only): only for behavior that
+   exists solely in the real AppKit/AX layer. A live test earns its keep only when
+   ViewInspector cannot instantiate the failing layer (real NSWindow/NSPanel,
+   focus/activation, scene routing, the NSHostingView boundary, actual AX exposure).
+5. **Snapshots** (dev-only, `XCTSkipIf(isCI)`): pixel truth; never CI-gated.
+
+**Identifiers:** add `.accessibilityIdentifier` on demand via the shared `A11yID`
+namespace (`Sources/A11yID.swift`) — the view modifier, the ViewInspector `find`, and
+the `/ui/press` allowlist all reference the constant so the compiler catches drift.
+Interaction tests never locate by display label; `find(text:)` only when the label
+itself is the behavior under test. An identifier makes a control tree-visible;
+press-drivable *additionally* requires a `/ui/press` allowlist entry — never allowlist
+a control whose action opens a menu/popover/sheet/panel (a nested runloop wedges the
+app, see `DebugRPCServer+UIPress.swift`). Never widen the window allowlist to PII
+windows or expose control values (`DebugRPCServer+UITree.swift`).
+
+**Live assertions:** assert the `/state` effect, never the returned `pressed` flag or
+tree structure (depth/frames/child counts). Assert the env-stable, load-bearing pin
+subset (`isVisible`, `floating`, `canJoinAllSpaces`) — `fullScreenAuxiliary` proved
+env-unstable on the CI mini (#511). `e2e-ui-smoke` is a harness-liveness canary only —
+feature-level live assertions go in `test_rpc.sh` or the `e2e-app` lanes.
+
+**GUI bug found:** failing test first, at the lowest layer that reproduces it. If only
+the live scene reproduces, drive the real scene window (a minimal probe window does not
+reproduce — #504). Acceptance: revert the fix, test goes red.
+
+**Don't:** chase snapshot coverage; use `/ui/press` to arrange state (it's for testing
+the pressed control); test SwiftUI framework behavior (e.g. that `.keyboardShortcut`
+fires). **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panels
+(NSOpenPanel/NSAlert), TCC prompts, typing into fields (no `/ui/setValue` — AX-set
+doesn't fire the SwiftUI binding), drag/focus order, visual appearance beyond dev-only
+snapshots.
 
 ## E2E Architecture
 
