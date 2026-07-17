@@ -1,5 +1,5 @@
 #if !APPSTORE
-    import AppKit
+    @preconcurrency import ApplicationServices
     import Foundation
 
     /// One node of the serialized accessibility tree — the Codable wire shape of
@@ -30,10 +30,10 @@
         let children: [Self]
     }
 
-    /// Minimal read-only view of one accessibility element, abstracting AppKit's
-    /// `NSAccessibility` so the recursive tree walk is unit-testable without a
-    /// live window. `@MainActor` because the production adapter reads AppKit
-    /// accessibility state, which is main-actor isolated.
+    /// Minimal read-only view of one accessibility element, abstracting the
+    /// underlying `AXUIElement` so the recursive tree walk is unit-testable
+    /// without a live window. `@MainActor` because the production adapter reads
+    /// self-pid AX state, which must run on the main actor.
     @MainActor
     protocol UITreeNodeSource {
         var uiRole: String? { get }
@@ -47,10 +47,11 @@
     /// `GET /ui/tree` — read-only accessibility-tree inspection, line-cap split
     /// from DebugRPCServer.swift.
     ///
-    /// The tree is walked in-process from the app's own `NSAccessibility`
-    /// hierarchy, which needs NO Accessibility TCC grant: TCC only gates
-    /// cross-process AX (the `AXUIElement` C API `ParticipantReader` uses against
-    /// other apps). Reading our own tree is plain method calls.
+    /// The tree is walked in-process from the app's own `AXUIElement` hierarchy
+    /// (see the `DebugRPCServer.ax*` helpers in `DebugRPCServer+AXElement.swift`),
+    /// which surfaces SwiftUI's real identifiers/labels and needs NO Accessibility
+    /// TCC grant (self-inspection is exempt). The older
+    /// `NSView.accessibilityChildren()` walk returned an empty SwiftUI tree.
     extension DebugRPCServer {
         /// SwiftUI scene identifiers exposed to `GET /ui/tree`. Deliberately only
         /// the Settings window for now — `speaker-naming`, `record-app`, and the
@@ -109,12 +110,11 @@
         }
 
         /// Resolve the accessibility root for an allowed, currently-open window,
-        /// or nil when no matching visible window exists. Walks
-        /// `NSApplication.shared.windows` the same way `/screenshot` does. Starts
-        /// from the window's `contentView` (an `NSView`, always a conforming
-        /// accessibility element) rather than the `NSWindow` itself.
+        /// or nil when no matching open window exists. Finds the window by its
+        /// `AXIdentifier` in the app-wide self-pid AX tree (shared with
+        /// `/ui/press`), so the walk is scoped to that window's subtree.
         static func uiTreeSource(forWindowIdentifier identifier: String) -> (any UITreeNodeSource)? {
-            visibleWindowContentView(identifier: identifier).map { AXElementSource(element: $0) }
+            axWindowElement(forIdentifier: identifier).map { AXTreeSource(element: $0) }
         }
 
         /// `GET /ui/tree?window=<id>` handler. 403 when the window isn't on the
@@ -134,43 +134,36 @@
         }
     }
 
-    /// Adapter bridging one AppKit accessibility element to `UITreeNodeSource`.
-    /// Only children conforming to the umbrella `NSAccessibility` protocol are
-    /// followed; an element exposing just the base element protocol is dropped
-    /// (it carries no `accessibilityChildren` anyway). Reads role / identifier /
-    /// title / frame / enabled; the title is home-directory redacted and the
-    /// control's `value` is deliberately not read (see `UITreeNode`).
+    /// Adapter bridging one self-pid `AXUIElement` to `UITreeNodeSource` via the
+    /// shared `DebugRPCServer.ax*` plumbing. Reads role / identifier / title /
+    /// frame / enabled; the title is home-directory redacted and the control's
+    /// `value` is deliberately not read (see `UITreeNode`).
     @MainActor
-    private struct AXElementSource: UITreeNodeSource {
-        let element: any NSAccessibilityProtocol
+    private struct AXTreeSource: UITreeNodeSource {
+        let element: AXUIElement
 
         var uiRole: String? {
-            element.accessibilityRole()?.rawValue
+            DebugRPCServer.axRole(element)
         }
 
         var uiIdentifier: String? {
-            guard let identifier = element.accessibilityIdentifier(), !identifier.isEmpty else { return nil }
-            return identifier
+            DebugRPCServer.axIdentifier(element)
         }
 
         var uiTitle: String? {
-            let title = element.accessibilityTitle() ?? element.accessibilityLabel()
-            return DebugRPCServer.redactUITreeString(title, homeDirectory: NSHomeDirectory())
+            DebugRPCServer.redactUITreeString(DebugRPCServer.axLabel(element), homeDirectory: NSHomeDirectory())
         }
 
         var uiFrame: CGRect {
-            element.accessibilityFrame()
+            DebugRPCServer.axFrame(element)
         }
 
         var uiEnabled: Bool {
-            element.isAccessibilityEnabled()
+            DebugRPCServer.axEnabled(element)
         }
 
         var uiChildren: [any UITreeNodeSource] {
-            (element.accessibilityChildren() ?? []).compactMap { child -> (any UITreeNodeSource)? in
-                guard let ax = child as? any NSAccessibilityProtocol else { return nil }
-                return Self(element: ax)
-            }
+            DebugRPCServer.axChildren(element).map { Self(element: $0) }
         }
     }
 #endif
