@@ -199,6 +199,7 @@ scripts/
   run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)
   e2e-app.sh               # Live-recording E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
   e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
+  e2e-settings-smoke.sh    # GitHub-hosted /ui/* canary: build homebrew .app + launch with RPC + assert GET /ui/tree surfaces recordOnlyToggle and POST /ui/press flips /state (self-pid AX; no TCC; run by e2e-ui-smoke.yml)
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
   e2e-live-captions.sh     # E2E driver asserting on in-flight liveCaptions.recentFinals RPC state (complements e2e-app.sh)
   e2e-cpu-load.sh          # E2E resource measurement: idle + recording-without-captions + recording-with-live-captions CPU/RAM of the deployed app via RPC /metrics deltas (logs trends, gates only a generous idle-CPU catastrophe bound)
@@ -232,6 +233,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly + label-gated PR runs via `run-e2e`)
   e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch + nightly trend cron, RESULT artifact)
   appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
+  e2e-ui-smoke.yml         # E2E — GitHub-hosted /ui/* self-pid AX canary: build homebrew .app, drive GET /ui/tree + POST /ui/press, assert (guards the non-contractual self-pid path against macOS drift; no TCC → runs off the mini; paths-filtered PR + main push + nightly + dispatch)
   build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
   quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch + label-gated PR runs via `run-quality`)
   dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps

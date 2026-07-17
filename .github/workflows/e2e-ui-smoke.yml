@@ -1,0 +1,65 @@
+name: E2E — UI Smoke (self-pid /ui/* canary)
+
+# Canary for the in-process /ui/* accessibility harness. Builds the Homebrew
+# .app, launches it with the debug RPC on a GitHub-hosted runner, and asserts the
+# self-pid AXUIElement path still works: GET /ui/tree surfaces a SwiftUI
+# identifier and POST /ui/press flips /state. That path rests on three
+# non-contractual macOS behaviors (see DebugRPCServer+AXElement.swift); this lane
+# makes an OS update that breaks any of them fail loudly and attributably.
+#
+# Runs on GitHub-hosted macOS (not the self-hosted Mac): the harness needs no TCC
+# grant (self-inspection is exempt), so it doesn't depend on the mini's manual
+# permission grants — which is the whole point of proving it here.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Self-validate only PRs that touch the harness or this lane; unrelated PRs
+    # aren't burdened with a full release build on the macos-26 runner budget.
+    paths:
+      - '.github/workflows/e2e-ui-smoke.yml'
+      - 'scripts/e2e-settings-smoke.sh'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+AXElement.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+  push:
+    branches: [main]
+    paths:
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+AXElement.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+      - 'scripts/e2e-settings-smoke.sh'
+      - '.github/workflows/e2e-ui-smoke.yml'
+  schedule:
+    # 04:00 UTC — after quality-and-safety (03:00) and appstore (03:30), before
+    # e2e-app (04:30), so nightly failures are easy to disambiguate in `gh run list`.
+    # The nightly run is the real reason this lane exists: it catches macOS drift
+    # breaking the non-contractual self-pid AX path even when no code changed.
+    - cron: '0 4 * * *'
+
+# Two runs would race on the build dir and the launched app process.
+concurrency:
+  group: ui-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/verify-xcode
+
+      - name: UI smoke — drive /ui/* against the live app
+        run: ./scripts/e2e-settings-smoke.sh
+
+      - name: Upload crash reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-smoke-crash-reports
+          path: ~/Library/Logs/DiagnosticReports/MeetingTranscriber-*.ips
+          if-no-files-found: ignore
