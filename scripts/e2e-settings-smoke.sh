@@ -18,8 +18,9 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SPM_DIR="$REPO_ROOT/app/MeetingTranscriber"
-APP="$SPM_DIR/.build/release/MeetingTranscriber.app"
+# build_release.sh assembles the bundle at the repo-root .build/release (it moves
+# the .app back there after staging the DMG), NOT the SPM package's .build.
+APP="$REPO_ROOT/.build/release/MeetingTranscriber.app"
 TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 BASE="http://127.0.0.1:9876"
 
