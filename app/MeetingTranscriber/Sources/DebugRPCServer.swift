@@ -340,6 +340,12 @@
                 return uiTreeResponse(target: request.path)
             }
 
+            // Drive a real UI action against an allowlisted window. Debug surface
+            // (no stability contract), like `/ui/tree`.
+            if request.method == "POST", pathWithoutQuery == "/ui/press" {
+                return uiPressResponse(body: request.body)
+            }
+
             switch (request.method, request.path) {
             case ("GET", "/state"):
                 let json = try? snapshot().jsonData()

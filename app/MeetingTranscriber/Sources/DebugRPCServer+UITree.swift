@@ -114,11 +114,7 @@
         /// from the window's `contentView` (an `NSView`, always a conforming
         /// accessibility element) rather than the `NSWindow` itself.
         static func uiTreeSource(forWindowIdentifier identifier: String) -> (any UITreeNodeSource)? {
-            let window = NSApplication.shared.windows.first { window in
-                window.identifier?.rawValue == identifier && window.isVisible
-            }
-            guard let root = window?.contentView else { return nil }
-            return AXElementSource(element: root)
+            visibleWindowContentView(identifier: identifier).map { AXElementSource(element: $0) }
         }
 
         /// `GET /ui/tree?window=<id>` handler. 403 when the window isn't on the
