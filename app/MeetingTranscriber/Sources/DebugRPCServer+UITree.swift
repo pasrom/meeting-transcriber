@@ -10,10 +10,13 @@
     /// ("Record Only", "Microphone Name"). It is home-directory redacted so a
     /// displayed path can't leak the account name; the Settings window is the
     /// only allowlisted window and its content is already exposed via
-    /// `/screenshot`, so labels here don't widen the surface. A control's
-    /// `value` (a text field's typed contents — mic name, endpoint URL) is
-    /// deliberately NOT exposed: that is user-entered content, and drivers
-    /// assert on `identifier` (app-set, never user input) and `enabled` anyway.
+    /// `/screenshot`, so labels here don't widen the surface. That parity holds
+    /// only because presented sheets are pruned from the walk (see
+    /// `uiTreeSheetRole`) — a sheet is a separate window `/screenshot` doesn't
+    /// capture and can carry PII (speaker names). A control's `value` (a text
+    /// field's typed contents — mic name, endpoint URL) is likewise deliberately
+    /// NOT exposed: that is user-entered content, and drivers assert on
+    /// `identifier` (app-set, never user input) and `enabled` anyway.
     struct UITreeNode: Codable, Equatable {
         struct Frame: Codable, Equatable {
             let x: Double
@@ -68,6 +71,15 @@
         /// deep, so this never truncates the real tree.
         nonisolated static let uiTreeMaxDepth = 40
 
+        /// AX role of a presented sheet. A SwiftUI `.sheet` over the allowlisted
+        /// window (e.g. Known Voices, which renders saved speaker names) is
+        /// realized as an `AXSheet` *descendant* of that window, yet it is a
+        /// separate `NSWindow` that `/screenshot` does NOT capture. Excluding the
+        /// sheet subtree keeps `/ui/tree` bounded by what `/screenshot` shows, so
+        /// no name/PII inside a sheet leaks here (confirmed live: an open sheet
+        /// otherwise adds a ~600-node subtree with the speaker-name labels).
+        nonisolated static let uiTreeSheetRole = "AXSheet"
+
         nonisolated static func isWindowAllowedForUITree(identifier: String?) -> Bool {
             isWindowAllowed(identifier, in: uiTreeAllowedWindowIDs)
         }
@@ -90,11 +102,15 @@
         }
 
         /// Recursively convert an accessibility source into the Codable wire
-        /// shape, capping recursion at `maxDepth` levels of descendants.
+        /// shape, capping recursion at `maxDepth` levels of descendants. Presented
+        /// sheets (`uiTreeSheetRole`) are pruned — their content is off-screen PII
+        /// that `/screenshot` doesn't capture (see `uiTreeSheetRole`).
         static func buildUITree(from source: any UITreeNodeSource, maxDepth: Int) -> UITreeNode {
             let children: [UITreeNode] = maxDepth <= 0
                 ? []
-                : source.uiChildren.map { buildUITree(from: $0, maxDepth: maxDepth - 1) }
+                : source.uiChildren
+                .filter { $0.uiRole != uiTreeSheetRole }
+                .map { buildUITree(from: $0, maxDepth: maxDepth - 1) }
             let frame = source.uiFrame
             return UITreeNode(
                 role: source.uiRole,
