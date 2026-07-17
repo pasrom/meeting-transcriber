@@ -7,7 +7,8 @@ import Foundation
 /// modifier, the ViewInspector tests, and the `/ui/press` allowlist makes the
 /// compiler catch a drifted identifier across those call sites — a raw string
 /// literal duplicated per site drifts silently. Shell drivers (`test_rpc.sh`,
-/// curl) still use the raw string; those are grep-checked.
+/// curl) use the raw string value and are not compiler-checked — keep them in
+/// sync by hand when a value changes.
 ///
 /// Add an entry on demand when a test or the harness needs to find/drive a
 /// control — don't spray identifiers onto controls nothing drives. The string
