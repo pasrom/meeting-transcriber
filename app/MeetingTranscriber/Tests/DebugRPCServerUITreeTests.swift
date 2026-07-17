@@ -84,6 +84,28 @@
         }
 
         @MainActor
+        func testBuildUITreePrunesSheetSubtrees() {
+            // A sheet presented over the window (AXSheet) carries off-screen PII
+            // (e.g. saved speaker names) that /screenshot doesn't capture — its
+            // whole subtree must be excluded from the tree.
+            let nameLabel = FakeSource(role: "AXStaticText", title: "Some Speaker Name")
+            let sheet = FakeSource(role: "AXSheet", title: "Known Voices", children: [nameLabel])
+            let baseControl = FakeSource(role: "AXCheckBox", identifier: "recordOnlyToggle", title: "Record Only")
+            let root = FakeSource(role: "AXWindow", title: "Settings", children: [baseControl, sheet])
+
+            let tree = DebugRPCServer.buildUITree(from: root, maxDepth: 10)
+
+            XCTAssertEqual(tree.children.count, 1, "the AXSheet child must be pruned, the base control kept")
+            XCTAssertEqual(tree.children.first?.identifier, "recordOnlyToggle")
+
+            func containsSheetOrName(_ node: UITreeNode) -> Bool {
+                if node.role == "AXSheet" || node.title == "Some Speaker Name" { return true }
+                return node.children.contains(where: containsSheetOrName)
+            }
+            XCTAssertFalse(containsSheetOrName(tree), "no AXSheet node or its name label may surface")
+        }
+
+        @MainActor
         func testUITreeNodeJSONRoundTrips() throws {
             let root = FakeSource(
                 role: "AXWindow", identifier: "settings",
