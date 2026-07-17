@@ -21,19 +21,18 @@ on:
       - '.github/workflows/e2e-ui-smoke.yml'
       - 'scripts/e2e-settings-smoke.sh'
       - 'scripts/build_release.sh'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+AXElement.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+      # `*`, not `DebugRPCServer+*.swift`: GitHub filter patterns treat `+` as a
+      # regex-style "one or more of the preceding char" quantifier, so a literal
+      # `+` in a path never matches its file (`DebugRPCServer+UIPress.swift` was
+      # silently unguarded). The `*` glob covers the `+…` suffix and all splits.
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer*.swift'
       - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
       - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
   push:
     branches: [main]
     paths:
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+AXElement.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UITree.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer+UIPress.swift'
-      - 'app/MeetingTranscriber/Sources/DebugRPCServer.swift'
+      # `*`, not a literal `+` (a GitHub filter-pattern quantifier — see above).
+      - 'app/MeetingTranscriber/Sources/DebugRPCServer*.swift'
       - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
       - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
       - 'scripts/e2e-settings-smoke.sh'
