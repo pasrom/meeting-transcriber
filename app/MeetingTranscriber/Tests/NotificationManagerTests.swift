@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import UserNotifications
 import XCTest
 
 final class NotificationManagerTests: XCTestCase {
@@ -182,6 +183,45 @@ final class NotificationManagerTests: XCTestCase {
                 "Expected no notification for state \(state)",
             )
         }
+    }
+
+    // MARK: - Browser consent prompt (issue #503)
+
+    func testConsentGrantedOnlyForRecordAction() {
+        XCTAssertTrue(NotificationManager.consentGranted(for: NotificationManager.recordActionID))
+    }
+
+    func testConsentDeclinedForIgnoreDismissAndDefault() {
+        XCTAssertFalse(NotificationManager.consentGranted(for: NotificationManager.ignoreActionID))
+        XCTAssertFalse(NotificationManager.consentGranted(for: UNNotificationDismissActionIdentifier))
+        XCTAssertFalse(NotificationManager.consentGranted(for: UNNotificationDefaultActionIdentifier))
+        XCTAssertFalse(NotificationManager.consentGranted(for: "something-else"))
+    }
+
+    func testConsentCategoryHasRecordAndIgnoreActions() {
+        let category = NotificationManager.makeConsentCategory()
+        XCTAssertEqual(category.identifier, NotificationManager.consentCategoryID)
+        XCTAssertEqual(
+            category.actions.map(\.identifier),
+            [NotificationManager.recordActionID, NotificationManager.ignoreActionID],
+        )
+        XCTAssertEqual(category.actions.map(\.title), ["Record", "Ignore"])
+    }
+
+    func testAskToRecordDeclinesWhenNotSetUp() async {
+        // No app bundle / setUp never ran → we can't show a prompt, so default
+        // to "don't record" rather than recording without asking.
+        let manager = NotificationManager()
+        let granted = await manager.askToRecord(title: "Browser meeting", body: "Record?")
+        XCTAssertFalse(granted)
+    }
+
+    func testDefaultNotifierDeniesConsent() async {
+        // The AppNotifying default (a notifier with no real prompt, e.g.
+        // SilentNotifier) denies consent, so a browser meeting never records
+        // without a visible prompt.
+        let granted = await SilentNotifier().askToRecord(title: "Browser meeting", body: "Record?")
+        XCTAssertFalse(granted)
     }
 
     // MARK: - Helpers
