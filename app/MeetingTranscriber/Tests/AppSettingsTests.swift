@@ -164,6 +164,27 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.watchApps, [])
     }
 
+    // MARK: - watchBrowserMeetings (issue #503)
+
+    func testWatchBrowserMeetingsDefaultsOff() {
+        XCTAssertFalse(settings.watchBrowserMeetings)
+        XCTAssertFalse(
+            settings.watchApps.contains("Google Chrome"),
+            "browser watching is opt-in, so Chrome must not be watched by default",
+        )
+    }
+
+    func testWatchBrowserMeetingsAppendsChromeToWatchApps() {
+        settings.watchBrowserMeetings = true
+        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Zoom", "Webex", "Google Chrome"])
+    }
+
+    func testWatchBrowserMeetingsPersists() {
+        settings.watchBrowserMeetings = true
+        let fresh = AppSettings(defaults: defaults)
+        XCTAssertTrue(fresh.watchBrowserMeetings)
+    }
+
     // MARK: - Claude CLI
 
     #if !APPSTORE

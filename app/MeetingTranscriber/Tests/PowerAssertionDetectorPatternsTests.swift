@@ -49,8 +49,10 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         }
         let meeting = detector.checkOnce()
         XCTAssertEqual(meeting?.pattern.appName, "Google Chrome")
-        XCTAssertTrue(meeting?.pattern.requiresRecordingConsent ?? false,
-                      "a detected browser meeting must carry the consent flag")
+        XCTAssertTrue(
+            meeting?.pattern.requiresRecordingConsent ?? false,
+            "a detected browser meeting must carry the consent flag",
+        )
     }
 
     func testChromeMediaPlaybackIsNotDetectedAsMeeting() {
@@ -149,5 +151,33 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         }
         _ = detector.checkOnce()
         XCTAssertNotNil(detector.checkOnce(), "Zoom on → a Zoom call must fire")
+    }
+
+    @MainActor
+    func testDefaultDetectorWiresBrowserToggle() throws {
+        // End-to-end wiring (issue #503): the watchBrowserMeetings toggle must
+        // flow through watchApps → patterns(watching:) → the default detector,
+        // so a Chrome WebRTC call fires only when the toggle is on.
+        func detector(browserOn: Bool) throws -> PowerAssertionDetector {
+            let suite = "BrowserWatchWiring-\(browserOn)-\(getpid())-\(UUID().uuidString)"
+            let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
+            settings.watchBrowserMeetings = browserOn
+            let d = try XCTUnwrap(
+                WatchingController.defaultDetector(settings: settings) as? PowerAssertionDetector,
+            )
+            d.windowListProvider = { [] }
+            d.assertionProvider = {
+                assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
+            }
+            return d
+        }
+
+        let on = try detector(browserOn: true)
+        _ = on.checkOnce()
+        XCTAssertNotNil(on.checkOnce(), "browser toggle on → a Chrome WebRTC call must fire")
+
+        let off = try detector(browserOn: false)
+        _ = off.checkOnce()
+        XCTAssertNil(off.checkOnce(), "browser toggle off → a Chrome WebRTC call must be ignored")
     }
 }
