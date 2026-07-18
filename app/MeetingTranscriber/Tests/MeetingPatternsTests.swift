@@ -21,7 +21,28 @@ final class AppMeetingPatternTests: XCTestCase {
     // MARK: - All Patterns
 
     func testAllPatternsCount() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 4)
+        XCTAssertEqual(AppMeetingPattern.all.count, 5)
+    }
+
+    // MARK: - Chrome Browser Pattern (issue #503)
+
+    func testForAppNameReturnsChromeBrowser() {
+        let pattern = AppMeetingPattern.forAppName("Google Chrome")
+        XCTAssertEqual(pattern?.appName, "Google Chrome")
+        XCTAssertTrue(pattern?.ownerNames.contains("Google Chrome") ?? false)
+    }
+
+    func testChromeBrowserRequiresRecordingConsent() {
+        XCTAssertTrue(AppMeetingPattern.chromeBrowser.requiresRecordingConsent)
+    }
+
+    func testNativePatternsDoNotRequireRecordingConsent() {
+        // Native desktop meeting apps keep their auto-start behaviour; only
+        // browser meetings gate behind a prompt.
+        XCTAssertFalse(AppMeetingPattern.teams.requiresRecordingConsent)
+        XCTAssertFalse(AppMeetingPattern.zoom.requiresRecordingConsent)
+        XCTAssertFalse(AppMeetingPattern.webex.requiresRecordingConsent)
+        XCTAssertFalse(AppMeetingPattern.simulator.requiresRecordingConsent)
     }
 
     // MARK: - Simulator Pattern

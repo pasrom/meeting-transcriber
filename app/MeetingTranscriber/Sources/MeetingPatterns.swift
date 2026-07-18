@@ -8,6 +8,12 @@ struct AppMeetingPattern: Equatable {
     let idlePatterns: [String]
     let minWindowWidth: CGFloat
     let minWindowHeight: CGFloat
+    /// When true, a detected meeting for this app must be confirmed by the user
+    /// before recording starts, instead of auto-recording. Browser meetings set
+    /// this (issue #503): the WebRTC power assertion that detects them fires for
+    /// any WebRTC use, not just meetings, so a prompt is the false-positive
+    /// filter. Native desktop clients leave it false and keep auto-start.
+    let requiresRecordingConsent: Bool
 
     init(
         appName: String,
@@ -16,6 +22,7 @@ struct AppMeetingPattern: Equatable {
         idlePatterns: [String] = [],
         minWindowWidth: CGFloat = 200,
         minWindowHeight: CGFloat = 200,
+        requiresRecordingConsent: Bool = false,
     ) {
         self.appName = appName
         self.ownerNames = ownerNames
@@ -23,6 +30,7 @@ struct AppMeetingPattern: Equatable {
         self.idlePatterns = idlePatterns
         self.minWindowWidth = minWindowWidth
         self.minWindowHeight = minWindowHeight
+        self.requiresRecordingConsent = requiresRecordingConsent
     }
 }
 
@@ -90,7 +98,20 @@ extension AppMeetingPattern {
         minWindowHeight: 100,
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator]
+    /// Browser-based meetings (Google Meet, Whereby, web Zoom/Teams/Webex) run
+    /// inside Chrome, which the native-app patterns above miss (issue #503).
+    /// Detection is by the WebRTC power assertion (see `PowerAssertionDetector`),
+    /// not window titles — Chrome's window title only reflects the active tab.
+    /// `requiresRecordingConsent` routes it through a prompt instead of
+    /// auto-start; `meetingPatterns` is empty (no title-based detection in the PoC).
+    static let chromeBrowser = AppMeetingPattern(
+        appName: "Google Chrome",
+        ownerNames: ["Google Chrome"],
+        meetingPatterns: [],
+        requiresRecordingConsent: true,
+    )
+
+    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, chromeBrowser]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]
