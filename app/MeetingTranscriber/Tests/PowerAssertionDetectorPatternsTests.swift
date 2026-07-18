@@ -15,11 +15,71 @@ private func assertionDict(processName: String, assertName: String) -> [Int32: [
 /// type_body_length cap) since this is a distinct concern.
 final class PowerAssertionDetectorPatternsTests: XCTestCase {
     func testPatternsWatchingAllKeepsEveryPattern() {
-        // All toggles on (the default) → every default pattern, unchanged.
+        // Every user-facing app watched (natives + browser) → every default pattern.
         let names = PowerAssertionDetector
-            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex"])
+            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex", "Google Chrome"])
             .map(\.appName)
         XCTAssertEqual(Set(names), Set(PowerAssertionDetector.defaultPatterns.map(\.appName)))
+    }
+
+    // MARK: - Browser (Chrome / WebRTC) pattern — issue #503
+
+    func testBrowserPatternIsOptInViaWatching() {
+        // The Chrome browser pattern ships in defaults but is only watched when
+        // the browser toggle adds "Google Chrome" to watchApps — off by default,
+        // so the native-only selection must not include it.
+        XCTAssertFalse(
+            PowerAssertionDetector.patterns(watching: ["Microsoft Teams", "Zoom", "Webex"])
+                .map(\.appName).contains("Google Chrome"),
+        )
+        XCTAssertTrue(
+            PowerAssertionDetector.patterns(watching: ["Google Chrome"])
+                .map(\.appName).contains("Google Chrome"),
+        )
+    }
+
+    func testChromeWebRTCCallIsDetected() {
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
+        }
+        let meeting = detector.checkOnce()
+        XCTAssertEqual(meeting?.pattern.appName, "Google Chrome")
+        XCTAssertTrue(meeting?.pattern.requiresRecordingConsent ?? false,
+                      "a detected browser meeting must carry the consent flag")
+    }
+
+    func testChromeMediaPlaybackIsNotDetectedAsMeeting() {
+        // A Chrome tab playing audio/video (e.g. YouTube) also holds a
+        // display-sleep assertion, but its name has no WebRTC marker — the
+        // keyword match must reject it so we don't prompt on every video.
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            assertionDict(processName: "Google Chrome", assertName: "Playing audio")
+        }
+        XCTAssertNil(detector.checkOnce())
+    }
+
+    func testNonChromeWebRTCAssertionIsNotDetected() {
+        // The pattern matches by exact process name; a different process holding
+        // a WebRTC-named assertion must not fire the Chrome browser pattern.
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            assertionDict(processName: "firefox", assertName: "WebRTC has active PeerConnections")
+        }
+        XCTAssertNil(detector.checkOnce())
     }
 
     func testPatternsWatchingSubsetDropsUnselectedApps() {
