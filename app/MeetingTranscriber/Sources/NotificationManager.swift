@@ -178,6 +178,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         }
     }
 
+    /// Resolve a parked browser-consent prompt programmatically (the debug-RPC
+    /// `confirmBrowserConsent` hook, issue #503) — an automated e2e driver can't
+    /// click the macOS notification, so it answers the parked prompt through
+    /// this instead. Returns whether a prompt was actually waiting. Touches only
+    /// the lock-guarded coordinator, so it's safe from any thread with no
+    /// MainActor hop (unlike the scene actions).
+    func resolveBrowserConsent(granted: Bool) -> Bool {
+        consentCoordinator.resolvePending(granted: granted)
+    }
+
     /// Post the actionable consent notification (the thin UNUserNotificationCenter
     /// adapter — the decision itself is driven by `didReceive` / the coordinator
     /// timeout, whichever resolves first).
