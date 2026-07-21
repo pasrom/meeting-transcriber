@@ -192,15 +192,20 @@ tools/meeting-simulator/   # Meeting simulator tool for testing (--title sets th
 tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screenshot, open-settings, …)
   Package.swift
   Sources/
-    MTCLI.swift            # ArgumentParser entrypoint
+    MTCLI.swift            # ArgumentParser entrypoint (+ confirm-browser-consent, wav-verdict subcommands, issue #503)
     RPCClient.swift        # HTTP client; reads token from AppPaths-equivalent path
+    WavVerdict.swift       # Pure RMS non-silence analysis (windowed dBFS + activeWindowRatio); backs `mt-cli wav-verdict`
   Tests/RPCClientTests.swift
+  Tests/WavVerdictTests.swift
+  Tests/WavVerdictCommandTests.swift
   skill.md                 # Claude skill: when to use mt-cli, with examples
 scripts/
   build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
   notarize_status.sh       # Check Apple notarization status
   run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)
   e2e-app.sh               # Live-recording E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
+  e2e-browser.sh           # Live browser-meeting E2E driver (issue #503): deploy dev.app (watchBrowserMeetings+recordOnly+noMic+RPC), open Chrome + fixtures/webrtc-tone.html, grant consent via RPC, assert _app.wav non-silent via `mt-cli wav-verdict`
+  fixtures/webrtc-tone.html  # Self-contained WebRTC-loopback + WebAudio-tone page (holds the "WebRTC has active PeerConnections" assertion + emits a tone the CATap can capture) for e2e-browser.sh
   e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
   e2e-settings-smoke.sh    # GitHub-hosted /ui/* canary: build homebrew .app + launch with RPC + assert GET /ui/tree surfaces recordOnlyToggle and POST /ui/press flips /state (self-pid AX; no TCC; run by e2e-ui-smoke.yml)
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
@@ -234,6 +239,7 @@ Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
   pr-labels.yml            # Automatic PR labeling
   e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push + label-gated PR runs via `run-e2e`)
   e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly + label-gated PR runs via `run-e2e`)
+  e2e-browser.yml          # E2E — browser-meeting detection + capture (issue #503): Chrome + WebRTC-tone fixture → power-assertion detect → RPC consent → non-silent _app.wav; NON-GATING canary on the self-hosted mini (dispatch + nightly + label-gated PR runs via `run-e2e`)
   e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch + nightly trend cron, RESULT artifact)
   appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
   e2e-ui-smoke.yml         # E2E — GitHub-hosted /ui/* self-pid AX canary: build homebrew .app, drive GET /ui/tree + POST /ui/press, assert (guards the non-contractual self-pid path against macOS drift; no TCC → runs off the mini; paths-filtered PR + main push + nightly + dispatch)
@@ -433,7 +439,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Debug RPC server (dev-only):**
 - `DebugRPCServer` is an embedded HTTP server bound to `127.0.0.1:9876` that exposes app state, screenshots, and scene actions for shell-driven inspection. Whole file is `#if !APPSTORE`. Two enable paths: persistent `Settings → Advanced → Local Automation API` toggle (key `debugRPCEnabled`, off by default), or per-session `MEETINGTRANSCRIBER_DEBUG_RPC=1` env var (force-starts at launch). `AppState.applyDebugRPCSetting()` reconciles the running server with both signals at startup and on toggle changes.
-- Debug / inspection endpoints (no stability contract): `GET /state` (pipeline + speaker DB + engine state JSON; `engines.*.modelState` lets driver scripts wait for model preload), `GET /healthz`, `GET /metrics` (cumulative CPU/RAM/instructions self-report via `proc_pid_rusage` — diff two snapshots for window averages; process-only, child processes excluded; consumed by `scripts/e2e-cpu-load.sh`), `GET /screenshot` (PNG of the largest visible window), `GET /ui/tree` (read-only accessibility tree of an allowlisted window as JSON — `?window=settings` by default; walks the app's own self-pid `AXUIElement` tree in-process — which surfaces SwiftUI's `.accessibilityIdentifier`s, unlike the `NSView.accessibilityChildren()` walk — and needs no Accessibility TCC grant since self-inspection is exempt; lets a driver assert on UI structure instead of pixel-diffing a screenshot; PII windows stay off the allowlist), `POST /ui/press` (drive a real UI action: presses the control with the given accessibility `identifier` in an allowlisted window via in-process `AXUIElementPerformAction(kAXPressAction)` on the self-pid tree — no TCC grant, runs on the main actor; body `{window, identifier}`; the pressable set is a reviewed per-identifier allowlist, not "any control in the window", so a token-holder can't trigger arbitrary or modal-opening controls; 200 `{"pressed":<bool>}` / 404 allowlisted id absent from tree / 409 present-but-disabled / 403 disallowed window or identifier / 503 window not open; the driver asserts the resulting state via `GET /state`, not the returned flag), `POST /action/openSettings`, `POST /action/closeSettings`.
+- Debug / inspection endpoints (no stability contract): `GET /state` (pipeline + speaker DB + engine state JSON; `engines.*.modelState` lets driver scripts wait for model preload), `GET /healthz`, `GET /metrics` (cumulative CPU/RAM/instructions self-report via `proc_pid_rusage` — diff two snapshots for window averages; process-only, child processes excluded; consumed by `scripts/e2e-cpu-load.sh`), `GET /screenshot` (PNG of the largest visible window), `GET /ui/tree` (read-only accessibility tree of an allowlisted window as JSON — `?window=settings` by default; walks the app's own self-pid `AXUIElement` tree in-process — which surfaces SwiftUI's `.accessibilityIdentifier`s, unlike the `NSView.accessibilityChildren()` walk — and needs no Accessibility TCC grant since self-inspection is exempt; lets a driver assert on UI structure instead of pixel-diffing a screenshot; PII windows stay off the allowlist), `POST /action/confirmBrowserConsent` (resolve a parked browser-meeting consent prompt without a clickable notification, issue #503; body `{granted:bool}` → `{"resolved":true}` if a prompt was waiting, `{"resolved":false}` no-op otherwise; resolves inline via the lock-guarded `ConsentPromptCoordinator`, no main-actor hop — used by `scripts/e2e-browser.sh` via `mt-cli confirm-browser-consent`), `POST /ui/press` (drive a real UI action: presses the control with the given accessibility `identifier` in an allowlisted window via in-process `AXUIElementPerformAction(kAXPressAction)` on the self-pid tree — no TCC grant, runs on the main actor; body `{window, identifier}`; the pressable set is a reviewed per-identifier allowlist, not "any control in the window", so a token-holder can't trigger arbitrary or modal-opening controls; 200 `{"pressed":<bool>}` / 404 allowlisted id absent from tree / 409 present-but-disabled / 403 disallowed window or identifier / 503 window not open; the driver asserts the resulting state via `GET /state`, not the returned flag), `POST /action/openSettings`, `POST /action/closeSettings`.
 - Versioned automation API under `/v1` (carries a stability contract, kept off the debug `/action/*` surface): `POST /v1/transcribe` (blocking one-call: 200 terminal / 202 still-running / 400), `POST /v1/jobs` + `GET /v1/jobs/<id>` (enqueue + poll), `GET`/`POST /v1/jobs/<id>/naming` + `POST /v1/jobs/<id>/naming/skip` (speaker naming; 409 on wrong state, 404 unknown id). The two POST enqueue routes honour an `Idempotency-Key` header. Finished-job readback survives the 60s queue reaping + an app restart via `TerminalJobStore`. Full reference: `docs/automation-api.md`. Routing in `DebugRPCServer+V1.swift`.
 - Two-layer auth: 32-byte hex bearer token at `~/Library/Application Support/MeetingTranscriber/.rpc-token` (chmod 0600) + reject on any non-empty browser `Origin` header.
 - Action endpoints post `Notification.Name.showSettings` / `.closeSettings` that the `@main` scene observes and routes to `bringWindowToFront(id: "settings")` / `closeWindow(id: "settings")` — same path the menu bar uses.
@@ -561,6 +567,35 @@ PRs are excluded from the self-hosted runner.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
+
+**Browser-meeting E2E (`e2e-browser.yml`, `scripts/e2e-browser.sh`)**
+- Proves the issue #503 chain end-to-end without a real meeting service:
+  deploys the dev `.app` (`watchBrowserMeetings` + `recordOnly` + `noMic` +
+  RPC, reusing `e2e-app.sh --redeploy-only` for build/sign), opens Chrome with
+  the self-contained `scripts/fixtures/webrtc-tone.html` (an in-page pc1↔pc2
+  WebRTC loopback carrying a 440 Hz WebAudio tone), then answers the parked
+  consent prompt over RPC (`mt-cli confirm-browser-consent`) instead of a
+  click, records ~15 s, quits Chrome to end the meeting, and asserts the
+  record-only `_app.wav` is non-silent (`mt-cli wav-verdict`).
+- The consent prompt normally requires a click; the debug-RPC
+  `POST /action/confirmBrowserConsent` resolves the parked
+  `ConsentPromptCoordinator` continuation so the whole flow runs headless.
+  `askToRecord` parks and blocks the watch loop regardless of notification
+  permission, so the RPC resolve works even when notifications are denied.
+- Detection uses the sandbox-safe power-assertion path (no Screen Recording),
+  so it needs no extra TCC beyond e2e-app's; the only new runner prerequisite
+  is Google Chrome installed. No mic (`noMic`).
+- The signal the driver polls is `confirm-browser-consent` returning
+  `{"resolved":true}` (a prompt has parked) — detection alone can't be read
+  from `watchState` (it stays `"watching"` both before detection and while
+  deferring for consent). After granting, it polls `watchState == "recording"`.
+- NON-GATING canary: reports red but is not a required check and not in
+  `tag-ruleset.json`. The assertion-hold (does a loopback PeerConnection hold
+  "WebRTC has active PeerConnections") and tap-capture (does the CATap record
+  Chrome's shared-audio-service output) are verified live on the mini when the
+  lane is first brought up.
+- Limitation: like `e2e-app`, self-hosted mini only; the fixture's Chrome
+  assertion wording is Chrome-version-dependent (the likeliest flake vector).
 
 **Why the live-recording variant exists** (history that's easy to lose):
 - An earlier attempt at xctest-framed live recording (PR #100,
