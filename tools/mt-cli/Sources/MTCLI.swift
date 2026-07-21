@@ -8,7 +8,7 @@ struct MTCLI: AsyncParsableCommand {
         abstract: "Thin client for the Meeting Transcriber debug RPC server.",
         subcommands: [
             State.self, Healthz.self, Screenshot.self, UITree.self, UIPress.self,
-            OpenSettings.self, CloseSettings.self,
+            OpenSettings.self, CloseSettings.self, ConfirmBrowserConsent.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
         ],
     )
@@ -62,6 +62,25 @@ struct CloseSettings: AsyncParsableCommand {
         let client = try RPCClient.loadDefault()
         let data = try await client.post("/action/closeSettings", json: [:])
         FileHandle.standardOutput.write(data)
+    }
+}
+
+struct ConfirmBrowserConsent: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "confirm-browser-consent",
+        abstract: "Answer a parked browser-meeting consent prompt (issue #503). "
+            + "Prints the server's {\"resolved\":bool} JSON; resolved:false means "
+            + "no prompt was waiting yet, so poll until true.",
+    )
+
+    @Flag(inversion: .prefixedNo, help: "Grant recording (default) or --no-granted to decline.")
+    var granted = true
+
+    func run() async throws {
+        let client = try RPCClient.loadDefault()
+        let data = try await client.post("/action/confirmBrowserConsent", json: ["granted": granted])
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
     }
 }
 
