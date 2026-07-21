@@ -17,6 +17,26 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
     private(set) var isSetUp = false
 
+    // MARK: - Browser meeting consent prompt (issue #503)
+
+    /// Notification category + action identifiers for the "record this browser
+    /// meeting?" prompt. The category is registered in `setUp()`; the action
+    /// identifier the user taps maps to a Bool via `consentGranted(for:)`.
+    static let consentCategoryID = "BROWSER_MEETING_CONSENT"
+    static let recordActionID = "BROWSER_MEETING_RECORD"
+    static let ignoreActionID = "BROWSER_MEETING_IGNORE"
+    /// An unanswered prompt counts as "ignore" after this long, so a missed
+    /// prompt doesn't block the watch loop indefinitely. Independent of
+    /// `BrowserConsentPolicy.cooldown` (post-decline re-prompt suppression),
+    /// which happens to share this value — the two are separate knobs, don't
+    /// unify them.
+    static let consentPromptTimeout: TimeInterval = 60
+
+    /// Owns the consent prompt's register/resolve/timeout/race logic (unit-tested
+    /// in `ConsentPromptCoordinatorTests`); this class only wires the
+    /// UNUserNotificationCenter add + delegate callback to it.
+    private let consentCoordinator = ConsentPromptCoordinator(timeout: NotificationManager.consentPromptTimeout)
+
     #if !APPSTORE
         /// Bounded in-memory log of every notification posted through
         /// `notify(...)`, read by the dev-only debug RPC `/state.notifications`
@@ -45,6 +65,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
         let center = UNUserNotificationCenter.current()
         center.delegate = self
+        center.setNotificationCategories([Self.makeConsentCategory()])
         center.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error {
                 logger.error("Notification permission error: \(error.localizedDescription, privacy: .public)")
@@ -122,6 +143,62 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         if let content = Self.notificationContent(for: newState, status: status) {
             notify(title: content.title, body: content.body)
         }
+    }
+
+    // MARK: - Consent prompt (issue #503)
+
+    /// The "record this browser meeting?" category with Record / Ignore actions.
+    static func makeConsentCategory() -> UNNotificationCategory {
+        let record = UNNotificationAction(identifier: recordActionID, title: "Record", options: [.foreground])
+        let ignore = UNNotificationAction(identifier: ignoreActionID, title: "Ignore", options: [])
+        return UNNotificationCategory(
+            identifier: consentCategoryID,
+            actions: [record, ignore],
+            intentIdentifiers: [],
+            options: [],
+        )
+    }
+
+    /// Pure mapping: only the explicit Record action grants consent. Ignore, a
+    /// swipe-away dismiss, and the default body tap all decline.
+    static func consentGranted(for actionIdentifier: String) -> Bool {
+        actionIdentifier == recordActionID
+    }
+
+    /// Post an actionable "record this browser meeting?" prompt and await the
+    /// user's choice (issue #503). Returns false when notifications can't be
+    /// delivered (no bundle / not set up) so we never record without a visible
+    /// prompt, and false on timeout/ignore/dismiss.
+    @MainActor
+    func askToRecord(title: String, body: String) async -> Bool {
+        guard isSetUp, Bundle.main.bundleIdentifier != nil else { return false }
+        let id = UUID().uuidString
+        return await consentCoordinator.awaitDecision(id: id) { [self] in
+            postConsentNotification(id: id, title: title, body: body)
+        }
+    }
+
+    /// Post the actionable consent notification (the thin UNUserNotificationCenter
+    /// adapter — the decision itself is driven by `didReceive` / the coordinator
+    /// timeout, whichever resolves first).
+    private func postConsentNotification(id: String, title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.categoryIdentifier = Self.consentCategoryID
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: id, content: content, trigger: nil),
+        )
+    }
+
+    // Handle a tapped consent action (or a dismiss) → resolve the prompt.
+    // swiftlint:disable:next async_without_await
+    func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        consentCoordinator.resolve(
+            id: response.notification.request.identifier,
+            granted: Self.consentGranted(for: response.actionIdentifier),
+        )
     }
 
     // Show notifications even when app is in foreground

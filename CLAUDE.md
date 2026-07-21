@@ -44,7 +44,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
     AXHelper.swift         # Shared accessibility API helper
     A11yID.swift           # Single source of truth for accessibility identifiers used as automation handles (ViewInspector find + /ui/press allowlist reference the constants → compiler catches drift)
-    NotificationManager.swift # macOS notifications
+    NotificationManager.swift # macOS notifications (+ actionable browser-consent prompt, issue #503)
+    ConsentPromptCoordinator.swift  # Pure async yes/no prompt coordinator (register→resolve-once by answer or injected-clock timeout, race-safe); NotificationManager wires UNUserNotificationCenter to it (issue #503)
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
     TranscribingEngine.swift # TranscribingEngine protocol + mergeDualSourceSegments default impl
@@ -83,6 +84,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
     WatchLoopEndPolicy.swift  # Pure decision logic for WatchLoop.waitForMeetingEnd (grace-period / max-duration)
+    BrowserConsentPolicy.swift  # Pure decision logic for the browser-meeting "ask before recording" prompt (per-app decline cooldown, issue #503)
     WatchLoopState.swift   # Value-type snapshot of WatchLoop's observable fields (for tests and RPC)
     WatchingController.swift  # @Observable controller owning WatchLoop lifecycle (wired by AppState)
     ManualRecordingMonitorPolicy.swift  # Pure decision logic for manual recording stop conditions (process-died vs max-duration)
@@ -397,6 +399,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Detection:**
 - `MeetingDetecting` protocol abstracts detection strategies. Two implementations: `MeetingDetector` (window title matching via `CGWindowListCopyWindowInfo`) and `PowerAssertionDetector` (IOKit power assertions — sandbox-safe, no Screen Recording permission needed).
 - `MeetingDetector` counts each pattern once per poll — prevents over-counting when multiple windows match the same app.
+- **Browser meetings (issue #503):** `PowerAssertionDetector` also carries a `Google Chrome` pattern that matches the `NoIdleSleepAssertion` named `"WebRTC has active PeerConnections"` (keyword `webrtc`/`peerconnection`, not the assertion type — Chrome holds the same type for plain media playback), so Google Meet / Whereby / web Zoom-Teams-Webex are detected without window titles. It is opt-in via `AppSettings.watchBrowserMeetings` (default off, appends `"Google Chrome"` to `watchApps`). Because the WebRTC signal isn't meeting-exclusive, browser meetings are gated behind a consent prompt (`AppMeetingPattern.requiresRecordingConsent` → `WatchLoop.consentProvider` → `NotificationManager.askToRecord`, a `BROWSER_MEETING_CONSENT` notification with Record/Ignore actions) instead of auto-starting; a decline suppresses re-prompts for a cooldown (`BrowserConsentPolicy`). Audio capture reuses the existing multi-PID tap (Chrome is multi-process like Electron); capturing only the meeting tab vs. all Chrome audio is a known follow-up.
 
 **Diarization:**
 - `FluidDiarizer` uses FluidAudio (CoreML/ANE) for on-device speaker diarization — no HuggingFace token needed. Two modes: `.offline` (default) and `.sortformer` (overlap-aware, via `SortformerDiarizer`). Selected via `AppSettings.diarizerMode`.

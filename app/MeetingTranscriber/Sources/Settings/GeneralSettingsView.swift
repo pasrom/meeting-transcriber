@@ -20,6 +20,11 @@ struct GeneralSettingsView: View {
                 Toggle("Microsoft Teams", isOn: $settings.watchTeams)
                 Toggle("Zoom", isOn: $settings.watchZoom)
                 Toggle("Webex", isOn: $settings.watchWebex)
+                Toggle("Browser Web Meetings (Google Chrome)", isOn: $settings.watchBrowserMeetings)
+                    .accessibilityIdentifier(A11yID.watchBrowserToggle)
+                Text("Detects meetings in Chrome (Google Meet, Whereby, web Zoom/Teams). Asks before recording.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Detection") {

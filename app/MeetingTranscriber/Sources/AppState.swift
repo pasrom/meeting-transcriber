@@ -12,6 +12,12 @@ import os.log
 protocol AppNotifying {
     func notify(title: String, body: String)
 
+    /// Ask the user whether to record a just-detected browser meeting (issue
+    /// #503); true = record. `@MainActor` — the real prompt is UI. Defaults to
+    /// false so a notifier without a prompt never records silently.
+    @MainActor
+    func askToRecord(title: String, body: String) async -> Bool
+
     #if !APPSTORE
         /// Recently posted notifications, oldest first, for the debug RPC
         /// `/state.notifications` snapshot. Defaults to empty — only the
@@ -29,6 +35,16 @@ protocol AppNotifying {
         }
     }
 #endif
+
+extension AppNotifying {
+    // swiftlint:disable async_without_await
+    /// Deny by default — only `NotificationManager` shows a real prompt.
+    @MainActor
+    func askToRecord(title _: String, body _: String) async -> Bool {
+        false
+    }
+    // swiftlint:enable async_without_await
+}
 
 // MARK: - AppState
 

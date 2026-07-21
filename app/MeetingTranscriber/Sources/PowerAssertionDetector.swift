@@ -55,6 +55,18 @@ class PowerAssertionDetector: MeetingDetecting {
             processNames: ["meeting-simulator"],
             keywords: ["simulator meeting"],
         ),
+        // Browser meetings (issue #503): Chrome holds a "NoIdleSleepAssertion"
+        // named "WebRTC has active PeerConnections" during any WebRTC call
+        // (Google Meet, Whereby, web Zoom/Teams/Webex). Keyword-only, no
+        // assertionTypes: Chrome holds the same assertion type for plain media
+        // playback (YouTube), so matching the type would fire on every video —
+        // the WebRTC name is the meeting-specific signal. Opt-in: only watched
+        // when the browser toggle adds "Google Chrome" to watchApps.
+        AssertionPattern(
+            appName: AppMeetingPattern.chromeBrowser.appName,
+            processNames: ["Google Chrome"],
+            keywords: ["webrtc", "peerconnection"],
+        ),
     ]
 
     /// The `defaultPatterns` subset to watch given the user's "Apps to Watch"

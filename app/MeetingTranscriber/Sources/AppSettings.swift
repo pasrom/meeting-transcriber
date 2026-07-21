@@ -112,6 +112,13 @@ final class AppSettings {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
+    /// Watch for browser-based meetings (Google Chrome / WebRTC), issue #503.
+    /// Off by default — opt-in, and browser meetings prompt before recording
+    /// (the WebRTC signal isn't meeting-exclusive), unlike native auto-start.
+    var watchBrowserMeetings: Bool {
+        didSet { defaults.set(watchBrowserMeetings, forKey: "watchBrowserMeetings") }
+    }
+
     /// Auto-start watching on app launch.
     var autoWatch: Bool {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
@@ -457,6 +464,7 @@ final class AppSettings {
         if watchTeams { apps.append("Microsoft Teams") }
         if watchZoom { apps.append("Zoom") }
         if watchWebex { apps.append("Webex") }
+        if watchBrowserMeetings { apps.append(AppMeetingPattern.chromeBrowser.appName) }
         return apps
     }
 
@@ -468,6 +476,7 @@ final class AppSettings {
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
         watchWebex = defaults.object(forKey: "watchWebex") as? Bool ?? true
+        watchBrowserMeetings = defaults.object(forKey: "watchBrowserMeetings") as? Bool ?? false
         autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
 
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0

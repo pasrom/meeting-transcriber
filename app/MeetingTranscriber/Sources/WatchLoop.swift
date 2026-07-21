@@ -83,6 +83,10 @@ class WatchLoop {
     /// spawning a real subprocess.
     let pidAliveCheck: (pid_t) -> Bool
 
+    /// Suppresses re-prompting after a browser-meeting decline (issue #503).
+    /// Internal so the consent gate can live in `WatchLoop+Consent.swift`.
+    var consentPolicy: BrowserConsentPolicy
+
     private var watchTask: Task<Void, Never>?
 
     /// Hook called when state changes (for UI updates, notifications, etc.)
@@ -108,6 +112,7 @@ class WatchLoop {
             try await Task.sleep(for: .seconds(interval))
         },
         pidAliveCheck: @escaping (pid_t) -> Bool = { kill($0, 0) == 0 },
+        consentPolicy: BrowserConsentPolicy = BrowserConsentPolicy(),
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -124,6 +129,7 @@ class WatchLoop {
         self.nowProvider = nowProvider
         self.sleepProvider = sleepProvider
         self.pidAliveCheck = pidAliveCheck
+        self.consentPolicy = consentPolicy
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -280,6 +286,12 @@ class WatchLoop {
     private func watchLoop() async {
         while !Task.isCancelled {
             if let meeting = detector.checkOnce() {
+                // Browser meetings (issue #503) ask before recording; native
+                // meetings skip this (flag false). See WatchLoop+Consent.swift.
+                if await shouldDeferForConsent(meeting) {
+                    try? await sleepProvider(pollInterval)
+                    continue
+                }
                 do {
                     try await handleMeeting(meeting)
                 } catch {
