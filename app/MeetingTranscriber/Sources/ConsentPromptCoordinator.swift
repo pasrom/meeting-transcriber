@@ -65,4 +65,27 @@ final class ConsentPromptCoordinator: @unchecked Sendable {
         timeoutTask?.cancel()
         continuation?.resume(returning: granted)
     }
+
+    /// Resolve every currently-pending prompt at once with `granted`, returning
+    /// whether at least one was waiting. The debug-RPC consent hook (issue #503)
+    /// has no prompt id — "resolve whatever is parked" is the only sensible
+    /// semantics for a test hook, and a `false` no-op when nothing waits lets the
+    /// driver poll until a prompt actually parks. The drain happens under the
+    /// lock so two racing callers can't double-resume the same continuation.
+    @discardableResult
+    func resolvePending(granted: Bool) -> Bool {
+        lock.lock()
+        let continuations = Array(pending.values)
+        let timeoutTasks = Array(timeouts.values)
+        pending.removeAll()
+        timeouts.removeAll()
+        lock.unlock()
+        for task in timeoutTasks {
+            task.cancel()
+        }
+        for continuation in continuations {
+            continuation.resume(returning: granted)
+        }
+        return !continuations.isEmpty
+    }
 }
