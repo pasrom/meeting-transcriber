@@ -52,6 +52,65 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         coord.resolve(id: "never-awaited", granted: true)
     }
 
+    // MARK: - resolvePending (the RPC consent hook — resolve without a prompt id)
+
+    func testResolvePendingWithNoPromptsReturnsFalse() {
+        // The RPC test hook has no prompt id and polls: "nothing waiting yet" is
+        // a false no-op, not an error, so the driver can retry.
+        let coord = ConsentPromptCoordinator(timeout: 60, sleep: neverSleep)
+        XCTAssertFalse(coord.resolvePending(granted: true))
+    }
+
+    func testResolvePendingResolvesSingleParkedPrompt() async {
+        let coord = ConsentPromptCoordinator(timeout: 60, sleep: neverSleep)
+        let task = Task { await coord.awaitDecision(id: "a") {} }
+        await yieldUntilParked()
+        let resolved = coord.resolvePending(granted: true)
+        XCTAssertTrue(resolved)
+        let result = await task.value
+        XCTAssertTrue(result)
+    }
+
+    func testResolvePendingResolvesAllParkedPrompts() async {
+        // Defensive n>1 case: with no ids to target, "resolve everything waiting"
+        // is the only sane semantics — no zombie continuations left to time out.
+        let coord = ConsentPromptCoordinator(timeout: 60, sleep: neverSleep)
+        let t1 = Task { await coord.awaitDecision(id: "a") {} }
+        let t2 = Task { await coord.awaitDecision(id: "b") {} }
+        await yieldUntilParked()
+        let resolved = coord.resolvePending(granted: false)
+        XCTAssertTrue(resolved)
+        let r1 = await t1.value
+        let r2 = await t2.value
+        XCTAssertFalse(r1)
+        XCTAssertFalse(r2)
+    }
+
+    func testResolvePendingAfterResolveByIdIsNoOp() async {
+        // A prompt already answered by id leaves nothing pending.
+        let coord = ConsentPromptCoordinator(timeout: 60, sleep: neverSleep)
+        let task = Task { await coord.awaitDecision(id: "a") {} }
+        await yieldUntilParked()
+        coord.resolve(id: "a", granted: true)
+        let result = await task.value
+        XCTAssertTrue(result)
+        XCTAssertFalse(coord.resolvePending(granted: false))
+    }
+
+    func testConcurrentResolvePendingResolvesEachOnce() async {
+        // Two racing resolvePending calls must not double-resume a continuation
+        // (that would crash) — the drain-under-lock lets exactly one see it.
+        let coord = ConsentPromptCoordinator(timeout: 60, sleep: neverSleep)
+        let task = Task { await coord.awaitDecision(id: "a") {} }
+        await yieldUntilParked()
+        async let a = Task.detached { coord.resolvePending(granted: true) }.value
+        async let b = Task.detached { coord.resolvePending(granted: true) }.value
+        let (ra, rb) = await (a, b)
+        XCTAssertNotEqual(ra, rb, "exactly one racing resolvePending should see the pending prompt")
+        let result = await task.value
+        XCTAssertTrue(result)
+    }
+
     /// Sleep briefly so the awaiting task registers its continuation inside
     /// `withCheckedContinuation` before the test resolves it.
     private func yieldUntilParked() async {
