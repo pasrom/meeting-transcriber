@@ -31,7 +31,11 @@
 
         private func startServer(
             snapshot: RPCStateSnapshot = .empty,
+            // NB: keep after `enqueueFile` — Swift's forward-scan binds an
+            // unlabeled trailing closure to the FIRST function-type param, and
+            // the enqueueFile tests rely on that being enqueueFile.
             enqueueFile: @escaping (URL) -> Bool = { _ in false },
+            confirmBrowserConsent: @escaping (Bool) -> Bool = { _ in false },
             enqueueFiles: @escaping ([URL]) -> Int = { _ in 0 },
             enqueueReturningIDs: @escaping ([URL]) -> [UUID] = { _ in [] },
             jobStatus: @escaping (UUID) -> JobStatusDTO? = { _ in nil },
@@ -44,6 +48,7 @@
                 port: 0,
                 token: Self.testToken,
                 snapshot: { snapshot },
+                confirmBrowserConsent: confirmBrowserConsent,
                 enqueueFile: enqueueFile,
                 enqueueFiles: enqueueFiles,
                 enqueueReturningIDs: enqueueReturningIDs,
@@ -239,6 +244,58 @@
                 for: request("GET", base.appendingPathComponent("screenshot"), headers: authHeader),
             )
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+        }
+
+        // MARK: - /action/confirmBrowserConsent (issue #503)
+
+        func testConfirmBrowserConsentUndecodableBodyReturns400() async throws {
+            let base = try await startServer()
+            var req = request("POST", base.appendingPathComponent("action/confirmBrowserConsent"), headers: authHeader)
+            req.httpBody = Data("{}".utf8) // missing "granted"
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testConfirmBrowserConsentNoParkedPromptReturnsResolvedFalse() async throws {
+            // Closure returns false (nothing parked) → 200 {"resolved":false} so
+            // the driver keeps polling until a prompt actually parks.
+            let noPrompt: (Bool) -> Bool = { _ in false }
+            let base = try await startServer(confirmBrowserConsent: noPrompt)
+            var req = request("POST", base.appendingPathComponent("action/confirmBrowserConsent"), headers: authHeader)
+            req.httpBody = Data(#"{"granted":true}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(String(data: data, encoding: .utf8), #"{"resolved":false}"#)
+        }
+
+        func testConfirmBrowserConsentResolvesAndForwardsGranted() async throws {
+            // Records each granted value the closure sees, as an array so the box
+            // holds a non-optional Bool and "not yet called" is just empty.
+            actor GrantBox {
+                private(set) var grants: [Bool] = []
+                func record(_ granted: Bool) {
+                    grants.append(granted)
+                }
+            }
+            let box = GrantBox()
+            let confirm: (Bool) -> Bool = { granted in
+                Task { await box.record(granted) }
+                return true
+            }
+            let base = try await startServer(confirmBrowserConsent: confirm)
+            var req = request("POST", base.appendingPathComponent("action/confirmBrowserConsent"), headers: authHeader)
+            req.httpBody = Data(#"{"granted":true}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            XCTAssertEqual(String(data: data, encoding: .utf8), #"{"resolved":true}"#)
+
+            var grants: [Bool] = []
+            for _ in 0 ..< 20 {
+                grants = await box.grants
+                if !grants.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertEqual(grants, [true], "the posted granted value must reach the closure")
         }
 
         // MARK: - /action/enqueueFile

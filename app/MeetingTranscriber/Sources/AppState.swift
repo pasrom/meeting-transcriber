@@ -18,6 +18,12 @@ protocol AppNotifying {
     @MainActor
     func askToRecord(title: String, body: String) async -> Bool
 
+    /// Resolve a parked `askToRecord` prompt programmatically (the debug-RPC
+    /// consent hook, issue #503); returns whether one was waiting. Lives on the
+    /// same seam as `askToRecord` so park + resolve share it. Defaults to false
+    /// (no prompt) for notifiers without a real coordinator.
+    func resolveBrowserConsent(granted: Bool) -> Bool
+
     #if !APPSTORE
         /// Recently posted notifications, oldest first, for the debug RPC
         /// `/state.notifications` snapshot. Defaults to empty — only the
@@ -43,7 +49,13 @@ extension AppNotifying {
     func askToRecord(title _: String, body _: String) async -> Bool {
         false
     }
+
     // swiftlint:enable async_without_await
+
+    /// No prompt to resolve by default — only `NotificationManager` parks one.
+    func resolveBrowserConsent(granted _: Bool) -> Bool {
+        false
+    }
 }
 
 // MARK: - AppState
@@ -310,6 +322,13 @@ final class AppState {
                     }
                 }
             }
+            // Answers a parked browser-meeting consent prompt (issue #503) so an
+            // e2e driver can confirm recording without a clickable notification.
+            // Rides the injected `notifier` seam — the same one `askToRecord`
+            // parks in (WatchLoop+Consent) — so park + resolve stay symmetric.
+            let confirmBrowserConsent: (Bool) -> Bool = { [weak self] granted in
+                self?.notifier.resolveBrowserConsent(granted: granted) ?? false
+            }
             // RPC counterpart to the NSOpenPanel "Open from Recording" flow.
             // Validates the file exists (RPC layer returns 400 on `false`),
             // then routes through the same `enqueueFiles` entry point the
@@ -354,6 +373,7 @@ final class AppState {
                 snapshot: snapshot,
                 speakerActions: makeSpeakerDBActions(),
                 skipNaming: skipNaming,
+                confirmBrowserConsent: confirmBrowserConsent,
                 enqueueFile: enqueueFile,
                 enqueueFiles: enqueueFilesRPC,
                 enqueueReturningIDs: enqueueReturningIDs,
