@@ -1,4 +1,5 @@
 import ArgumentParser
+import AVFoundation
 import Foundation
 
 @main
@@ -10,6 +11,7 @@ struct MTCLI: AsyncParsableCommand {
             State.self, Healthz.self, Screenshot.self, UITree.self, UIPress.self,
             OpenSettings.self, CloseSettings.self, ConfirmBrowserConsent.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
+            WavVerdictCommand.self,
         ],
     )
 }
@@ -81,6 +83,71 @@ struct ConfirmBrowserConsent: AsyncParsableCommand {
         let data = try await client.post("/action/confirmBrowserConsent", json: ["granted": granted])
         FileHandle.standardOutput.write(data)
         FileHandle.standardOutput.write(Data("\n".utf8))
+    }
+}
+
+// Sync ParsableCommand (not Async) — the analysis + file load are synchronous,
+// so a `run() async` would be an async_without_await. ArgumentParser dispatches
+// a sync subcommand of an async root fine.
+struct WavVerdictCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "wav-verdict",
+        abstract: "Analyze an audio file's loudness (issue #503 capture proof). "
+            + "Prints a JSON verdict; exits 0 when non-silent AND active-window "
+            + "ratio >= --min-active-ratio, 1 otherwise.",
+    )
+
+    @Argument(help: "Path to the WAV/audio file to analyze.")
+    var path: String
+
+    @Option(name: .long, help: "dBFS threshold below which a window is silent. Default -50.")
+    var thresholdDbfs: Double = -50
+
+    @Option(name: .long, help: "Minimum fraction of active windows to pass. Default 0.5.")
+    var minActiveRatio: Double = 0.5
+
+    @Option(name: .long, help: "Analysis window length in seconds. Default 0.5.")
+    var windowSeconds: Double = 0.5
+
+    func run() throws {
+        let (samples, sampleRate) = try Self.loadSamples(path: path)
+        let verdict = WavVerdict.analyze(
+            samples: samples, sampleRate: sampleRate,
+            windowSeconds: windowSeconds, thresholdDBFS: thresholdDbfs,
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try FileHandle.standardOutput.write(encoder.encode(verdict))
+        FileHandle.standardOutput.write(Data("\n".utf8))
+        // Non-zero exit if silent or too few active windows, so a driver can
+        // gate on the exit code alone.
+        if verdict.isSilent || verdict.activeWindowRatio < minActiveRatio {
+            throw ExitCode(1)
+        }
+    }
+
+    /// Load an audio file as mono Float32 samples via AVAudioFile, averaging any
+    /// channels down to mono. Thin I/O layer — the verdict logic stays pure.
+    static func loadSamples(path: String) throws -> (samples: [Float], sampleRate: Double) {
+        let file = try AVAudioFile(forReading: URL(fileURLWithPath: path))
+        let format = file.processingFormat
+        let frameCount = AVAudioFrameCount(file.length)
+        guard frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            return ([], format.sampleRate)
+        }
+        try file.read(into: buffer)
+        guard let channelData = buffer.floatChannelData else { return ([], format.sampleRate) }
+        let channels = Int(format.channelCount)
+        let frames = Int(buffer.frameLength)
+        var mono = [Float](repeating: 0, count: frames)
+        for frame in 0 ..< frames {
+            var sum: Float = 0
+            for channel in 0 ..< channels {
+                sum += channelData[channel][frame]
+            }
+            mono[frame] = sum / Float(channels)
+        }
+        return (mono, format.sampleRate)
     }
 }
 
