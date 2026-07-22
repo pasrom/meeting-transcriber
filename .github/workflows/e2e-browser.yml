@@ -109,7 +109,8 @@ jobs:
       # Freifunk outage / UI drift is not our regression — green means the real
       # chain works, a failure is a signal to check, not a merge blocker.
       - name: Run browser-meeting E2E driver (real Jitsi, best-effort)
-        if: github.event_name != 'pull_request'
+        # TEMP: PR gate lifted to validate the --jitsi lane once on the mini;
+        # re-add `if: github.event_name != 'pull_request'` after.
         continue-on-error: true
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
