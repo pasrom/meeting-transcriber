@@ -1,0 +1,144 @@
+name: E2E (Browser Meeting)
+
+# Live browser-meeting detection + capture E2E (issue #503). Drives Chrome +
+# a local WebRTC-tone fixture through the power-assertion detector, answers the
+# consent prompt over RPC, and asserts the record-only _app.wav is non-silent.
+# Background: CLAUDE.md > E2E Architecture. Driver: scripts/e2e-browser.sh.
+#
+# NON-GATING CANARY: not referenced by any required check and not listed in
+# .github/tag-ruleset.json. Red is reported (no continue-on-error) but never
+# blocks a merge or a stable tag. Promote to a gate only after a couple of
+# weeks of stable nightlies.
+#
+# Runner prerequisites: the same self-hosted Mac mini as e2e-app.yml (signing
+# identity + TCC audio-capture grant), PLUS Google Chrome installed. No mic is
+# needed (the driver runs with noMic) and no Screen Recording is needed
+# (detection uses the sandbox-safe power-assertion path).
+
+on:
+  workflow_dispatch:
+  # Label-gated PR runs, same-repo branches only — identical policy to
+  # e2e-app.yml (fork PRs never reach the self-hosted runner; a label would be
+  # a standing approval and a fork run would fail without signing secrets).
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # 05:15 UTC — offset from e2e-app's 04:30 cron so the two audio lanes don't
+    # queue behind each other at the same minute (they share the one `audio`
+    # runner) and are easy to tell apart in `gh run list`.
+    - cron: '15 5 * * *'
+
+# The single `audio`-labeled runner serialises this against e2e-app.yml (only
+# one audio job runs at a time; the rest queue). cancel-in-progress stays false
+# for the same reason as e2e-app: the dev app is launched detached (`open`), so
+# a cancelled run can't clean it up — it would keep recording, hold port 9876,
+# and orphan WAVs. PR events group per PR number so a labeled PR never sits in
+# front of a nightly/dispatch run.
+concurrency:
+  group: e2e-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-browser:
+    # Non-PR events (schedule/dispatch) always run. PR events run only for
+    # same-repo branches carrying the `run-e2e` label; fork PRs never reach the
+    # runner. The label-name check keeps a `labeled` event for some OTHER label
+    # from queueing a duplicate run.
+    if: |
+      github.event_name != 'pull_request' ||
+      (
+        contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
+      )
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    # Cold build + deploy + re-sign (~70 s) + mt-cli build + one browser
+    # meeting (Chrome launch + detect + ~15 s capture + stop + assert) →
+    # ~6 min observed. 15 min gives honest margin; the driver has its own
+    # internal timeouts so a hang surfaces as a driver failure, not a job kill.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/verify-xcode
+
+      # Same Developer ID signing path as e2e-app.yml — e2e-browser.sh shells
+      # out to e2e-app.sh --redeploy-only, which re-signs the deployed bundle.
+      # If the secret isn't set the action is a no-op and the self-signed dev
+      # cert from setup-self-hosted-runner.sh is used instead.
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for the driver
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Pre-flight codesign smoke test
+        if: env.E2E_SIGNING_KEYCHAIN != ''
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        run: |
+          TEST_BIN=$(mktemp)
+          trap 'rm -f "$TEST_BIN"' EXIT
+          cp /usr/bin/true "$TEST_BIN"
+          if ! codesign --force --sign "$DEVELOPER_ID" --keychain "$E2E_SIGNING_KEYCHAIN" "$TEST_BIN"; then
+              echo "::error::codesign smoke test failed — likely trustd or partition-list drift on the Mini"
+              exit 1
+          fi
+
+      - name: Run browser-meeting E2E driver
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 12
+        run: bash scripts/e2e-browser.sh
+
+      # Real-meeting variant (issue #503): instead of the local WebRTC fixture,
+      # two Chrome tabs join a REAL public Jitsi room (meet.ffmuc.net, no login)
+      # over a real WebRTC SFU — a genuine 2-participant meeting, not an in-page
+      # loopback. getUserMedia is overridden to a tone so no mic/TCC is needed.
+      # Reuses the bundle the step above built + signed (--no-build).
+      # Nightly/dispatch ONLY (never on labeled PRs) to keep hits on the
+      # third-party public instance rare, and continue-on-error because a
+      # Freifunk outage / UI drift is not our regression — green means the real
+      # chain works, a failure is a signal to check, not a merge blocker.
+      - name: Run browser-meeting E2E driver (real Jitsi, best-effort)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-browser.sh --jitsi --no-build
+
+      # Post-mortem: the captured app track + sidecar (copied to /tmp by the
+      # driver, so the on-exit recordings sweep doesn't delete them) plus a
+      # power-assertion snapshot and the audiotap log tail — the evidence for
+      # "did Chrome hold the assertion and did the tap capture audio?".
+      - name: Capture diagnostics
+        if: failure()
+        run: |
+          pmset -g assertions > /tmp/e2e-browser-assertions.txt 2>&1 || true
+          log show --last 5m --predicate 'subsystem == "com.meetingtranscriber.audiotap"' \
+            > /tmp/e2e-browser-audiotap.log 2>&1 || true
+
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-browser-diagnostics
+          path: |
+            /tmp/e2e-browser-app.wav
+            /tmp/e2e-browser-meta.json
+            /tmp/e2e-browser-assertions.txt
+            /tmp/e2e-browser-audiotap.log
+          if-no-files-found: ignore
+
+      - name: Cleanup signing keychain
+        if: always() && env.E2E_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true

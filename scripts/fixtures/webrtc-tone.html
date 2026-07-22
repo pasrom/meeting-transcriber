@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebRTC + Tone Fixture (issue #503)</title>
+</head>
+<body style="font-family: -apple-system, system-ui, sans-serif; padding: 2rem; font-size: 1.4rem">
+  <h1 id="status">starting…</h1>
+  <button id="start" style="font-size: 1.4rem; padding: 1rem 2rem">Start (if muted)</button>
+  <pre id="log" style="font-size: 0.9rem; color: #555"></pre>
+  <script>
+    // Self-contained e2e fixture for browser-meeting detection + capture.
+    // No Zoom / account / second participant / network needed:
+    //   1. A continuous 440 Hz tone rendered to the output device — this is
+    //      what the CATapDescription tap must record non-silently.
+    //   2. An in-page pc1 <-> pc2 WebRTC loopback carrying that tone as a
+    //      real media track, so Chrome holds the "WebRTC has active
+    //      PeerConnections" power assertion that PowerAssertionDetector
+    //      matches (a real active PeerConnection with a track guarantees the
+    //      assertion regardless of whether a bare RTCPeerConnection would).
+    const logEl = document.getElementById('log');
+    const statusEl = document.getElementById('status');
+    const log = (m) => { logEl.textContent += m + '\n'; };
+    const setStatus = (s) => { statusEl.textContent = s; };
+
+    let started = false;
+    async function start() {
+      if (started) return;
+      started = true;
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        await ctx.resume();
+
+        const osc = ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.value = 440;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.3;
+        osc.connect(gain);
+        gain.connect(ctx.destination);              // → output device → CATap
+        const streamDest = ctx.createMediaStreamDestination();
+        gain.connect(streamDest);                   // → WebRTC track
+        osc.start();
+
+        const pc1 = new RTCPeerConnection();
+        const pc2 = new RTCPeerConnection();
+        pc1.onicecandidate = (e) => { if (e.candidate) pc2.addIceCandidate(e.candidate); };
+        pc2.onicecandidate = (e) => { if (e.candidate) pc1.addIceCandidate(e.candidate); };
+        pc2.ontrack = () => log('pc2: received track');
+        pc1.onconnectionstatechange = () => {
+          log('pc1 connectionState: ' + pc1.connectionState);
+          if (pc1.connectionState === 'connected') setStatus('connected: tone + WebRTC active');
+        };
+        streamDest.stream.getTracks().forEach((t) => pc1.addTrack(t, streamDest.stream));
+
+        const offer = await pc1.createOffer();
+        await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(offer);
+        const answer = await pc2.createAnswer();
+        await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(answer);
+
+        window.__fixtureReady = true;             // pollable readiness flag
+        setStatus('tone playing + WebRTC negotiating');
+        log('AudioContext state: ' + ctx.state);
+      } catch (e) {
+        setStatus('error');
+        log('error: ' + e);
+      }
+    }
+
+    document.getElementById('start').addEventListener('click', start);
+    // Autostart: works when Chrome is launched with
+    // --autoplay-policy=no-user-gesture-required (the e2e driver does this).
+    // The button is a manual fallback when opened by hand.
+    window.addEventListener('load', () => { start(); });
+  </script>
+</body>
+</html>

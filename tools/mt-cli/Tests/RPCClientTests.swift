@@ -148,6 +148,78 @@ final class RPCClientTests: XCTestCase {
 
         XCTAssertEqual(captured.value, "GET /ui/tree?window=settings HTTP/1.1")
     }
+
+    /// The confirm-browser-consent command posts a Bool payload; it must
+    /// serialize as a JSON boolean (`true`), not the integer `1`, so the
+    /// server's `ConsentPayload { granted: Bool }` decodes it. Captures the
+    /// request body off a fake server and asserts the exact bytes.
+    func testPostSerializesBoolPayloadAsJSONBoolean() async throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let held = SilentConnectionHolder()
+        let captured = RequestLineBox()
+        listener.newConnectionHandler = { connection in
+            held.add(connection)
+            connection.start(queue: .global())
+            // URLSession delivers the POST body in a TCP segment after the
+            // headers, so accumulate until the full Content-Length body arrives.
+            drainRequestBody(connection, into: captured)
+        }
+
+        let portReady = XCTestExpectation(description: "listener bound")
+        let assignedPort = OSPortBox()
+        listener.stateUpdateHandler = { state in
+            if case .ready = state, let port = listener.port?.rawValue {
+                assignedPort.set(port)
+                portReady.fulfill()
+            }
+        }
+        listener.start(queue: .global())
+        defer { listener.cancel() }
+
+        await fulfillment(of: [portReady], timeout: 2)
+        let port = try XCTUnwrap(assignedPort.value)
+        guard let baseURL = URL(string: "http://127.0.0.1:\(port)") else {
+            XCTFail("could not build URL")
+            return
+        }
+        let client = RPCClient(baseURL: baseURL, token: "test-token")
+
+        _ = try await client.post("/action/confirmBrowserConsent", json: ["granted": true])
+
+        XCTAssertEqual(captured.value, #"{"granted":true}"#)
+    }
+}
+
+/// Recursively receive from `connection`, accumulating bytes until the full
+/// HTTP request body (per Content-Length) has arrived, then store the body in
+/// `box` and reply 200. URLSession splits headers and body across TCP segments,
+/// so a single receive can't see the POST body.
+private func drainRequestBody(_ connection: NWConnection, into box: RequestLineBox, acc: Data = Data()) {
+    connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, _, _ in
+        var buffer = acc
+        if let data { buffer.append(data) }
+        // Failable decode: a partial UTF-8 sequence at a TCP segment boundary
+        // yields nil, so keep accumulating rather than corrupting the body.
+        guard let text = String(bytes: buffer, encoding: .utf8) else {
+            drainRequestBody(connection, into: box, acc: buffer)
+            return
+        }
+        if let sep = text.range(of: "\r\n\r\n") {
+            let header = String(text[..<sep.lowerBound])
+            let body = String(text[sep.upperBound...])
+            let expected = header
+                .split(separator: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int($0.dropFirst("content-length:".count).trimmingCharacters(in: .whitespaces)) } ?? 0
+            if body.utf8.count >= expected {
+                box.set(body)
+                let resp = Data("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8)
+                connection.send(content: resp, completion: .contentProcessed { _ in connection.cancel() })
+                return
+            }
+        }
+        drainRequestBody(connection, into: box, acc: buffer)
+    }
 }
 
 /// Thread-safe single-shot box for the request line captured by the fake
