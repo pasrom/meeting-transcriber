@@ -49,35 +49,39 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         }
     #endif
 
-    override init() {
+    /// The notification center behind a port (so posting + registration are
+    /// testable against a fake) and the "can we deliver?" check (a real app
+    /// bundle is required — `Bundle.main.bundleIdentifier` is nil in `swift
+    /// test`). Both injected; production uses the real system center + the bundle
+    /// check, tests inject a fake scheduler and flip `canDeliver`.
+    private let scheduler: any NotificationScheduling
+    private let canDeliver: @Sendable () -> Bool
+
+    init(
+        scheduler: any NotificationScheduling = SystemNotificationScheduler(),
+        canDeliver: @escaping @Sendable () -> Bool = { Bundle.main.bundleIdentifier != nil },
+    ) {
+        self.scheduler = scheduler
+        self.canDeliver = canDeliver
         super.init()
     }
 
     /// Set up delegate and request permission. Must be called after the app bundle is loaded.
     func setUp() {
         guard !isSetUp else { return }
-        // UNUserNotificationCenter crashes without a proper app bundle
-        guard Bundle.main.bundleIdentifier != nil else {
-            logger.warning("Skipping setup — no app bundle")
+        // UNUserNotificationCenter crashes without a proper app bundle.
+        guard canDeliver() else {
+            logger.warning("Skipping setup — notifications not deliverable")
             return
         }
         isSetUp = true
-
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        center.setNotificationCategories([Self.makeConsentCategory()])
-        center.requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                logger.error("Notification permission error: \(error.localizedDescription, privacy: .public)")
-            }
-            if !granted {
-                logger.warning("Notification permission denied")
-            }
-        }
+        scheduler.setDelegate(self)
+        scheduler.setCategories([Self.makeConsentCategory()])
+        scheduler.requestAuthorization()
     }
 
     func notify(title: String, body: String) {
-        let deliverable = isSetUp && Bundle.main.bundleIdentifier != nil
+        let deliverable = isSetUp && canDeliver()
 
         #if !APPSTORE
             // Record before the delivery guard so the app's *decision* to notify
@@ -90,18 +94,25 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
         guard deliverable else { return }
 
+        scheduler.add(UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: Self.makeNotificationContent(title: title, body: body),
+            trigger: nil,
+        ))
+    }
+
+    /// Pure builder for a notification's `UNMutableNotificationContent` (title,
+    /// body, sound, and optional category). Split out so the content mapping is
+    /// unit-testable without a real notification center.
+    static func makeNotificationContent(
+        title: String, body: String, categoryID: String? = nil,
+    ) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil,
-        )
-
-        UNUserNotificationCenter.current().add(request)
+        if let categoryID { content.categoryIdentifier = categoryID }
+        return content
     }
 
     /// Pure function: determines notification content for a state transition.
@@ -171,7 +182,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// prompt, and false on timeout/ignore/dismiss.
     @MainActor
     func askToRecord(title: String, body: String) async -> Bool {
-        guard isSetUp, Bundle.main.bundleIdentifier != nil else { return false }
+        guard isSetUp, canDeliver() else { return false }
         let id = UUID().uuidString
         return await consentCoordinator.awaitDecision(id: id) { [self] in
             postConsentNotification(id: id, title: title, body: body)
@@ -188,26 +199,35 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         consentCoordinator.resolvePending(granted: granted)
     }
 
-    /// Post the actionable consent notification (the thin UNUserNotificationCenter
-    /// adapter — the decision itself is driven by `didReceive` / the coordinator
-    /// timeout, whichever resolves first).
+    /// Post the actionable consent notification (the request-building is the pure
+    /// `makeNotificationContent`; only the `scheduler.add` is I/O). The decision
+    /// itself is driven by `didReceive` / the coordinator timeout, whichever
+    /// resolves first.
     private func postConsentNotification(id: String, title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        content.categoryIdentifier = Self.consentCategoryID
-        UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: id, content: content, trigger: nil),
+        scheduler.add(UNNotificationRequest(
+            identifier: id,
+            content: Self.makeNotificationContent(title: title, body: body, categoryID: Self.consentCategoryID),
+            trigger: nil,
+        ))
+    }
+
+    /// Resolve a parked consent prompt from a notification response's primitives.
+    /// The delegate callback unwraps the framework `UNNotificationResponse` (which
+    /// has no public initialiser) into these, so the id + grant mapping stays
+    /// unit-testable without constructing a real response.
+    func resolveConsent(responseIdentifier: String, actionIdentifier: String) {
+        consentCoordinator.resolve(
+            id: responseIdentifier,
+            granted: Self.consentGranted(for: actionIdentifier),
         )
     }
 
     // Handle a tapped consent action (or a dismiss) → resolve the prompt.
     // swiftlint:disable:next async_without_await
     func userNotificationCenter(_: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        consentCoordinator.resolve(
-            id: response.notification.request.identifier,
-            granted: Self.consentGranted(for: response.actionIdentifier),
+        resolveConsent(
+            responseIdentifier: response.notification.request.identifier,
+            actionIdentifier: response.actionIdentifier,
         )
     }
 
