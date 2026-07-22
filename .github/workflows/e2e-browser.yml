@@ -99,6 +99,23 @@ jobs:
         timeout-minutes: 12
         run: bash scripts/e2e-browser.sh
 
+      # Real-meeting variant (issue #503): instead of the local WebRTC fixture,
+      # two Chrome tabs join a REAL public Jitsi room (meet.ffmuc.net, no login)
+      # over a real WebRTC SFU — a genuine 2-participant meeting, not an in-page
+      # loopback. getUserMedia is overridden to a tone so no mic/TCC is needed.
+      # Reuses the bundle the step above built + signed (--no-build).
+      # Nightly/dispatch ONLY (never on labeled PRs) to keep hits on the
+      # third-party public instance rare, and continue-on-error because a
+      # Freifunk outage / UI drift is not our regression — green means the real
+      # chain works, a failure is a signal to check, not a merge blocker.
+      - name: Run browser-meeting E2E driver (real Jitsi, best-effort)
+        if: github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-browser.sh --jitsi --no-build
+
       # Post-mortem: the captured app track + sidecar (copied to /tmp by the
       # driver, so the on-exit recordings sweep doesn't delete them) plus a
       # power-assertion snapshot and the audiotap log tail — the evidence for

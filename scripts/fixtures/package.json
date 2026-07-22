@@ -1,0 +1,9 @@
+{
+  "name": "e2e-jitsi-keeper",
+  "private": true,
+  "type": "module",
+  "description": "CDP driver deps for the real-Jitsi browser-meeting e2e (issue #503). Install with `npm i` in this dir; node_modules is gitignored.",
+  "dependencies": {
+    "puppeteer-core": "^24.0.0"
+  }
+}

@@ -27,3 +27,5 @@ __pycache__/
 # Local-only plans (open findings, research dumps, deferred work, history).
 # docs/plans/ stays committed for future-feature RFCs and reference docs.
 docs/plans/.local/
+scripts/fixtures/node_modules/
+scripts/fixtures/package-lock.json
