@@ -206,6 +206,8 @@ scripts/
   e2e-app.sh               # Live-recording E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
   e2e-browser.sh           # Live browser-meeting E2E driver (issue #503): deploy dev.app (watchBrowserMeetings+recordOnly+noMic+RPC), open Chrome + fixtures/webrtc-tone.html, grant consent via RPC, assert _app.wav non-silent via `mt-cli wav-verdict`
   fixtures/webrtc-tone.html  # Self-contained WebRTC-loopback + WebAudio-tone page (holds the "WebRTC has active PeerConnections" assertion + emits a tone the CATap can capture) for e2e-browser.sh
+  fixtures/jitsi-keeper.mjs  # CDP (puppeteer-core) driver for e2e-browser.sh --jitsi: two Chrome tabs join a REAL public Jitsi room (real 2-participant WebRTC SFU meeting); getUserMedia overridden to a 440 Hz tone so no mic/TCC is touched, unmuted so audio flows through the real server
+  fixtures/package.json      # puppeteer-core dep for jitsi-keeper.mjs (npm i on demand; node_modules gitignored)
   e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
   e2e-settings-smoke.sh    # GitHub-hosted /ui/* canary: build homebrew .app + launch with RPC + assert GET /ui/tree surfaces recordOnlyToggle and POST /ui/press flips /state (self-pid AX; no TCC; run by e2e-ui-smoke.yml)
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
@@ -596,6 +598,22 @@ PRs are excluded from the self-hosted runner.
   lane is first brought up.
 - Limitation: like `e2e-app`, self-hosted mini only; the fixture's Chrome
   assertion wording is Chrome-version-dependent (the likeliest flake vector).
+- **Real-meeting variant (`--jitsi`, `scripts/fixtures/jitsi-keeper.mjs`):** the
+  synthetic fixture is an in-page `pc1↔pc2` loopback, not a real remote meeting.
+  `e2e-browser.sh --jitsi` instead drives Chrome via CDP (puppeteer-core) so two
+  tabs join a REAL public Jitsi room (`meet.ffmuc.net`, no login — `meet.jit.si`
+  requires a moderator login since 2023) — a genuine 2-participant WebRTC SFU
+  meeting; each tab's `getUserMedia` is overridden to a 440 Hz WebAudio tone, so
+  no real mic is touched (the macOS Chrome **mic-TCC** gate otherwise *hangs*
+  `getUserMedia` on a headless runner, and `--use-file-for-fake-audio-capture`
+  is buggy on macOS). Verified live on the mini: Chrome holds the assertion
+  (detection fires) and the tone flows tab-A → real server → tab-B (`recvPeak`
+  ≈ the tone), so the CATap captures real server-transported meeting audio.
+  Runs **nightly/dispatch only, never on labeled PRs**, and `continue-on-error`
+  (best-effort, depends on a third-party public instance being up — an outage is
+  not our regression). Chrome must be installed; `~/Applications` works for a
+  runner user without `/Applications` write access, and `node`/`npm` are needed
+  (puppeteer-core is `npm i`-installed on demand into `scripts/fixtures`).
 
 **Why the live-recording variant exists** (history that's easy to lose):
 - An earlier attempt at xctest-framed live recording (PR #100,

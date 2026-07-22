@@ -27,19 +27,28 @@ set -euo pipefail
 NO_BUILD=false     # skip build/deploy/re-sign — use ~/Applications bundle as-is
 KEEP_APP=false     # leave the dev app running on exit
 KEEP_CHROME=false  # leave the fixture Chrome instance open on exit
+MODE=fixture       # meeting source: fixture (in-page loopback) | jitsi (real SFU)
+JITSI_HOST=meet.ffmuc.net  # real public Jitsi (no login) for --jitsi mode
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build)    NO_BUILD=true ;;
         --keep-app)    KEEP_APP=true ;;
         --keep-chrome) KEEP_CHROME=true ;;
+        --jitsi)       MODE=jitsi ;;
+        --jitsi-host)  shift; JITSI_HOST="$1" ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-browser.sh [--no-build] [--keep-app] [--keep-chrome]
+Usage: e2e-browser.sh [--no-build] [--keep-app] [--keep-chrome] [--jitsi [--jitsi-host HOST]]
 
   --no-build     Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app     Leave the dev app running on exit (default: quit it).
   --keep-chrome  Leave the fixture Chrome instance open on exit (default: quit it).
+  --jitsi        Real-meeting mode: instead of the local WebRTC fixture, join a real
+                 public Jitsi room with two Chrome tabs (real 2-participant WebRTC SFU
+                 meeting; getUserMedia overridden to a tone so no mic/TCC is needed).
+                 Best-effort — depends on a third-party public Jitsi being reachable.
+  --jitsi-host   Jitsi host for --jitsi (default meet.ffmuc.net, a no-login public instance).
 HELP
             exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -56,6 +65,10 @@ MTCLI_PKG="$ROOT/tools/mt-cli"
 MTCLI="$MTCLI_PKG/.build/release/mt-cli"
 FIXTURE="$ROOT/scripts/fixtures/webrtc-tone.html"
 FIXTURE_URL="file://$FIXTURE"
+FIXTURES_DIR="$ROOT/scripts/fixtures"
+KEEPER="$FIXTURES_DIR/jitsi-keeper.mjs"
+CDP_PORT=9222
+KEEPER_PID=""
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 RECORDINGS_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
@@ -130,9 +143,23 @@ require_command jq
 require_command swift
 require_command open
 
-[ -f "$FIXTURE" ] || fail "fixture not found: $FIXTURE"
 [ -n "$CHROME_APP" ] && [ -d "$CHROME_APP" ] \
     || fail "Google Chrome not found in ~/Applications or /Applications — install it on the runner (or set CHROME_APP)"
+
+if [ "$MODE" = fixture ]; then
+    [ -f "$FIXTURE" ] || fail "fixture not found: $FIXTURE"
+else
+    # --jitsi: drive Chrome via CDP with puppeteer-core (node). Install it on
+    # demand into scripts/fixtures (node_modules is gitignored).
+    require_command node
+    require_command npm
+    [ -f "$KEEPER" ] || fail "jitsi keeper not found: $KEEPER"
+    if [ ! -d "$FIXTURES_DIR/node_modules/puppeteer-core" ]; then
+        log "Installing puppeteer-core for the jitsi keeper"
+        ( cd "$FIXTURES_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 ) \
+            || fail "npm install puppeteer-core failed"
+    fi
+fi
 
 # noMic sidesteps the mic capture path, so a virtual input device isn't
 # required (unlike e2e-app.sh). Warn if absent, don't fail.
@@ -192,6 +219,7 @@ _ON_EXIT_RAN=""
 on_exit() {
     [ -n "$_ON_EXIT_RAN" ] && return 0
     _ON_EXIT_RAN=1
+    [ -n "$KEEPER_PID" ] && kill "$KEEPER_PID" 2>/dev/null || true
     [ "$KEEP_CHROME" = false ] && quit_chrome
     [ "$KEEP_APP" = false ] && quit_running_app || true
     # Restore the behaviour toggles per domain (empty snapshot → delete).
@@ -234,17 +262,26 @@ _dump_detection_diag() {
     pmset -g assertions 2>/dev/null | grep -iE "webrtc|peerconnection|Google Chrome" || log "DIAG:   (none)"
 }
 
-log "Launching Chrome with the WebRTC-tone fixture"
 # Keep Chrome off the macOS Keychain so its first launch never pops a blocking
 # "Chrome wants to use the keychain" modal a headless runner can't dismiss.
 # --use-mock-keychain is the macOS flag (Chrome uses a mock Keychain for its
 # Safe Storage); --password-store=basic is its Linux counterpart, harmless here.
-open -na "$CHROME_APP" --args \
-    --user-data-dir="$CHROME_PROFILE" \
-    --no-first-run --no-default-browser-check \
-    --use-mock-keychain --password-store=basic \
-    --autoplay-policy=no-user-gesture-required \
-    "$FIXTURE_URL"
+CHROME_FLAGS=(--user-data-dir="$CHROME_PROFILE" --no-first-run --no-default-browser-check
+    --use-mock-keychain --password-store=basic --autoplay-policy=no-user-gesture-required)
+if [ "$MODE" = fixture ]; then
+    log "Launching Chrome with the WebRTC-tone fixture"
+    open -na "$CHROME_APP" --args "${CHROME_FLAGS[@]}" "$FIXTURE_URL"
+else
+    # --jitsi: launch Chrome with a CDP port, then the keeper joins a real Jitsi
+    # room with two tabs (real 2-participant WebRTC SFU meeting). A unique room
+    # per run avoids colliding with anyone else on the public instance.
+    JITSI_ROOM="MtE2e$(date +%s)$$"
+    log "Launching Chrome (CDP) + joining real Jitsi room $JITSI_HOST/$JITSI_ROOM"
+    open -na "$CHROME_APP" --args "${CHROME_FLAGS[@]}" --remote-debugging-port="$CDP_PORT" "about:blank"
+    sleep 5
+    node "$KEEPER" --host "$JITSI_HOST" --room "$JITSI_ROOM" --keep 120 --port "$CDP_PORT" &
+    KEEPER_PID=$!
+fi
 
 # Detection + consent in one poll: confirm-browser-consent returns
 # {"resolved":false} until the consent prompt actually parks (i.e. the browser
