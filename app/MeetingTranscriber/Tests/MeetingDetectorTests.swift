@@ -45,14 +45,15 @@ final class MeetingPatternsTests: XCTestCase {
         XCTAssertFalse(AppMeetingPattern.webex.ownerNames.isEmpty)
     }
 
-    func testAllPatternsContainsFour() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 4)
+    func testAllPatternsContainsFive() {
+        XCTAssertEqual(AppMeetingPattern.all.count, 5)
     }
 
     func testByNameLookup() {
         XCTAssertNotNil(AppMeetingPattern.byName["microsoft teams"])
         XCTAssertNotNil(AppMeetingPattern.byName["zoom"])
         XCTAssertNotNil(AppMeetingPattern.byName["webex"])
+        XCTAssertNotNil(AppMeetingPattern.byName["google meet"])
         XCTAssertNil(AppMeetingPattern.byName["slack"])
     }
 }

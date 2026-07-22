@@ -251,12 +251,13 @@
                 let watchTeams: Bool
                 let watchZoom: Bool
                 let watchWebex: Bool
+                let watchMeet: Bool
                 let autoWatch: Bool
                 let pollIntervalSeconds: Double
 
                 static let empty = Self(
                     watchTeams: false, watchZoom: false, watchWebex: false,
-                    autoWatch: false, pollIntervalSeconds: 0,
+                    watchMeet: false, autoWatch: false, pollIntervalSeconds: 0,
                 )
             }
 

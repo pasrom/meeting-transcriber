@@ -15,12 +15,17 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Meeting
 struct MeetingTitleMatcher {
     let appName: String
     let ownerNames: [String]
+    /// Mirrors `AppMeetingPattern.strictTitleMatch`: when set, only
+    /// meeting-pattern titles are usable — `selectWindowTitle` never falls back
+    /// to the first non-idle title (a browser's unrelated tabs would leak in).
+    let strictTitleMatch: Bool
     private let idleRegexes: [NSRegularExpression]
     private let meetingRegexes: [NSRegularExpression]
 
     init(pattern: AppMeetingPattern) {
         appName = pattern.appName
         ownerNames = pattern.ownerNames
+        strictTitleMatch = pattern.strictTitleMatch
         idleRegexes = Self.compile(pattern.idlePatterns, kind: "idle", appName: pattern.appName)
         meetingRegexes = Self.compile(pattern.meetingPatterns, kind: "meeting", appName: pattern.appName)
     }
@@ -65,7 +70,7 @@ struct MeetingTitleMatcher {
                 continue
             }
             if isMeetingTitle(title) { return title }
-            if firstNonIdle == nil { firstNonIdle = title }
+            if firstNonIdle == nil, !strictTitleMatch { firstNonIdle = title }
         }
         return firstNonIdle
     }

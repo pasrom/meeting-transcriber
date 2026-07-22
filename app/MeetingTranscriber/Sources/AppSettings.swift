@@ -112,6 +112,13 @@ final class AppSettings {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
+    /// Google Meet in a Chromium browser (Chrome, Brave, Edge). Detection needs
+    /// Screen Recording permission: the browser's WebRTC power assertion is
+    /// only trusted when an in-call Meet tab title confirms it.
+    var watchMeet: Bool {
+        didSet { defaults.set(watchMeet, forKey: "watchMeet") }
+    }
+
     /// Auto-start watching on app launch.
     var autoWatch: Bool {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
@@ -457,6 +464,7 @@ final class AppSettings {
         if watchTeams { apps.append("Microsoft Teams") }
         if watchZoom { apps.append("Zoom") }
         if watchWebex { apps.append("Webex") }
+        if watchMeet { apps.append("Google Meet") }
         return apps
     }
 
@@ -468,6 +476,7 @@ final class AppSettings {
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
         watchWebex = defaults.object(forKey: "watchWebex") as? Bool ?? true
+        watchMeet = defaults.object(forKey: "watchMeet") as? Bool ?? true
         autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
 
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0

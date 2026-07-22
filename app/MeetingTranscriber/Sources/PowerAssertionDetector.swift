@@ -24,12 +24,26 @@ class PowerAssertionDetector: MeetingDetecting {
         /// Teams, whose WebView holds a display-sleep "Video Wake Lock" even with
         /// no call in progress, so it must stay keyword-only.
         let assertionTypes: [String]
+        /// A matched assertion counts only when the app's window-title lookup
+        /// also finds a meeting-pattern window. Required for browser-hosted
+        /// meetings (Google Meet): the browser's WebRTC assertion fires for any
+        /// site using camera/mic, so the assertion alone must never trigger a
+        /// recording of the whole browser. Needs Screen Recording permission
+        /// (window titles) — without it these patterns simply never fire.
+        let requiresWindowConfirmation: Bool
 
-        init(appName: String, processNames: [String], keywords: [String], assertionTypes: [String] = []) {
+        init(
+            appName: String,
+            processNames: [String],
+            keywords: [String],
+            assertionTypes: [String] = [],
+            requiresWindowConfirmation: Bool = false,
+        ) {
             self.appName = appName
             self.processNames = processNames
             self.keywords = keywords
             self.assertionTypes = assertionTypes
+            self.requiresWindowConfirmation = requiresWindowConfirmation
         }
     }
 
@@ -49,6 +63,12 @@ class PowerAssertionDetector: MeetingDetecting {
             appName: "Webex",
             processNames: ["Webex", "Cisco Webex Meetings", "Meeting Center"],
             keywords: ["webex"],
+        ),
+        AssertionPattern(
+            appName: "Google Meet",
+            processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
+            keywords: ["webrtc"],
+            requiresWindowConfirmation: true,
         ),
         AssertionPattern(
             appName: AppMeetingPattern.simulator.appName,
@@ -137,6 +157,13 @@ class PowerAssertionDetector: MeetingDetecting {
                     guard !hitsThisRound.contains(pattern.appName) else { continue }
 
                     if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
+                        // Browser-hosted meetings: the assertion alone is ambiguous
+                        // (any WebRTC site holds it), so require a meeting-pattern
+                        // window title before counting the hit.
+                        if pattern.requiresWindowConfirmation,
+                           lookupWindowTitle(appName: pattern.appName) == nil {
+                            continue
+                        }
                         hitsThisRound.insert(pattern.appName)
                         firstMatch[pattern.appName] = (pid, processName, assertName)
                         consecutiveHits[pattern.appName, default: 0] += 1
