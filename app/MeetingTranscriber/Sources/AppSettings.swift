@@ -1,4 +1,7 @@
+import os.log
 import SwiftUI
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AppSettings")
 
 // SwiftFormat strips redundant raw values matching their case name, which then
 // trips SwiftLint's `raw_value_for_camel_cased_codable_enum`; the rawValues
@@ -367,42 +370,78 @@ final class AppSettings {
 
     // MARK: - Output Directory
 
-    /// Security-scoped bookmark for a user-chosen output directory.
+    /// Bookmark (security-scoped when sandboxed) for a user-chosen output directory.
     var customOutputDirBookmark: Data? {
         get { defaults.data(forKey: "customOutputDirBookmark") }
         set { defaults.set(newValue, forKey: "customOutputDirBookmark") }
     }
 
-    /// Resolved URL from the security-scoped bookmark. Calls `startAccessingSecurityScopedResource()`.
+    /// Resolved URL from the stored bookmark (scoped or regular).
     var customOutputDir: URL? {
         guard let data = customOutputDirBookmark else { return nil }
         var isStale = false
-        guard let url = try? URL(
-            resolvingBookmarkData: data,
-            options: .withSecurityScope,
-            relativeTo: nil,
-            bookmarkDataIsStale: &isStale,
-        ) else { return nil }
+        guard let url = Self.resolveOutputDirBookmark(data, isStale: &isStale) else { return nil }
         if isStale {
             // Re-create bookmark from resolved URL
-            if let newData = try? url.bookmarkData(
-                options: .withSecurityScope,
-                includingResourceValuesForKeys: nil,
-                relativeTo: nil,
-            ) {
+            if let newData = Self.makeOutputDirBookmark(url) {
                 customOutputDirBookmark = newData
             }
         }
         return url
     }
 
-    /// Store a user-selected directory as a security-scoped bookmark.
-    func setCustomOutputDir(_ url: URL) {
-        guard let data = try? url.bookmarkData(
+    /// Create a bookmark for the output directory.
+    ///
+    /// Security-scoped bookmarks require the App Sandbox. The direct
+    /// (non-App-Store) build is NOT sandboxed — there
+    /// `bookmarkData(options: .withSecurityScope)` throws, and the previous
+    /// `guard try?` swallowed the error, so the chosen folder silently never
+    /// persisted and output always fell back to ~/Downloads while the
+    /// Settings UI kept showing the selected path. Try the scoped variant
+    /// first (APPSTORE build), fall back to a regular bookmark, and log a
+    /// failure instead of silently returning.
+    static func makeOutputDirBookmark(_ url: URL) -> Data? {
+        if let data = try? url.bookmarkData(
             options: .withSecurityScope,
             includingResourceValuesForKeys: nil,
             relativeTo: nil,
-        ) else { return }
+        ) {
+            return data
+        }
+        if let data = try? url.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil,
+        ) {
+            return data
+        }
+        logger.error("Output dir bookmark creation failed for \(url.path, privacy: .private)")
+        return nil
+    }
+
+    /// Resolve a stored output-dir bookmark, accepting both scoped and
+    /// regular forms (older installs may hold either kind).
+    static func resolveOutputDirBookmark(_ data: Data, isStale: inout Bool) -> URL? {
+        if let url = try? URL(
+            resolvingBookmarkData: data,
+            options: .withSecurityScope,
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale,
+        ) {
+            return url
+        }
+        return try? URL(
+            resolvingBookmarkData: data,
+            options: [],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale,
+        )
+    }
+
+    /// Store a user-selected directory as a bookmark (security-scoped in the
+    /// sandboxed build, regular otherwise).
+    func setCustomOutputDir(_ url: URL) {
+        guard let data = Self.makeOutputDirBookmark(url) else { return }
         customOutputDirBookmark = data
     }
 
