@@ -220,10 +220,28 @@ log "RPC up"
 
 # --- drive the browser meeting --------------------------------------------
 
+_watch_state() { rpc /state | jq -r '.watchState // ""'; }
+
+# Best-effort diagnostics when detection doesn't fire — the next CI run then
+# shows whether the app was watching, whether Chrome was in the watched set,
+# and whether the WebRTC assertion was actually present. Never fails the script.
+_dump_detection_diag() {
+    log "DIAG: watchState=$(_watch_state)"
+    log "DIAG: /state.settings.detection = $(rpc /state | jq -c '.settings.detection // {}' 2>/dev/null)"
+    log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$BUNDLE_ID" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
+    log "DIAG: effective autoWatch std=$(snapshot_default "$BUNDLE_ID" autoWatch)"
+    log "DIAG: pmset WebRTC assertions:"
+    pmset -g assertions 2>/dev/null | grep -iE "webrtc|peerconnection|Google Chrome" || log "DIAG:   (none)"
+}
+
 log "Launching Chrome with the WebRTC-tone fixture"
+# --password-store=basic keeps Chrome off the macOS keychain (an in-memory
+# store instead), so its first launch never pops a blocking "Chrome wants to
+# use the keychain" modal that a headless runner has no one to dismiss.
 open -na "$CHROME_APP" --args \
     --user-data-dir="$CHROME_PROFILE" \
     --no-first-run --no-default-browser-check \
+    --password-store=basic \
     --autoplay-policy=no-user-gesture-required \
     "$FIXTURE_URL"
 
@@ -237,12 +255,13 @@ _grant_consent() {
     assert_app_alive
     "$MTCLI" confirm-browser-consent --granted 2>/dev/null | jq -e '.resolved == true' >/dev/null 2>&1
 }
-poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent \
-    || fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
+poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
+    _dump_detection_diag
+    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
+}
 log "Consent granted over RPC"
 
 log "Waiting for recording to start (watchState == recording)"
-_watch_state() { rpc /state | jq -r '.watchState // ""'; }
 _is_recording() { [ "$(_watch_state)" = "recording" ]; }
 poll_until "$DETECT_TIMEOUT_S" 2 _is_recording \
     || fail "watchState never reached 'recording' after consent"
