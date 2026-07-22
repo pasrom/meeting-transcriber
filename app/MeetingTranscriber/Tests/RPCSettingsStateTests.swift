@@ -221,6 +221,7 @@
 
             let allowlist: Set = [
                 "detection.watchTeams", "detection.watchZoom", "detection.watchWebex",
+                "detection.watchMeet",
                 "detection.autoWatch", "detection.pollIntervalSeconds",
                 "recording.endGraceSeconds", "recording.noMic", "recording.recordOnly",
                 "recording.micDeviceUID", "recording.micName",

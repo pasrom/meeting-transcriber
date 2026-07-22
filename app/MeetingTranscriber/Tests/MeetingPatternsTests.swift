@@ -21,7 +21,7 @@ final class AppMeetingPatternTests: XCTestCase {
     // MARK: - All Patterns
 
     func testAllPatternsCount() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 4)
+        XCTAssertEqual(AppMeetingPattern.all.count, 5)
     }
 
     // MARK: - Simulator Pattern

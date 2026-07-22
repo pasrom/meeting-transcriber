@@ -149,18 +149,19 @@ final class AppSettingsTests: XCTestCase {
     // MARK: - watchApps
 
     func testWatchAppsAllEnabled() {
-        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Zoom", "Webex"])
+        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Zoom", "Webex", "Google Meet"])
     }
 
     func testWatchAppsSingleDisabled() {
         settings.watchZoom = false
-        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Webex"])
+        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Webex", "Google Meet"])
     }
 
     func testWatchAppsAllDisabled() {
         settings.watchTeams = false
         settings.watchZoom = false
         settings.watchWebex = false
+        settings.watchMeet = false
         XCTAssertEqual(settings.watchApps, [])
     }
 

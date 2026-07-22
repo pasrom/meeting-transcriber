@@ -17,7 +17,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     func testPatternsWatchingAllKeepsEveryPattern() {
         // All toggles on (the default) → every default pattern, unchanged.
         let names = PowerAssertionDetector
-            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex"])
+            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex", "Google Meet"])
             .map(\.appName)
         XCTAssertEqual(Set(names), Set(PowerAssertionDetector.defaultPatterns.map(\.appName)))
     }

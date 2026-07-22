@@ -8,6 +8,11 @@ struct AppMeetingPattern: Equatable {
     let idlePatterns: [String]
     let minWindowWidth: CGFloat
     let minWindowHeight: CGFloat
+    /// Only titles matching `meetingPatterns` count as usable window titles —
+    /// no first-non-idle fallback. Required for browser-hosted meetings (Google
+    /// Meet), where the owner is a general-purpose browser and any unrelated
+    /// tab title would otherwise pass as "the meeting window".
+    let strictTitleMatch: Bool
 
     init(
         appName: String,
@@ -16,6 +21,7 @@ struct AppMeetingPattern: Equatable {
         idlePatterns: [String] = [],
         minWindowWidth: CGFloat = 200,
         minWindowHeight: CGFloat = 200,
+        strictTitleMatch: Bool = false,
     ) {
         self.appName = appName
         self.ownerNames = ownerNames
@@ -23,6 +29,7 @@ struct AppMeetingPattern: Equatable {
         self.idlePatterns = idlePatterns
         self.minWindowWidth = minWindowWidth
         self.minWindowHeight = minWindowHeight
+        self.strictTitleMatch = strictTitleMatch
     }
 }
 
@@ -78,6 +85,24 @@ extension AppMeetingPattern {
         ],
     )
 
+    /// Google Meet runs in a Chromium browser, not a dedicated app. The owner is
+    /// the browser process; an in-call tab is titled "Meet – <code or name>"
+    /// (the landing page is just "Google Meet"). `strictTitleMatch` because any
+    /// other tab title in the same browser must never pass as the meeting.
+    /// The browser window title may carry a profile/browser suffix, so the
+    /// meeting regex is anchored at the start only.
+    static let meet = AppMeetingPattern(
+        appName: "Google Meet",
+        ownerNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
+        meetingPatterns: [
+            #"^Meet\s+[–—-]\s+\S+"#,
+        ],
+        idlePatterns: [
+            #"^Google Meet\b"#,
+        ],
+        strictTitleMatch: true,
+    )
+
     /// Debug simulator for testing the full pipeline without a real meeting app.
     /// Run: cd tools/meeting-simulator && swift run
     static let simulator = AppMeetingPattern(
@@ -90,7 +115,7 @@ extension AppMeetingPattern {
         minWindowHeight: 100,
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator]
+    static let all: [AppMeetingPattern] = [teams, zoom, webex, meet, simulator]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]
