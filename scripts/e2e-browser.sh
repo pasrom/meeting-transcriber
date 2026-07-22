@@ -235,13 +235,14 @@ _dump_detection_diag() {
 }
 
 log "Launching Chrome with the WebRTC-tone fixture"
-# --password-store=basic keeps Chrome off the macOS keychain (an in-memory
-# store instead), so its first launch never pops a blocking "Chrome wants to
-# use the keychain" modal that a headless runner has no one to dismiss.
+# Keep Chrome off the macOS Keychain so its first launch never pops a blocking
+# "Chrome wants to use the keychain" modal a headless runner can't dismiss.
+# --use-mock-keychain is the macOS flag (Chrome uses a mock Keychain for its
+# Safe Storage); --password-store=basic is its Linux counterpart, harmless here.
 open -na "$CHROME_APP" --args \
     --user-data-dir="$CHROME_PROFILE" \
     --no-first-run --no-default-browser-check \
-    --password-store=basic \
+    --use-mock-keychain --password-store=basic \
     --autoplay-policy=no-user-gesture-required \
     "$FIXTURE_URL"
 
@@ -297,7 +298,9 @@ cp "$APP_WAV" /tmp/e2e-browser-app.wav 2>/dev/null || true
 cp "$SIDECAR" /tmp/e2e-browser-meta.json 2>/dev/null || true
 
 log "Verdict on the captured app track:"
-"$MTCLI" wav-verdict "$APP_WAV" --threshold-dbfs -50 --min-active-ratio 0.5 \
+# `=` form is required for the negative threshold: ArgumentParser reads a bare
+# `-50` after `--threshold-dbfs` as another flag and errors out.
+"$MTCLI" wav-verdict "$APP_WAV" --threshold-dbfs=-50 --min-active-ratio=0.5 \
     || fail "app track is silent — the CATap did not capture Chrome's browser-meeting audio"
 
 log "PASS: browser detection → RPC consent → non-silent CATap capture of the app track"
