@@ -96,9 +96,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/OutputSettingsView.swift` | LLM provider · protocol language · output folder · custom prompt |
 | `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics · About |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
+| `Settings/HelpBadge.swift` | Clickable ⓘ badge that opens a settings-option explanation in a popover |
+| `Settings/SettingsHelp.swift` | Plain-English help strings for settings options (feeds `HelpBadge`) |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `NamingWindowPolicy.swift` | Pins the "Name Speakers" window floating above other apps so it stays reachable while the user works (issue #504) |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
+| `ProcessingStatsView.swift` | Surfaces average per-stage processing durations from `stage_timing.jsonl` |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
 | `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
@@ -125,6 +129,11 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `ParakeetTokenGrouping.swift` | Pure token-grouping logic extracted from `ParakeetEngine` (testable) |
 | `StreamingTranscriber.swift` | Per-channel live transcription actor (FluidVAD streaming → `engine.transcribeSamples` → partial/final captions) |
 | `PipelineQueue.swift` | Decouples recording from post-processing, sequential job pipeline |
+| `SpeakerNamingData.swift` | Speaker-naming value types (`SpeakerNamingData`, its `Segment`, and related models; split out of `PipelineQueue`) |
+| `SpeakerNamingSession.swift` | `@MainActor` session managing the naming-dialog `CheckedContinuation` flow for a single pipeline job |
+| `SpeakerNamingSession+Late.swift` | Late-reassignment extension — re-diarize + re-assign speakers after naming confirmation (line-cap split) |
+| `SpeakerNamingStore.swift` | Disk persistence for a job's speaker-naming sidecars (keyed by per-job slug; pure I/O, no queue state) |
+| `StageTimingStats.swift` | Pipeline-stage timing model read from `stage_timing.jsonl` (feeds `ProcessingStatsView`) |
 | `PipelineJob.swift` | Pipeline job model (waiting → transcribing → diarizing → generatingProtocol → done) |
 | `PipelineSnapshot.swift` | Pure I/O helpers for persisting `PipelineQueue` jobs to disk (atomic rename) |
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
@@ -133,6 +142,9 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (WhisperKit word-level \| EOU streaming) |
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing — which pipeline per channel; shared by `AppState`, coordinator, and controller |
 | `EouStreamingCaptionSession.swift` | EOU streaming caption session via FluidAudio end-of-utterance ASR, backed by `UtteranceRingBuffer` |
+| `NemotronStreamingCaptionSession.swift` | Nemotron streaming caption session (NVIDIA Nemotron ASR via FluidAudio; seam-injectable protocol for unit tests) |
+| `NemotronAsrManager.swift` | Production seam implementations wrapping FluidAudio's Nemotron model + Silero VAD (split out; no xctest without downloaded models) |
+| `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming-pipeline construction split out of `LiveTranscriptionController` (file-length cap; injectable factory for tests) |
 | `UtteranceRingBuffer.swift` | Rolling 16 kHz sample buffer addressable by absolute ms timestamp (feeds EOU streaming session) |
 | `EngineController.swift` | `@Observable @MainActor` engine selection + model lifecycle controller (language/vocabulary sync, preload) |
 | `PipelineController.swift` | `@Observable` controller owning `PipelineQueue` lifecycle (wired by `AppState`) |
@@ -198,6 +210,10 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | File | Role |
 |------|------|
 | `TranscriberStatus.swift` | Status + state enum models |
+| `EngineModelState.swift` | App-owned model lifecycle state for a `TranscribingEngine` — decouples the public protocol from WhisperKit's vendor-internal `ModelState` enum |
+| `AppSettings+RPC.swift` | Read-only settings projection for the debug RPC `/state` endpoint (`#if !APPSTORE`) |
+| `IdempotencyStore.swift` | Bounded FIFO map of `Idempotency-Key` → created job IDs so repeated automation requests return the original job(s) (`#if !APPSTORE`) |
+| `NotificationRingBuffer.swift` | Bounded, thread-safe log of the most-recent notifications the app posted (served at `/state`; `#if !APPSTORE`) |
 | `AppPaths.swift` | Centralized path constants (ipcDir, dataDir, logSubsystem, speakersDB) |
 | `AXHelper.swift` | Shared accessibility API helper (MuteDetector + ParticipantReader) |
 | `NotificationManager.swift` | macOS notifications |
