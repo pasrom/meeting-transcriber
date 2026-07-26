@@ -31,6 +31,23 @@ enum A11yID {
     static let experimentalTuningDisclosure = "experimentalTuningDisclosure"
     static let sortformerCapHint = "sortformer-cap-hint"
 
+    /// Mic speaker-name field (Settings → Speakers). The `/ui/type` allowlist's
+    /// only entry: a plain, non-secret text field whose write-back is readable in
+    /// `/state`, which is what makes it a usable text-entry probe.
+    static let micNameField = "micNameField"
+
+    /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
+    /// pane renders only the selected tab, so a control in another tab is absent
+    /// from the accessibility tree until its row is selected — a driver switches
+    /// tabs through these before driving anything outside General.
+    static func settingsTab(_ rawValue: String) -> String {
+        "settings-tab-\(rawValue)"
+    }
+
+    /// The one tab row the `/ui/press` allowlist admits. A named constant rather
+    /// than a literal at the allowlist, so the identifier has a single home.
+    static let settingsTabSpeakers = settingsTab("speakers")
+
     // Speaker-naming dialog.
     static let confirmButton = "confirm-button"
     static let skipButton = "skip-button"

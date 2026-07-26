@@ -1,4 +1,5 @@
 #if !APPSTORE
+    import AppKit
     @preconcurrency import ApplicationServices
     import Foundation
 
@@ -7,6 +8,18 @@
     struct UIPressPayload: Codable {
         let window: String?
         let identifier: String
+        /// How to actuate the control; omitted means `.ax`. Typed rather than a
+        /// raw string so an unknown value fails decoding into the existing 400 arm
+        /// instead of silently falling back to an AX press and reporting success.
+        let via: UIPressVia?
+    }
+
+    /// How `/ui/press` actuates a control. `click` exists because some SwiftUI
+    /// controls accept the AX press and report success without acting on it — a
+    /// `List(selection:)` row is the known case (see `MouseInjection`).
+    enum UIPressVia: String, Codable {
+        case ax
+        case click
     }
 
     /// The outcome of resolving and pressing a control inside a window's
@@ -33,6 +46,16 @@
         var uiChildren: [any UIPressTarget] { get }
         /// Fire the element's AX press action. Returns whether it reported running.
         func uiPress() -> Bool
+        /// Post a real mouse click at the element's frame. Returns whether it ran.
+        func uiClick() -> Bool
+    }
+
+    /// Click defaults to unsupported so in-memory fakes (and any target without a
+    /// window to post into) keep working without implementing it.
+    extension UIPressTarget {
+        func uiClick() -> Bool {
+            false
+        }
     }
 
     /// `POST /ui/press` — drive a real UI action (button/toggle press) against an
@@ -78,7 +101,15 @@
         /// would wedge the server and UI. This invariant, not the (localhost +
         /// token + env-gated + `#if !APPSTORE`) security margin, is the allowlist's
         /// real justification.
-        nonisolated static let uiPressAllowedIdentifiers: Set<String> = [A11yID.recordOnlyToggle]
+        /// The Settings sidebar rows are safe under the invariant above: selecting
+        /// one swaps the detail pane, it opens nothing modal. They are needed
+        /// because a control outside the General tab is absent from the
+        /// accessibility tree until its tab is selected, and they only actuate
+        /// via `"click"` (the AX press reports success without selecting).
+        nonisolated static let uiPressAllowedIdentifiers: Set<String> = [
+            A11yID.recordOnlyToggle,
+            A11yID.settingsTabSpeakers,
+        ]
 
         nonisolated static func isIdentifierAllowedForUIPress(_ identifier: String) -> Bool {
             uiPressAllowedIdentifiers.contains(identifier)
@@ -90,15 +121,17 @@
         /// `.notFound`. Identifiers are assumed unique per window, so first match
         /// wins. Pure over `UIPressTarget`, so it is unit-testable with a fake.
         static func performPress(
-            identifier: String, in root: any UIPressTarget, maxDepth: Int,
+            identifier: String, in root: any UIPressTarget, maxDepth: Int, via: UIPressVia? = nil,
         ) -> UIPressOutcome {
             if root.uiIdentifier == identifier {
                 guard root.uiEnabled else { return .disabled }
-                return .pressed(root.uiPress())
+                return .pressed(via == .click ? root.uiClick() : root.uiPress())
             }
             guard maxDepth > 0 else { return .notFound }
             for child in root.uiChildren {
-                let outcome = performPress(identifier: identifier, in: child, maxDepth: maxDepth - 1)
+                let outcome = performPress(
+                    identifier: identifier, in: child, maxDepth: maxDepth - 1, via: via,
+                )
                 if outcome != .notFound { return outcome }
             }
             return .notFound
@@ -107,8 +140,13 @@
         /// Resolve the accessibility root for an allowed, currently-open window,
         /// or nil when no matching open window exists. Shares `/ui/tree`'s self-pid
         /// window resolution; only the adapter differs.
+        /// The `NSWindow` is resolved alongside the AX root so a `"click"` press has
+        /// somewhere to post its mouse events. It stays optional on purpose: an AX
+        /// press works without it, so a missing window only disables clicking.
         static func uiPressTarget(forWindowIdentifier identifier: String) -> (any UIPressTarget)? {
-            axWindowElement(forIdentifier: identifier).map { AXPressSource(element: $0) }
+            guard let element = axWindowElement(forIdentifier: identifier) else { return nil }
+            let window = nsWindow(forIdentifier: identifier)
+            return AXPressSource(element: element, window: window)
         }
 
         /// Map a press outcome to its HTTP response. Pure so the 200/404/409
@@ -144,6 +182,7 @@
             }
             return Self.response(for: Self.performPress(
                 identifier: payload.identifier, in: root, maxDepth: Self.uiPressMaxDepth,
+                via: payload.via,
             ))
         }
     }
@@ -154,6 +193,9 @@
     @MainActor
     private struct AXPressSource: UIPressTarget {
         let element: AXUIElement
+        /// Nil when no `NSWindow` matched (headless harness): AX press still works,
+        /// `"click"` reports false rather than pretending it acted.
+        let window: NSWindow?
 
         var uiIdentifier: String? {
             DebugRPCServer.axIdentifier(element)
@@ -164,11 +206,18 @@
         }
 
         var uiChildren: [any UIPressTarget] {
-            DebugRPCServer.axChildren(element).map { Self(element: $0) }
+            DebugRPCServer.axChildren(element).map { Self(element: $0, window: window) }
         }
 
         func uiPress() -> Bool {
             DebugRPCServer.axPress(element)
+        }
+
+        func uiClick() -> Bool {
+            guard let window else { return false }
+            let frame = DebugRPCServer.axFrame(element)
+            guard !frame.isEmpty else { return false }
+            return MouseInjection.click(atAXPoint: CGPoint(x: frame.midX, y: frame.midY), in: window)
         }
     }
 #endif

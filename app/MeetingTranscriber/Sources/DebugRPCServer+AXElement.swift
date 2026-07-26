@@ -1,10 +1,11 @@
 #if !APPSTORE
     // `@preconcurrency`: ApplicationServices AX globals lack Sendable annotations
     // (same gap AXHelper/Permissions guard).
+    import AppKit
     @preconcurrency import ApplicationServices
 
     /// Shared HIServices accessibility plumbing for the in-process `/ui/*`
-    /// endpoints (`/ui/tree`, `/ui/press`). Reads the app's OWN accessibility tree
+    /// `/ui/*` endpoints. Reads the app's OWN accessibility tree
     /// via `AXUIElementCreateApplication(getpid())`.
     ///
     /// Why the AX C API and not `NSView.accessibilityChildren()`: SwiftUI builds
@@ -79,6 +80,25 @@
         /// `MainActor`); `DebugRPCServer`'s isolation enforces that.
         static func axPress(_ element: AXUIElement) -> Bool {
             AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
+        }
+
+        /// The app's `NSWindow` carrying the given identifier, or nil when none is
+        /// open (and always in the xctest process, where `NSApp` itself is nil).
+        /// Sits beside `axWindowElement` because the two are resolved together
+        /// whenever an endpoint needs to post events into a window rather than only
+        /// read its accessibility tree.
+        static func nsWindow(forIdentifier identifier: String) -> NSWindow? {
+            NSApp?.windows.first { $0.identifier?.rawValue == identifier }
+        }
+
+        /// Make the element the focused (first-responder) control. Returns whether
+        /// HIServices accepted it. Unlike `kAXValueAttribute` — which does not fire
+        /// a SwiftUI binding, see `KeyboardInjection` — setting focus on a
+        /// view-backed element maps to `makeFirstResponder:`, which is exactly what
+        /// `/ui/type` needs before posting key events. Main-actor for the same
+        /// reason as `axPress`.
+        static func axFocus(_ element: AXUIElement) -> Bool {
+            AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
         }
 
         /// The app's window with the given `AXIdentifier` (our `NSWindow`

@@ -20,6 +20,7 @@
             var uiChildren: [any UIPressTarget]
             let pressReturns: Bool
             private(set) var pressCallCount = 0
+            private(set) var clickCallCount = 0
 
             init(
                 identifier: String? = nil, enabled: Bool = true,
@@ -35,6 +36,53 @@
                 pressCallCount += 1
                 return pressReturns
             }
+
+            func uiClick() -> Bool {
+                clickCallCount += 1
+                return pressReturns
+            }
+        }
+
+        // MARK: - Actuation selector (`via`)
+
+        /// `"click"` must take the mouse path, not the AX press: the whole point is
+        /// that some controls report a successful press without acting on it.
+        @MainActor
+        func testViaClickUsesTheMousePathInsteadOfTheAXPress() {
+            let target = FakePressTarget(identifier: A11yID.settingsTabSpeakers)
+            let root = FakePressTarget(identifier: "settings", children: [target])
+
+            let outcome = DebugRPCServer.performPress(
+                identifier: A11yID.settingsTabSpeakers, in: root, maxDepth: 10, via: .click,
+            )
+
+            XCTAssertEqual(outcome, .pressed(true))
+            XCTAssertEqual(target.clickCallCount, 1)
+            XCTAssertEqual(target.pressCallCount, 0, "click must not also fire the AX press")
+        }
+
+        /// Omitting `via` keeps the pre-existing AX behaviour.
+        @MainActor
+        func testOmittedViaDefaultsToTheAXPress() {
+            let target = FakePressTarget(identifier: A11yID.recordOnlyToggle)
+            let root = FakePressTarget(identifier: "settings", children: [target])
+
+            _ = DebugRPCServer.performPress(
+                identifier: A11yID.recordOnlyToggle, in: root, maxDepth: 10,
+            )
+
+            XCTAssertEqual(target.pressCallCount, 1)
+            XCTAssertEqual(target.clickCallCount, 0)
+        }
+
+        /// An unknown actuation must fail decoding into the 400 arm rather than
+        /// silently degrading to an AX press and reporting success.
+        @MainActor
+        func testUnknownViaIsRejected() {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let body = #"{"identifier":"recordOnlyToggle","via":"tap"}"#
+
+            XCTAssertEqual(server.uiPressResponse(body: Data(body.utf8)).status, 400)
         }
 
         // MARK: - performPress (pure search + dispatch)
