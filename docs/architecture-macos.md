@@ -130,11 +130,15 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
 | `LiveTranscriptionController.swift` | Wires `StreamingTranscriber` to both `DualSourceRecorder` sinks (mic + app), feeds `LiveCaptionsState` (PoC) |
 | `LiveTranscriptionCoordinator.swift` | `@Observable` coordinator: builds + arms `LiveTranscriptionController`, feeds `LiveCaptionsState` |
-| `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (WhisperKit word-level \| EOU streaming) |
+| `LiveCaptionPipeline.swift` | Per-channel live captioning strategy protocol (WhisperKit word-level \| EOU streaming \| Nemotron streaming) |
 | `LiveCaptionsGate.swift` | Pure decision logic for live captions routing — which pipeline per channel; shared by `AppState`, coordinator, and controller |
 | `EouStreamingCaptionSession.swift` | EOU streaming caption session via FluidAudio end-of-utterance ASR, backed by `UtteranceRingBuffer` |
 | `UtteranceRingBuffer.swift` | Rolling 16 kHz sample buffer addressable by absolute ms timestamp (feeds EOU streaming session) |
+| `NemotronStreamingCaptionSession.swift` | Per-channel Nemotron streaming caption session via FluidAudio (multilingual streaming ASR, alternative to EOU) |
+| `NemotronAsrManager.swift` | Production FluidAudio Nemotron ASR actor wrapping `StreamingNemotronMultilingualAsrManager` |
+| `LiveTranscriptionController+Nemotron.swift` | Nemotron streaming pipeline factory — shared-model load + per-channel session build (line-cap split from `LiveTranscriptionController`) |
 | `EngineController.swift` | `@Observable @MainActor` engine selection + model lifecycle controller (language/vocabulary sync, preload) |
+| `EngineModelState.swift` | App-owned model lifecycle state enum for `TranscribingEngine` (`unloaded`/`downloading`/`loading`/`loaded`) — decouples the protocol from WhisperKit's vendor enum |
 | `PipelineController.swift` | `@Observable` controller owning `PipelineQueue` lifecycle (wired by `AppState`) |
 | `WatchingController.swift` | `@Observable` controller owning `WatchLoop` lifecycle (wired by `AppState`) |
 | `WavHeaderRepair.swift` | Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix) |

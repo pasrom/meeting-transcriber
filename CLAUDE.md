@@ -10,7 +10,9 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
     AppState.swift         # @Observable @MainActor composition root: wires the concern controllers (engines/watching/pipeline/permissions/channelHealth/liveTranscription/rpc) + exposes derived UI props (badge, status label)
     AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
+    AppSettings+RPC.swift  # RPC settings state projection for DebugRPCServer (#if !APPSTORE)
     EngineController.swift   # @Observable @MainActor engine selection + model lifecycle controller (language/vocabulary sync, preload)
+    EngineModelState.swift   # App-owned model lifecycle state enum for TranscribingEngine (unloaded/downloading/loading/loaded)
     AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
     MenuBarView.swift      # Menu bar dropdown UI
     MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
@@ -26,18 +28,29 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
       AdvancedSettingsView.swift # Permissions · Diagnostics · About
       View+RecordOnly.swift      # `recordOnlyDisabled(_:)` SwiftUI modifier (dim + disable downstream sections)
       PickerLanguages.swift      # Language picker entries for WhisperKit and Parakeet language selectors
+      HelpBadge.swift        # Clickable ⓘ popover for settings option explanations
+      SettingsHelp.swift     # Plain-English explanations for settings options, surfaced via HelpBadge
     SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
+    SpeakerNamingSession.swift  # Async speaker naming session coordinating PipelineQueue and SpeakerNamingStore
+    SpeakerNamingSession+Late.swift  # Late-join speaker naming session extension (line-cap split)
+    SpeakerNamingData.swift  # Speaker naming value types (split out of PipelineQueue)
+    SpeakerNamingStore.swift  # Disk persistence for speaker-naming sidecars, keyed by per-job slug
+    NamingWindowPolicy.swift  # Pins the "Name Speakers" window while user works in other apps (issue #504)
     KnownVoicesView.swift  # Speaker DB management UI (rename, delete, merge entries)
     RecognitionStatsView.swift # Recognition stats display (aggregate counts from recognition_log.jsonl)
+    ProcessingStatsView.swift  # Per-stage processing duration view backed by stage_timing.jsonl
+    StageTimingStats.swift  # Per-stage duration statistics model and stage_timing.jsonl reader
     VoiceEnrollmentView.swift  # Voice enrollment sheet (seed speakers.json from audio file)
     AppPickerView.swift    # App picker for manual recording
     LiveCaptionsState.swift # @Observable live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types
     LiveCaptionsOverlay.swift # SwiftUI caption-bar content (recent finals + per-channel hypotheses) hosted in LiveCaptionsWindow
     LiveCaptionsWindowController.swift # Borderless click-through NSPanel hosting the caption overlay (⌥-drag to reposition; origin persisted)
-    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming)
+    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming | Nemotron streaming)
     LiveCaptionsGate.swift   # Pure decision logic for live captions routing (which pipeline per channel, shared by AppState + controller)
     EouStreamingCaptionSession.swift # EOU streaming caption session (FluidAudio end-of-utterance ASR, UtteranceRingBuffer-backed)
     UtteranceRingBuffer.swift # Rolling 16 kHz sample buffer addressable by absolute timestamp (feeds EOU streaming)
+    NemotronStreamingCaptionSession.swift  # Per-channel Nemotron streaming caption session via FluidAudio (multilingual streaming ASR)
+    NemotronAsrManager.swift  # Production FluidAudio Nemotron ASR actor (wraps StreamingNemotronMultilingualAsrManager)
     PairedImportPanelDelegate.swift  # NSOpenPanel delegate + accessory view for paired dual-source file import
     PairedRecordingResolver.swift    # Groups recording URLs into dual-source groups for reimport
     AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
@@ -45,6 +58,8 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     AXHelper.swift         # Shared accessibility API helper
     A11yID.swift           # Single source of truth for accessibility identifiers used as automation handles (ViewInspector find + /ui/press allowlist reference the constants → compiler catches drift)
     NotificationManager.swift # macOS notifications (+ actionable browser-consent prompt, issue #503)
+    NotificationScheduling.swift  # Protocol over UNUserNotificationCenter slice used by NotificationManager (testability seam)
+    NotificationRingBuffer.swift  # Bounded FIFO log of recent notifications (#if !APPSTORE)
     ConsentPromptCoordinator.swift  # Pure async yes/no prompt coordinator (register→resolve-once by answer or injected-clock timeout, race-safe); NotificationManager wires UNUserNotificationCenter to it (issue #503)
     KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
     TranscriberStatus.swift # Status + MeetingInfo models
@@ -78,11 +93,13 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     JobStatusDTO.swift      # Wire shape for GET /v1/jobs/<id> (live job or persisted terminal record)
     NamingStatusDTO.swift   # Wire shape for GET /v1/jobs/<id>/naming (speaker labels + auto-name suggestions, no embeddings)
     LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
+    LiveTranscriptionController+Nemotron.swift  # Nemotron streaming pipeline factory (line-cap split from LiveTranscriptionController)
     LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
     ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
     ClaudeCLIProtocolGenerator.swift # Claude CLI subprocess protocol generation (#if !APPSTORE)
     OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
     WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
+    WatchLoop+Consent.swift  # Browser-meeting consent gate (line-cap split from WatchLoop, issue #503)
     WatchLoopEndPolicy.swift  # Pure decision logic for WatchLoop.waitForMeetingEnd (grace-period / max-duration)
     BrowserConsentPolicy.swift  # Pure decision logic for the browser-meeting "ask before recording" prompt (per-app decline cooldown, issue #503)
     WatchLoopState.swift   # Value-type snapshot of WatchLoop's observable fields (for tests and RPC)
@@ -122,6 +139,7 @@ app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
     DebugRPCServer+UITree.swift # GET /ui/tree: in-process self-pid AXUIElement tree walk → JSON (read-only, allowlisted windows, surfaces SwiftUI identifiers, no TCC)
     DebugRPCServer+UIPress.swift # POST /ui/press: in-process AXUIElementPerformAction(kAXPressAction) of a control by identifier (allowlisted windows, no TCC)
     DebugRPCServer+V1.swift # /v1/jobs automation-API routing (line-cap split from DebugRPCServer.route)
+    IdempotencyStore.swift  # Bounded FIFO idempotency-key→job map for /v1 automation API (#if !APPSTORE)
     HTTPRequest.swift      # HTTP/1.1 request parsing for DebugRPCServer (line-cap split)
     HTTPResponse.swift     # HTTP/1.1 response serialization for DebugRPCServer (line-cap split)
     RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
@@ -211,6 +229,7 @@ scripts/
   e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
   e2e-settings-smoke.sh    # GitHub-hosted /ui/* canary: build homebrew .app + launch with RPC + assert GET /ui/tree surfaces recordOnlyToggle and POST /ui/press flips /state (self-pid AX; no TCC; run by e2e-ui-smoke.yml)
   e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
+  e2e-permission-health.sh  # E2E test for permission-health probes (issue #446 follow-up)
   e2e-live-captions.sh     # E2E driver asserting on in-flight liveCaptions.recentFinals RPC state (complements e2e-app.sh)
   e2e-cpu-load.sh          # E2E resource measurement: idle + recording-without-captions + recording-with-live-captions CPU/RAM of the deployed app via RPC /metrics deltas (logs trends, gates only a generous idle-CPU catastrophe bound)
   setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + manual TCC grants keyed on cert SHA-1 (needed before e2e-app.sh works)
