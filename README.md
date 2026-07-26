@@ -81,7 +81,7 @@ flowchart TD
 
 ## Features
 
-- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, plus opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in Chrome) gated behind a recording-consent prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
@@ -96,6 +96,7 @@ flowchart TD
 - **Multi-format input** — Supports WAV, MP3, M4A, MP4, and with ffmpeg also MKV, WebM, OGG
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
+- **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
 - **Local automation API** (Homebrew build): drive the pipeline headlessly over localhost HTTP. POST an audio file, get a diarized transcript back. See [`docs/automation-api.md`](docs/automation-api.md)
 - **Distribution** — Install via Homebrew Cask or build from source
 
@@ -243,9 +244,9 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Apps to watch (Teams/Zoom/Webex), detection timing, update checks |
-| **Audio** | Microphone device, voice activity detection (VAD) |
-| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary) |
+| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser), detection timing, update checks |
+| **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator |
+| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), protocol language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
