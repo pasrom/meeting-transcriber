@@ -129,5 +129,58 @@ done
 ok "recordOnly flipped $before -> $after"
 if press; then ok "restored"; else echo "    (restore press failed — harmless on the ephemeral runner)"; fi
 
+step "POST /ui/press via=click selects a sidebar row (the AX press cannot)"
+field_in_tree() {
+    curl -sf --max-time 15 "${AUTH[@]}" "$BASE/ui/tree?window=settings" | grep -c micNameField || true
+}
+# SwiftUI renders only the selected tab, so the Speakers field is absent until the
+# row is selected. That absence is the assertion: it proves the click did something
+# an AX press provably cannot, rather than trusting the returned flag.
+[ "$(field_in_tree)" = "0" ] \
+    || fail "micNameField already in the tree before switching tabs — cannot prove the click did it"
+curl -sf --max-time 15 "${AUTH[@]}" -X POST "$BASE/ui/press" \
+    -H 'Content-Type: application/json' \
+    -d '{"window":"settings","identifier":"settings-tab-speakers","via":"click"}' -o /dev/null \
+    || fail "ui/press via=click failed"
+present=0
+for _ in $(seq 1 8); do
+    present=$(field_in_tree)
+    [ "$present" != "0" ] && break
+    sleep 1
+done
+[ "$present" != "0" ] \
+    || fail "Speakers tab did not become selected => synthetic click did not hit-test on this runner"
+ok "click switched tabs (micNameField now in the tree)"
+
+step "POST /ui/type writes through to AppSettings"
+read_mic_name() {
+    curl -sf --max-time 15 "${AUTH[@]}" "$BASE/state" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['settings']['recording']['micName'])"
+}
+original_mic=$(read_mic_name) || fail "could not read micName"
+probe="UiTypeSmoke"
+curl -sf --max-time 15 "${AUTH[@]}" -X POST "$BASE/ui/type" \
+    -H 'Content-Type: application/json' \
+    -d "{\"identifier\":\"micNameField\",\"text\":\"$probe\",\"clear\":true}" -o /dev/null \
+    || fail "ui/type failed"
+typed=""
+for _ in $(seq 1 8); do
+    typed=$(read_mic_name) || fail "could not read micName after typing"
+    [ "$typed" = "$probe" ] && break
+    sleep 1
+done
+# Exact match, not "contains": clear must replace, and a partial match would hide
+# the append-vs-replace ambiguity this endpoint exists to remove.
+[ "$typed" = "$probe" ] \
+    || fail "micName is '$typed', expected '$probe' => posted key events did not drive the SwiftUI binding"
+ok "micName written via posted key events: '$typed'"
+
+# Restore so a re-run starts from the same state as a fresh runner.
+curl -sf --max-time 15 "${AUTH[@]}" -X POST "$BASE/ui/type" \
+    -H 'Content-Type: application/json' \
+    -d "{\"identifier\":\"micNameField\",\"text\":\"$original_mic\",\"clear\":true}" -o /dev/null \
+    && ok "restored micName to '$original_mic'" \
+    || echo "    (restore failed — harmless on the ephemeral runner)"
+
 echo
 echo "UI-SMOKE PASSED — self-pid /ui/* harness works on this runner"

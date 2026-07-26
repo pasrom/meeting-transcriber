@@ -28,6 +28,10 @@ on:
       - 'app/MeetingTranscriber/Sources/DebugRPCServer*.swift'
       - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
       - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
+      # The injectors the /ui/* harness actuates through — as load-bearing for
+      # this lane as the endpoints themselves, so a change to them must trigger it.
+      - 'app/MeetingTranscriber/Sources/KeyboardInjection.swift'
+      - 'app/MeetingTranscriber/Sources/MouseInjection.swift'
   push:
     branches: [main]
     paths:
@@ -35,6 +39,10 @@ on:
       - 'app/MeetingTranscriber/Sources/DebugRPCServer*.swift'
       - 'app/MeetingTranscriber/Sources/HTTPRequest.swift'
       - 'app/MeetingTranscriber/Sources/HTTPResponse.swift'
+      # The injectors the /ui/* harness actuates through — as load-bearing for
+      # this lane as the endpoints themselves, so a change to them must trigger it.
+      - 'app/MeetingTranscriber/Sources/KeyboardInjection.swift'
+      - 'app/MeetingTranscriber/Sources/MouseInjection.swift'
       - 'scripts/e2e-settings-smoke.sh'
       - 'scripts/build_release.sh'
       - '.github/workflows/e2e-ui-smoke.yml'
