@@ -4,264 +4,38 @@
 
 ```
 VERSION                    # App version (read by build scripts)
-app/MeetingTranscriber/    # Swift macOS menu bar app (SPM)
-  Package.swift            # SPM manifest (WhisperKit + FluidAudio + AudioTapLib runtime deps; ViewInspector + SnapshotTesting test deps)
-  Sources/
-    MeetingTranscriberApp.swift  # @main, UI shell (scenes, NSOpenPanel, NSWorkspace)
-    AppState.swift         # @Observable @MainActor composition root: wires the concern controllers (engines/watching/pipeline/permissions/channelHealth/liveTranscription/rpc) + exposes derived UI props (badge, status label)
-    AppState+RPC.swift     # RPC state snapshot helper for DebugRPCServer (#if !APPSTORE)
-    EngineController.swift   # @Observable @MainActor engine selection + model lifecycle controller (language/vocabulary sync, preload)
-    AudioConstants.swift   # Shared audio pipeline constants (target sample rate)
-    MenuBarView.swift      # Menu bar dropdown UI
-    MenuBarIcon.swift      # Animated waveform menu bar icon + BadgeKind.compute() pure function
-    ChannelHealthMonitor.swift  # Pure state machine for per-channel asymmetric silence detection (mic vs app audio)
-    ChannelHealthController.swift  # @Observable controller polling channel levels and driving ChannelHealthMonitor
-    SettingsView.swift     # Settings window (TabView shell hosting six sub-views in Settings/)
-    Settings/
-      GeneralSettingsView.swift  # Apps to Watch · Detection · Updates
-      AudioSettingsView.swift    # Microphone device · VAD settings
-      TranscriptionSettingsView.swift  # ASR engine picker + per-engine options
-      SpeakersSettingsView.swift # Diarization · Mic Speaker Name · Known Voices · Recognition Stats
-      OutputSettingsView.swift   # LLM provider · protocol language · output folder · prompt
-      AdvancedSettingsView.swift # Permissions · Diagnostics · About
-      View+RecordOnly.swift      # `recordOnlyDisabled(_:)` SwiftUI modifier (dim + disable downstream sections)
-      PickerLanguages.swift      # Language picker entries for WhisperKit and Parakeet language selectors
-    SpeakerNamingView.swift # Speaker naming dialog + AccessibleTextField
-    KnownVoicesView.swift  # Speaker DB management UI (rename, delete, merge entries)
-    RecognitionStatsView.swift # Recognition stats display (aggregate counts from recognition_log.jsonl)
-    VoiceEnrollmentView.swift  # Voice enrollment sheet (seed speakers.json from audio file)
-    AppPickerView.swift    # App picker for manual recording
-    LiveCaptionsState.swift # @Observable live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types
-    LiveCaptionsOverlay.swift # SwiftUI caption-bar content (recent finals + per-channel hypotheses) hosted in LiveCaptionsWindow
-    LiveCaptionsWindowController.swift # Borderless click-through NSPanel hosting the caption overlay (⌥-drag to reposition; origin persisted)
-    LiveCaptionPipeline.swift # Per-channel live captioning strategy protocol (WhisperKit word-level | EOU streaming)
-    LiveCaptionsGate.swift   # Pure decision logic for live captions routing (which pipeline per channel, shared by AppState + controller)
-    EouStreamingCaptionSession.swift # EOU streaming caption session (FluidAudio end-of-utterance ASR, UtteranceRingBuffer-backed)
-    UtteranceRingBuffer.swift # Rolling 16 kHz sample buffer addressable by absolute timestamp (feeds EOU streaming)
-    PairedImportPanelDelegate.swift  # NSOpenPanel delegate + accessory view for paired dual-source file import
-    PairedRecordingResolver.swift    # Groups recording URLs into dual-source groups for reimport
-    AppPaths.swift         # Centralized paths (ipcDir, dataDir, logSubsystem, speakersDB)
-    AppSettings.swift      # @Observable settings (UserDefaults + file-based secrets)
-    AXHelper.swift         # Shared accessibility API helper
-    A11yID.swift           # Single source of truth for accessibility identifiers used as automation handles (ViewInspector find + /ui/press allowlist reference the constants → compiler catches drift)
-    NotificationManager.swift # macOS notifications (+ actionable browser-consent prompt, issue #503)
-    ConsentPromptCoordinator.swift  # Pure async yes/no prompt coordinator (register→resolve-once by answer or injected-clock timeout, race-safe); NotificationManager wires UNUserNotificationCenter to it (issue #503)
-    KeychainHelper.swift   # Keychain CRUD (legacy/test-only, token now file-based)
-    TranscriberStatus.swift # Status + MeetingInfo models
-    TranscribingEngine.swift # TranscribingEngine protocol + mergeDualSourceSegments default impl
-    WhisperKitEngine.swift # WhisperKit transcription engine (CoreML/ANE, 99+ languages)
-    ParakeetEngine.swift   # NVIDIA Parakeet TDT v3 engine via FluidAudio (CoreML/ANE, 25 EU languages)
-    ParakeetTokenGrouping.swift  # Pure token-grouping logic extracted from ParakeetEngine (testable)
-    StreamingTranscriber.swift # Per-channel live transcription actor (FluidVAD streaming → engine.transcribeSamples → partial/final captions)
-    FluidDiarizer.swift    # CoreML-based speaker diarization via FluidAudio (on-device, OfflineDiarizer + Sortformer modes)
-    FluidDiarizer+SortformerEmbeddings.swift  # Post-hoc WeSpeaker embedding extraction for Sortformer mode (feeds SpeakerMatcher)
-    FluidVAD.swift         # VAD preprocessing via FluidAudio Silero v6 (silence trimming + timeline remapping)
-    SpeakerMatcher.swift   # Speaker embedding DB + cosine similarity matching
-    SpeakerMatcher+Logging.swift # Forensic match-decision logging (pseudonymized speaker names)
-    LiveSpeakerMatcher.swift  # Actor for real-time speaker matching in live captions overlay (same WeSpeaker model as batch path)
-    StoredSpeaker.swift    # Codable speaker DB entry model (centroid + FIFO embeddings + metadata)
-    SpeakerKey.swift       # Speaker-track identity value type (track + raw id); single serialization boundary for the R_/M_ prefix strings
-    RecognitionStats.swift # Recognition event logging + aggregate stats model (recognition_log.jsonl)
-    RecordingSidecar.swift # Metadata sidecar written next to dual-source recordings in record-only mode
-    RecordingFileSuffix.swift  # Filename suffixes for dual-source recordings (_app.wav, _mic.wav, _mix.wav)
-    DiarizationProcess.swift  # DiarizationProvider protocol + result types
-    PipelineQueue.swift    # Decouples recording from post-processing (transcription → diarization → protocol)
-    PipelineQueue+Stages.swift  # Pipeline-stage execution methods (processNext/transcribe/diarize/render/protocol/VAD/copyAudioToOutput) split out to shrink the PipelineQueue class body (line-cap split)
-    PipelineQueue+Recovery.swift  # Snapshot restore (loadSnapshot) + orphaned-recording recovery (recoverOrphanedRecordings) split out to bring the PipelineQueue class body under the type_body_length cap (line-cap split)
-    ProcessedRecordingsLedger.swift  # File-backed skip-list of successfully-processed mix paths (backs PipelineQueue orphan recovery)
-    PipelineEventLog.swift  # Appends per-job state transitions to pipeline_log.jsonl (owner-only; extracted from PipelineQueue)
-    PipelineJob.swift      # Pipeline job model
-    PipelineSnapshot.swift  # Pure I/O helpers for persisting pipeline queue jobs to disk (atomic rename)
-    SnapshotWriterActor.swift  # Actor isolating pipeline queue snapshot writes (prevents main-actor stalls)
-    PipelineController.swift  # @Observable controller owning PipelineQueue lifecycle (wired by AppState)
-    TerminalJobStore.swift  # Durable finished-job records (id→state+paths) so the /v1/jobs/<id> automation readback survives the in-memory done-job reaping
-    JobStatusDTO.swift      # Wire shape for GET /v1/jobs/<id> (live job or persisted terminal record)
-    NamingStatusDTO.swift   # Wire shape for GET /v1/jobs/<id>/naming (speaker labels + auto-name suggestions, no embeddings)
-    LiveTranscriptionController.swift # Wires StreamingTranscriber to both DualSourceRecorder sinks (mic + app), feeds LiveCaptionsState (PoC)
-    LiveTranscriptionCoordinator.swift # @Observable coordinator: builds + arms LiveTranscriptionController, feeds LiveCaptionsState
-    ProtocolGenerator.swift   # Shared protocol utilities: prompts, file I/O, ProtocolError
-    ClaudeCLIProtocolGenerator.swift # Claude CLI subprocess protocol generation (#if !APPSTORE)
-    OpenAIProtocolGenerator.swift # OpenAI-compatible API protocol generation (Ollama, LM Studio, etc.)
-    WatchLoop.swift        # @MainActor watch loop: detect → record → enqueue PipelineJob
-    WatchLoopEndPolicy.swift  # Pure decision logic for WatchLoop.waitForMeetingEnd (grace-period / max-duration)
-    BrowserConsentPolicy.swift  # Pure decision logic for the browser-meeting "ask before recording" prompt (per-app decline cooldown, issue #503)
-    WatchLoopState.swift   # Value-type snapshot of WatchLoop's observable fields (for tests and RPC)
-    WatchingController.swift  # @Observable controller owning WatchLoop lifecycle (wired by AppState)
-    ManualRecordingMonitorPolicy.swift  # Pure decision logic for manual recording stop conditions (process-died vs max-duration)
-    SilentRecordingMonitor.swift  # Pure state machine detecting fully-silent recordings (both channels below threshold)
-    DualSourceRecorder.swift  # App audio (AudioTapLib) + mic recording (captures startTime in start())
-    WavHeaderRepair.swift     # Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix)
-    MeetingDetecting.swift # MeetingDetecting protocol + DetectedMeeting model
-    MeetingDetector.swift  # Window title matching (counts each pattern once per poll)
-    MeetingTitleMatcher.swift  # Shared compiled idle/meeting title classifier per AppMeetingPattern (used by MeetingDetector + PowerAssertionDetector title lookup)
-    FFmpegHelper.swift     # ffmpeg CLI detection + audio extraction for MKV/WebM/OGG
-    AudioMixer.swift       # Multi-format audio loading (WAV/MP3/M4A/MP4 via AVAsset fallback, MKV/WebM/OGG via ffmpeg) + mixing to 16kHz mono
-    LiveAudioResampler.swift # Streams live LiveAudioBuffer through AVAudioConverter → 16 kHz mono Float32 (feeds StreamingTranscriber)
-    SampleRateDriftDetector.swift # Watches actual vs declared CATap sample rate (catches USB hot-plug + HFP↔A2DP renegotiation drift)
-    MicRecorder.swift      # Microphone recording via AVAudioEngine
-    PermissionHealthCheck.swift # Permission health check (TCC verdict + live probe → PermissionStatus)
-    PermissionsController.swift # @Observable controller for permission health checks (wired by AppState)
-    PermissionRow.swift    # Permission status row UI component
-    Permissions.swift      # Permission checks (mic, screen recording)
-    ParticipantReader.swift # Reads meeting participants via accessibility
-    MeetingPatterns.swift  # App-specific window title patterns
-    PowerAssertionDetector.swift  # Meeting detection via IOKit power assertions (sandbox-safe)
-    UpdateChecker.swift    # GitHub release update checker
-    Bundle+AppVersion.swift # Bundle extension: appVersion + gitCommitHash from Info.plist
-    FileManager+OwnerOnly.swift # FileManager extension: owner-only file permission constant (rw-------, single source of truth)
-    DateFormatter+FilenameStamp.swift # Shared Gregorian/POSIX filename-stamp formatter factory (used by ProtocolGenerator + DualSourceRecorder)
-    SingleFlight.swift        # Single-flight async deduplication coordinator (concurrent callers await one shared run)
-    ModelWarmupQueue.swift    # Serial async gate ordering launch model warm-ups one-at-a-time (avoids the concurrent CoreML compile storm that starves the system on a meeting join)
-    DiagnosticExporter.swift # Reads log entries → shareable .log file (Settings → Advanced → Export Diagnostics)
-    PersistentDiagnosticLog.swift # Persistent log stream subprocess with sliding-window restart policy
-    String+LogRedaction.swift # String extensions: .pseudonymized and .redactedName for log privacy
-    DebugRPCServer.swift   # Localhost HTTP RPC for shell-driven inspection (#if !APPSTORE, env-gated by MEETINGTRANSCRIBER_DEBUG_RPC=1)
-    DebugRPCServer+Metrics.swift # GET /metrics handler (line-cap split from DebugRPCServer.route)
-    DebugRPCServer+Screenshot.swift # GET /screenshot capture + allowlist (line-cap split from DebugRPCServer)
-    DebugRPCServer+AXElement.swift # Shared self-pid AXUIElement plumbing (DebugRPCServer.ax* statics: read/press + window resolver) for the in-process /ui/* endpoints; no TCC (self-inspection exempt)
-    DebugRPCServer+UITree.swift # GET /ui/tree: in-process self-pid AXUIElement tree walk → JSON (read-only, allowlisted windows, surfaces SwiftUI identifiers, no TCC)
-    DebugRPCServer+UIPress.swift # POST /ui/press: in-process AXUIElementPerformAction(kAXPressAction) of a control by identifier (allowlisted windows, no TCC)
-    DebugRPCServer+V1.swift # /v1/jobs automation-API routing (line-cap split from DebugRPCServer.route)
-    HTTPRequest.swift      # HTTP/1.1 request parsing for DebugRPCServer (line-cap split)
-    HTTPResponse.swift     # HTTP/1.1 response serialization for DebugRPCServer (line-cap split)
-    RPCStateSnapshot.swift # JSON-serializable RPC state snapshot (#if !APPSTORE)
-    RPCResourceMetrics.swift # Cumulative CPU/RAM/instructions self-report via proc_pid_rusage (#if !APPSTORE, served at GET /metrics)
-    RPCServerController.swift  # @Observable controller owning DebugRPCServer lifecycle (#if !APPSTORE, wired by AppState)
-    Assets.xcassets        # App icon assets
-    Info.plist             # Bundle metadata
-  Entitlements/
-    Homebrew.entitlements  # Mic only (Homebrew/direct distribution)
-    AppStore.entitlements  # Sandbox + mic + network + file picker (App Store)
-  Tests/                   # Swift tests (XCTest + ViewInspector)
-    Fixtures/              # Test audio files (two_speakers_de.wav, etc.)
-tools/audiotap/            # AudioTapLib — CATapDescription-based app audio capture (SPM library)
-  Package.swift            # SPM manifest (macOS 14+, library target)
-  Sources/
-    AppAudioCapture.swift  # CATapDescription + IOProc → FileHandle
-    AppAudioCapture+PIDTranslation.swift  # Translates PIDs to CoreAudio AudioObjectIDs (multi-process tap for Electron apps)
-    AppAudioCapture+DebugLogging.swift # Per-buffer dBFS/RMS logging helpers extracted from AppAudioCapture (line-cap split)
-    AppAudioCapture+LiveSink.swift # Live-buffer forwarding from CATap IOProc into LiveAudioBuffer sinks (line-cap split)
-    MicCaptureHandler.swift # AVAudioEngine → WAV
-    AudioCaptureSession.swift # Orchestrator (start/stop, computes micDelay)
-    AudioCaptureResult.swift  # Result struct
-    LiveAudioBuffer.swift  # Real-time audio sample snapshot yielded from capture callbacks (CATap IOProc + AVAudioEngine input tap)
-    CurrentLevel.swift     # Pure function: dBFS level read with staleness decay (stale tap → silence)
-    LevelPublisher.swift   # Cross-thread dBFS slot (audio callback writes, UI thread reads)
-    DebugRMSReporter.swift # Throttled RMS accumulator/reporter for audio debug logging
-    Helpers.swift          # machTicksToSeconds, getDefaultOutputDeviceUID, writeAllToFileHandle
-    MicRestartPolicy.swift # Pure decision logic for mic engine restart on device change
-    OutputDeviceChangeCoordinator.swift # State machine for output device change + tap restart flow
-    ProcessTreeEnumerator.swift  # Enumerates all PIDs under an .app bundle (Electron/Teams child-process support)
-    SampleRateQuery.swift  # Pure functions for sample rate detection and cross-validation
-    AVAudioNode+SafeInstallTap.swift  # Safe installTap wrapper catching NSException via CExceptionCatcher (issue #379)
-    AppAudioCapture+Resampling.swift  # Capture-time resampling for CATap buffers (line-cap split)
-    AppAudioCapture+TapError.swift    # Tap-creation error mapping for AppAudioCapture (line-cap split)
-    CExceptionCatcher/               # Obj-C module catching AVFoundation NSException from installTapOnBus
-    DebugTapFault.swift              # Fault-injection configuration for mic device-change E2E (issue #379)
-    MicCaptureHandler+Timeline.swift  # Timeline tracking for MicCaptureHandler across device-change restarts
-    MicRestartRetryPolicy.swift      # Retry/backoff policy for failed mic engine restarts
-    StreamingMonoResampler.swift     # Streaming mono resampler for live 16 kHz audio path
-    TapFormatResolver.swift          # Derives mic tap format from hardware format (prevents installTap channel mismatch)
-    TimelineAnchor.swift             # Wall-clock timeline anchor across device-change restarts (aligns track to real time)
-  Tests/
-    AppAudioCaptureDebugLoggingTests.swift
-    AppAudioCaptureLiveSinkTests.swift
-    AppAudioCapturePIDTranslationTests.swift
-    AppAudioCaptureResamplingTests.swift
-    AppAudioCaptureStatusTests.swift
-    AudioCaptureResultTests.swift
-    CExceptionCatcherTests.swift
-    CurrentLevelTests.swift
-    DebugRMSReporterTests.swift
-    HelpersTests.swift
-    LevelPublisherTests.swift
-    LiveAudioBufferTests.swift
-    MicCaptureErrorTests.swift
-    MicCaptureHandlerTimelineTests.swift
-    MicRestartPolicyTests.swift
-    MicRestartRetryPolicyTests.swift
-    OutputDeviceChangeCoordinatorTests.swift
-    ProcessTreeEnumeratorTests.swift
-    SampleRateQueryTests.swift
-    StreamingMonoResamplerTests.swift
-    TapFormatResolverTests.swift
-    TimelineAnchorTests.swift
-tools/meeting-simulator/   # Meeting simulator tool for testing (--title sets the window title the app's title lookup sees → drives the detected meeting title)
-  Package.swift
-  Sources/main.swift
-tools/mt-cli/              # Thin Swift client for DebugRPCServer (state, screenshot, open-settings, …)
-  Package.swift
-  Sources/
-    MTCLI.swift            # ArgumentParser entrypoint (+ confirm-browser-consent, wav-verdict subcommands, issue #503)
-    RPCClient.swift        # HTTP client; reads token from AppPaths-equivalent path
-    WavVerdict.swift       # Pure RMS non-silence analysis (windowed dBFS + activeWindowRatio); backs `mt-cli wav-verdict`
-  Tests/RPCClientTests.swift
-  Tests/WavVerdictTests.swift
-  Tests/WavVerdictCommandTests.swift
-  skill.md                 # Claude skill: when to use mt-cli, with examples
-scripts/
-  build_release.sh         # Build self-contained .app bundle + DMG (--appstore for App Store variant)
-  notarize_status.sh       # Check Apple notarization status
-  run_app.sh               # Build + sign + launch menu bar app bundle (--build-only skips `open -W`)
-  e2e-app.sh               # Live-recording E2E driver: build + deploy dev.app, trigger meeting-simulator, assert on RPC /state.lastJob
-  e2e-browser.sh           # Live browser-meeting E2E driver (issue #503): deploy dev.app (watchBrowserMeetings+recordOnly+noMic+RPC), open Chrome + fixtures/webrtc-tone.html, grant consent via RPC, assert _app.wav non-silent via `mt-cli wav-verdict`
-  fixtures/webrtc-tone.html  # Self-contained WebRTC-loopback + WebAudio-tone page (holds the "WebRTC has active PeerConnections" assertion + emits a tone the CATap can capture) for e2e-browser.sh
-  fixtures/jitsi-keeper.mjs  # CDP (puppeteer-core) driver for e2e-browser.sh --jitsi: two Chrome tabs join a REAL public Jitsi room (real 2-participant WebRTC SFU meeting); getUserMedia overridden to a 440 Hz tone so no mic/TCC is touched, unmuted so audio flows through the real server
-  fixtures/package.json      # puppeteer-core dep for jitsi-keeper.mjs (npm i on demand; node_modules gitignored)
-  e2e-channel-health.sh    # E2E test for per-channel signal indicator (forces mic-silent state + asserts red-tint via RPC screenshot)
-  e2e-settings-smoke.sh    # GitHub-hosted /ui/* canary: build homebrew .app + launch with RPC + assert GET /ui/tree surfaces recordOnlyToggle and POST /ui/press flips /state (self-pid AX; no TCC; run by e2e-ui-smoke.yml)
-  e2e-silent-recording.sh  # E2E test for silent-recording detector (both channels at noise floor → in-app warning)
-  e2e-live-captions.sh     # E2E driver asserting on in-flight liveCaptions.recentFinals RPC state (complements e2e-app.sh)
-  e2e-cpu-load.sh          # E2E resource measurement: idle + recording-without-captions + recording-with-live-captions CPU/RAM of the deployed app via RPC /metrics deltas (logs trends, gates only a generous idle-CPU catastrophe bound)
-  setup-self-hosted-runner.sh  # One-time: self-signed code-signing cert + manual TCC grants keyed on cert SHA-1 (needed before e2e-app.sh works)
-  generate_test_audio.sh   # Generate 2-speaker test WAV fixture (requires sox)
-  generate_test_audio_3speakers.sh  # Generate 3-speaker test WAV fixture (requires sox)
-  generate_test_audio_with_silence.sh # Generate 2-speaker fixture with engineered silence block for VAD E2E tests
-  generate_quality_fixtures.sh # Generate WER/DER quality ground-truth fixtures (WAV + truth JSON, requires sox)
-  build_perf_report.sh     # Build performance analysis: CI run history → job duration trends + slowdown alerts
-  configure-tag-ruleset.sh  # Configure/update GitHub Tag Ruleset for stable-tag protection (idempotent)
-  lint.sh                   # Lint & format (--fix to auto-correct; runs SwiftFormat + SwiftLint)
-  test_rpc.sh               # Live smoketest for DebugRPCServer (build + launch + drive via mt-cli + assert)
-  pre-push.sh               # Pre-push parity check: swift build -c release (catches Sendable diagnostics that debug-mode builds tolerate)
-  export-lcov.sh            # Export LCOV coverage for an SPM package's xctest bundle
-  keychain-prepend.sh       # Idempotent keychain search-list prepend (used by setup-self-hosted-runner.sh)
-  generate_menu_bar_gifs.swift      # Generate menu bar animation GIFs
-  assert-red-pixels.swift   # Visual regression assertion for menu-bar red-tint indicator (counts red pixels in PNG)
-  bless_quality_baseline.sh  # Project quality results into slim baseline JSON for CI regression gate
-  generate_social_preview.py  # Generate GitHub social preview card (docs/social-preview.png)
-  generate_test_audio_en.sh  # Generate English 2-speaker test WAV fixture (two_speakers_en.wav, requires say + sox)
-  lib/e2e-helpers.sh        # Shared helpers sourced by e2e-app.sh, e2e-channel-health.sh, e2e-silent-recording.sh
-  tests/
-    test_build_release_signing.sh  # Regression test for build_release.sh codesign-identity detection
-Casks/meeting-transcriber.rb # Homebrew Cask formula (stable)
-Casks/meeting-transcriber@beta.rb # Homebrew Cask formula (pre-release)
-.github/workflows/
-  ci.yml                   # CI: lint + analyze + Swift tests (3 parallel jobs)
-  release.yml              # CI: build DMG + GitHub Release on tag push
-  pr-labels.yml            # Automatic PR labeling
-  e2e.yml                  # E2E — fixture-based xctest on self-hosted Mac (dispatch + main push + label-gated PR runs via `run-e2e`)
-  e2e-app.yml              # E2E — deployed dev .app + live recording + RPC-driven assertion (dispatch + push to main + nightly + label-gated PR runs via `run-e2e`)
-  e2e-browser.yml          # E2E — browser-meeting detection + capture (issue #503): Chrome + WebRTC-tone fixture → power-assertion detect → RPC consent → non-silent _app.wav; NON-GATING canary on the self-hosted mini (dispatch + nightly + label-gated PR runs via `run-e2e`)
-  e2e-cpu-load.yml         # E2E — idle + in-meeting CPU/RAM measurement of the deployed app (dispatch + nightly trend cron, RESULT artifact)
-  appstore.yml             # App Store variant smoke test: build + launch-check (main push + nightly + dispatch)
-  e2e-ui-smoke.yml         # E2E — GitHub-hosted /ui/* self-pid AX canary: build homebrew .app, drive GET /ui/tree + POST /ui/press, assert (guards the non-contractual self-pid path against macOS drift; no TCC → runs off the mini; paths-filtered PR + main push + nightly + dispatch)
-  build-perf-tracking.yml  # Weekly build performance trend analysis (flags regressions vs 28-day baseline)
-  quality-and-safety.yml   # TSan/ASan matrix + WER/DER quality regression (main + nightly + dispatch + label-gated PR runs via `run-quality`)
-  dependabot-auto-merge.yml # Auto-merge Dependabot patch/minor and github-actions bumps
-  e2e-crash-recovery.yml    # E2E — crash recovery: SIGKILL mid-recording + verify pipeline recovers via WAV header repair (dispatch + nightly + label-gated PR runs via `run-e2e`)
-  e2e-mic-device-change.yml # E2E — mic device-change NSException survival (issue #379, fault-injection build)
-  pages.yml                 # Deploy landing page to GitHub Pages (site/ → GitHub Pages, main push + dispatch)
-docs/
-  architecture-macos.md        # High-level architecture quick-reference
-  menu-bar-*.gif               # Menu bar icon animation GIFs (idle, recording, transcribing, diarizing, protocol, permission, record-only, channel-silent-app, channel-silent-mic)
-  plans/
-    appstate-tests.md          # AppState test expansion plan
-    2026-03-10-repo-review.md  # Repository review findings
-    2026-03-21-workflow-integration-tests.md  # Workflow integration test plan
-protocols/                 # Output directory (gitignored)
-speakers.json              # Saved voice profiles (gitignored, created at runtime)
-.env                       # Environment variables (gitignored)
+app/MeetingTranscriber/    # Swift macOS menu-bar app (SPM)
+  Package.swift            # WhisperKit + FluidAudio + AudioTapLib runtime deps;
+                           #   ViewInspector + SnapshotTesting test deps
+  Sources/                 # @main app shell + AppState composition root wiring the concern
+                           #   controllers (engines, watching, pipeline, permissions, channel
+                           #   health, live transcription, RPC). ASR engines: WhisperKitEngine
+                           #   (99+ langs) + ParakeetEngine (25 EU langs, via FluidAudio).
+                           #   Diarization + VAD: FluidDiarizer (offline + Sortformer), FluidVAD,
+                           #   SpeakerMatcher. Recording: DualSourceRecorder (app audio + mic).
+                           #   Post-processing: PipelineQueue (transcribe -> diarize -> protocol).
+                           #   Live captions overlay + StreamingTranscriber. Settings UI
+                           #   (SettingsView + Settings/). Protocol generation:
+                           #   ClaudeCLIProtocolGenerator (#if !APPSTORE) / OpenAIProtocolGenerator.
+                           #   DebugRPCServer + /v1 automation API (#if !APPSTORE).
+  Tests/                   # XCTest + ViewInspector; Fixtures/ test audio (two_speakers_de.wav, ...)
+  Entitlements/            # Homebrew.entitlements (mic only) + AppStore.entitlements (sandbox)
+  Info.plist               # Bundle metadata
+tools/audiotap/            # AudioTapLib: CATapDescription app-audio + AVAudioEngine mic capture (SPM lib)
+tools/meeting-simulator/   # Meeting simulator for testing
+tools/mt-cli/              # Thin Swift client for DebugRPCServer (+ skill.md)
+scripts/                   # build_release / run_app / e2e-*.sh drivers, lint.sh, pre-push.sh,
+                           #   test-audio + quality-fixture generators, self-hosted runner setup
+Casks/                     # Homebrew Cask formulae (meeting-transcriber + @beta)
+.github/workflows/         # CI (lint/analyze/test), release, e2e lanes, quality-and-safety, pages
+docs/                      # architecture-macos.md + plans/ (committed RFCs; .local/ = gitignored scratch)
+protocols/                 # Protocol output dir (gitignored)
+speakers.json / .env       # Runtime voice profiles + env vars (gitignored)
 ```
+
+> Full per-file breakdown: `find app/MeetingTranscriber/Sources tools -name '*.swift'` — each
+> file's purpose is documented in its header comment. Non-obvious design rationale and gotchas
+> live in the Architecture Notes and Critical Notes sections below.
 
 ## Pipeline
 
