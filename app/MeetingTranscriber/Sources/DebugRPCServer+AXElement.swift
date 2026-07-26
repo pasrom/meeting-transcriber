@@ -82,13 +82,30 @@
             AXUIElementPerformAction(element, kAXPressAction as CFString) == .success
         }
 
-        /// The app's `NSWindow` carrying the given identifier, or nil when none is
-        /// open (and always in the xctest process, where `NSApp` itself is nil).
-        /// Sits beside `axWindowElement` because the two are resolved together
-        /// whenever an endpoint needs to post events into a window rather than only
-        /// read its accessibility tree.
+        /// The app's on-screen `NSWindow` carrying the given identifier, or nil when
+        /// no visible one matches (and always in the xctest process, where `NSApp`
+        /// itself is nil). See `visibleWindow` for why visibility decides.
         static func nsWindow(forIdentifier identifier: String) -> NSWindow? {
-            NSApp?.windows.first { $0.identifier?.rawValue == identifier }
+            visibleWindow(identifier: identifier, among: NSApp?.windows ?? [])
+        }
+
+        /// The on-screen window carrying `identifier`, or nil when every match is
+        /// off-screen. Pure over the window list so it is testable without a running
+        /// application.
+        ///
+        /// Visibility is the identity signal that matters here: the accessibility
+        /// tree lists only on-screen windows, but `NSApp.windows` keeps closed ones,
+        /// so a plain first-match can pair a live AX element with a dead `NSWindow`
+        /// — focus lands on the real field, the events go nowhere, and the endpoint
+        /// still reports that it dispatched them.
+        static func visibleWindow(identifier: String, among windows: [NSWindow]) -> NSWindow? {
+            windows.first { $0.identifier?.rawValue == identifier && $0.isVisible }
+        }
+
+        /// Accessibility subrole, which distinguishes a secure text field from a
+        /// plain one (both report the `AXTextField` role).
+        static func axSubrole(_ element: AXUIElement) -> String? {
+            AXHelper.getAttribute(element, attribute: kAXSubroleAttribute as String) as? String
         }
 
         /// Make the element the focused (first-responder) control. Returns whether

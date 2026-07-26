@@ -142,7 +142,9 @@
         /// window resolution; only the adapter differs.
         /// The `NSWindow` is resolved alongside the AX root so a `"click"` press has
         /// somewhere to post its mouse events. It stays optional on purpose: an AX
-        /// press works without it, so a missing window only disables clicking.
+        /// press works without it, so a missing window only disables clicking — and
+        /// "missing" now includes an identifier match that is merely off-screen,
+        /// since `nsWindow` resolves only visible windows.
         static func uiPressTarget(forWindowIdentifier identifier: String) -> (any UIPressTarget)? {
             guard let element = axWindowElement(forIdentifier: identifier) else { return nil }
             let window = nsWindow(forIdentifier: identifier)
