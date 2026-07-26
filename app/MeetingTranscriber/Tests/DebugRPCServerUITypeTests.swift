@@ -16,6 +16,8 @@
         /// can prove the disabled path never types.
         @MainActor
         private final class FakeTypeTarget: UITypeTarget {
+            var uiRole: String?
+            var uiSubrole: String?
             var uiIdentifier: String?
             var uiEnabled: Bool
             var uiChildren: [any UITypeTarget]
@@ -26,7 +28,10 @@
             init(
                 identifier: String? = nil, enabled: Bool = true,
                 typeReturns: Bool = true, children: [any UITypeTarget] = [],
+                role: String? = kAXTextFieldRole as String, subrole: String? = nil,
             ) {
+                uiRole = role
+                uiSubrole = subrole
                 uiIdentifier = identifier
                 uiEnabled = enabled
                 self.typeReturns = typeReturns
@@ -124,6 +129,77 @@
             )
 
             XCTAssertEqual(field.clearRequests, [false])
+        }
+
+        // MARK: - Role guard
+
+        /// Pins WHERE the check happens, not just that it happens: the carrier is
+        /// skipped and the real field beneath it still receives the text. A check
+        /// placed before the walk, or in the adapter, would abort on the carrier and
+        /// never reach the field — this is the SwiftUI identifier-propagation case
+        /// the guard exists for, so it is the behaviour worth pinning.
+        @MainActor
+        func testSkipsAnIdentifierCarryingContainerAndTypesIntoTheFieldBeneathIt() {
+            let field = FakeTypeTarget(identifier: A11yID.micNameField)
+            let carrier = FakeTypeTarget(
+                identifier: A11yID.micNameField, children: [field], role: kAXGroupRole as String,
+            )
+            let root = FakeTypeTarget(identifier: "settings", children: [carrier])
+
+            let outcome = DebugRPCServer.performType(
+                text: "Speaker A", identifier: A11yID.micNameField, in: root, maxDepth: 10,
+            )
+
+            XCTAssertEqual(outcome, .typed(true))
+            XCTAssertEqual(field.typedText, ["Speaker A"], "the field beneath the carrier must receive it")
+            XCTAssertTrue(carrier.typedText.isEmpty, "the carrier itself must never be typed into")
+        }
+
+        @MainActor
+        func testRefusesAnElementThatIsNotATextField() {
+            let label = FakeTypeTarget(identifier: A11yID.micNameField, role: kAXStaticTextRole as String)
+            let root = FakeTypeTarget(identifier: "settings", children: [label])
+
+            let outcome = DebugRPCServer.performType(
+                text: "x", identifier: A11yID.micNameField, in: root, maxDepth: 10,
+            )
+
+            XCTAssertEqual(outcome, .notFound, "an identifier match on a non-field must not type")
+            XCTAssertTrue(label.typedText.isEmpty)
+        }
+
+        /// Structural enforcement of the "never a secure field" invariant, which
+        /// until now lived only in a comment. A `SecureField` exposes as
+        /// `AXTextField` with the `AXSecureTextField` subrole, so the role check
+        /// alone would happily accept it.
+        @MainActor
+        func testRefusesASecureTextField() {
+            let secure = FakeTypeTarget(
+                identifier: A11yID.micNameField,
+                role: kAXTextFieldRole as String, subrole: "AXSecureTextField",
+            )
+            let root = FakeTypeTarget(identifier: "settings", children: [secure])
+
+            let outcome = DebugRPCServer.performType(
+                text: "hunter2", identifier: A11yID.micNameField, in: root, maxDepth: 10,
+            )
+
+            XCTAssertEqual(outcome, .notFound, "a secure field must never receive posted keystrokes")
+            XCTAssertTrue(secure.typedText.isEmpty)
+        }
+
+        /// The guard must not reject the real target.
+        @MainActor
+        func testAcceptsAPlainTextField() {
+            let field = FakeTypeTarget(identifier: A11yID.micNameField)
+            let root = FakeTypeTarget(identifier: "settings", children: [field])
+
+            let outcome = DebugRPCServer.performType(
+                text: "ok", identifier: A11yID.micNameField, in: root, maxDepth: 10,
+            )
+
+            XCTAssertEqual(outcome, .typed(true))
+            XCTAssertEqual(field.typedText, ["ok"])
         }
 
         // MARK: - Allowlists

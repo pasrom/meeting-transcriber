@@ -49,6 +49,8 @@
     /// record the *text* it received.
     @MainActor
     protocol UITypeTarget {
+        var uiRole: String? { get }
+        var uiSubrole: String? { get }
         var uiIdentifier: String? { get }
         var uiEnabled: Bool { get }
         var uiChildren: [any UITypeTarget] { get }
@@ -115,7 +117,7 @@
             text: String, identifier: String, in root: any UITypeTarget, maxDepth: Int,
             clear: Bool = false,
         ) -> UITypeOutcome {
-            if root.uiIdentifier == identifier {
+            if root.uiIdentifier == identifier, isTypable(root) {
                 guard root.uiEnabled else { return .disabled }
                 return .typed(root.uiType(text, clear: clear))
             }
@@ -130,6 +132,24 @@
                 }
             }
             return .notFound
+        }
+
+        /// Whether an element may receive posted keystrokes at all.
+        ///
+        /// The identifier alone must not decide: SwiftUI propagates
+        /// `.accessibilityIdentifier` to descendants when applied to a container, so
+        /// a label or group can end up carrying a field's identifier — typing into
+        /// that is at best a no-op and at worst lands in the wrong control. Checked
+        /// inside the match arm rather than before the walk, so a non-typable
+        /// carrier is skipped and the real field beneath it is still reached. A
+        /// non-matching element is therefore absent, not a conflict.
+        ///
+        /// The subrole check is what makes the "never a secure field" invariant
+        /// structural instead of a comment: a `SecureField` reports the same
+        /// `AXTextField` role as a plain one and is told apart only by its subrole.
+        static func isTypable(_ element: any UITypeTarget) -> Bool {
+            element.uiRole == kAXTextFieldRole as String
+                && element.uiSubrole != kAXSecureTextFieldSubrole as String
         }
 
         /// Resolve the accessibility root *and* the `NSWindow` for an allowed,
@@ -194,6 +214,14 @@
     private struct AXTypeSource: UITypeTarget {
         let element: AXUIElement
         let window: NSWindow
+
+        var uiRole: String? {
+            DebugRPCServer.axRole(element)
+        }
+
+        var uiSubrole: String? {
+            DebugRPCServer.axSubrole(element)
+        }
 
         var uiIdentifier: String? {
             DebugRPCServer.axIdentifier(element)
