@@ -1,4 +1,5 @@
 #if !APPSTORE
+    import AppKit
     @testable import MeetingTranscriber
     import XCTest
 
@@ -171,6 +172,75 @@
             let body = Data(#"{"identifier":"micNameField","text":"x","clear":true}"#.utf8)
 
             XCTAssertTrue(try JSONDecoder().decode(UITypePayload.self, from: body).clear)
+        }
+
+        // MARK: - Routing
+
+        /// `/ui/type` reaches its handler through `routeUI`, so these go through
+        /// `route()` rather than calling the handler directly: the dispatch branch
+        /// is exactly what a duplicate or mis-ordered route would break.
+        private func authed(_ body: String) -> HTTPRequest {
+            HTTPRequest(
+                method: "POST", path: "/ui/type",
+                headers: ["authorization": "Bearer \(Self.testToken)"],
+                body: Data(body.utf8),
+            )
+        }
+
+        @MainActor
+        func testRouteReachesTheTypeHandler() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+
+            // 403 proves the request reached the handler's allowlist check; an
+            // unrouted path would 404 instead.
+            let response = await server.route(authed(#"{"identifier":"openAIApiKeyField","text":"x"}"#))
+
+            XCTAssertEqual(response.status, 403)
+        }
+
+        @MainActor
+        func testRouteRejectsMalformedTypeBody() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+
+            let response = await server.route(authed("not json"))
+
+            XCTAssertEqual(response.status, 400)
+        }
+
+        /// Text past the cap is refused before any window work. The cap exists so a
+        /// single request cannot occupy the main actor typing tens of thousands of
+        /// characters, which would stall the UI and the server with it.
+        @MainActor
+        func testRouteRejectsOversizedText() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let tooLong = String(repeating: "x", count: DebugRPCServer.uiTypeMaxTextLength + 1)
+
+            let response = await server.route(authed(#"{"identifier":"micNameField","text":"\#(tooLong)"}"#))
+
+            XCTAssertEqual(response.status, 400)
+        }
+
+        @MainActor
+        func testTextAtTheCapIsAccepted() async {
+            let server = DebugRPCServer(port: 0, token: Self.testToken) { .empty }
+            let atCap = String(repeating: "x", count: DebugRPCServer.uiTypeMaxTextLength)
+
+            let response = await server.route(authed(#"{"identifier":"micNameField","text":"\#(atCap)"}"#))
+
+            // 503: allowed and correctly sized, but this process has no live window.
+            XCTAssertEqual(response.status, 503, "the cap must be inclusive")
+        }
+
+        // MARK: - Headless resolution
+
+        /// Fail closed: with no running application there is no window to focus or
+        /// post into, so resolution yields nothing rather than a half-usable target.
+        @MainActor
+        func testTargetResolutionYieldsNothingWithoutAnApplication() {
+            XCTAssertNil(NSApp, "precondition: xctest has no NSApplication")
+
+            XCTAssertNil(DebugRPCServer.uiTypeTarget(forWindowIdentifier: "settings"))
+            XCTAssertNil(DebugRPCServer.nsWindow(forIdentifier: "settings"))
         }
 
         // MARK: - Payload validation

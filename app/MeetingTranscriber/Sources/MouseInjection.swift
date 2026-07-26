@@ -44,16 +44,30 @@
         /// whose mouse-up never follows leaves the tracking loop waiting for an up
         /// that cannot arrive, which wedges the main thread exactly as described
         /// above, so a half-built pair must never be delivered.
+        /// Resolve an accessibility point into `window`'s own coordinate space, or
+        /// nil when it falls outside the window.
+        ///
+        /// Split out of `click` because this is the part that can be subtly wrong —
+        /// a bad flip mirrors the click and a stale frame lands it on whatever moved
+        /// into that spot — and it is the only part testable without a running
+        /// `NSApplication`. Hit-testing, not the validated identifier, decides what a
+        /// click actually hits, so refusing out-of-window points is a guard, not a
+        /// convenience.
+        static func windowPoint(
+            forAXPoint axPoint: CGPoint, in window: NSWindow, primaryScreenHeight: CGFloat,
+        ) -> CGPoint? {
+            let screenPoint = cocoaScreenPoint(
+                fromAXPoint: axPoint, primaryScreenHeight: primaryScreenHeight,
+            )
+            guard window.frame.contains(screenPoint) else { return nil }
+            return window.convertPoint(fromScreen: screenPoint)
+        }
+
         static func click(atAXPoint axPoint: CGPoint, in window: NSWindow) -> Bool {
             guard let app = NSApp, let primary = NSScreen.screens.first else { return false }
-            let screenPoint = cocoaScreenPoint(
-                fromAXPoint: axPoint, primaryScreenHeight: primary.frame.height,
-            )
-            // Hit-testing, not the validated identifier, decides what a click lands
-            // on. Refusing points outside the window keeps a stale frame (window
-            // moved or scrolled since the accessibility read) from clicking
-            // something else entirely.
-            guard window.frame.contains(screenPoint) else { return false }
+            guard let windowPoint = windowPoint(
+                forAXPoint: axPoint, in: window, primaryScreenHeight: primary.frame.height,
+            ) else { return false }
             // A synthetic click on an inactive app is delivered but not acted on:
             // measured against the running app, the sidebar selection did not change
             // and the endpoint still answered `{"pressed":true}`. Making the window
@@ -62,7 +76,6 @@
                 app.activate(ignoringOtherApps: true)
                 window.makeKeyAndOrderFront(nil)
             }
-            let windowPoint = window.convertPoint(fromScreen: screenPoint)
             guard let down = mouseEvent(.leftMouseDown, at: windowPoint, in: window),
                   let up = mouseEvent(.leftMouseUp, at: windowPoint, in: window)
             else { return false }
