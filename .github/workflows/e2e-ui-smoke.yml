@@ -32,6 +32,13 @@ on:
       # this lane as the endpoints themselves, so a change to them must trigger it.
       - 'app/MeetingTranscriber/Sources/KeyboardInjection.swift'
       - 'app/MeetingTranscriber/Sources/MouseInjection.swift'
+      # The Settings UI the lane drives. Omitting these was the lane's own blind
+      # spot: a sidebar/identifier refactor is the likeliest thing to break it, and
+      # without these globs such a PR merges unguarded and the breakage surfaces on
+      # the nightly cron, where it misreads as macOS drift.
+      - 'app/MeetingTranscriber/Sources/SettingsView.swift'
+      - 'app/MeetingTranscriber/Sources/Settings/*.swift'
+      - 'app/MeetingTranscriber/Sources/A11yID.swift'
   push:
     branches: [main]
     paths:
@@ -43,6 +50,13 @@ on:
       # this lane as the endpoints themselves, so a change to them must trigger it.
       - 'app/MeetingTranscriber/Sources/KeyboardInjection.swift'
       - 'app/MeetingTranscriber/Sources/MouseInjection.swift'
+      # The Settings UI the lane drives. Omitting these was the lane's own blind
+      # spot: a sidebar/identifier refactor is the likeliest thing to break it, and
+      # without these globs such a PR merges unguarded and the breakage surfaces on
+      # the nightly cron, where it misreads as macOS drift.
+      - 'app/MeetingTranscriber/Sources/SettingsView.swift'
+      - 'app/MeetingTranscriber/Sources/Settings/*.swift'
+      - 'app/MeetingTranscriber/Sources/A11yID.swift'
       - 'scripts/e2e-settings-smoke.sh'
       - 'scripts/build_release.sh'
       - '.github/workflows/e2e-ui-smoke.yml'
