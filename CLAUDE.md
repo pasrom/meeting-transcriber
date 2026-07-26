@@ -229,7 +229,7 @@ Rule: test each behavior at the cheapest layer that can falsify it.
 3. **`/state` (live RPC):** first choice for live assertions, including window/scene
    behavior via `/state.windows` (`isVisible` after deactivate, `floating`,
    `canJoinAllSpaces` — how #509/#511 guard the naming-window pin).
-4. **`/ui/tree` + `/ui/press`** (live, Settings window only): only for behavior that
+4. **`/ui/tree` + `/ui/press` + `/ui/type`** (live, Settings window only): only for behavior that
    exists solely in the real AppKit/AX layer. A live test earns its keep only when
    ViewInspector cannot instantiate the failing layer (real NSWindow/NSPanel,
    focus/activation, scene routing, the NSHostingView boundary, actual AX exposure).
@@ -263,9 +263,16 @@ reproduce — #504). Acceptance: revert the fix, test goes red.
 **Don't:** chase snapshot coverage; use `/ui/press` to arrange state (it's for testing
 the pressed control); test SwiftUI framework behavior (e.g. that `.keyboardShortcut`
 fires). **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panels
-(NSOpenPanel/NSAlert), TCC prompts, typing into fields (no `/ui/setValue` — AX-set
-doesn't fire the SwiftUI binding), drag/focus order, visual appearance beyond dev-only
+(NSOpenPanel/NSAlert), TCC prompts, drag/focus order, visual appearance beyond dev-only
 snapshots.
+
+**Typing** is automatable via `POST /ui/type` (allowlisted plain text fields only —
+never a `SecureField`). It posts real key events, because an AX set-value does *not*
+fire the SwiftUI binding; that asymmetry is why there is no `/ui/setValue`. Pass
+`clear: true` to replace rather than append, or the assertion depends on the field's
+prior contents. Reaching a control outside the General tab needs a tab switch first,
+and only `POST /ui/press` with `"via": "click"` performs one — the AX press reports
+success on a sidebar row without selecting it.
 
 ## E2E Architecture
 

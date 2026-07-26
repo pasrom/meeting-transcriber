@@ -56,6 +56,19 @@
     /// TCC grant (self-inspection is exempt). The older
     /// `NSView.accessibilityChildren()` walk returned an empty SwiftUI tree.
     extension DebugRPCServer {
+        /// Routing for the whole `/ui/*` debug surface (tree, press, type), so
+        /// `route()` stays inside its length budget and the related endpoints sit
+        /// together — the same split `routeV1` uses for `/v1`. Returns nil when the
+        /// request is not a `/ui/*` call, so `route()` falls through to its table.
+        func routeUI(_ request: HTTPRequest, path: String) -> HTTPResponse? {
+            // The raw target (with the query) is parsed inside `uiTreeResponse` to
+            // read `?window=x`.
+            if request.method == "GET", path == "/ui/tree" { return uiTreeResponse(target: request.path) }
+            if request.method == "POST", path == "/ui/press" { return uiPressResponse(body: request.body) }
+            if request.method == "POST", path == "/ui/type" { return uiTypeResponse(body: request.body) }
+            return nil
+        }
+
         /// SwiftUI scene identifiers exposed to `GET /ui/tree`. Deliberately only
         /// the Settings window for now — `speaker-naming`, `record-app`, and the
         /// live-captions panel stay off the list because they surface PII /
