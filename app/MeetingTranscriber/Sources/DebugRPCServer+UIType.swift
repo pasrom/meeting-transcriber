@@ -159,14 +159,16 @@
                 HTTPResponse.conflict()
 
             case let .typed(accepted):
-                HTTPResponse.ok(body: Data(#"{"typed":\#(accepted)}"#.utf8), contentType: "application/json")
+                // `dispatched` for the same reason as `/ui/press`: it reports that
+                // focus + injection ran, not that the binding took the text.
+                HTTPResponse.ok(body: Data(#"{"dispatched":\#(accepted)}"#.utf8), contentType: "application/json")
             }
         }
 
         /// `POST /ui/type` handler. 400 undecodable body / empty identifier, 403
         /// window or identifier off its allowlist, 503 allowed window not open,
-        /// 404 identifier absent, 409 present-but-disabled, 200 typed
-        /// (`{"typed":<bool>}`).
+        /// 404 identifier absent, 409 present-but-disabled, 200 dispatched
+        /// (`{"dispatched":<bool>}`).
         func uiTypeResponse(body: Data) -> HTTPResponse {
             guard let payload = try? JSONDecoder().decode(UITypePayload.self, from: body),
                   !payload.identifier.isEmpty,

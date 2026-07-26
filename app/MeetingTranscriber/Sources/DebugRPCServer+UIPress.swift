@@ -161,7 +161,12 @@
                 HTTPResponse.conflict()
 
             case let .pressed(accepted):
-                HTTPResponse.ok(body: Data(#"{"pressed":\#(accepted)}"#.utf8), contentType: "application/json")
+                // `dispatched`, not `pressed`: the flag only says the actuation ran,
+                // never that it had an effect — an AX press on a `List(selection:)`
+                // row returns true without selecting anything. Naming it after the
+                // effect invites exactly the assertion that silently passes forever,
+                // so the wire name refuses it. Drivers assert `/state`.
+                HTTPResponse.ok(body: Data(#"{"dispatched":\#(accepted)}"#.utf8), contentType: "application/json")
             }
         }
 

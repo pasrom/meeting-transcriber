@@ -175,11 +175,11 @@
             let accepted = DebugRPCServer.response(for: .pressed(true))
             XCTAssertEqual(accepted.status, 200)
             XCTAssertEqual(accepted.contentType, "application/json")
-            XCTAssertEqual(String(data: accepted.body, encoding: .utf8), #"{"pressed":true}"#)
+            XCTAssertEqual(String(data: accepted.body, encoding: .utf8), #"{"dispatched":true}"#)
 
             let declined = DebugRPCServer.response(for: .pressed(false))
             XCTAssertEqual(declined.status, 200)
-            XCTAssertEqual(String(data: declined.body, encoding: .utf8), #"{"pressed":false}"#)
+            XCTAssertEqual(String(data: declined.body, encoding: .utf8), #"{"dispatched":false}"#)
         }
 
         func testResponseForNotFoundIs404() {

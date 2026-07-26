@@ -152,7 +152,10 @@
         func testTypedResponseCarriesTheWireShape() throws {
             let response = DebugRPCServer.uiTypeResponse(for: UITypeOutcome.typed(true))
             let body = try XCTUnwrap(String(data: response.body, encoding: .utf8))
-            XCTAssertTrue(body.contains("\"typed\":true"), "driver reads {\"typed\":<bool>}; got \(body)")
+            XCTAssertTrue(
+                body.contains("\"dispatched\":true"),
+                "the wire flag is deliberately named for dispatch, not effect; got \(body)",
+            )
         }
 
         // MARK: - Payload decoding
