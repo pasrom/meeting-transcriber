@@ -239,8 +239,14 @@ sleep "$SETTLE_TIMEOUT_S"
 # the meeting window open for the full duration without an hour of sound coming
 # out of the runner. The soak measures the resident process, not transcription
 # quality, so silence costs nothing here.
-log "Starting meeting-simulator for ${SOAK_MINUTES} minutes"
-"$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --silent --duration "$((SOAK_MINUTES * 60))" >/dev/null 2>&1 &
+# `--minutes` means minutes of MEASURED soak, so the meeting has to outlast the
+# ramp settle too. Without that the sampling window runs past the meeting's end
+# and the closing samples measure an idle app: the footprint drops once
+# recording stops, which drags the fitted slope down and can mask the very leak
+# this lane exists to find.
+MEETING_SECONDS=$((RECORDING_SETTLE_S + SOAK_MINUTES * 60))
+log "Starting meeting-simulator for ${MEETING_SECONDS}s (${SOAK_MINUTES}min measured + ${RECORDING_SETTLE_S}s ramp)"
+"$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --silent --duration "$MEETING_SECONDS" >/dev/null 2>&1 &
 SIM_PID=$!
 
 _is_recording() {
