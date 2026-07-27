@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UserNotifications
 
 // MARK: - PermissionsController
 
@@ -23,6 +24,16 @@ final class PermissionsController {
     /// calls triggered by `NSApplication.didBecomeActiveNotification` so the
     /// 500 ms mic probe doesn't churn the audio HAL on every Cmd-Tab.
     private(set) var lastCheckAt: Date?
+
+    /// Latest notification authorisation, refreshed by `check()`. Deliberately
+    /// NOT folded into `HealthCheckResult`: it only matters when browser
+    /// watching is on (see `BrowserConsentReadiness`), so treating it as a
+    /// general problem would badge the menu bar for a permission most users
+    /// never need, and `handle(_:)` reports problems BY posting a notification,
+    /// which cannot work when the problem is that notifications do not arrive.
+    /// The browser-meeting consent prompt depends on it, so Settings warns
+    /// there instead.
+    private(set) var notificationAuthorization: UNAuthorizationStatus?
 
     private let notifier: any AppNotifying
     private let probe: () async -> HealthCheckResult
@@ -67,6 +78,9 @@ final class PermissionsController {
             return
         }
         let result = await probe()
+        // Cheap query, no HAL churn, so it rides along with the debounced TCC
+        // probe rather than needing its own schedule.
+        notificationAuthorization = await notifier.notificationAuthorization()
         lastCheckAt = Date()
         handle(result)
     }

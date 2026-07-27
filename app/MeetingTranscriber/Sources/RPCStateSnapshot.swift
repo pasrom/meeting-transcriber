@@ -168,6 +168,17 @@
             /// re-deriving it from the three strings.
             let isHealthy: Bool
 
+            /// Notification authorisation ("authorized", "denied",
+            /// "notDetermined", "provisional", "ephemeral", "unknown").
+            ///
+            /// Deliberately outside `isHealthy`: it is not a TCC permission and
+            /// only matters for browser-meeting consent, which is opt-in. It is
+            /// here because the browser e2e lane answers consent over RPC, which
+            /// resolves the parked prompt whether or not a notification was ever
+            /// shown — so without this the lane could pass on a runner where the
+            /// feature is dead for a real user.
+            let notifications: String
+
             /// Pre-check placeholder: the health check runs asynchronously at
             /// launch, so a snapshot taken before it completes reports "unknown".
             static let unknown = Self(
@@ -175,6 +186,7 @@
                 microphone: "unknown",
                 accessibility: "unknown",
                 isHealthy: false,
+                notifications: "unknown",
             )
         }
 

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import os.log
+import UserNotifications
 
 // MARK: - AppNotifying
 
@@ -23,6 +24,22 @@ protocol AppNotifying {
     /// same seam as `askToRecord` so park + resolve share it. Defaults to false
     /// (no prompt) for notifiers without a real coordinator.
     func resolveBrowserConsent(granted: Bool) -> Bool
+
+    /// Current notification authorisation. On the same seam as `askToRecord`
+    /// because it answers whether that prompt could be SEEN, which decides
+    /// whether browser meetings work at all (see `BrowserConsentReadiness`).
+    ///
+    /// Here rather than as a probe closure on `PermissionsController` because
+    /// `NotificationManager` already owns both the scheduler port and the
+    /// `canDeliver` bundle guard this read needs; a separate closure would
+    /// re-derive that guard and add a second injection point to every test that
+    /// already injects a notifier.
+    ///
+    /// `@MainActor` for the same reason as `askToRecord`: `AppNotifying` is not
+    /// Sendable, so a non-isolated async requirement would force callers to send
+    /// the notifier across an actor boundary.
+    @MainActor
+    func notificationAuthorization() async -> UNAuthorizationStatus
 
     #if !APPSTORE
         /// Recently posted notifications, oldest first, for the debug RPC
@@ -48,6 +65,15 @@ extension AppNotifying {
     @MainActor
     func askToRecord(title _: String, body _: String) async -> Bool {
         false
+    }
+
+    /// Nothing to report by default. Notably this keeps
+    /// `UNUserNotificationCenter.current()` out of every headless context: it
+    /// raises NSInternalInconsistencyException without a real app bundle, so a
+    /// default that reached for it would abort any test touching the notifier.
+    @MainActor
+    func notificationAuthorization() async -> UNAuthorizationStatus {
+        .notDetermined
     }
 
     // swiftlint:enable async_without_await

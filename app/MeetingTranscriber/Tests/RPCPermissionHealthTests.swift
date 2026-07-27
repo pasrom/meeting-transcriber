@@ -43,6 +43,7 @@
                     microphone: "broken",
                     accessibility: "denied",
                     isHealthy: false,
+                    notifications: "denied",
                 ),
             )
             let json = try XCTUnwrap(String(data: snapshot.jsonData(), encoding: .utf8))
@@ -51,6 +52,12 @@
             XCTAssertTrue(json.contains("\"screenRecording\" : \"healthy\""), json)
             XCTAssertTrue(json.contains("\"microphone\" : \"broken\""), json)
             XCTAssertTrue(json.contains("\"accessibility\" : \"denied\""), json)
+            // Notification authorisation rides in the same struct so the browser
+            // e2e lane can prove the consent prompt is deliverable on the runner.
+            // Its RPC path answers consent directly, which works whether or not a
+            // notification was ever shown, so this is the lane's only way to see
+            // a runner where the feature would be dead for a real user.
+            XCTAssertTrue(json.contains("\"notifications\" : \"denied\""), json)
         }
     }
 #endif

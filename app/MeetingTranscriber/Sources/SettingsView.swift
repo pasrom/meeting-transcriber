@@ -1,10 +1,16 @@
 import SwiftUI
+import UserNotifications
 
 struct SettingsView: View {
     @Bindable var settings: AppSettings
     var whisperKitEngine: WhisperKitEngine
     var parakeetEngine: ParakeetEngine
     var updateChecker: UpdateChecker?
+
+    /// Notification authorisation from `PermissionsController`, forwarded to the
+    /// General tab so it can warn when browser-meeting consent cannot reach the
+    /// user. Nil until the first permission check completes.
+    var notificationAuthorization: UNAuthorizationStatus?
     /// Required: the same actor instance the pipeline writes to, so the Stats
     /// tab and the pipeline don't race two writers on `recognition_log.jsonl`.
     var recognitionStatsLog: RecognitionStatsLog
@@ -52,7 +58,11 @@ struct SettingsView: View {
     private func detailView(for tab: SettingsTab) -> some View {
         switch tab {
         case .general:
-            GeneralSettingsView(settings: settings, updateChecker: updateChecker)
+            GeneralSettingsView(
+                settings: settings,
+                updateChecker: updateChecker,
+                notificationAuthorization: notificationAuthorization,
+            )
 
         case .audio:
             AudioSettingsView(settings: settings)

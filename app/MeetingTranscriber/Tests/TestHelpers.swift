@@ -1,6 +1,7 @@
 @preconcurrency import AVFoundation
 import Foundation
 @testable import MeetingTranscriber
+import UserNotifications
 import XCTest
 
 // MARK: - Temp-Directory / Temp-File Helpers
@@ -275,9 +276,21 @@ final class ManagedCounter {
 final class RecordingNotifier: AppNotifying {
     private(set) var calls: [(title: String, body: String)] = []
 
+    /// What `notificationAuthorization()` reports. Defaults to the protocol's
+    /// own default so existing users of this double are unaffected.
+    var authorizationStatus: UNAuthorizationStatus = .notDetermined
+
     func notify(title: String, body: String) {
         calls.append((title: title, body: body))
     }
+
+    // swiftlint:disable async_without_await
+    @MainActor
+    func notificationAuthorization() async -> UNAuthorizationStatus {
+        authorizationStatus
+    }
+
+    // swiftlint:enable async_without_await
 }
 
 // MARK: - Shared Mock Classes

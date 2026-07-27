@@ -1,6 +1,7 @@
 #if !APPSTORE
     import AppKit
     import Foundation
+    import UserNotifications
 
     extension RPCStateSnapshot.WindowInfo {
         /// Project an `NSWindow`'s pinning-relevant properties for the RPC
@@ -27,6 +28,24 @@
             case .denied: "denied"
             case .broken: "broken"
             case .notDetermined: "notDetermined"
+            }
+        }
+    }
+
+    extension UNAuthorizationStatus {
+        /// Stable wire string for the same snapshot. Hand-written rather than
+        /// derived from `rawValue` so a driver script asserts on a name that
+        /// cannot silently shift if Apple renumbers the enum. Lives here beside
+        /// its twin above, and inside this file's `#if !APPSTORE`, because the
+        /// snapshot is its only consumer.
+        var rpcValue: String {
+            switch self {
+            case .notDetermined: "notDetermined"
+            case .denied: "denied"
+            case .authorized: "authorized"
+            case .provisional: "provisional"
+            case .ephemeral: "ephemeral"
+            @unknown default: "unknown"
             }
         }
     }
@@ -171,12 +190,16 @@
         /// check completes → `.unknown`. Extracted (like `channelHealthSnapshot`)
         /// to keep `rpcStateSnapshot`'s literal under the type-check budget.
         private func permissionHealthSnapshot() -> RPCStateSnapshot.PermissionHealth {
-            guard let health = permissions.health else { return .unknown }
+            // Per-field fallbacks rather than an early `.unknown` return: the TCC
+            // probe and the notification query complete independently, so one
+            // being unfinished must not blank the other.
+            let health = permissions.health
             return RPCStateSnapshot.PermissionHealth(
-                screenRecording: health.screenRecording.rpcValue,
-                microphone: health.microphone.rpcValue,
-                accessibility: health.accessibility.rpcValue,
-                isHealthy: health.isHealthy,
+                screenRecording: health?.screenRecording.rpcValue ?? "unknown",
+                microphone: health?.microphone.rpcValue ?? "unknown",
+                accessibility: health?.accessibility.rpcValue ?? "unknown",
+                isHealthy: health?.isHealthy ?? false,
+                notifications: permissions.notificationAuthorization?.rpcValue ?? "unknown",
             )
         }
 

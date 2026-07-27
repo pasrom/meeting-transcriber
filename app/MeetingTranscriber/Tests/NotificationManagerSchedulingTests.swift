@@ -2,37 +2,6 @@
 import UserNotifications
 import XCTest
 
-/// Fake `NotificationScheduling` recording what `NotificationManager` posts /
-/// registers, so the posting + consent behaviour is testable without a real
-/// `UNUserNotificationCenter` (which needs an app bundle absent in `swift test`).
-private final class FakeNotificationScheduler: NotificationScheduling, @unchecked Sendable {
-    private let lock = NSLock()
-    private var _added: [UNNotificationRequest] = []
-    private(set) var categories: Set<UNNotificationCategory> = []
-    private(set) weak var delegate: (any UNUserNotificationCenterDelegate)?
-    private(set) var authRequested = false
-
-    var added: [UNNotificationRequest] {
-        lock.lock(); defer { lock.unlock() }; return _added
-    }
-
-    func add(_ request: UNNotificationRequest) {
-        lock.lock(); _added.append(request); lock.unlock()
-    }
-
-    func setCategories(_ categories: Set<UNNotificationCategory>) {
-        self.categories = categories
-    }
-
-    func setDelegate(_ delegate: (any UNUserNotificationCenterDelegate)?) {
-        self.delegate = delegate
-    }
-
-    func requestAuthorization() {
-        authRequested = true
-    }
-}
-
 /// Mutable deliverability so a test can flip `canDeliver` to false *after*
 /// `setUp()` has already succeeded — the only way to exercise the `canDeliver`
 /// conjunct of `notify`'s deliver guard independently of the `isSetUp` conjunct.

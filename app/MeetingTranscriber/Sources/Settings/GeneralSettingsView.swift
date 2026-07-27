@@ -1,9 +1,26 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 struct GeneralSettingsView: View {
     @Bindable var settings: AppSettings
     var updateChecker: UpdateChecker?
+
+    /// Latest notification authorisation from `PermissionsController`, or nil
+    /// before the first check. Browser-meeting recording depends on it (the
+    /// consent prompt is a notification), and nothing else in the app can say so
+    /// without using the channel that is broken.
+    var notificationAuthorization: UNAuthorizationStatus?
+
+    /// Nil until the first permission check, and nil when the prompt will be
+    /// visible. The view never needs the readiness CASE, only the message.
+    private var browserConsentWarningText: String? {
+        guard let notificationAuthorization else { return nil }
+        return BrowserConsentReadiness.evaluate(
+            browserMeetingsEnabled: settings.watchBrowserMeetings,
+            authorization: notificationAuthorization,
+        ).warning
+    }
 
     var body: some View {
         // swiftlint:disable:next closure_body_length
@@ -25,6 +42,7 @@ struct GeneralSettingsView: View {
                 Text("Detects meetings in Chrome (Google Meet, Whereby, web Zoom/Teams). Asks before recording.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                browserConsentWarning
             }
 
             Section("Detection") {
@@ -57,6 +75,41 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
     }
+
+    /// Warns when browser watching is on but the consent prompt cannot reach the
+    /// user. Rendered here rather than as a notification for the obvious reason,
+    /// and kept out of the menu-bar permission badge because this permission only
+    /// matters for this one opt-in feature.
+    @ViewBuilder private var browserConsentWarning: some View {
+        if let warning = browserConsentWarningText {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Browser meetings cannot be recorded.")
+                        .font(.callout.weight(.semibold))
+                    Text(warning)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier(A11yID.browserConsentWarning)
+                    Button("Open Notification Settings") {
+                        NSWorkspace.shared.open(Self.notificationSettingsURL)
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            .padding(8)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    /// Deep link to System Settings > Notifications. Verified to land on the
+    /// Notifications pane rather than merely opening the app.
+    private static let notificationSettingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.notifications",
+    )!
 
     private var recordOnlyBanner: some View {
         let display = OutputSettingsLogic.displayPath(

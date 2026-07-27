@@ -15,6 +15,12 @@ protocol NotificationScheduling: AnyObject, Sendable {
     func setCategories(_ categories: Set<UNNotificationCategory>)
     func setDelegate(_ delegate: (any UNUserNotificationCenterDelegate)?)
     func requestAuthorization()
+
+    /// Current authorisation, queried rather than remembered from the
+    /// `requestAuthorization` callback: the user can revoke it in System
+    /// Settings at any time, and browser-meeting consent silently stops working
+    /// when they do (see `BrowserConsentReadiness`).
+    func authorizationStatus() async -> UNAuthorizationStatus
 }
 
 /// Real adapter: forwards to `UNUserNotificationCenter.current()`. Sendable (its
@@ -33,6 +39,10 @@ final class SystemNotificationScheduler: NotificationScheduling, Sendable {
 
     func setDelegate(_ delegate: (any UNUserNotificationCenterDelegate)?) {
         UNUserNotificationCenter.current().delegate = delegate
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
     func requestAuthorization() {

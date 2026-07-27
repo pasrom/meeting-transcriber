@@ -182,11 +182,35 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// prompt, and false on timeout/ignore/dismiss.
     @MainActor
     func askToRecord(title: String, body: String) async -> Bool {
-        guard isSetUp, canDeliver() else { return false }
+        let deliverable = isSetUp && canDeliver()
+
+        #if !APPSTORE
+            // Same contract as `notify(...)`, and for the same reason: record the
+            // app's DECISION to prompt before the delivery guard, so an RPC
+            // consumer can tell "never asked" from "asked and could not show it".
+            // Without this the consent prompt was the one notification that left
+            // no trace, which is precisely how an invisible prompt could keep the
+            // browser e2e lane green while the feature was dead for users.
+            recentNotificationsLog.record(title: title, body: body, delivered: deliverable)
+        #endif
+
+        guard deliverable else { return false }
         let id = UUID().uuidString
         return await consentCoordinator.awaitDecision(id: id) { [self] in
             postConsentNotification(id: id, title: title, body: body)
         }
+    }
+
+    /// Current notification authorisation, for `BrowserConsentReadiness`. Read
+    /// live rather than cached from `requestAuthorization`: the user can revoke
+    /// it in System Settings long after launch, and that silently disables
+    /// browser-meeting recording.
+    @MainActor
+    func notificationAuthorization() async -> UNAuthorizationStatus {
+        // Same guard as `setUp` and `notify`: without a real app bundle the
+        // notification centre raises NSInternalInconsistencyException.
+        guard canDeliver() else { return .notDetermined }
+        return await scheduler.authorizationStatus()
     }
 
     /// Resolve a parked browser-consent prompt programmatically (the debug-RPC
