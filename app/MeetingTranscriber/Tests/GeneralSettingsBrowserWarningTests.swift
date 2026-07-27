@@ -58,4 +58,22 @@ final class GeneralSettingsBrowserWarningTests: XCTestCase {
     func test_unknownAuthorization_showsNoWarningYet() throws {
         XCTAssertNil(try warningText(browserMeetings: true, authorization: nil))
     }
+
+    /// The General tab is reached through `SettingsView`, so the value has to
+    /// survive one more hop than the tests above exercise. Without this, passing
+    /// nil (or the wrong property) from the scene would go unnoticed.
+    func test_settingsView_forwardsAuthorizationToTheGeneralTab() throws {
+        let view = try SettingsView(
+            settings: makeSettings(browserMeetings: true),
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+            updateChecker: nil,
+            notificationAuthorization: .denied,
+            recognitionStatsLog: RecognitionStatsLog(),
+            stageTimingLog: StageTimingLog(),
+        )
+        let warning = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.browserConsentWarning)
+        XCTAssertTrue(try warning.text().string().lowercased().contains("record"))
+    }
 }

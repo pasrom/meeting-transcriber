@@ -267,7 +267,7 @@ _notification_auth_known() { [ "$(_notification_auth)" != "unknown" ]; }
 poll_until 20 1 _notification_auth_known || true
 NOTIFICATION_AUTH="$(_notification_auth)"
 case "$NOTIFICATION_AUTH" in
-    authorized | ephemeral)
+    authorized)
         log "Notification authorization: $NOTIFICATION_AUTH"
         ;;
     *)

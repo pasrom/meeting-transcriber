@@ -1,5 +1,6 @@
 #if !APPSTORE
     @testable import MeetingTranscriber
+    import UserNotifications
     import XCTest
 
     /// Covers the permission-health surface exposed in the RPC `/state` snapshot
@@ -13,6 +14,16 @@
             XCTAssertEqual(PermissionStatus.denied.rpcValue, "denied")
             XCTAssertEqual(PermissionStatus.broken.rpcValue, "broken")
             XCTAssertEqual(PermissionStatus.notDetermined.rpcValue, "notDetermined")
+        }
+
+        /// Sibling table for the notification status. These strings are a wire
+        /// contract that `scripts/e2e-browser.sh` asserts on, and they are
+        /// hand-written precisely so they cannot shift with Apple's enum.
+        func testNotificationAuthorizationRPCValues() {
+            XCTAssertEqual(UNAuthorizationStatus.authorized.rpcValue, "authorized")
+            XCTAssertEqual(UNAuthorizationStatus.denied.rpcValue, "denied")
+            XCTAssertEqual(UNAuthorizationStatus.notDetermined.rpcValue, "notDetermined")
+            XCTAssertEqual(UNAuthorizationStatus.provisional.rpcValue, "provisional")
         }
 
         // MARK: - PermissionHealth placeholder

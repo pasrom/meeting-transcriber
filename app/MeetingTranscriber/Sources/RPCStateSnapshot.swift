@@ -169,7 +169,8 @@
             let isHealthy: Bool
 
             /// Notification authorisation ("authorized", "denied",
-            /// "notDetermined", "provisional", "ephemeral", "unknown").
+            /// "notDetermined", "provisional", "unknown"). `.ephemeral` is iOS-only
+            /// and cannot occur here, so it falls through to "unknown".
             ///
             /// Deliberately outside `isHealthy`: it is not a TCC permission and
             /// only matters for browser-meeting consent, which is opt-in. It is

@@ -65,6 +65,18 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
         XCTAssertEqual(status, .denied)
     }
 
+    /// The protocol default, which every real double overrides and so had no
+    /// coverage. It is the safety net that keeps `UNUserNotificationCenter`
+    /// out of headless contexts: a notifier with no notification centre must
+    /// report "not asked" rather than reach for one.
+    func test_appNotifyingDefault_reportsNotDetermined() async {
+        struct BareNotifier: AppNotifying {
+            func notify(title _: String, body _: String) {}
+        }
+        let status = await BareNotifier().notificationAuthorization()
+        XCTAssertEqual(status, .notDetermined)
+    }
+
     /// Without a real app bundle the notification centre aborts the process, so
     /// the same `canDeliver` guard that protects `setUp` and `notify` has to
     /// protect this read too. A default that reached for the real centre

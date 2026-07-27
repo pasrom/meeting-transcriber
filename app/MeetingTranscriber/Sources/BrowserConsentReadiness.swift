@@ -39,7 +39,7 @@ enum BrowserConsentReadiness: Equatable {
         // turn a new OS behaviour into a silently dead feature, while the
         // reverse only costs a warning that turns out to be unnecessary.
         switch authorization {
-        case .authorized, .ephemeral: return .ready
+        case .authorized: return .ready
         case .denied: return .denied
         case .notDetermined: return .undetermined
         case .provisional: return .quiet

@@ -44,7 +44,6 @@
             case .denied: "denied"
             case .authorized: "authorized"
             case .provisional: "provisional"
-            case .ephemeral: "ephemeral"
             @unknown default: "unknown"
             }
         }
