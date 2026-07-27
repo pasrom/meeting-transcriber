@@ -10,6 +10,10 @@ struct GroundTruth: Decodable {
     let sampleRate: Int
     let text: String
     let turns: [Turn]
+    /// Provenance of a fixture derived from third-party material: which corpus,
+    /// which excerpt, under which licence. Absent for the locally rendered
+    /// synthetic fixtures, which have no upstream to credit.
+    let source: String?
 
     struct Turn: Decodable {
         let speaker: String
