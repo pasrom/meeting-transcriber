@@ -27,6 +27,15 @@ final class ParakeetQualityTests: XCTestCase {
         try await runFixture(named: "three_speakers_de")
     }
 
+    /// Real recorded meeting with overlapping speakers. Measured 0.38, so it
+    /// fits under the same bound as the synthetic fixtures. As with WhisperKit
+    /// the errors are mostly deletions (103 of 126); see that test for why the
+    /// deletion count cannot be attributed to overlapped speech alone.
+    func test_parakeet_fourSpeakers_en_real_wer() async throws {
+        try skipUnlessQualityRun()
+        try await runFixture(named: "four_speakers_en_ami")
+    }
+
     // Threshold 0.6 sits ~12-15 % above the current baseline (~0.45-0.46) so
     // the test catches catastrophic breakage (model corrupted, language
     // auto-detect misfiring, audio not loaded) without flapping on minor

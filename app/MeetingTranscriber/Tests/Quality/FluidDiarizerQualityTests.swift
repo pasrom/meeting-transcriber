@@ -10,44 +10,67 @@ import XCTest
 /// Pairs with `WhisperKitQualityTests` (WER); the writer aggregates both.
 @MainActor
 final class FluidDiarizerQualityTests: XCTestCase {
+    // Synthetic fixtures. Offline systematically under-clusters clips this
+    // short (≤30 s): both collapse to a single speaker, giving DER ≈0.53 and
+    // ≈0.68 as of 2026-05-10. The 0.85 bound accepts that while still tripping
+    // on "no segments at all" (DER 1.0). Sortformer handles short clips fine.
     func test_offline_twoSpeakers_de_der() async throws {
         try skipUnlessQualityRun()
-        try await runDERFixture(named: "two_speakers_de", mode: .offline)
+        try await runDERFixture(named: "two_speakers_de", mode: .offline, threshold: 0.85)
     }
 
     func test_offline_threeSpeakers_de_der() async throws {
         try skipUnlessQualityRun()
-        try await runDERFixture(named: "three_speakers_de", mode: .offline)
+        try await runDERFixture(named: "three_speakers_de", mode: .offline, threshold: 0.85)
     }
 
     func test_sortformer_twoSpeakers_de_der() async throws {
         try skipUnlessQualityRun()
-        try await runDERFixture(named: "two_speakers_de", mode: .sortformer)
+        try await runDERFixture(named: "two_speakers_de", mode: .sortformer, threshold: 0.50)
     }
 
     func test_sortformer_threeSpeakers_de_der() async throws {
         try skipUnlessQualityRun()
-        try await runDERFixture(named: "three_speakers_de", mode: .sortformer)
+        try await runDERFixture(named: "three_speakers_de", mode: .sortformer, threshold: 0.50)
+    }
+
+    // Real recorded meeting: four speakers, ~31 % of the excerpt overlapping,
+    // sitting exactly on Sortformer's four-speaker cap. The only fixture whose
+    // REFERENCE contains simultaneous speech, so the only one that can charge a
+    // diarizer for failing to report it.
+    //
+    // The synthetic bounds do not transfer. Offline scores far better here
+    // (0.36) than on the short synthetic clips (0.53/0.68), which it only fails
+    // because they are too short for it to cluster, so reusing 0.85 would leave
+    // it effectively ungated.
+    //
+    // Worth recording: under the overlap-aware metric Sortformer (0.33) beats
+    // offline (0.36) here. Under the collapsing metric it looked like the
+    // reverse, 0.26 against 0.15, because credit for reporting a second
+    // simultaneous speaker was being scored as confusion.
+    func test_offline_fourSpeakers_en_real_der() async throws {
+        try skipUnlessQualityRun()
+        try await runDERFixture(named: "four_speakers_en_ami", mode: .offline, threshold: 0.55)
+    }
+
+    func test_sortformer_fourSpeakers_en_real_der() async throws {
+        try skipUnlessQualityRun()
+        try await runDERFixture(named: "four_speakers_en_ami", mode: .sortformer, threshold: 0.50)
     }
 
     // MARK: - Helpers
 
-    /// Per-mode soft sanity bound. Set well above current observed baselines so
-    /// the test catches catastrophic regressions (model corrupted, audio not
-    /// loaded, segments=0) without flapping on small variance.
-    ///
-    /// Offline mode systematically under-clusters short fixtures (≤30 s) — both
-    /// `two_speakers_de` and `three_speakers_de` collapse to 1 speaker, producing
-    /// DER ≈0.53 and ≈0.68 respectively as of 2026-05-10. The offline threshold
-    /// is set high enough to accept that baseline; it would still trip if the
-    /// diarizer regressed to "no segments at all" (DER=1.0). Sortformer is
-    /// overlap-aware end-to-end and handles short fixtures fine.
-    private static let derThreshold: [DiarizerMode: Double] = [
-        .offline: 0.85,
-        .sortformer: 0.50,
-    ]
-
-    private func runDERFixture(named name: String, mode: DiarizerMode) async throws {
+    /// Each test method already names exactly one (fixture, mode) pair, so the
+    /// call sites ARE the threshold table and the bound sits next to the
+    /// rationale for it. An earlier per-mode dictionary implied the bound was a
+    /// property of the mode; it never was. `.offline: 0.85` existed because the
+    /// synthetic clips are too SHORT for it to cluster, which is a property of
+    /// the fixture.
+    private func runDERFixture(
+        named name: String,
+        mode: DiarizerMode,
+        threshold: Double,
+    ) async throws {
         let truth = try GroundTruth.load(named: name)
         try XCTSkipUnless(
             FileManager.default.fileExists(atPath: truth.audioURL.path),
@@ -88,7 +111,6 @@ final class FluidDiarizerQualityTests: XCTestCase {
         )
         _ = try? QualityResultsWriter.shared.flush()
 
-        let threshold = Self.derThreshold[mode, default: 0.5]
         XCTAssertLessThan(
             breakdown.der,
             threshold,
