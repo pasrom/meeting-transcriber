@@ -1,0 +1,108 @@
+name: E2E (Soak)
+
+# Long-session memory soak of the deployed production app: hold one meeting
+# open for an hour, sample RPC /metrics throughout, and report how the process
+# footprint moved (scripts/e2e-soak.sh).
+#
+# Why this exists: every other lane records for seconds, while real meetings run
+# 30-120 minutes and the menu-bar app stays resident for weeks. A steady leak in
+# the recording buffers or the pipeline snapshots is invisible to all of them.
+# The lane also asserts the pipeline still produces a job afterwards — leaking
+# and quietly stopping are different failures.
+#
+# Weekly, not nightly, on purpose: the run occupies the shared `audio` runner for
+# well over an hour, which would delay every PR-triggered lane behind it. Leaks
+# are slow-moving, so weekly detection is soon enough; raise the cadence if the
+# trend data turns out to be worth it.
+#
+# Measure-and-log phase: gates only a generous catastrophe bound, and collects a
+# RESULT artifact per run so a real threshold can be derived from observed
+# run-to-run variance instead of guessed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Soak duration in minutes"
+        required: false
+        default: "60"
+  schedule:
+    # Sundays 06:30 UTC — after every nightly lane (quality 03:00, appstore
+    # 03:30, ui-smoke 04:00, e2e-app 04:30, cpu-load and browser 05:15), so a
+    # long soak never sits in front of them in the runner queue.
+    - cron: '30 6 * * 0'
+
+# Mutates host state (deploys the bundle, holds the audio device for an hour)
+# and needs a quiet machine for honest numbers — never run two in parallel.
+concurrency:
+  group: e2e-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-soak:
+    # `audio` label: the runner with exclusive access to the BlackHole virtual
+    # input device (same as e2e-app.yml and e2e-cpu-load.yml).
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    # Budget: build+deploy ~2 min, settle 2 min, 60 min soak, then up to 30 min
+    # for the pipeline to finish an hour of audio.
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/verify-xcode
+
+      # Same signing flow as the sibling lanes: Developer ID cert when the
+      # secret exists, otherwise the self-signed setup-self-hosted-runner.sh
+      # path. Distinct keychain name so a concurrent lane on the second runner
+      # cannot collide on keychain setup/teardown.
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-soak-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for e2e-soak.sh
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Run soak driver
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+          SOAK_MINUTES: ${{ inputs.minutes || '60' }}
+        timeout-minutes: 110
+        # pipefail: without it `| tee` would mask the driver's exit code.
+        run: |
+          set -o pipefail
+          bash scripts/e2e-soak.sh --minutes "$SOAK_MINUTES" | tee /tmp/e2e-soak-run.log
+
+      # The RESULT line carries the fitted growth plus the full sample series,
+      # so trend analysis across weeks needs no log scraping.
+      - name: Extract RESULT line for trend collection
+        if: always()
+        run: |
+          grep -F '[e2e-soak] RESULT ' /tmp/e2e-soak-run.log 2>/dev/null \
+            | sed 's/^.*RESULT //' > /tmp/soak-result.json || true
+
+      - name: Upload soak result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-result
+          path: /tmp/soak-result.json
+          if-no-files-found: ignore
+
+      - name: Upload full run log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-run.log
+          path: /tmp/e2e-soak-run.log
+          if-no-files-found: ignore
+
+      - name: Cleanup signing keychain
+        if: always() && env.E2E_SIGNING_KEYCHAIN != ''
+        run: security delete-keychain "$E2E_SIGNING_KEYCHAIN" 2>/dev/null || true
