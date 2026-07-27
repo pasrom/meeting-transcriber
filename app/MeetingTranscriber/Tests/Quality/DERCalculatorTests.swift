@@ -105,4 +105,97 @@ final class DERCalculatorTests: XCTestCase {
         XCTAssertEqual(result.totalReference, 10.0, accuracy: 1e-9)
         XCTAssertEqual(result.der, 0.3, accuracy: 1e-9)
     }
+
+    // MARK: - Overlapping speech
+
+    // Real meetings run roughly a third overlapping. These pin the behaviour
+    // that a single-speaker-per-instant metric cannot express at all.
+    func test_overlap_countsTowardTheDenominatorTwice() {
+        // A talks 0-10, B talks 4-8 on top. Wall-clock speech is 10s but
+        // reference SPEAKER-time is 14s, and a metric that says 10 charges
+        // every error against a denominator ~30 % too small.
+        let ref: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 4, end: 8),
+        ]
+        let result = DERCalculator.derBreakdown(reference: ref, hypothesis: ref)
+        XCTAssertEqual(result.totalReference, 14.0, accuracy: 1e-9)
+        XCTAssertEqual(result.der, 0.0, accuracy: 1e-9)
+    }
+
+    func test_overlap_reportingOnlyOneOfTwoSimultaneousSpeakers_isMissedSpeech() {
+        // The failure an overlap-aware diarizer exists to avoid. Under a
+        // collapsing metric this scores 0.0 and the regression is invisible.
+        let ref: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 4, end: 8),
+        ]
+        let hyp: [DERCalculator.Turn] = [.init(speaker: "A", start: 0, end: 10)]
+        let result = DERCalculator.derBreakdown(reference: ref, hypothesis: hyp)
+        XCTAssertEqual(result.missedSpeech, 4.0, accuracy: 1e-9)
+        XCTAssertEqual(result.falseAlarm, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result.speakerConfusion, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result.der, 4.0 / 14.0, accuracy: 1e-9)
+    }
+
+    func test_overlap_inventedSimultaneousSpeaker_isFalseAlarm() {
+        let ref: [DERCalculator.Turn] = [.init(speaker: "A", start: 0, end: 10)]
+        let hyp: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 4, end: 8),
+        ]
+        let result = DERCalculator.derBreakdown(reference: ref, hypothesis: hyp)
+        XCTAssertEqual(result.falseAlarm, 4.0, accuracy: 1e-9)
+        XCTAssertEqual(result.missedSpeech, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result.der, 0.4, accuracy: 1e-9)
+    }
+
+    func test_overlap_rightCountWrongSpeaker_isConfusionNotMissedPlusFalseAlarm() {
+        // Two speakers active, two reported, one of them wrong. C is pinned to
+        // reference C by its own 12-20 turn, so the optimal mapping cannot
+        // rescue it by renaming — during 4-8 it is genuinely the wrong speaker.
+        // (Substituting a FRESH label there would be a pure relabelling, which
+        // DER is right to score 0; speaker identifiers are arbitrary.)
+        let ref: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 4, end: 8),
+            .init(speaker: "C", start: 12, end: 20),
+        ]
+        let hyp: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "C", start: 4, end: 8),
+            .init(speaker: "C", start: 12, end: 20),
+        ]
+        let result = DERCalculator.derBreakdown(reference: ref, hypothesis: hyp)
+        XCTAssertEqual(result.speakerConfusion, 4.0, accuracy: 1e-9)
+        XCTAssertEqual(result.missedSpeech, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result.falseAlarm, 0.0, accuracy: 1e-9)
+        XCTAssertEqual(result.totalReference, 22.0, accuracy: 1e-9)
+        XCTAssertEqual(result.der, 4.0 / 22.0, accuracy: 1e-9)
+    }
+
+    func test_overlap_freshLabelForASimultaneousSpeaker_isPureRelabelling() {
+        // The control for the test above: DER must stay 0 when the only
+        // difference is which arbitrary string names the second speaker.
+        let ref: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 4, end: 8),
+        ]
+        let hyp: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "C", start: 4, end: 8),
+        ]
+        XCTAssertEqual(DERCalculator.der(reference: ref, hypothesis: hyp), 0.0, accuracy: 1e-9)
+    }
+
+    func test_overlap_threeSimultaneousSpeakers_countAllThree() {
+        let ref: [DERCalculator.Turn] = [
+            .init(speaker: "A", start: 0, end: 10),
+            .init(speaker: "B", start: 2, end: 6),
+            .init(speaker: "C", start: 3, end: 5),
+        ]
+        let result = DERCalculator.derBreakdown(reference: ref, hypothesis: ref)
+        XCTAssertEqual(result.totalReference, 16.0, accuracy: 1e-9)
+        XCTAssertEqual(result.der, 0.0, accuracy: 1e-9)
+    }
 }
