@@ -146,6 +146,13 @@ require_command open
 [ -n "$CHROME_APP" ] && [ -d "$CHROME_APP" ] \
     || fail "Google Chrome not found in ~/Applications or /Applications — install it on the runner (or set CHROME_APP)"
 
+# This lane's field-facing claim is "the Chrome users actually run still raises
+# a matching WebRTC assertion". That only holds while the runner's Chrome tracks
+# theirs, and a browser launched for one minute per night may never let Keystone
+# update it. Logged, not asserted: staleness is a judgement call, but it should
+# never be invisible.
+log "Chrome: $(defaults read "$CHROME_APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "unknown version") ($CHROME_APP)"
+
 if [ "$MODE" = fixture ]; then
     [ -f "$FIXTURE" ] || fail "fixture not found: $FIXTURE"
 else
@@ -246,6 +253,32 @@ _rpc_ready() { [ -f "$RPC_TOKEN_FILE" ] && RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" 
 poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
 
+# The lane answers the consent prompt over RPC, which resolves the parked
+# continuation whether or not a notification was ever posted, authorised or
+# rendered. That is a real blind spot: with notifications denied, a USER sees no
+# prompt, it times out as a decline, and browser meetings are never recorded,
+# while this lane still passes end to end.
+#
+# So assert the runner is in a state where a real user WOULD see the prompt.
+# The permission check runs asynchronously at launch, hence the short poll.
+log "Checking notification authorization (the consent prompt is a notification)"
+_notification_auth() { rpc /state | jq -r '.permissionHealth.notifications // "unknown"'; }
+_notification_auth_known() { [ "$(_notification_auth)" != "unknown" ]; }
+poll_until 20 1 _notification_auth_known || true
+NOTIFICATION_AUTH="$(_notification_auth)"
+case "$NOTIFICATION_AUTH" in
+    authorized | ephemeral)
+        log "Notification authorization: $NOTIFICATION_AUTH"
+        ;;
+    *)
+        fail "notification authorization is '$NOTIFICATION_AUTH', so a real user would never
+       see the browser-meeting consent prompt and nothing would be recorded.
+       This lane would still pass, because it answers consent over RPC.
+       Fix the runner: allow notifications for the dev app in
+       System Settings > Notifications, then re-run."
+        ;;
+esac
+
 # --- drive the browser meeting --------------------------------------------
 
 _watch_state() { rpc /state | jq -r '.watchState // ""'; }
@@ -298,6 +331,23 @@ poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
     fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
 }
 log "Consent granted over RPC"
+
+# Answering over RPC resolves the parked continuation directly, so on its own it
+# proves nothing about the notification a real user depends on. The pre-flight
+# above proved the runner COULD show one; this proves the app actually posted
+# one, and that it went out flagged deliverable rather than recorded-but-dropped.
+# Without both, a regression that stopped posting the prompt entirely would keep
+# this lane green.
+_consent_notification_posted() {
+    rpc /state | jq -e \
+        '[.notifications[]? | select(.title == "Record browser meeting?" and .delivered == true)] | length > 0' \
+        >/dev/null 2>&1
+}
+poll_until 10 1 _consent_notification_posted \
+    || fail "consent was answered over RPC, but the app never posted a deliverable
+       consent notification — a real user would have seen nothing. Check
+       NotificationManager.askToRecord and its ring-buffer record."
+log "Consent notification was posted and flagged deliverable"
 
 log "Waiting for recording to start (watchState == recording)"
 _is_recording() { [ "$(_watch_state)" = "recording" ]; }
