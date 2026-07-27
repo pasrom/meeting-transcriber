@@ -26,6 +26,10 @@ on:
         description: "Soak duration in minutes"
         required: false
         default: "60"
+      sample-every:
+        description: "Minutes between /metrics samples (must divide into minutes at least twice)"
+        required: false
+        default: "5"
   schedule:
     # Sundays 06:30 UTC — after every nightly lane (quality 03:00, appstore
     # 03:30, ui-smoke 04:00, e2e-app 04:30, cpu-load and browser 05:15), so a
@@ -73,11 +77,13 @@ jobs:
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
           SOAK_MINUTES: ${{ inputs.minutes || '60' }}
+          SOAK_SAMPLE_EVERY: ${{ inputs.sample-every || '5' }}
         timeout-minutes: 110
         # pipefail: without it `| tee` would mask the driver's exit code.
         run: |
           set -o pipefail
-          bash scripts/e2e-soak.sh --minutes "$SOAK_MINUTES" | tee /tmp/e2e-soak-run.log
+          bash scripts/e2e-soak.sh --minutes "$SOAK_MINUTES" \
+              --sample-every "$SOAK_SAMPLE_EVERY" | tee /tmp/e2e-soak-run.log
 
       # The RESULT line carries the fitted growth plus the full sample series,
       # so trend analysis across weeks needs no log scraping.
