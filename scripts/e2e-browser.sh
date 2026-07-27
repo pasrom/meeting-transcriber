@@ -262,13 +262,28 @@ log "RPC up"
 # So assert the runner is in a state where a real user WOULD see the prompt.
 # The permission check runs asynchronously at launch, hence the short poll.
 log "Checking notification authorization (the consent prompt is a notification)"
-_notification_auth() { rpc /state | jq -r '.permissionHealth.notifications // "unknown"'; }
-_notification_auth_known() { [ "$(_notification_auth)" != "unknown" ]; }
-poll_until 20 1 _notification_auth_known || true
+# `/healthz` answers before `/state` does — the latter builds the whole
+# snapshot — so an empty reply here means "not ready yet", NOT "no permission".
+# Treating empty as a known value made this abort in 17 ms and report a blank
+# status; the poll has to keep waiting until a real one appears.
+_notification_auth() { rpc /state | jq -r '.permissionHealth.notifications // empty' 2>/dev/null; }
+_notification_auth_known() {
+    local value
+    value="$(_notification_auth)"
+    [ -n "$value" ] && [ "$value" != "unknown" ]
+}
+poll_until 30 1 _notification_auth_known || true
 NOTIFICATION_AUTH="$(_notification_auth)"
 case "$NOTIFICATION_AUTH" in
     authorized)
         log "Notification authorization: $NOTIFICATION_AUTH"
+        ;;
+    "" | unknown)
+        # Distinct from a real denial: the app never reported a status at all.
+        fail "/state never reported a notification authorization within 30s.
+       The app is up (/healthz answered), so this is an RPC or startup problem
+       on the runner, not a permission problem. Check the app launched from the
+       build this run deployed."
         ;;
     *)
         fail "notification authorization is '$NOTIFICATION_AUTH', so a real user would never
