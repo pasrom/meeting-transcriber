@@ -69,10 +69,12 @@ SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}
 # shellcheck source=lib/signing.sh
 source "$SCRIPT_DIR/lib/signing.sh"
 ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$SPM_DIR/Entitlements/Homebrew.entitlements" "com.meetingtranscriber.dev")"
+SIGN_HASH="$(signing_identity_for "com.meetingtranscriber.dev" "$SIGN_HASH")"
 if [ -n "$SIGN_HASH" ]; then
     codesign --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE" 2>/dev/null && \
         echo "  Signed with: $SIGN_HASH (+ entitlements)"
 fi
+verify_signing "$APP_BUNDLE"
 
 if [ "$BUILD_ONLY" = true ]; then
     echo "Bundle ready: $APP_BUNDLE"

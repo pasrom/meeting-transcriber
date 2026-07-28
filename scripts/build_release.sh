@@ -161,6 +161,7 @@ if [ "$NOTARIZE" = true ]; then
         --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
         "$APP_BUNDLE"
     echo "  Signed with Developer ID for notarization"
+    verify_signing "$APP_BUNDLE"
 
     # When --staple is set, notarize and staple the .app itself so Gatekeeper
     # does not need to contact Apple online when the app is launched (cask
