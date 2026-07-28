@@ -125,6 +125,38 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertFalse(granted)
     }
 
+    // MARK: - interruption level (issue #543)
+
+    /// The consent prompt asks a question that expires after
+    /// `consentPromptTimeout`. At the default `.active` level macOS renders it
+    /// as a banner, which auto-dismisses in seconds and is suppressed entirely
+    /// under any Focus mode — so the question is never seen, times out as a
+    /// decline, and browser meetings silently never record. `.timeSensitive` is
+    /// the only level that breaks through Focus.
+    func testConsentPromptIsTimeSensitive() async {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        let task = Task { await manager.askToRecord(title: "Record browser meeting?", body: "A meeting is active.") }
+
+        guard let posted = await firstPostedRequest(from: fake) else {
+            XCTFail("no consent notification posted")
+            return
+        }
+        XCTAssertEqual(posted.content.interruptionLevel, .timeSensitive)
+
+        manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: NotificationManager.ignoreActionID)
+        _ = await task.value
+    }
+
+    /// Only the consent prompt. A transcript-ready or permission-problem notice
+    /// has no deadline and must not break through the user's Focus.
+    func testOrdinaryNotificationsStayActiveLevel() {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        manager.notify(title: "Protocol Ready", body: "x")
+        XCTAssertEqual(fake.added.first?.content.interruptionLevel, .active)
+    }
+
     // MARK: - pure content builder
 
     func testMakeNotificationContentMapsFields() {
