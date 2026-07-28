@@ -62,9 +62,16 @@ cp "$BUILD_BINARY" "$APP_BINARY"
 # Code-sign so macOS keeps Screen Recording permission across rebuilds.
 # Uses SHA-1 hash to avoid "ambiguous identity" errors with duplicate names.
 SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
+# Sign WITH the Homebrew entitlements, the same set build_release.sh uses.
+# Without them the dev build carries no entitlements at all, so anything gated on
+# one behaves differently here than in a release build — notably the
+# time-sensitive consent prompt (issue #543).
+# shellcheck source=lib/signing.sh
+source "$SCRIPT_DIR/lib/signing.sh"
+ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$SPM_DIR/Entitlements/Homebrew.entitlements" "com.meetingtranscriber.dev")"
 if [ -n "$SIGN_HASH" ]; then
-    codesign --force --sign "$SIGN_HASH" "$APP_BUNDLE" 2>/dev/null && \
-        echo "  Signed with: $SIGN_HASH"
+    codesign --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE" 2>/dev/null && \
+        echo "  Signed with: $SIGN_HASH (+ entitlements)"
 fi
 
 if [ "$BUILD_ONLY" = true ]; then

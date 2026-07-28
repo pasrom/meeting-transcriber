@@ -345,6 +345,28 @@ poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
     _dump_detection_diag
     fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
 }
+# The consent prompt only breaks through a Focus mode if the deployed bundle
+# actually carries the time-sensitive entitlement (issue #543). That is a
+# signing-time property no runtime assertion can see, and a build or re-sign
+# change could drop it silently — after which the feature would keep passing
+# every test while being invisible to any user with Do Not Disturb on.
+# Only meaningful once a provisioning profile authorises the entitlement: a
+# bundle signed with it but no profile does not launch at all, so the key is
+# added conditionally (scripts/lib/signing.sh). Assert the PAIRING rather than
+# the key: a profile present without the entitlement means the signing step
+# silently stopped deriving it, which would leave the prompt suppressed under
+# Focus while every other check stayed green.
+if [ -f "$DEV_BUNDLE_DEPLOY/Contents/embedded.provisionprofile" ]; then
+    log "Profile embedded — checking the time-sensitive entitlement came with it"
+    codesign -d --entitlements :- "$DEV_BUNDLE_DEPLOY" 2>/dev/null \
+        | grep -q "com.apple.developer.usernotifications.time-sensitive" \
+        || fail "the deployed bundle embeds a provisioning profile but is missing the
+       time-sensitive entitlement, so the consent prompt cannot break through
+       Focus. Check prepare_signing in scripts/lib/signing.sh."
+else
+    log "No provisioning profile in the deployed bundle — skipping the time-sensitive check"
+fi
+
 log "Consent granted over RPC"
 
 # Answering over RPC resolves the parked continuation directly, so on its own it

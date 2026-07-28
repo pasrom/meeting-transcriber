@@ -148,6 +148,14 @@ if [ "$NOTARIZE" = true ]; then
             codesign --force --sign "$DEVELOPER_ID" --options runtime --timestamp "$lib"
         done
 
+    # Embed the provisioning profile (when available) and derive the
+    # entitlements it authorises — see scripts/lib/signing.sh for why the
+    # time-sensitive key must never be added without one.
+    # shellcheck source=lib/signing.sh
+    source "$SCRIPT_DIR/lib/signing.sh"
+    BUNDLE_ID_FOR_SIGNING="com.meetingtranscriber.app"
+    ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$ENTITLEMENTS" "$BUNDLE_ID_FOR_SIGNING")"
+
     # Sign the main app binary with entitlements
     codesign --force --sign "$DEVELOPER_ID" \
         --options runtime --timestamp --entitlements "$ENTITLEMENTS" \

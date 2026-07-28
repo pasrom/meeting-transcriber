@@ -29,3 +29,6 @@ __pycache__/
 docs/plans/.local/
 scripts/fixtures/node_modules/
 scripts/fixtures/package-lock.json
+
+# Developer ID provisioning profiles (account artifacts, like the signing cert)
+signing/
