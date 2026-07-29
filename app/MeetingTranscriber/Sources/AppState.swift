@@ -174,7 +174,13 @@ final class AppState {
     // function reference instead of re-solving the dependency's init.
 
     private static func makeDefaultSettings() -> AppSettings {
-        AppSettings()
+        // Runs before the first read of `.standard`: the bundle identifier
+        // changed, UserDefaults is scoped per identifier, and an existing
+        // user's settings sit in the old domain until this copies them across.
+        // This is the only production construction of `AppSettings` — tests
+        // inject their own, so none of them touch the real domains.
+        LegacyDefaultsMigration.run(into: .standard)
+        return AppSettings()
     }
 
     private static func makeUpdateChecker() -> UpdateChecker {
