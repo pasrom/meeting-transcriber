@@ -169,7 +169,7 @@ struct TranscriptionSettingsView: View {
             + "Caption text is **not** logged by default — enable "
             + "\"Verbose Diagnostic Logging\" in Advanced to see "
             + "partials + finals in Console.app (subsystem "
-            + "com.meetingtranscriber.app, category LiveTranscription). "
+            + "com.meetingtranscriber, category LiveTranscription). "
             + "Engine changes take effect on the next recording — "
             + "switching mid-recording is not supported."
     }

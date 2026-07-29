@@ -7,7 +7,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LiveTra
 
 /// Wires the per-channel caption pipelines to both audio sinks of a
 /// `DualSourceRecorder`. Logs partial/final captions via os_log on subsystem
-/// `com.meetingtranscriber.app`, category `LiveTranscription`, and feeds them
+/// `com.meetingtranscriber`, category `LiveTranscription`, and feeds them
 /// into the observable `LiveCaptionsState` that backs the caption-bar overlay.
 ///
 /// Scope:

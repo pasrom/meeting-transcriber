@@ -165,7 +165,7 @@ final class AppSettings {
 
     /// PoC: when on, mic-channel audio is also fed to a live `StreamingTranscriber`
     /// during recording. Partial / finalised captions are logged via os_log on
-    /// subsystem `com.meetingtranscriber.app`, category `LiveTranscription` — no
+    /// subsystem `com.meetingtranscriber`, category `LiveTranscription` — no
     /// caption-bar UI yet. Only effective when the active engine is Parakeet;
     /// other engines silently no-op. Default: off.
     var liveTranscriptionEnabled: Bool {
