@@ -87,8 +87,8 @@ RUN_MARKER="/tmp/e2e-browser-marker.$$"
 # Chrome and can be quit by argv match without touching the user's windows.
 CHROME_PROFILE="$(mktemp -d /tmp/e2e-browser-chrome.XXXXXX)"
 
-_CONTAINER_PLIST="$HOME/Library/Containers/com.meetingtranscriber.dev/Data/Library/Preferences/com.meetingtranscriber.dev.plist"
-BUNDLE_ID="com.meetingtranscriber.dev"
+_CONTAINER_PLIST="$HOME/Library/Containers/app.meetingtranscriber.dev/Data/Library/Preferences/app.meetingtranscriber.dev.plist"
+BUNDLE_ID="app.meetingtranscriber.dev"
 
 # --- timing budgets -------------------------------------------------------
 

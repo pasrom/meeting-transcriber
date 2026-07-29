@@ -37,7 +37,7 @@ fail() { printf "    \033[0;31m✗\033[0m %s\n" "$1"; exit 1; }
 kill_app() { pkill -f "$APP" 2>/dev/null || true; }
 trap 'kill_app; rm -f "$TREE_JSON"' EXIT
 
-# This drives the RELEASE bundle, which shares the `com.meetingtranscriber.app`
+# This drives the RELEASE bundle, which shares the `app.meetingtranscriber`
 # defaults domain with an installed copy — so the run mutates the REAL settings of
 # whoever executes it. Each step restores what it changed, but a run that dies in
 # between leaves them changed, and `recordOnly` stuck ON means the next real meeting
@@ -45,7 +45,7 @@ trap 'kill_app; rm -f "$TREE_JSON"' EXIT
 # machine does, so local runs must opt in knowingly.
 if [ -z "${CI:-}" ] && [ "${MT_SMOKE_ALLOW_LOCAL:-}" != "1" ]; then
     printf "\033[0;31m✗\033[0m %s\n" \
-        "refusing to run outside CI: this toggles recordOnly and rewrites micName in your REAL settings (com.meetingtranscriber.app)." >&2
+        "refusing to run outside CI: this toggles recordOnly and rewrites micName in your REAL settings (app.meetingtranscriber)." >&2
     printf "  %s\n" "Re-run with MT_SMOKE_ALLOW_LOCAL=1 if you accept that a crashed run can leave them changed." >&2
     exit 1
 fi

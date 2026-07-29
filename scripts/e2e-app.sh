@@ -374,18 +374,18 @@ fi
 # explicit "Start Watching" menu click would — necessary because that
 # menu isn't reachable over SSH. `debugRPCEnabled` brings the RPC up at
 # launch instead of after a Settings toggle.
-defaults write com.meetingtranscriber.dev debugRPCEnabled -bool true
-defaults write com.meetingtranscriber.dev autoWatch -bool true
+defaults write app.meetingtranscriber.dev debugRPCEnabled -bool true
+defaults write app.meetingtranscriber.dev autoWatch -bool true
 
 if [ "$RECORD_ONLY" = true ]; then
     log "Enabling record-only mode (no transcript/protocol generation)"
-    defaults write com.meetingtranscriber.dev recordOnly -bool true
+    defaults write app.meetingtranscriber.dev recordOnly -bool true
     mkdir -p "$RECORDINGS_DIR"
     touch "$RECORD_ONLY_MARKER"
 else
     # Reset stale toggle from a previous --record-only run on the same host
     # so a plain `--two-meetings` invocation isn't silently still in record-only.
-    defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
+    defaults delete app.meetingtranscriber.dev recordOnly 2>/dev/null || true
 fi
 
 # Optional diarizer-mode override. `MTT_DIARIZER_MODE=sortformer` flips the
@@ -394,16 +394,16 @@ fi
 # actually lights up the naming dialog in production-chain. Always cleared
 # on exit so subsequent runs return to the default `.offline` mode.
 #
-# `defaults write com.meetingtranscriber.dev` from outside writes to the
+# `defaults write app.meetingtranscriber.dev` from outside writes to the
 # *standard* preferences domain. The dev .app's bundle has a pre-existing
-# container at `~/Library/Containers/com.meetingtranscriber.dev/...` —
+# container at `~/Library/Containers/app.meetingtranscriber.dev/...` —
 # from a prior App Store-variant build or interactive use — and macOS
 # routes the app's UserDefaults reads to that container regardless of
 # whether the current binary is sandboxed. A naïve `defaults write` is
 # silently a no-op there. Write to both: container if it exists (covers
 # this runner) AND standard domain (covers a clean runner where the
 # container hasn't been created yet).
-_CONTAINER_PLIST="$HOME/Library/Containers/com.meetingtranscriber.dev/Data/Library/Preferences/com.meetingtranscriber.dev.plist"
+_CONTAINER_PLIST="$HOME/Library/Containers/app.meetingtranscriber.dev/Data/Library/Preferences/app.meetingtranscriber.dev.plist"
 _set_dev_default() {
     local key="$1" value="$2" type="${3:-string}"
     # `numSpeakers` is read as `defaults.object(forKey:) as? Int`, so it must be
@@ -411,22 +411,22 @@ _set_dev_default() {
     # and silently fall back to the auto-detect sentinel (0).
     case "$type" in
         bool)
-            defaults write com.meetingtranscriber.dev "$key" -bool "$value" 2>/dev/null || true
+            defaults write app.meetingtranscriber.dev "$key" -bool "$value" 2>/dev/null || true
             [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
             ;;
         int)
-            defaults write com.meetingtranscriber.dev "$key" -int "$value" 2>/dev/null || true
+            defaults write app.meetingtranscriber.dev "$key" -int "$value" 2>/dev/null || true
             [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -int "$value" 2>/dev/null || true
             ;;
         *)
-            defaults write com.meetingtranscriber.dev "$key" "$value" 2>/dev/null || true
+            defaults write app.meetingtranscriber.dev "$key" "$value" 2>/dev/null || true
             [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" "$value" 2>/dev/null || true
             ;;
     esac
 }
 _delete_dev_default() {
     local key="$1"
-    defaults delete com.meetingtranscriber.dev "$key" 2>/dev/null || true
+    defaults delete app.meetingtranscriber.dev "$key" 2>/dev/null || true
     [ -f "$_CONTAINER_PLIST" ] && defaults delete "$_CONTAINER_PLIST" "$key" 2>/dev/null || true
 }
 if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
@@ -566,15 +566,15 @@ _naming_confirm_cleanup() {
     # Restore each domain to exactly its own snapshot. The shared restore_*_default
     # helpers translate `defaults read`'s 1/0 into the -bool true/false tokens and
     # write -int for numSpeakers (a raw 1/0 into `-bool` errors; see the helpers).
-    restore_bool_default com.meetingtranscriber.dev diarize "$_NC_PRE_DIARIZE_STD"
-    restore_int_default com.meetingtranscriber.dev numSpeakers "$_NC_PRE_NUMSPK_STD"
+    restore_bool_default app.meetingtranscriber.dev diarize "$_NC_PRE_DIARIZE_STD"
+    restore_int_default app.meetingtranscriber.dev numSpeakers "$_NC_PRE_NUMSPK_STD"
     if [ -f "$_CONTAINER_PLIST" ]; then
         restore_bool_default "$_CONTAINER_PLIST" diarize "$_NC_PRE_DIARIZE_CTR"
         restore_int_default "$_CONTAINER_PLIST" numSpeakers "$_NC_PRE_NUMSPK_CTR"
     fi
     local now_diarize now_num
-    now_diarize="$(read_dev_default_effective com.meetingtranscriber.dev "$_CONTAINER_PLIST" diarize)"
-    now_num="$(read_dev_default_effective com.meetingtranscriber.dev "$_CONTAINER_PLIST" numSpeakers)"
+    now_diarize="$(read_dev_default_effective app.meetingtranscriber.dev "$_CONTAINER_PLIST" diarize)"
+    now_num="$(read_dev_default_effective app.meetingtranscriber.dev "$_CONTAINER_PLIST" numSpeakers)"
     log "[naming-confirm] settings restored (effective diarize='$now_diarize' numSpeakers='$now_num')"
 }
 
@@ -585,8 +585,8 @@ if [ "$NAMING_CONFIRM" = true ]; then
     log "Enabling naming-confirm lane (diarize on, expected speakers = 2)"
     # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
     # restores each domain to exactly its own pre-lane state.
-    _NC_PRE_DIARIZE_STD="$(snapshot_default com.meetingtranscriber.dev diarize)"
-    _NC_PRE_NUMSPK_STD="$(snapshot_default com.meetingtranscriber.dev numSpeakers)"
+    _NC_PRE_DIARIZE_STD="$(snapshot_default app.meetingtranscriber.dev diarize)"
+    _NC_PRE_NUMSPK_STD="$(snapshot_default app.meetingtranscriber.dev numSpeakers)"
     if [ -f "$_CONTAINER_PLIST" ]; then
         _NC_PRE_DIARIZE_CTR="$(snapshot_default "$_CONTAINER_PLIST" diarize)"
         _NC_PRE_NUMSPK_CTR="$(snapshot_default "$_CONTAINER_PLIST" numSpeakers)"
@@ -662,7 +662,7 @@ on_exit() {
     _ON_EXIT_RAN=1
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
     if [ "$RECORD_ONLY" = true ]; then
-        defaults delete com.meetingtranscriber.dev recordOnly 2>/dev/null || true
+        defaults delete app.meetingtranscriber.dev recordOnly 2>/dev/null || true
         # Marker-bounded cleanup: only files created since `touch $MARKER`
         # at launch — never touches pre-existing user data. See feedback
         # memory `no_destructive_fs_on_real_dirs`. Skipped under

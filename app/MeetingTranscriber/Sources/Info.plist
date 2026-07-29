@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.meetingtranscriber.app</string>
+    <string>app.meetingtranscriber</string>
     <key>CFBundleName</key>
     <string>Meeting Transcriber</string>
     <key>CFBundleDisplayName</key>

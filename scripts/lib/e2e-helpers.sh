@@ -5,7 +5,7 @@
 #   quit_running_app
 #   bootout_stale_launchctl
 #   wait_for_rpc "$MTCLI"
-#   restore_bool_default com.meetingtranscriber.dev autoWatch "$SAVED"
+#   restore_bool_default app.meetingtranscriber.dev autoWatch "$SAVED"
 #
 # This file has no shebang and no `set -e` — it inherits the caller's.
 
@@ -21,7 +21,7 @@
 # graceful and never sends SIGTERM/SIGKILL when the process has
 # already exited.
 quit_running_app() {
-    local bundle_id="${1:-com.meetingtranscriber.dev}"
+    local bundle_id="${1:-app.meetingtranscriber.dev}"
     # Default pattern matches the dev bundle. Release-bundle callers
     # (e.g. test_rpc.sh against the homebrew-cask binary) override by
     # passing a second arg.
@@ -51,7 +51,7 @@ quit_running_app() {
     return 1
 }
 
-# Boot out stale launchctl entries for `com.meetingtranscriber.dev.*`.
+# Boot out stale launchctl entries for `app.meetingtranscriber.dev.*`.
 # A previous run that exited ungracefully can leave per-PID service
 # registrations in `gui/<uid>` even after the process is dead, which
 # in turn can hold per-bundle TCC state or block re-launches. Safe to
@@ -62,7 +62,7 @@ bootout_stale_launchctl() {
     # (e.g. an SSH session without a `gui/<uid>` domain) so callers
     # outside an EXIT trap aren't taken down by a best-effort cleanup.
     { launchctl list 2>/dev/null \
-        | awk '$3 ~ /com\.meetingtranscriber\.dev/ {print $3}' \
+        | awk '$3 ~ /app\.meetingtranscriber\.dev/ {print $3}' \
         | while read -r srv; do
             launchctl bootout "gui/$(id -u)/$srv" 2>/dev/null || true
         done

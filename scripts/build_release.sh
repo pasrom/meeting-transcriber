@@ -153,7 +153,7 @@ if [ "$NOTARIZE" = true ]; then
     # time-sensitive key must never be added without one.
     # shellcheck source=lib/signing.sh
     source "$SCRIPT_DIR/lib/signing.sh"
-    BUNDLE_ID_FOR_SIGNING="com.meetingtranscriber.app"
+    BUNDLE_ID_FOR_SIGNING="app.meetingtranscriber"
     ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$ENTITLEMENTS" "$BUNDLE_ID_FOR_SIGNING")"
 
     # Sign the main app binary with entitlements
