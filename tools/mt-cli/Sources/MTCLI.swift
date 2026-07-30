@@ -93,8 +93,8 @@ struct WavVerdictCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wav-verdict",
         abstract: "Analyze an audio file's loudness (issue #503 capture proof). "
-            + "Prints a JSON verdict; exits 0 when non-silent AND active-window "
-            + "ratio >= --min-active-ratio, 1 otherwise.",
+            + "Prints a JSON verdict; exits 0 when non-silent AND at least "
+            + "--min-active-seconds of audio is above the threshold, 1 otherwise.",
     )
 
     @Argument(help: "Path to the WAV/audio file to analyze.")
@@ -103,8 +103,12 @@ struct WavVerdictCommand: ParsableCommand {
     @Option(name: .long, help: "dBFS threshold below which a window is silent. Default -50.")
     var thresholdDbfs: Double = -50
 
-    @Option(name: .long, help: "Minimum fraction of active windows to pass. Default 0.5.")
-    var minActiveRatio: Double = 0.5
+    /// Seconds rather than a fraction of the file: every recording carries
+    /// trailing silence (grace period, then finalisation) whose length varies
+    /// run to run, so a ratio floor gates on how long the recording happened to
+    /// be rather than on how much audio was captured.
+    @Option(name: .long, help: "Minimum seconds of audio above the threshold to pass. Default 3.")
+    var minActiveSeconds: Double = 3
 
     @Option(name: .long, help: "Analysis window length in seconds. Default 0.5.")
     var windowSeconds: Double = 0.5
@@ -119,9 +123,21 @@ struct WavVerdictCommand: ParsableCommand {
         encoder.outputFormatting = [.sortedKeys]
         try FileHandle.standardOutput.write(encoder.encode(verdict))
         FileHandle.standardOutput.write(Data("\n".utf8))
-        // Non-zero exit if silent or too few active windows, so a driver can
-        // gate on the exit code alone.
-        if verdict.isSilent || verdict.activeWindowRatio < minActiveRatio {
+        // Non-zero exit if silent or too little audio, so a driver can gate on
+        // the exit code alone. Which of the two failed goes to stderr: they
+        // mean different things, and a caller reporting "silent" for a file
+        // whose own verdict says `isSilent: false` sends the reader hunting in
+        // the wrong place.
+        if verdict.isSilent {
+            FileHandle.standardError.write(Data(
+                "silent: no window above \(thresholdDbfs) dBFS\n".utf8,
+            ))
+            throw ExitCode(1)
+        }
+        if verdict.activeSeconds < minActiveSeconds {
+            let reason = "too little audio: \(verdict.activeSeconds)s above "
+                + "\(thresholdDbfs) dBFS, need \(minActiveSeconds)s\n"
+            FileHandle.standardError.write(Data(reason.utf8))
             throw ExitCode(1)
         }
     }

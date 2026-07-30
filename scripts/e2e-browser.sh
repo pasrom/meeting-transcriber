@@ -427,9 +427,16 @@ cp "$APP_WAV" /tmp/e2e-browser-app.wav 2>/dev/null || true
 cp "$SIDECAR" /tmp/e2e-browser-meta.json 2>/dev/null || true
 
 log "Verdict on the captured app track:"
+# Gate on SECONDS of audio, not on the fraction of the file that is audible.
+# The recording keeps running after Chrome quits (grace period, then
+# finalisation) and that tail varies run to run, so a ratio floor is really a
+# threshold on recording length: measured here, the captured tone was identical
+# across runs (31 active windows every time) while the ratio swung across a 0.5
+# floor purely because one recording came out a second longer.
+#
 # `=` form is required for the negative threshold: ArgumentParser reads a bare
 # `-50` after `--threshold-dbfs` as another flag and errors out.
-"$MTCLI" wav-verdict "$APP_WAV" --threshold-dbfs=-50 --min-active-ratio=0.5 \
-    || fail "app track is silent — the CATap did not capture Chrome's browser-meeting audio"
+"$MTCLI" wav-verdict "$APP_WAV" --threshold-dbfs=-50 --min-active-seconds=5 \
+    || fail "the CATap did not capture enough of Chrome's browser-meeting audio (reason above)"
 
 log "PASS: browser detection → RPC consent → non-silent CATap capture of the app track"

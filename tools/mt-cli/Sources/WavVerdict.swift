@@ -6,13 +6,19 @@ import Foundation
 /// I/O — the `wav-verdict` subcommand loads samples via AVAudioFile and hands
 /// them here, so the decision logic stays deterministically unit-testable.
 ///
-/// `activeWindowRatio` is what distinguishes a genuine continuous recording
-/// from a "1 s blip then silence" regression: a driver asserting a sustained
-/// tone checks both `!isSilent` and `activeWindowRatio` above a floor.
+/// `activeSeconds` is what distinguishes a genuine capture from a "1 s blip
+/// then silence" regression, and it is what a driver should gate on: how much
+/// real audio was recorded does not shrink because the recording ran longer.
+/// `activeWindowRatio` is the same count as a fraction — informative, but it
+/// moves with the trailing silence every recording has (grace period, then
+/// finalisation), so a floor on it is a threshold on recording length wearing a
+/// disguise.
 struct WavVerdict: Codable, Equatable {
     let overallRMSdBFS: Double
     let peakWindowRMSdBFS: Double
     let activeWindowRatio: Double
+    /// Total duration of the windows above the threshold.
+    let activeSeconds: Double
     let windowCount: Int
     let isSilent: Bool
 
@@ -45,6 +51,7 @@ struct WavVerdict: Codable, Equatable {
             overallRMSdBFS: dBFS(rmsOf: samples[...]),
             peakWindowRMSdBFS: peak,
             activeWindowRatio: ratio,
+            activeSeconds: Double(activeCount) * windowSeconds,
             windowCount: windows.count,
             // Silent iff no window is loud enough — the peak decides it.
             isSilent: peak < thresholdDBFS,

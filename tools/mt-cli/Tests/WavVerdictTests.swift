@@ -66,4 +66,38 @@ final class WavVerdictTests: XCTestCase {
         XCTAssertTrue(v.isSilent)
         XCTAssertEqual(v.peakWindowRMSdBFS, WavVerdict.silenceFloorDBFS)
     }
+
+    // MARK: - activeSeconds
+
+    func testActiveSecondsCountsOnlyTheAudiblePart() {
+        var samples = sine(rmsDBFS: -20, seconds: 3)
+        samples += [Float](repeating: 0, count: Int(7 * sampleRate))
+        let v = WavVerdict.analyze(samples: samples, sampleRate: sampleRate)
+        XCTAssertEqual(v.activeSeconds, 3, accuracy: 0.6)
+    }
+
+    /// The property a capture proof actually needs: how much real audio was
+    /// recorded does not shrink because the recording ran longer. Measured on
+    /// the browser-meeting lane, where the tone was identical across runs (31
+    /// active windows every time) but the recording length varied — the ratio
+    /// swung from 0.508 to 0.463 across a fixed 0.5 floor and flipped a passing
+    /// run to failing without anything about the captured audio changing.
+    func testTrailingSilenceShrinksTheRatioButNotActiveSeconds() {
+        let tone = sine(rmsDBFS: -20, seconds: 3)
+        let short = WavVerdict.analyze(
+            samples: tone + [Float](repeating: 0, count: Int(3 * sampleRate)),
+            sampleRate: sampleRate,
+        )
+        let long = WavVerdict.analyze(
+            samples: tone + [Float](repeating: 0, count: Int(9 * sampleRate)),
+            sampleRate: sampleRate,
+        )
+        XCTAssertEqual(short.activeSeconds, long.activeSeconds, accuracy: 0.001)
+        XCTAssertGreaterThan(short.activeWindowRatio, long.activeWindowRatio)
+    }
+
+    func testSilenceHasNoActiveSeconds() {
+        let v = WavVerdict.analyze(samples: [Float](repeating: 0, count: 16000), sampleRate: sampleRate)
+        XCTAssertEqual(v.activeSeconds, 0)
+    }
 }
