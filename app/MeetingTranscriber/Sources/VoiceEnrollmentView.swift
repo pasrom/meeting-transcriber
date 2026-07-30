@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Three-stage sheet that seeds `speakers.json` from an existing audio file:
 /// 1. Pick file → 2. Diarize → 3. Name speakers (reuses `SpeakerNamingView`)
@@ -166,10 +165,18 @@ struct VoiceEnrollmentView: View {
 
     // MARK: - Actions
 
-    private func pickFile(initialDirectory: URL?) {
+    /// Builds the configured file panel. Split out of `pickFile` so a test can
+    /// assert what the panel actually offers — `runModal()` is a modal loop and
+    /// stays manual-QA-only, but its configuration does not have to be.
+    static func makeFilePanel() -> NSOpenPanel {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.audio, .mpeg4Audio, .mp3, .wav]
+        panel.allowedContentTypes = AudioImportTypes.enrollmentTypes
         panel.allowsMultipleSelection = false
+        return panel
+    }
+
+    private func pickFile(initialDirectory: URL?) {
+        let panel = Self.makeFilePanel()
         if let initialDirectory {
             try? FileManager.default.createDirectory(
                 at: initialDirectory, withIntermediateDirectories: true,
