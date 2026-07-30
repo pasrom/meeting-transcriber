@@ -220,6 +220,19 @@ public class MicCaptureHandler: @unchecked Sendable {
                 standardFormatWithSampleRate: fileSampleRate, channels: 1,
             )! // swiftlint:disable:this force_unwrapping
             converter = AVAudioConverter(from: tapFormat, to: outputFormat)
+            // AVAudioConverter's IMPLICIT downmix writes SILENCE — with no
+            // error — when the input carries a discrete channel layout, which
+            // is exactly what a mic array reports. The built-in mic switches to
+            // a 3ch discrete array the moment another app activates voice
+            // processing (any WeChat / FaceTime / Teams call), so the mic track
+            // of a real call recorded 50 minutes of digital silence while the
+            // app track was fine. Selecting a channel explicitly restores it.
+            if let map = MicChannelMap.downmixMap(for: tapFormat) {
+                converter?.channelMap = map
+                logger.info(
+                    "Mic: discrete/multichannel layout — selecting channel 0 explicitly (implicit downmix yields silence)",
+                )
+            }
             logger.info(
                 "Mic: converting \(Int(tapFormat.sampleRate))Hz/\(tapFormat.channelCount)ch → \(Int(self.fileSampleRate))Hz/1ch",
             )
