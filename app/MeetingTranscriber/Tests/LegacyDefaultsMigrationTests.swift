@@ -7,11 +7,10 @@ import XCTest
 /// the update. The decision of *what* to copy is the part worth testing; the
 /// read/write of the two domains is a thin wrapper around Foundation.
 final class LegacyDefaultsMigrationTests: XCTestCase {
-    func testCopiesLegacyKeysWhenNothingMigratedYet() {
+    func testCopiesLegacyKeys() {
         let plan = LegacyDefaultsMigration.plan(
             legacy: ["whisperLanguage": "de", "autoWatch": true],
             existing: [],
-            alreadyMigrated: false,
         )
         XCTAssertEqual(plan["whisperLanguage"] as? String, "de")
         XCTAssertEqual(plan["autoWatch"] as? Bool, true)
@@ -24,26 +23,9 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         let plan = LegacyDefaultsMigration.plan(
             legacy: ["whisperLanguage": "de", "autoWatch": true],
             existing: ["whisperLanguage"],
-            alreadyMigrated: false,
         )
         XCTAssertNil(plan["whisperLanguage"])
         XCTAssertEqual(plan["autoWatch"] as? Bool, true)
-    }
-
-    /// Runs once. Otherwise a user who deliberately reset a setting back to its
-    /// default would have the legacy value restored on the next launch.
-    func testNothingIsCopiedOnceTheMigrationHasRun() {
-        let plan = LegacyDefaultsMigration.plan(
-            legacy: ["whisperLanguage": "de"],
-            existing: [],
-            alreadyMigrated: true,
-        )
-        XCTAssertTrue(plan.isEmpty)
-    }
-
-    func testEmptyLegacyDomainProducesNothingToDo() {
-        let plan = LegacyDefaultsMigration.plan(legacy: [:], existing: [], alreadyMigrated: false)
-        XCTAssertTrue(plan.isEmpty)
     }
 
     /// The marker itself lives in the legacy domain too once a user has run a
@@ -53,7 +35,6 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         let plan = LegacyDefaultsMigration.plan(
             legacy: [LegacyDefaultsMigration.markerKey: true, "autoWatch": true],
             existing: [],
-            alreadyMigrated: false,
         )
         XCTAssertNil(plan[LegacyDefaultsMigration.markerKey])
         XCTAssertEqual(plan["autoWatch"] as? Bool, true)

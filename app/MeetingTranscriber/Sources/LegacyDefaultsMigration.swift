@@ -23,19 +23,13 @@ enum LegacyDefaultsMigration {
     /// Set once the copy has run, so a later launch never re-applies it.
     static let markerKey = "migratedFromLegacyBundleIdentifier"
 
-    /// Which key/value pairs to write into the current domain.
+    /// Which key/value pairs to write into the current domain: everything from
+    /// the legacy domain except the marker and except keys already set under the
+    /// new identifier, which are the user's newer intent.
     ///
-    /// - A key already present under the new identifier is the user's newer
-    ///   intent and is left alone.
-    /// - Runs exactly once: after that, a value the user reset back to its
-    ///   default must not be resurrected from the legacy plist.
-    static func plan(
-        legacy: [String: Any],
-        existing: Set<String>,
-        alreadyMigrated: Bool,
-    ) -> [String: Any] {
-        guard !alreadyMigrated else { return [:] }
-        return legacy.filter { key, _ in
+    /// Running at most once is `run`'s concern, not this function's.
+    static func plan(legacy: [String: Any], existing: Set<String>) -> [String: Any] {
+        legacy.filter { key, _ in
             key != markerKey && !existing.contains(key)
         }
     }
@@ -48,7 +42,7 @@ enum LegacyDefaultsMigration {
 
         let legacy = defaults.persistentDomain(forName: legacyDomain) ?? [:]
         let existing = Set(legacy.keys.filter { defaults.object(forKey: $0) != nil })
-        let pending = plan(legacy: legacy, existing: existing, alreadyMigrated: false)
+        let pending = plan(legacy: legacy, existing: existing)
 
         for (key, value) in pending {
             defaults.set(value, forKey: key)
