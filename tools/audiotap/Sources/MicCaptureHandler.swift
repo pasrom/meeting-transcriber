@@ -211,26 +211,11 @@ public class MicCaptureHandler: @unchecked Sendable {
 
         converter = nil
         resampleRatio = fileSampleRate / tapFormat.sampleRate
-        // Convert to 16 kHz mono whenever the tap isn't already there — this
-        // covers resampling AND downmixing a multi-channel input device. Since
-        // the tap now matches the node's real channel count (issue #379), a
-        // 2ch device is captured as 2ch and folded to the mono WAV here.
-        if tapFormat.sampleRate != fileSampleRate || tapFormat.channelCount != 1 {
-            let outputFormat = AVAudioFormat(
-                standardFormatWithSampleRate: fileSampleRate, channels: 1,
-            )! // swiftlint:disable:this force_unwrapping
-            converter = AVAudioConverter(from: tapFormat, to: outputFormat)
-            // AVAudioConverter's IMPLICIT downmix writes SILENCE — with no
-            // error — when the input carries a discrete channel layout, which
-            // is exactly what a mic array reports. The built-in mic switches to
-            // a 3ch discrete array the moment another app activates voice
-            // processing (any WeChat / FaceTime / Teams call), so the mic track
-            // of a real call recorded 50 minutes of digital silence while the
-            // app track was fine. Selecting a channel explicitly restores it.
-            if let map = MicChannelMap.downmixMap(for: tapFormat) {
-                converter?.channelMap = map
+        if let setup = MicConverterFactory.make(tapFormat: tapFormat, fileSampleRate: fileSampleRate) {
+            converter = setup.converter
+            if let channel = setup.selectedChannel {
                 logger.info(
-                    "Mic: discrete/multichannel layout — selecting channel 0 explicitly (implicit downmix yields silence)",
+                    "Mic: layout has no usable implicit downmix — selecting channel \(channel) explicitly",
                 )
             }
             logger.info(
