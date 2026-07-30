@@ -420,12 +420,28 @@ class WatchLoop {
         participants: [String] = [],
     ) {
         if recordOnly() {
-            writeRecordOnlySidecar(
-                title: title,
-                appName: appName,
-                recording: recording,
-                participants: participants,
-            )
+            do {
+                try writeRecordOnlySidecar(
+                    title: title,
+                    appName: appName,
+                    recording: recording,
+                    participants: participants,
+                )
+            } catch {
+                // Error left redacted: a sidecar/WAV write error embeds the
+                // meeting-title-derived basename in its description.
+                logger.error("Record-only: \(error.localizedDescription)")
+                update { next in
+                    next.lastError = "Record-only output failed: \(error.localizedDescription)"
+                }
+                // Record-only performs no state transition, so `lastError` is
+                // never surfaced on its own. The notification is the only way
+                // the user learns their fleet pipeline lost this recording.
+                notifier.notify(
+                    title: "Record-only output failed",
+                    body: error.localizedDescription,
+                )
+            }
             return
         }
 
@@ -441,80 +457,6 @@ class WatchLoop {
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title, privacy: .private)")
-    }
-
-    private func writeRecordOnlySidecar(
-        title: String,
-        appName: String,
-        recording: RecordingResult,
-        participants: [String],
-    ) {
-        let startedAt = recording.recordingStartDate
-        // Guard the sidecar's startedAt <= stoppedAt invariant against a
-        // backward wall-clock step between start and stop (e.g. NTP correcting a
-        // fast clock): never emit a negative interval for downstream fleet
-        // consumers that compute a duration from the pair.
-        let stoppedAt = max(Date(), startedAt)
-
-        let mixName = recording.mixPath.lastPathComponent
-        let basename = RecordingFileSuffix.stripSuffix(from: mixName)?.stem
-            ?? recording.mixPath.deletingPathExtension().lastPathComponent
-
-        do {
-            let destination = recordOnlyDestination()
-            // start/stopAccessingSecurityScopedResource MUST be called on the
-            // URL that resolved from the bookmark (App Store sandboxed build,
-            // or any custom Output Folder pick) — calling it on a child path
-            // silently fails. We then write into the `recordings/` subfolder
-            // beneath that scope.
-            let accessing = destination.scope.startAccessingSecurityScopedResource()
-            defer { if accessing { destination.scope.stopAccessingSecurityScopedResource() } }
-
-            let destDir = destination.writeDir
-            try FileManager.default.createDirectory(
-                at: destDir, withIntermediateDirectories: true,
-            )
-            let movedMix = try Self.move(recording.mixPath, into: destDir)
-            let movedApp = try recording.appPath.map { try Self.move($0, into: destDir) }
-            let movedMic = try recording.micPath.map { try Self.move($0, into: destDir) }
-
-            let sidecar = RecordingSidecar(
-                title: title,
-                appName: appName,
-                startedAt: startedAt,
-                stoppedAt: stoppedAt,
-                participants: participants,
-                micDelaySeconds: recording.micDelay,
-                mixFilename: movedMix.lastPathComponent,
-                appFilename: movedApp?.lastPathComponent,
-                micFilename: movedMic?.lastPathComponent,
-            )
-            try sidecar.write(toDirectory: destDir, basename: basename)
-            logger.info("Record-only: wrote sidecar + WAVs to \(destDir.path) for \(title, privacy: .private)")
-        } catch {
-            // Error left redacted: a sidecar/WAV write error embeds the
-            // meeting-title-derived basename in its description.
-            logger.error("Record-only: \(error.localizedDescription)")
-            update { next in
-                next.lastError = "Record-only output failed: \(error.localizedDescription)"
-            }
-            // Record-only skips state transitions, so `lastError` alone is
-            // never surfaced. Notify directly so the user learns about the
-            // silent data-loss for downstream pipelines.
-            notifier.notify(
-                title: "Record-only output failed",
-                body: error.localizedDescription,
-            )
-        }
-    }
-
-    /// Move a file into `destDir`, returning its new URL. If a file with the
-    /// same name already exists at the destination it is overwritten.
-    private static func move(_ source: URL, into destDir: URL) throws -> URL {
-        let dest = destDir.appendingPathComponent(source.lastPathComponent)
-        try? FileManager.default.removeItem(at: dest)
-        try FileManager.default.moveItem(at: source, to: dest)
-        return dest
     }
 
     /// Single funnel through which every observable-field mutation flows.
