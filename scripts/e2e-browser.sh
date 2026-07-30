@@ -300,6 +300,30 @@ case "$NOTIFICATION_AUTH" in
         ;;
 esac
 
+# Authorised is not the same as visible. The reported field case was authorised
+# throughout, with the alert style set to None: the prompt reached Notification
+# Center, showed no banner and expired on its timer. Same silent death as a
+# denial, and the check above cannot see it.
+log "Checking the prompt would actually be shown (banner + Focus breakthrough)"
+NOTIFICATION_ALERT_STYLE="$(rpc /state | jq -r '.permissionHealth.notificationsAlertStyle // "unknown"')"
+NOTIFICATION_TIME_SENSITIVE="$(rpc /state | jq -r '.permissionHealth.notificationsTimeSensitive // "unknown"')"
+log "Alert style: $NOTIFICATION_ALERT_STYLE, time-sensitive: $NOTIFICATION_TIME_SENSITIVE"
+if [ "$NOTIFICATION_ALERT_STYLE" = "none" ]; then
+    fail "the dev app's alert style is None, so the consent prompt shows no banner and
+       expires unanswered for a real user. This lane would still pass, because it
+       answers consent over RPC. Fix the runner: System Settings > Notifications >
+       MeetingTranscriber-Dev, set the alert style to Banners, then re-run."
+fi
+# `disabled` means the switch was turned off for this app; `notSupported` means
+# the build carries no time-sensitive entitlement, which is a build property
+# this lane already checks separately against the deployed bundle.
+if [ "$NOTIFICATION_TIME_SENSITIVE" = "disabled" ]; then
+    fail "Time Sensitive notifications are switched off for the dev app, so the consent
+       prompt cannot break through Focus. Fix the runner: System Settings >
+       Notifications > MeetingTranscriber-Dev > Allow Time Sensitive Notifications,
+       then re-run."
+fi
+
 # --- drive the browser meeting --------------------------------------------
 
 _watch_state() { rpc /state | jq -r '.watchState // ""'; }
