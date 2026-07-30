@@ -200,4 +200,22 @@ final class BrowserConsentReadinessTests: XCTestCase {
         XCTAssertNil(BrowserConsentReadiness.ready.headline)
         XCTAssertNil(BrowserConsentReadiness.disabled.headline)
     }
+
+    /// The Settings view renders the warning only when it has BOTH a headline
+    /// and a body, so a case with one and not the other would silently show
+    /// nothing at all — the exact failure mode this whole type exists to
+    /// prevent. Listed by hand (the enum is not `CaseIterable` in production
+    /// just for a test): extend this when adding a case.
+    func test_headlineAndWarning_areAlwaysBothPresentOrBothAbsent() {
+        let all: [BrowserConsentReadiness] = [
+            .disabled, .ready, .denied, .undetermined, .quiet, .bannersOff, .timeSensitiveOff,
+        ]
+        for readiness in all {
+            XCTAssertEqual(
+                readiness.headline == nil,
+                readiness.warning == nil,
+                "\(readiness) would render half a warning, which renders as none",
+            )
+        }
+    }
 }
