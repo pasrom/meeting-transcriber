@@ -73,7 +73,7 @@ final class NotificationManagerTests: XCTestCase {
         /// notify", not "the user saw it". This is the single chokepoint the
         /// debug RPC `/state.notifications` snapshot reads, so every caller is
         /// observable without touching call sites.
-        func testNotifyRecordsUndeliveredEntryWhenSetUpNeverRan() {
+        func testNotifyRecordsUnpostedEntryWhenSetUpNeverRan() {
             let manager = NotificationManager()
             XCTAssertFalse(manager.isSetUp)
 
@@ -83,7 +83,7 @@ final class NotificationManagerTests: XCTestCase {
             let entries = manager.recentNotificationsLog.entries
             XCTAssertEqual(entries.map(\.title), ["Silent Recording", "Meeting Detected"])
             XCTAssertEqual(entries.map(\.body), ["Both channels silent", "Recording: Standup (Teams)"])
-            XCTAssertEqual(entries.map(\.delivered), [false, false], "delivery guard failed, so entries must be marked undelivered")
+            XCTAssertEqual(entries.map(\.posted), [false, false], "delivery guard failed, so entries must be marked unposted")
         }
 
         /// The `AppNotifying.recentNotifications` conformance exposes the same

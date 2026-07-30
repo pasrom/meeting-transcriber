@@ -132,7 +132,7 @@
         /// End-to-end wire check for the notification ring buffer: post through
         /// the production notifier chokepoint, project it through the REAL
         /// `AppState.rpcStateSnapshot()` (injected notifier, no re-implemented
-        /// mapping), and assert the `{title, body, postedAt, delivered}` rows
+        /// mapping), and assert the `{title, body, postedAt, posted}` rows
         /// come back over a real socket in chronological order. A fresh
         /// `NotificationManager` (not `.shared`) keeps the buffer isolated.
         func testStateExposesPostedNotifications() async throws {
@@ -154,8 +154,8 @@
             XCTAssertEqual(decoded.notifications.map(\.title), ["Meeting Detected", "Silent Recording"])
             XCTAssertEqual(decoded.notifications.map(\.body), ["Recording: Standup (Teams)", "Both channels silent"])
             // Test host has no app bundle, so the delivery guard fails: the wire
-            // must report the entries as NOT delivered.
-            XCTAssertEqual(decoded.notifications.map(\.delivered), [false, false])
+            // must report the entries as NOT posted.
+            XCTAssertEqual(decoded.notifications.map(\.posted), [false, false])
             let first = try XCTUnwrap(decoded.notifications.first)
             XCTAssertNotNil(
                 ISO8601DateFormatter().date(from: first.postedAt),

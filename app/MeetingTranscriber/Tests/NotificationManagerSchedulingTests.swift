@@ -59,9 +59,9 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertEqual(fake.added.first?.content.title, "Meeting Detected")
         XCTAssertEqual(fake.added.first?.content.body, "Recording: Standup (Teams)")
         #if !APPSTORE
-            // The ring-buffer entry must be flagged delivered — RPC/e2e consumers
+            // The ring-buffer entry must be flagged posted — RPC/e2e consumers
             // asserting a user-VISIBLE warning gate on this flag.
-            XCTAssertEqual(manager.recentNotifications.map(\.delivered), [true])
+            XCTAssertEqual(manager.recentNotifications.map(\.posted), [true])
         #endif
     }
 

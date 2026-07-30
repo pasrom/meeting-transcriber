@@ -30,8 +30,25 @@ protocol NotificationScheduling: AnyObject, Sendable {
 final class SystemNotificationScheduler: NotificationScheduling, Sendable {
     private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "NotificationScheduler")
 
+    /// Completion-handler form, only for the error. The fire-and-forget
+    /// overload discards it, so a rejected post looked exactly like a
+    /// successful one from inside the app — and the consent prompt is the one
+    /// notification where that difference decides whether a meeting is
+    /// recorded. `.public` on the message: `localizedDescription`, never
+    /// `String(describing:)`, which can carry a home-directory path.
     func add(_ request: UNNotificationRequest) {
-        UNUserNotificationCenter.current().add(request)
+        // The identifier is lifted out because `UNNotificationRequest` is not
+        // Sendable and the completion is a `@Sendable` closure.
+        let id = request.identifier
+        UNUserNotificationCenter.current().add(request) { error in
+            guard let error else { return }
+            self.logger.error(
+                """
+                notification_post_failed id=\(id, privacy: .public) \
+                error=\(error.localizedDescription, privacy: .public)
+                """,
+            )
+        }
     }
 
     func setCategories(_ categories: Set<UNNotificationCategory>) {

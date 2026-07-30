@@ -237,7 +237,7 @@
         /// `rpcStateSnapshot()` reads the notifier the AppState was constructed
         /// with, so notifications posted through THAT instance surface in
         /// `snapshot.notifications` with the ISO-8601 `postedAt` wire shape and
-        /// the delivered flag (false here: `setUp()` never ran in the test host).
+        /// the posted flag (false here: `setUp()` never ran in the test host).
         func test_snapshot_notifications_readsInjectedNotifier() throws {
             let manager = NotificationManager()
             let notifierState = AppState(settings: state.settings, notifier: manager)
@@ -249,7 +249,7 @@
 
             XCTAssertEqual(snapshot.notifications.map(\.title), ["Silent Recording", "Meeting Detected"])
             XCTAssertEqual(snapshot.notifications.map(\.body), ["Both channels silent", "Recording: Standup (Teams)"])
-            XCTAssertEqual(snapshot.notifications.map(\.delivered), [false, false])
+            XCTAssertEqual(snapshot.notifications.map(\.posted), [false, false])
             let posted = try XCTUnwrap(snapshot.notifications.first)
             XCTAssertNotNil(
                 ISO8601DateFormatter().date(from: posted.postedAt),

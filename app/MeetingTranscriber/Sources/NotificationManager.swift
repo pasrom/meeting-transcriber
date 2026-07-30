@@ -87,9 +87,10 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
             // Record before the delivery guard so the app's *decision* to notify
             // is captured even in headless/test contexts where
             // `UNUserNotificationCenter` (which needs a real app bundle) is
-            // absent. The `delivered` flag preserves the distinction: RPC
-            // consumers asserting a user-VISIBLE warning must check it.
-            recentNotificationsLog.record(title: title, body: body, delivered: deliverable)
+            // absent. The `posted` flag preserves that distinction, and claims
+            // nothing beyond it — whether anything was rendered is the
+            // `NotificationVisibility` question, not this one.
+            recentNotificationsLog.record(title: title, body: body, posted: deliverable)
         #endif
 
         guard deliverable else { return }
@@ -200,7 +201,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
             // Without this the consent prompt was the one notification that left
             // no trace, which is precisely how an invisible prompt could keep the
             // browser e2e lane green while the feature was dead for users.
-            recentNotificationsLog.record(title: title, body: body, delivered: deliverable)
+            recentNotificationsLog.record(title: title, body: body, posted: deliverable)
         #endif
 
         guard deliverable else { return false }

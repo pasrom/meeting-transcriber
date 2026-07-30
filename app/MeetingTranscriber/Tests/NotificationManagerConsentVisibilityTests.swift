@@ -14,7 +14,7 @@ import XCTest
 @MainActor
 final class NotificationManagerConsentVisibilityTests: XCTestCase {
     #if !APPSTORE
-        func test_consentPrompt_isRecordedAsDeliveredWhenItCanBePosted() async {
+        func test_consentPrompt_isRecordedAsPostedWhenItCanBePosted() async {
             let scheduler = FakeNotificationScheduler()
             let canDeliver: @Sendable () -> Bool = { true }
             let manager = NotificationManager(scheduler: scheduler, canDeliver: canDeliver)
@@ -31,15 +31,15 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
             let entries = manager.recentNotifications
             let consent = entries.first { $0.title == "Browser Meeting" }
             XCTAssertNotNil(consent, "consent prompt must appear in the ring buffer")
-            XCTAssertEqual(consent?.delivered, true)
+            XCTAssertEqual(consent?.posted, true)
             XCTAssertEqual(scheduler.added.count, 1, "and must actually have been posted")
         }
 
         /// The case that matters: no bundle, so nothing is posted and no prompt
         /// can be seen. The ring buffer must still record the app's DECISION to
-        /// prompt, flagged undelivered, so a driver can tell "never tried" from
+        /// prompt, flagged unposted, so a driver can tell "never tried" from
         /// "tried and could not".
-        func test_consentPrompt_isRecordedAsUndeliveredWhenItCannotBePosted() async {
+        func test_consentPrompt_isRecordedAsUnpostedWhenItCannotBePosted() async {
             let scheduler = FakeNotificationScheduler()
             let canDeliver: @Sendable () -> Bool = { false }
             let manager = NotificationManager(scheduler: scheduler, canDeliver: canDeliver)
@@ -51,7 +51,7 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
             XCTAssertTrue(scheduler.added.isEmpty)
             let consent = manager.recentNotifications.first { $0.title == "Browser Meeting" }
             XCTAssertNotNil(consent, "an unpostable prompt must still be visible to /state")
-            XCTAssertEqual(consent?.delivered, false)
+            XCTAssertEqual(consent?.posted, false)
         }
     #endif
 

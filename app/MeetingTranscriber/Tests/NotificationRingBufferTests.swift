@@ -4,28 +4,28 @@
     import XCTest
 
     final class NotificationRingBufferTests: XCTestCase {
-        // MARK: - Records title / body / timestamp / delivered
+        // MARK: - Records title / body / timestamp / posted
 
         func testRecordCapturesTitleBodyTimestampAndDelivered() {
             let fixed = Date(timeIntervalSince1970: 1_700_000_000)
             let buffer = NotificationRingBuffer { fixed }
 
-            buffer.record(title: "Meeting Detected", body: "Recording: Standup (Teams)", delivered: true)
+            buffer.record(title: "Meeting Detected", body: "Recording: Standup (Teams)", posted: true)
 
             XCTAssertEqual(buffer.entries.count, 1)
             let entry = buffer.entries[0]
             XCTAssertEqual(entry.title, "Meeting Detected")
             XCTAssertEqual(entry.body, "Recording: Standup (Teams)")
             XCTAssertEqual(entry.postedAt, fixed)
-            XCTAssertTrue(entry.delivered)
+            XCTAssertTrue(entry.posted)
         }
 
         func testRecordPreservesDeliveredFalse() {
             let buffer = NotificationRingBuffer()
 
-            buffer.record(title: "Silent Recording", body: "Both channels silent", delivered: false)
+            buffer.record(title: "Silent Recording", body: "Both channels silent", posted: false)
 
-            XCTAssertEqual(buffer.entries.map(\.delivered), [false])
+            XCTAssertEqual(buffer.entries.map(\.posted), [false])
         }
 
         func testTimestampAdvancesWithClock() {
@@ -43,8 +43,8 @@
                 }
             }
 
-            buffer.record(title: "a", body: "1", delivered: true)
-            buffer.record(title: "b", body: "2", delivered: true)
+            buffer.record(title: "a", body: "1", posted: true)
+            buffer.record(title: "b", body: "2", posted: true)
 
             XCTAssertEqual(buffer.entries.map(\.postedAt), times)
         }
@@ -54,9 +54,9 @@
         func testEntriesAreChronologicalNewestLast() {
             let buffer = NotificationRingBuffer()
 
-            buffer.record(title: "first", body: "1", delivered: true)
-            buffer.record(title: "second", body: "2", delivered: true)
-            buffer.record(title: "third", body: "3", delivered: true)
+            buffer.record(title: "first", body: "1", posted: true)
+            buffer.record(title: "second", body: "2", posted: true)
+            buffer.record(title: "third", body: "3", posted: true)
 
             XCTAssertEqual(buffer.entries.map(\.title), ["first", "second", "third"])
         }
@@ -67,7 +67,7 @@
             let buffer = NotificationRingBuffer(capacity: 3)
 
             for i in 1 ... 5 {
-                buffer.record(title: "n\(i)", body: "b\(i)", delivered: true)
+                buffer.record(title: "n\(i)", body: "b\(i)", posted: true)
             }
 
             // Oldest two (n1, n2) dropped; newest three retained in order.
@@ -78,7 +78,7 @@
             let buffer = NotificationRingBuffer(capacity: 2)
 
             for i in 0 ..< 100 {
-                buffer.record(title: "n\(i)", body: "", delivered: true)
+                buffer.record(title: "n\(i)", body: "", posted: true)
             }
 
             XCTAssertEqual(buffer.entries.count, 2)
@@ -92,7 +92,7 @@
 
             let buffer = NotificationRingBuffer()
             for i in 0 ..< 60 {
-                buffer.record(title: "n\(i)", body: "", delivered: true)
+                buffer.record(title: "n\(i)", body: "", posted: true)
             }
 
             XCTAssertEqual(buffer.entries.count, 50)

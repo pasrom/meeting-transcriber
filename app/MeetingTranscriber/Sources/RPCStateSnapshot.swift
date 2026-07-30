@@ -217,11 +217,14 @@
             let body: String
             /// ISO-8601 wall-clock time the notification was posted.
             let postedAt: String
-            /// Whether it passed the delivery guard and reached
-            /// `UNUserNotificationCenter`. Assertions about user-VISIBLE
-            /// warnings must require `true`; `false` means the app only
-            /// *decided* to notify (headless context, setup not run).
-            let delivered: Bool
+            /// Whether the app handed it to `UNUserNotificationCenter`;
+            /// `false` means it only *decided* to notify (headless context,
+            /// setup not run).
+            ///
+            /// Not a claim that anything was shown — macOS decides that, and
+            /// `permissionHealth.notifications*` carries the settings that
+            /// answer it. An assertion about a user-VISIBLE warning needs both.
+            let posted: Bool
         }
 
         struct LastJob: Codable {

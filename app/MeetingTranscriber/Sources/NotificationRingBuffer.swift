@@ -23,11 +23,19 @@
             let title: String
             let body: String
             let postedAt: Date
-            /// Whether the notification passed the delivery guard and was handed
-            /// to `UNUserNotificationCenter`. `false` means the app *decided* to
-            /// notify but nothing reached the user (no bundle / `setUp()` never
-            /// ran) — E2E assertions about user-visible warnings must check this.
-            let delivered: Bool
+            /// Whether the app handed this notification to
+            /// `UNUserNotificationCenter`. `false` means it only *decided* to
+            /// notify and nothing was posted at all (no bundle / `setUp()` never
+            /// ran).
+            ///
+            /// Named for what it can prove. It is emphatically NOT "the user saw
+            /// it": macOS still decides whether to render anything, and under a
+            /// Focus mode or an alert style of None a posted notification is
+            /// never shown. An earlier `delivered` claimed exactly that, and
+            /// 31 of 31 entries on the reported machine were flagged true while
+            /// the user saw none of them. Read the presentation settings
+            /// (`NotificationVisibility`) for the visibility half.
+            let posted: Bool
         }
 
         /// Most entries retained; oldest evicted first once exceeded.
@@ -45,10 +53,11 @@
             self.now = now
         }
 
-        /// Append a posted notification, dropping the oldest if over capacity.
-        func record(title: String, body: String, delivered: Bool) {
+        /// Append a notification the app decided to send, dropping the oldest if
+        /// over capacity.
+        func record(title: String, body: String, posted: Bool) {
             state.withLock { entries in
-                entries.append(Entry(title: title, body: body, postedAt: now(), delivered: delivered))
+                entries.append(Entry(title: title, body: body, postedAt: now(), posted: posted))
                 if entries.count > capacity {
                     entries.removeFirst(entries.count - capacity)
                 }

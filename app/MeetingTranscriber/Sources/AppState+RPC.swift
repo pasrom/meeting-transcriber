@@ -184,7 +184,7 @@
                     title: entry.title,
                     body: entry.body,
                     postedAt: Self.isoFormatter.string(from: entry.postedAt),
-                    delivered: entry.delivered,
+                    posted: entry.posted,
                 )
             }
         }

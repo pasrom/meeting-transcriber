@@ -406,7 +406,7 @@ fi
 # this lane green.
 _consent_notification_posted() {
     rpc /state | jq -e \
-        '[.notifications[]? | select(.title == "Record browser meeting?" and .delivered == true)] | length > 0' \
+        '[.notifications[]? | select(.title == "Record browser meeting?" and .posted == true)] | length > 0' \
         >/dev/null 2>&1
 }
 poll_until 10 1 _consent_notification_posted \
