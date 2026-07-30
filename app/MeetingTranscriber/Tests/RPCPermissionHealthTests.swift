@@ -33,6 +33,9 @@
             XCTAssertEqual(unknown.screenRecording, "unknown")
             XCTAssertEqual(unknown.microphone, "unknown")
             XCTAssertEqual(unknown.accessibility, "unknown")
+            XCTAssertEqual(unknown.notifications, "unknown")
+            XCTAssertEqual(unknown.notificationsAlertStyle, "unknown")
+            XCTAssertEqual(unknown.notificationsTimeSensitive, "unknown")
             // "not yet checked" must not read as healthy.
             XCTAssertFalse(unknown.isHealthy)
         }
@@ -55,6 +58,9 @@
                     accessibility: "denied",
                     isHealthy: false,
                     notifications: "denied",
+                    notificationsAlertStyle: "none",
+                    notificationsTimeSensitive: "disabled",
+                    notificationsScheduledDelivery: "enabled",
                 ),
             )
             let json = try XCTUnwrap(String(data: snapshot.jsonData(), encoding: .utf8))
@@ -69,6 +75,24 @@
             // notification was ever shown, so this is the lane's only way to see
             // a runner where the feature would be dead for a real user.
             XCTAssertTrue(json.contains("\"notifications\" : \"denied\""), json)
+            // And the presentation settings alongside it: authorisation alone
+            // cannot tell an audible prompt from one that is never shown, which
+            // is the state the browser lane has to be able to refuse to run in.
+            XCTAssertTrue(json.contains("\"notificationsAlertStyle\" : \"none\""), json)
+            XCTAssertTrue(json.contains("\"notificationsTimeSensitive\" : \"disabled\""), json)
+            XCTAssertTrue(json.contains("\"notificationsScheduledDelivery\" : \"enabled\""), json)
+        }
+
+        /// Wire strings for the presentation settings, pinned for the same
+        /// reason as the authorisation table: `scripts/e2e-browser.sh` greps for
+        /// them, and Apple renumbering an enum must not silently change them.
+        func testNotificationPresentationRPCValues() {
+            XCTAssertEqual(UNNotificationSetting.enabled.rpcValue, "enabled")
+            XCTAssertEqual(UNNotificationSetting.disabled.rpcValue, "disabled")
+            XCTAssertEqual(UNNotificationSetting.notSupported.rpcValue, "notSupported")
+            XCTAssertEqual(UNAlertStyle.none.rpcValue, "none")
+            XCTAssertEqual(UNAlertStyle.banner.rpcValue, "banner")
+            XCTAssertEqual(UNAlertStyle.alert.rpcValue, "alert")
         }
     }
 #endif

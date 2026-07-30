@@ -25,9 +25,10 @@ protocol AppNotifying {
     /// (no prompt) for notifiers without a real coordinator.
     func resolveBrowserConsent(granted: Bool) -> Bool
 
-    /// Current notification authorisation. On the same seam as `askToRecord`
-    /// because it answers whether that prompt could be SEEN, which decides
-    /// whether browser meetings work at all (see `BrowserConsentReadiness`).
+    /// How a posted notification would be presented. On the same seam as
+    /// `askToRecord` because it answers whether that prompt could be SEEN, which
+    /// decides whether browser meetings work at all (see
+    /// `BrowserConsentReadiness`).
     ///
     /// Here rather than as a probe closure on `PermissionsController` because
     /// `NotificationManager` already owns both the scheduler port and the
@@ -39,7 +40,7 @@ protocol AppNotifying {
     /// Sendable, so a non-isolated async requirement would force callers to send
     /// the notifier across an actor boundary.
     @MainActor
-    func notificationAuthorization() async -> UNAuthorizationStatus
+    func notificationVisibility() async -> NotificationVisibility
 
     #if !APPSTORE
         /// Recently posted notifications, oldest first, for the debug RPC
@@ -72,8 +73,8 @@ extension AppNotifying {
     /// raises NSInternalInconsistencyException without a real app bundle, so a
     /// default that reached for it would abort any test touching the notifier.
     @MainActor
-    func notificationAuthorization() async -> UNAuthorizationStatus {
-        .notDetermined
+    func notificationVisibility() async -> NotificationVisibility {
+        .unread
     }
 
     // swiftlint:enable async_without_await

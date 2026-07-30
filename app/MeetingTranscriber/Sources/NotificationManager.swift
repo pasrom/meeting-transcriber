@@ -210,16 +210,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         }
     }
 
-    /// Current notification authorisation, for `BrowserConsentReadiness`. Read
-    /// live rather than cached from `requestAuthorization`: the user can revoke
-    /// it in System Settings long after launch, and that silently disables
-    /// browser-meeting recording.
+    /// How a posted notification would be presented, for
+    /// `BrowserConsentReadiness`. Read live rather than cached from
+    /// `requestAuthorization`: the user can change any of it in System Settings
+    /// long after launch, and that silently disables browser-meeting recording.
     @MainActor
-    func notificationAuthorization() async -> UNAuthorizationStatus {
+    func notificationVisibility() async -> NotificationVisibility {
         // Same guard as `setUp` and `notify`: without a real app bundle the
         // notification centre raises NSInternalInconsistencyException.
-        guard canDeliver() else { return .notDetermined }
-        return await scheduler.authorizationStatus()
+        guard canDeliver() else { return .unread }
+        return await scheduler.visibility()
     }
 
     /// Resolve a parked browser-consent prompt programmatically (the debug-RPC

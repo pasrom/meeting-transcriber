@@ -180,6 +180,24 @@
             /// feature is dead for a real user.
             let notifications: String
 
+            /// How an alert would be presented ("none", "banner", "alert",
+            /// "unknown"). "none" means no banner appears, so the consent prompt
+            /// expires in Notification Center unseen even though authorisation
+            /// reads as "authorized" — the state the original field report came
+            /// from, and invisible to the line above on its own.
+            let notificationsAlertStyle: String
+
+            /// Whether the app may post time-sensitive notifications ("enabled",
+            /// "disabled", "notSupported", "unknown"). This is what carries the
+            /// consent prompt through Focus; "notSupported" means the build has
+            /// no time-sensitive entitlement rather than a user setting.
+            let notificationsTimeSensitive: String
+
+            /// Whether delivery is batched into the scheduled summary. Diagnostic
+            /// only: time-sensitive bypasses the summary, so this changes no
+            /// verdict on its own.
+            let notificationsScheduledDelivery: String
+
             /// Pre-check placeholder: the health check runs asynchronously at
             /// launch, so a snapshot taken before it completes reports "unknown".
             static let unknown = Self(
@@ -188,6 +206,9 @@
                 accessibility: "unknown",
                 isHealthy: false,
                 notifications: "unknown",
+                notificationsAlertStyle: "unknown",
+                notificationsTimeSensitive: "unknown",
+                notificationsScheduledDelivery: "unknown",
             )
         }
 

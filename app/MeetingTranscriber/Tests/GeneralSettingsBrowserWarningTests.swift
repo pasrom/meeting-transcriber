@@ -25,38 +25,64 @@ final class GeneralSettingsBrowserWarningTests: XCTestCase {
         return settings
     }
 
+    /// Authorised and fully visible, then override the one setting under test.
+    private func visibility(
+        authorization: UNAuthorizationStatus = .authorized,
+        alertStyle: UNAlertStyle = .banner,
+        timeSensitive: UNNotificationSetting = .enabled,
+    ) -> NotificationVisibility {
+        NotificationVisibility(
+            authorization: authorization,
+            alert: .enabled,
+            alertStyle: alertStyle,
+            timeSensitive: timeSensitive,
+            scheduledDelivery: .disabled,
+        )
+    }
+
     private func warningText(
         browserMeetings: Bool,
-        authorization: UNAuthorizationStatus?,
+        visibility: NotificationVisibility?,
     ) throws -> String? {
         let view = try GeneralSettingsView(
             settings: makeSettings(browserMeetings: browserMeetings),
             updateChecker: nil,
-            notificationAuthorization: authorization,
+            notificationVisibility: visibility,
         )
         let found = try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserConsentWarning)
         return try found?.text().string()
     }
 
     func test_deniedNotifications_showTheWarning() throws {
-        let text = try warningText(browserMeetings: true, authorization: .denied)
+        let text = try warningText(browserMeetings: true, visibility: visibility(authorization: .denied))
         let warning = try XCTUnwrap(text, "denied notifications must warn in the General tab")
         XCTAssertTrue(warning.lowercased().contains("record"), warning)
     }
 
     func test_authorizedNotifications_showNoWarning() throws {
-        XCTAssertNil(try warningText(browserMeetings: true, authorization: .authorized))
+        XCTAssertNil(try warningText(browserMeetings: true, visibility: visibility()))
     }
 
     func test_browserWatchingOff_showsNoWarningEvenWhenDenied() throws {
-        XCTAssertNil(try warningText(browserMeetings: false, authorization: .denied))
+        XCTAssertNil(try warningText(
+            browserMeetings: false,
+            visibility: visibility(authorization: .denied),
+        ))
+    }
+
+    /// The regression this whole change is about: authorisation says yes, the
+    /// alert style says no banner, and the old view saw only the first half.
+    func test_authorizedButNoBanner_showsTheWarning() throws {
+        let text = try warningText(browserMeetings: true, visibility: visibility(alertStyle: .none))
+        let warning = try XCTUnwrap(text, "an invisible prompt must warn in the General tab")
+        XCTAssertTrue(warning.lowercased().contains("record"), warning)
     }
 
     /// Before the first permission check the status is unknown. Guessing either
     /// way is wrong: claiming a problem would cry wolf on every launch, and
     /// claiming health would hide a real one, so render nothing until it is read.
     func test_unknownAuthorization_showsNoWarningYet() throws {
-        XCTAssertNil(try warningText(browserMeetings: true, authorization: nil))
+        XCTAssertNil(try warningText(browserMeetings: true, visibility: nil))
     }
 
     /// The General tab is reached through `SettingsView`, so the value has to
@@ -68,7 +94,7 @@ final class GeneralSettingsBrowserWarningTests: XCTestCase {
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
             updateChecker: nil,
-            notificationAuthorization: .denied,
+            notificationVisibility: visibility(authorization: .denied),
             recognitionStatsLog: RecognitionStatsLog(),
             stageTimingLog: StageTimingLog(),
         )

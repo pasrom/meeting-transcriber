@@ -20,23 +20,35 @@ final class PermissionsControllerNotificationTests: XCTestCase {
         { HealthCheckResult(screenRecording: .healthy, microphone: .healthy, accessibility: .healthy) }
     }
 
+    /// Authorised-and-visible apart from the status under test: this suite is
+    /// about the polling, not about the presentation settings.
+    private func visibility(_ authorization: UNAuthorizationStatus) -> NotificationVisibility {
+        NotificationVisibility(
+            authorization: authorization,
+            alert: .enabled,
+            alertStyle: .banner,
+            timeSensitive: .enabled,
+            scheduledDelivery: .disabled,
+        )
+    }
+
     private func makeController(
         authorization: UNAuthorizationStatus,
         notifier: RecordingNotifier = RecordingNotifier(),
     ) -> PermissionsController {
-        notifier.authorizationStatus = authorization
+        notifier.reportedVisibility = visibility(authorization)
         return PermissionsController(notifier: notifier, probe: healthyProbe())
     }
 
     func test_authorization_isUnknownBeforeTheFirstCheck() {
         let controller = makeController(authorization: .denied)
-        XCTAssertNil(controller.notificationAuthorization)
+        XCTAssertNil(controller.notificationVisibility)
     }
 
     func test_check_refreshesTheAuthorizationStatus() async {
         let controller = makeController(authorization: .denied)
         await controller.check()
-        XCTAssertEqual(controller.notificationAuthorization, .denied)
+        XCTAssertEqual(controller.notificationVisibility?.authorization, .denied)
     }
 
     /// The user revoking notifications in System Settings mid-session is the
@@ -45,11 +57,11 @@ final class PermissionsControllerNotificationTests: XCTestCase {
         let notifier = RecordingNotifier()
         let controller = makeController(authorization: .authorized, notifier: notifier)
         await controller.check()
-        XCTAssertEqual(controller.notificationAuthorization, .authorized)
+        XCTAssertEqual(controller.notificationVisibility?.authorization, .authorized)
 
-        notifier.authorizationStatus = .denied
+        notifier.reportedVisibility = visibility(.denied)
         await controller.check()
-        XCTAssertEqual(controller.notificationAuthorization, .denied)
+        XCTAssertEqual(controller.notificationVisibility?.authorization, .denied)
     }
 
     /// Denied notifications must never reach the notify path, or the app tries

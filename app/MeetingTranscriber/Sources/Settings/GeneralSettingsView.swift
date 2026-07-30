@@ -6,20 +6,20 @@ struct GeneralSettingsView: View {
     @Bindable var settings: AppSettings
     var updateChecker: UpdateChecker?
 
-    /// Latest notification authorisation from `PermissionsController`, or nil
+    /// Latest notification visibility from `PermissionsController`, or nil
     /// before the first check. Browser-meeting recording depends on it (the
     /// consent prompt is a notification), and nothing else in the app can say so
     /// without using the channel that is broken.
-    var notificationAuthorization: UNAuthorizationStatus?
+    var notificationVisibility: NotificationVisibility?
 
-    /// Nil until the first permission check, and nil when the prompt will be
-    /// visible. The view never needs the readiness CASE, only the message.
-    private var browserConsentWarningText: String? {
-        guard let notificationAuthorization else { return nil }
+    /// Nil until the first permission check. The case, not just the message:
+    /// how total the failure is decides the headline.
+    private var browserConsentReadiness: BrowserConsentReadiness? {
+        guard let notificationVisibility else { return nil }
         return BrowserConsentReadiness.evaluate(
             browserMeetingsEnabled: settings.watchBrowserMeetings,
-            authorization: notificationAuthorization,
-        ).warning
+            visibility: notificationVisibility,
+        )
     }
 
     var body: some View {
@@ -81,10 +81,12 @@ struct GeneralSettingsView: View {
     /// and kept out of the menu-bar permission badge because this permission only
     /// matters for this one opt-in feature.
     @ViewBuilder private var browserConsentWarning: some View {
-        if let warning = browserConsentWarningText {
+        if let readiness = browserConsentReadiness,
+           let headline = readiness.headline,
+           let warning = readiness.warning {
             Label {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Browser meetings cannot be recorded.")
+                    Text(headline)
                         .font(.callout.weight(.semibold))
                     Text(warning)
                         .font(.caption)

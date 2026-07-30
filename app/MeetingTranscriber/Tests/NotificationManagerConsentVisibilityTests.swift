@@ -55,14 +55,34 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
         }
     #endif
 
-    func test_authorization_isReadThroughTheSchedulerSeam() async {
+    func test_visibility_isReadThroughTheSchedulerSeam() async {
         let canDeliver: @Sendable () -> Bool = { true }
         let manager = NotificationManager(
             scheduler: FakeNotificationScheduler(status: .denied),
             canDeliver: canDeliver,
         )
-        let status = await manager.notificationAuthorization()
-        XCTAssertEqual(status, .denied)
+        let visibility = await manager.notificationVisibility()
+        XCTAssertEqual(visibility.authorization, .denied)
+    }
+
+    /// The presentation settings travel with the authorisation status, in one
+    /// read. Carrying only the status is what made an authorised-but-invisible
+    /// prompt indistinguishable from a healthy one.
+    func test_visibility_carriesThePresentationSettings() async {
+        let canDeliver: @Sendable () -> Bool = { true }
+        let invisible = NotificationVisibility(
+            authorization: .authorized,
+            alert: .enabled,
+            alertStyle: .none,
+            timeSensitive: .disabled,
+            scheduledDelivery: .enabled,
+        )
+        let manager = NotificationManager(
+            scheduler: FakeNotificationScheduler(visibility: invisible),
+            canDeliver: canDeliver,
+        )
+        let visibility = await manager.notificationVisibility()
+        XCTAssertEqual(visibility, invisible)
     }
 
     /// The protocol default, which every real double overrides and so had no
@@ -73,21 +93,21 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
         struct BareNotifier: AppNotifying {
             func notify(title _: String, body _: String) {}
         }
-        let status = await BareNotifier().notificationAuthorization()
-        XCTAssertEqual(status, .notDetermined)
+        let visibility = await BareNotifier().notificationVisibility()
+        XCTAssertEqual(visibility, .unread)
     }
 
     /// Without a real app bundle the notification centre aborts the process, so
     /// the same `canDeliver` guard that protects `setUp` and `notify` has to
     /// protect this read too. A default that reached for the real centre
     /// crashed every existing `PermissionsControllerTests` case with signal 6.
-    func test_authorization_isNotDeterminedWhenNotDeliverable() async {
+    func test_visibility_isUnreadWhenNotDeliverable() async {
         let canDeliver: @Sendable () -> Bool = { false }
         let manager = NotificationManager(
             scheduler: FakeNotificationScheduler(status: .authorized),
             canDeliver: canDeliver,
         )
-        let status = await manager.notificationAuthorization()
-        XCTAssertEqual(status, .notDetermined, "must not consult the centre without a bundle")
+        let visibility = await manager.notificationVisibility()
+        XCTAssertEqual(visibility, .unread, "must not consult the centre without a bundle")
     }
 }

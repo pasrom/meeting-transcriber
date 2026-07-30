@@ -13,10 +13,23 @@ final class FakeNotificationScheduler: NotificationScheduling, @unchecked Sendab
     private(set) var categories: Set<UNNotificationCategory> = []
     private(set) weak var delegate: (any UNUserNotificationCenterDelegate)?
     private(set) var authRequested = false
-    let status: UNAuthorizationStatus
+    let reportedVisibility: NotificationVisibility
 
-    init(status: UNAuthorizationStatus = .authorized) {
-        self.status = status
+    /// Authorised and fully visible unless a test says otherwise, so a suite
+    /// about posting doesn't have to spell out presentation settings it does
+    /// not care about.
+    convenience init(status: UNAuthorizationStatus = .authorized) {
+        self.init(visibility: NotificationVisibility(
+            authorization: status,
+            alert: .enabled,
+            alertStyle: .banner,
+            timeSensitive: .enabled,
+            scheduledDelivery: .disabled,
+        ))
+    }
+
+    init(visibility: NotificationVisibility) {
+        reportedVisibility = visibility
     }
 
     var added: [UNNotificationRequest] {
@@ -40,8 +53,8 @@ final class FakeNotificationScheduler: NotificationScheduling, @unchecked Sendab
     }
 
     // swiftlint:disable async_without_await
-    func authorizationStatus() async -> UNAuthorizationStatus {
-        status
+    func visibility() async -> NotificationVisibility {
+        reportedVisibility
     }
 
     // swiftlint:enable async_without_await

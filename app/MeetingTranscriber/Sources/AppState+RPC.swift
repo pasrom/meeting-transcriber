@@ -49,6 +49,34 @@
         }
     }
 
+    extension UNNotificationSetting {
+        /// Wire string for the presentation settings that decide whether the
+        /// consent prompt is seen. Hand-written for the same reason as the
+        /// authorisation table above.
+        var rpcValue: String {
+            switch self {
+            case .notSupported: "notSupported"
+            case .disabled: "disabled"
+            case .enabled: "enabled"
+            @unknown default: "unknown"
+            }
+        }
+    }
+
+    extension UNAlertStyle {
+        /// Wire string for the alert style. "none" is the interesting one: it
+        /// means Notification Center only, no banner, which is how an authorised
+        /// app can still never show a prompt with a deadline.
+        var rpcValue: String {
+            switch self {
+            case .none: "none"
+            case .banner: "banner"
+            case .alert: "alert"
+            @unknown default: "unknown"
+            }
+        }
+    }
+
     extension PipelineQueue {
         /// Build the RPC pipeline-queue status from inside `PipelineQueue`, so the
         /// counter reads are single-hop `self.` accesses. Constructing this
@@ -193,12 +221,16 @@
             // probe and the notification query complete independently, so one
             // being unfinished must not blank the other.
             let health = permissions.health
+            let visibility = permissions.notificationVisibility
             return RPCStateSnapshot.PermissionHealth(
                 screenRecording: health?.screenRecording.rpcValue ?? "unknown",
                 microphone: health?.microphone.rpcValue ?? "unknown",
                 accessibility: health?.accessibility.rpcValue ?? "unknown",
                 isHealthy: health?.isHealthy ?? false,
-                notifications: permissions.notificationAuthorization?.rpcValue ?? "unknown",
+                notifications: visibility?.authorization.rpcValue ?? "unknown",
+                notificationsAlertStyle: visibility?.alertStyle.rpcValue ?? "unknown",
+                notificationsTimeSensitive: visibility?.timeSensitive.rpcValue ?? "unknown",
+                notificationsScheduledDelivery: visibility?.scheduledDelivery.rpcValue ?? "unknown",
             )
         }
 

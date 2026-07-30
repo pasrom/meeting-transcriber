@@ -10,6 +10,11 @@ import UserNotifications
 /// after `NotificationManager.consentPromptTimeout`, a cooldown starts, and the
 /// cycle repeats forever while the toggle still reads as on.
 ///
+/// Authorisation is not the whole question, and treating it as the whole
+/// question is what let the original field report through (issue #543): that
+/// user was `.authorized` throughout. `NotificationVisibility` carries the rest
+/// of the settings that decide whether the prompt is actually seen.
+///
 /// Nothing else in the app notices. `NotificationManager.canDeliver` only checks
 /// that an app bundle exists, `PermissionHealthCheck` covers microphone, screen
 /// recording and accessibility, and warning the user with a notification would
@@ -28,22 +33,51 @@ enum BrowserConsentReadiness: Equatable {
     /// Provisional authorisation: delivered quietly to Notification Center with
     /// no banner. A prompt that expires on a timer is effectively invisible.
     case quiet
+    /// Authorised, but no banner is shown (alerts off, or alert style None).
+    /// The prompt reaches Notification Center and expires there unanswered.
+    case bannersOff
+    /// Authorised and visible, but not allowed through Focus. The prompt shows
+    /// on an idle Mac and is suppressed during any Focus mode, which is when
+    /// meetings tend to happen. The only partial failure of the set.
+    case timeSensitiveOff
 
     static func evaluate(
         browserMeetingsEnabled: Bool,
-        authorization: UNAuthorizationStatus,
+        visibility: NotificationVisibility,
     ) -> Self {
         guard browserMeetingsEnabled else { return .disabled }
-        // An unknown future status falls in with `.quiet` rather than `.ready`:
-        // assuming a state this build has never seen can show a banner would
-        // turn a new OS behaviour into a silently dead feature, while the
-        // reverse only costs a warning that turns out to be unnecessary.
-        switch authorization {
-        case .authorized: return .ready
+        // Authorisation first: without permission to post, no presentation
+        // setting can rescue the prompt, so reporting the subtler problem would
+        // send the user to a switch that changes nothing. An unknown future
+        // status falls in with `.quiet` rather than `.ready`: assuming a state
+        // this build has never seen can show a banner would turn a new OS
+        // behaviour into a silently dead feature, while the reverse only costs
+        // a warning that turns out to be unnecessary.
+        switch visibility.authorization {
+        case .authorized: break
         case .denied: return .denied
         case .notDetermined: return .undetermined
         case .provisional: return .quiet
         @unknown default: return .quiet
+        }
+
+        if visibility.alert == .disabled || visibility.alertStyle == .none { return .bannersOff }
+        // `.notSupported` means this build carries no time-sensitive
+        // entitlement, not that the user switched something off. There is no
+        // toggle to point them at, and the prompt still shows whenever no Focus
+        // is active, so it is not a warning anyone could act on.
+        if visibility.timeSensitive == .disabled { return .timeSensitiveOff }
+        return .ready
+    }
+
+    /// Headline for the Settings warning, or nil when there is nothing to say.
+    /// Only the states that stop every browser meeting claim that outright: an
+    /// overstated warning is one users learn to scroll past.
+    var headline: String? {
+        switch self {
+        case .disabled, .ready: nil
+        case .denied, .undetermined, .quiet, .bannersOff: "Browser meetings cannot be recorded."
+        case .timeSensitiveOff: "Browser meetings can be missed."
         }
     }
 
@@ -69,6 +103,18 @@ enum BrowserConsentReadiness: Equatable {
             "Notifications are delivered quietly, so the \"record this meeting?\" "
                 + "prompt arrives without a banner and usually expires unanswered. "
                 + "Browser meetings will rarely be recorded. Allow banners in System Settings."
+
+        case .bannersOff:
+            "Notifications are allowed but show no banner, so the \"record this meeting?\" "
+                + "prompt goes straight to Notification Center and expires unanswered. "
+                + "Browser meetings will rarely be recorded. Set the alert style to "
+                + "Banners or Alerts in System Settings."
+
+        case .timeSensitiveOff:
+            "Time Sensitive notifications are turned off for Meeting Transcriber, so the "
+                + "\"record this meeting?\" prompt is hidden while a Focus mode or Do Not "
+                + "Disturb is on. Browser meetings started during Focus will not be "
+                + "recorded. Allow Time Sensitive notifications in System Settings."
         }
     }
 }
