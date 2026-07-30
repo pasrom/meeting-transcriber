@@ -17,8 +17,23 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "LegacyD
 /// identifier's preferences. That variant has no installed base under the old
 /// identifier, so there is nothing to carry over.
 enum LegacyDefaultsMigration {
-    /// The identifier the app shipped under until the rename.
-    static let defaultLegacyDomain = "com.meetingtranscriber.app"
+    /// What each current identifier was called before the rename.
+    ///
+    /// A table rather than one constant, because the release and dev builds
+    /// each have their own history: pointing both at the release domain made
+    /// the dev build inherit the release user's settings on first launch, which
+    /// is exactly the separation the dev identity exists to keep.
+    private static let legacyDomains = [
+        "app.meetingtranscriber": "com.meetingtranscriber.app",
+        "app.meetingtranscriber.dev": "com.meetingtranscriber.dev",
+    ]
+
+    /// The pre-rename domain for a current identifier, or nil when there is
+    /// none. Unknown identifiers get nothing: guessing a domain for one could
+    /// only import settings that were never ours.
+    static func legacyDomain(for bundleID: String) -> String? {
+        legacyDomains[bundleID]
+    }
 
     /// Set once the copy has run, so a later launch never re-applies it.
     static let markerKey = "migratedFromLegacyBundleIdentifier"
@@ -60,11 +75,20 @@ enum LegacyDefaultsMigration {
         return dict
     }
 
-    /// Reads the legacy domain, applies `plan`, and records that it ran. Marks
-    /// itself done even when there was nothing to copy, so the fresh-install
-    /// case stops re-reading a domain that will never appear.
-    static func run(into defaults: UserDefaults, legacyDomain: String = defaultLegacyDomain) {
+    /// Reads the legacy domain belonging to the running identifier, applies
+    /// `plan`, and records that it ran. Marks itself done even when there was
+    /// nothing to copy, so the fresh-install case stops re-reading a domain
+    /// that will never appear.
+    ///
+    /// `legacyDomain` is resolved from the running bundle identifier, so the
+    /// dev build reads the old dev domain rather than the release user's.
+    /// Tests pass it explicitly; outside an app bundle there is no identifier
+    /// and nothing to migrate.
+    static func run(into defaults: UserDefaults, legacyDomain: String? = nil) {
         guard !defaults.bool(forKey: markerKey) else { return }
+        guard let legacyDomain = legacyDomain
+            ?? Bundle.main.bundleIdentifier.flatMap(self.legacyDomain(for:))
+        else { return }
 
         let legacy = mergedLegacy(
             standard: defaults.persistentDomain(forName: legacyDomain) ?? [:],

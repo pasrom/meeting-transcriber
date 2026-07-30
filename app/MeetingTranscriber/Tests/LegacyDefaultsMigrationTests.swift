@@ -40,6 +40,29 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         XCTAssertEqual(plan["autoWatch"] as? Bool, true)
     }
 
+    // MARK: - which legacy domain belongs to which identifier
+
+    /// The release build reads the release domain, and the dev build reads the
+    /// dev one. A single hardcoded legacy domain made the dev build inherit the
+    /// *release* user's settings on first launch, which defeats the separate
+    /// identity the dev build exists for.
+    func testEachIdentifierMapsToItsOwnLegacyDomain() {
+        XCTAssertEqual(
+            LegacyDefaultsMigration.legacyDomain(for: "app.meetingtranscriber"),
+            "com.meetingtranscriber.app",
+        )
+        XCTAssertEqual(
+            LegacyDefaultsMigration.legacyDomain(for: "app.meetingtranscriber.dev"),
+            "com.meetingtranscriber.dev",
+        )
+    }
+
+    /// An identifier we never shipped under has nothing to carry over, and
+    /// guessing a domain for it could only import a stranger's settings.
+    func testUnknownIdentifierHasNoLegacyDomain() {
+        XCTAssertNil(LegacyDefaultsMigration.legacyDomain(for: "com.example.other"))
+    }
+
     // MARK: - container redirect
 
     /// When a container exists for a bundle identifier, macOS redirects the
