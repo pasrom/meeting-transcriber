@@ -119,6 +119,24 @@ final class AppSettings {
         didSet { defaults.set(watchBrowserMeetings, forKey: "watchBrowserMeetings") }
     }
 
+    /// Mic-input-detected call apps (see `MicInputDetector`). Off by default —
+    /// additive opt-in so existing installs see no new auto-recording behavior.
+    var watchWeChat: Bool {
+        didSet { defaults.set(watchWeChat, forKey: "watchWeChat") }
+    }
+
+    var watchTencentMeeting: Bool {
+        didSet { defaults.set(watchTencentMeeting, forKey: "watchTencentMeeting") }
+    }
+
+    var watchFaceTime: Bool {
+        didSet { defaults.set(watchFaceTime, forKey: "watchFaceTime") }
+    }
+
+    var watchWhatsApp: Bool {
+        didSet { defaults.set(watchWhatsApp, forKey: "watchWhatsApp") }
+    }
+
     /// Auto-start watching on app launch.
     var autoWatch: Bool {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
@@ -465,6 +483,10 @@ final class AppSettings {
         if watchZoom { apps.append("Zoom") }
         if watchWebex { apps.append("Webex") }
         if watchBrowserMeetings { apps.append(AppMeetingPattern.chromeBrowser.appName) }
+        if watchWeChat { apps.append(AppMeetingPattern.wechat.appName) }
+        if watchTencentMeeting { apps.append(AppMeetingPattern.tencentMeeting.appName) }
+        if watchFaceTime { apps.append(AppMeetingPattern.faceTime.appName) }
+        if watchWhatsApp { apps.append(AppMeetingPattern.whatsApp.appName) }
         return apps
     }
 
@@ -477,6 +499,10 @@ final class AppSettings {
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true
         watchWebex = defaults.object(forKey: "watchWebex") as? Bool ?? true
         watchBrowserMeetings = defaults.object(forKey: "watchBrowserMeetings") as? Bool ?? false
+        watchWeChat = defaults.object(forKey: "watchWeChat") as? Bool ?? false
+        watchTencentMeeting = defaults.object(forKey: "watchTencentMeeting") as? Bool ?? false
+        watchFaceTime = defaults.object(forKey: "watchFaceTime") as? Bool ?? false
+        watchWhatsApp = defaults.object(forKey: "watchWhatsApp") as? Bool ?? false
         autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
 
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0

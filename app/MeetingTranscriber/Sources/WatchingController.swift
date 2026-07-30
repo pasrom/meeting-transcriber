@@ -104,7 +104,10 @@ final class WatchingController {
     /// (`settings.watchApps`). Extracted so the toggle → detection wiring is
     /// unit-testable without spinning up a watch loop.
     static func defaultDetector(settings: AppSettings) -> any MeetingDetecting {
-        PowerAssertionDetector(patterns: PowerAssertionDetector.patterns(watching: settings.watchApps))
+        CompositeMeetingDetector([
+            PowerAssertionDetector(patterns: PowerAssertionDetector.patterns(watching: settings.watchApps)),
+            MicInputDetector(patterns: MicInputDetector.patterns(watching: settings.watchApps)),
+        ])
     }
 
     /// Wire the engine-sync hook. Called once from `AppState.init` after its

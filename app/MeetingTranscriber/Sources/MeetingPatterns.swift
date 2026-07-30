@@ -111,7 +111,36 @@ extension AppMeetingPattern {
         requiresRecordingConsent: true,
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, chromeBrowser]
+    // Call apps detected by mic input rather than assertions or window titles
+    // (see `MicInputDetector`): their in-call assertions are unnamed or absent
+    // and their call-window titles are localized/unstable, so `meetingPatterns`
+    // stays empty and titles fall back to the "<App> Call" placeholder.
+
+    static let wechat = AppMeetingPattern(
+        appName: "WeChat",
+        ownerNames: ["WeChat", "微信"],
+        meetingPatterns: [],
+    )
+
+    static let tencentMeeting = AppMeetingPattern(
+        appName: "Tencent Meeting",
+        ownerNames: ["TencentMeeting", "腾讯会议", "WeMeet", "wemeetapp"],
+        meetingPatterns: [],
+    )
+
+    static let faceTime = AppMeetingPattern(
+        appName: "FaceTime",
+        ownerNames: ["FaceTime"],
+        meetingPatterns: [],
+    )
+
+    static let whatsApp = AppMeetingPattern(
+        appName: "WhatsApp",
+        ownerNames: ["WhatsApp"],
+        meetingPatterns: [],
+    )
+
+    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, chromeBrowser, wechat, tencentMeeting, faceTime, whatsApp]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]
