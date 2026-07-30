@@ -993,6 +993,24 @@ final class PipelineQueueTests: XCTestCase {
         return (makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen), protocolGen)
     }
 
+    /// A file the user picked for import lives in their own folder, and the app
+    /// has no business relocating it. Only the app's own staging recordings get
+    /// moved into the output dir.
+    func testImportedSourceFileStaysWhereTheUserPutIt() async throws {
+        let (q, _) = makeStraightThroughQueue()
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        q.enqueue(PipelineJob(
+            meetingTitle: "Voice Memo", appName: "File",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+        await q.processNext()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: audioPath.path),
+            "import must not move the user's file out of its folder",
+        )
+    }
+
     /// Transcript, protocol, and both audio artifacts of one job must all land on
     /// the identical stem, stamped with the meeting-start time and carrying the
     /// job shortID. Fails against the old code, which stamped each save with a
@@ -1022,10 +1040,11 @@ final class PipelineQueueTests: XCTestCase {
             fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(stem).md").path),
             "protocol must share the same basename",
         )
-        XCTAssertTrue(
-            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_mix.wav").path),
-            "mix audio copy must share the same basename",
-        )
+        // No `_mix.wav` assertion: the source here sits outside the staging dir,
+        // so it counts as a user-picked import and is left where it is
+        // (`AudioPersistencePolicy`). The 16 kHz sidecar below is the artifact
+        // that actually has to carry the shared basename, since re-diarization
+        // and late naming resolve it by slug.
         XCTAssertTrue(
             fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_16k.wav").path),
             "16k audio must share the same basename",

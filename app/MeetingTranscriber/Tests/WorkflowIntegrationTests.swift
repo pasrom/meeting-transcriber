@@ -251,18 +251,26 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
 
+        // The triplet was picked by the user, so it stays in their folder under
+        // its original names. The rename chain the aliasing bug produced is
+        // therefore impossible here — assert that directly instead of counting
+        // output copies, and check both directories for the artifact names it
+        // used to leave behind.
+        let fm = FileManager.default
+        for url in [mixURL, appURL, micURL] {
+            XCTAssertTrue(
+                fm.fileExists(atPath: url.path),
+                "imported \(url.lastPathComponent) must stay where the user put it",
+            )
+        }
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)) ?? []
-        let audioWAVs = names.filter { $0.hasSuffix(".wav") && !$0.contains("_16k") }
-
-        // Exactly one triplet — no aliasing artifacts.
-        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.mix) }, 1)
-        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.app) }, 1)
-        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.mic) }, 1)
-        for name in audioWAVs {
+        let names = ((try? fm.contentsOfDirectory(atPath: recordingsDir.path)) ?? [])
+            + ((try? fm.contentsOfDirectory(atPath: importDir.path)) ?? [])
+        XCTAssertEqual(names.count { $0.hasSuffix(RecordingFileSuffix.mix) }, 1, "no duplicate mix files")
+        for name in names {
             XCTAssertFalse(
                 name.contains("_app_mix.wav") || name.contains("_mic_mix.wav"),
-                "Aliasing artifact in output filename: \(name)",
+                "Aliasing artifact in filename: \(name)",
             )
         }
     }

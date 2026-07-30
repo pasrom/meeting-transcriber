@@ -488,9 +488,10 @@ extension PipelineQueue {
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
-        Self.copyAudioToOutput(
-            mixPath: ctx.mixPath, appPath: ctx.appPath, micPath: ctx.micPath,
+        Self.persistAudioToOutput(
+            sources: (ctx.mixPath, ctx.appPath, ctx.micPath),
             basename: ctx.slug, outputDir: recordingsDir,
+            stagingDir: AppPaths.recordingsDir,
         )
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
@@ -631,24 +632,31 @@ extension PipelineQueue {
 
     // MARK: - Audio File Copy
 
-    /// Copy recording audio files to the protocol output directory. Nil
-    /// `mixPath` (paired imports without a `_mix.wav` source) → mix slot
-    /// is skipped, no persistent mix is written.
-    private static func copyAudioToOutput(
-        mixPath: URL?, appPath: URL?, micPath: URL?,
-        basename: String, outputDir: URL,
+    /// Hand the app's own staging recordings over to the protocol output
+    /// directory. Nil `mixPath` (paired imports without a `_mix.wav` source) →
+    /// mix slot is skipped, no persistent mix is written.
+    ///
+    /// Files that came from outside `stagingDir` belong to the user and stay put
+    /// (`AudioPersistencePolicy`). Nothing reads the persisted `_mix.wav` for an
+    /// import anyway: re-diarization and late naming use the `_16k.wav` sidecar,
+    /// and orphan recovery plus the processed-recordings ledger only ever scan
+    /// the staging directory.
+    private static func persistAudioToOutput(
+        sources: (mix: URL?, app: URL?, mic: URL?),
+        basename: String, outputDir: URL, stagingDir: URL,
     ) {
+        let (mixPath, appPath, micPath) = sources
         // Each move below renames-in-place — if two of the three URLs point at
         // the same file, the first move destroys the source for the next one.
         // Loud failure in dev/CI > silent data destruction.
         if let mixStd = mixPath?.standardizedFileURL {
             precondition(
                 appPath.map { mixStd != $0.standardizedFileURL } ?? true,
-                "copyAudioToOutput: mixPath aliases appPath — would destroy source",
+                "persistAudioToOutput: mixPath aliases appPath — would destroy source",
             )
             precondition(
                 micPath.map { mixStd != $0.standardizedFileURL } ?? true,
-                "copyAudioToOutput: mixPath aliases micPath — would destroy source",
+                "persistAudioToOutput: mixPath aliases micPath — would destroy source",
             )
         }
 
@@ -665,17 +673,25 @@ extension PipelineQueue {
             micPath.map { ($0, "\(basename)\(RecordingFileSuffix.mic)") },
         ].compactMap(\.self)
 
-        let outputDirStd = outputDir.standardizedFileURL
         for (src, name) in audioPaths {
             let dst = outputDir.appendingPathComponent(name)
-            // Source already in the target dir → move would just rename in place
-            // with a fresh `<today_timestamp>_<title>` prefix, which produces an
-            // endless compounding-rename loop on every re-import (orphan recovery
-            // re-picks the new name on next launch). The file is already at its
-            // final home; keep it put.
-            if src.deletingLastPathComponent().standardizedFileURL == outputDirStd {
+            switch AudioPersistencePolicy.action(
+                source: src, stagingDir: stagingDir, destinationDir: outputDir,
+            ) {
+            case .alreadyAtDestination:
+                // Moving would just rename in place with a fresh
+                // `<today_timestamp>_<title>` prefix, which produces an endless
+                // compounding-rename loop on every re-import (orphan recovery
+                // re-picks the new name on next launch).
                 logger.info("Audio already in output dir, skipping rename: \(src.lastPathComponent, privacy: .private)")
                 continue
+
+            case .leaveInPlace:
+                logger.info("Imported audio left in place: \(src.lastPathComponent, privacy: .private)")
+                continue
+
+            case .move:
+                break
             }
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
