@@ -33,10 +33,18 @@ PROFILE_DIR="${PROFILE_DIR:-$_SIGNING_LIB_ROOT/signing}"
 TIME_SENSITIVE_KEY="com.apple.developer.usernotifications.time-sensitive"
 
 # profile_for <bundle-id> → path, or empty when none is available.
+#
+# "No profile" is a normal outcome, not a failure, so this must return 0 either
+# way: an `&&`-terminated body would hand back the failed test's status, and a
+# caller's `profile="$(profile_for "$id")"` under `set -e` would then abort the
+# whole build with no output at all. Every machine without the account's
+# profiles takes this path.
 profile_for() {
     local bundle_id="$1"
     local candidate="$PROFILE_DIR/${bundle_id}.provisionprofile"
-    [ -f "$candidate" ] && printf '%s' "$candidate"
+    if [ -f "$candidate" ]; then
+        printf '%s' "$candidate"
+    fi
 }
 
 # prepare_signing <app-bundle> <base-entitlements> <bundle-id> [fallback-identity]
