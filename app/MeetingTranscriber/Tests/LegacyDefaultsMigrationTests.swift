@@ -40,6 +40,40 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         XCTAssertEqual(plan["autoWatch"] as? Bool, true)
     }
 
+    // MARK: - container redirect
+
+    /// When a container exists for a bundle identifier, macOS redirects the
+    /// app's UserDefaults reads into it — even for a binary that is not
+    /// sandboxed. So the values the old app actually saw may live in the
+    /// container plist rather than the standard one, and the container has to
+    /// win where both define a key. Reading only the standard domain would
+    /// migrate stale values, or none, without any sign that it happened.
+    func testContainerValuesWinOverTheStandardDomain() {
+        let merged = LegacyDefaultsMigration.mergedLegacy(
+            standard: ["whisperLanguage": "de", "autoWatch": false],
+            container: ["whisperLanguage": "en"],
+        )
+        XCTAssertEqual(merged["whisperLanguage"] as? String, "en")
+        XCTAssertEqual(merged["autoWatch"] as? Bool, false)
+    }
+
+    /// The common case: no container, so nothing to merge.
+    func testStandardDomainSurvivesWithoutAContainer() {
+        let merged = LegacyDefaultsMigration.mergedLegacy(
+            standard: ["whisperLanguage": "de"],
+            container: [:],
+        )
+        XCTAssertEqual(merged["whisperLanguage"] as? String, "de")
+    }
+
+    func testContainerOnlyKeysAreCarriedOver() {
+        let merged = LegacyDefaultsMigration.mergedLegacy(
+            standard: [:],
+            container: ["micName": "Me"],
+        )
+        XCTAssertEqual(merged["micName"] as? String, "Me")
+    }
+
     // MARK: - end to end against real defaults domains
 
     func testRunCopiesAcrossDomainsAndIsIdempotent() throws {
