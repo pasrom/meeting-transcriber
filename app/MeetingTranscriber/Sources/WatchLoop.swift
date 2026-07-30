@@ -229,6 +229,9 @@ class WatchLoop {
         // Stop auto-watch if active
         watchTask?.cancel()
         watchTask = nil
+        // Same reason as in `stop()`: with the poll loop gone there is nothing
+        // left to act on an answer, so the question must not stay open.
+        declineParkedConsent()
 
         let recorder = await recorderFactory()
         try recorder.start(

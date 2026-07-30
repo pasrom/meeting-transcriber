@@ -246,6 +246,21 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         loop.stop()
     }
 
+    /// Starting a manual recording takes the poll loop away too, so the same
+    /// rule applies: nothing would be left to act on an answer.
+    func testStartingAManualRecordingResolvesAParkedPrompt() async throws {
+        let spy = ParkingConsentSpy()
+        let (loop, _) = makeLoop(detector: SwappableDetector(browserMeeting()), spy: spy)
+        loop.start()
+
+        await waitFor(spy.isParked)
+        try await loop.startManualRecording(pid: 1234, appName: "Some App", title: "Ad-hoc")
+
+        await waitFor(!spy.resolutions.isEmpty)
+        XCTAssertEqual(spy.resolutions, [false])
+        loop.stopManualRecording()
+    }
+
     /// Stopping the watch loop answers a parked prompt as a decline. Otherwise
     /// the question outlives the thing it was asked about: watching is off, yet
     /// a notification is still sitting there offering to record.
