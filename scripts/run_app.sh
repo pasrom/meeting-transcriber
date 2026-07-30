@@ -28,10 +28,8 @@ APP_BUNDLE="$SPM_DIR/.build/MeetingTranscriber-Dev.app"
 APP_MACOS="$APP_BUNDLE/Contents/MacOS"
 APP_BINARY="$APP_MACOS/MeetingTranscriber"
 INFO_PLIST="$SPM_DIR/Sources/Info.plist"
-# Separate identity from the release build so the two never share TCC grants,
-# settings or a notification registration. Single source of truth for this
-# script and the e2e drivers that read the dev bundle's defaults domain.
-DEV_BUNDLE_ID="app.meetingtranscriber.dev"
+# shellcheck source=lib/bundle-ids.sh
+source "$SCRIPT_DIR/lib/bundle-ids.sh"
 
 # Always rebuild to pick up code changes
 echo "Building Meeting Transcriber app..."
@@ -48,11 +46,7 @@ swift build "${SWIFT_BUILD_FLAGS[@]}"
 
 # Assemble .app bundle
 mkdir -p "$APP_MACOS"
-# Use dev bundle identifier to keep permissions separate from release.
-# Assigned rather than text-substituted: a sed on the release identifier fails
-# silently the moment that identifier changes, and the dev bundle would then
-# inherit the release one — sharing its TCC grants and settings, which is the
-# exact opposite of the point.
+# Use the dev bundle identifier to keep permissions separate from release.
 cp "$INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $DEV_BUNDLE_ID" "$APP_BUNDLE/Contents/Info.plist"
 
@@ -76,11 +70,10 @@ SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}
 # time-sensitive consent prompt (issue #543).
 # shellcheck source=lib/signing.sh
 source "$SCRIPT_DIR/lib/signing.sh"
-ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$SPM_DIR/Entitlements/Homebrew.entitlements" "$DEV_BUNDLE_ID")"
-SIGN_HASH="$(signing_identity_for "$DEV_BUNDLE_ID" "$SIGN_HASH")"
-if [ -n "$SIGN_HASH" ]; then
-    codesign --force --sign "$SIGN_HASH" --entitlements "$ENTITLEMENTS" "$APP_BUNDLE" 2>/dev/null && \
-        echo "  Signed with: $SIGN_HASH (+ entitlements)"
+prepare_signing "$APP_BUNDLE" "$SPM_DIR/Entitlements/Homebrew.entitlements" "$DEV_BUNDLE_ID" "$SIGN_HASH"
+if [ -n "$SIGNING_IDENTITY" ]; then
+    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$SIGNING_ENTITLEMENTS" "$APP_BUNDLE" 2>/dev/null && \
+        echo "  Signed with: $SIGNING_IDENTITY (+ entitlements)"
 fi
 verify_signing "$APP_BUNDLE"
 

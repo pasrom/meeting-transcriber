@@ -5,9 +5,14 @@
 #   quit_running_app
 #   bootout_stale_launchctl
 #   wait_for_rpc "$MTCLI"
-#   restore_bool_default app.meetingtranscriber.dev autoWatch "$SAVED"
+#   restore_bool_default "$DEV_BUNDLE_ID" autoWatch "$SAVED"
 #
 # This file has no shebang and no `set -e` — it inherits the caller's.
+# Sourcing it also gives the caller $RELEASE_BUNDLE_ID / $DEV_BUNDLE_ID, so no
+# driver has to restate an identifier that only Info.plist should own.
+
+# shellcheck source=bundle-ids.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle-ids.sh"
 
 # Graceful AppleScript quit → SIGTERM → SIGKILL ladder. Returns 0 when
 # the process is gone, 1 if it survived even SIGKILL (unusual; means
@@ -21,7 +26,7 @@
 # graceful and never sends SIGTERM/SIGKILL when the process has
 # already exited.
 quit_running_app() {
-    local bundle_id="${1:-app.meetingtranscriber.dev}"
+    local bundle_id="${1:-$DEV_BUNDLE_ID}"
     # Default pattern matches the dev bundle. Release-bundle callers
     # (e.g. test_rpc.sh against the homebrew-cask binary) override by
     # passing a second arg.
@@ -51,7 +56,7 @@ quit_running_app() {
     return 1
 }
 
-# Boot out stale launchctl entries for `app.meetingtranscriber.dev.*`.
+# Boot out stale launchctl entries for `$DEV_BUNDLE_ID.*`.
 # A previous run that exited ungracefully can leave per-PID service
 # registrations in `gui/<uid>` even after the process is dead, which
 # in turn can hold per-bundle TCC state or block re-launches. Safe to
@@ -62,7 +67,7 @@ bootout_stale_launchctl() {
     # (e.g. an SSH session without a `gui/<uid>` domain) so callers
     # outside an EXIT trap aren't taken down by a best-effort cleanup.
     { launchctl list 2>/dev/null \
-        | awk '$3 ~ /app\.meetingtranscriber\.dev/ {print $3}' \
+        | awk -v id="$DEV_BUNDLE_ID" 'index($3, id) == 1 {print $3}' \
         | while read -r srv; do
             launchctl bootout "gui/$(id -u)/$srv" 2>/dev/null || true
         done

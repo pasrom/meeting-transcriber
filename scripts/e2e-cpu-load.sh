@@ -78,7 +78,9 @@ DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
 RPC_BASE="http://127.0.0.1:9876"
-BUNDLE_ID="app.meetingtranscriber.dev"
+# shellcheck source=lib/bundle-ids.sh
+source "$ROOT/scripts/lib/bundle-ids.sh"
+BUNDLE_ID="$DEV_BUNDLE_ID"
 
 [ -n "$SIMULATOR_FIXTURE" ] || SIMULATOR_FIXTURE="$DEFAULT_FIXTURE"
 

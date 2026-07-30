@@ -64,7 +64,9 @@ MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
 # in the same CI workflow, e2e-app.sh's release build is reused via
 # `--no-build` rather than rebuilt in debug mode.
 SIM="$ROOT/tools/meeting-simulator/.build/release/meeting-simulator"
-BUNDLE_ID="app.meetingtranscriber.dev"
+# shellcheck source=lib/bundle-ids.sh
+source "$ROOT/scripts/lib/bundle-ids.sh"
+BUNDLE_ID="$DEV_BUNDLE_ID"
 REC_DIR="$HOME/Library/Application Support/MeetingTranscriber/recordings"
 # Anchor for the EXIT-trap artifact sweep: created before any recording, so
 # every file this run produces is newer than it (see sweep_run_artifacts).

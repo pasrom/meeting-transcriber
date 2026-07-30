@@ -87,8 +87,10 @@ RUN_MARKER="/tmp/e2e-browser-marker.$$"
 # Chrome and can be quit by argv match without touching the user's windows.
 CHROME_PROFILE="$(mktemp -d /tmp/e2e-browser-chrome.XXXXXX)"
 
-_CONTAINER_PLIST="$HOME/Library/Containers/app.meetingtranscriber.dev/Data/Library/Preferences/app.meetingtranscriber.dev.plist"
-BUNDLE_ID="app.meetingtranscriber.dev"
+# shellcheck source=lib/bundle-ids.sh
+source "$ROOT/scripts/lib/bundle-ids.sh"
+BUNDLE_ID="$DEV_BUNDLE_ID"
+_CONTAINER_PLIST="$(dev_container_plist)"
 
 # --- timing budgets -------------------------------------------------------
 
@@ -105,6 +107,10 @@ fail() { printf '[e2e-browser] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib/e2e-helpers.sh
 source "$SCRIPT_DIR/lib/e2e-helpers.sh"
+# For bundle_has_time_sensitive: the entitlement assertion below shares the
+# library's definition of the check and of the key itself.
+# shellcheck source=lib/signing.sh
+source "$SCRIPT_DIR/lib/signing.sh"
 
 require_command() { command -v "$1" >/dev/null || fail "missing command: $1"; }
 
@@ -345,6 +351,8 @@ poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
     _dump_detection_diag
     fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
 }
+log "Consent granted over RPC"
+
 # The consent prompt only breaks through a Focus mode if the deployed bundle
 # actually carries the time-sensitive entitlement (issue #543). That is a
 # signing-time property no runtime assertion can see, and a build or re-sign
@@ -358,16 +366,13 @@ poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
 # Focus while every other check stayed green.
 if [ -f "$DEV_BUNDLE_DEPLOY/Contents/embedded.provisionprofile" ]; then
     log "Profile embedded — checking the time-sensitive entitlement came with it"
-    codesign -d --entitlements :- "$DEV_BUNDLE_DEPLOY" 2>/dev/null \
-        | grep -q "com.apple.developer.usernotifications.time-sensitive" \
+    bundle_has_time_sensitive "$DEV_BUNDLE_DEPLOY" \
         || fail "the deployed bundle embeds a provisioning profile but is missing the
        time-sensitive entitlement, so the consent prompt cannot break through
        Focus. Check prepare_signing in scripts/lib/signing.sh."
 else
     log "No provisioning profile in the deployed bundle — skipping the time-sensitive check"
 fi
-
-log "Consent granted over RPC"
 
 # Answering over RPC resolves the parked continuation directly, so on its own it
 # proves nothing about the notification a real user depends on. The pre-flight

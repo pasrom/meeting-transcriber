@@ -30,35 +30,6 @@
 _SIGNING_LIB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROFILE_DIR="${PROFILE_DIR:-$_SIGNING_LIB_ROOT/signing}"
 
-# signing_identity_for <bundle-id> <fallback-identity>
-#
-# A profile authorises specific CERTIFICATES. Signing with one it does not list
-# makes macOS reject the launch outright once the entitlement is really present
-# ("Launchd job spawn failed" — measured). Developer ID distribution profiles
-# list the Developer ID Application certificate, so when a profile applies, that
-# is the identity to use rather than whatever `security find-identity` returns
-# first.
-#
-# A separate function rather than a variable set inside prepare_signing: that one
-# runs in a command substitution, so anything it assigns dies with the subshell.
-signing_identity_for() {
-    local bundle_id="$1" fallback="$2"
-    if [ -z "$(profile_for "$bundle_id")" ]; then
-        printf '%s' "$fallback"
-        return 0
-    fi
-    local devid
-    devid="$(security find-identity -v -p codesigning \
-        | grep "Developer ID Application" | head -1 | awk '{print $2}')"
-    if [ -n "$devid" ]; then
-        printf '%s' "$devid"
-    else
-        echo "  WARNING: a profile applies but no Developer ID Application certificate was found;" >&2
-        echo "  the signature will not be covered by it and the app may refuse to launch." >&2
-        printf '%s' "$fallback"
-    fi
-}
-
 TIME_SENSITIVE_KEY="com.apple.developer.usernotifications.time-sensitive"
 
 # profile_for <bundle-id> → path, or empty when none is available.
@@ -68,16 +39,26 @@ profile_for() {
     [ -f "$candidate" ] && printf '%s' "$candidate"
 }
 
-# prepare_signing <app-bundle> <base-entitlements> <bundle-id>
+# prepare_signing <app-bundle> <base-entitlements> <bundle-id> [fallback-identity]
 #
-# Embeds the matching profile when there is one and prints the entitlements path
-# to sign with: either a temporary copy carrying the time-sensitive key, or the
-# base file unchanged. Always prints exactly one path on stdout; progress goes to
-# stderr so the caller can capture the path.
+# Embeds the matching profile when there is one, then sets two globals for the
+# caller to sign with:
+#   SIGNING_ENTITLEMENTS — the base file, or a derived copy carrying the
+#                          time-sensitive key when a profile authorises it
+#   SIGNING_IDENTITY     — the identity that profile covers, else the fallback
+#
+# Globals rather than stdout: this function MUTATES the bundle (it copies the
+# profile in, or removes a stale one), and a `$( )` call site would hide that
+# side effect inside a subshell — plus returning two values through stdout is
+# what previously forced a second function and a second keychain query.
+#
+# shellcheck disable=SC2034  # SIGNING_ENTITLEMENTS/SIGNING_IDENTITY are read by callers
 prepare_signing() {
-    local bundle="$1" base_entitlements="$2" bundle_id="$3"
+    local bundle="$1" base_entitlements="$2" bundle_id="$3" fallback="${4:-}"
     local profile
     profile="$(profile_for "$bundle_id")"
+
+    SIGNING_IDENTITY="$fallback"
 
     if [ -z "$profile" ]; then
         # Drop a profile left behind by an earlier build: the bundle is
@@ -85,28 +66,44 @@ prepare_signing() {
         # this build look provisioned when it is not, and would make
         # verify_signing warn about a profile nobody asked for.
         rm -f "$bundle/Contents/embedded.provisionprofile"
-        echo "  No provisioning profile for $bundle_id — signing without $TIME_SENSITIVE_KEY." >&2
-        echo "  (The consent prompt will not break through Focus in this build; see issue #543.)" >&2
-        printf '%s' "$base_entitlements"
+        echo "  No provisioning profile for $bundle_id — signing without $TIME_SENSITIVE_KEY."
+        echo "  (The consent prompt will not break through Focus in this build; see issue #543.)"
+        SIGNING_ENTITLEMENTS="$base_entitlements"
         return 0
     fi
 
     cp "$profile" "$bundle/Contents/embedded.provisionprofile"
-    echo "  Embedded provisioning profile for $bundle_id" >&2
+    echo "  Embedded provisioning profile for $bundle_id"
 
+    # A profile authorises specific CERTIFICATES. Signing with one it does not
+    # list makes macOS reject the launch outright once the entitlement is really
+    # present ("Launchd job spawn failed" — measured). Developer ID distribution
+    # profiles list the Developer ID Application certificate, so prefer that
+    # over whatever `security find-identity` happens to return first.
+    local devid
+    devid="$(security find-identity -v -p codesigning 2>/dev/null \
+        | grep "Developer ID Application" | head -1 | awk '{print $2}')" || true
+    if [ -n "$devid" ]; then
+        SIGNING_IDENTITY="$devid"
+    else
+        echo "  WARNING: a profile applies but no Developer ID Application certificate was found;"
+        echo "  the signature will not be covered by it and the app may refuse to launch."
+    fi
 
     # Derive the entitlements rather than keeping a second near-duplicate file,
-    # so the base list stays the single source of truth.
-    local derived
-    derived="$(mktemp -t entitlements).plist"
+    # so the base list stays the single source of truth. Written beside the
+    # bundle instead of into TMPDIR: it is a build artifact, gets overwritten by
+    # the next build, and goes away with the build directory rather than piling
+    # up one file per build forever.
+    local derived="${bundle%.app}-entitlements.plist"
     cp "$base_entitlements" "$derived"
     # plutil reads dots in a key as KEY PATH separators, so the literal key has
     # to arrive escaped or the insert silently fails and the build reports a key
     # it never added.
     plutil -insert "${TIME_SENSITIVE_KEY//./\\.}" -bool true "$derived" \
         || { echo "  ERROR: could not add $TIME_SENSITIVE_KEY to the entitlements" >&2; return 1; }
-    echo "  Requesting $TIME_SENSITIVE_KEY" >&2
-    printf '%s' "$derived"
+    echo "  Requesting $TIME_SENSITIVE_KEY"
+    SIGNING_ENTITLEMENTS="$derived"
 }
 
 # verify_signing <app-bundle>
@@ -124,14 +121,24 @@ verify_signing() {
     local bundle="$1"
     [ -f "$bundle/Contents/embedded.provisionprofile" ] || return 0
 
-    if codesign -d --entitlements :- "$bundle" 2>/dev/null | grep -q "$TIME_SENSITIVE_KEY"; then
-        echo "  Verified $TIME_SENSITIVE_KEY survived signing" >&2
+    if bundle_has_time_sensitive "$bundle"; then
+        echo "  Verified $TIME_SENSITIVE_KEY survived signing"
         return 0
     fi
 
-    echo "  WARNING: the profile is embedded but codesign dropped $TIME_SENSITIVE_KEY." >&2
-    echo "  The profile does not grant it — enable the Time Sensitive Notifications" >&2
-    echo "  capability on this App ID and re-issue the profile. Until then the" >&2
-    echo "  consent prompt cannot break through Focus (issue #543)." >&2
+    echo "  WARNING: the profile is embedded but codesign dropped $TIME_SENSITIVE_KEY."
+    echo "  The profile does not grant it — enable the Time Sensitive Notifications"
+    echo "  capability on this App ID and re-issue the profile. Until then the"
+    echo "  consent prompt cannot break through Focus (issue #543)."
     return 0
+}
+
+# bundle_has_time_sensitive <app-bundle>
+#
+# True when the SIGNATURE actually carries the key. Separate from
+# verify_signing so a caller that must fail on a missing key (an e2e lane
+# asserting the prompt can break through Focus) shares this one definition of
+# the check and of the key itself, instead of re-spelling both.
+bundle_has_time_sensitive() {
+    codesign -d --entitlements :- "$1" 2>/dev/null | grep -q "$TIME_SENSITIVE_KEY"
 }

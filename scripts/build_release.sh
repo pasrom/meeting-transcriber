@@ -153,12 +153,15 @@ if [ "$NOTARIZE" = true ]; then
     # time-sensitive key must never be added without one.
     # shellcheck source=lib/signing.sh
     source "$SCRIPT_DIR/lib/signing.sh"
-    BUNDLE_ID_FOR_SIGNING="app.meetingtranscriber"
-    ENTITLEMENTS="$(prepare_signing "$APP_BUNDLE" "$ENTITLEMENTS" "$BUNDLE_ID_FOR_SIGNING")"
+    # shellcheck source=lib/bundle-ids.sh
+    source "$SCRIPT_DIR/lib/bundle-ids.sh"
+    prepare_signing "$APP_BUNDLE" "$ENTITLEMENTS" "$RELEASE_BUNDLE_ID" "$DEVELOPER_ID"
 
-    # Sign the main app binary with entitlements
-    codesign --force --sign "$DEVELOPER_ID" \
-        --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
+    # Sign the main app binary with entitlements. The identity comes from
+    # prepare_signing: when a profile is embedded it must be one the profile
+    # authorises, or macOS refuses to launch the app.
+    codesign --force --sign "$SIGNING_IDENTITY" \
+        --options runtime --timestamp --entitlements "$SIGNING_ENTITLEMENTS" \
         "$APP_BUNDLE"
     echo "  Signed with Developer ID for notarization"
     verify_signing "$APP_BUNDLE"
