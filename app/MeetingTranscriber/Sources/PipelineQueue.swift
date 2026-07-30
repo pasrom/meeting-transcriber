@@ -50,6 +50,10 @@ class PipelineQueue {
     let diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)?
     let protocolGeneratorFactory: (() -> (any ProtocolGenerating)?)?
     let outputDir: URL?
+    /// Where `DualSourceRecorder` writes, i.e. the audio this app produced and
+    /// may therefore relocate. Injectable so a test can exercise the hand-off
+    /// without writing into the real user directory; see `AudioPersistencePolicy`.
+    let stagingDir: URL
     let diarizeEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
@@ -210,6 +214,7 @@ class PipelineQueue {
         self.diarizationFactoryWithMode = nil
         self.protocolGeneratorFactory = nil
         self.outputDir = nil
+        stagingDir = AppPaths.recordingsDir
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
@@ -282,6 +287,7 @@ class PipelineQueue {
         protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
         outputDir: URL,
         logDir: URL? = nil,
+        stagingDir: URL = AppPaths.recordingsDir,
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
@@ -301,6 +307,7 @@ class PipelineQueue {
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
         self.protocolGeneratorFactory = protocolGeneratorFactory
         self.outputDir = outputDir
+        self.stagingDir = stagingDir
         self.diarizeEnabled = diarizeEnabled
         self.numSpeakers = numSpeakers
         // "Remote" is the reserved routing tag for the app/remote track

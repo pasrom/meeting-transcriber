@@ -488,11 +488,7 @@ extension PipelineQueue {
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
-        Self.persistAudioToOutput(
-            sources: (ctx.mixPath, ctx.appPath, ctx.micPath),
-            basename: ctx.slug, outputDir: recordingsDir,
-            stagingDir: AppPaths.recordingsDir,
-        )
+        Self.persistAudioToOutput(ctx: ctx, outputDir: recordingsDir, stagingDir: stagingDir)
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
         try? FileManager.default.moveItem(
@@ -633,19 +629,11 @@ extension PipelineQueue {
     // MARK: - Audio File Copy
 
     /// Hand the app's own staging recordings over to the protocol output
-    /// directory. Nil `mixPath` (paired imports without a `_mix.wav` source) →
-    /// mix slot is skipped, no persistent mix is written.
-    ///
-    /// Files that came from outside `stagingDir` belong to the user and stay put
-    /// (`AudioPersistencePolicy`). Nothing reads the persisted `_mix.wav` for an
-    /// import anyway: re-diarization and late naming use the `_16k.wav` sidecar,
-    /// and orphan recovery plus the processed-recordings ledger only ever scan
-    /// the staging directory.
-    private static func persistAudioToOutput(
-        sources: (mix: URL?, app: URL?, mic: URL?),
-        basename: String, outputDir: URL, stagingDir: URL,
-    ) {
-        let (mixPath, appPath, micPath) = sources
+    /// directory, per `AudioPersistencePolicy`. Nil `mixPath` (paired imports
+    /// without a `_mix.wav` source) → mix slot is skipped, no persistent mix is
+    /// written.
+    private static func persistAudioToOutput(ctx: JobContext, outputDir: URL, stagingDir: URL) {
+        let (mixPath, appPath, micPath) = (ctx.mixPath, ctx.appPath, ctx.micPath)
         // Each move below renames-in-place — if two of the three URLs point at
         // the same file, the first move destroys the source for the next one.
         // Loud failure in dev/CI > silent data destruction.
@@ -668,9 +656,9 @@ extension PipelineQueue {
         // Reuse the job's single basename so the audio copies match the
         // transcript/protocol stems exactly (same meeting-start stamp + shortID).
         let audioPaths: [(URL, String)] = [
-            mixPath.map { ($0, "\(basename)\(RecordingFileSuffix.mix)") },
-            appPath.map { ($0, "\(basename)\(RecordingFileSuffix.app)") },
-            micPath.map { ($0, "\(basename)\(RecordingFileSuffix.mic)") },
+            mixPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.mix)") },
+            appPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.app)") },
+            micPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.mic)") },
         ].compactMap(\.self)
 
         for (src, name) in audioPaths {

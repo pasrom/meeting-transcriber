@@ -30,6 +30,7 @@ final class WorkflowIntegrationTests: XCTestCase {
 
     private func makeHarness(
         diarizeEnabled: Bool = false,
+        stagingDir: URL? = nil,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -57,6 +58,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,
             logDir: tmpDir,
+            stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: diarizeEnabled,
             micLabel: "Me",
         )
@@ -212,7 +214,7 @@ final class WorkflowIntegrationTests: XCTestCase {
 
     /// Reproduces the bug behind the "feat: paired import" PR's first iteration.
     /// When the picker selected only `_app.wav` + `_mic.wav` (no `_mix.wav`), the
-    /// constructed job had `mixPath == appPath`. `copyAudioToOutput`'s first
+    /// constructed job had `mixPath == appPath`. `persistAudioToOutput`'s first
     /// move renamed the source to `<slug>_mix.wav`; the second move silently
     /// failed; `recoverOrphanedRecordings` re-picked the renamed file on every
     /// launch, producing an endless compounding-rename chain on disk.
@@ -222,9 +224,11 @@ final class WorkflowIntegrationTests: XCTestCase {
     /// triplet — no `<slug>_app_mix.wav`, `<slug>_mic_mix.wav`, or similar
     /// aliasing artifacts.
     func testWorkflowPairedImportTripletProducesCleanOutputTriplet() async throws {
-        let (h, _) = try makeHarness(diarizeEnabled: false)
-
+        // The triplet has to count as audio the app produced, otherwise the move
+        // loop never runs and the aliasing artifacts this test looks for cannot
+        // appear no matter how broken the code is.
         let importDir = try makeTempDirectory(prefix: "import-source")
+        let (h, _) = try makeHarness(diarizeEnabled: false, stagingDir: importDir)
         let mixURL = importDir.appendingPathComponent("standup_mix.wav")
         let appURL = importDir.appendingPathComponent("standup_app.wav")
         let micURL = importDir.appendingPathComponent("standup_mic.wav")
@@ -251,26 +255,18 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
 
-        // The triplet was picked by the user, so it stays in their folder under
-        // its original names. The rename chain the aliasing bug produced is
-        // therefore impossible here — assert that directly instead of counting
-        // output copies, and check both directories for the artifact names it
-        // used to leave behind.
-        let fm = FileManager.default
-        for url in [mixURL, appURL, micURL] {
-            XCTAssertTrue(
-                fm.fileExists(atPath: url.path),
-                "imported \(url.lastPathComponent) must stay where the user put it",
-            )
-        }
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
-        let names = ((try? fm.contentsOfDirectory(atPath: recordingsDir.path)) ?? [])
-            + ((try? fm.contentsOfDirectory(atPath: importDir.path)) ?? [])
-        XCTAssertEqual(names.count { $0.hasSuffix(RecordingFileSuffix.mix) }, 1, "no duplicate mix files")
-        for name in names {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)) ?? []
+        let audioWAVs = names.filter { $0.hasSuffix(".wav") && !$0.contains("_16k") }
+
+        // Exactly one triplet — no aliasing artifacts.
+        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.mix) }, 1)
+        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.app) }, 1)
+        XCTAssertEqual(audioWAVs.count { $0.hasSuffix(RecordingFileSuffix.mic) }, 1)
+        for name in audioWAVs {
             XCTAssertFalse(
                 name.contains("_app_mix.wav") || name.contains("_mic_mix.wav"),
-                "Aliasing artifact in filename: \(name)",
+                "Aliasing artifact in output filename: \(name)",
             )
         }
     }

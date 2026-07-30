@@ -47,4 +47,31 @@ final class AudioPersistencePolicyTests: XCTestCase {
         XCTAssertEqual(action("/data/MeetingTranscriber/recordings/./take_mix.wav"), .move)
         XCTAssertEqual(action("/data/MeetingTranscriber/other/../recordings/take_mix.wav"), .move)
     }
+
+    /// Reaching the same directory through a symlink must not read as a
+    /// different one. When the destination is a link to the staging dir, a
+    /// lexical comparison says "not at destination" and the file gets renamed in
+    /// place under a fresh stamp, which is how the compounding-rename chain
+    /// started. The literal paths in the tests above never exist, so only this
+    /// case exercises the resolution.
+    func testResolvesSymlinkedDirectories() throws {
+        let root = try makeTempDirectory(prefix: "persistence-symlink")
+        let real = root.appendingPathComponent("real")
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let source = link.appendingPathComponent("take_mix.wav")
+        try Data().write(to: source)
+
+        XCTAssertEqual(
+            AudioPersistencePolicy.action(source: source, stagingDir: staging, destinationDir: real),
+            .alreadyAtDestination,
+            "a symlinked path to the destination must not look like a different directory",
+        )
+        XCTAssertEqual(
+            AudioPersistencePolicy.action(source: source, stagingDir: real, destinationDir: destination),
+            .move,
+            "a symlinked path into staging is still staging",
+        )
+    }
 }

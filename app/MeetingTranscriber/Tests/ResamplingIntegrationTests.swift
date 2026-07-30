@@ -11,9 +11,10 @@ final class ResamplingIntegrationTests: XCTestCase { // swiftlint:disable:this b
         tmpDir = try makeTempDirectory(prefix: "resample_integ")
     }
 
-    /// Copy a fixture into the test's tmpDir. Use for pipeline tests because
-    /// `PipelineQueue.copyAudioToOutput` moves the source file out of place —
-    /// passing the original Fixtures/ path would delete the shared asset.
+    /// Copy a fixture into the test's tmpDir. Kept for pipeline tests as a
+    /// safety margin: `persistAudioToOutput` only relocates sources inside the
+    /// staging dir, so a Fixtures/ path is left alone today, but a test that
+    /// points staging at its own tmpDir would delete the shared asset.
     private func copyFixtureIntoTmp(_ name: String) throws -> URL {
         let src = fixtureURL(name)
         let dst = tmpDir.appendingPathComponent("\(UUID().uuidString)_\(name)")
@@ -172,9 +173,9 @@ final class ResamplingIntegrationTests: XCTestCase { // swiftlint:disable:this b
     func testDualSourceResamplingFlowsThroughPipeline() async throws {
         let fixtureSrc = fixtureURL("two_speakers_de.m4a")
         try XCTSkipUnless(FileManager.default.fileExists(atPath: fixtureSrc.path), "Fixture not found")
-        // Each track needs its own copy because copyAudioToOutput moves the
-        // source file once per (mix/app/mic) path, even when several point at
-        // the same URL.
+        // Each track gets its own copy: the persist step handles the mix, app
+        // and mic paths one by one, so several pointing at the same URL is the
+        // shape that used to destroy the source.
         let mixPath = try copyFixtureIntoTmp("two_speakers_de.m4a")
         let appPath = try copyFixtureIntoTmp("two_speakers_de.m4a")
         let micPath = try copyFixtureIntoTmp("two_speakers_de.m4a")

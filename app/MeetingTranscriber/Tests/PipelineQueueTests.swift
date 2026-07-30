@@ -887,6 +887,7 @@ final class PipelineQueueTests: XCTestCase {
         diar: MockDiarization,
         protocolGen: MockProtocolGen,
         micLabel: String = "Me",
+        stagingDir: URL? = nil,
     ) -> PipelineQueue {
         PipelineQueue(
             engine: engine,
@@ -895,6 +896,9 @@ final class PipelineQueueTests: XCTestCase {
             protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,
             logDir: tmpDir,
+            // Default keeps sources outside staging, i.e. they count as
+            // user-picked imports; pass tmpDir to exercise the hand-off instead.
+            stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: true,
             numSpeakers: 0,
             micLabel: micLabel,
@@ -979,7 +983,7 @@ final class PipelineQueueTests: XCTestCase {
 
     // MARK: - One meeting-start-anchored basename per job
 
-    private func makeStraightThroughQueue() -> (PipelineQueue, MockProtocolGen) {
+    private func makeStraightThroughQueue(stagingDir: URL? = nil) -> (PipelineQueue, MockProtocolGen) {
         let engine = MockEngine()
         engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello world")]
         let diar = MockDiarization()
@@ -990,7 +994,10 @@ final class PipelineQueueTests: XCTestCase {
             embeddings: nil, // no matcher/naming pause → job runs straight to .done
         )
         let protocolGen = MockProtocolGen()
-        return (makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen), protocolGen)
+        return (
+            makeCapturingQueue(engine: engine, diar: diar, protocolGen: protocolGen, stagingDir: stagingDir),
+            protocolGen,
+        )
     }
 
     /// A file the user picked for import lives in their own folder, and the app
@@ -1017,7 +1024,11 @@ final class PipelineQueueTests: XCTestCase {
     /// fresh `Date()` (processing time) and omitted the shortID from the
     /// transcript/protocol/mix names.
     func testAllArtifactsShareOneMeetingStartAnchoredBasename() async throws {
-        let (q, _) = makeStraightThroughQueue()
+        // Staging == tmpDir, so the fixture counts as audio the app produced and
+        // the hand-off into the output dir runs. That is what pins the shared
+        // stem on the moved `_mix.wav`, and it is the suite's only coverage of
+        // the move branch.
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
         let start = try localDate(2026, 3, 4, 9, 15)
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
@@ -1040,11 +1051,10 @@ final class PipelineQueueTests: XCTestCase {
             fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(stem).md").path),
             "protocol must share the same basename",
         )
-        // No `_mix.wav` assertion: the source here sits outside the staging dir,
-        // so it counts as a user-picked import and is left where it is
-        // (`AudioPersistencePolicy`). The 16 kHz sidecar below is the artifact
-        // that actually has to carry the shared basename, since re-diarization
-        // and late naming resolve it by slug.
+        XCTAssertTrue(
+            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_mix.wav").path),
+            "mix audio must share the same basename",
+        )
         XCTAssertTrue(
             fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_16k.wav").path),
             "16k audio must share the same basename",

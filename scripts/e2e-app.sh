@@ -1179,11 +1179,11 @@ run_naming_confirm() {
     [ "$record_only" = "false" ] || fail "$label: settings.recording.recordOnly is '$record_only', expected false"
 
     # Enqueue a PRIVATE COPY of the fixture, never the shared Tests/Fixtures
-    # path. The pipeline's copyAudioToOutput MOVES (renames in place) the
-    # enqueued audio into the output dir once the job finishes, which would
-    # destroy the shared fixture for every later lane in this checkout (a
-    # documented PipelineQueue-consumer trap; the unit suite hit the same bug
-    # once). Copy into a temp dir cleaned up on exit by _naming_confirm_cleanup.
+    # path. The pipeline leaves a user-picked import where it is nowadays, so
+    # this is a safety margin rather than load-bearing: it also keeps the lane
+    # from leaving its own artifacts next to the shared fixture, and it survives
+    # a future change to what counts as relocatable audio. Copy into a temp dir
+    # cleaned up on exit by _naming_confirm_cleanup.
     _NC_FIXTURE_DIR="$(mktemp -d /tmp/e2e-naming-confirm-fixture.XXXXXX)"
     local fixture_copy="$_NC_FIXTURE_DIR/two_speakers_de.wav"
     cp "$DEFAULT_FIXTURE" "$fixture_copy" || fail "$label: could not copy fixture to $fixture_copy"

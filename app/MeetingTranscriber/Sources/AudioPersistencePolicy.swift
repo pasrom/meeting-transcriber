@@ -15,18 +15,31 @@ enum AudioPersistenceAction: Equatable {
 /// Decides whether a job's source audio may be relocated when the job finishes.
 ///
 /// The distinction the pipeline needs is "did the app make this file, or did the
-/// user hand it to us", and that is derivable from where the file lives rather
-/// than needing a provenance flag on `PipelineJob` (which would have to be
-/// carried through the Codable snapshot and back-filled for jobs persisted by an
-/// older build). `DualSourceRecorder` writes into the staging directory, so
-/// anything else came from the user.
+/// user hand it to us". `DualSourceRecorder` writes into the staging directory,
+/// so anything from elsewhere came from the user, which makes the answer
+/// derivable from the path and keeps it out of `PipelineJob` and its four
+/// construction sites. A provenance flag on the job would be the more explicit
+/// design and is a well-trodden path here (`meetingStartTime`, `usedDiarizerMode`
+/// and `autoSkipNaming` were all added to the Codable snapshot as optionals with
+/// a legacy-nil fallback); location is preferred only because it is exact today
+/// and far smaller. Its known edge: a user who navigates the import panel into
+/// the staging directory and picks a file there gets it relocated. That is
+/// harmless, since staging is not a folder anyone keeps files in, and it matches
+/// the behaviour before this policy existed.
 enum AudioPersistencePolicy {
     static func action(source: URL, stagingDir: URL, destinationDir: URL) -> AudioPersistenceAction {
         // Compare paths, not URLs: `deletingLastPathComponent()` yields a
         // directory URL with a trailing slash while the directories are passed in
         // without one, and URL equality is string-based, so every comparison
-        // would miss. Symlinks are resolved because macOS hands out `/var/…`
-        // paths for what is really `/private/var/…`.
+        // would miss.
+        //
+        // Symlinks are resolved, unlike the `standardizedFileURL.path` used by
+        // the ledger and orphan recovery, because those answer "is this the same
+        // file" while this answers "is this file inside that directory" — and a
+        // symlinked output or staging directory would otherwise read as a
+        // different one, which is exactly how the compounding-rename bug used to
+        // start. Resolution only differs from lexical standardization for paths
+        // that exist, which a source's parent directory always does.
         func key(_ url: URL) -> String {
             url.resolvingSymlinksInPath().path
         }
