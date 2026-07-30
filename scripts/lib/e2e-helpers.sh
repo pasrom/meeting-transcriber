@@ -259,3 +259,39 @@ sweep_run_artifacts() {
         find "$rec_dir" -type f -newer "$marker" -delete 2>/dev/null || true
     fi
 }
+
+# Common German words, matched whole. Function words rather than words from the
+# fixture's script, because the live lane cannot choose which part of the
+# meeting it records: the app starts recording only once it has DETECTED the
+# meeting, so the opening seconds are never captured and the remaining slice
+# shifts run to run. Measured over 13 runs, a content-word list drawn from the
+# script matched exactly [Status Entwicklung] twelve times and [Entwicklung]
+# once — a ceiling of 2 against a floor of 2, so the gate was one dropped word
+# from red while nothing was wrong with the recording.
+#
+# What the gate is actually for is unchanged: catching an English hallucination
+# or garbage that got past the size check. Any German speech carries several of
+# these; English carries none.
+# Kept broad on purpose: the margin comes from the list being long enough that
+# any few German sentences hit several, not from a low threshold.
+GERMAN_MARKER_WORDS=(
+    und die der den das ein ist sind nicht noch mit für haben wir ich
+)
+GERMAN_MARKER_WORDS_MIN=3
+
+# True when the transcript reads as German. Word-boundary matching (`-w`) is
+# load-bearing: with substring matching, English "submit"/"listed"/"sound"
+# contain mit/ist/und and fluent English would pass the very check meant to
+# reject it.
+transcript_is_german() {
+    local transcript_path="$1"
+    local matched=0 hit="" word
+    for word in "${GERMAN_MARKER_WORDS[@]}"; do
+        if grep -qiw -- "$word" "$transcript_path" 2>/dev/null; then
+            matched=$(( matched + 1 )); hit="$hit $word"
+        fi
+    done
+    GERMAN_MARKER_HITS="${hit# }"
+    GERMAN_MARKER_MATCHED="$matched"
+    [ "$matched" -ge "$GERMAN_MARKER_WORDS_MIN" ]
+}

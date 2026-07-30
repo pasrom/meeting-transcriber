@@ -223,14 +223,14 @@ RECORD_ONLY_MARKER="/tmp/e2e-app-record-only-marker.$$"
 # speaks "Meeting", but neither this list nor the xctest set includes it: it is
 # the one English word, so requiring only German words proves the German
 # fixture actually transcribed rather than an English hallucination.
-# Threshold is 2-of-5, below the xctest's 3-of-5: the live-capture path
-# (BlackHole → CATap → dual-track merge) is lossier than the xctest's
-# direct-engine path, so 2 leaves margin against capture variance while still
-# decisively rejecting garbage (which matches 0). Applied only when the
-# simulator plays the known fixture (and not the mic-device-change survival
-# lane); a custom --fixture keeps only the >100-byte size check.
-DEFAULT_FIXTURE_KEYWORDS=(willkommen Projekt Status Entwicklung Zeitplan)
-DEFAULT_FIXTURE_KEYWORDS_MIN=2
+# The check itself lives in lib/e2e-helpers.sh as `transcript_is_german` and
+# keys on common German words, NOT on the fixture's script. Recording starts
+# only once the app has DETECTED the meeting, so the opening seconds are never
+# captured and which sentences land shifts run to run; a script-derived list
+# therefore measured recording-start timing, not transcription quality.
+# Applied only when the simulator plays the known fixture (and not the
+# mic-device-change survival lane); a custom --fixture keeps only the
+# >100-byte size check.
 IS_DEFAULT_FIXTURE=false
 [ "$SIMULATOR_FIXTURE" = "$DEFAULT_FIXTURE" ] && IS_DEFAULT_FIXTURE=true
 
@@ -819,28 +819,17 @@ _poll_for_new_lastjob_terminal() {
     POLL_LJ_STATE="$lj_state"
 }
 
-# Assert the transcript contains at least DEFAULT_FIXTURE_KEYWORDS_MIN of the
-# expected German content words (case-insensitive). Guards the live-recording
-# lanes against a transcript that clears the >100-byte size check but is
-# actually garbage — wrong-language hallucination, silent-capture noise, or an
-# empty-ish file — none of which contain the fixture's spoken words. Logs which
-# keywords matched so a near-miss is diagnosable straight from the CI log.
-# Accumulates hit/miss as strings (not arrays) to stay safe under `set -u` on
-# the runner's bash regardless of version.
-assert_transcript_keywords() {
+# Fail the lane unless the transcript reads as German. Guards the
+# live-recording lanes against a transcript that clears the >100-byte size
+# check but is actually garbage — wrong-language hallucination, silent-capture
+# noise, or an empty-ish file. Logs which words matched so a near-miss is
+# diagnosable straight from the CI log.
+assert_transcript_is_german() {
     local label="$1" transcript_path="$2"
-    local matched=0 hit="" miss="" kw
-    for kw in "${DEFAULT_FIXTURE_KEYWORDS[@]}"; do
-        if grep -qi -- "$kw" "$transcript_path"; then
-            matched=$(( matched + 1 )); hit="$hit $kw"
-        else
-            miss="$miss $kw"
-        fi
-    done
-    if [ "$matched" -lt "$DEFAULT_FIXTURE_KEYWORDS_MIN" ]; then
-        fail "$label: transcript matched only $matched/${#DEFAULT_FIXTURE_KEYWORDS[@]} expected German fixture keywords (need >= $DEFAULT_FIXTURE_KEYWORDS_MIN) — likely garbage or wrong-language despite passing the >100-byte size check. matched=[${hit# }] missing=[${miss# }]. Preview:"$'\n'"$(head -c 500 "$transcript_path")"
+    if ! transcript_is_german "$transcript_path"; then
+        fail "$label: transcript does not read as German — matched only $GERMAN_MARKER_MATCHED/${#GERMAN_MARKER_WORDS[@]} common German words (need >= $GERMAN_MARKER_WORDS_MIN), so it is likely an English hallucination or garbage despite passing the >100-byte size check. matched=[$GERMAN_MARKER_HITS]. Preview:"$'\n'"$(head -c 500 "$transcript_path")"
     fi
-    log "$label: transcript content OK — matched $matched/${#DEFAULT_FIXTURE_KEYWORDS[@]} keywords [${hit# }]"
+    log "$label: transcript content OK — matched $GERMAN_MARKER_MATCHED/${#GERMAN_MARKER_WORDS[@]} German words [$GERMAN_MARKER_HITS]"
 }
 
 run_one_meeting() {
@@ -887,7 +876,7 @@ run_one_meeting() {
         # false regression that masks the real survival signal, so skip it.
         log "$label: mic-device-change survival lane — skipping content keyword assertion"
     elif [ "$IS_DEFAULT_FIXTURE" = true ]; then
-        assert_transcript_keywords "$label" "$transcript_path"
+        assert_transcript_is_german "$label" "$transcript_path"
     else
         # Custom --fixture: unknown spoken content, so keep only the size check.
         log "$label: custom fixture — skipping content keyword assertion (size check only)"
