@@ -48,7 +48,7 @@ The app lives in your menu bar — open it, grant microphone + screen-recording 
 ```mermaid
 flowchart TD
     A["Meeting Detected<br/>Teams · Zoom · Webex"]
-    A2["File Import<br/>WAV · MP3 · M4A · MP4 · MKV · WebM · OGG"]
+    A2["File Import<br/>WAV · MP3 · M4A · MP4 · FLAC · AMR · 3GP · OPUS · OGG<br/>MKV · WebM (ffmpeg)"]
     B["Dual Recording<br/>App audio + Mic · 16 kHz per track"]
     C["16 kHz Mono Convert<br/>AVAudioFile → AVAsset → ffmpeg"]
     D{"Transcription Engine<br/>CoreML / ANE"}
@@ -93,7 +93,7 @@ flowchart TD
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), OpenAI-compatible APIs (Ollama, LM Studio, etc.), or disabled (save transcript only)
 - **Configurable protocol prompt** — Custom prompt file support (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`)
 - **Manual recording** — Record any app via app picker, not just detected meetings
-- **Multi-format input** — Supports WAV, MP3, M4A, MP4, and with ffmpeg also MKV, WebM, OGG
+- **Multi-format input** — Supports WAV, MP3, M4A, MP4, FLAC, plus the phone and messenger voice formats AMR, 3GP/3G2 and OPUS/OGG; MKV and WebM additionally need ffmpeg
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
 - **Record-only mode** — Skip the entire post-recording pipeline and drop dual-source recordings + a metadata sidecar into the output folder, for external/fleet processing (e.g. a separate GPU host)
@@ -113,7 +113,7 @@ No HuggingFace token needed — FluidAudio and WhisperKit download their models 
 
 ### Optional: ffmpeg for extra formats
 
-Install ffmpeg to enable MKV, WebM, and OGG support:
+Install ffmpeg to enable MKV and WebM support:
 
 ```bash
 brew install ffmpeg
@@ -232,7 +232,7 @@ If a permission problem coexists, the red exclamation badge takes precedence ove
 
 Launch the app — it sits in your menu bar. When a supported meeting is detected, recording starts automatically. When the meeting ends, the pipeline runs in the background: transcription → diarization → protocol generation.
 
-You can also batch-process existing audio and video files via the menu (⌘P) — supported formats: WAV, MP3, M4A, MP4 (and MKV, WebM, OGG when ffmpeg is installed).
+You can also batch-process existing audio and video files via the menu (⌘P) — supported formats: WAV, MP3, M4A, MP4, FLAC, AMR, 3GP/3G2 and OPUS/OGG (and MKV, WebM when ffmpeg is installed). Smartphone call recordings (AMR, 3GP) and voice messages (OPUS) need no extra tools.
 
 ---
 

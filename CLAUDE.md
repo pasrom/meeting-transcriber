@@ -147,7 +147,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).
 - `loadAudioFromAVAsset()` extracts audio tracks via `AVAssetReader`, outputs 16kHz Float32 PCM.
 - `FFmpegHelper` detects ffmpeg binary (env var → `/opt/homebrew/bin` → `/usr/local/bin` → `~/.local/bin` → `/usr/bin`), cached via static let. Converts to 16kHz mono WAV via temp file.
-- File picker supports WAV, MP3, M4A, MP4, MOV, and other AVAsset-compatible formats. MKV, WebM, OGG shown only when ffmpeg is detected.
+- Both `NSOpenPanel` type lists (batch import + voice enrollment) come from `AudioImportTypes`, not inline literals — the panels are manual-QA-only, so the pure type list is what tests can pin. Only MKV/WebM are ffmpeg-gated; AMR, 3GPP and Ogg (`.opus`/`.ogg`) decode natively and must stay out of `FFmpegHelper.ffmpegOnlyExtensions`, whose members skip `AVAudioFile`/`AVAsset` entirely.
 - ffmpeg is optional — install via `brew install ffmpeg`. Status shown in Settings → About.
 
 **Recording:**
