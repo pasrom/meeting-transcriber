@@ -13,7 +13,12 @@ public enum TapFormatResolver {
     /// it always matches the bus (issue #379 — a mismatched channel count made
     /// installTapOnBus raise) AND it works for any channel count, whereas
     /// `standardFormatWithSampleRate:channels:` returns nil for >2 channels
-    /// (no inferable layout). The converter downmixes it to the mono WAV.
+    /// (no inferable layout).
+    ///
+    /// The channel layout rides along verbatim, which matters downstream: for
+    /// anything but plain stereo `AVAudioConverter`'s implicit downmix writes
+    /// silence, so `MicConverterFactory` has to select a channel explicitly.
+    /// Do not assume the converter folds this format to mono on its own.
     public static func tapFormat(forHardware hwFormat: AVAudioFormat) -> AVAudioFormat? {
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else { return nil }
         return hwFormat
