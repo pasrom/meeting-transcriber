@@ -417,6 +417,14 @@ _find_sidecar() {
 poll_until "$SIDECAR_TIMEOUT_S" 1 _find_sidecar || fail "no record-only sidecar written under $RECORDINGS_DIR"
 log "Sidecar: $SIDECAR"
 
+# A browser meeting is detector-initiated; the consent prompt only gates it and
+# does not make the recording user-initiated. This is the one lane that runs
+# that path for real, so pin the label here rather than leaving it to unit
+# tests that never see the consent hop.
+SIDECAR_TRIGGER="$(jq -r '.trigger // "absent"' "$SIDECAR")"
+[ "$SIDECAR_TRIGGER" = "auto" ] \
+    || fail "consented browser meeting must be labelled trigger=auto (got: $SIDECAR_TRIGGER)"
+
 APP_WAV="${SIDECAR%_meta.json}_app.wav"
 [ -f "$APP_WAV" ] || fail "no _app.wav next to the sidecar ($APP_WAV)"
 

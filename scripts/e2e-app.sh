@@ -942,7 +942,8 @@ run_one_record_only_meeting() {
     # Schema check in one jq invocation — emits "ok" or a human-readable reason.
     local schema_check
     schema_check="$(jq -r '
-        if .version != 1 then "version != 1 (got: \(.version))"
+        if .version != 2 then "version != 2 (got: \(.version))"
+        elif .trigger != "auto" then "trigger != auto (got: \(.trigger // "absent"))"
         elif (.startedAt | type) != "string" then "startedAt not string"
         elif (.stoppedAt | type) != "string" then "stoppedAt not string"
         elif (.startedAt | fromdateiso8601? // -1) < 0 then "startedAt not ISO8601"
