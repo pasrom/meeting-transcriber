@@ -64,7 +64,69 @@ final class ResamplingIntegrationTests: XCTestCase { // swiftlint:disable:this b
         XCTAssertGreaterThan(file.length, 0)
     }
 
+    // MARK: - Phone / messenger voice formats
+
+    /// Opus arrives at 48 kHz, so the import must decode and downsample it. A
+    /// byte copy would leave the output at 48 kHz.
+    func testResampleOpusFixtureTo16kHz() async throws {
+        let fixture = fixtureURL("two_speakers_de.opus")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixture.path), "Fixture not found")
+
+        let output = tmpDir.appendingPathComponent("resampled.wav")
+        try await AudioMixer.resampleFile(from: fixture, to: output)
+
+        let file = try AVAudioFile(forReading: output)
+        XCTAssertEqual(Int(file.processingFormat.sampleRate), 16000)
+        XCTAssertGreaterThan(file.length, 0)
+    }
+
     // MARK: - Resampled output fed to pipeline with mock engine
+
+    /// A voice memo in a container Apple's frameworks decode (not ffmpeg) must
+    /// survive the whole queue. The engine is stubbed, so what this covers is the
+    /// import chain around it: decode, downsample to 16 kHz, persist.
+    @MainActor
+    func testOpusImportFlowsThroughPipeline() async throws {
+        let fixtureSrc = fixtureURL("two_speakers_de.opus")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: fixtureSrc.path), "Fixture not found")
+        let mixPath = try copyFixtureIntoTmp("two_speakers_de.opus")
+
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Voice memo content"),
+        ]
+        let protocolGen = MockProtocolGen()
+
+        let queue = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { protocolGen },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+        )
+
+        queue.enqueue(PipelineJob(
+            meetingTitle: "Voice Memo",
+            appName: "Test",
+            mixPath: mixPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        ))
+        await queue.awaitProcessing()
+
+        let result = queue.jobs.first
+        XCTAssertEqual(result?.state, .done, "pipeline error: \(result?.error ?? "nil")")
+        XCTAssertTrue(protocolGen.capturedTranscript?.contains("Voice memo content") ?? false)
+
+        let persisted = try FileManager.default
+            .contentsOfDirectory(at: tmpDir.appendingPathComponent("recordings"), includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasSuffix("_16k.wav") }
+        let audio16k = try XCTUnwrap(persisted.first, "no 16 kHz audio persisted for the import")
+        let file = try AVAudioFile(forReading: audio16k)
+        XCTAssertEqual(Int(file.processingFormat.sampleRate), AudioConstants.targetSampleRate)
+        XCTAssertGreaterThan(file.length, 0)
+    }
 
     @MainActor
     func testResampledAudioFlowsThroughPipeline() async throws {
