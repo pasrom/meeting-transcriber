@@ -492,6 +492,7 @@ final class AppSettings {
 
     // MARK: - Init
 
+    // swiftlint:disable:next function_body_length
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
 
