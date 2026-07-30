@@ -244,7 +244,7 @@ enum AudioMixer {
     /// Load any audio or video file as mono Float32 samples.
     ///
     /// Uses a 3-tier fallback: AVAudioFile → AVAsset → ffmpeg CLI.
-    /// Known ffmpeg-only formats (MKV, WebM, OGG) skip Apple frameworks entirely.
+    /// Known ffmpeg-only formats (MKV, WebM) skip Apple frameworks entirely.
     static func loadAudioAsFloat32(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
         // Short-circuit: known ffmpeg-only formats skip AVAudioFile + AVAsset
         if FFmpegHelper.ffmpegOnlyExtensions.contains(url.pathExtension.lowercased()) {
@@ -352,7 +352,8 @@ enum AudioMixer {
     // MARK: - Audio I/O
 
     /// Load an audio file as mono Float32 samples.
-    /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC, CAF.
+    /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC,
+    /// CAF, AMR (`.amr`/`.awb`), 3GPP (`.3gp`/`.3g2`) and Ogg (`.opus`/`.ogg`).
     static func loadAudioFileAsFloat32(url: URL) throws -> [Float] {
         let file = try AVAudioFile(forReading: url)
         return try readSamplesFromAudioFile(file)

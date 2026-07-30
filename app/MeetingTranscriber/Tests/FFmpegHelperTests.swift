@@ -13,7 +13,15 @@ final class FFmpegHelperTests: XCTestCase {
         let extensions = FFmpegHelper.ffmpegOnlyTypes.compactMap(\.preferredFilenameExtension)
         XCTAssertTrue(extensions.contains("mkv"))
         XCTAssertTrue(extensions.contains("webm"))
-        XCTAssertTrue(extensions.contains("ogg"))
+    }
+
+    /// The ffmpeg short-circuit in `AudioMixer.loadAudioAsFloat32` skips
+    /// AVAudioFile entirely, so anything listed here becomes unimportable on a
+    /// machine without the CLI — not merely slower. Only MKV and WebM earn that:
+    /// `AVAudioFile` fails on them with error 1954115647, while AMR, 3GPP and Ogg
+    /// (`.opus`/`.ogg`/`.oga`, all `org.xiph.ogg-audio`) decode natively.
+    func testFFmpegOnlyExtensionsCoverOnlyContainersAppleCannotRead() {
+        XCTAssertEqual(FFmpegHelper.ffmpegOnlyExtensions, ["mkv", "webm"])
     }
 
     // MARK: - Error Descriptions

@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "FFmpegHelper")
 
-/// Detects and invokes ffmpeg CLI for formats not supported by Apple frameworks (MKV, WebM, OGG).
+/// Detects and invokes ffmpeg CLI for formats not supported by Apple frameworks (MKV, WebM).
 enum FFmpegHelper {
     /// Search paths for the ffmpeg binary.
     private static let searchPaths = [
@@ -49,14 +49,19 @@ enum FFmpegHelper {
     }
 
     /// File types that require ffmpeg (not supported by AVAudioFile or AVAsset).
+    /// Doubles as the conditional group of `AudioImportTypes.pickerTypes`.
     static let ffmpegOnlyTypes: [UTType] = [
         UTType(filenameExtension: "mkv"),
         UTType(filenameExtension: "webm"),
-        UTType(filenameExtension: "ogg"),
     ].compactMap(\.self)
 
     /// File extensions that require ffmpeg, for fast lookup in the fallback chain.
-    static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm", "ogg"]
+    ///
+    /// Membership here *skips* AVAudioFile and AVAsset entirely, so a natively
+    /// decodable format listed here would become unimportable without the CLI
+    /// rather than merely slower. Ogg is deliberately absent: `.ogg`/`.opus`/`.oga`
+    /// open through `AVAudioFile` with both Vorbis and Opus payloads.
+    static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm"]
 
     static let timeoutSeconds: TimeInterval = 300
 
