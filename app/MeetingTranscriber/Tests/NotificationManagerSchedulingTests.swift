@@ -132,6 +132,27 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertFalse(granted)
     }
 
+    /// A resolved prompt is withdrawn. macOS clears a notification the user
+    /// actually tapped, but not one that expired on its timer or was answered
+    /// out of band, so without this every unanswered prompt stays in
+    /// Notification Center: 31 dead prompts were sitting on the reported
+    /// machine, each one asking about a meeting that ended long ago.
+    func testResolvedConsentPromptIsWithdrawn() async {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        let task = Task { await manager.askToRecord(title: "Record browser meeting?", body: "A meeting is active.") }
+
+        guard let posted = await firstPostedRequest(from: fake) else {
+            XCTFail("no consent notification posted")
+            return
+        }
+        XCTAssertTrue(fake.removedIdentifiers.isEmpty, "must not withdraw a prompt that is still parked")
+
+        manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: NotificationManager.ignoreActionID)
+        _ = await task.value
+        XCTAssertEqual(fake.removedIdentifiers, [posted.identifier])
+    }
+
     // MARK: - pure content builder
 
     func testMakeNotificationContentMapsFields() {

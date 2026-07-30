@@ -170,7 +170,13 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
     /// The "record this browser meeting?" category with Record / Ignore actions.
     static func makeConsentCategory() -> UNNotificationCategory {
-        let record = UNNotificationAction(identifier: recordActionID, title: "Record", options: [.foreground])
+        // No `.foreground` on either action: the delegate callback fires
+        // whether or not the app is activated, so the flag adds nothing except
+        // yanking the user out of the meeting they just agreed to record. It
+        // also activates whichever bundle LaunchServices considers canonical
+        // for the identifier, which on a machine with several copies installed
+        // is not necessarily the one that asked.
+        let record = UNNotificationAction(identifier: recordActionID, title: "Record", options: [])
         let ignore = UNNotificationAction(identifier: ignoreActionID, title: "Ignore", options: [])
         return UNNotificationCategory(
             identifier: consentCategoryID,
@@ -206,9 +212,14 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
         guard deliverable else { return false }
         let id = UUID().uuidString
-        return await consentCoordinator.awaitDecision(id: id) { [self] in
+        let granted = await consentCoordinator.awaitDecision(id: id) { [self] in
             postConsentNotification(id: id, title: title, body: body)
         }
+        // However it resolved — tapped, expired, or answered over RPC — the
+        // question is settled, so the prompt must not stay in Notification
+        // Center asking about a meeting that has moved on.
+        scheduler.removeDelivered(withIdentifiers: [id])
+        return granted
     }
 
     /// How a posted notification would be presented, for

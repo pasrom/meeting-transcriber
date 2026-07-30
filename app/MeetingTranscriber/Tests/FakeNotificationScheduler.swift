@@ -10,6 +10,7 @@ import UserNotifications
 final class FakeNotificationScheduler: NotificationScheduling, @unchecked Sendable {
     private let lock = NSLock()
     private var _added: [UNNotificationRequest] = []
+    private var _removedIdentifiers: [String] = []
     private(set) var categories: Set<UNNotificationCategory> = []
     private(set) weak var delegate: (any UNUserNotificationCenterDelegate)?
     private(set) var authRequested = false
@@ -36,8 +37,16 @@ final class FakeNotificationScheduler: NotificationScheduling, @unchecked Sendab
         lock.lock(); defer { lock.unlock() }; return _added
     }
 
+    var removedIdentifiers: [String] {
+        lock.lock(); defer { lock.unlock() }; return _removedIdentifiers
+    }
+
     func add(_ request: UNNotificationRequest) {
         lock.lock(); _added.append(request); lock.unlock()
+    }
+
+    func removeDelivered(withIdentifiers identifiers: [String]) {
+        lock.lock(); _removedIdentifiers.append(contentsOf: identifiers); lock.unlock()
     }
 
     func setCategories(_ categories: Set<UNNotificationCategory>) {

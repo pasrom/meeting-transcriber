@@ -12,6 +12,13 @@ import UserNotifications
 /// notifications, which unit coverage can't reach.
 protocol NotificationScheduling: AnyObject, Sendable {
     func add(_ request: UNNotificationRequest)
+
+    /// Withdraw already-delivered notifications. Only the consent prompt needs
+    /// it: macOS clears a notification the user tapped, but not one that
+    /// expired or was answered out of band, so without this the dead prompts
+    /// pile up in Notification Center.
+    func removeDelivered(withIdentifiers identifiers: [String])
+
     func setCategories(_ categories: Set<UNNotificationCategory>)
     func setDelegate(_ delegate: (any UNUserNotificationCenterDelegate)?)
     func requestAuthorization()
@@ -49,6 +56,10 @@ final class SystemNotificationScheduler: NotificationScheduling, Sendable {
                 """,
             )
         }
+    }
+
+    func removeDelivered(withIdentifiers identifiers: [String]) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
     func setCategories(_ categories: Set<UNNotificationCategory>) {

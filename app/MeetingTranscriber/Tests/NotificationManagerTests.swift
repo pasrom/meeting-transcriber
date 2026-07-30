@@ -208,6 +208,23 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertEqual(category.actions.map(\.title), ["Record", "Ignore"])
     }
 
+    /// Neither action may carry `.foreground`. The delegate callback fires
+    /// either way, so the flag buys nothing and costs the user their meeting
+    /// window: tapping Record activates the app, pulling focus away from the
+    /// call they just consented to keep having. On a machine with several
+    /// bundles registered for the same identifier it is worse than useless,
+    /// because LaunchServices activates whichever copy it considers canonical
+    /// rather than the running one.
+    func testConsentActionsDoNotActivateTheApp() {
+        let category = NotificationManager.makeConsentCategory()
+        for action in category.actions {
+            XCTAssertFalse(
+                action.options.contains(.foreground),
+                "\(action.identifier) must not steal focus from the meeting",
+            )
+        }
+    }
+
     func testAskToRecordDeclinesWhenNotSetUp() async {
         // No app bundle / setUp never ran → we can't show a prompt, so default
         // to "don't record" rather than recording without asking.
