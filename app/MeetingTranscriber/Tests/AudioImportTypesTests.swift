@@ -13,7 +13,7 @@ final class AudioImportTypesTests: XCTestCase {
     /// phone call recorders write, `.opus`/`.oga` what messengers and voice
     /// recorders write.
     private let nativeExtensions = [
-        "wav", "mp3", "m4a", "mp4", "mov", "aiff",
+        "wav", "mp3", "m4a", "mp4", "mov", "aiff", "flac",
         "amr", "3gp", "3g2", "opus", "ogg", "oga",
     ]
 

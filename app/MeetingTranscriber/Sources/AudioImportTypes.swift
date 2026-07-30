@@ -13,7 +13,8 @@ import UniformTypeIdentifiers
 /// Types are resolved from file extensions rather than written as UTI identifier
 /// strings, because `UTType(_:)` is failable and a wrong identifier is dropped
 /// silently by `compactMap` — removing the format from the panel with no build
-/// error.
+/// error. That is how the previous `UTType("public.flac")` never worked: the real
+/// identifier is `org.xiph.flac`.
 enum AudioImportTypes {
     /// 3GPP containers, named wherever they are wanted because they conform to
     /// `.audiovisualContent` only — an `.audio` filter hides them, and they are
@@ -22,7 +23,7 @@ enum AudioImportTypes {
 
     /// Extensions with no compile-time `UTType` constant. `"opus"` resolves to
     /// `org.xiph.ogg-audio`, which covers `.ogg` and `.oga` as well.
-    private static let extraNativeExtensions = ["amr", "opus"]
+    private static let extraNativeExtensions = ["flac", "amr", "opus"]
 
     /// Audio and video types readable without the ffmpeg CLI.
     private static let nativeTypes: [UTType] = [
