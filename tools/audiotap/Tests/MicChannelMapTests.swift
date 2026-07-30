@@ -3,10 +3,23 @@ import AVFoundation
 import XCTest
 
 final class MicChannelMapTests: XCTestCase {
-    private func discreteFormat(channels: AVAudioChannelCount) throws -> AVAudioFormat {
-        let tag = kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels)
+    /// 2ch layouts whose implicit downmix was measured to yield silence.
+    /// `MidSide` and `XY` are what a stereo microphone pair reports.
+    private static let silentStereoTags: [AudioChannelLayoutTag] = [
+        kAudioChannelLayoutTag_StereoHeadphones,
+        kAudioChannelLayoutTag_MatrixStereo,
+        kAudioChannelLayoutTag_MidSide,
+        kAudioChannelLayoutTag_XY,
+        kAudioChannelLayoutTag_Binaural,
+    ]
+
+    private func taggedFormat(_ tag: AudioChannelLayoutTag) throws -> AVAudioFormat {
         let layout = try XCTUnwrap(AVAudioChannelLayout(layoutTag: tag))
         return AVAudioFormat(standardFormatWithSampleRate: 48000, channelLayout: layout)
+    }
+
+    private func discreteFormat(channels: AVAudioChannelCount) throws -> AVAudioFormat {
+        try taggedFormat(kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels))
     }
 
     // MARK: - Policy
@@ -23,13 +36,33 @@ final class MicChannelMapTests: XCTestCase {
     }
 
     func testDiscreteStereoNeedsExplicitMap() throws {
-        XCTAssertEqual(MicChannelMap.downmixMap(for: try discreteFormat(channels: 2)), [0])
+        let discreteStereo = try discreteFormat(channels: 2)
+        XCTAssertEqual(MicChannelMap.downmixMap(for: discreteStereo), [0])
     }
 
     func testDiscreteMicArrayNeedsExplicitMap() throws {
         // The built-in mic in voice-processing mode: 3ch discrete.
-        XCTAssertEqual(MicChannelMap.downmixMap(for: try discreteFormat(channels: 3)), [0])
-        XCTAssertEqual(MicChannelMap.downmixMap(for: try discreteFormat(channels: 4)), [0])
+        let threeChannel = try discreteFormat(channels: 3)
+        let fourChannel = try discreteFormat(channels: 4)
+        XCTAssertEqual(MicChannelMap.downmixMap(for: threeChannel), [0])
+        XCTAssertEqual(MicChannelMap.downmixMap(for: fourChannel), [0])
+    }
+
+    func testNamedStereoVariantsNeedExplicitMap() throws {
+        // Every 2ch layout except the plain Stereo tag downmixes to silence,
+        // including the two microphone-pair configurations (MidSide, XY).
+        for tag in Self.silentStereoTags {
+            let format = try taggedFormat(tag)
+            XCTAssertEqual(
+                MicChannelMap.downmixMap(for: format), [0],
+                "layout tag \(String(format: "0x%06X", tag)) must not stay on the implicit path",
+            )
+        }
+    }
+
+    func testPlainStereoTagKeepsImplicitDownmix() throws {
+        let stereo = try taggedFormat(kAudioChannelLayoutTag_Stereo)
+        XCTAssertNil(MicChannelMap.downmixMap(for: stereo))
     }
 
     // MARK: - The behaviour the policy exists for
@@ -41,19 +74,38 @@ final class MicChannelMapTests: XCTestCase {
     func testImplicitDownmixIsSilentAndMapRestoresAudio() throws {
         for channels in [2, 3, 4] as [AVAudioChannelCount] {
             let inFormat = try discreteFormat(channels: channels)
-            XCTAssertEqual(
-                try convertPeak(from: inFormat, channelMap: nil), 0, accuracy: 0.0001,
-                "discrete \(channels)ch implicit downmix is expected to yield silence",
-            )
-            XCTAssertEqual(
-                try convertPeak(from: inFormat, channelMap: MicChannelMap.downmixMap(for: inFormat)), 0.5,
-                accuracy: 0.01, "explicit channel map must preserve the signal (\(channels)ch)",
-            )
+            try assertImplicitSilentAndMapAudible(inFormat, label: "discrete \(channels)ch")
+        }
+        for tag in Self.silentStereoTags {
+            let inFormat = try taggedFormat(tag)
+            try assertImplicitSilentAndMapAudible(inFormat, label: String(format: "tag 0x%06X", tag))
         }
     }
 
-    /// Feeds one buffer of a 0.5-amplitude sine on every channel through the
-    /// same conversion MicCaptureHandler performs; returns the output peak.
+    /// The plain Stereo tag is the one layout the allowlist keeps on the
+    /// implicit path, so its fold has to stay correct for that to be safe.
+    func testPlainStereoStillFoldsCorrectlyWithoutAMap() throws {
+        let stereo = try taggedFormat(kAudioChannelLayoutTag_Stereo)
+        let peak = try convertPeak(from: stereo, channelMap: nil)
+        XCTAssertEqual(peak, 0.5, accuracy: 0.01)
+    }
+
+    private func assertImplicitSilentAndMapAudible(
+        _ inFormat: AVAudioFormat, label: String, file: StaticString = #filePath, line: UInt = #line,
+    ) throws {
+        let implicitPeak = try convertPeak(from: inFormat, channelMap: nil)
+        XCTAssertEqual(
+            implicitPeak, 0, accuracy: 0.0001,
+            "\(label): implicit downmix is expected to yield silence", file: file, line: line,
+        )
+        let mappedPeak = try convertPeak(from: inFormat, channelMap: MicChannelMap.downmixMap(for: inFormat))
+        XCTAssertEqual(
+            mappedPeak, 0.5, accuracy: 0.01,
+            "\(label): explicit channel map must preserve the signal", file: file, line: line,
+        )
+    }
+
+    // swiftlint:disable:next discouraged_optional_collection legacy_objc_type
     private func convertPeak(from inFormat: AVAudioFormat, channelMap: [NSNumber]?) throws -> Float {
         let outFormat = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16000, channels: 1))
         let converter = try XCTUnwrap(AVAudioConverter(from: inFormat, to: outFormat))

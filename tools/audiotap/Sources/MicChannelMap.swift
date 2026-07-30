@@ -4,45 +4,49 @@ import AVFoundation
 /// `channelMap` instead of `AVAudioConverter`'s implicit downmix.
 ///
 /// Why this exists: `AVAudioConverter` silently produces **silence** (all-zero
-/// downmix matrix, `convert` returns success, no error) when the input format
-/// carries a *discrete* channel layout — the layout a microphone array reports.
-/// The built-in mic switches from 1ch to a 3ch discrete array as soon as any
-/// other app activates voice processing (a WeChat / FaceTime / Teams call), so
-/// the mic track of a real call is written as digital silence while the app
-/// track records normally. Measured on macOS 26.1: discrete 2ch/3ch/4ch → peak
-/// 0.0; the same conversion with `channelMap = [0]` → the input signal intact.
+/// downmix matrix, `convert` returns success, no error) for most layouts a real
+/// capture device reports. The built-in mic switches from 1ch to a 3ch discrete
+/// array as soon as another app activates voice processing (a WeChat /
+/// FaceTime / Teams call), so the mic track of a whole call is written as
+/// digital silence while the app track records normally.
 ///
-/// Standard mono/stereo layouts downmix correctly and are left alone, so a
-/// normal stereo interface keeps both channels folded together as before.
+/// The set of layouts the implicit path folds correctly is much smaller than
+/// "everything that is not discrete". Measured on macOS 26.5.2, 48 kHz → 16 kHz
+/// mono, 0.5-amplitude sine on *every* input channel:
+///
+///     mono; stereo with no layout; kAudioChannelLayoutTag_Stereo    0.5  ok
+///     DiscreteInOrder 2ch / 3ch / 4ch                               0.0  silent
+///     StereoHeadphones, MatrixStereo, MidSide, XY, Binaural         0.0  silent
+///
+/// `MidSide` and `XY` are microphone-pair configurations, so the silent set is
+/// not exotic. The policy is therefore an ALLOWLIST: only layouts measured to
+/// fold correctly stay on the implicit path, everything else selects one real
+/// channel. A named surround layout loses its correct fold that way, but no mic
+/// input reports one, and one audible channel beats a silent track.
+///
+/// For a mic array channel 0 is taken as-is rather than averaging the elements,
+/// which would risk comb filtering from the inter-element delay.
 public enum MicChannelMap {
-    /// High 16 bits of a layout tag hold the tag "family"; the low 16 hold the
-    /// channel count for count-parameterised tags such as `DiscreteInOrder`.
-    private static let tagFamilyMask: AudioChannelLayoutTag = 0xFFFF_0000
-
-    private static func family(of tag: AudioChannelLayoutTag) -> AudioChannelLayoutTag {
-        tag & tagFamilyMask
-    }
+    // `AVAudioConverter.channelMap` takes `[NSNumber]`, and `nil` here means
+    // "leave the converter's own downmix alone" rather than "map no channels",
+    // so both of these rules are unavoidable at this boundary.
+    // swiftlint:disable discouraged_optional_collection legacy_objc_type
 
     /// `[0]` when `format` needs an explicit single-channel selection, `nil`
-    /// when the implicit downmix is trustworthy (mono, or a standard layout
-    /// with an inferable downmix matrix).
+    /// when the implicit downmix is trustworthy.
     public static func downmixMap(for format: AVAudioFormat) -> [NSNumber]? {
         guard format.channelCount > 1 else { return nil }
 
         guard let layout = format.channelLayout else {
-            // No layout at all: only mono/stereo have an inferable downmix.
-            return format.channelCount > 2 ? [0] : nil
+            // Plain stereo carries no layout object and folds L+R correctly.
+            return format.channelCount == 2 ? nil : [0]
         }
 
-        let tagFamily = family(of: layout.layoutTag)
-        let discreteFamily = family(of: kAudioChannelLayoutTag_DiscreteInOrder)
-        let unknownFamily = family(of: kAudioChannelLayoutTag_Unknown)
-
-        if tagFamily == discreteFamily || tagFamily == unknownFamily {
-            return [0]
+        if format.channelCount == 2, layout.layoutTag == kAudioChannelLayoutTag_Stereo {
+            return nil
         }
-        // Any other named layout above stereo has no meaningful mono fold for a
-        // mic capture either — prefer one real channel over a guess.
-        return format.channelCount > 2 ? [0] : nil
+        return [0]
     }
+
+    // swiftlint:enable discouraged_optional_collection legacy_objc_type
 }
