@@ -78,6 +78,35 @@ jobs:
           cert: ${{ secrets.DEVELOPER_ID_CERT }}
           cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
 
+      # The time-sensitive notification entitlement is RESTRICTED: codesign only
+      # keeps it when a provisioning profile that grants it is embedded, and
+      # silently drops it otherwise while still reporting success. Profiles are
+      # account artifacts and gitignored, so without this step a release ships
+      # with the entitlement missing and the browser-consent prompt stays
+      # suppressed under Focus for every user — the exact bug it fixes.
+      # Absent secret: prepare_signing takes its no-profile path and the build
+      # still succeeds, so a fork release is not blocked by it.
+      - name: Install provisioning profile
+        if: matrix.variant == 'homebrew'
+        env:
+          PROFILE_B64: ${{ secrets.RELEASE_PROVISIONING_PROFILE }}
+        run: |
+          # Guarded here rather than in `if:` — the secrets context is not
+          # dependable in step conditions, and the repo already gates
+          # DEVELOPER_ID this way.
+          if [ -z "${PROFILE_B64:-}" ]; then
+            echo "No RELEASE_PROVISIONING_PROFILE secret — building without the entitlement."
+            exit 0
+          fi
+          # shellcheck source=scripts/lib/signing.sh
+          source scripts/lib/signing.sh
+          # shellcheck source=scripts/lib/bundle-ids.sh
+          source scripts/lib/bundle-ids.sh
+          mkdir -p "$PROFILE_DIR"
+          printf '%s' "$PROFILE_B64" \
+            | base64 --decode > "$PROFILE_DIR/${RELEASE_BUNDLE_ID}.provisionprofile"
+          echo "Installed profile for $RELEASE_BUNDLE_ID"
+
       - name: Build .app and DMG
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
@@ -94,6 +123,32 @@ jobs:
             ./scripts/build_release.sh $STAPLE_FLAG ${BUILD_VERSION:-}
           else
             ./scripts/build_release.sh ${{ matrix.build-flags }} --no-notarize ${BUILD_VERSION:-}
+          fi
+
+      # Assert on the SHIPPED signature, not on the profile: a profile that
+      # grants the key is necessary but not sufficient, and every other way the
+      # entitlement gets dropped (unset DEVELOPER_ID, a plist edit that breaks,
+      # a signing path that never reaches prepare_signing) is invisible to a
+      # check on the input. verify_signing only warns, deliberately, so
+      # contributor builds keep working — the release lane is the one caller
+      # that has to fail.
+      - name: Verify the release carries the time-sensitive entitlement
+        if: matrix.variant == 'homebrew'
+        env:
+          PROFILE_B64: ${{ secrets.RELEASE_PROVISIONING_PROFILE }}
+        run: |
+          if [ -z "${PROFILE_B64:-}" ]; then
+            echo "No profile was installed — nothing to verify."
+            exit 0
+          fi
+          # shellcheck source=scripts/lib/signing.sh
+          source scripts/lib/signing.sh
+          APP_BUNDLE=".build/release/MeetingTranscriber.app"
+          if bundle_has_time_sensitive "$APP_BUNDLE"; then
+            echo "Signature carries $TIME_SENSITIVE_KEY"
+          else
+            echo "::error::the built app is missing $TIME_SENSITIVE_KEY — the consent prompt would stay suppressed under Focus"
+            exit 1
           fi
 
       - name: Get version
