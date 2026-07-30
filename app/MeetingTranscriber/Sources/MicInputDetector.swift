@@ -88,6 +88,12 @@ class MicInputDetector: MeetingDetecting {
     }
 
     func checkOnce() -> DetectedMeeting? {
+        // All four toggles default to off, so most installs run this detector
+        // with an empty pattern set. Skip the whole round then: no Core Audio
+        // enumeration every poll, and no diagnostic naming every mic-using
+        // bundle on machines that never opted into this channel.
+        guard !patterns.isEmpty else { return nil }
+
         let processes = processProvider()
         var hitsThisRound: Set<String> = []
         var firstMatch: [String: pid_t] = [:]

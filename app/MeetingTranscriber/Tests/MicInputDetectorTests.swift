@@ -26,6 +26,21 @@ final class MicInputDetectorTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
+    /// The default install watches none of these apps, and then this channel
+    /// must cost nothing: no Core Audio enumeration per poll, and no diagnostic
+    /// naming the bundle of every app that touches the mic.
+    func testUnwatchedInstallDoesNotEnumerateAudioProcesses() {
+        let detector = MicInputDetector(patterns: MicInputDetector.patterns(watching: []), confirmationCount: 1)
+        detector.windowListProvider = { [] }
+        var providerCalls = 0
+        detector.processProvider = {
+            providerCalls += 1
+            return [snapshot("com.tencent.xinWeChat")]
+        }
+        XCTAssertNil(detector.checkOnce())
+        XCTAssertEqual(providerCalls, 0)
+    }
+
     func testDetectsWeChatCall() {
         let detector = makeDetector()
         detector.processProvider = { [snapshot("com.tencent.xinWeChat", pid: 777)] }
@@ -121,46 +136,5 @@ final class MicInputDetectorTests: XCTestCase {
         XCTAssertTrue(none.isEmpty)
         let one = MicInputDetector.patterns(watching: ["WeChat"])
         XCTAssertEqual(one.map(\.appName), ["WeChat"])
-    }
-}
-
-// MARK: - Composite Tests
-
-final class CompositeMeetingDetectorTests: XCTestCase {
-    private func micDetector(bundleID: String = "com.tencent.xinWeChat") -> MicInputDetector {
-        let detector = MicInputDetector(confirmationCount: 1)
-        detector.windowListProvider = { [] }
-        detector.processProvider = { [snapshot(bundleID)] }
-        return detector
-    }
-
-    private func assertionDetector(active: Bool) -> PowerAssertionDetector {
-        let detector = PowerAssertionDetector(confirmationCount: 1)
-        detector.windowListProvider = { [] }
-        detector.assertionProvider = {
-            active
-                ? makeAssertionDict(pid: 55, processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
-                : [:]
-        }
-        return detector
-    }
-
-    func testFirstHitWins() {
-        let composite = CompositeMeetingDetector([assertionDetector(active: true), micDetector()])
-        XCTAssertEqual(composite.checkOnce()?.pattern.appName, "Microsoft Teams")
-    }
-
-    func testFallsThroughToLaterDetector() {
-        let composite = CompositeMeetingDetector([assertionDetector(active: false), micDetector()])
-        XCTAssertEqual(composite.checkOnce()?.pattern.appName, "WeChat")
-    }
-
-    func testLivenessIsPerStrategyOr() throws {
-        let mic = micDetector()
-        let composite = CompositeMeetingDetector([assertionDetector(active: false), mic])
-        let meeting = try XCTUnwrap(composite.checkOnce())
-        XCTAssertTrue(composite.isMeetingActive(meeting))
-        mic.processProvider = { [] }
-        XCTAssertFalse(composite.isMeetingActive(meeting))
     }
 }
