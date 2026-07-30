@@ -53,6 +53,10 @@ final class RecordOnlyE2ETests: XCTestCase { // swiftlint:disable:this balanced_
         XCTAssertEqual(sidecar.files.mix, "\(Self.basename)_mix.wav")
         XCTAssertEqual(sidecar.files.app, "\(Self.basename)_app.wav")
         XCTAssertEqual(sidecar.files.mic, "\(Self.basename)_mic.wav")
+        XCTAssertEqual(
+            sidecar.trigger, .auto,
+            "a detector-started meeting must be labelled auto, not manual",
+        )
         XCTAssertLessThanOrEqual(sidecar.startedAt, sidecar.stoppedAt)
 
         // Round-trip the moved mix file through AVAudioFile to catch corruption

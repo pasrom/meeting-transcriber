@@ -11,7 +11,20 @@ struct RecordingSidecar: Codable {
 
     /// Schema version stamped into every new sidecar. Bump when fields are
     /// added/removed/repurposed so downstream consumers can branch on it.
-    static let currentVersion = 1
+    /// 2 added `trigger`.
+    static let currentVersion = 2
+
+    /// How the recording was started. Consumers apply different policies to
+    /// the two: a very short auto capture is usually a false trigger worth
+    /// discarding, while a short manual recording is deliberate. Without this
+    /// the only downstream signal is duration, which cannot tell them apart.
+    enum Trigger: String, Codable {
+        /// Started by a meeting detector, including browser meetings where the
+        /// user only confirmed a consent prompt the detector raised.
+        case auto
+        /// Started by the user picking an app in the recording picker.
+        case manual
+    }
 
     let version: Int
     let title: String
@@ -22,10 +35,29 @@ struct RecordingSidecar: Codable {
     let micDelaySeconds: TimeInterval
     let files: Files
 
+    /// Raw storage so an unrecognised value decodes as `nil` instead of
+    /// throwing. `read()` swallows decode errors, so a strict `Trigger?` would
+    /// let one future value discard the entire sidecar on the reimport path
+    /// (title, participants and meeting-start included) rather than just the
+    /// one field this build cannot interpret.
+    private let triggerRaw: String?
+
+    /// `nil` for version 1 sidecars, which predate the field, and for values
+    /// introduced by a newer schema version than this build knows.
+    var trigger: Trigger? {
+        triggerRaw.flatMap(Trigger.init(rawValue:))
+    }
+
     struct Files: Codable {
         let mix: String
         let app: String?
         let mic: String?
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version, title, appName, startedAt, stoppedAt
+        case participants, micDelaySeconds, files
+        case triggerRaw = "trigger"
     }
 
     init(
@@ -35,6 +67,7 @@ struct RecordingSidecar: Codable {
         stoppedAt: Date,
         participants: [String],
         micDelaySeconds: TimeInterval,
+        trigger: Trigger,
         mixFilename: String,
         appFilename: String?,
         micFilename: String?,
@@ -46,6 +79,7 @@ struct RecordingSidecar: Codable {
         self.stoppedAt = stoppedAt
         self.participants = participants
         self.micDelaySeconds = micDelaySeconds
+        self.triggerRaw = trigger.rawValue
         self.files = Files(mix: mixFilename, app: appFilename, mic: micFilename)
     }
 

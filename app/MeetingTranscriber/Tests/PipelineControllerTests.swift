@@ -183,7 +183,7 @@ final class PipelineControllerTests: XCTestCase {
         let sidecar = RecordingSidecar(
             title: "Weekly Sync", appName: "Teams",
             startedAt: meetingStart, stoppedAt: meetingStart.addingTimeInterval(1800),
-            participants: [], micDelaySeconds: 0,
+            participants: [], micDelaySeconds: 0, trigger: .auto,
             mixFilename: "standup_mix.wav", appFilename: "standup_app.wav", micFilename: "standup_mic.wav",
         )
         try sidecar.write(toDirectory: tmpDir, basename: "standup")

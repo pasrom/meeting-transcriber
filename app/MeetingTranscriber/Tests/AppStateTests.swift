@@ -526,6 +526,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             stoppedAt: Date(timeIntervalSince1970: 1_777_001_800),
             participants: ["Speaker A", "Speaker B"],
             micDelaySeconds: 0.25,
+            trigger: .auto,
             mixFilename: "\(basename)_mix.wav",
             appFilename: "\(basename)_app.wav",
             micFilename: "\(basename)_mic.wav",

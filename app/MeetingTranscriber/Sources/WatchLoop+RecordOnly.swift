@@ -13,6 +13,7 @@ extension WatchLoop {
         title: String,
         appName: String,
         recording: RecordingResult,
+        trigger: RecordingSidecar.Trigger,
         participants: [String],
     ) throws {
         let startedAt = recording.recordingStartDate
@@ -50,6 +51,7 @@ extension WatchLoop {
             stoppedAt: stoppedAt,
             participants: participants,
             micDelaySeconds: recording.micDelay,
+            trigger: trigger,
             mixFilename: movedMix.lastPathComponent,
             appFilename: movedApp?.lastPathComponent,
             micFilename: movedMic?.lastPathComponent,

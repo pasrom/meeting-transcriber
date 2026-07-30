@@ -393,6 +393,10 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertEqual(sidecar.files.mix, "20260503_120000_mix.wav")
         XCTAssertEqual(sidecar.files.app, "20260503_120000_app.wav")
         XCTAssertEqual(sidecar.files.mic, "20260503_120000_mic.wav")
+        XCTAssertEqual(
+            sidecar.trigger, .manual,
+            "a recording started from the app picker must be labelled manual, not auto",
+        )
         // startedAt must precede stoppedAt — we don't pin exact wall-clock
         // values because the manual-recording flow records its own startTime.
         XCTAssertLessThanOrEqual(sidecar.startedAt, sidecar.stoppedAt)

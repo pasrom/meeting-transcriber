@@ -233,7 +233,9 @@ class WatchLoop {
         var failureMessage: String?
         do {
             let recording = try recorder.stop()
-            enqueueRecording(title: info.title, appName: info.appName, recording: recording)
+            enqueueRecording(
+                title: info.title, appName: info.appName, recording: recording, trigger: .manual,
+            )
         } catch {
             logger.error("Failed to stop manual recording: \(error.localizedDescription, privacy: .public)")
             failureMessage = error.localizedDescription
@@ -374,6 +376,7 @@ class WatchLoop {
             title: title,
             appName: meeting.pattern.appName,
             recording: recording,
+            trigger: .auto,
             participants: participants,
         )
     }
@@ -417,6 +420,7 @@ class WatchLoop {
         title: String,
         appName: String,
         recording: RecordingResult,
+        trigger: RecordingSidecar.Trigger,
         participants: [String] = [],
     ) {
         if recordOnly() {
@@ -425,6 +429,7 @@ class WatchLoop {
                     title: title,
                     appName: appName,
                     recording: recording,
+                    trigger: trigger,
                     participants: participants,
                 )
             } catch {
