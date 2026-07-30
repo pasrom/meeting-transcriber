@@ -126,6 +126,8 @@ struct AdvancedSettingsView: View {
             Section("About") {
                 LabeledContent("Version", value: Self.versionString)
                     .textSelection(.enabled)
+                LabeledContent("Identifier", value: Bundle.main.bundleID)
+                    .textSelection(.enabled)
                 LabeledContent("Build Date", value: Self.buildDate)
                     .textSelection(.enabled)
                 LabeledContent("ffmpeg") {

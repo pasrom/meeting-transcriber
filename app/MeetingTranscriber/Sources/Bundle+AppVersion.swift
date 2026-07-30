@@ -13,4 +13,15 @@ extension Bundle {
     var gitCommitHash: String {
         infoDictionary?["GitCommitHash"] as? String ?? "dev"
     }
+
+    /// The bundle identifier, or `"?"` outside an app bundle (`swift test`).
+    ///
+    /// Surfaced in Settings → Advanced → About because the identifier decides
+    /// which settings domain, TCC grants and notification registration the
+    /// running app actually uses — so "which build am I looking at" is not
+    /// answerable from the version alone, and a release/dev mix-up otherwise
+    /// only shows up as permissions or preferences inexplicably missing.
+    var bundleID: String {
+        bundleIdentifier ?? "?"
+    }
 }

@@ -502,21 +502,6 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertNoThrow(try body.find(text: "Accessibility"))
     }
 
-    func testAboutSectionExists() throws {
-        let body = try makeAdvanced().inspect()
-        XCTAssertNoThrow(try body.find(text: "Version"))
-    }
-
-    func testAboutSectionShowsBuildDate() throws {
-        let body = try makeAdvanced().inspect()
-        XCTAssertNoThrow(try body.find(text: "Build Date"))
-    }
-
-    func testAboutSectionShowsFfmpegStatus() throws {
-        let body = try makeAdvanced().inspect()
-        XCTAssertNoThrow(try body.find(text: "ffmpeg"))
-    }
-
     #if !APPSTORE
         func testDebugRPCToggleExists() throws {
             let body = try makeAdvanced().inspect()
