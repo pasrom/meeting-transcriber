@@ -24,6 +24,8 @@
     <string>AppIcon</string>
     <key>CFBundleIconName</key>
     <string>AppIcon</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Meeting Transcriber records the meeting app’s own audio (the other participants) via a Core Audio process tap.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Meeting Transcriber needs microphone access to record meeting audio for transcription.</string>
     <key>NSScreenCaptureUsageDescription</key>
