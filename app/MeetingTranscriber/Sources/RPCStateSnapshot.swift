@@ -34,6 +34,12 @@
         /// `watchState == "recording"` when no caption signal is available
         /// (live transcription off — the default user profile).
         let watchState: String?
+        /// The app whose browser-meeting consent prompt is currently parked,
+        /// nil when no question is open. `watchState` stays "watching" while a
+        /// prompt waits, so this is the only wire signal that tells "detected,
+        /// waiting for an answer" from "nothing detected" — the pair that was
+        /// indistinguishable from outside when a prompt was invisible.
+        let pendingConsentApp: String?
         /// True while the active recording is a manual (app-picker) recording
         /// rather than an auto-detected meeting. `watchState` reads "recording"
         /// for both, so this is the only wire signal that distinguishes the
@@ -416,6 +422,7 @@
             permissionHealth: PermissionHealth = .unknown,
             liveCaptions: LiveCaptions = .empty,
             watchState: String? = nil,
+            pendingConsentApp: String? = nil,
             isManualRecording: Bool = false,
             notifications: [Notification] = [],
             settings: Settings = .empty,
@@ -432,6 +439,7 @@
             self.permissionHealth = permissionHealth
             self.liveCaptions = liveCaptions
             self.watchState = watchState
+            self.pendingConsentApp = pendingConsentApp
             self.isManualRecording = isManualRecording
             self.notifications = notifications
             self.settings = settings

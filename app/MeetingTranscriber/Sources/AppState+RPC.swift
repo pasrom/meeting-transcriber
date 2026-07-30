@@ -130,6 +130,7 @@
                 permissionHealth: permissionHealthSnapshot(),
                 liveCaptions: liveCaptionsSnapshot(),
                 watchState: watching.watchLoop?.state.rawValue,
+                pendingConsentApp: watching.watchLoop?.pendingConsentApp,
                 isManualRecording: isManualRecording,
                 notifications: notificationsSnapshot(),
                 // Built inside AppSettings (single-hop `self.` reads) to stay

@@ -87,6 +87,29 @@ class WatchLoop {
     /// Internal so the consent gate can live in `WatchLoop+Consent.swift`.
     var consentPolicy: BrowserConsentPolicy
 
+    /// The app whose consent prompt is currently parked, nil when no question
+    /// is open. The answer is awaited in `consentTask` rather than inline, so
+    /// this is what keeps a second prompt from going out on every poll while
+    /// the first one waits. Internal (not `private(set)`) because
+    /// `WatchLoop+Consent.swift` owns the transitions.
+    var pendingConsentApp: String?
+
+    /// A meeting the user approved, waiting for the loop to pick it up.
+    /// Recordings start in the loop and nowhere else, so an answer arriving
+    /// out of band parks here instead of starting one from the consent task.
+    var approvedConsentMeeting: DetectedMeeting?
+
+    /// The task awaiting the parked answer. Held so `stop()` can let go of it.
+    var consentTask: Task<Void, Never>?
+
+    /// Forget the open question. Not a decline: `WatchLoop+Consent` decides
+    /// what an answer (or the lack of one) means.
+    func clearConsentState() {
+        pendingConsentApp = nil
+        approvedConsentMeeting = nil
+        consentTask = nil
+    }
+
     private var watchTask: Task<Void, Never>?
 
     /// Hook called when state changes (for UI updates, notifications, etc.)
@@ -177,6 +200,10 @@ class WatchLoop {
     func stop() {
         watchTask?.cancel()
         watchTask = nil
+        // Answer a parked prompt before the state goes idle: a question that
+        // outlives the watching it was asked on behalf of would sit in
+        // Notification Center offering to record with watching switched off.
+        declineParkedConsent()
         cleanupManualRecording()
         update { next in
             next.phase = .idle
@@ -287,39 +314,57 @@ class WatchLoop {
 
     private func watchLoop() async {
         while !Task.isCancelled {
-            if let meeting = detector.checkOnce() {
+            // A prompt answered since the last poll comes first: the answer
+            // arrives out of band, but recordings only ever start here.
+            // Re-checked because the answer may have landed while another
+            // meeting was recording, which blocks this loop for its duration —
+            // by now the approved call can be long over.
+            if let approved = takeApprovedConsentMeeting(), detector.isMeetingActive(approved) {
+                if await runMeeting(approved) { return }
+            } else if let meeting = detector.checkOnce() {
                 // Browser meetings (issue #503) ask before recording; native
                 // meetings skip this (flag false). See WatchLoop+Consent.swift.
-                if await shouldDeferForConsent(meeting) {
+                // Asking does NOT block this loop — that is the whole point:
+                // an unanswered prompt used to stop `checkOnce()` from running
+                // for a full minute, so a Teams or Zoom call starting in that
+                // window went unrecorded.
+                if requestConsentIfNeeded(for: meeting) {
                     try? await sleepProvider(pollInterval)
                     continue
                 }
-                do {
-                    try await handleMeeting(meeting)
-                } catch {
-                    if error is CancellationError { return }
-                    let msg = "Recording error: \(error.localizedDescription)"
-                    logger.error("\(msg, privacy: .public)")
-                    update { next in
-                        next.phase = .error
-                        next.lastError = error.localizedDescription
-                        next.detail = "Recording error: \(error.localizedDescription)"
-                    }
-                    try? await sleepProvider(10)
-                }
-
-                detector.reset(appName: meeting.pattern.appName)
-
-                if !Task.isCancelled {
-                    update { next in
-                        next.phase = .watching
-                        next.detail = "Polling for meetings..."
-                    }
-                }
+                if await runMeeting(meeting) { return }
             }
 
             try? await sleepProvider(pollInterval)
         }
+    }
+
+    /// Record one meeting to completion and return to watching. True means the
+    /// loop was cancelled mid-recording and must exit.
+    private func runMeeting(_ meeting: DetectedMeeting) async -> Bool {
+        do {
+            try await handleMeeting(meeting)
+        } catch {
+            if error is CancellationError { return true }
+            let msg = "Recording error: \(error.localizedDescription)"
+            logger.error("\(msg, privacy: .public)")
+            update { next in
+                next.phase = .error
+                next.lastError = error.localizedDescription
+                next.detail = "Recording error: \(error.localizedDescription)"
+            }
+            try? await sleepProvider(10)
+        }
+
+        detector.reset(appName: meeting.pattern.appName)
+
+        if !Task.isCancelled {
+            update { next in
+                next.phase = .watching
+                next.detail = "Polling for meetings..."
+            }
+        }
+        return false
     }
 
     // MARK: - Meeting Handling

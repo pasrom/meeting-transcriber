@@ -361,19 +361,32 @@ else
     KEEPER_PID=$!
 fi
 
-# Detection + consent in one poll: confirm-browser-consent returns
-# {"resolved":false} until the consent prompt actually parks (i.e. the browser
-# meeting was detected and the watch loop is blocked awaiting consent), then
-# {"resolved":true} once we grant it. Polling until true is race-free against
+# The prompt parks while the watch loop keeps polling (issue #543), and
+# `/state.pendingConsentApp` reports that from outside. Assert it before
+# answering: it is the only signal that separates "detected, waiting for an
+# answer" from "nothing detected at all" — the very pair a user with an
+# invisible prompt cannot tell apart either. Polling is race-free against
 # however long Chrome takes to hold the assertion.
-log "Waiting up to ${DETECT_TIMEOUT_S}s for detection + granting consent over RPC"
+log "Waiting up to ${DETECT_TIMEOUT_S}s for the consent prompt to park"
+_consent_parked() {
+    assert_app_alive
+    [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "Google Chrome" ]
+}
+poll_until "$DETECT_TIMEOUT_S" 2 _consent_parked || {
+    _dump_detection_diag
+    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
+}
+log "Consent prompt parked for Google Chrome"
+
+# confirm-browser-consent answers the parked prompt in place of a click.
+log "Granting consent over RPC"
 _grant_consent() {
     assert_app_alive
     "$MTCLI" confirm-browser-consent --granted 2>/dev/null | jq -e '.resolved == true' >/dev/null 2>&1
 }
-poll_until "$DETECT_TIMEOUT_S" 2 _grant_consent || {
+poll_until 30 2 _grant_consent || {
     _dump_detection_diag
-    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
+    fail "a prompt was parked but confirm-browser-consent never resolved it"
 }
 log "Consent granted over RPC"
 
@@ -409,6 +422,11 @@ _consent_notification_posted() {
         '[.notifications[]? | select(.title == "Record browser meeting?" and .posted == true)] | length > 0' \
         >/dev/null 2>&1
 }
+_consent_cleared() { [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "" ]; }
+poll_until 10 1 _consent_cleared \
+    || fail "consent was answered but /state still reports a parked prompt for
+       $(rpc /state | jq -r '.pendingConsentApp // "?"') — the gate never took the answer"
+
 poll_until 10 1 _consent_notification_posted \
     || fail "consent was answered over RPC, but the app never posted a deliverable
        consent notification — a real user would have seen nothing. Check
