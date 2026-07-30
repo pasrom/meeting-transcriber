@@ -13,11 +13,17 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "MicInpu
 /// assertions are absent, unnamed, or undocumented (WeChat, Tencent Meeting,
 /// FaceTime, WhatsApp): a call ALWAYS captures the mic, so
 /// `kAudioProcessPropertyIsRunningInput` flipping true on a watched bundle ID
-/// is a reliable signal. The confirmation threshold (N consecutive polls)
-/// filters sub-poll-interval mic grabs (voice-message recording, dictation);
-/// longer non-call grabs are expected to be filtered downstream by the
-/// consumer (min-duration policy), mirroring how the browser/WebRTC channel
-/// accepts imperfect precision in exchange for coverage.
+/// is a reliable signal.
+///
+/// Precision is deliberately traded for coverage, and the cost is real: any
+/// watched app holding the mic across `confirmationCount` polls starts a
+/// recording, so a WeChat or WhatsApp voice message longer than roughly
+/// `pollInterval * confirmationCount` (about 6 s at the defaults) looks like a
+/// call. There is no minimum-duration filter downstream to catch that. What
+/// limits the blast radius today: every one of these apps is off by default,
+/// detection needs N consecutive polls, and a 5 s cooldown follows a reset.
+/// `AppMeetingPattern.requiresRecordingConsent` would be the stronger lever,
+/// as the browser channel uses it, but it is not enabled for these patterns.
 @Observable
 class MicInputDetector: MeetingDetecting {
     /// A call app watched by bundle ID.
