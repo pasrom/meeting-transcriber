@@ -24,6 +24,43 @@ enum Permissions {
         return granted
     }
 
+    /// Take a one-shot flag: true when this caller is the first to claim it.
+    /// Shared by the prompt guards below, which would otherwise each hand-roll
+    /// the same test-and-set in a slightly different shape.
+    private static func claimFirst(_ lock: OSAllocatedUnfairLock<Bool>) -> Bool {
+        lock.withLock { claimed in
+            defer { claimed = true }
+            return !claimed
+        }
+    }
+
+    private static let screenRecordingPromptLock = OSAllocatedUnfairLock(initialState: false)
+
+    /// Ask macOS for Screen Recording, at most once per session.
+    ///
+    /// `CGRequestScreenCaptureAccess` is the only call that registers the app in
+    /// the Screen Recording list; `CGPreflightScreenCaptureAccess` reports
+    /// status and registers nothing. Until the app is in that list there is
+    /// nothing for the user to switch on, and the "Open System Settings" link
+    /// opens a pane the app is absent from.
+    ///
+    /// Unlike the microphone, this cannot grant in place: macOS offers only
+    /// Deny or Open System Settings, the toggle stays there, and the grant takes
+    /// effect on the next launch. So the win is turning "find the bundle inside
+    /// a hidden folder" into "flip the switch that is already there".
+    ///
+    /// The already-granted check comes first so a session that starts granted
+    /// does not burn the one-shot flag: if the grant is revoked mid-session, the
+    /// next watch start still asks.
+    static func ensureScreenRecordingAccess() {
+        guard !CGPreflightScreenCaptureAccess() else { return }
+        guard claimFirst(screenRecordingPromptLock) else { return }
+
+        if !CGRequestScreenCaptureAccess() {
+            logger.warning("permission_denied resource=screen_recording status=user_denied_prompt")
+        }
+    }
+
     static func ensureMicrophoneAccess() async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         if status == .authorized { return true }

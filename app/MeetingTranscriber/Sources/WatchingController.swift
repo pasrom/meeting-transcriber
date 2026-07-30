@@ -47,6 +47,22 @@ final class WatchingController {
     /// surfaces a permission problem through its own `permissionChecker`).
     private let ensureMicAccess: () async -> Bool
 
+    /// Screen-Recording request, fired at watch start. Injectable so tests skip
+    /// the real TCC prompt.
+    ///
+    /// Asking is what registers the app in the Screen Recording list at all —
+    /// preflighting never does — and until it is listed there is nothing for
+    /// the user to switch on. It sits here, next to the microphone gate, rather
+    /// than in the health check: that runs on every activation, so the request
+    /// would keep arriving while the user is trying to work, and a checker
+    /// causing a system prompt is a side effect nothing can inject around.
+    ///
+    /// The result is ignored, like the microphone gate: the permission only
+    /// improves the detected meeting's title (`PowerAssertionDetector` falls
+    /// back to a placeholder), so watching proceeds either way and the health
+    /// check reports the state.
+    private let requestScreenRecording: () -> Void
+
     /// Meeting detector factory for the auto-detect path. Injectable so tests can
     /// supply a deterministic detector instead of the IOKit-backed
     /// `PowerAssertionDetector`.
@@ -66,6 +82,7 @@ final class WatchingController {
         permissions: PermissionsController,
         liveTranscription: LiveTranscriptionCoordinator,
         ensureMicAccess: @escaping () async -> Bool = { await Permissions.ensureMicrophoneAccess() },
+        requestScreenRecording: @escaping () -> Void = { Permissions.ensureScreenRecordingAccess() },
         makeDetector: (() -> any MeetingDetecting)? = nil,
     ) {
         self.settings = settings
@@ -75,6 +92,7 @@ final class WatchingController {
         self.permissions = permissions
         self.liveTranscription = liveTranscription
         self.ensureMicAccess = ensureMicAccess
+        self.requestScreenRecording = requestScreenRecording
         // Tests inject a deterministic detector; production defaults to one
         // filtered by the "Apps to Watch" toggles, re-read at each watch start.
         self.makeDetector = makeDetector ?? { [settings] in
@@ -123,6 +141,7 @@ final class WatchingController {
             startTask = Task { @MainActor in
                 defer { startTask = nil }
                 _ = await ensureMicAccess()
+                requestScreenRecording()
 
                 syncEngines?()
                 pipeline.rebuild()

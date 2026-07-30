@@ -28,6 +28,7 @@ final class WatchingControllerTests: XCTestCase {
     /// default detector never matches a window so no recording starts.
     private func makeController(
         ensureMicAccess: @escaping () async -> Bool = { true },
+        requestScreenRecording: @escaping () -> Void = {},
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
     ) -> WatchingController {
         let settings = AppSettings()
@@ -54,8 +55,30 @@ final class WatchingControllerTests: XCTestCase {
             permissions: permissions,
             liveTranscription: liveTranscription,
             ensureMicAccess: ensureMicAccess,
+            requestScreenRecording: requestScreenRecording,
             makeDetector: makeDetector,
         )
+    }
+
+    // MARK: - requestScreenRecording seam
+
+    /// Asking is what registers the app in the Screen Recording list, and until
+    /// it is listed there is no switch for the user to turn on. It belongs at
+    /// watch start, where the window-title lookup that needs it happens — not
+    /// in the health check, which runs on every activation and would re-ask a
+    /// user who is trying to work.
+    func testToggleWatchingRequestsScreenRecording() async {
+        var requested = false
+        // Not trailing-closure: a trailing closure binds to the last param
+        // (`makeDetector`), not `requestScreenRecording`.
+        // swiftlint:disable:next trailing_closure
+        let controller = makeController(requestScreenRecording: { requested = true })
+        addTeardownBlock { await controller.watchLoop?.stop() }
+
+        controller.toggleWatching()
+        await waitFor(requested)
+
+        XCTAssertTrue(requested, "toggleWatching must ask for Screen Recording")
     }
 
     // MARK: - ensureMicAccess seam
