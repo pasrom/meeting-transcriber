@@ -838,6 +838,114 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(engine.transcribeCallCount > 0)
     }
 
+    // MARK: - Concurrent runs of the same job (issue #558)
+
+    /// A work directory derived from the job ID alone is shared by every run of
+    /// that job, so a second run walks into the first run's intermediate files.
+    /// This pins the collision half: a `pipeline_<jobID>` directory that already
+    /// holds a `mix_16k.wav` must not fail the run that arrives second.
+    /// `AudioMixer.resampleFile` copies when the source is already 16 kHz mono,
+    /// and `copyItem` onto an existing destination throws Cocoa 516.
+    func testRunIsNotFailedByAnotherRunsWorkDirectory() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Second run speaking"),
+        ]
+        let (pQueue, _) = makeMockProcessingQueue(engine: engine)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Collision",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+
+        // Stand in for a concurrent run of the same job that already resampled.
+        let otherRunDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pipeline_\(job.id.uuidString)")
+        try FileManager.default.createDirectory(at: otherRunDir, withIntermediateDirectories: true)
+        try Data().write(to: otherRunDir.appendingPathComponent("mix_16k.wav"))
+        defer { try? FileManager.default.removeItem(at: otherRunDir) }
+
+        pQueue.enqueue(job)
+        await pQueue.processNext()
+
+        XCTAssertNotEqual(
+            pQueue.jobs.first?.state, .error,
+            "job failed with: \(pQueue.jobs.first?.error ?? "no error recorded")",
+        )
+        XCTAssertTrue(engine.transcribeCallCount > 0, "transcription never ran")
+    }
+
+    /// A queue wired for the concurrent-run tests: its own log and output
+    /// directory, so the temp working directory is the only thing two of these
+    /// share.
+    private func makeConcurrentRunQueue(
+        engine: any TranscribingEngine, name: String,
+    ) throws -> PipelineQueue {
+        let ownDir = tmpDir.appendingPathComponent(name)
+        try FileManager.default.createDirectory(at: ownDir, withIntermediateDirectories: true)
+        return PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            diarizationFactoryWithMode: nil,
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: ownDir,
+            logDir: ownDir,
+            diarizeEnabled: true,
+            numSpeakers: 0,
+            micLabel: "Me",
+        )
+    }
+
+    /// The destruction half: with a shared working directory, the run that
+    /// fails first takes the other run's intermediate files down with it via
+    /// its cleanup, and the surviving run then dies reaching for a file that is
+    /// gone, after transcription has already succeeded. That is the hour of
+    /// meeting content issue #558 reports losing.
+    func testConcurrentRunDoesNotDestroyTheOtherRunsWorkingFiles() async throws {
+        let parked = ParkedEngine()
+        parked.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "First run speaking")]
+        let secondEngine = MockEngine()
+        secondEngine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Second run speaking")]
+
+        let first = try makeConcurrentRunQueue(engine: parked, name: "first")
+        let second = try makeConcurrentRunQueue(engine: secondEngine, name: "second")
+
+        // The same job value in both queues: a struct copy carries the same id,
+        // which is what a snapshot restore into a replacement queue produces.
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Long Call",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        first.insertJobForTesting(job)
+        second.insertJobForTesting(job)
+
+        async let firstRun: Void = first.processNext()
+        await waitFor(parked.isParked, timeout: .seconds(5))
+        // The first run now holds finished intermediate files. Drive the second
+        // run to completion on top of them.
+        await second.processNext()
+        parked.release()
+        await firstRun
+
+        // Pins the premise: if the second run ever stops reaching the point
+        // where it writes into the working directory, this test would go green
+        // without exercising anything.
+        XCTAssertNotEqual(
+            second.jobs.first?.state, .error,
+            "second run failed with: \(second.jobs.first?.error ?? "no error recorded")",
+        )
+        XCTAssertNotEqual(
+            first.jobs.first?.state, .error,
+            "first run failed with: \(first.jobs.first?.error ?? "no error recorded")",
+        )
+    }
+
     func testProcessNextEmptyTranscriptSetsError() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [] // empty = no speech

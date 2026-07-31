@@ -79,8 +79,14 @@ extension PipelineQueue {
 
         do {
             // Temp directory for intermediate 16kHz files, cleaned up on any exit.
+            // The run suffix is what makes the `defer` below safe: keyed on the
+            // job ID alone, two runs of the same job would share this directory,
+            // and whichever failed first would delete the other's intermediate
+            // files mid-flight, losing a finished transcription (issue #558).
+            // The suffix scopes the directory, and therefore the cleanup, to the
+            // run that created it.
             let workDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("pipeline_\(ctx.jobID.uuidString)")
+                .appendingPathComponent("pipeline_\(ctx.jobID.uuidString)_\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: workDir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: workDir) }
 
