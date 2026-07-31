@@ -49,9 +49,18 @@ class MicInputDetector: MeetingDetecting {
             appName: "Tencent Meeting",
             bundleIDs: ["com.tencent.meeting", "com.tencent.tencentmeeting", "com.tencent.wemeet"],
         ),
-        // FaceTime audio may be owned by the AV conference daemon rather than
-        // the app process — both are listed; the unmatched-bundle diagnostic
-        // below names the real one if neither fires during a live call.
+        // Measured on macOS 26.5.2 during a native FaceTime audio call: the
+        // owner is `com.apple.avconferenced`, and `com.apple.FaceTime` never
+        // reports input at all. The app bundle is kept in case another macOS
+        // version attributes it differently. Two consequences of the owner
+        // being a daemon: the reported PID is the daemon's, so the recorder
+        // taps `avconferenced` (correct, the call audio lives there) while the
+        // window-title matcher finds no window and falls back to the
+        // placeholder, and ParticipantReader has no window to read. Note also
+        // that `avconferenced` serves AV conferencing in general, not FaceTime
+        // alone. A FaceTime *link* joined in a browser is owned by
+        // `com.apple.WebKit.GPU` instead and is not covered here; that case
+        // belongs to the browser detection channel.
         MicPattern(appName: "FaceTime", bundleIDs: ["com.apple.FaceTime", "com.apple.avconferenced"]),
         MicPattern(appName: "WhatsApp", bundleIDs: ["net.whatsapp.WhatsApp"]),
     ]
