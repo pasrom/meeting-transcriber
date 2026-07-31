@@ -213,7 +213,7 @@ Suffix constants live as static lets: the audio-file suffixes on `RecordingFileS
 
 - AudioTapLib (CATapDescription) requires macOS 14.2+ — compiled as SPM library, no separate binary needed
 - Screen Recording permission required for **meeting detection** (window titles via `CGWindowListCopyWindowInfo`)
-- Audio capture (AudioTapLib) does NOT require Screen Recording — uses CATapDescription (purple dot indicator)
+- Audio capture (CATapDescription process tap) is TCC-gated: it needs either the `NSAudioCaptureUsageDescription` "Audio Recording" grant or, as a fallback, the Screen Recording grant. With neither, the tap returns `noErr` but captures silence, with no error and nothing logged (issue #524; measured on macOS 26, see the process-tap TCC-gate notes). This corrects an earlier "does not require Screen Recording" claim.
 - FluidAudio models are downloaded automatically on first run (~50 MB)
 
 ## GUI Testing
