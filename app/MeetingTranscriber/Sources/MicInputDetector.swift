@@ -35,10 +35,20 @@ class MicInputDetector: MeetingDetecting {
     }
 
     static let defaultPatterns: [MicPattern] = [
-        // WeChat calls run in the main app process.
+        // WeChat calls run in the main app process. (Its sandboxed helpers
+        // `.IPCHelper`, `.MiniProgram` and `.WeChatMacShare` are deliberately
+        // not listed: a mini program recording audio is not a call.)
         MicPattern(appName: "WeChat", bundleIDs: ["com.tencent.xinWeChat"]),
-        // Tencent Meeting ships as WeMeet in some distributions.
-        MicPattern(appName: "Tencent Meeting", bundleIDs: ["com.tencent.meeting", "com.tencent.wemeet"]),
+        // Two separate builds: `com.tencent.meeting` is 腾讯会议, and the
+        // international VooV Meeting build is `com.tencent.tencentmeeting`
+        // (both confirmed from the Homebrew casks' quit/zap identifiers).
+        // `com.tencent.wemeet` is kept as unverified insurance: the only
+        // wemeet-namespaced artifact found is a `.FileDelta` helper container,
+        // so it may never match a main app process.
+        MicPattern(
+            appName: "Tencent Meeting",
+            bundleIDs: ["com.tencent.meeting", "com.tencent.tencentmeeting", "com.tencent.wemeet"],
+        ),
         // FaceTime audio may be owned by the AV conference daemon rather than
         // the app process — both are listed; the unmatched-bundle diagnostic
         // below names the real one if neither fires during a live call.

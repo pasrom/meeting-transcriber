@@ -58,6 +58,14 @@ final class MicInputDetectorTests: XCTestCase {
         XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Tencent Meeting")
     }
 
+    /// The international build ships as VooV Meeting under its own bundle ID,
+    /// so watching only the mainland one would miss those users entirely.
+    func testDetectsVooVMeetingInternationalBundle() {
+        let detector = makeDetector()
+        detector.processProvider = { [snapshot("com.tencent.tencentmeeting")] }
+        XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Tencent Meeting")
+    }
+
     func testIdleProcessDoesNotDetect() {
         let detector = makeDetector()
         detector.processProvider = { [snapshot("com.tencent.xinWeChat", running: false)] }
