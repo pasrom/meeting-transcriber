@@ -560,6 +560,58 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertTrue(freshQueue.jobs.isEmpty)
     }
 
+    // MARK: - Processed ledger on unhappy outcomes
+
+    /// Marking a failed recording as processed looks wrong at first glance and
+    /// is deliberate: a recording that fails deterministically, say a silent one
+    /// that yields an empty transcript, would otherwise be re-picked as an
+    /// orphan on every launch and fail again, with a notification each time.
+    /// Re-importing it by hand is the intended retry and never consults this
+    /// list. Pinned because the doc comment used to claim the opposite, which is
+    /// an invitation to "fix" it.
+    func testAFailedRecordingIsMarkedProcessed() {
+        let mixPath = tmpDir.appendingPathComponent("failed_mix.wav")
+        let queue = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Silent Meeting", appName: "Teams",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+
+        queue.updateJobState(id: job.id, to: .error, error: "Empty transcript")
+
+        XCTAssertTrue(
+            ProcessedRecordingsLedger(logDir: tmpDir).load()
+                .contains(mixPath.standardizedFileURL.path),
+            "a failed recording was left to be re-picked on every launch",
+        )
+    }
+
+    /// The consequence of the above, at the layer the user notices: the failed
+    /// recording does not come back as a recovered orphan.
+    func testOrphanRecoverySkipsARecordingThatAlreadyFailed() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let failing = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Silent Meeting", appName: "Teams",
+            mixPath: mixFile, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        failing.insertJobForTesting(job)
+        failing.updateJobState(id: job.id, to: .error, error: "Empty transcript")
+
+        let nextLaunch = PipelineQueue(logDir: tmpDir)
+        await nextLaunch.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertTrue(
+            nextLaunch.jobs.isEmpty,
+            "the failed recording came back as an orphan and would fail again",
+        )
+    }
+
     // MARK: - Orphaned Recording Recovery Tests
 
     func testRecoverFindsUntrackedMixWav() async throws {
