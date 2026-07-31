@@ -281,11 +281,15 @@ public class AppAudioCapture: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "Cannot get default output device UID"],
             )
         }
-        logger.info("System output device: \(systemOutputUID)")
+        // Transport type is logged unconditionally (not personal data, unlike
+        // the device name/UID): a "Virtual"/"Aggregate" transport is the first
+        // sign that a third-party audio tool has interposed on the output and
+        // the process tap may capture silence (issue #524).
+        let transport = getDefaultOutputDeviceTransportType() ?? "?"
+        logger.info("System output device: \(systemOutputUID) transport=\(transport, privacy: .public)")
 
         if debugLogging {
             let deviceName = getDefaultOutputDeviceName() ?? "?"
-            let transport = getDefaultOutputDeviceTransportType() ?? "?"
             let deviceRate = getDefaultOutputDeviceSampleRate() ?? 0
             logger.info(
                 "[debug] Default output device: name=\(deviceName, privacy: .public) uid=\(systemOutputUID, privacy: .public) transport=\(transport, privacy: .public) rate=\(deviceRate, privacy: .public)",
@@ -314,10 +318,10 @@ public class AppAudioCapture: @unchecked Sendable {
             )
         }
         tapID = newTapID
-        logger.info("Created process tap: \(self.tapID)")
+        let tapRate = Self.queryTapSampleRate(tapID: tapID)
+        logger.info("Created process tap: \(self.tapID) rate=\(tapRate, privacy: .public) Hz")
 
         if debugLogging {
-            let tapRate = Self.queryTapSampleRate(tapID: tapID)
             logger.info(
                 "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(self.tapID, privacy: .public)",
             )
