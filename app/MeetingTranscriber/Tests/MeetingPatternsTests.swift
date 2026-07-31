@@ -21,7 +21,7 @@ final class AppMeetingPatternTests: XCTestCase {
     // MARK: - All Patterns
 
     func testAllPatternsCount() {
-        XCTAssertEqual(AppMeetingPattern.all.count, 5)
+        XCTAssertEqual(AppMeetingPattern.all.count, 9)
     }
 
     // MARK: - Chrome Browser Pattern (issue #503)

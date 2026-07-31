@@ -133,7 +133,8 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         settings.watchWebex = false
 
         let detector = try XCTUnwrap(
-            WatchingController.defaultDetector(settings: settings) as? PowerAssertionDetector,
+            WatchingController.defaultDetectors(settings: settings)
+                .compactMap { $0 as? PowerAssertionDetector }.first,
         )
         detector.windowListProvider = { [] }
 
@@ -163,7 +164,8 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
             let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
             settings.watchBrowserMeetings = browserOn
             let d = try XCTUnwrap(
-                WatchingController.defaultDetector(settings: settings) as? PowerAssertionDetector,
+                WatchingController.defaultDetectors(settings: settings)
+                    .compactMap { $0 as? PowerAssertionDetector }.first,
             )
             d.windowListProvider = { [] }
             d.assertionProvider = {
