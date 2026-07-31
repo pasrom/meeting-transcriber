@@ -207,7 +207,14 @@ class MicInputDetector: MeetingDetecting {
         else { return [] }
 
         return objectIDs.compactMap { objectID in
-            guard let bundleID = stringProperty(objectID, selector: kAudioProcessPropertyBundleID) else {
+            // A process without a bundle (a plain CLI tool such as `afplay`)
+            // answers noErr with an EMPTY string rather than failing, so the
+            // optional alone does not filter it. Such an entry can never match
+            // a watched pattern; drop it here so the snapshot list keeps its
+            // "every entry identifies an app" invariant.
+            guard let bundleID = stringProperty(objectID, selector: kAudioProcessPropertyBundleID),
+                  !bundleID.isEmpty
+            else {
                 return nil
             }
             let pid = pid_t(int32Property(objectID, selector: kAudioProcessPropertyPID) ?? -1)
