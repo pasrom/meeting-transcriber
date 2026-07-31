@@ -12,8 +12,7 @@ extension AppAudioCapture {
         switch status {
         case -12988:
             "OSStatus -12988: likely missing permission. " +
-                "Check System Settings → Privacy & Security → Screen Recording " +
-                "and enable Meeting Transcriber."
+                "Check \(SystemSettingsPaths.screenRecording) and enable Meeting Transcriber."
 
         case -10851:
             "OSStatus -10851 (kAudioUnitErr_InvalidProperty): " +
