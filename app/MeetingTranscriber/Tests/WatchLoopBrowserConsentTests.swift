@@ -30,18 +30,18 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     /// `WatchLoop` consent gate calls. Records how often the user was prompted.
     private final class ConsentSpy: AppNotifying {
         private(set) var calls = 0
-        let response: Bool
-        init(response: Bool) {
-            self.response = response
+        let answer: ConsentAnswer
+        init(answer: ConsentAnswer) {
+            self.answer = answer
         }
 
         func notify(title _: String, body _: String) {}
 
         // swiftlint:disable async_without_await
         @MainActor
-        func askToRecord(title _: String, body _: String) async -> Bool {
+        func askToRecord(title _: String, body _: String) async -> ConsentAnswer {
             calls += 1
-            return response
+            return answer
         }
         // swiftlint:enable async_without_await
     }
@@ -72,7 +72,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         private(set) var calls = 0
         /// Every answer handed to a parked prompt, in order.
         private(set) var resolutions: [Bool] = []
-        private var continuation: CheckedContinuation<Bool, Never>?
+        private var continuation: CheckedContinuation<ConsentAnswer, Never>?
 
         var isParked: Bool {
             continuation != nil
@@ -81,11 +81,21 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         func notify(title _: String, body _: String) {}
 
         @MainActor
-        func askToRecord(title _: String, body _: String) async -> Bool {
+        func askToRecord(title _: String, body _: String) async -> ConsentAnswer {
             calls += 1
             return await withCheckedContinuation { continuation in
                 self.continuation = continuation
             }
+        }
+
+        /// Let the parked prompt expire unanswered, the way the real one does
+        /// after `NotificationManager.consentPromptTimeout`.
+        @discardableResult
+        func expire() -> Bool {
+            guard let continuation else { return false }
+            self.continuation = nil
+            continuation.resume(returning: .expired)
+            return true
         }
 
         /// Same contract as `NotificationManager.resolveBrowserConsent`: true
@@ -94,7 +104,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
             guard let continuation else { return false }
             self.continuation = nil
             resolutions.append(granted)
-            continuation.resume(returning: granted)
+            continuation.resume(returning: granted ? .granted : .declined)
             return true
         }
     }
@@ -139,7 +149,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     }
 
     func testBrowserMeetingRecordsWhenConsentGranted() async {
-        let spy = ConsentSpy(response: true)
+        let spy = ConsentSpy(answer: .granted)
         let (loop, recorder) = makeLoop(detector: FixedDetector(browserMeeting()), spy: spy)
         loop.start()
         await waitFor(recorder.startCalled)
@@ -149,7 +159,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     }
 
     func testBrowserMeetingNotRecordedWhenConsentDenied() async {
-        let spy = ConsentSpy(response: false)
+        let spy = ConsentSpy(answer: .declined)
         let (loop, recorder) = makeLoop(detector: FixedDetector(browserMeeting()), spy: spy)
         loop.start()
         // Well within the default 60 s decline cooldown: several polls happen,
@@ -162,7 +172,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     }
 
     func testNativeMeetingNeverPromptsAndAutoStarts() async {
-        let spy = ConsentSpy(response: false) // would block recording IF consulted
+        let spy = ConsentSpy(answer: .declined) // would block recording IF consulted
         let (loop, recorder) = makeLoop(detector: FixedDetector(nativeMeeting()), spy: spy)
         loop.start()
         await waitFor(recorder.startCalled)
@@ -172,11 +182,11 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     }
 
     func testDeclinedBrowserMeetingRePromptsAfterCooldown() async {
-        let spy = ConsentSpy(response: false)
+        let spy = ConsentSpy(answer: .declined)
         let (loop, recorder) = makeLoop(
             detector: FixedDetector(browserMeeting()),
             spy: spy,
-            consentPolicy: BrowserConsentPolicy(cooldown: 0.15),
+            consentPolicy: BrowserConsentPolicy(declineCooldown: 0.15, expiryCooldown: 0.15),
         )
         loop.start()
         // With a 0.15 s cooldown and 0.05 s polls, a decline suppresses a few
@@ -243,6 +253,45 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         _ = spy.resolveBrowserConsent(granted: true)
         await waitFor(recorder.startCalled, timeout: .seconds(3))
         XCTAssertTrue(recorder.startCalled, "a granted prompt must still record")
+        loop.stop()
+    }
+
+    /// The point of telling the two apart: a prompt nobody answered must not
+    /// buy the same silence as a refusal. The user was away, not opposed.
+    func testAnExpiredPromptIsAskedAgainSoon() async {
+        let spy = ParkingConsentSpy()
+        let (loop, _) = makeLoop(
+            detector: SwappableDetector(browserMeeting()),
+            spy: spy,
+            consentPolicy: BrowserConsentPolicy(declineCooldown: 60, expiryCooldown: 0.1),
+        )
+        loop.start()
+
+        await waitFor(spy.isParked)
+        spy.expire()
+        await waitFor(spy.calls >= 2, timeout: .seconds(3))
+        XCTAssertGreaterThanOrEqual(spy.calls, 2, "an unanswered prompt must be re-asked once its short cooldown passes")
+
+        _ = spy.resolveBrowserConsent(granted: false)
+        loop.stop()
+    }
+
+    /// And the mirror image, with the same numbers: an explicit no stays quiet
+    /// for the long cooldown. Without the distinction this test and the one
+    /// above cannot both hold.
+    func testAnExplicitDeclineStaysQuiet() async {
+        let spy = ParkingConsentSpy()
+        let (loop, _) = makeLoop(
+            detector: SwappableDetector(browserMeeting()),
+            spy: spy,
+            consentPolicy: BrowserConsentPolicy(declineCooldown: 60, expiryCooldown: 0.1),
+        )
+        loop.start()
+
+        await waitFor(spy.isParked)
+        _ = spy.resolveBrowserConsent(granted: false)
+        try? await Task.sleep(nanoseconds: 500_000_000) // ten polls, five expiry cooldowns
+        XCTAssertEqual(spy.calls, 1, "a refusal must not be re-asked within the decline cooldown")
         loop.stop()
     }
 
