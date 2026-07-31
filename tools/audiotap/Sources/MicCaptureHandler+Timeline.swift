@@ -26,6 +26,19 @@ extension MicCaptureHandler {
         Self.writeSilence(frames: silence, to: outputFile)
     }
 
+    /// A steady clock skew (mic crystal a little slower than the mach clock)
+    /// back-fills a handful of frames every few seconds. Logging each one buries
+    /// the export in noise, so only fills at or above this duration get a line.
+    static let gapFillLogMinSeconds = 0.05
+
+    /// Whether a gap fill of `frames` at `sampleRate` is large enough to log.
+    /// Sub-threshold fills are the harmless clock-skew slivers; at or above it
+    /// the gap is long enough to be a genuine restart worth one line. Pure so it
+    /// can be unit-tested without touching a file or an engine.
+    static func shouldLogGapFill(frames: Int, sampleRate: Double) -> Bool {
+        Double(frames) >= sampleRate * gapFillLogMinSeconds
+    }
+
     /// Write `frames` zeroed frames to `file` in its processing format. Static
     /// (engine-free) so it can be unit-tested directly against an `AVAudioFile`
     /// without any engine setup.
@@ -41,7 +54,9 @@ extension MicCaptureHandler {
         }
         do {
             try file.write(from: silentBuffer)
-            logger.info("Mic: filled \(frames) silent frames for a device-restart gap")
+            if shouldLogGapFill(frames: frames, sampleRate: file.processingFormat.sampleRate) {
+                logger.info("Mic: inserted \(frames) silent frames to keep the track aligned to wall-clock")
+            }
         } catch {
             logger.warning("Mic timeline gap-fill write error: \(error.localizedDescription, privacy: .public)")
         }

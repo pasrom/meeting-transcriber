@@ -61,4 +61,26 @@ final class MicCaptureHandlerTimelineTests: XCTestCase {
 
         XCTAssertEqual(file.length, 0, "no gap, no write")
     }
+
+    // A mic whose sample clock runs a little slower than the mach clock
+    // back-fills a few frames of silence roughly every 5 s. Those sub-50ms
+    // slivers are load-bearing (they keep the track wall-clock aligned) but
+    // logging each one flooded the diagnostic export (2427 of 2590 lines in
+    // the issue #524 log), and the "device-restart gap" wording sent triage
+    // the wrong way. Only fills long enough to be a real gap should be logged.
+    func testTinyClockSkewFillsAreNotLogged() {
+        XCTAssertFalse(MicCaptureHandler.shouldLogGapFill(frames: 10, sampleRate: speechSampleRate))
+        XCTAssertFalse(MicCaptureHandler.shouldLogGapFill(frames: 799, sampleRate: speechSampleRate))
+    }
+
+    func testRealGapFillsAreLogged() {
+        XCTAssertTrue(MicCaptureHandler.shouldLogGapFill(frames: 800, sampleRate: speechSampleRate))
+        XCTAssertTrue(MicCaptureHandler.shouldLogGapFill(frames: 14400, sampleRate: speechSampleRate))
+    }
+
+    func testGapFillLogThresholdScalesWithSampleRate() {
+        // 50 ms at 48 kHz is 2400 frames.
+        XCTAssertFalse(MicCaptureHandler.shouldLogGapFill(frames: 2399, sampleRate: 48000))
+        XCTAssertTrue(MicCaptureHandler.shouldLogGapFill(frames: 2400, sampleRate: 48000))
+    }
 }
