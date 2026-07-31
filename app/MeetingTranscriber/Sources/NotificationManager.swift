@@ -25,12 +25,12 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     static let consentCategoryID = "BROWSER_MEETING_CONSENT"
     static let recordActionID = "BROWSER_MEETING_RECORD"
     static let ignoreActionID = "BROWSER_MEETING_IGNORE"
-    /// An unanswered prompt counts as "ignore" after this long, so a missed
-    /// prompt doesn't block the watch loop indefinitely. Independent of
-    /// `BrowserConsentPolicy.cooldown` (post-decline re-prompt suppression),
-    /// which happens to share this value — the two are separate knobs, don't
-    /// unify them.
-    static let consentPromptTimeout: TimeInterval = 60
+    /// How long an unanswered prompt stays open before it resolves itself as
+    /// `.expired`. Five minutes, not one: it no longer blocks anything (the
+    /// watch loop kept polling since issue #543), and a minute was only ever
+    /// enough for someone sitting at the screen. Independent of the
+    /// `BrowserConsentPolicy` cooldowns, which govern the NEXT question.
+    static let consentPromptTimeout: TimeInterval = 300
 
     /// Owns the consent prompt's register/resolve/timeout/race logic (unit-tested
     /// in `ConsentPromptCoordinatorTests`); this class only wires the
@@ -193,11 +193,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     }
 
     /// Post an actionable "record this browser meeting?" prompt and await the
-    /// user's choice (issue #503). Returns false when notifications can't be
-    /// delivered (no bundle / not set up) so we never record without a visible
-    /// prompt, and false on timeout/ignore/dismiss.
+    /// user's choice (issue #503). Returns `.declined` when notifications can't
+    /// be delivered (no bundle / not set up) so we never record without a
+    /// visible prompt, `.expired` when nobody answered in time.
     @MainActor
-    func askToRecord(title: String, body: String) async -> Bool {
+    func askToRecord(title: String, body: String) async -> ConsentAnswer {
         let deliverable = isSetUp && canDeliver()
 
         #if !APPSTORE
@@ -210,16 +210,16 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
             recentNotificationsLog.record(title: title, body: body, posted: deliverable)
         #endif
 
-        guard deliverable else { return false }
+        guard deliverable else { return .declined }
         let id = UUID().uuidString
-        let granted = await consentCoordinator.awaitDecision(id: id) { [self] in
+        let answer = await consentCoordinator.awaitDecision(id: id) { [self] in
             postConsentNotification(id: id, title: title, body: body)
         }
         // However it resolved — tapped, expired, or answered over RPC — the
         // question is settled, so the prompt must not stay in Notification
         // Center asking about a meeting that has moved on.
         scheduler.removeDelivered(withIdentifiers: [id])
-        return granted
+        return answer
     }
 
     /// How a posted notification would be presented, for

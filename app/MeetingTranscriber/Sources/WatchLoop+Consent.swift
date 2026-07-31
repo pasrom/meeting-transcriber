@@ -37,11 +37,11 @@ extension WatchLoop {
         pendingConsentApp = app
         consentTask = Task { [weak self] in
             guard let self else { return }
-            let granted = await notifier.askToRecord(
+            let answer = await notifier.askToRecord(
                 title: "Record browser meeting?",
                 body: "A meeting is active in \(app).",
             )
-            finishConsent(for: meeting, granted: granted)
+            finishConsent(for: meeting, answer: answer)
         }
         return true
     }
@@ -68,12 +68,18 @@ extension WatchLoop {
 
     /// Land the user's answer. Main-actor isolated like the rest of
     /// `WatchLoop`, so it cannot race the poll loop's reads.
-    private func finishConsent(for meeting: DetectedMeeting, granted: Bool) {
+    private func finishConsent(for meeting: DetectedMeeting, answer: ConsentAnswer) {
         let app = meeting.pattern.appName
         clearConsentState()
 
-        guard granted else {
-            consentPolicy.recordDecline(app: app, now: nowProvider())
+        guard answer.isGranted else {
+            // A refusal and a prompt nobody saw are different facts, and the
+            // cooldown treats them differently: ten minutes of quiet after a
+            // no, one minute after silence.
+            switch answer {
+            case .expired: consentPolicy.recordExpiry(app: app, now: nowProvider())
+            default: consentPolicy.recordDecline(app: app, now: nowProvider())
+            }
             detector.reset(appName: app)
             return
         }

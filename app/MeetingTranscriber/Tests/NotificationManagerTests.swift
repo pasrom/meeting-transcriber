@@ -229,16 +229,16 @@ final class NotificationManagerTests: XCTestCase {
         // No app bundle / setUp never ran → we can't show a prompt, so default
         // to "don't record" rather than recording without asking.
         let manager = NotificationManager()
-        let granted = await manager.askToRecord(title: "Browser meeting", body: "Record?")
-        XCTAssertFalse(granted)
+        let answer = await manager.askToRecord(title: "Browser meeting", body: "Record?")
+        XCTAssertEqual(answer, .declined)
     }
 
     func testDefaultNotifierDeniesConsent() async {
         // The AppNotifying default (a notifier with no real prompt, e.g.
         // SilentNotifier) denies consent, so a browser meeting never records
         // without a visible prompt.
-        let granted = await SilentNotifier().askToRecord(title: "Browser meeting", body: "Record?")
-        XCTAssertFalse(granted)
+        let answer = await SilentNotifier().askToRecord(title: "Browser meeting", body: "Record?")
+        XCTAssertEqual(answer, .declined)
     }
 
     // MARK: - Helpers

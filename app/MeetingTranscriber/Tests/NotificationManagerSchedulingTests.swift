@@ -114,8 +114,8 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertEqual(posted.content.interruptionLevel, .timeSensitive)
 
         manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: NotificationManager.recordActionID)
-        let granted = await task.value
-        XCTAssertTrue(granted)
+        let answer = await task.value
+        XCTAssertEqual(answer, .granted)
     }
 
     func testAskToRecordIgnoreActionDeclines() async {
@@ -128,8 +128,8 @@ final class NotificationManagerSchedulingTests: XCTestCase {
             return
         }
         manager.resolveConsent(responseIdentifier: posted.identifier, actionIdentifier: NotificationManager.ignoreActionID)
-        let granted = await task.value
-        XCTAssertFalse(granted)
+        let answer = await task.value
+        XCTAssertEqual(answer, .declined)
     }
 
     /// A resolved prompt is withdrawn. macOS clears a notification the user

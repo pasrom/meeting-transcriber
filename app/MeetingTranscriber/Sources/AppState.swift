@@ -17,7 +17,7 @@ protocol AppNotifying {
     /// #503); true = record. `@MainActor` — the real prompt is UI. Defaults to
     /// false so a notifier without a prompt never records silently.
     @MainActor
-    func askToRecord(title: String, body: String) async -> Bool
+    func askToRecord(title: String, body: String) async -> ConsentAnswer
 
     /// Resolve a parked `askToRecord` prompt programmatically (the debug-RPC
     /// consent hook, issue #503); returns whether one was waiting. Lives on the
@@ -62,10 +62,11 @@ protocol AppNotifying {
 
 extension AppNotifying {
     // swiftlint:disable async_without_await
-    /// Deny by default — only `NotificationManager` shows a real prompt.
+    /// Deny by default — only `NotificationManager` shows a real prompt, and
+    /// "we could not ask" must never record.
     @MainActor
-    func askToRecord(title _: String, body _: String) async -> Bool {
-        false
+    func askToRecord(title _: String, body _: String) async -> ConsentAnswer {
+        .declined
     }
 
     /// Nothing to report by default. Notably this keeps

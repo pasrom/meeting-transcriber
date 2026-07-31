@@ -14,7 +14,7 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         await yieldUntilParked()
         coord.resolve(id: "a", granted: true)
         let result = await task.value
-        XCTAssertTrue(result)
+        XCTAssertEqual(result, .granted)
     }
 
     func testResolvesToDeniedAnswer() async {
@@ -23,14 +23,34 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         await yieldUntilParked()
         coord.resolve(id: "b", granted: false)
         let result = await task.value
-        XCTAssertFalse(result)
+        XCTAssertFalse(result.isGranted)
+    }
+
+    /// A timeout is reported as its own answer, not as a decline: the two mean
+    /// different things to the re-prompt cooldown (issue #543).
+    func testTimeoutIsDistinguishableFromADecline() async {
+        let instant: @Sendable (TimeInterval) async -> Void = { _ in }
+        let coordinator = ConsentPromptCoordinator(timeout: 0.01, sleep: instant)
+        let expired = await coordinator.awaitDecision(id: "a") {}
+        XCTAssertEqual(expired, .expired)
+
+        let slow: @Sendable (TimeInterval) async -> Void = { _ in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+        }
+        let answered = ConsentPromptCoordinator(timeout: 5, sleep: slow)
+        let task = Task { await answered.awaitDecision(id: "b") {} }
+        while !answered.resolvePending(granted: false) {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let declined = await task.value
+        XCTAssertEqual(declined, .declined)
     }
 
     func testUnansweredPromptTimesOutToDeny() async {
         // A short real timeout: an unanswered prompt resolves to "don't record".
         let coord = ConsentPromptCoordinator(timeout: 0.02)
         let result = await coord.awaitDecision(id: "c") {}
-        XCTAssertFalse(result)
+        XCTAssertFalse(result.isGranted)
     }
 
     func testSecondResolveIsIgnored() async {
@@ -43,7 +63,7 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         coord.resolve(id: "d", granted: true)
         coord.resolve(id: "d", granted: false)
         let result = await task.value
-        XCTAssertTrue(result)
+        XCTAssertEqual(result, .granted)
     }
 
     func testResolveForUnknownIdIsNoOp() {
@@ -68,7 +88,7 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         let resolved = coord.resolvePending(granted: true)
         XCTAssertTrue(resolved)
         let result = await task.value
-        XCTAssertTrue(result)
+        XCTAssertEqual(result, .granted)
     }
 
     func testResolvePendingResolvesAllParkedPrompts() async {
@@ -82,8 +102,8 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         XCTAssertTrue(resolved)
         let r1 = await t1.value
         let r2 = await t2.value
-        XCTAssertFalse(r1)
-        XCTAssertFalse(r2)
+        XCTAssertFalse(r1.isGranted)
+        XCTAssertFalse(r2.isGranted)
     }
 
     func testResolvePendingAfterResolveByIdIsNoOp() async {
@@ -93,7 +113,7 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         await yieldUntilParked()
         coord.resolve(id: "a", granted: true)
         let result = await task.value
-        XCTAssertTrue(result)
+        XCTAssertEqual(result, .granted)
         XCTAssertFalse(coord.resolvePending(granted: false))
     }
 
@@ -108,7 +128,7 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         let (ra, rb) = await (a, b)
         XCTAssertNotEqual(ra, rb, "exactly one racing resolvePending should see the pending prompt")
         let result = await task.value
-        XCTAssertTrue(result)
+        XCTAssertEqual(result, .granted)
     }
 
     /// Sleep briefly so the awaiting task registers its continuation inside

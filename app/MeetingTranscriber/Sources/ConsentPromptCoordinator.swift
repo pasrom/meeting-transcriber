@@ -13,7 +13,7 @@ import Foundation
 /// notification delegate and the timeout task resolve from arbitrary queues.
 final class ConsentPromptCoordinator: @unchecked Sendable {
     private let lock = NSLock()
-    private var pending: [String: CheckedContinuation<Bool, Never>] = [:]
+    private var pending: [String: CheckedContinuation<ConsentAnswer, Never>] = [:]
     private var timeouts: [String: Task<Void, Never>] = [:]
 
     private let timeout: TimeInterval
@@ -34,15 +34,16 @@ final class ConsentPromptCoordinator: @unchecked Sendable {
     /// Await the decision for `id`. `onParked` runs once the continuation is
     /// registered (the caller posts the notification there, so a fast answer
     /// can't race ahead of registration). Resolves via `resolve(id:granted:)`
-    /// or, if unanswered, `false` after the timeout.
-    func awaitDecision(id: String, onParked: @Sendable () -> Void) async -> Bool {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+    /// or, if unanswered, `.expired` after the timeout — reported separately
+    /// from a decline because the re-prompt cooldown treats them differently.
+    func awaitDecision(id: String, onParked: @Sendable () -> Void) async -> ConsentAnswer {
+        await withCheckedContinuation { (continuation: CheckedContinuation<ConsentAnswer, Never>) in
             let sleep = self.sleep
             let timeout = self.timeout
             let timeoutTask = Task { [weak self] in
                 await sleep(timeout)
                 guard !Task.isCancelled else { return }
-                self?.resolve(id: id, granted: false)
+                self?.resolve(id: id, answer: .expired)
             }
 
             lock.lock()
@@ -58,12 +59,18 @@ final class ConsentPromptCoordinator: @unchecked Sendable {
     /// removes it; later calls no-op. Cancels the timeout task so it doesn't
     /// linger once an answer arrives.
     func resolve(id: String, granted: Bool) {
+        resolve(id: id, answer: granted ? .granted : .declined)
+    }
+
+    /// The full form: a timeout resolves `.expired` through here, an answer
+    /// through the `granted:` overload above.
+    func resolve(id: String, answer: ConsentAnswer) {
         lock.lock()
         let continuation = pending.removeValue(forKey: id)
         let timeoutTask = timeouts.removeValue(forKey: id)
         lock.unlock()
         timeoutTask?.cancel()
-        continuation?.resume(returning: granted)
+        continuation?.resume(returning: answer)
     }
 
     /// Resolve every currently-pending prompt at once with `granted`, returning
@@ -83,8 +90,9 @@ final class ConsentPromptCoordinator: @unchecked Sendable {
         for task in timeoutTasks {
             task.cancel()
         }
+        let answer: ConsentAnswer = granted ? .granted : .declined
         for continuation in continuations {
-            continuation.resume(returning: granted)
+            continuation.resume(returning: answer)
         }
         return !continuations.isEmpty
     }
