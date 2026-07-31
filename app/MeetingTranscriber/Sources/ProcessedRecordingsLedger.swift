@@ -3,8 +3,15 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "ProcessedRecordingsLedger")
 
-/// File-backed ledger of mix-file paths that completed the pipeline
-/// successfully, backing `PipelineQueue`'s orphan-recovery skip list.
+/// File-backed ledger of mix-file paths the pipeline is finished with, backing
+/// `PipelineQueue`'s orphan-recovery skip list.
+///
+/// Finished, not succeeded. A recording lands here once its job reached any
+/// terminal state, and also when the user dismisses it. Recording the failures
+/// is the point: one that fails deterministically, say a silent capture that
+/// yields an empty transcript, would otherwise be re-picked as an orphan on
+/// every launch and fail again, with a notification each time. Re-importing by
+/// hand is the intended retry and never consults this list.
 ///
 /// Pure persistence over one JSON file (`processed_recordings.json` in
 /// `logDir`): a JSON array of standardized file paths (`[String]`), written
@@ -24,8 +31,8 @@ struct ProcessedRecordingsLedger {
         logDir.appendingPathComponent("processed_recordings.json")
     }
 
-    /// Load the set of mix paths that completed successfully. Returns an empty
-    /// set when the file is missing or unreadable/corrupt.
+    /// Load the set of mix paths the pipeline is finished with. Returns an
+    /// empty set when the file is missing or unreadable/corrupt.
     func load() -> Set<String> {
         guard let data = try? Data(contentsOf: path),
               let paths = try? JSONDecoder().decode([String].self, from: data) else {
@@ -34,7 +41,7 @@ struct ProcessedRecordingsLedger {
         return Set(paths)
     }
 
-    /// Record that a job's mix file was successfully processed. Nil mixPath
+    /// Record that the pipeline is finished with a job's mix file. Nil mixPath
     /// (paired imports without a `_mix.wav` source) is a no-op — there's no
     /// path to track for orphan recovery.
     func markProcessed(mixPath: URL?) {

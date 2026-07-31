@@ -88,7 +88,8 @@ extension PipelineQueue {
 
     /// Scan `recordingsDir` for `*_mix.wav` files not tracked by any loaded job.
     /// Creates recovery jobs for untracked recordings younger than `maxAge`.
-    /// Skips files that were already successfully processed (tracked in processed_recordings.json).
+    /// Skips files the pipeline is already finished with, successfully or not
+    /// (tracked in processed_recordings.json).
     ///
     /// The directory scan + per-file `attributesOfItem` calls run on a
     /// detached task — startup callers don't block the UI on a potentially
