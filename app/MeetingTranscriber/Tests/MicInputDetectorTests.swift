@@ -26,6 +26,39 @@ final class MicInputDetectorTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
+    /// Exercises the real Core Audio bridging, which the injected
+    /// `processProvider` otherwise hides: hand-rolled property sizes and an
+    /// `UnsafeMutablePointer` round-trip for the CFString. A mistake there
+    /// yields garbage rather than a compile error, so assert the shape of what
+    /// comes back. The list may legitimately be empty on a headless runner.
+    func testSystemAudioProcessesReturnsWellFormedSnapshots() {
+        for snapshot in MicInputDetector.systemAudioProcesses() {
+            XCTAssertFalse(
+                snapshot.bundleID.isEmpty,
+                "a snapshot is only produced for a process that reported a bundle ID",
+            )
+            XCTAssertGreaterThan(snapshot.pid, 0, "\(snapshot.bundleID) reported a non-positive pid")
+        }
+    }
+
+    /// A watched app with no `AppMeetingPattern` must still detect, with a
+    /// synthesised pattern and the placeholder title, instead of dropping the
+    /// meeting on the floor.
+    func testWatchedAppWithoutMeetingPatternStillDetects() {
+        let detector = MicInputDetector(
+            patterns: [MicInputDetector.MicPattern(appName: "Unlisted Call App", bundleIDs: ["com.example.unlisted"])],
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.processProvider = { [snapshot("com.example.unlisted", pid: 99)] }
+
+        let result = detector.checkOnce()
+        XCTAssertEqual(result?.pattern.appName, "Unlisted Call App")
+        XCTAssertEqual(result?.pattern.ownerNames, ["Unlisted Call App"])
+        XCTAssertEqual(result?.windowPID, 99)
+        XCTAssertEqual(result?.windowTitle, "Unlisted Call App Call")
+    }
+
     /// The default install watches none of these apps, and then this channel
     /// must cost nothing: no Core Audio enumeration per poll, and no diagnostic
     /// naming the bundle of every app that touches the mic.

@@ -36,6 +36,26 @@ final class CompositeMeetingDetectorTests: XCTestCase {
         XCTAssertEqual(composite.checkOnce()?.pattern.appName, "WeChat")
     }
 
+    func testNoStrategySeesAnythingReturnsNil() {
+        let mic = MicInputDetector(confirmationCount: 1)
+        mic.windowListProvider = { [] }
+        mic.processProvider = { [] }
+        let composite = CompositeMeetingDetector([assertionDetector(active: false), mic])
+        XCTAssertNil(composite.checkOnce())
+    }
+
+    func testResetReachesEveryStrategy() throws {
+        // Observable proof that the fan-out happens: after a reset naming the
+        // app, the mic strategy's cooldown suppresses the very same process
+        // snapshot that fired a moment earlier.
+        let mic = micDetector()
+        let composite = CompositeMeetingDetector([assertionDetector(active: false), mic])
+        let meeting = try XCTUnwrap(composite.checkOnce())
+
+        composite.reset(appName: meeting.pattern.appName)
+        XCTAssertNil(composite.checkOnce(), "the reset must have reached the mic strategy's cooldown")
+    }
+
     func testLivenessIsPerStrategyOr() throws {
         let mic = micDetector()
         let composite = CompositeMeetingDetector([assertionDetector(active: false), mic])
