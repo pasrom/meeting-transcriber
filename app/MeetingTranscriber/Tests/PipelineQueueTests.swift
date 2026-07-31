@@ -1014,6 +1014,58 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// Preparing the mix for diarization sits outside the block that treats a
+    /// diarization failure as a warning, so a file problem there fails the whole
+    /// job instead of costing only the speaker labels. The transcript is already
+    /// finished at that point and stage 3 tolerates a missing mix, so losing it
+    /// buys nothing.
+    ///
+    /// Only a paired source can reach that failure: a single-source job already
+    /// wrote the 16 kHz mix during transcription, so the step returns early. The
+    /// sources are removed once transcription has consumed them, which is the
+    /// state a concurrent run or a user tidying a folder can produce.
+    func testDiarizationLosingItsAudioCostsOnlySpeakerLabels() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Recorded fine")]
+        let job = try makeDualSourceJob(title: "Vanishing Sources")
+
+        // The diarizer is built between transcription and mix preparation, so
+        // building it is where the sources can be taken away: a concurrent run
+        // relocating staged audio, or somebody tidying the folder mid-job.
+        let diar = MockDiarization()
+        let removeEverySource = {
+            for path in [job.appPath, job.micPath, job.mixPath].compactMap(\.self) {
+                try? FileManager.default.removeItem(at: path)
+            }
+        }
+        let queue = makeCapturingQueue(
+            engine: engine,
+            diar: diar,
+            protocolGen: MockProtocolGen(),
+            beforeDiarizing: removeEverySource,
+        )
+
+        queue.insertJobForTesting(job)
+        await queue.processNext()
+
+        let finished = queue.jobs.first { $0.id == job.id }
+        XCTAssertEqual(
+            finished?.state, .done,
+            "job ended in \(String(describing: finished?.state)): \(finished?.error ?? "no error recorded")",
+        )
+        XCTAssertTrue(
+            finished?.warnings.contains { $0.contains("Diarization") } ?? false,
+            "the lost diarization was not reported as a warning",
+        )
+        // The point of the whole change: the finished transcript is kept.
+        let transcript = finished?.transcriptPath
+        XCTAssertNotNil(transcript, "no transcript was written")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: transcript?.path ?? ""),
+            "the transcript was recorded but not saved",
+        )
+    }
+
     func testProcessNextEmptyTranscriptSetsError() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [] // empty = no speech
@@ -1064,10 +1116,14 @@ final class PipelineQueueTests: XCTestCase {
         protocolGen: MockProtocolGen,
         micLabel: String = "Me",
         stagingDir: URL? = nil,
+        beforeDiarizing: (() -> Void)? = nil,
     ) -> PipelineQueue {
         PipelineQueue(
             engine: engine,
-            diarizationFactory: { diar },
+            diarizationFactory: {
+                beforeDiarizing?()
+                return diar
+            },
             diarizationFactoryWithMode: nil,
             protocolGeneratorFactory: { protocolGen },
             outputDir: tmpDir,

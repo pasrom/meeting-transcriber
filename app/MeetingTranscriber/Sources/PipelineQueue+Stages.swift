@@ -107,7 +107,7 @@ extension PipelineQueue {
                 return
             }
 
-            let finalTranscript = try await diarize(
+            let finalTranscript = await diarize(
                 transcription, ctx: ctx, engine: engine,
                 workDir: workDir, outputDir: outputDir,
             )
@@ -222,10 +222,15 @@ extension PipelineQueue {
     /// diarization is disabled, unavailable, or fails. Drives the speaker-naming
     /// dialog loop and persists naming data + recognition forensics as side
     /// effects.
+    /// Cannot throw, and that is the point: every failure inside is caught and
+    /// downgraded to a warning, so a diarization problem costs the speaker
+    /// labels and never the transcript. Keeping that in the signature means the
+    /// compiler, not a comment, refuses the next throwing call added outside the
+    /// block.
     private func diarize(
         _ transcription: TranscriptionOutput, ctx: JobContext,
         engine: any TranscribingEngine, workDir: URL, outputDir: URL,
-    ) async throws -> String {
+    ) async -> String {
         var finalTranscript = transcription.transcript
 
         guard diarizeEnabled, let diarizationFactory else { return finalTranscript }
@@ -250,9 +255,14 @@ extension PipelineQueue {
 
         updateJobState(id: ctx.jobID, to: .diarizing)
         startElapsedTimer()
-        let mix16k = try await ensureMixAudio(workDir: workDir, ctx: ctx)
-
         do {
+            // Inside the block on purpose: preparing the mix is part of
+            // diarizing, and this catch is what keeps a diarization problem from
+            // costing more than the speaker labels. Outside it, a missing or
+            // unreadable source here failed the whole job, discarding a
+            // transcript that was already finished. Stage 3 tolerates a missing
+            // mix, so there is nothing further downstream that needs it.
+            let mix16k = try await ensureMixAudio(workDir: workDir, ctx: ctx)
             let speakerCount = numSpeakers > 0 ? numSpeakers : nil
             let run = try await runDiarization(
                 diarizeProcess: diarizeProcess, useDualTrack: transcription.isDualSource,
