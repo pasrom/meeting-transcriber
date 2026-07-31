@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import AudioTapLib
 import AVFoundation
 import os.log
 import SwiftUI
@@ -37,7 +38,7 @@ struct AdvancedSettingsView: View {
                     label: "Screen Recording",
                     detail: Self.screenRecordingDetail,
                     granted: screenRecordingOK,
-                    help: "System Settings → Privacy & Security → Screen Recording → enable Meeting Transcriber",
+                    help: "\(SystemSettingsPaths.screenRecording) → enable Meeting Transcriber",
                     settingsURL: PrivacyPane.screenCapture.url,
                 )
                 PermissionRow(

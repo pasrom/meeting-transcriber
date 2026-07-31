@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -63,7 +64,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         // intercepting the meeting app's output (issue #524). Name both so the
         // notification is actionable instead of a dead end.
         let message = ChannelHealthController.asymmetricSilenceMessage(for: .app)
-        XCTAssertTrue(message.contains("Screen & System Audio Recording"))
+        XCTAssertTrue(message.contains(SystemSettingsPaths.screenRecording))
         XCTAssertTrue(message.contains("SoundSource"))
     }
 

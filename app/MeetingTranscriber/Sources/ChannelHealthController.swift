@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 import Observation
 
@@ -191,8 +192,8 @@ final class ChannelHealthController {
         switch channel {
         case .app:
             "The app-audio channel went silent while the mic is still carrying audio. "
-                + "Enable Meeting Transcriber under System Settings → Privacy & Security → "
-                + "Screen & System Audio Recording, and check whether a third-party audio tool "
+                + "Enable Meeting Transcriber under \(SystemSettingsPaths.screenRecording), "
+                + "and check whether a third-party audio tool "
                 + "(SoundSource, Audio Hijack, Loopback, Krisp) is intercepting the meeting app's audio."
 
         case .mic:
