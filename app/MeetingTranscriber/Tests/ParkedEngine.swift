@@ -24,17 +24,25 @@ final class ParkedEngine: TranscribingEngine {
     private(set) var isParked = false
 
     private var parkedContinuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
 
     func loadModel() {}
 
     func transcribeSegments(audioPath _: URL) async -> [TimestampedSegment] {
         isParked = true
-        await withCheckedContinuation { parkedContinuation = $0 }
+        // Parking only when the release has not already happened keeps the two
+        // orderings equivalent. Otherwise a run that arrives here after the
+        // caller gave up waiting would park with nobody left to release it, and
+        // the suite would hang rather than fail.
+        if !isReleased {
+            await withCheckedContinuation { parkedContinuation = $0 }
+        }
         return segmentsToReturn
     }
 
-    /// Let the parked run continue.
+    /// Let the parked run continue, whether or not it has parked yet.
     func release() {
+        isReleased = true
         parkedContinuation?.resume()
         parkedContinuation = nil
     }
