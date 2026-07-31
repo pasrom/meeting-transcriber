@@ -50,6 +50,24 @@ extension PipelineQueue {
         }
     }
 
+    /// The immutable per-job inputs the stages read, derived once so every
+    /// stage agrees on the same basename.
+    private static func makeContext(for job: PipelineJob) -> JobContext {
+        JobContext(
+            jobID: job.id,
+            shortID: job.shortID,
+            title: job.meetingTitle,
+            mixPath: job.mixPath,
+            appPath: job.appPath,
+            micPath: job.micPath,
+            micDelay: job.micDelay,
+            participants: job.participants,
+            // Anchor the basename on the meeting start; reimport/orphan jobs
+            // have no recorded start, so fall back to the enqueue time.
+            slug: namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.meetingStartTime ?? job.enqueuedAt),
+        )
+    }
+
     /// Thin orchestrator: take the next waiting job and run it through the
     /// pipeline — transcribe → diarize → generate protocol → done.
     func processNext() async {
@@ -63,19 +81,7 @@ extension PipelineQueue {
             return
         }
         let job = jobs[index]
-        let ctx = JobContext(
-            jobID: job.id,
-            shortID: job.shortID,
-            title: job.meetingTitle,
-            mixPath: job.mixPath,
-            appPath: job.appPath,
-            micPath: job.micPath,
-            micDelay: job.micDelay,
-            participants: job.participants,
-            // Anchor the basename on the meeting start; reimport/orphan jobs
-            // have no recorded start, so fall back to the enqueue time.
-            slug: Self.namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.meetingStartTime ?? job.enqueuedAt),
-        )
+        let ctx = Self.makeContext(for: job)
 
         do {
             // Temp directory for intermediate 16kHz files, cleaned up on any exit.
