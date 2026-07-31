@@ -687,6 +687,15 @@ extension PipelineQueue {
             case .move:
                 break
             }
+            // The policy decides from path shape alone, so a source another run
+            // of this job already relocated still reads as `.move`. Falling
+            // through would delete that run's destination copy and then fail the
+            // move on the missing source, and since staging audio is moved
+            // rather than copied, no copy would remain anywhere.
+            guard fm.fileExists(atPath: src.path) else {
+                logger.info("Audio already relocated, skipping: \(name, privacy: .private)")
+                continue
+            }
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: src, to: dst)

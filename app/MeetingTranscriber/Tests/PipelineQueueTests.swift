@@ -883,6 +883,7 @@ final class PipelineQueueTests: XCTestCase {
     /// share.
     private func makeConcurrentRunQueue(
         engine: any TranscribingEngine, name: String,
+        outputDir: URL? = nil, stagingDir: URL? = nil,
     ) throws -> PipelineQueue {
         let ownDir = tmpDir.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: ownDir, withIntermediateDirectories: true)
@@ -891,8 +892,11 @@ final class PipelineQueueTests: XCTestCase {
             diarizationFactory: { MockDiarization() },
             diarizationFactoryWithMode: nil,
             protocolGeneratorFactory: { MockProtocolGen() },
-            outputDir: ownDir,
+            outputDir: outputDir ?? ownDir,
             logDir: ownDir,
+            // Default keeps sources outside staging, i.e. user-picked imports
+            // the pipeline leaves alone; pass one to exercise the relocation.
+            stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: true,
             numSpeakers: 0,
             micLabel: "Me",
@@ -943,6 +947,70 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertNotEqual(
             first.jobs.first?.state, .error,
             "first run failed with: \(first.jobs.first?.error ?? "no error recorded")",
+        )
+    }
+
+    /// Two runs that both reach the end now both try to relocate the same
+    /// staging audio. The relocation deletes an existing destination before
+    /// moving onto it, and the policy that picks `.move` only looks at path
+    /// shape, never at whether the source still exists. So the second finisher
+    /// deletes the recording the first one persisted and then fails its move
+    /// into a swallowed warning, leaving no copy anywhere: staging was emptied
+    /// by the first run, because audio is moved out of it, not copied.
+    func testSecondFinishingRunDoesNotDeleteThePersistedRecording() async throws {
+        let stagingDir = tmpDir.appendingPathComponent("staging")
+        let sharedOutputDir = tmpDir.appendingPathComponent("shared-output")
+        for dir in [stagingDir, sharedOutputDir] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        let parked = ParkedEngine()
+        parked.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "First run speaking")]
+        let secondEngine = MockEngine()
+        secondEngine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Second run speaking")]
+
+        let first = try makeConcurrentRunQueue(
+            engine: parked, name: "first-persist",
+            outputDir: sharedOutputDir, stagingDir: stagingDir,
+        )
+        let second = try makeConcurrentRunQueue(
+            engine: secondEngine, name: "second-persist",
+            outputDir: sharedOutputDir, stagingDir: stagingDir,
+        )
+
+        // Source inside the staging dir, so the persistence policy relocates it.
+        let stagedAudio = stagingDir.appendingPathComponent("meeting_mix.wav")
+        let sourceAudio = try createTestAudioFile(in: tmpDir)
+        try FileManager.default.copyItem(at: sourceAudio, to: stagedAudio)
+        let job = PipelineJob(
+            meetingTitle: "Long Call",
+            appName: "Teams",
+            mixPath: stagedAudio,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        first.insertJobForTesting(job)
+        second.insertJobForTesting(job)
+
+        async let firstRun: Void = first.processNext()
+        await waitFor(parked.isParked, timeout: .seconds(5))
+        // The second run finishes first and relocates the audio.
+        await second.processNext()
+        let recordingsDir = sharedOutputDir.appendingPathComponent("recordings")
+        let persisted = try FileManager.default
+            .contentsOfDirectory(atPath: recordingsDir.path)
+            .filter { $0.hasSuffix(RecordingFileSuffix.mix) }
+        XCTAssertEqual(persisted.count, 1, "second run did not persist the recording")
+
+        // Now let the first run finish on top of it.
+        parked.release()
+        await firstRun
+
+        let survivors = try FileManager.default
+            .contentsOfDirectory(atPath: recordingsDir.path)
+            .filter { $0.hasSuffix(RecordingFileSuffix.mix) }
+        XCTAssertEqual(
+            survivors, persisted,
+            "the finished run deleted the recording the other run had already persisted",
         )
     }
 
