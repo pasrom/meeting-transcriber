@@ -191,7 +191,9 @@ final class ChannelHealthController {
         switch channel {
         case .app:
             "The app-audio channel went silent while the mic is still carrying audio. "
-                + "Check the meeting app's audio settings or system audio permission."
+                + "Enable Meeting Transcriber under System Settings → Privacy & Security → "
+                + "Screen & System Audio Recording, and check whether a third-party audio tool "
+                + "(SoundSource, Audio Hijack, Loopback, Krisp) is intercepting the meeting app's audio."
 
         case .mic:
             "The microphone went silent while the app audio is still recording. "

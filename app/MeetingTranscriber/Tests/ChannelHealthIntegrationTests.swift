@@ -57,6 +57,16 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertTrue(micMessage.lowercased().contains("microphone"))
     }
 
+    func testAppSilenceMessagePointsAtPermissionAndAudioTools() {
+        // A silent far side is most often a missing Screen & System Audio
+        // Recording grant (the tap needs it) or a third-party audio utility
+        // intercepting the meeting app's output (issue #524). Name both so the
+        // notification is actionable instead of a dead end.
+        let message = ChannelHealthController.asymmetricSilenceMessage(for: .app)
+        XCTAssertTrue(message.contains("Screen & System Audio Recording"))
+        XCTAssertTrue(message.contains("SoundSource"))
+    }
+
     // MARK: - Production scenario: user mutes their mic mid-meeting
 
     func testMutedMicWithAppSpeechFiresMicSilent() {
