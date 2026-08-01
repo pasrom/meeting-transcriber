@@ -108,6 +108,30 @@ extension PipelineQueue {
         )
     }
 
+    /// Put the transcript on disk as soon as transcription produced it.
+    ///
+    /// Diarization is where this pipeline dies hardest, and a model that crashes
+    /// on a given recording crashes again next launch, because the restored job
+    /// runs the same stage over the same audio. Without this write the
+    /// transcript is persisted in no round at all and the recording is lost
+    /// however often it is retried. Stage 3 writes the same file again with the
+    /// labelled version, so on every path that reaches it this costs one extra
+    /// pass over text already in hand and leaves no trace.
+    ///
+    /// On the paths that do not reach stage 3, the draft is the point, and it
+    /// stays: an unlabelled transcript remains for a job that was cancelled or
+    /// killed mid-diarization, where previously nothing did. That is the trade,
+    /// not an oversight.
+    ///
+    /// Best effort on purpose: a job that cannot write here will report the real
+    /// problem when stage 3 tries again and does not swallow it.
+    private func saveTranscriptDraft(_ transcript: String, ctx: JobContext, outputDir: URL) {
+        _ = try? ProtocolGenerator.saveTranscript(
+            transcript, basename: ctx.slug,
+            dir: outputDir.appendingPathComponent("protocols"),
+        )
+    }
+
     /// Thin orchestrator: take the next waiting job and run it through the
     /// pipeline — transcribe → diarize → generate protocol → done.
     func processNext() async {
@@ -158,6 +182,8 @@ extension PipelineQueue {
                 triggerProcessing()
                 return
             }
+
+            saveTranscriptDraft(transcription.transcript, ctx: ctx, outputDir: outputDir)
 
             let finalTranscript = await diarize(
                 transcription, ctx: ctx, engine: engine,

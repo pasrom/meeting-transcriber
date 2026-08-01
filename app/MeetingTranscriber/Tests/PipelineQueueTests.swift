@@ -1535,6 +1535,88 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The transcript reaches disk before the diarization stage begins, rather
+    /// than only after it. Asked at the moment the diarizer is built, which is
+    /// that stage's first act: nothing later in it touches this directory, so
+    /// present at entry means present throughout.
+    func testTheTranscriptIsOnDiskBeforeDiarizationBegins() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Readable early")]
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+
+        var draftsAtDiarizationEntry: [String] = []
+        let queue = PipelineQueue(
+            engine: engine,
+            diarizationFactory: {
+                let names = (try? FileManager.default
+                    .contentsOfDirectory(atPath: protocolsDir.path)) ?? []
+                draftsAtDiarizationEntry = names.compactMap { name in
+                    try? String(contentsOf: protocolsDir.appendingPathComponent(name), encoding: .utf8)
+                }
+                return MockDiarization()
+            },
+            diarizationFactoryWithMode: nil,
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            diarizeEnabled: true,
+            numSpeakers: 0,
+            micLabel: "Me",
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Long Meeting", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+        await queue.processNext()
+
+        // Reading the content, not just the name: an implementation writing an
+        // empty or placeholder file would satisfy a presence check and save
+        // nothing.
+        XCTAssertTrue(
+            draftsAtDiarizationEntry.contains { $0.contains("Readable early") },
+            "the spoken text was not on disk when diarization began: \(draftsAtDiarizationEntry)",
+        )
+    }
+
+    /// The early write puts the unlabelled transcript on disk. Stage 3 has to
+    /// replace it with the labelled one, or the change would trade a readable
+    /// intermediate for a permanently worse result.
+    func testTheFinishedTranscriptIsTheLabelledOneNotTheEarlyDraft() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "First line"),
+            TimestampedSegment(start: 5, end: 10, text: "Second line"),
+        ]
+        let queue = makeCapturingQueue(
+            engine: engine, diar: MockDiarization(), protocolGen: MockProtocolGen(),
+        )
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Labelled Result", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+        await queue.processNext()
+
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        let transcripts = try FileManager.default
+            .contentsOfDirectory(atPath: protocolsDir.path)
+            .filter { $0.hasSuffix(".txt") }
+        XCTAssertEqual(transcripts.count, 1, "the early draft was left behind as a second file")
+        let saved = try String(contentsOf: protocolsDir.appendingPathComponent(transcripts[0]), encoding: .utf8)
+        // The label is the mock diarizer's; what matters is that some label is
+        // there at all, since the early draft carries none.
+        XCTAssertTrue(
+            saved.contains("SPEAKER_"),
+            "the file kept the unlabelled draft instead of the diarized transcript: \(saved)",
+        )
+        XCTAssertFalse(saved.isEmpty)
+    }
+
     func testProcessNextEmptyTranscriptSetsError() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [] // empty = no speech
