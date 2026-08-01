@@ -612,7 +612,79 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// The re-materialization point of issue #558: a queue built while its
+    /// predecessor is still working reads the same snapshot, where the job is
+    /// still recorded as active, resets it to waiting and starts it again.
+    func testLoadSnapshotSkipsAJobThatIsAlreadyRunning() throws {
+        let mixPath = tmpDir.appendingPathComponent("in_flight_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Long Call",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .transcribing
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let registry = InFlightRunRegistry()
+        XCTAssertEqual(registry.begin(jobID: job.id, mixPath: mixPath), .claimed, "test premise: the claim was free")
+
+        let freshQueue = PipelineQueue(logDir: tmpDir, inFlightRuns: registry)
+        freshQueue.loadSnapshot()
+
+        XCTAssertTrue(
+            freshQueue.jobs.isEmpty,
+            "restored a job another queue is still running",
+        )
+    }
+
+    /// Without the job ID in play, a restored job whose claim is free must still
+    /// come back, or the filter would quietly eat ordinary crash recovery.
+    func testLoadSnapshotStillRestoresAJobNobodyIsRunning() throws {
+        let mixPath = tmpDir.appendingPathComponent("idle_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Interrupted Call",
+            appName: "Teams",
+            mixPath: mixPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .transcribing
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir, inFlightRuns: InFlightRunRegistry())
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1)
+        XCTAssertEqual(freshQueue.jobs.first?.state, .waiting)
+    }
+
     // MARK: - Orphaned Recording Recovery Tests
+
+    /// The scan reaches the same recording under a fresh job ID, so the audio
+    /// path is the only thing tying it to the run already under way.
+    func testRecoverSkipsARecordingThatIsAlreadyRunning() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let registry = InFlightRunRegistry()
+        XCTAssertEqual(registry.begin(jobID: UUID(), mixPath: mixFile), .claimed, "test premise: the claim was free")
+
+        let freshQueue = PipelineQueue(logDir: tmpDir, inFlightRuns: registry)
+        await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        XCTAssertTrue(
+            freshQueue.jobs.isEmpty,
+            "recovered a recording another queue is still running",
+        )
+    }
 
     func testRecoverFindsUntrackedMixWav() async throws {
         let recDir = tmpDir.appendingPathComponent("recordings")
@@ -936,6 +1008,7 @@ final class PipelineQueueTests: XCTestCase {
     private func makeConcurrentRunQueue(
         engine: any TranscribingEngine, name: String,
         outputDir: URL? = nil, stagingDir: URL? = nil,
+        inFlightRuns: InFlightRunRegistry? = nil,
     ) throws -> PipelineQueue {
         let ownDir = tmpDir.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: ownDir, withIntermediateDirectories: true)
@@ -952,6 +1025,12 @@ final class PipelineQueueTests: XCTestCase {
             diarizeEnabled: true,
             numSpeakers: 0,
             micLabel: "Me",
+            // A fresh registry per CALL, not per test: the concurrency tests
+            // build two queues that must not see each other's claims, or the
+            // second queue gives its job up and the test passes on an empty
+            // list without exercising anything. Hoisting this into setUp would
+            // gut them silently.
+            inFlightRuns: inFlightRuns ?? InFlightRunRegistry(),
         )
     }
 
@@ -1116,6 +1195,250 @@ final class PipelineQueueTests: XCTestCase {
             FileManager.default.fileExists(atPath: transcript?.path ?? ""),
             "the transcript was recorded but not saved",
         )
+    }
+
+    /// A replacement queue restores the same job from the shared snapshot while
+    /// the queue it replaced is still working on it. Nothing in either instance
+    /// can see the other, so both would run it. The claim they share is what
+    /// stops the second one before it starts.
+    func testSecondQueueDoesNotRunAJobTheFirstIsAlreadyRunning() async throws {
+        let registry = InFlightRunRegistry()
+        let parked = ParkedEngine()
+        parked.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "First run speaking")]
+        let secondEngine = MockEngine()
+        secondEngine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Second run speaking")]
+
+        let first = try makeConcurrentRunQueue(engine: parked, name: "first", inFlightRuns: registry)
+        let second = try makeConcurrentRunQueue(engine: secondEngine, name: "second", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Long Call",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        first.insertJobForTesting(job)
+        second.insertJobForTesting(job)
+
+        async let firstRun: Void = first.processNext()
+        await waitFor(parked.isParked, timeout: .seconds(5))
+        await second.processNext()
+
+        XCTAssertEqual(
+            secondEngine.transcribeCallCount, 0,
+            "the second queue transcribed a job the first one was already running",
+        )
+
+        parked.release()
+        await firstRun
+        XCTAssertNotEqual(
+            first.jobs.first?.state, .error,
+            "first run failed with: \(first.jobs.first?.error ?? "no error recorded")",
+        )
+    }
+
+    /// The claim has to be released when the run ends, or the job could never be
+    /// re-run: a late re-diarization, a retry, or simply the next launch.
+    func testAFinishedRunReleasesItsClaim() async throws {
+        let registry = InFlightRunRegistry()
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let queue = try makeConcurrentRunQueue(engine: engine, name: "single", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Short Call",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+        await queue.processNext()
+
+        XCTAssertFalse(registry.isInFlight(jobID: job.id), "claim on the job ID outlived the run")
+        XCTAssertFalse(registry.isInFlight(mixPath: audioPath), "claim on the audio outlived the run")
+    }
+
+    /// An errored run must release its claim too, otherwise one failure locks
+    /// the recording out of every later attempt for the rest of the session.
+    func testAFailedRunReleasesItsClaim() async throws {
+        let registry = InFlightRunRegistry()
+        let engine = MockEngine()
+        engine.shouldThrow = true
+        let queue = try makeConcurrentRunQueue(engine: engine, name: "failing", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Doomed Call",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+        await queue.processNext()
+
+        XCTAssertEqual(queue.jobs.first?.state, .error, "test premise: the run was supposed to fail")
+        XCTAssertFalse(registry.isInFlight(jobID: job.id), "claim survived a failed run")
+        XCTAssertFalse(registry.isInFlight(mixPath: audioPath), "claim survived a failed run")
+    }
+
+    /// Cancellation is the exit that is easiest to get wrong, because it does
+    /// not come back through the normal path. A claim left behind here would
+    /// lock the recording out of every later attempt for the rest of the
+    /// session, which is worse than the double run it prevents. Enqueued rather
+    /// than driven directly, so a real `Task` cancellation is what tears the run
+    /// down.
+    func testACancelledRunReleasesItsClaim() async throws {
+        let registry = InFlightRunRegistry()
+        let parked = ParkedEngine()
+        parked.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Interrupted")]
+        let queue = try makeConcurrentRunQueue(engine: parked, name: "cancelled", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Abandoned Call",
+            appName: "Teams",
+            mixPath: audioPath,
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.enqueue(job)
+        await waitFor(parked.isParked, timeout: .seconds(5))
+        XCTAssertTrue(registry.isInFlight(jobID: job.id), "test premise: the run had claimed")
+
+        queue.cancelJob(id: job.id)
+        parked.release()
+        await waitFor(self.queueIsIdle(queue), timeout: .seconds(5))
+
+        XCTAssertFalse(registry.isInFlight(jobID: job.id), "claim survived a cancelled run")
+        XCTAssertFalse(registry.isInFlight(mixPath: audioPath), "claim survived a cancelled run")
+    }
+
+    /// True once nothing is running and nothing is left waiting.
+    private func queueIsIdle(_ queue: PipelineQueue) -> Bool {
+        !queue.isProcessing && !queue.jobs.contains { $0.state == .waiting }
+    }
+
+    /// Giving up a job someone else owns must not stall the rest of the queue.
+    /// Without the re-trigger on the refusal path, everything behind the dropped
+    /// job waits for whatever happens to poke the queue next.
+    func testARefusedJobIsDroppedAndTheQueueKeepsDraining() async throws {
+        let registry = InFlightRunRegistry()
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Mine to run")]
+        let queue = try makeConcurrentRunQueue(engine: engine, name: "draining", inFlightRuns: registry)
+
+        let ownedElsewherePath = try createTestAudioFile(in: tmpDir)
+        let ownJobPath = try createTestAudioFile(in: tmpDir)
+        let ownedElsewhere = PipelineJob(
+            meetingTitle: "Someone Else's Call", appName: "Teams",
+            mixPath: ownedElsewherePath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        let ours = PipelineJob(
+            meetingTitle: "Our Call", appName: "Teams",
+            mixPath: ownJobPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        XCTAssertEqual(
+            registry.begin(jobID: ownedElsewhere.id, mixPath: ownedElsewherePath), .claimed,
+            "test premise: the claim was free",
+        )
+
+        queue.insertJobForTesting(ownedElsewhere)
+        queue.insertJobForTesting(ours)
+        queue.triggerProcessing()
+        // Bounded rather than `awaitProcessing()`: the behaviour under test is
+        // exactly the one whose absence leaves a job waiting forever, and an
+        // unbounded wait would hang the suite instead of failing it.
+        await waitFor(self.queueIsIdle(queue), timeout: .seconds(5))
+
+        XCTAssertFalse(
+            queue.jobs.contains { $0.id == ownedElsewhere.id },
+            "the copy of a job owned elsewhere was kept",
+        )
+        XCTAssertEqual(engine.transcribeCallCount, 1, "the job behind the dropped one never ran")
+        let ourState = queue.jobs.first { $0.id == ours.id }?.state
+        XCTAssertNotEqual(ourState, .waiting)
+    }
+
+    /// The claim is released as the run unwinds, after the queue has already
+    /// armed the next one. That only works because the next run cannot begin
+    /// until this one has returned. If it ever could, a second job over the same
+    /// audio would be refused and silently dropped, so this pins the ordering.
+    func testTwoRunsOverTheSameAudioSucceedOneAfterTheOther() async throws {
+        let registry = InFlightRunRegistry()
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Same file twice")]
+        let queue = try makeConcurrentRunQueue(engine: engine, name: "sequential", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        for title in ["First Import", "Second Import"] {
+            queue.insertJobForTesting(PipelineJob(
+                meetingTitle: title, appName: "Teams",
+                mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+            ))
+        }
+        queue.triggerProcessing()
+        await waitFor(engine.transcribeCallCount == 2, timeout: .seconds(5))
+
+        XCTAssertEqual(engine.transcribeCallCount, 2, "the second run over the same audio was refused")
+    }
+
+    /// A job parked at speaker naming is waiting on the user, not executing, so
+    /// its claim is long released. Filtering it on a path some other run happens
+    /// to hold would silently discard naming the user still owes an answer to.
+    func testLoadSnapshotKeepsAPendingNamingJobWhoseAudioIsClaimed() throws {
+        let mixPath = tmpDir.appendingPathComponent("parked_mix.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Awaiting Names", appName: "Teams",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let registry = InFlightRunRegistry()
+        XCTAssertEqual(registry.begin(jobID: UUID(), mixPath: mixPath), .claimed, "test premise: the claim was free")
+
+        let freshQueue = PipelineQueue(logDir: tmpDir, inFlightRuns: registry)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 1, "dropped a job that was only waiting for the user")
+    }
+
+    /// Dropping a duplicate without a trace is only right when the run that
+    /// owns it will answer under the same job ID. Submitting the same file
+    /// twice through the automation API mints a fresh ID, so nothing would ever
+    /// answer for the second one: its status lookup would keep reporting
+    /// nothing found, and a blocking submit would run to its deadline. That
+    /// job needs a terminal state instead.
+    func testAJobRefusedOverAnotherJobsAudioEndsInError() async throws {
+        let registry = InFlightRunRegistry()
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Never runs")]
+        let queue = try makeConcurrentRunQueue(engine: engine, name: "pathduplicate", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        XCTAssertEqual(
+            registry.begin(jobID: UUID(), mixPath: audioPath), .claimed,
+            "test premise: a different job took the audio first",
+        )
+
+        let job = PipelineJob(
+            meetingTitle: "Same File Again", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+        queue.triggerProcessing()
+        await waitFor(self.queueIsIdle(queue), timeout: .seconds(5))
+
+        let refusedState = queue.jobs.first { $0.id == job.id }?.state
+        XCTAssertEqual(
+            refusedState, .error,
+            "the job vanished instead of reporting why it did not run",
+        )
+        XCTAssertEqual(engine.transcribeCallCount, 0, "it must not run either")
     }
 
     func testProcessNextEmptyTranscriptSetsError() async throws {

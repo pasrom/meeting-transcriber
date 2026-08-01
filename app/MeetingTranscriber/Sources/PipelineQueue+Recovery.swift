@@ -52,6 +52,17 @@ extension PipelineQueue {
                 && !FileManager.default.fileExists(atPath: mixPath.path)
         }
 
+        // Drop what another queue is still running. This is where issue #558
+        // brought the job back: a replacement queue reads the same snapshot,
+        // finds the job recorded as active, resets it to waiting above and
+        // starts it a second time. Speaker naming is exempt because a job
+        // parked there is waiting on the user, not executing.
+        loaded.removeAll { job in
+            guard job.state != .speakerNamingPending else { return false }
+            if inFlightRuns.isInFlight(jobID: job.id) { return true }
+            return job.mixPath.map { inFlightRuns.isInFlight(mixPath: $0) } ?? false
+        }
+
         guard !loaded.isEmpty else {
             logger.info("Snapshot loaded but no recoverable jobs")
             return
@@ -105,7 +116,11 @@ extension PipelineQueue {
             await processedLedger.migrate(recordingsDir: recordingsDir)
         }
 
+        // Both reads happen here, on the main actor, before the detached hop:
+        // the registry is main-actor isolated, and reading it from inside the
+        // detached task would be a different question anyway, asked later.
         let trackedPaths = Set(jobs.compactMap { $0.mixPath?.standardizedFileURL.path })
+        let runningPaths = inFlightRuns.claimedAudioPaths
         let ledger = processedLedger
 
         // Off-main: directory scan + processed-list read + per-file
@@ -124,6 +139,7 @@ extension PipelineQueue {
                 guard let mixURL = group.mix else { return false }
                 let stdPath = mixURL.standardizedFileURL.path
                 guard !trackedPaths.contains(stdPath) else { return false }
+                guard !runningPaths.contains(stdPath) else { return false }
                 guard !processedPaths.contains(stdPath) else { return false }
                 let attrs = try? fm.attributesOfItem(atPath: mixURL.path)
                 if let created = attrs?[.creationDate] as? Date,

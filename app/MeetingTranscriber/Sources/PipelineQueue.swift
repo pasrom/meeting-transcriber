@@ -69,6 +69,12 @@ class PipelineQueue {
 
     let completedJobLifetime: TimeInterval
 
+    /// Process-wide claim on the runs currently executing, so a replacement
+    /// queue cannot start a job the queue it replaced is still working on.
+    /// Defaults to the shared instance; tests inject their own to stay isolated
+    /// from each other.
+    let inFlightRuns: InFlightRunRegistry
+
     /// Durable store of finished-job records for the automation API readback.
     /// nil (default) disables it; production injects one, tests opt in.
     let terminalJobStore: TerminalJobStore?
@@ -205,6 +211,7 @@ class PipelineQueue {
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
         terminalJobStore: TerminalJobStore? = nil,
+        inFlightRuns: InFlightRunRegistry? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -225,6 +232,7 @@ class PipelineQueue {
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.terminalJobStore = terminalJobStore
+        self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
             namingStore: SpeakerNamingStore(outputDir: nil),
             speakerMatcherFactory: speakerMatcherFactory,
@@ -298,6 +306,7 @@ class PipelineQueue {
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
         terminalJobStore: TerminalJobStore? = nil,
+        inFlightRuns: InFlightRunRegistry? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -326,6 +335,7 @@ class PipelineQueue {
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.terminalJobStore = terminalJobStore
+        self.inFlightRuns = inFlightRuns ?? .shared
         naming = SpeakerNamingSession(
             namingStore: SpeakerNamingStore(outputDir: outputDir),
             speakerMatcherFactory: speakerMatcherFactory,

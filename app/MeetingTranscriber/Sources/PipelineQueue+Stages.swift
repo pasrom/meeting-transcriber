@@ -50,6 +50,42 @@ extension PipelineQueue {
         }
     }
 
+    /// Take ownership of this job's run, or give the job up when another queue
+    /// already owns it. A queue only ever guards its own re-entry, so a
+    /// replacement queue restoring this job from the shared snapshot would run
+    /// it a second time alongside the queue it replaced (issue #558). The claim
+    /// is process-wide and settles which instance owns the run.
+    ///
+    /// A job we do not own is given up rather than left waiting, since leaving
+    /// it would only re-pick it forever. How it is given up depends on who holds
+    /// it. The same job running elsewhere reports under this very ID, so that
+    /// copy goes silently: no ledger mark, no terminal record, and the snapshot
+    /// left alone, because the owner's view of this job is the current one. A
+    /// different job holding the audio reports under an ID nobody is watching
+    /// for, so this one ends in error rather than vanishing unanswered.
+    private func claimRunOrGiveUpDuplicate(_ job: PipelineJob) -> Bool {
+        switch inFlightRuns.begin(jobID: job.id, mixPath: job.mixPath) {
+        case .claimed:
+            return true
+
+        case .refusedSameJob:
+            // The owner reports under this same job ID, so this copy can go
+            // without a trace.
+            logger.info("[\(job.shortID, privacy: .public)] already running elsewhere, dropping this copy")
+            jobs.removeAll { $0.id == job.id }
+
+        case .refusedSameAudio:
+            // A different job holds the audio, so nothing will ever answer for
+            // this one. It needs a terminal state of its own, or a caller
+            // waiting on it waits forever.
+            logger.info("[\(job.shortID, privacy: .public)] audio already running under another job")
+            updateJobState(id: job.id, to: .error, error: "This recording is already being processed")
+        }
+        isProcessing = false
+        triggerProcessing()
+        return false
+    }
+
     /// The immutable per-job inputs the stages read, derived once so every
     /// stage agrees on the same basename.
     private static func makeContext(for job: PipelineJob) -> JobContext {
@@ -81,6 +117,12 @@ extension PipelineQueue {
             return
         }
         let job = jobs[index]
+        guard claimRunOrGiveUpDuplicate(job) else { return }
+        // Function scope on purpose: the run leaves through several exits,
+        // including the early return on an empty transcript and every throw.
+        // A claim that outlived one of them would lock the recording out of
+        // any later attempt for the rest of the session.
+        defer { inFlightRuns.end(jobID: job.id) }
         let ctx = Self.makeContext(for: job)
 
         do {
