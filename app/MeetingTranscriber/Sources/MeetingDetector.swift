@@ -3,8 +3,14 @@ import Foundation
 
 /// Polls window list to detect active meeting windows.
 ///
-/// Uses CGWindowListCopyWindowInfo to read on-screen windows.
-/// Requires Screen Recording permission.
+/// Uses CGWindowListCopyWindowInfo to read on-screen windows, which needs
+/// Screen Recording permission.
+///
+/// Not the production detector: the watch loop auto-detects via
+/// `PowerAssertionDetector` (IOKit power assertions), which fires without
+/// Screen Recording. The grant only sharpens the meeting title (a real title
+/// with it, a placeholder without) and gates the audio-tap TCC fallback
+/// (issue #524), so a detection failure is never a Screen Recording problem.
 @Observable
 class MeetingDetector: MeetingDetecting {
     private let patterns: [AppMeetingPattern]
