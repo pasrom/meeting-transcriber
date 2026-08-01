@@ -1441,6 +1441,42 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(engine.transcribeCallCount, 0, "it must not run either")
     }
 
+    /// A job given up to another queue leaves this one without a word in the
+    /// event log, and that log is how the double run in issue #558 was found in
+    /// the first place: two `waiting -> transcribing` entries under one job ID.
+    /// A story that simply stops there is exactly the gap that made the bug hard
+    /// to see, so the hand-off is recorded. Both queues append to the same file,
+    /// so the drop reads in order against the owner's entries.
+    func testGivingUpADuplicateIsRecordedInTheEventLog() async throws {
+        let registry = InFlightRunRegistry()
+        let parked = ParkedEngine()
+        parked.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "First run speaking")]
+        let first = try makeConcurrentRunQueue(engine: parked, name: "owner", inFlightRuns: registry)
+        let second = try makeConcurrentRunQueue(engine: MockEngine(), name: "loser", inFlightRuns: registry)
+
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Long Call", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        first.insertJobForTesting(job)
+        second.insertJobForTesting(job)
+
+        async let firstRun: Void = first.processNext()
+        await waitFor(parked.isParked, timeout: .seconds(5))
+        await second.processNext()
+        parked.release()
+        await firstRun
+
+        let log = (try? String(
+            contentsOf: tmpDir.appendingPathComponent("loser/pipeline_log.jsonl"), encoding: .utf8,
+        )) ?? ""
+        XCTAssertTrue(
+            log.contains(job.id.uuidString) && log.contains("duplicate_dropped"),
+            "the hand-off left no trace in the event log: \(log.isEmpty ? "<no log at all>" : log)",
+        )
+    }
+
     func testProcessNextEmptyTranscriptSetsError() async throws {
         let engine = MockEngine()
         engine.segmentsToReturn = [] // empty = no speech

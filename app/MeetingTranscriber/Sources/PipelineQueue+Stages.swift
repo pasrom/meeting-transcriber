@@ -72,6 +72,10 @@ extension PipelineQueue {
             // The owner reports under this same job ID, so this copy can go
             // without a trace.
             logger.info("[\(job.shortID, privacy: .public)] already running elsewhere, dropping this copy")
+            // Into the event log, not just os_log: that file is how the double
+            // run was found in the first place, and a job whose story stops
+            // there without a word is the gap that made it hard to see.
+            eventLog.append(jobID: job.id, event: "duplicate_dropped", from: job.state, to: job.state)
             jobs.removeAll { $0.id == job.id }
 
         case .refusedSameAudio:
