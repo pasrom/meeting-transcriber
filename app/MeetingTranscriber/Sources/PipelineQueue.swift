@@ -405,6 +405,14 @@ class PipelineQueue {
 
     /// Cancel a job. Removes the job + cleans up sidecar files if naming was
     /// pending. Done/error jobs are not affected.
+    ///
+    /// The recording is marked processed, so the cancel holds. Without that,
+    /// orphan recovery offers it again, and not only on the next launch:
+    /// switching watching on rebuilds the queue and rebuilding scans for
+    /// orphans, so the job the user just stopped came back within the session,
+    /// relabelled as a recovered recording. Cancelling that copy only re-armed
+    /// the loop. Re-importing the file by hand stays the way back and never
+    /// consults the ledger.
     func cancelJob(id: UUID) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
         let state = jobs[index].state
@@ -414,6 +422,9 @@ class PipelineQueue {
         // too — otherwise a job cancelled mid-stage leaks these entries.
         stageStartByJob.removeValue(forKey: id)
         jobAudioSeconds.removeValue(forKey: id)
+        if state != .done, state != .error {
+            processedLedger.markProcessed(mixPath: jobs[index].mixPath)
+        }
         switch state {
         case .waiting:
             jobs.remove(at: index)

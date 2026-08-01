@@ -664,6 +664,64 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.first?.state, .waiting)
     }
 
+    // MARK: - Cancelling a job
+
+    /// Cancelling is the most explicit "stop this" the app offers, yet the
+    /// recording used to stay eligible for orphan recovery. Since the queue is
+    /// rebuilt whenever watching is switched on, and rebuilding scans for
+    /// orphans, the cancelled recording came back within the same session,
+    /// relabelled as a recovered one so it did not even look like the thing that
+    /// was stopped. Cancelling the copy only re-armed the loop.
+    func testCancellingAJobStopsItComingBackAsAnOrphan() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260311_120000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Stopped By Hand", appName: "Teams",
+            mixPath: mixFile, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        queue.insertJobForTesting(job)
+
+        queue.cancelJob(id: job.id)
+
+        let rebuilt = PipelineQueue(logDir: tmpDir)
+        await rebuilt.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertTrue(
+            rebuilt.jobs.isEmpty,
+            "the cancelled recording was offered again as a recovered one",
+        )
+    }
+
+    /// Cancelling a job that is mid-run has to settle it the same way. This is
+    /// the expensive case: the recording that comes back is the one that was
+    /// costing minutes of compute when it was stopped.
+    func testCancellingAJobInFlightStopsItComingBackAsAnOrphan() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260311_130000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        var job = PipelineJob(
+            meetingTitle: "Stopped Mid Run", appName: "Teams",
+            mixPath: mixFile, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .transcribing
+        queue.insertJobForTesting(job)
+
+        queue.cancelJob(id: job.id)
+
+        let rebuilt = PipelineQueue(logDir: tmpDir)
+        await rebuilt.recoverOrphanedRecordings(recordingsDir: recDir)
+        XCTAssertTrue(
+            rebuilt.jobs.isEmpty,
+            "the cancelled recording was offered again as a recovered one",
+        )
+    }
+
     // MARK: - Orphaned Recording Recovery Tests
 
     /// The scan reaches the same recording under a fresh job ID, so the audio
