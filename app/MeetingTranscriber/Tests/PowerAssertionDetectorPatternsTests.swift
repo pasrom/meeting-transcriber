@@ -135,6 +135,46 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         }
     }
 
+    func testBrowserProcessNamesMatchOwnerNames() {
+        // The browser AssertionPattern's processNames (used for detection) and
+        // chromeBrowser.ownerNames (used for the window-title lookup) are two
+        // hand-maintained copies of the same Chromium family. A fork added to
+        // one list only would detect without a title, or title without
+        // detecting, silently. Pin them equal so drift fails here.
+        let browser = PowerAssertionDetector.defaultPatterns.first { pattern in
+            pattern.appName == AppMeetingPattern.chromeBrowser.appName
+        }
+        XCTAssertEqual(browser?.processNames, AppMeetingPattern.chromeBrowser.ownerNames)
+    }
+
+    func testTwoFamilyBrowsersInOnePollCountOnce() {
+        // Two Chromium browsers each holding a WebRTC assertion in the same poll
+        // share the one browser identity. The once-per-poll guard must count that
+        // as a single hit, not double-increment toward confirmation — otherwise
+        // the pair would confirm in one poll instead of the required two.
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            confirmationCount: 2,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            [
+                10: [[
+                    "Process Name": "Google Chrome",
+                    "AssertName": "WebRTC has active PeerConnections",
+                    "AssertType": "PreventUserIdleDisplaySleep",
+                ]],
+                20: [[
+                    "Process Name": "Brave Browser",
+                    "AssertName": "WebRTC has active PeerConnections",
+                    "AssertType": "PreventUserIdleDisplaySleep",
+                ]],
+            ]
+        }
+        XCTAssertNil(detector.checkOnce(), "two browsers in one poll must count once, not reach confirmation")
+        XCTAssertNotNil(detector.checkOnce(), "the shared counter reaches confirmation on the second poll")
+    }
+
     func testPatternsWatchingSubsetDropsUnselectedApps() {
         let names = PowerAssertionDetector.patterns(watching: ["Zoom"]).map(\.appName)
         XCTAssertTrue(names.contains("Zoom"))
