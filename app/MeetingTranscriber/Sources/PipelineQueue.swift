@@ -396,6 +396,14 @@ class PipelineQueue {
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             processedLedger.markProcessed(mixPath: jobs[index].mixPath)
+            // Unconditional, because removing a job has to remove what belongs
+            // to it. A job dismissed while still awaiting speaker naming used to
+            // strand its sidecars for good: only cancelling cleaned them up, and
+            // Cancel is not offered in that state. Nothing sweeps the output
+            // folder for them and the job is gone from the snapshot that would
+            // have named them. Resolved jobs have nothing left here, so this
+            // costs them a no-op.
+            naming.removeNamingData(jobID: id, slug: jobs[index].namingSlug)
             jobs.remove(at: index)
         }
         stageStartByJob.removeValue(forKey: id)

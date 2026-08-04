@@ -664,6 +664,41 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(freshQueue.jobs.first?.state, .waiting)
     }
 
+    // MARK: - Dismissing a job awaiting speaker naming
+
+    /// Dismiss is offered for a job still awaiting speaker naming, and it routes
+    /// to `removeJob`, which knew nothing about naming data. Only cancelling
+    /// cleaned it up, and Cancel is not offered in that state, so the sidecars
+    /// were left behind for good: nothing sweeps the output folder for them, and
+    /// the job is gone from the snapshot that would have named them. Each 16 kHz
+    /// sidecar is mono 16-bit at 16 kHz, so a dismissed hour of a two-track
+    /// meeting stranded roughly a third of a gigabyte.
+    func testDismissingAJobAwaitingNamingCleansUpItsSidecars() async throws {
+        let (queue, _, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Dismissed Before Naming",
+            transcriptSegments: [TimestampedSegment(start: 0, end: 5, text: "Never named")],
+        )
+        let slug = try XCTUnwrap(queue.jobs.first { $0.id == jobID }?.namingSlug)
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let leftovers = ["_naming.json", "_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
+            .map { recordingsDir.appendingPathComponent("\(slug)\($0)") }
+
+        // Premise: naming really did park with data on disk, or the test proves
+        // nothing about cleaning it up.
+        XCTAssertTrue(
+            leftovers.contains { FileManager.default.fileExists(atPath: $0.path) },
+            "no naming data was written, so there is nothing to strand",
+        )
+
+        queue.removeJob(id: jobID)
+
+        let stranded = leftovers.filter { FileManager.default.fileExists(atPath: $0.path) }
+        XCTAssertTrue(
+            stranded.isEmpty,
+            "dismissing left these behind for good: \(stranded.map(\.lastPathComponent))",
+        )
+    }
+
     // MARK: - Cancelling a job
 
     /// Cancelling is the most explicit "stop this" the app offers, yet the
