@@ -26,9 +26,10 @@ set -euo pipefail
 
 NO_BUILD=false     # skip build/deploy/re-sign — use ~/Applications bundle as-is
 KEEP_APP=false     # leave the dev app running on exit
-KEEP_CHROME=false  # leave the fixture Chrome instance open on exit
+KEEP_CHROME=false  # leave the fixture browser instance open on exit
 MODE=fixture       # meeting source: fixture (in-page loopback) | jitsi (real SFU)
 JITSI_HOST=meet.ffmuc.net  # real public Jitsi (no login) for --jitsi mode
+BROWSER=chrome     # which Chromium browser to drive: chrome | brave | edge | chromium
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,13 +38,16 @@ while [ $# -gt 0 ]; do
         --keep-chrome) KEEP_CHROME=true ;;
         --jitsi)       MODE=jitsi ;;
         --jitsi-host)  shift; JITSI_HOST="$1" ;;
+        --browser)     shift; BROWSER="$1" ;;
         -h|--help)
             cat <<'HELP'
-Usage: e2e-browser.sh [--no-build] [--keep-app] [--keep-chrome] [--jitsi [--jitsi-host HOST]]
+Usage: e2e-browser.sh [--no-build] [--keep-app] [--keep-chrome] [--browser NAME] [--jitsi [--jitsi-host HOST]]
 
   --no-build     Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app     Leave the dev app running on exit (default: quit it).
-  --keep-chrome  Leave the fixture Chrome instance open on exit (default: quit it).
+  --keep-chrome  Leave the fixture browser instance open on exit (default: quit it).
+  --browser      Which Chromium browser to drive: chrome (default), brave, edge, chromium.
+                 Fixture mode only.
   --jitsi        Real-meeting mode: instead of the local WebRTC fixture, join a real
                  public Jitsi room with two Chrome tabs (real 2-participant WebRTC SFU
                  meeting; getUserMedia overridden to a tone so no mic/TCC is needed).
@@ -72,13 +76,26 @@ KEEPER_PID=""
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 RECORDINGS_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
-# Resolve Chrome from an explicit override, then the user Applications dir, then
-# the system one. A self-hosted runner whose user can't write /Applications
-# (no passwordless sudo) installs Chrome under ~/Applications, so check there too.
-CHROME_APP="${CHROME_APP:-}"
-if [ -z "$CHROME_APP" ]; then
-    for candidate in "$HOME/Applications/Google Chrome.app" "/Applications/Google Chrome.app"; do
-        [ -d "$candidate" ] && CHROME_APP="$candidate" && break
+# Resolve the target browser. All four are Chromium forks; issue #503 detection
+# matches each under the shared "Google Chrome" identity, so the lane differs
+# only in which .app it launches and how it labels diagnostics. BROWSER_LABEL is
+# also the process name the fork holds its WebRTC assertion under (== the app's
+# CFBundleExecutable), which the detection pattern keys on.
+case "$BROWSER" in
+    chrome)   BROWSER_LABEL="Google Chrome";  BROWSER_APP_NAME="Google Chrome.app" ;;
+    brave)    BROWSER_LABEL="Brave Browser";  BROWSER_APP_NAME="Brave Browser.app" ;;
+    edge)     BROWSER_LABEL="Microsoft Edge"; BROWSER_APP_NAME="Microsoft Edge.app" ;;
+    chromium) BROWSER_LABEL="Chromium";       BROWSER_APP_NAME="Chromium.app" ;;
+    *) echo "unknown --browser '$BROWSER' (expected chrome|brave|edge|chromium)" >&2; exit 2 ;;
+esac
+[ "$MODE" = jitsi ] && [ "$BROWSER" != chrome ] && { echo "--jitsi supports chrome only" >&2; exit 2; }
+# Resolve from an explicit BROWSER_APP override, then the user Applications dir,
+# then the system one. A self-hosted runner whose user can't write /Applications
+# (no passwordless sudo) installs browsers under ~/Applications, so check there too.
+BROWSER_APP="${BROWSER_APP:-}"
+if [ -z "$BROWSER_APP" ]; then
+    for candidate in "$HOME/Applications/$BROWSER_APP_NAME" "/Applications/$BROWSER_APP_NAME"; do
+        [ -d "$candidate" ] && BROWSER_APP="$candidate" && break
     done
 fi
 # `find -newer` marker so cleanup + artifact search only touch THIS run's files.
@@ -149,15 +166,15 @@ require_command jq
 require_command swift
 require_command open
 
-[ -n "$CHROME_APP" ] && [ -d "$CHROME_APP" ] \
-    || fail "Google Chrome not found in ~/Applications or /Applications — install it on the runner (or set CHROME_APP)"
+[ -n "$BROWSER_APP" ] && [ -d "$BROWSER_APP" ] \
+    || fail "$BROWSER_LABEL not found in ~/Applications or /Applications — install it on the runner (or set BROWSER_APP)"
 
-# This lane's field-facing claim is "the Chrome users actually run still raises
-# a matching WebRTC assertion". That only holds while the runner's Chrome tracks
-# theirs, and a browser launched for one minute per night may never let Keystone
-# update it. Logged, not asserted: staleness is a judgement call, but it should
+# This lane's field-facing claim is "the browser users actually run still raises
+# a matching WebRTC assertion". That only holds while the runner's browser tracks
+# theirs, and a browser launched for one minute per night may never let its
+# updater run. Logged, not asserted: staleness is a judgement call, but it should
 # never be invisible.
-log "Chrome: $(defaults read "$CHROME_APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "unknown version") ($CHROME_APP)"
+log "$BROWSER_LABEL: $(defaults read "$BROWSER_APP/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "unknown version") ($BROWSER_APP)"
 
 if [ "$MODE" = fixture ]; then
     [ -f "$FIXTURE" ] || fail "fixture not found: $FIXTURE"
@@ -222,6 +239,11 @@ _set_dev_bool noMic true                  # app-track only; no mic needed for th
 
 mkdir -p "$RECORDINGS_DIR"
 touch "$RUN_MARKER"
+# Clear this browser's captured-track artifacts from any earlier run up front.
+# The copy at the end runs only on success, and the self-hosted runner persists
+# /tmp between runs, so a fork that fails before then would otherwise upload a
+# previous run's WAV as this run's evidence.
+rm -f "/tmp/e2e-browser-$BROWSER-app.wav" "/tmp/e2e-browser-$BROWSER-meta.json"
 
 # --- launch + cleanup trap ------------------------------------------------
 
@@ -337,25 +359,36 @@ _dump_detection_diag() {
     log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$BUNDLE_ID" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
     log "DIAG: effective autoWatch std=$(snapshot_default "$BUNDLE_ID" autoWatch)"
     log "DIAG: pmset WebRTC assertions:"
-    pmset -g assertions 2>/dev/null | grep -iE "webrtc|peerconnection|Google Chrome" || log "DIAG:   (none)"
+    pmset -g assertions 2>/dev/null | grep -iE "webrtc|peerconnection|$BROWSER_LABEL" || log "DIAG:   (none)"
 }
 
 # Keep Chrome off the macOS Keychain so its first launch never pops a blocking
 # "Chrome wants to use the keychain" modal a headless runner can't dismiss.
 # --use-mock-keychain is the macOS flag (Chrome uses a mock Keychain for its
 # Safe Storage); --password-store=basic is its Linux counterpart, harmless here.
+#
+# --disable-features=WebRtcHideLocalIpsWithMdns is load-bearing for the forks:
+# modern Chromium replaces host ICE candidates with mDNS ".local" names, and on
+# a fresh runner profile with no mDNS responder to resolve them the in-page
+# pc1<->pc2 loopback never reaches "connected", so the browser holds only a
+# "Playing audio" assertion and never "WebRTC has active PeerConnections" —
+# detection then correctly does not fire and the lane fails. Chrome happened to
+# connect without it; Brave/Edge/Chromium did not (measured). Disabling the mDNS
+# obfuscation lets the loopback use raw local IPs, which is fine here (the fixture
+# is a same-page loopback, not a privacy-sensitive real call).
 CHROME_FLAGS=(--user-data-dir="$CHROME_PROFILE" --no-first-run --no-default-browser-check
-    --use-mock-keychain --password-store=basic --autoplay-policy=no-user-gesture-required)
+    --use-mock-keychain --password-store=basic --autoplay-policy=no-user-gesture-required
+    --disable-features=WebRtcHideLocalIpsWithMdns)
 if [ "$MODE" = fixture ]; then
-    log "Launching Chrome with the WebRTC-tone fixture"
-    open -na "$CHROME_APP" --args "${CHROME_FLAGS[@]}" "$FIXTURE_URL"
+    log "Launching $BROWSER_LABEL with the WebRTC-tone fixture"
+    open -na "$BROWSER_APP" --args "${CHROME_FLAGS[@]}" "$FIXTURE_URL"
 else
     # --jitsi: launch Chrome with a CDP port, then the keeper joins a real Jitsi
     # room with two tabs (real 2-participant WebRTC SFU meeting). A unique room
     # per run avoids colliding with anyone else on the public instance.
     JITSI_ROOM="MtE2e$(date +%s)$$"
     log "Launching Chrome (CDP) + joining real Jitsi room $JITSI_HOST/$JITSI_ROOM"
-    open -na "$CHROME_APP" --args "${CHROME_FLAGS[@]}" --remote-debugging-port="$CDP_PORT" "about:blank"
+    open -na "$BROWSER_APP" --args "${CHROME_FLAGS[@]}" --remote-debugging-port="$CDP_PORT" "about:blank"
     sleep 5
     node "$KEEPER" --host "$JITSI_HOST" --room "$JITSI_ROOM" --keep 120 --port "$CDP_PORT" &
     KEEPER_PID=$!
@@ -368,15 +401,18 @@ fi
 # invisible prompt cannot tell apart either. Polling is race-free against
 # however long Chrome takes to hold the assertion.
 log "Waiting up to ${DETECT_TIMEOUT_S}s for the consent prompt to park"
+# pendingConsentApp is the shared browser-meetings identity ("Google Chrome"),
+# NOT the concrete browser: Brave/Edge/Chromium all detect under it (issue #503),
+# so this assertion is correct and unchanged whichever fork this run drives.
 _consent_parked() {
     assert_app_alive
     [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "Google Chrome" ]
 }
 poll_until "$DETECT_TIMEOUT_S" 2 _consent_parked || {
     _dump_detection_diag
-    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — detection or the assertion never fired"
+    fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — $BROWSER_LABEL detection or the assertion never fired"
 }
-log "Consent prompt parked for Google Chrome"
+log "Consent prompt parked (identity Google Chrome; browser $BROWSER_LABEL)"
 
 # confirm-browser-consent answers the parked prompt in place of a click.
 log "Granting consent over RPC"
@@ -473,8 +509,8 @@ APP_WAV="${SIDECAR%_meta.json}_app.wav"
 # Preserve the captured track + sidecar OUTSIDE the recordings dir so the
 # on-exit sweep (CI-gated) doesn't delete them before CI uploads them for
 # post-mortem — the whole point of this lane is "was there audio?".
-cp "$APP_WAV" /tmp/e2e-browser-app.wav 2>/dev/null || true
-cp "$SIDECAR" /tmp/e2e-browser-meta.json 2>/dev/null || true
+cp "$APP_WAV" "/tmp/e2e-browser-$BROWSER-app.wav" 2>/dev/null || true
+cp "$SIDECAR" "/tmp/e2e-browser-$BROWSER-meta.json" 2>/dev/null || true
 
 log "Verdict on the captured app track:"
 # Gate on SECONDS of audio, not on the fraction of the file that is audible.
@@ -489,4 +525,4 @@ log "Verdict on the captured app track:"
 "$MTCLI" wav-verdict "$APP_WAV" --threshold-dbfs=-50 --min-active-seconds=5 \
     || fail "the CATap did not capture enough of Chrome's browser-meeting audio (reason above)"
 
-log "PASS: browser detection → RPC consent → non-silent CATap capture of the app track"
+log "PASS ($BROWSER_LABEL): browser detection → RPC consent → non-silent CATap capture of the app track"

@@ -1,8 +1,10 @@
 name: E2E (Browser Meeting)
 
-# Live browser-meeting detection + capture E2E (issue #503). Drives Chrome +
-# a local WebRTC-tone fixture through the power-assertion detector, answers the
-# consent prompt over RPC, and asserts the record-only _app.wav is non-silent.
+# Live browser-meeting detection + capture E2E (issue #503). Drives a Chromium
+# browser + a local WebRTC-tone fixture through the power-assertion detector,
+# answers the consent prompt over RPC, and asserts the record-only _app.wav is
+# non-silent. Chrome is the primary (builds + runs on every event); Brave, Edge
+# and Chromium run nightly/dispatch as best-effort forks reusing that bundle.
 # Background: CLAUDE.md > E2E Architecture. Driver: scripts/e2e-browser.sh.
 #
 # NON-GATING CANARY: not referenced by any required check and not listed in
@@ -11,9 +13,10 @@ name: E2E (Browser Meeting)
 # weeks of stable nightlies.
 #
 # Runner prerequisites: the same self-hosted Mac mini as e2e-app.yml (signing
-# identity + TCC audio-capture grant), PLUS Google Chrome installed. No mic is
-# needed (the driver runs with noMic) and no Screen Recording is needed
-# (detection uses the sandbox-safe power-assertion path).
+# identity + TCC audio-capture grant), PLUS Google Chrome installed (and, for the
+# nightly fork legs, Brave / Microsoft Edge / Chromium under ~/Applications — a
+# missing one just fails its best-effort step). No mic is needed (the driver runs
+# with noMic) and no Screen Recording is needed (power-assertion detection path).
 
 on:
   workflow_dispatch:
@@ -93,11 +96,46 @@ jobs:
               exit 1
           fi
 
-      - name: Run browser-meeting E2E driver
+      - name: Run browser-meeting E2E driver (Chrome)
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 12
         run: bash scripts/e2e-browser.sh
+
+      # Chromium forks (issue #503 follow-up): Brave/Edge/Chromium hold the same
+      # "WebRTC has active PeerConnections" assertion and detect under the shared
+      # "Google Chrome" identity, so the same fixture lane proves each end to end.
+      # Reuse the bundle the Chrome step built + signed (--no-build). Nightly/
+      # dispatch only (kept off labeled PRs to keep PR runs to the one primary
+      # browser). NOT continue-on-error: unlike the third-party Jitsi step, a fork
+      # failure here is our regression or a runner-setup gap, and this whole lane
+      # is a non-gating canary (not a required check, not in tag-ruleset.json), so
+      # a red reports honestly without blocking a merge — masking it as green would
+      # defeat the point of per-fork coverage. Each writes its own browser-suffixed
+      # /tmp artifact so a failure uploads that fork's evidence.
+      #
+      # The `!cancelled()` in each `if` keeps the forks independent: a custom `if`
+      # without a status function implies `success()`, so one fork failing would
+      # otherwise SKIP the rest. Each must run and report on its own regardless of
+      # the others (a real cancellation still stops them).
+      #
+      # No DEVELOPER_ID: --no-build never re-signs, so the signing secret is dead
+      # on these steps (only the codesign smoke test and the Chrome build step,
+      # which shells out to e2e-app.sh --redeploy-only, read it).
+      - name: Run browser-meeting E2E driver (Brave)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-browser.sh --browser brave --no-build
+
+      - name: Run browser-meeting E2E driver (Edge)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-browser.sh --browser edge --no-build
+
+      - name: Run browser-meeting E2E driver (Chromium)
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        timeout-minutes: 8
+        run: bash scripts/e2e-browser.sh --browser chromium --no-build
 
       # Real-meeting variant (issue #503): instead of the local WebRTC fixture,
       # two Chrome tabs join a REAL public Jitsi room (meet.ffmuc.net, no login)
@@ -109,10 +147,8 @@ jobs:
       # Freifunk outage / UI drift is not our regression — green means the real
       # chain works, a failure is a signal to check, not a merge blocker.
       - name: Run browser-meeting E2E driver (real Jitsi, best-effort)
-        if: github.event_name != 'pull_request'
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
         continue-on-error: true
-        env:
-          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 8
         run: bash scripts/e2e-browser.sh --jitsi --no-build
 
@@ -133,8 +169,8 @@ jobs:
         with:
           name: e2e-browser-diagnostics
           path: |
-            /tmp/e2e-browser-app.wav
-            /tmp/e2e-browser-meta.json
+            /tmp/e2e-browser-*-app.wav
+            /tmp/e2e-browser-*-meta.json
             /tmp/e2e-browser-assertions.txt
             /tmp/e2e-browser-audiotap.log
           if-no-files-found: ignore
