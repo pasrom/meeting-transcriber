@@ -23,10 +23,27 @@ enum BadgeKind: String, CaseIterable, Codable {
     case updateAvailable
 
     /// Whether this badge kind uses animation.
+    ///
+    /// `.error` and `.userAction` animate so their exclamation BLINKS. They are
+    /// not progress states — nothing is moving underneath — but a static badge
+    /// is exactly what a user misses. Every silent failure on 2026-08-04
+    /// (missing Accessibility grant, suppressed consent prompt, a capture tap
+    /// recording an hour of silence) surfaced only through notifications, which
+    /// Do Not Disturb suppressed. The menu bar is the one surface DND cannot
+    /// mute, so it has to move when the app cannot do its job.
     var isAnimated: Bool {
         switch self {
         case .recording, .transcribing, .diarizing, .processing: true
+        case .error, .userAction: true
 
+        default: false
+        }
+    }
+
+    /// Attention states blink their overlay rather than animating a body.
+    var blinksOverlay: Bool {
+        switch self {
+        case .error, .userAction: true
         default: false
         }
     }
@@ -49,6 +66,14 @@ enum BadgeKind: String, CaseIterable, Codable {
 /// breaking anyone.
 @MainActor
 enum MenuBarIcon {
+    /// Whether a blinking overlay is in its visible phase. Half the cycle on,
+    /// half off — at the 0.4s frame timer that is ~1.2s on, ~1.2s off: clearly
+    /// moving in peripheral vision without being frantic.
+    nonisolated static func blinkIsOn(frame: Int) -> Bool {
+        guard frameCount > 1 else { return true }
+        return (frame % frameCount) < (frameCount / 2)
+    }
+
     /// Number of distinct animation frames. Pure constant.
     nonisolated static let frameCount = 6
 
@@ -199,8 +224,14 @@ enum MenuBarIcon {
 
             // Overlay precedence: permission errors win over record-only because a permission
             // problem actually breaks recording, so the user must see it first.
+            //
+            // Blink it: on for the first half of the cycle, off for the second.
+            // A static exclamation reads as decoration next to a grey "Idle";
+            // motion is what makes a broken app distinguishable from a quiet one.
             if permissionOverlay || badge == .error {
-                drawExclamationBadge(in: rect)
+                if !badge.blinksOverlay || blinkIsOn(frame: frame) {
+                    drawExclamationBadge(in: rect)
+                }
             } else if recordOnlyOverlay {
                 drawRecordOnlyBadge(in: rect)
             }
@@ -447,9 +478,18 @@ extension BadgeKind {
         activeJobState: JobState?,
         updateAvailable: Bool,
         permissionProblem: Bool = false,
+        captureProblem: Bool = false,
     ) -> BadgeKind {
         if watchLoopActive {
-            if watchLoopState == .recording { return .recording }
+            // A capture problem OUTRANKS `.recording`. A recording whose app or
+            // mic channel is at the noise floor is not healthy, and showing the
+            // ordinary recording badge for it is how an hour of one-sided audio
+            // reached the archive on 2026-08-04 without anyone noticing. The
+            // notification that would have said so was suppressed by Do Not
+            // Disturb; the icon is the surface that cannot be suppressed.
+            if watchLoopState == .recording {
+                return captureProblem ? .error : .recording
+            }
             switch transcriberState {
             case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
             case .protocolReady: return .done
