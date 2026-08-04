@@ -99,14 +99,17 @@ extension AppMeetingPattern {
     )
 
     /// Browser-based meetings (Google Meet, Whereby, web Zoom/Teams/Webex) run
-    /// inside Chrome, which the native-app patterns above miss (issue #503).
-    /// Detection is by the WebRTC power assertion (see `PowerAssertionDetector`),
-    /// not window titles — Chrome's window title only reflects the active tab.
-    /// `requiresRecordingConsent` routes it through a prompt instead of
-    /// auto-start; `meetingPatterns` is empty (no title-based detection in the PoC).
+    /// inside a Chromium browser, which the native-app patterns above miss
+    /// (issue #503). Detection is by the WebRTC power assertion (see
+    /// `PowerAssertionDetector`), not window titles — a browser's window title
+    /// only reflects the active tab. Every Chromium fork (Chrome, Brave, Edge,
+    /// Chromium) emits the same assertion, so all four owner names share this one
+    /// browser identity (one "Google Chrome" toggle). `requiresRecordingConsent`
+    /// routes it through a prompt instead of auto-start; `meetingPatterns` is
+    /// empty (no title-based detection in the PoC).
     static let chromeBrowser = AppMeetingPattern(
         appName: "Google Chrome",
-        ownerNames: ["Google Chrome"],
+        ownerNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
         meetingPatterns: [],
         requiresRecordingConsent: true,
     )

@@ -41,9 +41,9 @@ struct GeneralSettingsView: View {
                 Toggle("Tencent Meeting", isOn: $settings.watchTencentMeeting)
                 Toggle("FaceTime", isOn: $settings.watchFaceTime)
                 Toggle("WhatsApp", isOn: $settings.watchWhatsApp)
-                Toggle("Browser Web Meetings (Google Chrome)", isOn: $settings.watchBrowserMeetings)
+                Toggle("Browser Web Meetings (Chrome, Brave, Edge)", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)
-                Text("Detects meetings in Chrome (Google Meet, Whereby, web Zoom/Teams). Asks before recording.")
+                Text("Detects meetings in Chromium browsers such as Chrome, Brave, and Edge (Google Meet, Whereby, web Zoom/Teams). Asks before recording.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 browserConsentWarning

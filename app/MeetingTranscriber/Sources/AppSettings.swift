@@ -112,7 +112,7 @@ final class AppSettings {
         didSet { defaults.set(watchWebex, forKey: "watchWebex") }
     }
 
-    /// Watch for browser-based meetings (Google Chrome / WebRTC), issue #503.
+    /// Watch for browser-based meetings (Chromium browsers / WebRTC), issue #503.
     /// Off by default — opt-in, and browser meetings prompt before recording
     /// (the WebRTC signal isn't meeting-exclusive), unlike native auto-start.
     var watchBrowserMeetings: Bool {

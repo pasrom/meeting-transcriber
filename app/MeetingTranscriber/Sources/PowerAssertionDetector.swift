@@ -55,16 +55,19 @@ class PowerAssertionDetector: MeetingDetecting {
             processNames: ["meeting-simulator"],
             keywords: ["simulator meeting"],
         ),
-        // Browser meetings (issue #503): Chrome holds a "NoIdleSleepAssertion"
-        // named "WebRTC has active PeerConnections" during any WebRTC call
-        // (Google Meet, Whereby, web Zoom/Teams/Webex). Keyword-only, no
-        // assertionTypes: Chrome holds the same assertion type for plain media
-        // playback (YouTube), so matching the type would fire on every video —
-        // the WebRTC name is the meeting-specific signal. Opt-in: only watched
-        // when the browser toggle adds "Google Chrome" to watchApps.
+        // Browser meetings (issue #503): a Chromium browser holds a
+        // "NoIdleSleepAssertion" named "WebRTC has active PeerConnections"
+        // during any WebRTC call (Google Meet, Whereby, web Zoom/Teams/Webex).
+        // The assertion lives in Chromium's content layer, so every fork
+        // (Chrome, Brave, Edge, Chromium) emits the same name — all four are
+        // matched under one shared browser identity. Keyword-only, no
+        // assertionTypes: a Chromium browser holds the same assertion type for
+        // plain media playback (YouTube), so matching the type would fire on
+        // every video — the WebRTC name is the meeting-specific signal. Opt-in:
+        // only watched when the browser toggle adds "Google Chrome" to watchApps.
         AssertionPattern(
             appName: AppMeetingPattern.chromeBrowser.appName,
-            processNames: ["Google Chrome"],
+            processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
             keywords: ["webrtc", "peerconnection"],
         ),
     ]
@@ -167,7 +170,11 @@ class PowerAssertionDetector: MeetingDetecting {
                     ownerNames: [match.processName],
                     meetingPatterns: [],
                 )
-                let title = lookupWindowTitle(appName: appName) ?? Self.placeholderTitle(appName: appName)
+                // Browser meetings share one "Google Chrome" identity but can run
+                // in any Chromium fork; title the placeholder by the concrete
+                // browser process so a Brave/Edge call is not labeled as Chrome.
+                let placeholderApp = meetingPattern.requiresRecordingConsent ? match.processName : appName
+                let title = lookupWindowTitle(appName: appName) ?? Self.placeholderTitle(appName: placeholderApp)
                 return DetectedMeeting(
                     pattern: meetingPattern,
                     windowTitle: title,
