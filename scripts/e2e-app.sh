@@ -199,6 +199,8 @@ DEV_BUNDLE_BUILD="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app
 DEV_BUNDLE_DEPLOY="$HOME/Applications/MeetingTranscriber-Dev.app"
 SIMULATOR_PKG="$ROOT/tools/meeting-simulator"
 SIMULATOR_BIN="$SIMULATOR_PKG/.build/release/meeting-simulator"
+MTCLI_PKG="$ROOT/tools/mt-cli"
+MTCLI="$MTCLI_PKG/.build/release/mt-cli"
 DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
@@ -368,6 +370,14 @@ fi
 if [ ! -x "$SIMULATOR_BIN" ]; then
     log "Building meeting-simulator"
     (cd "$SIMULATOR_PKG" && swift build -c release)
+fi
+
+# Record-only lanes assert the captured app track is non-silent via
+# `mt-cli wav-verdict` (the same analyzer the browser lane uses). Only that
+# mode needs it, so build lazily to keep the processing lane unchanged.
+if [ "$RECORD_ONLY" = true ] && [ ! -x "$MTCLI" ]; then
+    log "Building mt-cli (app-track silence guard)"
+    (cd "$MTCLI_PKG" && swift build -c release) || fail "mt-cli build failed"
 fi
 
 # `autoWatch` triggers the same `.autoWatchStart` notification an
@@ -963,10 +973,34 @@ run_one_record_only_meeting() {
     mix_path="$sidecar_dir/$mix_filename"
     [ -f "$mix_path" ] || fail "$label: mix WAV not found: $mix_path"
     mix_size="$(wc -c <"$mix_path" | tr -d ' ')"
-    # 16 kHz mono Float32 = 64 KB/sec. Fixture two_speakers_de.wav is ~10 s
-    # → expect > 64 KB even after worst-case truncation.
+    # 16 kHz mono 16-bit PCM = 32 KB/sec. Fixture two_speakers_de.wav is ~10 s,
+    # so expect > 64 KB even after worst-case truncation.
     [ "$mix_size" -gt 65536 ] || fail "$label: mix WAV suspiciously small: $mix_size bytes (expected > 64 KB)"
     log "$label: mix WAV $mix_path ($mix_size bytes)"
+
+    # The mix-size check above only proves bytes were written. Two capture
+    # failures slip past it: (a) an all-zeros app track is byte-for-byte the
+    # same size as a good one, and the mic masks it in the mix via speaker
+    # bleed; (b) a tap that never attaches leaves no app track at all, and the
+    # mix falls back to mic-only at full size. This meeting is always
+    # dual-source (the simulator plays the fixture the whole time), so assert
+    # the app track both exists AND carries energy, via the same mt-cli
+    # wav-verdict analyzer the browser lane uses (windowed peak RMS, robust to
+    # the trailing grace-period silence). A missing or silent app track means
+    # system-audio capture produced no signal (a wrong tap PID set, a missing
+    # TCC audio-capture grant, or a regressed capture path).
+    # `=` form for the negative threshold: ArgumentParser reads a bare `-50` as
+    # another flag and errors out.
+    local app_filename app_path app_verdict
+    app_filename="$(jq -r '.files.app // empty' "$sidecar")"
+    [ -n "$app_filename" ] || fail "$label: sidecar has no app track (.files.app is null): dual-source capture wrote no app audio (the tap never attached or produced 0 bytes)."
+    app_path="$sidecar_dir/$app_filename"
+    [ -f "$app_path" ] || fail "$label: app track WAV not found: $app_path"
+    if app_verdict="$("$MTCLI" wav-verdict "$app_path" --threshold-dbfs=-50 --min-active-seconds=3)"; then
+        log "$label: app track $app_filename capture OK: $app_verdict"
+    else
+        fail "$label: app track $app_filename is silent/too quiet (reason above): system-audio capture produced no usable signal. Likely a wrong tap PID set, a missing TCC audio-capture grant, or a regressed capture path."
+    fi
 
     # Negative: record-only short-circuits before VAD/transcription/protocol.
     # No `.txt`/`.md` files from THIS meeting should exist in recordings/.
