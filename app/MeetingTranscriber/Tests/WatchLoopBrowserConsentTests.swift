@@ -30,6 +30,9 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     /// `WatchLoop` consent gate calls. Records how often the user was prompted.
     private final class ConsentSpy: AppNotifying {
         private(set) var calls = 0
+        /// The body of the most recent prompt, so a test can assert which app
+        /// the user was actually asked about.
+        private(set) var lastBody = ""
         let answer: ConsentAnswer
         init(answer: ConsentAnswer) {
             self.answer = answer
@@ -39,8 +42,9 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
 
         // swiftlint:disable async_without_await
         @MainActor
-        func askToRecord(title _: String, body _: String) async -> ConsentAnswer {
+        func askToRecord(title _: String, body: String) async -> ConsentAnswer {
             calls += 1
+            lastBody = body
             return answer
         }
         // swiftlint:enable async_without_await
@@ -155,6 +159,33 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         await waitFor(recorder.startCalled)
         XCTAssertTrue(recorder.startCalled, "granted consent must start recording")
         XCTAssertGreaterThanOrEqual(spy.calls, 1, "the user must have been prompted")
+        loop.stop()
+    }
+
+    func testConsentPromptNamesTheConcreteBrowser() async {
+        // Brave/Edge/Chromium share the one "Google Chrome" toggle identity, but
+        // the consent prompt is the surface that gates recording — it must name
+        // the actual browser so a Brave user recognises the call and does not
+        // decline it as a phantom Chrome prompt (which would then suppress the
+        // whole family for the decline cooldown).
+        let spy = ConsentSpy(answer: .declined)
+        let brave = DetectedMeeting(
+            pattern: .chromeBrowser,
+            windowTitle: "Brave Browser Call",
+            ownerName: "Brave Browser",
+            windowPID: 5632,
+        )
+        let (loop, _) = makeLoop(detector: FixedDetector(brave), spy: spy)
+        loop.start()
+        await waitFor(spy.calls >= 1)
+        XCTAssertTrue(
+            spy.lastBody.contains("Brave Browser"),
+            "consent prompt must name the concrete browser, got: \(spy.lastBody)",
+        )
+        XCTAssertFalse(
+            spy.lastBody.contains("Google Chrome"),
+            "a Brave call must not be mislabeled as Google Chrome in the prompt",
+        )
         loop.stop()
     }
 
