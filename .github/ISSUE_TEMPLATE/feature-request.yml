@@ -1,0 +1,69 @@
+name: Feature Request
+description: Suggest a new feature or an improvement
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Two things make a request much easier to act on:
+        which version you are on, and, if the idea came out of something you actually
+        ran into, what you observed.
+
+        Version matters more than it sounds: a fair number of requests turn out to be
+        already fixed in a newer release.
+
+  - type: input
+    id: app-version
+    attributes:
+      label: App version
+      description: From Settings → Advanced → About. If you have not installed it yet, write "not installed".
+      placeholder: "1.2.3 (abcdef) · Homebrew"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: What are you trying to do today, and where does the app get in the way?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+      description: A rough sketch is fine. If you considered other ways to solve it, mention them.
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Did you observe something specific?
+      description: |
+        Fill this in only if the request came out of a concrete observation, for example
+        unusual CPU or battery load, a meeting that was not recorded, or a bad transcript.
+        Numbers, timestamps and what the menu bar icon was doing at the time help far more
+        than adjectives.
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnostic log
+      description: |
+        Only useful if you answered the question above. To produce one:
+
+        1. Open Meeting Transcriber → **Settings → Advanced → Diagnostics**
+        2. Toggle **Verbose Diagnostic Logging** ON
+        3. Reproduce what you observed
+        4. Click **Export Diagnostics…** and Finder will reveal a `.log` file
+        5. Drag that `.log` file into this field
+
+        Speaker names in the log are pseudonymised (e.g. `speaker_a3f2`) and
+        transcript text is **not** included.
+    validations:
+      required: false
