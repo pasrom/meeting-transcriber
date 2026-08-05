@@ -1,0 +1,10 @@
+# Blank issues are disabled so that every report arrives with the app version.
+# Most incoming requests used to be free-form, and the version is what decides
+# whether a report describes something already fixed in a newer release.
+# Discussions stays open as the low-friction route for anything that is not yet
+# a concrete bug or feature request.
+blank_issues_enabled: false
+contact_links:
+  - name: Question, setup help or an open-ended idea
+    url: https://github.com/pasrom/meeting-transcriber/discussions
+    about: Not sure it is a bug or a concrete feature request yet? Start a discussion instead.
