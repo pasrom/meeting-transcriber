@@ -1,3 +1,6 @@
+# The diagnostic-log export steps near the bottom of this file are duplicated
+# in bug-report.yml. Issue forms have no include mechanism, so a change to the
+# export flow in the app has to be made in both files.
 name: Feature Request
 description: Suggest a new feature or an improvement
 title: "[Feature] "

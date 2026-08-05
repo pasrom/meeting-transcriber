@@ -1,3 +1,6 @@
+# The diagnostic-log export steps below are duplicated in feature-request.yml.
+# Issue forms have no include mechanism, so a change to the export flow in the
+# app has to be made in both files.
 name: Bug Report
 description: Report a bug in Meeting Transcriber
 title: "[Bug] "
