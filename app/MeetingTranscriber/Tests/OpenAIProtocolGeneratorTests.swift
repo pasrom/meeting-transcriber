@@ -336,6 +336,79 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
     }
 
+    // MARK: - max_tokens / max_completion_tokens negotiation
+
+    /// Verbatim 400 body returned by the OpenAI Chat Completions API (and Azure
+    /// Foundry) for GPT-5-family models when `max_tokens` is sent.
+    private static let unsupportedMaxTokensBody = """
+    {"error":{"message":"Unsupported parameter: 'max_tokens' is not supported \
+    with this model. Use 'max_completion_tokens' instead.",\
+    "type":"invalid_request_error","param":"max_tokens",\
+    "code":"unsupported_parameter"}}
+    """
+
+    func testRejectsMaxTokensMatchesUnsupportedParameterBody() {
+        XCTAssertTrue(OpenAIProtocolGenerator.rejectsMaxTokens(Self.unsupportedMaxTokensBody))
+    }
+
+    func testRejectsMaxTokensIgnoresUnrelatedErrors() {
+        XCTAssertFalse(
+            OpenAIProtocolGenerator.rejectsMaxTokens(
+                #"{"error":{"message":"Incorrect API key provided","code":"invalid_api_key"}}"#,
+            ),
+        )
+        XCTAssertFalse(
+            OpenAIProtocolGenerator.rejectsMaxTokens(
+                #"{"error":{"message":"The model does not exist","param":"model"}}"#,
+            ),
+        )
+        XCTAssertFalse(OpenAIProtocolGenerator.rejectsMaxTokens(""))
+    }
+
+    func testGenerateRetriesWithMaxCompletionTokensWhenRejected() async throws {
+        final class Recorder: @unchecked Sendable { var keys: [String] = [] }
+        let recorder = Recorder()
+
+        MockURLProtocol.handler = { request in
+            if self.requestBody(request)["max_tokens"] != nil {
+                recorder.keys.append("max_tokens")
+                return self.mockResponse(
+                    request, status: 400, body: Data(Self.unsupportedMaxTokensBody.utf8),
+                )
+            }
+            recorder.keys.append("max_completion_tokens")
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        let result = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+
+        XCTAssertEqual(result, "OK")
+        XCTAssertEqual(recorder.keys, ["max_tokens", "max_completion_tokens"])
+    }
+
+    func testGenerateDoesNotRetryOnUnrelated400() async throws {
+        final class Recorder: @unchecked Sendable { var count = 0 }
+        let recorder = Recorder()
+
+        MockURLProtocol.handler = { request in
+            recorder.count += 1
+            return self.mockResponse(
+                request, status: 400,
+                body: Data(#"{"error":{"message":"Incorrect API key provided"}}"#.utf8),
+            )
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        do {
+            _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+            XCTFail("expected the 400 to propagate")
+        } catch let ProtocolError.httpError(status, _) {
+            XCTAssertEqual(status, 400)
+        }
+        XCTAssertEqual(recorder.count, 1, "an unrelated 400 must not trigger a retry")
+    }
+
     func testGenerateDiarizedDoesNotThrow() async throws {
         MockURLProtocol.handler = { request in
             self.mockResponse(request, body: Data(Self.okSSE.utf8))

@@ -18,7 +18,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// idle timer); this deadline ends it regardless. Generous by default so a
     /// legitimately long protocol isn't cut off.
     let maxTotalSeconds: TimeInterval
-    /// Output-token cap sent as `max_tokens`. Bounds a runaway/verbose
+    /// Output-token cap sent as `max_tokens`, or `max_completion_tokens` when the
+    /// endpoint rejects the former. Bounds a runaway/verbose
     /// generation (the 131k-context case that ground for ~2h) by length rather
     /// than time. Generous — a meeting protocol is well under this — and a hit
     /// is surfaced as `protocolTruncated`, never silently presented as complete.
@@ -53,11 +54,42 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
             ["role": "user", "content": transcript],
         ]
 
+        do {
+            return try await send(messages: messages, tokenLimit: .maxTokens)
+        } catch let ProtocolError.httpError(status, body)
+            where status == 400 && Self.rejectsMaxTokens(body) {
+            logger.info("Endpoint rejected 'max_tokens'; retrying with 'max_completion_tokens'")
+            return try await send(messages: messages, tokenLimit: .maxCompletionTokens)
+        }
+    }
+
+    /// Name of the output-token cap parameter in the request body.
+    ///
+    /// OpenAI renamed `max_tokens` to `max_completion_tokens`; current models
+    /// (GPT-5 family and newer) reject the old name with HTTP 400, while local
+    /// servers such as LM Studio and Ollama only understand the old one. So the
+    /// old name is sent first and the new one used only on an explicit refusal.
+    enum TokenLimitParameter: String {
+        case maxTokens = "max_tokens"
+        case maxCompletionTokens = "max_completion_tokens"
+    }
+
+    /// True when a 400 body is the API specifically refusing `max_tokens` and
+    /// naming `max_completion_tokens` as the replacement. Both names must appear
+    /// so unrelated 400s (bad model, bad key, malformed request) don't retry.
+    static func rejectsMaxTokens(_ errorBody: String) -> Bool {
+        errorBody.contains(TokenLimitParameter.maxCompletionTokens.rawValue)
+            && errorBody.contains(TokenLimitParameter.maxTokens.rawValue)
+    }
+
+    private func send(
+        messages: [[String: Any]], tokenLimit: TokenLimitParameter,
+    ) async throws -> String {
         let body: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": true,
-            "max_tokens": maxOutputTokens,
+            tokenLimit.rawValue: maxOutputTokens,
         ]
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
