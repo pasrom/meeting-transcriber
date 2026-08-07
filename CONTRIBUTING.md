@@ -49,6 +49,34 @@ fix(app): prevent duplicate recording on reconnect
 test(app): add WhisperKitEngine concurrency tests
 ```
 
+**Fold review changes into the commit they belong to.** This project
+rebase-merges only (squash is disabled), so every commit on your branch lands on
+`main` verbatim; nothing is collapsed at merge time. The merged history must stay
+atomic: one logical change per commit, with no separate "address review" commits.
+
+- **While review is ongoing**, push review responses as `fixup!` commits so
+  reviewers can see what changed since their last pass:
+
+  ```bash
+  git commit --fixup=<sha>   # find the sha with: git log --oneline origin/main..
+  ```
+
+  (Single-commit PR? `git commit --amend` plus a force-push is fine too.)
+
+- **Once review has settled** (or when a maintainer asks), fold the fixups into
+  their target commits and update the branch:
+
+  ```bash
+  git fetch origin
+  git rebase --autosquash origin/main
+  git push --force-with-lease
+  ```
+
+Not comfortable rewriting history? Leave **"Allow edits by maintainers"** checked
+(it is on by default) and a maintainer will fold the commits before merging. If we
+do, resync your local branch with `git fetch origin && git reset --hard
+origin/<your-branch>` instead of pushing again.
+
 ### AI-assisted development
 
 The project includes a [`CLAUDE.md`](CLAUDE.md) with full architecture context. If you use [Claude Code](https://docs.anthropic.com/en/docs/claude-code), we recommend the [`/git-workflow` skill](https://github.com/pasrom/dotclaude/blob/main/skills/git-workflow/SKILL.md) for commit creation — install it via the [dotclaude](https://github.com/pasrom/dotclaude) collection.
@@ -68,6 +96,7 @@ cd app/MeetingTranscriber && swift test
 3. Ensure all tests pass
 4. Write a clear PR description: what changed and why
 5. Link related issues if applicable
+6. Before merge, fold any review-fix commits into the commit they belong to (see [Commit conventions](#commit-conventions))
 
 ## Reporting issues
 
