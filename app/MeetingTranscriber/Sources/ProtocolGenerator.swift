@@ -94,8 +94,13 @@ enum ProtocolGenerator {
     /// Build the localized system prompt: `loadPrompt` + `applyLanguage`
     /// + optional `diarizationNote`. Excludes the transcript itself —
     /// callers append or attach it as they see fit.
-    static func buildSystemPrompt(diarized: Bool, language: String) -> String {
-        var prompt = applyLanguage(loadPrompt(), language: language)
+    ///
+    /// `promptURL` is forwarded to `loadPrompt` and exists for the same reason:
+    /// without it tests fall through to the shared `AppPaths.customPromptFile`,
+    /// so their result depends on whether the developer has customised their own
+    /// prompt through the app.
+    static func buildSystemPrompt(diarized: Bool, language: String, promptURL: URL = AppPaths.customPromptFile) -> String {
+        var prompt = applyLanguage(loadPrompt(from: promptURL), language: language)
         if diarized { prompt += diarizationNote }
         return prompt
     }

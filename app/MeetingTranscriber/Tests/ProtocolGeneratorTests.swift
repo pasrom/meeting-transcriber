@@ -211,15 +211,23 @@ final class ProtocolGeneratorTests: XCTestCase {
 
     // MARK: - System Prompt Construction
 
-    func testBuildSystemPromptSubstitutesLanguage() {
-        let prompt = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "Polish")
-        XCTAssertTrue(prompt.contains("Polish"))
-        XCTAssertFalse(prompt.contains("{LANGUAGE}"))
+    func testBuildSystemPromptSubstitutesLanguage() throws {
+        let url = makeTempFile(suffix: ".md")
+        try "Protocol language: {LANGUAGE}.".write(to: url, atomically: true, encoding: .utf8)
+
+        let prompt = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "Polish", promptURL: url)
+
+        // Equality also pins that the injected URL is honoured: reading the shared
+        // user file or the built-in default would not produce this exact string.
+        XCTAssertEqual(prompt, "Protocol language: Polish.")
     }
 
     func testBuildSystemPromptAppendsDiarizationNoteWhenDiarized() {
-        let plain = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "German")
-        let diarized = ProtocolGenerator.buildSystemPrompt(diarized: true, language: "German")
+        // Never created, so both calls fall back to the built-in default rather
+        // than to whatever the developer has in their own prompt file.
+        let url = makeTempFile(suffix: ".md")
+        let plain = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "German", promptURL: url)
+        let diarized = ProtocolGenerator.buildSystemPrompt(diarized: true, language: "German", promptURL: url)
         XCTAssertGreaterThan(diarized.count, plain.count)
         XCTAssertTrue(diarized.contains(ProtocolGenerator.diarizationNote))
         XCTAssertFalse(plain.contains(ProtocolGenerator.diarizationNote))
