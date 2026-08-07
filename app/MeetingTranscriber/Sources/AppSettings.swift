@@ -98,6 +98,14 @@ final class AppSettings {
     /// processes don't race on the shared on-disk plist.
     @ObservationIgnored private let defaults: UserDefaults
 
+    /// Keychain account backing `openAIAPIKey`. Production callers pass
+    /// nothing → the real account. Tests inject a unique account so they never
+    /// touch the key the user configured in the app: the Keychain is scoped
+    /// per user, not per process, and the production item belongs to the app's
+    /// code signature, so a test binary reading it raises an authorization
+    /// prompt that blocks the run.
+    @ObservationIgnored private let apiKeyAccount: String
+
     // MARK: - Apps to Watch
 
     var watchTeams: Bool {
@@ -380,12 +388,12 @@ final class AppSettings {
     }
 
     var openAIAPIKey: String {
-        get { KeychainHelper.read(key: "openAIAPIKey") ?? "" }
+        get { KeychainHelper.read(key: apiKeyAccount) ?? "" }
         set {
             if newValue.isEmpty {
-                KeychainHelper.delete(key: "openAIAPIKey")
+                KeychainHelper.delete(key: apiKeyAccount)
             } else {
-                KeychainHelper.save(key: "openAIAPIKey", value: newValue)
+                KeychainHelper.save(key: apiKeyAccount, value: newValue)
             }
         }
     }
@@ -471,30 +479,12 @@ final class AppSettings {
         didSet { defaults.set(includePreReleases, forKey: "includePreReleases") }
     }
 
-    // MARK: - Computed
-
-    /// The meeting apps the user opted to watch. Drives auto-detection: the
-    /// `WatchingController` default detector keeps only the assertion patterns
-    /// whose app is listed here (`PowerAssertionDetector.patterns(watching:)`),
-    /// read at each watch start. Freshness: FROZEN per watch session.
-    var watchApps: [String] {
-        var apps: [String] = []
-        if watchTeams { apps.append("Microsoft Teams") }
-        if watchZoom { apps.append("Zoom") }
-        if watchWebex { apps.append("Webex") }
-        if watchBrowserMeetings { apps.append(AppMeetingPattern.chromeBrowser.appName) }
-        if watchWeChat { apps.append(AppMeetingPattern.wechat.appName) }
-        if watchTencentMeeting { apps.append(AppMeetingPattern.tencentMeeting.appName) }
-        if watchFaceTime { apps.append(AppMeetingPattern.faceTime.appName) }
-        if watchWhatsApp { apps.append(AppMeetingPattern.whatsApp.appName) }
-        return apps
-    }
-
     // MARK: - Init
 
     // swiftlint:disable:next function_body_length
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, apiKeyAccount: String = "openAIAPIKey") {
         self.defaults = defaults
+        self.apiKeyAccount = apiKeyAccount
 
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true

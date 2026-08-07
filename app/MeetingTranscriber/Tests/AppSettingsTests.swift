@@ -9,27 +9,31 @@ final class AppSettingsTests: XCTestCase {
     private var defaults: UserDefaults!
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var testSuiteName: String!
+    // swiftlint:disable:next implicitly_unwrapped_optional
+    private var apiKeyAccount: String!
 
     /// Each test gets its own volatile `UserDefaults(suiteName:)` so
     /// `swift test --parallel` doesn't race on the shared on-disk plist.
     /// AppSettings receives the suite via constructor injection.
     ///
-    /// Keychain state is per-user (not per-process), so we deliberately do
-    /// NOT touch any production keychain accounts here — `swift test
-    /// --parallel` spawns a fresh `xctest` process per test method, and an
-    /// unconditional delete in setUp would race with the write performed
-    /// by `testOpenAIAPIKeyViaKeychainHelper` running in a sibling process.
-    /// The one test that needs a clean keychain slot manages the slot
-    /// itself.
+    /// The Keychain account backing `openAIAPIKey` is injected the same way,
+    /// for a stronger reason. Keychain state is per-user, not per-process, and
+    /// the production account holds the API key the user actually configured
+    /// in the app — so driving it from a test would overwrite and then delete
+    /// a real credential. It is also owned by the app's code signature, so the
+    /// test binary touching it raises a Keychain authorization prompt that
+    /// blocks `swift test` indefinitely. A unique account per test avoids both,
+    /// and removes the sibling-process race under `--parallel`.
     override func setUp() {
         super.setUp()
         testSuiteName = "AppSettingsTests-\(getpid())-\(UUID().uuidString)"
+        apiKeyAccount = "AppSettingsTests-openAIAPIKey-\(getpid())-\(UUID().uuidString)"
         guard let suite = UserDefaults(suiteName: testSuiteName) else {
             XCTFail("Could not create test UserDefaults suite")
             return
         }
         defaults = suite
-        settings = AppSettings(defaults: defaults)
+        settings = AppSettings(defaults: defaults, apiKeyAccount: apiKeyAccount)
     }
 
     override func tearDown() {
@@ -37,6 +41,8 @@ final class AppSettingsTests: XCTestCase {
         defaults.removePersistentDomain(forName: testSuiteName)
         defaults = nil
         testSuiteName = nil
+        KeychainHelper.delete(key: apiKeyAccount)
+        apiKeyAccount = nil
         super.tearDown()
     }
 
@@ -252,20 +258,19 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testOpenAIAPIKeyViaKeychainHelper() {
-        // Reset the keychain slot before + after so a crashed prior run
-        // can't seed `"sk-test-key"` and a failure here doesn't leak it
-        // to the next invocation.
-        KeychainHelper.delete(key: "openAIAPIKey")
-        defer { KeychainHelper.delete(key: "openAIAPIKey") }
-
+        // The account is unique to this test and removed in tearDown, so there
+        // is no shared slot to reset up front. Asserting through
+        // `apiKeyAccount` also proves AppSettings honours the injection: were
+        // it to fall back to the hardcoded production account, every read here
+        // would come back nil.
         XCTAssertEqual(settings.openAIAPIKey, "")
 
         settings.openAIAPIKey = "sk-test-key"
-        XCTAssertEqual(KeychainHelper.read(key: "openAIAPIKey"), "sk-test-key")
+        XCTAssertEqual(KeychainHelper.read(key: apiKeyAccount), "sk-test-key")
         XCTAssertEqual(settings.openAIAPIKey, "sk-test-key")
 
         settings.openAIAPIKey = ""
-        XCTAssertNil(KeychainHelper.read(key: "openAIAPIKey"))
+        XCTAssertNil(KeychainHelper.read(key: apiKeyAccount))
         XCTAssertEqual(settings.openAIAPIKey, "")
     }
 

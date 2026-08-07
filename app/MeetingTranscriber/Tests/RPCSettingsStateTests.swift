@@ -166,10 +166,12 @@
         // MARK: - Secrets never reach the wire
 
         /// The ONLY secret `AppSettings` holds is the OpenAI API key, stored in
-        /// the process-global macOS Keychain. We deliberately do NOT write that
-        /// Keychain account here: it has no per-suite isolation and a second
-        /// writer would race `AppSettingsTests.testOpenAIAPIKeyViaKeychainHelper`
-        /// under `swift test --parallel` (a hazard that file already documents).
+        /// the user-scoped macOS Keychain. We deliberately do NOT write that
+        /// Keychain account here: it holds the key the user configured in the
+        /// app, so a test writing it would clobber a real credential and, since
+        /// the item is owned by the app's code signature, block on an
+        /// authorization prompt (`AppSettingsTests` injects a per-test account
+        /// to avoid exactly that).
         /// Instead we pin the projection can never carry a secret — no
         /// secret-bearing field name or marker anywhere in the encoded JSON —
         /// while proving the guard isn't vacuous: the non-secret OpenAI fields
