@@ -509,11 +509,12 @@ class DualSourceRecorder: RecordingProvider {
     /// prepending the root if enumeration somehow missed it — order matters
     /// for the aggregate device's cosmetic name tag (root first).
     static func resolveTapPIDs(rootPID: pid_t) -> [pid_t] {
-        resolveTapPIDs(
+        // Safari's audio runs in WebKit XPC outside Safari.app — see ProcessResponsibility.tapPIDs.
+        ProcessResponsibility.tapPIDs(rootPID: rootPID, bundleDerived: resolveTapPIDs(
             rootPID: rootPID,
             bundleURL: NSRunningApplication(processIdentifier: rootPID)?.bundleURL,
             enumerate: ProcessTreeEnumerator.pidsRooted(in:),
-        )
+        ))
     }
 
     /// Test seam — same PID-set decision as `resolveTapPIDs(rootPID:)` but with
