@@ -13,16 +13,25 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     /// bytes. Catches a fully-stalled connection, but does NOT bound total time —
     /// a slow-but-trickling stream resets it on every byte. See `maxTotalSeconds`.
     let timeoutSeconds: TimeInterval
-    /// Hard wall-clock cap for the whole generation. `timeoutSeconds` alone lets
+    /// Wall-clock cap for a single request attempt. `timeoutSeconds` alone lets
     /// a struggling LLM that trickles tokens run for hours (each byte resets the
     /// idle timer); this deadline ends it regardless. Generous by default so a
-    /// legitimately long protocol isn't cut off.
+    /// legitimately long protocol isn't cut off. Note the deadline is applied per
+    /// attempt, so the `max_completion_tokens` fallback in `generate()` can span
+    /// up to twice it — only reachable via an endpoint that trickles a 400 body.
     let maxTotalSeconds: TimeInterval
     /// Output-token cap sent as `max_tokens`, or `max_completion_tokens` when the
     /// endpoint rejects the former. Bounds a runaway/verbose
     /// generation (the 131k-context case that ground for ~2h) by length rather
     /// than time. Generous — a meeting protocol is well under this — and a hit
     /// is surfaced as `protocolTruncated`, never silently presented as complete.
+    ///
+    /// The two names are not interchangeable: `max_completion_tokens` bounds
+    /// visible output tokens *plus* reasoning tokens, and reasoning tokens never
+    /// arrive as content deltas. A long transcript can therefore end the stream on
+    /// `finish_reason: length` with little or no content, surfaced here as
+    /// `protocolTruncated`. The old name never had to account for that, since the
+    /// models that accept it emit no reasoning tokens.
     let maxOutputTokens: Int
     let session: URLSession
 

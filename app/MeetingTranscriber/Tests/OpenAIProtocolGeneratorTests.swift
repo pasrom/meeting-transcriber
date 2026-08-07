@@ -363,6 +363,13 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
             ),
         )
         XCTAssertFalse(OpenAIProtocolGenerator.rejectsMaxTokens(""))
+        // Only one of the two names present: a value error, not the rename.
+        XCTAssertFalse(OpenAIProtocolGenerator.rejectsMaxTokens(
+            #"{"error":{"message":"max_tokens is too large: 16000","param":"max_tokens"}}"#,
+        ))
+        XCTAssertFalse(OpenAIProtocolGenerator.rejectsMaxTokens(
+            #"{"error":{"message":"Use max_completion_tokens for this model"}}"#,
+        ))
     }
 
     func testGenerateRetriesWithMaxCompletionTokensWhenRejected() async throws {
@@ -376,6 +383,9 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
                     request, status: 400, body: Data(Self.unsupportedMaxTokensBody.utf8),
                 )
             }
+            let retryBody = self.requestBody(request)
+            XCTAssertEqual(retryBody["max_completion_tokens"] as? Int, 16000)
+            XCTAssertNil(retryBody["max_tokens"], "the retry must replace the cap, not add to it")
             recorder.keys.append("max_completion_tokens")
             return self.mockResponse(request, body: Data(Self.okSSE.utf8))
         }
@@ -407,6 +417,27 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
             XCTAssertEqual(status, 400)
         }
         XCTAssertEqual(recorder.count, 1, "an unrelated 400 must not trigger a retry")
+    }
+
+    func testGenerateDoesNotRetryOnNon400NamingBothParameters() async throws {
+        final class Recorder: @unchecked Sendable { var count = 0 }
+        let recorder = Recorder()
+
+        MockURLProtocol.handler = { request in
+            recorder.count += 1
+            return self.mockResponse(
+                request, status: 502, body: Data(Self.unsupportedMaxTokensBody.utf8),
+            )
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        do {
+            _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+            XCTFail("expected the 502 to propagate")
+        } catch let ProtocolError.httpError(status, _) {
+            XCTAssertEqual(status, 502)
+        }
+        XCTAssertEqual(recorder.count, 1, "only an explicit 400 refusal may retry")
     }
 
     func testGenerateDiarizedDoesNotThrow() async throws {
