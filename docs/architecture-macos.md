@@ -60,6 +60,8 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │ 3. Transcribe via active engine                                │
         │      └─ TranscribingEngine: WhisperKit | Parakeet             │
         │         (dual-source: each track separately, then merge)       │
+        │      └─ Save unlabelled transcript draft immediately — survives│
+        │         a diarization crash repeating on relaunch (issue #558) │
         │ 4. (opt) Diarize via FluidDiarizer                             │
         │      └─ Mode: .offline | .sortformer                           │
         │      └─ Dual-source: app + mic diarized separately,            │
@@ -68,7 +70,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │      (centroid + recent-FIFO, threshold 0.40, margin 0.10)     │
         │ 6. Speaker naming UI (suspended via CheckedContinuation)       │
         │ 7. Assign speakers to transcript by temporal overlap           │
-        │ 8. Save transcript (.txt)                                      │
+        │ 8. Save transcript (.txt) — replaces the stage-3 draft         │
         │ 9. Protocol generation                                         │
         │      └─ ProtocolProvider: .claudeCLI | .openAICompatible | .none│
         │ 10. Save protocol (.md, transcript appended)                   │
@@ -105,6 +107,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
+| `AppSettings+Computed.swift` | Values derived from the stored `AppSettings` toggles, split out to keep `AppSettings.swift` under the line cap |
 | `UpdateChecker.swift` | Checks GitHub releases for newer versions, drives the menu bar update badge |
 | `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
 | `LiveCaptionsState.swift` | `@Observable` live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types |
@@ -124,10 +127,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `MeetingDetector.swift` | Window title polling, pattern matching, confirmation counting, cooldown |
 | `MeetingTitleMatcher.swift` | Compiled idle/meeting title regex semantics for one `AppMeetingPattern` |
 | `PowerAssertionDetector.swift` | IOKit power assertion–based meeting detection (sandbox-safe); carries the Chrome WebRTC pattern for browser meetings (issue #503) |
+| `MicInputDetector.swift` | Core Audio mic-input–based meeting detection for call apps whose in-call power assertions are absent/unnamed (WeChat, Tencent Meeting, FaceTime, WhatsApp); each app off by default. Also defines `CompositeMeetingDetector`, which fans out to every active strategy — `WatchingController.defaultDetectors` composes `PowerAssertionDetector` + `MicInputDetector` |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex, browser (Chrome WebRTC) |
 | `BrowserConsentPolicy.swift` | Pure decision logic for the browser-meeting "ask before recording" prompt — decline cooldown (issue #503) |
+| `ConsentAnswer.swift` | Three-way outcome of a browser-meeting consent prompt (granted / declined / unanswered) so a timeout and an explicit "no" get different re-prompt cooldowns (issue #543) |
 | `ConsentPromptCoordinator.swift` | Coordinates an async yes/no recording-consent prompt: register pending decision by id, resolve once via answer or timeout |
 | `WatchLoop+Consent.swift` | Browser-meeting consent gate, split out of `WatchLoop`; only patterns with `requiresRecordingConsent` reach it |
+| `WatchLoop+RecordOnly.swift` | Record-only output branch (move recordings + write the sidecar), split out of `WatchLoop.swift` for the line cap |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
 | `TranscribingEngine.swift` | `TranscribingEngine` protocol + `mergeDualSourceSegments` default impl |
 | `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
@@ -142,6 +148,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `PipelineEventLog.swift` | Append-only JSONL log of `PipelineQueue` job state transitions |
 | `StageTimingStats.swift` | Per-stage wall-clock duration tracking, backs `ProcessingStatsView` |
 | `ProcessedRecordingsLedger.swift` | File-backed ledger of mix-file paths that completed the pipeline (dedupes recovery re-processing) |
+| `InFlightRunRegistry.swift` | Process-wide in-memory guard so two `PipelineQueue` instances can't claim the same job ID or audio path at once (issue #558) |
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
 | `SpeakerNamingSession.swift` | Collaborator `PipelineQueue` calls for the speaker-naming work still owned by the queue, split out for size |
 | `SpeakerNamingSession+Late.swift` | Late-confirm and late re-diarization paths for speaker naming |
@@ -189,6 +196,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AudioMixer.swift` | Resampling, mixing, echo suppression, mute masking, WAV I/O |
 | `AudioConstants.swift` | Shared audio pipeline constants (target sample rate) |
 | `FFmpegHelper.swift` | ffmpeg CLI detection + 16 kHz mono WAV conversion fallback for file-import formats AVAsset can't decode |
+| `AudioImportTypes.swift` | Shared `NSOpenPanel` file-type list for batch import + voice enrollment (pure type list, pinned by tests) |
+| `AudioPersistencePolicy.swift` | Decides per finished job whether its source audio moves into the output folder, stays in place, or is left untouched (user-picked import) |
 | `MicRecorder.swift` | Microphone recording via AVAudioEngine |
 | `FluidVAD.swift` | VAD preprocessing via FluidAudio Silero v6 — silence trimming + `VadSegmentMap` timeline remapping |
 | `LiveAudioResampler.swift` | Streams live `LiveAudioBuffer` through `AVAudioConverter` → 16 kHz mono Float32 (feeds `StreamingTranscriber`) |
@@ -219,6 +228,10 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/StreamingMonoResampler.swift` | Streaming mono resampler for the live 16 kHz audio path |
 | `tools/audiotap/Sources/TapFormatResolver.swift` | Derives mic tap format from hardware format (prevents installTap channel-count mismatch) |
 | `tools/audiotap/Sources/TimelineAnchor.swift` | Wall-clock timeline anchor across device-change restarts (keeps track aligned to real time) |
+| `tools/audiotap/Sources/ProcessResponsibility.swift` | Groups a helper process with the app macOS holds responsible for it (`responsibility_get_pid_responsible_for_pid`) — extends the tap PID set to Safari's WebKit XPC helpers, which live outside the app bundle and can't be found by path-prefix rooting (issue #524) |
+| `tools/audiotap/Sources/MicChannelMap.swift` | Decides when a multi-channel mic input needs an explicit converter channel map — `AVAudioConverter`'s implicit downmix silently produces all-zero silence for most discrete layouts |
+| `tools/audiotap/Sources/MicConverterFactory.swift` | Builds the mic tap → 16 kHz mono WAV converter, applying `MicChannelMap`'s explicit channel selection when the implicit downmix would be silent |
+| `tools/audiotap/Sources/SystemSettingsPaths.swift` | Versioned System Settings navigation paths (macOS 15 renamed the Screen Recording pane) shared by the tap-error hint, permission UI, and channel-health notification |
 
 ### Support
 
@@ -229,6 +242,9 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AXHelper.swift` | Shared accessibility API helper (MuteDetector + ParticipantReader) |
 | `NotificationManager.swift` | macOS notifications |
 | `NotificationScheduling.swift` | Port over the `UNUserNotificationCenter` slice `NotificationManager` uses, so posting/registration is testable against a fake scheduler |
+| `NotificationVisibility.swift` | Whether the notification centre will actually show a posted notification (authorisation + alert setting + alert style + Time Sensitive + scheduled delivery), not just whether the app is allowed to post one |
+| `BrowserConsentReadiness.swift` | Decides when Settings → General should warn that notification permission can't actually deliver the browser-meeting consent prompt |
+| `LegacyDefaultsMigration.swift` | One-shot copy of `UserDefaults` from the pre-rename bundle identifier so the `app.meetingtranscriber` rename didn't reset every setting |
 | `NotificationRingBuffer.swift` | Bounded, thread-safe log of recently-posted notifications (`#if !APPSTORE`) |
 | `DateFormatter+FilenameStamp.swift` | `DateFormatter` pinned to Gregorian calendar + POSIX locale for filename timestamp stamps |
 | `KeychainHelper.swift` | Legacy keychain CRUD (token now file-based) |
@@ -242,7 +258,10 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `DebugRPCServer+Metrics.swift` | `GET /metrics` handler — cumulative CPU/RAM/instruction counters via `proc_pid_rusage` |
 | `DebugRPCServer+Screenshot.swift` | `GET /screenshot` handler (PNG of the largest visible window via ScreenCaptureKit) |
 | `DebugRPCServer+UITree.swift` | `GET /ui/tree` handler — read-only accessibility tree of an allowlisted window |
-| `DebugRPCServer+UIPress.swift` | `POST /ui/press` handler — presses an allowlisted control via in-process `AXUIElementPerformAction` |
+| `DebugRPCServer+UIPress.swift` | `POST /ui/press` handler — presses an allowlisted control via in-process `AXUIElementPerformAction`, or clicks it via `MouseInjection` when `"via":"click"` is given |
+| `DebugRPCServer+UIType.swift` | `POST /ui/type` handler — focuses an allowlisted text field and fills it via `KeyboardInjection` |
+| `KeyboardInjection.swift` | Types text into the app's own UI via real key events — an AX set-value bypasses `interpretKeyEvents:`/`insertText:`, so a SwiftUI `TextField`'s binding never observes it |
+| `MouseInjection.swift` | Clicks a point in the app's own UI via real mouse events — some AX press actions (e.g. a `List(selection:)` row) report success without the action taking effect |
 | `DebugRPCServer+AXElement.swift` | Shared self-pid `AXUIElement` tree walk backing `/ui/tree` and `/ui/press` |
 | `HTTPRequest.swift` | Minimal HTTP/1.1 request parsing for `DebugRPCServer` (pure value type, line-cap split) |
 | `HTTPResponse.swift` | Minimal HTTP/1.1 response serialization for `DebugRPCServer` (pure value type, line-cap split) |
@@ -488,6 +507,8 @@ When dual-source recording (app + mic) is available:
 - **`.none`** — Skip LLM generation; save transcript only
 
 `AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`.
+
+`OpenAIProtocolGenerator` sends `max_tokens` first and retries once with `max_completion_tokens` when the endpoint's HTTP 400 body explicitly names both parameters — GPT-5-family models reject the renamed-away `max_tokens`, while local servers (Ollama, LM Studio) still expect it. An unrelated 400 (bad key, unknown model) does not trigger a retry.
 
 ### Claude CLI Invocation
 
