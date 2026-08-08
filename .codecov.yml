@@ -81,6 +81,17 @@ ignore:
   - "tools/audiotap/Sources/AppAudioCapture.swift"
   - "tools/audiotap/Sources/MicCaptureHandler.swift"
   - "tools/audiotap/Sources/AudioCaptureSession.swift"
+  # The AVAudioEngine wrapper extracted out of MicCaptureHandler.swift: reading
+  # `inputNode`, pinning the device, installing the tap, prepare/start, teardown.
+  # No test can drive its BRING-UP path: hardwareFormat / installTap / start need
+  # real input hardware, and on the CI runner reading `inputNode` raises an
+  # uncatchable NSException. Tests do construct it and do execute teardown's
+  # no-tap guard and deviceIDForUID (MicCaptureHandlerStopTests, the wedge tests),
+  # so this entry knowingly trades that sliver of visible coverage for not
+  # reporting the hardware-bound remainder as a regression. It follows code that
+  # was already ignored while it lived in MicCaptureHandler.swift. The logic that
+  # drives the session through the protocol stays counted.
+  - "tools/audiotap/Sources/MicEngineSession.swift"
   # Fault-injection test seam (#379): a 2-field config struct constructed ONLY
   # in the e2e build's composition root under #if E2E_FAULT_INJECTION, so the
   # xctest suite never executes its init. Exercised by e2e-mic-device-change.yml;
