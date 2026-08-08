@@ -76,8 +76,10 @@ jobs:
     # macos-26. Sanitizer doesn't need the `audio` label, so either Mini
     # runner picks up.
     runs-on: [self-hosted, macOS, ARM64]
-    # ~7 min wall-clock observed; 20 min leaves room for cold-build
-    # variance while still surfacing runaways before they cost an hour.
+    # ~7 min wall-clock observed for the app package alone; the AudioTapLib
+    # step below adds roughly 1.5 to 2.5 min, most of it waiting out real
+    # restart deadlines rather than compiling. 20 min still leaves room for
+    # cold-build variance while surfacing runaways before they cost an hour.
     timeout-minutes: 20
     permissions:
       contents: read
@@ -132,6 +134,24 @@ jobs:
           security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
       - name: Swift tests
         run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
+      # AudioTapLib is a separate SPM package, so the app's test run never
+      # compiles its test target and the sanitizers never saw it. That is the
+      # wrong way round: it holds the capture-restart machinery, which is the
+      # most lock- and queue-dense code in the repo (an unfair lock behind every
+      # arbiter decision, a serial restart queue, a real-time IOProc block and a
+      # render-thread tap block), and it is the code the ASan comment above
+      # already names as the reason ASan is in this matrix at all.
+      #
+      # Worth being honest about the cost, because it is not the build. The
+      # package compiles quickly next to the app, but its wedge tests wait out
+      # real `RestartArbiter.attemptTimeout` deadlines (5 s, a static let, not
+      # injectable), and within a class XCTest runs serially. Budget roughly
+      # 1.5 to 2.5 min per sanitizer leg, which still sits well inside this
+      # job's timeout. What that buys: those same tests drive real queues and
+      # semaphores, so TSan gets genuine interleavings rather than a
+      # single-threaded walk.
+      - name: Swift tests (AudioTapLib)
+        run: cd tools/audiotap && swift test --parallel ${{ matrix.sanitizer-flag }}
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
