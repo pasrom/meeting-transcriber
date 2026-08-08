@@ -35,7 +35,30 @@ public class MicCaptureHandler: @unchecked Sendable {
     var session: MicEngineSessionProviding
     /// `internal` (not `private`) so the cross-file `+Timeline` extension can
     /// write gap-fill silence to it.
-    var outputFile: AVAudioFile?
+    ///
+    /// Lock-backed because three threads touch it: it is created on whichever
+    /// queue `startEngine` runs (main at first start, the restart queue during
+    /// an attempt), nilled on the main queue by stop and by give-up, and read by
+    /// the render-thread tap block for every buffer. As a plain stored property
+    /// that is a load racing a store-and-release. The getter hands out a strong
+    /// reference and the write then happens outside the lock, so a buffer
+    /// already in flight finishes against a live object instead of one the main
+    /// queue just dropped.
+    var outputFile: AVAudioFile? {
+        get {
+            outputFileLock.lock()
+            defer { outputFileLock.unlock() }
+            return storedOutputFile
+        }
+        set {
+            outputFileLock.lock()
+            storedOutputFile = newValue
+            outputFileLock.unlock()
+        }
+    }
+
+    private let outputFileLock = NSLock()
+    private var storedOutputFile: AVAudioFile?
     private let outputURL: URL
     private let debugLogging: Bool
     private let liveSink: LiveAudioSink?
