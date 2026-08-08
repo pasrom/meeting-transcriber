@@ -18,7 +18,12 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// IO with the render thread is impossible by lifecycle. `@unchecked Sendable`
 /// reflects that this discipline isn't expressible to the compiler.
 public class MicCaptureHandler: @unchecked Sendable {
-    private var engine = AVAudioEngine()
+    /// Builds a fresh engine session. Injectable so tests can supply one that
+    /// never touches audio hardware (the CI runner has no input device) and can
+    /// be made to block on demand, which is how the issue #588 wedge is
+    /// exercised without a Bluetooth headset.
+    private let sessionFactory: () -> MicEngineSessionProviding
+    private var session: MicEngineSessionProviding
     /// `internal` (not `private`) so the cross-file `+Timeline` extension can
     /// write gap-fill silence to it.
     var outputFile: AVAudioFile?
@@ -29,12 +34,6 @@ public class MicCaptureHandler: @unchecked Sendable {
     // build's composition root injects one (DualSourceRecorder, gated by
     // #if E2E_FAULT_INJECTION) to verify the installTap NSException recovery.
     private let debugFault: DebugTapFault?
-    /// Removes the engine's input tap in `stop()`. Injectable so a test can
-    /// assert the teardown is skipped when no tap was installed (reading
-    /// `AVAudioEngine.inputNode` throws an uncatchable NSException on an input-less host).
-    private let removeInputTap: (AVAudioEngine) -> Void
-    /// True once a tap is attached to the current engine's inputNode; gates the `inputNode` teardown in `stop()`.
-    private var tapInstalled = false
     private var isRecording = false
     private var isRestarting = false
     // Bounded retry for transient restart failures (issue #379): a device
@@ -82,40 +81,46 @@ public class MicCaptureHandler: @unchecked Sendable {
         mElement: kAudioObjectPropertyElementMain,
     )
 
-    public init(
+    public convenience init(
         outputURL: URL,
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
         debugFault: DebugTapFault? = nil,
         removeInputTap: @escaping (AVAudioEngine) -> Void = { $0.inputNode.removeTap(onBus: 0) },
     ) {
+        let factory: () -> MicEngineSessionProviding = {
+            MicEngineSession(removeInputTap: removeInputTap)
+        }
+        self.init(
+            outputURL: outputURL,
+            debugLogging: debugLogging,
+            liveSink: liveSink,
+            debugFault: debugFault,
+            sessionFactory: factory,
+        )
+    }
+
+    /// Test seam. Deliberately not `public`: `MicEngineSessionProviding` stays
+    /// internal, so the published API keeps exposing only the real engine path
+    /// while same-module tests can substitute a session that never touches audio
+    /// hardware.
+    init(
+        outputURL: URL,
+        debugLogging: Bool = false,
+        liveSink: LiveAudioSink? = nil,
+        debugFault: DebugTapFault? = nil,
+        sessionFactory: @escaping () -> MicEngineSessionProviding,
+    ) {
         self.outputURL = outputURL
         self.debugLogging = debugLogging
         self.liveSink = liveSink
         self.debugFault = debugFault
-        self.removeInputTap = removeInputTap
+        self.sessionFactory = sessionFactory
+        session = sessionFactory()
     }
 
     deinit {
         stop()
-    }
-
-    private static func deviceIDForUID(_ uid: String) -> AudioDeviceID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var deviceID: AudioDeviceID = kAudioObjectUnknown
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        var cfUID: Unmanaged<CFString>? = Unmanaged.passUnretained(uid as CFString)
-        let qualifierSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address, qualifierSize, &cfUID,
-            &size, &deviceID,
-        )
-        return deviceID
     }
 
     public func start(deviceUID: String? = nil) throws {
@@ -143,34 +148,11 @@ public class MicCaptureHandler: @unchecked Sendable {
         return tapFormat
     }
 
-    // swiftlint:disable:next function_body_length
-    private func startEngine(deviceUID: String? = nil) throws {
-        tapInstalled = false // reset per attempt; re-set once safeInstallTap attaches a tap
-        // No input device available (e.g. Mac Mini server without mic hardware) —
-        // accessing AVAudioEngine.inputNode would throw an uncatchable NSException.
-        guard AVCaptureDevice.default(for: .audio) != nil else {
-            throw MicCaptureError.noInputDevice
-        }
-
-        let inputNode = engine.inputNode
-
-        if let uid = deviceUID {
-            var deviceID = Self.deviceIDForUID(uid)
-            if deviceID != kAudioObjectUnknown {
-                let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
-                AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global, 0,
-                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
-                )
-                logger.info("Mic device set: \(uid) (ID \(deviceID))")
-            } else {
-                logger.warning("Unknown mic device UID '\(uid)', using default")
-            }
-        }
-
-        let hwFormat = inputNode.outputFormat(forBus: 0)
+    // swiftlint:disable function_body_length
+    @discardableResult
+    private func startEngine(deviceUID: String? = nil) throws -> Double {
+        // The one call in here that can block forever (issue #588).
+        let hwFormat = try session.hardwareFormat(deviceUID: deviceUID)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
 
         let tapFormat = try validatedTapFormat(for: hwFormat)
@@ -271,22 +253,17 @@ public class MicCaptureHandler: @unchecked Sendable {
             }
         }
 
-        do {
-            try inputNode.safeInstallTap(onBus: 0, bufferSize: 4096, format: installFormat, block: tapBlock)
-        } catch {
-            logger.error("Mic: installTap failed (\(error.localizedDescription, privacy: .public)) — restart will retry")
-            throw error
-        }
-        tapInstalled = true // inputNode accessed + tap attached; stop() must remove it even if start() throws
-
-        engine.prepare()
-        try engine.start()
+        try session.installTap(format: installFormat, block: tapBlock)
+        try session.start()
         isRecording = true
         restartRetryCount = 0
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
 
         armDebugFaultIfNeeded()
+        return hwFormat.sampleRate
     }
+
+    // swiftlint:enable function_body_length
 
     private func installDeviceChangeListener() {
         guard deviceChangeListener == nil else { return }
@@ -312,7 +289,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         guard configChangeObserver == nil else { return }
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
-            object: engine,
+            object: session.notificationObject,
             queue: .main,
         ) { [weak self] _ in
             self?.handleEngineConfigChange()
@@ -331,7 +308,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     }
 
     private func handleDeviceChange() {
-        let isDeviceAvailable = selectedDeviceUID.map { Self.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
+        let isDeviceAvailable = selectedDeviceUID.map { MicEngineSession.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
         let action = MicRestartPolicy.decideRestart(
             isRecording: isRecording,
             // Treat a pending retry as still-restarting so a device change in
@@ -358,31 +335,24 @@ public class MicCaptureHandler: @unchecked Sendable {
             logger.warning("Mic: selected device '\(uid)' no longer available, falling back to system default")
         }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
+        session.teardown()
 
         if let observer = configChangeObserver {
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
 
-        // AVAudioEngine can be in a bad state after config change — must recreate.
-        // Hold a strong reference to the old engine for a grace period so any
-        // in-flight `AVAudioIOUnit::IOUnitPropertyListener` blocks that
-        // AVFoundation queued on a libdispatch worker fire against a live
-        // object. Without this hold, dropping the last reference here races
-        // against those blocks and crashes with EXC_BAD_ACCESS in
-        // `objc_msgSend` on the freed engine.
-        let oldEngine = engine
-        engine = AVAudioEngine()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            _ = oldEngine
-        }
+        // AVAudioEngine can be in a bad state after a config change, so the
+        // restart runs on a brand-new session rather than reusing the engine.
+        // The old one is kept alive briefly by its own teardown (see
+        // MicEngineSession.teardown) so in-flight AVFoundation listener blocks
+        // do not fire against a freed object.
+        session = sessionFactory()
 
         do {
-            try startEngine(deviceUID: deviceUID)
-            let hwRate = engine.inputNode.outputFormat(forBus: 0).sampleRate
+            // The rate comes back from startEngine: reading it again through the
+            // engine would be a second call that can wedge (issue #588).
+            let hwRate = try startEngine(deviceUID: deviceUID)
             if hwRate <= 0 {
                 logger.warning("Mic: hardware format rate is \(hwRate) after restart — may produce incorrect audio")
             }
@@ -438,25 +408,12 @@ public class MicCaptureHandler: @unchecked Sendable {
             NotificationCenter.default.removeObserver(observer)
             configChangeObserver = nil
         }
-        // Skip the inputNode teardown when no tap was installed — the getter
-        // raises an uncatchable NSException on an input-less host (deinit path).
-        if tapInstalled {
-            removeInputTap(engine)
-        }
-        engine.stop()
-        engine.reset()
+        // Tap removal, stop/reset and the retain-grace that keeps in-flight
+        // AVFoundation listener blocks firing against a live object all live in
+        // the session now, including the "no tap was installed" guard that keeps
+        // an input-less host from raising in the deinit path.
+        session.teardown()
         outputFile = nil
-
-        // Mirror the retain-grace from executeRestart: if the caller drops
-        // MicCaptureHandler immediately after stop() returns, the engine
-        // ivar's last reference would race against any in-flight
-        // AVAudioIOUnit::IOUnitPropertyListener block AVFoundation queued
-        // on a libdispatch worker. Holding a local ref for 500 ms lets
-        // those blocks fire against a live object.
-        let retainedEngine = engine
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            _ = retainedEngine
-        }
         logger.info("Mic recording stopped")
     }
 }
