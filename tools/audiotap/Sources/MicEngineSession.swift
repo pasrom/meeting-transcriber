@@ -60,7 +60,9 @@ final class MicEngineSession: MicEngineSessionProviding {
 
     private(set) var tapInstalled = false
 
-    var notificationObject: AnyObject { engine }
+    var notificationObject: AnyObject {
+        engine
+    }
 
     init(removeInputTap: @escaping (AVAudioEngine) -> Void = { $0.inputNode.removeTap(onBus: 0) }) {
         self.removeInputTap = removeInputTap

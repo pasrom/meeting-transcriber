@@ -109,8 +109,10 @@ public class AppAudioCapture: @unchecked Sendable {
     /// Restart attempts run here, never on the main queue. `startCapture` is a
     /// chain of HAL calls through the same coreaudiod that can stop answering,
     /// and on the main queue a stuck one takes the whole app down.
-    let restartQueue = DispatchQueue(label: "com.meetingtranscriber.audiotap.app-restart",
-                                             qos: .userInitiated)
+    let restartQueue = DispatchQueue(
+        label: "com.meetingtranscriber.audiotap.app-restart",
+        qos: .userInitiated,
+    )
 
     /// The work one attempt performs. Injectable so a test can substitute a call
     /// that blocks the way a wedged HAL call does; nil means the real thing.

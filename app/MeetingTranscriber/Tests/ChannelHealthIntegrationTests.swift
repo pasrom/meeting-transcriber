@@ -337,8 +337,10 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
 
         XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertEqual(notifier.calls.first?.body,
-                       ChannelHealthController.captureGaveUpMessage(for: .mic))
+        XCTAssertEqual(
+            notifier.calls.first?.body,
+            ChannelHealthController.captureGaveUpMessage(for: .mic),
+        )
     }
 
     func testASilentChannelThatDidNotGiveUpKeepsTheSilenceMessage() {
@@ -349,8 +351,10 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         controller.applyTick(recorder: recorder, now: t0)
         _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
 
-        XCTAssertEqual(notifier.calls.first?.body,
-                       ChannelHealthController.asymmetricSilenceMessage(for: .mic))
+        XCTAssertEqual(
+            notifier.calls.first?.body,
+            ChannelHealthController.asymmetricSilenceMessage(for: .mic),
+        )
     }
 
     func testTheGiveUpMessageRecommendsARestart() {

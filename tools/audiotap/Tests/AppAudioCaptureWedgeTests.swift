@@ -30,7 +30,9 @@ final class AppAudioCaptureWedgeTests: XCTestCase {
             return _starts
         }
 
-        func release() { gate.signal() }
+        func release() {
+            gate.signal()
+        }
 
         func run() throws {
             countLock.lock(); _starts += 1; countLock.unlock()

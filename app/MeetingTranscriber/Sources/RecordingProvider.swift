@@ -34,6 +34,11 @@ extension RecordingProvider {
         -120
     }
 
-    var appCaptureGaveUp: Bool { false }
-    var micCaptureGaveUp: Bool { false }
+    var appCaptureGaveUp: Bool {
+        false
+    }
+
+    var micCaptureGaveUp: Bool {
+        false
+    }
 }

@@ -42,7 +42,9 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         // swiftlint:disable:next force_unwrapping
         var format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
 
-        func release() { wedge.signal() }
+        func release() {
+            wedge.signal()
+        }
 
         func hardwareFormat(deviceUID _: String?) throws -> AVAudioFormat {
             record("hardwareFormat")
@@ -180,8 +182,11 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settled.fulfill() }
         wait(for: [settled], timeout: 5)
 
-        XCTAssertEqual(try Data(contentsOf: url), afterGiveUp,
-                       "the finished recording must be byte-identical after a late return")
+        XCTAssertEqual(
+            try Data(contentsOf: url),
+            afterGiveUp,
+            "the finished recording must be byte-identical after a late return",
+        )
     }
 
     func testATimedOutAttemptSchedulesNoRetry() throws {
@@ -251,8 +256,11 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { settled.fulfill() }
         wait(for: [settled], timeout: 5)
 
-        XCTAssertEqual(try Data(contentsOf: url), afterGiveUp,
-                       "a sealed session must not recreate and truncate the recording")
+        XCTAssertEqual(
+            try Data(contentsOf: url),
+            afterGiveUp,
+            "a sealed session must not recreate and truncate the recording",
+        )
     }
 
     // MARK: - Publication

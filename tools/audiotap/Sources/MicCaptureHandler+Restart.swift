@@ -190,8 +190,10 @@ extension MicCaptureHandler {
                 // Re-resolve the target now rather than reusing the one captured
                 // when the backoff started: a device change during the backoff is
                 // ignored by design, so this is where a newer reality is picked up.
-                self.launchRestartAttempt(deviceUID: self.currentRestartTarget() ?? deviceUID,
-                                          generation: generation)
+                self.launchRestartAttempt(
+                    deviceUID: self.currentRestartTarget() ?? deviceUID,
+                    generation: generation,
+                )
             }
         }
     }

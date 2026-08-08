@@ -122,7 +122,9 @@ struct RestartArbiter: Equatable {
 
     /// True only while capture is actually running: the render-thread tap block
     /// uses this to short-circuit once a restart, a give-up or a stop has begun.
-    var isCapturing: Bool { phase == .capturing }
+    var isCapturing: Bool {
+        phase == .capturing
+    }
 
     mutating func handle(_ event: Event) -> Action {
         switch (phase, event) {

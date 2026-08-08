@@ -44,7 +44,9 @@ final class MicEngineSessionSeamTests: XCTestCase {
             tapInstalled = true
         }
 
-        func start() { calls.append(.start) }
+        func start() {
+            calls.append(.start)
+        }
 
         func teardown() {
             calls.append(.teardown)

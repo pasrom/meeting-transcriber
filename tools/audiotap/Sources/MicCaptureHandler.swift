@@ -52,15 +52,20 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// Restart attempts run here, never on the main queue: the call that brings
     /// an engine up can block forever, and on the main queue that takes the whole
     /// app down with it rather than just the microphone track.
-    let restartQueue = DispatchQueue(label: "com.meetingtranscriber.audiotap.mic-restart",
-                                             qos: .userInitiated)
+    let restartQueue = DispatchQueue(
+        label: "com.meetingtranscriber.audiotap.mic-restart",
+        qos: .userInitiated,
+    )
 
     /// Called when the microphone track was abandoned, either because a restart
     /// attempt exceeded its deadline or because the retry budget ran out. The
     /// rest of the session keeps recording.
     public var onGiveUp: (() -> Void)?
 
-    var isRecording: Bool { arbiter.withLock { $0.isCapturing } }
+    var isRecording: Bool {
+        arbiter.withLock { $0.isCapturing }
+    }
+
     // Bounded retry for transient restart failures (issue #379): a device
     // change can briefly expose an invalid format; retry with exponential
     // backoff (MicRestartRetryPolicy) rather than dropping the recording.
