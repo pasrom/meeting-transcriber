@@ -68,7 +68,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     // Bounded retry for transient restart failures (issue #379): a device
     // change can briefly expose an invalid format; retry with exponential
-    // backoff (MicRestartRetryPolicy) rather than dropping the recording.
+    // backoff (CaptureRestartRetryPolicy) rather than dropping the recording.
     // Reset to 0 on a successful (re)start.
     var restartRetryCount = 0
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?

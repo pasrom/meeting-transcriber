@@ -39,7 +39,7 @@ extension MicCaptureHandler {
     ///
     /// The deadline is the whole point: the call that brings an engine up can
     /// loop forever inside AVFAudio and cannot be cancelled, so the only way to
-    /// find out is to stop waiting. `MicRestartRetryPolicy` still governs
+    /// find out is to stop waiting. `CaptureRestartRetryPolicy` still governs
     /// attempts that come back with an error; it never sees one that hangs.
     private func launchRestartAttempt(deviceUID: String?, generation: Int) {
         if deviceUID == nil, let uid = selectedDeviceUID {
@@ -172,10 +172,10 @@ extension MicCaptureHandler {
     /// `.backingOff`, so capture is deliberately not "running". The arbiter is the
     /// guard, and it answers `.ignore` for both events once the session is sealed.
     private func scheduleRestartRetry(deviceUID: String?) {
-        switch MicRestartRetryPolicy.decide(attemptsSoFar: restartRetryCount) {
+        switch CaptureRestartRetryPolicy.decide(attemptsSoFar: restartRetryCount) {
         case .giveUp:
             guard case .giveUp = arbiter.withLock({ $0.handle(.retryBudgetExhausted) }) else { return }
-            logger.error("Mic: giving up restart after \(MicRestartRetryPolicy.maxAttempts) failed attempts")
+            logger.error("Mic: giving up restart after \(CaptureRestartRetryPolicy.maxAttempts) failed attempts")
             outputFile = nil
             onGiveUp?()
 
@@ -186,7 +186,7 @@ extension MicCaptureHandler {
                 guard let self else { return }
                 guard case let .launchAttempt(generation) = self.arbiter.withLock({ $0.handle(.retryDue) })
                 else { return }
-                logger.info("Mic: restart retry \(attempt)/\(MicRestartRetryPolicy.maxAttempts)")
+                logger.info("Mic: restart retry \(attempt)/\(CaptureRestartRetryPolicy.maxAttempts)")
                 // Re-resolve the target now rather than reusing the one captured
                 // when the backoff started: a device change during the backoff is
                 // ignored by design, so this is where a newer reality is picked up.

@@ -9,7 +9,7 @@ import Foundation
 /// that just vanished. The call cannot be cancelled, and in the field it returned
 /// only when the device came back three hours later.
 ///
-/// `MicRestartRetryPolicy` bounds how *many* attempts are made and is unaffected:
+/// `CaptureRestartRetryPolicy` bounds how *many* attempts are made and is unaffected:
 /// a restart that fails is the transient case it was built for. This type bounds
 /// how *long* one attempt may take, and it makes the outcome safe if a wedged
 /// attempt eventually returns:
@@ -23,7 +23,7 @@ import Foundation
 ///   flight, since the wedged attempt holds the engine's mutex.
 ///
 /// Pure value type so the whole transition table is unit-testable without an
-/// engine, following `OutputDeviceChangeCoordinator` and `MicRestartRetryPolicy`.
+/// engine, following `OutputDeviceChangeCoordinator` and `CaptureRestartRetryPolicy`.
 struct RestartArbiter: Equatable {
     /// How long a single restart attempt may take before it counts as wedged.
     ///
