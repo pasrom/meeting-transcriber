@@ -317,6 +317,10 @@ class MockRecorder: RecordingProvider {
     /// the protocol's default implementations.
     var micLevelDBFS: Double = -120
     var appLevelDBFS: Double = -120
+    /// Whether a channel's capture restart was abandoned (issue #588). Default
+    /// false, matching the protocol's default, so existing tests are unaffected.
+    var micCaptureGaveUp = false
+    var appCaptureGaveUp = false
 
     /// Overrides the `recordingStartDate` `stop()` reports. `nil` (default)
     /// yields `Date()` at stop time, matching a real recorder; set it to pin a

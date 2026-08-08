@@ -156,9 +156,12 @@ final class ChannelHealthController {
                 appSilentActive = true
                 micSilentActive = false
             }
+            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
             notifier.notify(
-                title: "Capture Channel Silent",
-                body: Self.asymmetricSilenceMessage(for: channel),
+                title: gaveUp ? "Capture Channel Lost" : "Capture Channel Silent",
+                body: gaveUp
+                    ? Self.captureGaveUpMessage(for: channel)
+                    : Self.asymmetricSilenceMessage(for: channel),
             )
 
         case .recovered:
@@ -186,6 +189,25 @@ final class ChannelHealthController {
         }
 
         return event
+    }
+
+    /// Message for a channel whose capture restart was abandoned (issue #588),
+    /// as opposed to one that merely went quiet.
+    ///
+    /// Two things make this a different message rather than a variation. The
+    /// track is gone for the rest of this recording, so advice to check the
+    /// device or the mute state would send the user chasing something that
+    /// cannot help. And when the cause was an attempt that never returned, it is
+    /// stuck inside a system call that cannot be cancelled, holding a thread and
+    /// a noticeable share of a core until the process exits, so restarting is
+    /// not a suggestion but the actual remedy. Giving up because the retry budget
+    /// ran out costs no CPU, hence the hedge.
+    nonisolated static func captureGaveUpMessage(for channel: AudioChannel) -> String {
+        let track = channel == .mic ? "Microphone" : "App-audio"
+        return "\(track) capture could not recover after an audio device change and has stopped "
+            + "for this recording. The rest of the recording continues. "
+            + "Restart Meeting Transcriber to bring the channel back, and to release the extra CPU "
+            + "a stuck restart attempt may still be holding."
     }
 
     nonisolated static func asymmetricSilenceMessage(for channel: AudioChannel) -> String {

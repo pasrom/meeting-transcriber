@@ -33,33 +33,6 @@ struct CaptureFormat {
     let targetRate: Int
 }
 
-/// Abstraction for recording, enabling mock injection in tests.
-@MainActor
-protocol RecordingProvider {
-    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging: Bool) throws
-    func stop() throws -> RecordingResult
-
-    /// Instantaneous app-audio level in dBFS. -120 when no capture session is
-    /// active or the tap stopped delivering buffers in the last 0.5 s.
-    /// Drives the menu-bar asymmetric-silence indicator. Default: -120
-    /// (mocks that don't simulate audio levels stay silent).
-    var appLevelDBFS: Double { get }
-
-    /// Instantaneous mic level in dBFS, with the same semantics as
-    /// `appLevelDBFS`.
-    var micLevelDBFS: Double { get }
-}
-
-extension RecordingProvider {
-    var appLevelDBFS: Double {
-        -120
-    }
-
-    var micLevelDBFS: Double {
-        -120
-    }
-}
-
 /// Orchestrates app audio capture (via AudioTapLib) + mic recording, then mixes.
 @MainActor
 @Observable
@@ -84,6 +57,16 @@ class DualSourceRecorder: RecordingProvider {
     var micLevelDBFS: Double {
         guard #available(macOS 14.2, *) else { return -120 }
         return captureSession?.micLevelDBFS ?? -120
+    }
+
+    var appCaptureGaveUp: Bool {
+        guard #available(macOS 14.2, *) else { return false }
+        return captureSession?.appCaptureGaveUp ?? false
+    }
+
+    var micCaptureGaveUp: Bool {
+        guard #available(macOS 14.2, *) else { return false }
+        return captureSession?.micCaptureGaveUp ?? false
     }
 
     /// Requested app-audio capture format (what the CATap aggregate device is

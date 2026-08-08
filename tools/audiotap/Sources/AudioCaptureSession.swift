@@ -22,6 +22,15 @@ public class AudioCaptureSession {
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
+
+    /// Set when a channel's capture was abandoned (issue #588), either because a
+    /// restart attempt never returned or because the retry budget ran out.
+    /// Terminal for the session, so the user needs to be told something more
+    /// useful than "this channel is quiet". In the first case a wedged attempt
+    /// also keeps a thread and a good share of a core until the process
+    /// restarts. Read from the polling path that already watches channel levels.
+    public private(set) var appCaptureGaveUp = false
+    public private(set) var micCaptureGaveUp = false
     private var appFileHandle: FileHandle?
 
     /// - Parameter pids: PIDs to capture audio from. For Electron/WebView2
@@ -84,6 +93,7 @@ public class AudioCaptureSession {
             throw error
         }
         appFileHandle = handle
+        capture.onGiveUp = { [weak self] in self?.appCaptureGaveUp = true }
         appCapture = capture
 
         // Start mic capture if requested
@@ -96,6 +106,7 @@ public class AudioCaptureSession {
             )
             do {
                 try mic.start(deviceUID: micDeviceUID)
+                mic.onGiveUp = { [weak self] in self?.micCaptureGaveUp = true }
                 micCapture = mic
             } catch {
                 logger.error("Failed to start mic capture: \(error.localizedDescription, privacy: .public). Continuing with app audio only.")

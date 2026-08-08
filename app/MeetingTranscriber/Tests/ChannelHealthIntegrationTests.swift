@@ -321,4 +321,43 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         _ = controller.applyTick(recorder: recorder, now: t1.addingTimeInterval(30))
         XCTAssertTrue(controller.recordingSilentActive, "reset sibling monitor re-fires on a fresh silent window")
     }
+
+    // MARK: - Capture give-up (issue #588)
+
+    func testASilentChannelThatGaveUpGetsTheRestartMessage() {
+        // A channel that merely fell silent may come back. One whose restart
+        // attempt was abandoned will not, and the wedged attempt keeps burning
+        // CPU until the app restarts, so the user must be told something else.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureGaveUp = true
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+
+        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertEqual(notifier.calls.first?.body,
+                       ChannelHealthController.captureGaveUpMessage(for: .mic))
+    }
+
+    func testASilentChannelThatDidNotGiveUpKeepsTheSilenceMessage() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+
+        XCTAssertEqual(notifier.calls.first?.body,
+                       ChannelHealthController.asymmetricSilenceMessage(for: .mic))
+    }
+
+    func testTheGiveUpMessageRecommendsARestart() {
+        // The leaked thread only goes away with the process, so the advice has to
+        // say so; "check your mic" would send the user chasing the wrong thing.
+        let message = ChannelHealthController.captureGaveUpMessage(for: .mic)
+        XCTAssertTrue(message.lowercased().contains("restart"))
+        XCTAssertNotEqual(message, ChannelHealthController.asymmetricSilenceMessage(for: .mic))
+    }
 }
