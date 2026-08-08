@@ -44,17 +44,18 @@ public class AppAudioCapture: @unchecked Sendable {
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var procID: AudioDeviceIOProcID?
     /// Gates the IOProc callback (read on `writeQueue`), set on the start/stop
-    /// path on the main thread. `isRunning = true` must follow `AudioDeviceStart`,
+    /// path on the main thread. It is set only by `start()` and by the restart
+    /// adoption, never by `startCapture` itself, and must follow `AudioDeviceStart`,
     /// so it can't be reordered ahead of the callback's read — hence an atomic lock.
     private let runningLock = OSAllocatedUnfairLock(initialState: false)
-    private var isRunning: Bool {
+    var isRunning: Bool {
         get { runningLock.withLock { $0 } }
         set { runningLock.withLock { $0 = newValue } }
     }
 
-    private var outputListenerInstalled = false
+    var outputListenerInstalled = false
     /// Stored listener block so we can pass the same instance to remove.
-    private var outputDeviceChangeListener: AudioObjectPropertyListenerBlock?
+    var outputDeviceChangeListener: AudioObjectPropertyListenerBlock?
     private let writeQueue = DispatchQueue(
         label: "audiotap.writer", qos: .userInteractive,
     )
@@ -73,7 +74,7 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     /// CoreAudio property address for default output device changes.
-    private var defaultOutputAddress = AudioObjectPropertyAddress(
+    var defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
         mElement: kAudioObjectPropertyElementMain,
@@ -98,7 +99,26 @@ public class AppAudioCapture: @unchecked Sendable {
 
     private var didLogFormat = false
     /// Pure state machine that decides when/what to dispatch on device-change events.
-    private var deviceChangeCoordinator = OutputDeviceChangeCoordinator()
+    var deviceChangeCoordinator = OutputDeviceChangeCoordinator()
+
+    /// Bounds a single restart attempt (issue #588). The coordinator above decides
+    /// *what* a device change should do and how many times; this decides how long
+    /// one attempt may take before it counts as never returning.
+    let restartArbiter = OSAllocatedUnfairLock(initialState: RestartArbiter())
+
+    /// Restart attempts run here, never on the main queue. `startCapture` is a
+    /// chain of HAL calls through the same coreaudiod that can stop answering,
+    /// and on the main queue a stuck one takes the whole app down.
+    let restartQueue = DispatchQueue(label: "com.meetingtranscriber.audiotap.app-restart",
+                                             qos: .userInitiated)
+
+    /// The work one attempt performs. Injectable so a test can substitute a call
+    /// that blocks the way a wedged HAL call does; nil means the real thing.
+    private let attemptBody: (() throws -> Void)?
+
+    /// Called when app-audio capture was abandoned, either because a restart
+    /// attempt exceeded its deadline or because the retry budget ran out.
+    public var onGiveUp: (() -> Void)?
 
     /// - Parameters:
     ///   - pids: Process IDs to capture audio from. Pass the meeting app's
@@ -114,7 +134,7 @@ public class AppAudioCapture: @unchecked Sendable {
     ///   - liveSink: Optional callback receiving a copy of each captured buffer.
     ///     Called on the audio IOProc thread — must not block. Nil = no-op,
     ///     existing batch path unchanged.
-    public init(
+    public convenience init(
         pids: [pid_t],
         outputFileDescriptor: Int32,
         sampleRate: Int = 48000,
@@ -122,17 +142,55 @@ public class AppAudioCapture: @unchecked Sendable {
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
     ) {
+        self.init(
+            pids: pids,
+            outputFileDescriptor: outputFileDescriptor,
+            sampleRate: sampleRate,
+            channels: channels,
+            debugLogging: debugLogging,
+            liveSink: liveSink,
+            attemptBody: nil,
+        )
+    }
+
+    /// Test seam. Deliberately not `public`: same-module tests substitute the
+    /// hardware work so the restart choreography can be exercised on a machine
+    /// with no audio device, and made to block so the deadline can be observed.
+    init(
+        pids: [pid_t],
+        outputFileDescriptor: Int32,
+        sampleRate: Int = 48000,
+        channels: Int = 2,
+        debugLogging: Bool = false,
+        liveSink: LiveAudioSink? = nil,
+        attemptBody: (() throws -> Void)?,
+    ) {
         self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
         self.sampleRate = sampleRate
         self.channels = channels
         self.debugLogging = debugLogging
         self.liveSink = liveSink
+        self.attemptBody = attemptBody
         resampler = StreamingMonoResampler(targetRate: Int(speechSampleRate))
     }
 
+    /// One attempt's worth of work: bring the tap up, or whatever a test injected.
+    func performAttempt() throws {
+        if let attemptBody {
+            try attemptBody()
+        } else {
+            try startCapture()
+        }
+    }
+
     public func start() throws {
-        try startCapture()
+        try performAttempt()
+        // startCapture deliberately no longer sets this. Declaring capture
+        // running belongs to start() and to the restart adoption, so an attempt
+        // that returns after a give-up cannot do it.
+        isRunning = true
+        _ = restartArbiter.withLock { $0.handle(.startSucceeded) }
         installOutputDeviceChangeListener()
     }
 
@@ -457,12 +515,14 @@ public class AppAudioCapture: @unchecked Sendable {
             )
         }
 
-        isRunning = true
-
+        // Deliberately does NOT declare capture running. Only start() and the
+        // restart adoption may do that, so an attempt that returns after a
+        // give-up cannot resurrect the IOProc against a file descriptor the
+        // session has already closed.
         logger.info("Audio capture started (PIDs \(self.pids), rate: \(self.actualSampleRate) Hz)")
     }
 
-    private func stopCapture() {
+    func stopCapture() {
         isRunning = false
 
         if debugLogging {
@@ -493,7 +553,22 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     public func stop() {
-        stopCapture()
+        // Ask first: an attempt may be stuck inside the same coreaudiod, and every
+        // HAL call below would block behind it. Safe to skip in that case because
+        // an attempt is only ever launched after the coordinator already ran
+        // stopCapture(), so no IOProc is live while one is outstanding.
+        let decision = restartArbiter.withLock { $0.handle(.stopRequested) }
+        switch decision {
+        case .teardown:
+            stopCapture()
+
+        case .sealAndSkipEngine:
+            logger.warning("App audio: stopping while a restart attempt is outstanding — leaving its resources alone")
+            markStoppedAfterGiveUp()
+
+        default:
+            break
+        }
         if outputListenerInstalled, let listener = outputDeviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
@@ -505,84 +580,5 @@ public class AppAudioCapture: @unchecked Sendable {
             outputListenerInstalled = false
         }
         logger.info("Audio capture stopped")
-    }
-}
-
-// MARK: - Output device change handling
-
-@available(macOS 14.2, *)
-extension AppAudioCapture {
-    func installOutputDeviceChangeListener() {
-        guard !outputListenerInstalled else { return }
-        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.handleOutputDeviceChanged()
-        }
-        let status = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &defaultOutputAddress,
-            DispatchQueue.main,
-            listener,
-        )
-        if status == noErr {
-            outputDeviceChangeListener = listener
-            outputListenerInstalled = true
-            logger.info("App audio: listening for default output device changes")
-        }
-    }
-
-    func handleOutputDeviceChanged() {
-        guard isRunning else { return }
-        let action = deviceChangeCoordinator.handle(.deviceChanged)
-        guard action != .ignore else { return }
-
-        logger.info("App audio: default output device changed, recreating tap...")
-        if debugLogging {
-            let newName = getDefaultOutputDeviceName() ?? "?"
-            let newUID = getDefaultOutputDeviceUID() ?? "?"
-            logger.info(
-                "[debug] Output device change → name=\(newName, privacy: .public) uid=\(newUID, privacy: .public)",
-            )
-        }
-        applyAction(action)
-    }
-
-    /// Try a startCapture() and feed the result into the coordinator, dispatching
-    /// any follow-up restart/retry/give-up action it asks for.
-    private func completeRestart() {
-        let event: OutputDeviceChangeCoordinator.Event
-        do {
-            try startCapture()
-            event = .startSucceeded(rate: actualSampleRate)
-        } catch {
-            logger.error("Failed to restart app audio capture: \(error.localizedDescription, privacy: .public)")
-            event = .startFailed
-        }
-        applyAction(deviceChangeCoordinator.handle(event))
-    }
-
-    private func applyAction(_ action: OutputDeviceChangeCoordinator.Action) {
-        switch action {
-        case .ignore:
-            break
-
-        case let .stopAndRetry(delay):
-            stopCapture()
-            scheduleRetry(after: delay)
-
-        case let .restart(delay):
-            scheduleRetry(after: delay)
-
-        case .complete:
-            logger.info("App audio: tap restarted (rate: \(self.actualSampleRate) Hz)")
-
-        case .giveUp:
-            logger.error("App audio: retry failed; giving up")
-        }
-    }
-
-    private func scheduleRetry(after delay: TimeInterval) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.completeRestart()
-        }
     }
 }
