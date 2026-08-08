@@ -387,25 +387,11 @@ public class AppAudioCapture: @unchecked Sendable {
             )
         }
 
-        // Create aggregate device with the tap. The name embeds the root PID
-        // (first entry) — purely cosmetic for `system_profiler SPAudioDataType`.
-        let nameTag = pids.first.map(String.init) ?? "0"
-        let desc: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "audiotap-\(nameTag)",
-            kAudioAggregateDeviceUIDKey as String: UUID().uuidString,
-            kAudioAggregateDeviceMainSubDeviceKey as String: systemOutputUID,
-            kAudioAggregateDeviceIsPrivateKey as String: true,
-            kAudioAggregateDeviceTapAutoStartKey as String: true,
-            kAudioAggregateDeviceSubDeviceListKey as String: [
-                [kAudioSubDeviceUIDKey as String: systemOutputUID],
-            ],
-            kAudioAggregateDeviceTapListKey as String: [
-                [
-                    kAudioSubTapUIDKey as String: tap.uuid.uuidString,
-                    kAudioSubTapDriftCompensationKey as String: true,
-                ],
-            ],
-        ]
+        let desc = Self.aggregateDescription(
+            nameTag: pids.first.map(String.init) ?? "0",
+            outputUID: systemOutputUID,
+            tapUUID: tap.uuid.uuidString,
+        )
 
         var newAggregateID = AudioObjectID(kAudioObjectUnknown)
         let aggStatus = AudioHardwareCreateAggregateDevice(
