@@ -12,18 +12,27 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// when still available or falling back to system default with a warning.
 ///
 /// Public API (`start`/`stop`/`currentLevelDBFS`) is called from the main actor.
-/// The `installTap` render-thread callback writes to per-buffer state guarded by
-/// `LevelPublisher` (lock-protected) and to `outputFile` which is only mutated
-/// between `engine.stop()` and `engine.start()` on the main thread, so concurrent
-/// IO with the render thread is impossible by lifecycle. `@unchecked Sendable`
-/// reflects that this discipline isn't expressible to the compiler.
+///
+/// Mutable state is split by owner. `session`, `configChangeObserver` and the
+/// retry counter are confined to the main queue: a restart attempt runs on
+/// `restartQueue`, builds a candidate session from locals, and publishes nothing
+/// until the main queue adopts it with the arbiter's approval, so a stop and an
+/// adoption are totally ordered rather than racing. `outputFile` is created in
+/// `startEngine` on whichever queue runs it (main at first start, `restartQueue`
+/// during an attempt) and only when the arbiter's `mayCreateOutputFile` allows
+/// it under the lock; it is nilled only on the main queue, by stop and by
+/// give-up. The render-thread tap block reads it through optional chaining
+/// behind an `isCapturing` check, so a buffer arriving after a seal is a dropped
+/// write rather than a write to a closed file. Per-buffer level state is guarded
+/// by `LevelPublisher`. `@unchecked Sendable` reflects that this discipline
+/// isn't expressible to the compiler.
 public class MicCaptureHandler: @unchecked Sendable {
     /// Builds a fresh engine session. Injectable so tests can supply one that
     /// never touches audio hardware (the CI runner has no input device) and can
     /// be made to block on demand, which is how the issue #588 wedge is
     /// exercised without a Bluetooth headset.
-    private let sessionFactory: () -> MicEngineSessionProviding
-    private var session: MicEngineSessionProviding
+    let sessionFactory: () -> MicEngineSessionProviding
+    var session: MicEngineSessionProviding
     /// `internal` (not `private`) so the cross-file `+Timeline` extension can
     /// write gap-fill silence to it.
     var outputFile: AVAudioFile?
@@ -34,21 +43,32 @@ public class MicCaptureHandler: @unchecked Sendable {
     // build's composition root injects one (DualSourceRecorder, gated by
     // #if E2E_FAULT_INJECTION) to verify the installTap NSException recovery.
     private let debugFault: DebugTapFault?
-    private var isRecording = false
-    private var isRestarting = false
+    /// Bounds a single restart attempt and decides what a late or superseded
+    /// attempt is allowed to do (issue #588). Lock-guarded because the watchdog
+    /// fires on main while the attempt runs on `restartQueue`, and the render
+    /// thread reads the capture state per buffer.
+    let arbiter = OSAllocatedUnfairLock(initialState: RestartArbiter())
+
+    /// Restart attempts run here, never on the main queue: the call that brings
+    /// an engine up can block forever, and on the main queue that takes the whole
+    /// app down with it rather than just the microphone track.
+    let restartQueue = DispatchQueue(label: "com.meetingtranscriber.audiotap.mic-restart",
+                                             qos: .userInitiated)
+
+    /// Called when the microphone track was abandoned, either because a restart
+    /// attempt exceeded its deadline or because the retry budget ran out. The
+    /// rest of the session keeps recording.
+    public var onGiveUp: (() -> Void)?
+
+    var isRecording: Bool { arbiter.withLock { $0.isCapturing } }
     // Bounded retry for transient restart failures (issue #379): a device
     // change can briefly expose an invalid format; retry with exponential
     // backoff (MicRestartRetryPolicy) rather than dropping the recording.
     // Reset to 0 on a successful (re)start.
-    private var restartRetryCount = 0
-    // True while a retry is pending in the backoff window. `isRestarting` is
-    // cleared synchronously when executeRestart returns, so without this a
-    // device change arriving during the 0.3 s backoff would start a second,
-    // parallel restart chain racing the pending one on `engine`.
-    private var retryScheduled = false
+    var restartRetryCount = 0
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
-    private var configChangeObserver: NSObjectProtocol?
-    private var selectedDeviceUID: String?
+    var configChangeObserver: NSObjectProtocol?
+    var selectedDeviceUID: String?
     private var fileSampleRate: Double = 0
     private var converter: AVAudioConverter?
     /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
@@ -125,7 +145,8 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
-        try startEngine(deviceUID: deviceUID)
+        try startEngine(deviceUID: deviceUID, on: session)
+        _ = arbiter.withLock { $0.handle(.startSucceeded) }
         installDeviceChangeListener()
         installConfigChangeObserver()
     }
@@ -138,7 +159,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// node bus. Matching the node's channel count and downmixing to mono in
     /// the converter (see startEngine) avoids the mismatch at the source. The
     /// 0 Hz / 0-channel guard covers the transient where the device hasn't
-    /// finished re-initialising; throwing lets executeRestart retry.
+    /// finished re-initialising; throwing lets the restart attempt retry.
     private func validatedTapFormat(for hwFormat: AVAudioFormat) throws -> AVAudioFormat {
         guard let tapFormat = TapFormatResolver.tapFormat(forHardware: hwFormat) else {
             throw MicCaptureError.invalidHardwareFormat(
@@ -150,7 +171,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     // swiftlint:disable function_body_length
     @discardableResult
-    private func startEngine(deviceUID: String? = nil) throws -> Double {
+    func startEngine(deviceUID: String?, on session: MicEngineSessionProviding) throws -> Double {
         // The one call in here that can block forever (issue #588).
         let hwFormat = try session.hardwareFormat(deviceUID: deviceUID)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
@@ -167,8 +188,11 @@ public class MicCaptureHandler: @unchecked Sendable {
 
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
 
-        // Always 16kHz — WhisperKit target rate
-        if outputFile == nil {
+        // Always 16kHz — WhisperKit target rate. `mayCreateOutputFile` is false
+        // once the session was sealed by a give-up or a stop: a wedged attempt
+        // that returns later must not recreate (and thereby truncate) a
+        // recording that was already finalized.
+        if outputFile == nil, arbiter.withLock({ $0.mayCreateOutputFile }) {
             fileSampleRate = speechSampleRate
             let wavSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
@@ -255,8 +279,6 @@ public class MicCaptureHandler: @unchecked Sendable {
 
         try session.installTap(format: installFormat, block: tapBlock)
         try session.start()
-        isRecording = true
-        restartRetryCount = 0
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
 
         armDebugFaultIfNeeded()
@@ -285,7 +307,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     }
 
     /// Listen for AVAudioEngine configuration changes (format changes on current device).
-    private func installConfigChangeObserver() {
+    func installConfigChangeObserver() {
         guard configChangeObserver == nil else { return }
         configChangeObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
@@ -307,94 +329,14 @@ public class MicCaptureHandler: @unchecked Sendable {
         handleDeviceChange()
     }
 
-    private func handleDeviceChange() {
-        let isDeviceAvailable = selectedDeviceUID.map { MicEngineSession.deviceIDForUID($0) != kAudioObjectUnknown } ?? false
-        let action = MicRestartPolicy.decideRestart(
-            isRecording: isRecording,
-            // Treat a pending retry as still-restarting so a device change in
-            // the backoff window doesn't spawn a competing restart chain.
-            isRestarting: isRestarting || retryScheduled,
-            selectedDeviceUID: selectedDeviceUID,
-            isSelectedDeviceAvailable: isDeviceAvailable,
-        )
-
-        switch action {
-        case let .restart(deviceUID):
-            executeRestart(deviceUID: deviceUID)
-
-        case .skip:
-            break
-        }
-    }
-
-    private func executeRestart(deviceUID: String?) {
-        isRestarting = true
-        defer { isRestarting = false }
-
-        if deviceUID == nil, let uid = selectedDeviceUID {
-            logger.warning("Mic: selected device '\(uid)' no longer available, falling back to system default")
-        }
-
-        session.teardown()
-
-        if let observer = configChangeObserver {
-            NotificationCenter.default.removeObserver(observer)
-            configChangeObserver = nil
-        }
-
-        // AVAudioEngine can be in a bad state after a config change, so the
-        // restart runs on a brand-new session rather than reusing the engine.
-        // The old one is kept alive briefly by its own teardown (see
-        // MicEngineSession.teardown) so in-flight AVFoundation listener blocks
-        // do not fire against a freed object.
-        session = sessionFactory()
-
-        do {
-            // The rate comes back from startEngine: reading it again through the
-            // engine would be a second call that can wedge (issue #588).
-            let hwRate = try startEngine(deviceUID: deviceUID)
-            if hwRate <= 0 {
-                logger.warning("Mic: hardware format rate is \(hwRate) after restart — may produce incorrect audio")
-            }
-            installConfigChangeObserver()
-            logger.info("Mic: engine restarted on \(deviceUID != nil ? "selected" : "default") device (\(Int(hwRate)) Hz)")
-        } catch {
-            // A transient invalid format / installTap raise (issue #379) is
-            // recoverable: the device usually settles within a few hundred ms.
-            // Keep recording and retry with backoff instead of killing it.
-            logger.error("Failed to restart mic after device change: \(error.localizedDescription, privacy: .public) — scheduling retry")
-            scheduleRestartRetry(deviceUID: deviceUID)
-        }
-    }
-
-    /// Re-attempt a failed restart after a short backoff, bounded by
-    /// `maxRestartRetries`. Only retries while still recording; gives up (and
-    /// stops recording) once the budget is exhausted.
-    private func scheduleRestartRetry(deviceUID: String?) {
-        guard isRecording else { return }
-        switch MicRestartRetryPolicy.decide(attemptsSoFar: restartRetryCount) {
-        case .giveUp:
-            isRecording = false
-            logger.error("Mic: giving up restart after \(MicRestartRetryPolicy.maxAttempts) failed attempts")
-
-        case let .retry(delay):
-            restartRetryCount += 1
-            retryScheduled = true
-            let attempt = restartRetryCount
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self else { return }
-                self.retryScheduled = false
-                guard self.isRecording else { return }
-                logger.info("Mic: restart retry \(attempt)/\(MicRestartRetryPolicy.maxAttempts)")
-                self.executeRestart(deviceUID: deviceUID)
-            }
-        }
-    }
-
     public func stop() {
-        // Set isRecording=false first so any in-flight tap closure short-circuits
-        // before touching the soon-released AVAudioFile.
-        isRecording = false
+        // Seal first, so any in-flight tap closure short-circuits before touching
+        // the soon-released AVAudioFile. The arbiter also answers the question
+        // that decides the rest of this method: is a restart attempt currently
+        // inside the engine? If so, every engine call below would block behind
+        // the mutex that attempt holds, and stopping a recording would freeze the
+        // caller (issue #588).
+        let decision = arbiter.withLock { $0.handle(.stopRequested) }
         if let listener = deviceChangeListener {
             AudioObjectRemovePropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject),
@@ -412,7 +354,22 @@ public class MicCaptureHandler: @unchecked Sendable {
         // AVFoundation listener blocks firing against a live object all live in
         // the session now, including the "no tap was installed" guard that keeps
         // an input-less host from raising in the deinit path.
-        session.teardown()
+        //
+        // Skipped entirely when an attempt is stuck inside the engine: the
+        // attempt's own stale-commit path tears down what it built, and the
+        // engine it is wedged in is unreachable either way.
+        switch decision {
+        case .teardown:
+            session.teardown()
+
+        case .sealAndSkipEngine:
+            logger.warning("Mic: stopping while a restart attempt is outstanding — leaving its engine alone")
+
+        default:
+            // Already stopped. Nothing to release, and touching the engine again
+            // would be a double teardown via deinit.
+            break
+        }
         outputFile = nil
         logger.info("Mic recording stopped")
     }
@@ -539,7 +496,7 @@ private extension MicCaptureHandler {
     /// No-op in production. When a `DebugTapFault` was injected: once, after the
     /// first successful start, schedule a single self-triggered device-change
     /// restart whose tap install uses the bad format. Drives the real
-    /// handleDeviceChange → executeRestart → startEngine path so the
+    /// handleDeviceChange -> launchRestartAttempt -> startEngine path so the
     /// reproduction exercises production code, not a shortcut.
     func armDebugFaultIfNeeded() {
         guard let debugFault, !debugFaultArmed else { return }
