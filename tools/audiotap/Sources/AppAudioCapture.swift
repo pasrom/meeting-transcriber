@@ -412,6 +412,12 @@ public class AppAudioCapture: @unchecked Sendable {
 
         // Set up IOProc to read audio data and write to file descriptor
         let fd = outputFileDescriptor
+        // The device this block belongs to, captured by value. Reading the field
+        // from inside the callback would query whatever device the newest attempt
+        // installed rather than the one actually delivering these buffers, so a
+        // block that outlives its own attempt would correct its rate against a
+        // stranger.
+        let ownAggregateID = aggregateID
         var newProcID: AudioDeviceIOProcID?
         let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
             &newProcID, aggregateID, writeQueue,
@@ -432,7 +438,7 @@ public class AppAudioCapture: @unchecked Sendable {
                 self.actualChannels = Int(abl.mBuffers.mNumberChannels)
 
                 // Device is running — query the measured actual rate
-                let measuredRate = Self.queryActualSampleRate(deviceID: self.aggregateID)
+                let measuredRate = Self.queryActualSampleRate(deviceID: ownAggregateID)
                 if measuredRate > 0, measuredRate != self.actualSampleRate {
                     logger.warning(
                         "Measured rate \(measuredRate) Hz differs from cached \(self.actualSampleRate) Hz — updating",
