@@ -17,7 +17,7 @@ cd meeting-transcriber
 Run the tests to verify everything works:
 
 ```bash
-cd app/MeetingTranscriber && swift test
+cd app/MeetingTranscriber && swift test --parallel
 ```
 
 ## Development workflow
@@ -86,7 +86,7 @@ The project includes a [`CLAUDE.md`](CLAUDE.md) with full architecture context. 
 All new features and bug fixes must include tests. Run the full test suite before submitting:
 
 ```bash
-cd app/MeetingTranscriber && swift test
+cd app/MeetingTranscriber && swift test --parallel
 ```
 
 ## Submitting a PR
