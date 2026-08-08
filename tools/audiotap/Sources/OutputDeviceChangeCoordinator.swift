@@ -7,16 +7,23 @@ import Foundation
 /// Lifecycle (one cycle per device change):
 ///   .idle → deviceChanged          → .restarting    + .stopAndRetry(initial)
 ///   .restarting → succeeded(rate>0)  → .idle         + .complete
-///   .restarting → succeeded(rate≤0)  → .retryPending + .stopAndRetry(retry)
-///   .restarting → failed             → .retryPending + .restart(retry)
-///   .retryPending → succeeded(rate>0)            → .idle + .complete
-///   .retryPending → succeeded(rate≤0) | failed   → .idle + .giveUp
+///   .restarting → succeeded(rate≤0)  → .retrying(1) + .stopAndRetry(backoff)
+///   .restarting → failed             → .retrying(1) + .restart(backoff)
+///   .retrying(n) → succeeded(rate>0)           → .idle + .complete
+///   .retrying(n) → succeeded(rate≤0) | failed  → .retrying(n+1) while the
+///     shared retry policy still grants an attempt, otherwise .idle + .giveUp
 ///   deviceChanged while not idle is ignored.
-struct OutputDeviceChangeCoordinator: Equatable {
+///
+/// Not Equatable: it carries the injected retry policy now, and nothing ever
+/// compared two coordinators. Tests compare `state`.
+struct OutputDeviceChangeCoordinator {
     enum State: Equatable {
         case idle
         case restarting
-        case retryPending
+        /// How many retries have already been spent. The budget and the backoff
+        /// come from `CaptureRestartRetryPolicy`, the same one the microphone
+        /// channel uses.
+        case retrying(attemptsSoFar: Int)
     }
 
     enum Event: Equatable {
@@ -40,11 +47,34 @@ struct OutputDeviceChangeCoordinator: Equatable {
 
     private(set) var state: State = .idle
     let initialRestartDelay: TimeInterval
-    let retryDelay: TimeInterval
+    /// How long to wait before the next retry, and when to stop retrying.
+    /// Injected so tests can use a fast schedule; production shares the
+    /// microphone channel's, because both channels are reacting to the same
+    /// device going away.
+    let decideRetry: @Sendable (Int) -> CaptureRestartRetryAction
 
-    init(initialRestartDelay: TimeInterval = 0.5, retryDelay: TimeInterval = 1.0) {
+    init(
+        initialRestartDelay: TimeInterval = 0.5,
+        decideRetry: @escaping @Sendable (Int) -> CaptureRestartRetryAction
+            = CaptureRestartRetryPolicy.decide,
+    ) {
         self.initialRestartDelay = initialRestartDelay
-        self.retryDelay = retryDelay
+        self.decideRetry = decideRetry
+    }
+
+    /// Turn the shared policy's verdict into this machine's next state.
+    private mutating func afterFailedAttempt(
+        attemptsSoFar: Int, stopFirst: Bool,
+    ) -> Action {
+        switch decideRetry(attemptsSoFar) {
+        case let .retry(delay):
+            state = .retrying(attemptsSoFar: attemptsSoFar + 1)
+            return stopFirst ? .stopAndRetry(delay: delay) : .restart(delay: delay)
+
+        case .giveUp:
+            state = .idle
+            return .giveUp
+        }
     }
 
     mutating func handle(_ event: Event) -> Action {
@@ -57,23 +87,25 @@ struct OutputDeviceChangeCoordinator: Equatable {
             state = .idle
             return .complete
 
+        // A start that reports rate 0 is a failure wearing a success's clothes:
+        // the tap came up against a device that is not delivering.
         case (.restarting, .startSucceeded):
-            state = .retryPending
-            return .stopAndRetry(delay: retryDelay)
+            return afterFailedAttempt(attemptsSoFar: 0, stopFirst: true)
 
         case (.restarting, .startFailed):
-            state = .retryPending
-            return .restart(delay: retryDelay)
+            return afterFailedAttempt(attemptsSoFar: 0, stopFirst: false)
 
-        case let (.retryPending, .startSucceeded(rate)) where rate > 0:
+        case let (.retrying(_), .startSucceeded(rate)) where rate > 0:
             state = .idle
             return .complete
 
-        case (.retryPending, .startSucceeded), (.retryPending, .startFailed):
-            state = .idle
-            return .giveUp
+        case let (.retrying(attempts), .startSucceeded):
+            return afterFailedAttempt(attemptsSoFar: attempts, stopFirst: true)
 
-        case (.restarting, .deviceChanged), (.retryPending, .deviceChanged):
+        case let (.retrying(attempts), .startFailed):
+            return afterFailedAttempt(attemptsSoFar: attempts, stopFirst: false)
+
+        case (.restarting, .deviceChanged), (.retrying, .deviceChanged):
             return .ignore
 
         case (.idle, .startSucceeded), (.idle, .startFailed):

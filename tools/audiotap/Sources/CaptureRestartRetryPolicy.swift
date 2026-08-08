@@ -23,7 +23,7 @@ public enum CaptureRestartRetryPolicy {
     public static let maxAttempts = 5
 
     /// First-retry backoff; doubles each subsequent attempt up to `maxBackoff`.
-    static let baseBackoff = 0.3
+    public static let baseBackoff = 0.3
     static let maxBackoff = 2.0
 
     /// Decide whether to retry after a failed restart.

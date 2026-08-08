@@ -122,8 +122,15 @@ final class AppAudioCaptureWedgeTests: XCTestCase {
         // this timing.
         let attempt = Attempt()
         let capture = makeCapture(attempt)
+        // Typed local, not a trailing closure: SwiftFormat restyles a labelled
+        // closure argument into a trailing one and mangles the call. One fast
+        // retry then give up, because these tests are about the wedge and the
+        // give-up, not about how patient the production budget is.
+        let fastRetry: @Sendable (Int) -> CaptureRestartRetryAction = { attemptsSoFar in
+            attemptsSoFar < 1 ? .retry(afterSeconds: 0.05) : .giveUp
+        }
         capture.deviceChangeCoordinator = OutputDeviceChangeCoordinator(
-            initialRestartDelay: 0.05, retryDelay: 0.05,
+            initialRestartDelay: 0.05, decideRetry: fastRetry,
         )
 
         try capture.start()
@@ -146,8 +153,15 @@ final class AppAudioCaptureWedgeTests: XCTestCase {
         // depends on it, so the two channels must agree.
         let attempt = Attempt()
         let capture = makeCapture(attempt)
+        // Typed local, not a trailing closure: SwiftFormat restyles a labelled
+        // closure argument into a trailing one and mangles the call. One fast
+        // retry then give up, because these tests are about the wedge and the
+        // give-up, not about how patient the production budget is.
+        let fastRetry: @Sendable (Int) -> CaptureRestartRetryAction = { attemptsSoFar in
+            attemptsSoFar < 1 ? .retry(afterSeconds: 0.05) : .giveUp
+        }
         capture.deviceChangeCoordinator = OutputDeviceChangeCoordinator(
-            initialRestartDelay: 0.05, retryDelay: 0.05,
+            initialRestartDelay: 0.05, decideRetry: fastRetry,
         )
 
         let gaveUp = expectation(description: "give-up reported")
