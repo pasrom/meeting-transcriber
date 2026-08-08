@@ -398,7 +398,7 @@ public class AppAudioCapture: @unchecked Sendable {
             desc as CFDictionary, &newAggregateID,
         )
         guard aggStatus == noErr else {
-            AudioHardwareDestroyProcessTap(tapID)
+            releaseTapAndAggregate()
             throw NSError(
                 domain: "audiotap", code: Int(aggStatus),
                 userInfo: [
@@ -466,8 +466,7 @@ public class AppAudioCapture: @unchecked Sendable {
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            AudioHardwareDestroyProcessTap(tapID)
+            releaseTapAndAggregate()
             throw NSError(
                 domain: "audiotap", code: Int(ioProcStatus),
                 userInfo: [
@@ -492,8 +491,14 @@ public class AppAudioCapture: @unchecked Sendable {
 
         let startStatus = AudioDeviceStart(aggregateID, procID)
         guard startStatus == noErr else {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            AudioHardwareDestroyProcessTap(tapID)
+            // The IOProc was registered a few lines up and outlives the aggregate
+            // unless it is destroyed explicitly. Every other throw site in this
+            // function releases exactly what it had built; this one forgot the
+            // registration, so a device that refuses to start leaked one per
+            // attempt for the life of the process.
+            AudioDeviceDestroyIOProcID(aggregateID, validProcID)
+            procID = nil
+            releaseTapAndAggregate()
             throw NSError(
                 domain: "audiotap", code: Int(startStatus),
                 userInfo: [
@@ -508,6 +513,21 @@ public class AppAudioCapture: @unchecked Sendable {
         // give-up cannot resurrect the IOProc against a file descriptor the
         // session has already closed.
         logger.info("Audio capture started (PIDs \(self.pids), rate: \(self.actualSampleRate) Hz)")
+    }
+
+    /// Destroy the tap and the aggregate and forget both ids. Every caller that
+    /// releases them must also clear them: `stopCapture` destroys whatever the
+    /// fields point at, so a field left holding a destroyed id makes the next
+    /// stop free something this object no longer owns.
+    private func releaseTapAndAggregate() {
+        if aggregateID != kAudioObjectUnknown {
+            AudioHardwareDestroyAggregateDevice(aggregateID)
+            aggregateID = AudioObjectID(kAudioObjectUnknown)
+        }
+        if tapID != kAudioObjectUnknown {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = AudioObjectID(kAudioObjectUnknown)
+        }
     }
 
     func stopCapture() {
@@ -529,14 +549,7 @@ public class AppAudioCapture: @unchecked Sendable {
         // onto writeQueue, so without this barrier a late buffer could write
         // to a closed/recycled fd.
         writeQueue.sync {}
-        if aggregateID != kAudioObjectUnknown {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            aggregateID = AudioObjectID(kAudioObjectUnknown)
-        }
-        if tapID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapID)
-            tapID = AudioObjectID(kAudioObjectUnknown)
-        }
+        releaseTapAndAggregate()
         didLogFormat = false
     }
 
