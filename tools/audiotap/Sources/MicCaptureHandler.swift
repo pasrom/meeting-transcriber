@@ -74,10 +74,6 @@ public class MicCaptureHandler: @unchecked Sendable {
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     var configChangeObserver: NSObjectProtocol?
     var selectedDeviceUID: String?
-    private var fileSampleRate: Double = 0
-    private var converter: AVAudioConverter?
-    /// Pre-computed resampling ratio (fileSampleRate / tapSampleRate), avoids division in audio callback.
-    private var resampleRatio: Double = 1.0
     /// Wall-clock anchoring so a device-restart gap becomes silence in the WAV
     /// instead of an under-run (issue #379 follow-up — see `+Timeline`).
     /// `internal` for that cross-file extension; survives restarts (never reset).
@@ -197,8 +193,10 @@ public class MicCaptureHandler: @unchecked Sendable {
         // once the session was sealed by a give-up or a stop: a wedged attempt
         // that returns later must not recreate (and thereby truncate) a
         // recording that was already finalized.
+        // Always the speech rate; it was a stored property whose only value was
+        // this constant, which made it look like per-session state.
+        let fileSampleRate = speechSampleRate
         if outputFile == nil, arbiter.withLock({ $0.mayCreateOutputFile }) {
-            fileSampleRate = speechSampleRate
             let wavSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: fileSampleRate,
@@ -220,8 +218,14 @@ public class MicCaptureHandler: @unchecked Sendable {
             timelineAnchor = TimelineAnchor(rate: Int(fileSampleRate))
         }
 
-        converter = nil
-        resampleRatio = fileSampleRate / tapFormat.sampleRate
+        // Locals, captured by value below. Sharing them across sessions loses
+        // audio silently: a restart attempt rebuilds them for ITS format before
+        // the arbiter has agreed to adopt it, while the previous session's tap
+        // block is still installed and still delivering buffers in the old one.
+        // Those buffers then go through a converter that does not match them and
+        // are dropped without an error (issue #589).
+        let resampleRatio = fileSampleRate / tapFormat.sampleRate
+        var converter: AVAudioConverter?
         if let setup = MicConverterFactory.make(tapFormat: tapFormat, fileSampleRate: fileSampleRate) {
             converter = setup.converter
             if let channel = setup.selectedChannel {
@@ -230,7 +234,7 @@ public class MicCaptureHandler: @unchecked Sendable {
                 )
             }
             logger.info(
-                "Mic: converting \(Int(tapFormat.sampleRate))Hz/\(tapFormat.channelCount)ch → \(Int(self.fileSampleRate))Hz/1ch",
+                "Mic: converting \(Int(tapFormat.sampleRate))Hz/\(tapFormat.channelCount)ch → \(Int(fileSampleRate))Hz/1ch",
             )
         }
 
@@ -252,9 +256,9 @@ public class MicCaptureHandler: @unchecked Sendable {
             self.publishCurrentLevel()
             self.maybeReportDebugRMS()
             do {
-                if let converter = self.converter {
+                if let converter {
                     let outputFrames = resampleOutputCapacity(
-                        inputFrames: buffer.frameLength, ratio: self.resampleRatio,
+                        inputFrames: buffer.frameLength, ratio: resampleRatio,
                     )
                     guard let outputBuffer = AVAudioPCMBuffer(
                         pcmFormat: converter.outputFormat,
