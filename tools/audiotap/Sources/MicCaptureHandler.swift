@@ -71,6 +71,10 @@ public class MicCaptureHandler: @unchecked Sendable {
     // backoff (CaptureRestartRetryPolicy) rather than dropping the recording.
     // Reset to 0 on a successful (re)start.
     var restartRetryCount = 0
+    /// How long to wait before the next restart attempt, and when to stop. Both
+    /// channels default to the same shared policy; injected only so a test can
+    /// use a schedule that does not spend six seconds proving a give-up.
+    let decideRetry: @Sendable (Int) -> CaptureRestartRetryAction
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     var configChangeObserver: NSObjectProtocol?
     var selectedDeviceUID: String?
@@ -131,7 +135,10 @@ public class MicCaptureHandler: @unchecked Sendable {
         liveSink: LiveAudioSink? = nil,
         debugFault: DebugTapFault? = nil,
         sessionFactory: @escaping () -> MicEngineSessionProviding,
+        decideRetry: @escaping @Sendable (Int) -> CaptureRestartRetryAction
+            = CaptureRestartRetryPolicy.decide,
     ) {
+        self.decideRetry = decideRetry
         self.outputURL = outputURL
         self.debugLogging = debugLogging
         self.liveSink = liveSink

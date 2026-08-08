@@ -172,10 +172,10 @@ extension MicCaptureHandler {
     /// `.backingOff`, so capture is deliberately not "running". The arbiter is the
     /// guard, and it answers `.ignore` for both events once the session is sealed.
     private func scheduleRestartRetry(deviceUID: String?) {
-        switch CaptureRestartRetryPolicy.decide(attemptsSoFar: restartRetryCount) {
+        switch decideRetry(restartRetryCount) {
         case .giveUp:
             guard case .giveUp = arbiter.withLock({ $0.handle(.retryBudgetExhausted) }) else { return }
-            logger.error("Mic: giving up restart after \(CaptureRestartRetryPolicy.maxAttempts) failed attempts")
+            logger.error("Mic: giving up restart after \(self.restartRetryCount) failed attempts")
             outputFile = nil
             onGiveUp?()
 

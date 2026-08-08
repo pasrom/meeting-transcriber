@@ -96,13 +96,22 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
 
     private func makeHandler(
         sessions: [WedgingSession],
+        decideRetry: (@Sendable (Int) -> CaptureRestartRetryAction)? = nil,
     ) -> (MicCaptureHandler, URL) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("wedge-\(UUID().uuidString).wav")
         var remaining = sessions
-        let handler = MicCaptureHandler(outputURL: url) {
+        // Typed locals, not trailing closures: SwiftFormat restyles a labelled
+        // closure argument into a trailing one and mangles the call.
+        let factory: () -> MicEngineSessionProviding = {
             remaining.isEmpty ? WedgingSession() : remaining.removeFirst()
         }
+        guard let decideRetry else {
+            return (MicCaptureHandler(outputURL: url, sessionFactory: factory), url)
+        }
+        let handler = MicCaptureHandler(
+            outputURL: url, sessionFactory: factory, decideRetry: decideRetry,
+        )
         return (handler, url)
     }
 
@@ -230,7 +239,14 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
             session.shouldFail = true
             return session
         }
-        let (handler, url) = makeHandler(sessions: [first] + failing)
+        // A fast schedule with the production budget: this test is about the
+        // give-up at the end of the budget, not about how long the real backoff
+        // waits between attempts.
+        let fastRetry: @Sendable (Int) -> CaptureRestartRetryAction = { attemptsSoFar in
+            attemptsSoFar < CaptureRestartRetryPolicy.maxAttempts
+                ? .retry(afterSeconds: 0.02) : .giveUp
+        }
+        let (handler, url) = makeHandler(sessions: [first] + failing, decideRetry: fastRetry)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let gaveUp = expectation(description: "give-up reported")
@@ -244,8 +260,7 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         }
 
         handler.handleDeviceChange()
-        // The backoff schedule sums to a few seconds across the whole budget.
-        wait(for: [gaveUp], timeout: 30)
+        wait(for: [gaveUp], timeout: 10)
 
         let afterGiveUp = try Data(contentsOf: url)
         XCTAssertGreaterThan(afterGiveUp.count, 10000, "the recording must contain real audio")
