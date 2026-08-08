@@ -47,8 +47,9 @@ extension AppAudioCapture {
         restartQueue.async { [weak self] in
             guard let self else { return }
             var failed = false
+            var built: AppTapSession?
             do {
-                try self.performAttempt()
+                built = try self.performAttempt()
             } catch {
                 logger.error("Failed to restart app audio capture: \(error.localizedDescription, privacy: .public)")
                 failed = true
@@ -60,29 +61,36 @@ extension AppAudioCapture {
             guard outcome != .rejectStale else {
                 logger.info("App audio: discarding a restart attempt that outlived its deadline")
                 // A stale attempt that SUCCEEDED built a live tap. It has
-                // returned, so the HAL is answering and this releases it.
-                if succeeded { self.stopCapture() }
+                // returned, so the HAL is answering, and it releases what IT
+                // built rather than reaching into fields a newer attempt may
+                // already own.
+                built?.destroy()
                 return
             }
             DispatchQueue.main.async {
-                self.finishRestart(generation: generation, succeeded: succeeded)
+                self.finishRestart(generation: generation, succeeded: succeeded, built: built)
             }
         }
     }
 
     /// Publish or discard a returned attempt, then let the coordinator decide what
     /// comes next. Main queue only, so a stop and an adoption cannot interleave.
-    private func finishRestart(generation: Int, succeeded: Bool) {
+    private func finishRestart(generation: Int, succeeded: Bool, built: AppTapSession?) {
         if succeeded {
             guard case .adopt = restartArbiter.withLock({ $0.handle(.commitReady(generation: generation)) })
             else {
                 logger.info("App audio: discarding a restart that succeeded after the session was sealed")
-                stopCapture()
+                // Same rule as the stale path above: destroy what this attempt
+                // built, not whatever happens to be installed.
+                built?.destroy()
                 return
             }
             // Only start() and this adoption may declare capture running. Leaving
             // it to startCapture would let an attempt that returns after a give-up
             // resurrect the IOProc against a file descriptor the session closed.
+            // Same as start(): a nil here is the test seam, not a successful
+            // attempt that built nothing.
+            if let built { install(built) }
             isRunning = true
         }
         let event: OutputDeviceChangeCoordinator.Event = succeeded

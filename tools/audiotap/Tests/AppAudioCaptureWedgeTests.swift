@@ -54,6 +54,9 @@ final class AppAudioCaptureWedgeTests: XCTestCase {
     private func makeCapture(_ attempt: Attempt) -> AppAudioCapture {
         AppAudioCapture(pids: [1], outputFileDescriptor: FileHandle.nullDevice.fileDescriptor) {
             try attempt.run()
+            // These tests are about the restart choreography, not about what an
+            // attempt builds; returning nothing keeps their dynamics unchanged.
+            return nil
         }
     }
 

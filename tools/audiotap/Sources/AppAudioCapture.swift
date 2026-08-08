@@ -40,9 +40,11 @@ public class AppAudioCapture: @unchecked Sendable {
     /// #379 follow-up — see `writeCapturedBuffer` in `+Resampling`). `internal`
     /// for that cross-file extension; touched only on `writeQueue`.
     var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
-    private var aggregateID = AudioObjectID(kAudioObjectUnknown)
-    private var tapID = AudioObjectID(kAudioObjectUnknown)
-    private var procID: AudioDeviceIOProcID?
+    /// What the currently installed attempt built, or nil while nothing is
+    /// installed. Main-queue confined: only `start()`, the restart adoption and
+    /// `stopCapture` touch it, and all three run there. An attempt in flight
+    /// holds its own session locally and never reads this.
+    private var tapSession: AppTapSession?
     /// Gates the IOProc callback (read on `writeQueue`), set on the start/stop
     /// path on the main thread. It is set only by `start()` and by the restart
     /// adoption, never by `startCapture` itself, and must follow `AudioDeviceStart`,
@@ -116,7 +118,7 @@ public class AppAudioCapture: @unchecked Sendable {
 
     /// The work one attempt performs. Injectable so a test can substitute a call
     /// that blocks the way a wedged HAL call does; nil means the real thing.
-    private let attemptBody: (() throws -> Void)?
+    private let attemptBody: (() throws -> AppTapSession?)?
 
     /// Called when app-audio capture was abandoned, either because a restart
     /// attempt exceeded its deadline or because the retry budget ran out.
@@ -165,7 +167,7 @@ public class AppAudioCapture: @unchecked Sendable {
         channels: Int = 2,
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
-        attemptBody: (() throws -> Void)?,
+        attemptBody: (() throws -> AppTapSession?)?,
     ) {
         self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
@@ -178,16 +180,29 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     /// One attempt's worth of work: bring the tap up, or whatever a test injected.
-    func performAttempt() throws {
+    func performAttempt() throws -> AppTapSession? {
         if let attemptBody {
-            try attemptBody()
-        } else {
-            try startCapture()
+            return try attemptBody()
         }
+        return try startCapture()
+    }
+
+    /// Install what an attempt built and publish its rate. The only two callers
+    /// are `start()` and the restart adoption, which is what keeps a returning
+    /// stale attempt from resurrecting capture.
+    ///
+    /// Caller guarantees nothing is installed: both callers follow a stop in the
+    /// same cycle. Taking a non-optional keeps "a successful attempt built
+    /// something" a fact the type system carries rather than a convention.
+    func install(_ session: AppTapSession) {
+        tapSession = session
+        actualSampleRate = session.resolvedSampleRate
     }
 
     public func start() throws {
-        try performAttempt()
+        // Only the test seam returns nothing: production startCapture either
+        // hands back a session or throws.
+        if let built = try performAttempt() { install(built) }
         // startCapture deliberately no longer sets this. Declaring capture
         // running belongs to start() and to the restart adoption, so an attempt
         // that returns after a give-up cannot do it.
@@ -311,7 +326,7 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     // swiftlint:disable:next function_body_length
-    private func startCapture() throws {
+    private func startCapture() throws -> AppTapSession {
         let translated = try translatePIDs()
         let processObjectIDs = translated.map(\.audioObjectID)
 
@@ -377,13 +392,20 @@ public class AppAudioCapture: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: hint],
             )
         }
-        tapID = newTapID
-        let tapRate = Self.queryTapSampleRate(tapID: tapID)
-        logger.info("Created process tap: \(self.tapID) rate=\(tapRate, privacy: .public) Hz")
+        // From here the attempt owns what it builds. Every failure below hands
+        // back one object instead of remembering which of three ids it created.
+        //
+        // The drain captures the queue by value on purpose. A `[weak self]` drain
+        // would silently skip the barrier once self is gone, which is exactly the
+        // write-after-close bug the barrier exists to prevent, and a strong self
+        // would make the session keep its owner alive.
+        let session = AppTapSession(tapID: newTapID) { [writeQueue] in writeQueue.sync {} }
+        let tapRate = Self.queryTapSampleRate(tapID: newTapID)
+        logger.info("Created process tap: \(newTapID) rate=\(tapRate, privacy: .public) Hz")
 
         if debugLogging {
             logger.info(
-                "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(self.tapID, privacy: .public)",
+                "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(newTapID, privacy: .public)",
             )
         }
 
@@ -398,7 +420,7 @@ public class AppAudioCapture: @unchecked Sendable {
             desc as CFDictionary, &newAggregateID,
         )
         guard aggStatus == noErr else {
-            releaseTapAndAggregate()
+            session.destroy()
             throw NSError(
                 domain: "audiotap", code: Int(aggStatus),
                 userInfo: [
@@ -407,8 +429,18 @@ public class AppAudioCapture: @unchecked Sendable {
                 ],
             )
         }
-        aggregateID = newAggregateID
-        logger.info("Created aggregate device: \(self.aggregateID)")
+        // Resolving the rate here rather than after the IOProc is value ordering,
+        // not race-safety: it reads only the tap format and the device's
+        // nominal/stream-format properties, so it is valid before the device
+        // starts, and doing it now lets the session carry it. The IOProc's
+        // first-callback measured correction layers on top of the published copy.
+        session.attach(
+            aggregateID: newAggregateID,
+            resolvedSampleRate: Self.resolveActualSampleRate(
+                deviceID: newAggregateID, tapID: newTapID, requestedRate: sampleRate,
+            ),
+        )
+        logger.info("Created aggregate device: \(newAggregateID)")
 
         // Set up IOProc to read audio data and write to file descriptor
         let fd = outputFileDescriptor
@@ -417,11 +449,10 @@ public class AppAudioCapture: @unchecked Sendable {
         // installed rather than the one actually delivering these buffers, so a
         // block that outlives its own attempt would correct its rate against a
         // stranger.
-        let ownAggregateID = aggregateID
         var newProcID: AudioDeviceIOProcID?
         let ioProcStatus = AudioDeviceCreateIOProcIDWithBlock(
-            &newProcID, aggregateID, writeQueue,
-        ) { [weak self] _, inInputData, inInputTime, _, _ in
+            &newProcID, newAggregateID, writeQueue,
+        ) { [weak self, session] _, inInputData, inInputTime, _, _ in
             guard let self, self.isRunning else { return }
             let abl = inInputData.pointee
 
@@ -438,7 +469,7 @@ public class AppAudioCapture: @unchecked Sendable {
                 self.actualChannels = Int(abl.mBuffers.mNumberChannels)
 
                 // Device is running — query the measured actual rate
-                let measuredRate = Self.queryActualSampleRate(deviceID: ownAggregateID)
+                let measuredRate = Self.queryActualSampleRate(deviceID: session.aggregateID)
                 if measuredRate > 0, measuredRate != self.actualSampleRate {
                     logger.warning(
                         "Measured rate \(measuredRate) Hz differs from cached \(self.actualSampleRate) Hz — updating",
@@ -472,7 +503,7 @@ public class AppAudioCapture: @unchecked Sendable {
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
-            releaseTapAndAggregate()
+            session.destroy()
             throw NSError(
                 domain: "audiotap", code: Int(ioProcStatus),
                 userInfo: [
@@ -481,30 +512,11 @@ public class AppAudioCapture: @unchecked Sendable {
                 ],
             )
         }
-        procID = validProcID
+        session.attach(procID: validProcID)
 
-        // Resolve and store the sample rate BEFORE starting the device — value
-        // ordering, not race-safety (the field's lock handles cross-thread
-        // access, see its declaration). Writing the resolved value first lets
-        // the IOProc's first-callback measured-rate correction layer on top
-        // instead of a post-start write clobbering it. Resolving is valid
-        // pre-start: `resolveActualSampleRate` reads only the tap format and the
-        // device's nominal/stream-format properties; the one started-device
-        // query (kAudioDevicePropertyActualSampleRate) lives in the IOProc.
-        actualSampleRate = Self.resolveActualSampleRate(
-            deviceID: aggregateID, tapID: tapID, requestedRate: sampleRate,
-        )
-
-        let startStatus = AudioDeviceStart(aggregateID, procID)
+        let startStatus = AudioDeviceStart(newAggregateID, validProcID)
         guard startStatus == noErr else {
-            // The IOProc was registered a few lines up and outlives the aggregate
-            // unless it is destroyed explicitly. Every other throw site in this
-            // function releases exactly what it had built; this one forgot the
-            // registration, so a device that refuses to start leaked one per
-            // attempt for the life of the process.
-            AudioDeviceDestroyIOProcID(aggregateID, validProcID)
-            procID = nil
-            releaseTapAndAggregate()
+            session.destroy()
             throw NSError(
                 domain: "audiotap", code: Int(startStatus),
                 userInfo: [
@@ -518,22 +530,10 @@ public class AppAudioCapture: @unchecked Sendable {
         // restart adoption may do that, so an attempt that returns after a
         // give-up cannot resurrect the IOProc against a file descriptor the
         // session has already closed.
-        logger.info("Audio capture started (PIDs \(self.pids), rate: \(self.actualSampleRate) Hz)")
-    }
-
-    /// Destroy the tap and the aggregate and forget both ids. Every caller that
-    /// releases them must also clear them: `stopCapture` destroys whatever the
-    /// fields point at, so a field left holding a destroyed id makes the next
-    /// stop free something this object no longer owns.
-    private func releaseTapAndAggregate() {
-        if aggregateID != kAudioObjectUnknown {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            aggregateID = AudioObjectID(kAudioObjectUnknown)
-        }
-        if tapID != kAudioObjectUnknown {
-            AudioHardwareDestroyProcessTap(tapID)
-            tapID = AudioObjectID(kAudioObjectUnknown)
-        }
+        logger.info(
+            "Audio capture started (PIDs \(self.pids), rate: \(session.resolvedSampleRate) Hz)",
+        )
+        return session
     }
 
     func stopCapture() {
@@ -545,17 +545,11 @@ public class AppAudioCapture: @unchecked Sendable {
             )
         }
 
-        if let procID {
-            AudioDeviceStop(aggregateID, procID)
-            AudioDeviceDestroyIOProcID(aggregateID, procID)
-            self.procID = nil
-        }
-        // Drain pending IOProc blocks before the caller closes the fd —
-        // AudioDeviceStop doesn't synchronize against blocks already dispatched
-        // onto writeQueue, so without this barrier a late buffer could write
-        // to a closed/recycled fd.
-        writeQueue.sync {}
-        releaseTapAndAggregate()
+        // The session owns the release order, including the write-queue drain
+        // that keeps a late buffer from writing into a descriptor the caller is
+        // about to close.
+        tapSession?.destroy()
+        tapSession = nil
         didLogFormat = false
     }
 
