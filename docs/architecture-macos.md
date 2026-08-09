@@ -51,6 +51,8 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │  • PowerAssertion-  │  │  (CATap +      │  │  processing →      │
         │    Detector (IOKit, │  │   AVAudioEng.) │  │  see breakdown     │
         │    sandbox-safe)    │  │  + AudioMixer  │  │  below             │
+        │  • MicInputDetector │  │                │  │                    │
+        │    (CoreAudio proc) │  │                │  │                    │
         └─────────────────────┘  └────────────────┘  └─────────┬──────────┘
                                                                │
         PipelineQueue per-job processing:                      │
@@ -93,7 +95,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AudioImportTypes.swift` | File types offered by the batch-import and voice-enrollment `NSOpenPanel`s — single source of truth so the ffmpeg-gated vs. natively-decoded format lists stay pinned and testable |
 | `A11yID.swift` | Shared accessibility-identifier namespace — one constant per control, referenced by the view modifier, ViewInspector tests, and the `/ui/press` allowlist |
 | `SettingsView.swift` | Settings window — `TabView` shell hosting six topic-grouped sub-views in `Sources/Settings/` |
-| `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser) · Detection (Poll Interval, Grace Period) · Updates |
+| `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp) · Detection (Poll Interval, Grace Period) · Updates |
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats · Experimental Diarization Tuning |
@@ -102,6 +104,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `NamingGraceKey.swift` | Identity of one keyboard-grace window in the naming dialog — what counts as "a new grace window" (data revision + pending-job count), so the gate re-locks when another job steals focus |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
@@ -227,7 +230,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/RestartArbiter.swift` | Bounds how long a *single* restart attempt may run — generation-tagged so a wedged attempt that eventually returns is rejected rather than adopted, and forbids output-file creation forever once timed out (issue #588) |
 | `tools/audiotap/Sources/OutputDeviceChangeCoordinator.swift` | State machine for output device change + tap restart flow |
 | `tools/audiotap/Sources/ProcessTreeEnumerator.swift` | Enumerates all PIDs under an `.app` bundle (Electron/Teams child-process support) |
-| `tools/audiotap/Sources/ProcessResponsibility.swift` | Groups a helper process with the app macOS holds *responsible* for it — needed for Safari, whose call audio comes from WebKit XPC services outside `Safari.app` rather than child processes under its bundle (issue #524) |
+| `tools/audiotap/Sources/ProcessResponsibility.swift` | Groups a helper process with the app macOS holds *responsible* for it — needed for Safari, whose call audio comes from WebKit XPC services outside `Safari.app` rather than child processes under its bundle (issue #524); private symbol via `dlsym`, so it is `nil` under `APPSTORE` |
 | `tools/audiotap/Sources/SystemSettingsPaths.swift` | User-facing System Settings navigation paths (e.g. Screen Recording pane, renamed in macOS 15), kept in one place so the tap-error hint, permission UI, and channel-health notification name it identically |
 | `tools/audiotap/Sources/SampleRateQuery.swift` | Pure functions for sample rate detection and cross-validation |
 | `tools/audiotap/Sources/AVAudioNode+SafeInstallTap.swift` | Safe `installTapOnBus` wrapper catching `NSException` via `CExceptionCatcher` (issue #379) |
@@ -581,6 +584,7 @@ AppSettings (UserDefaults)
 |-----------|----------------|
 | MeetingDetector | `windowListProvider` closure (mock window list) |
 | PowerAssertionDetector | `assertionProvider` + `windowListProvider` closures |
+| MicInputDetector | `processProvider` + `windowListProvider` closures |
 | DiarizationProvider | `diarizationFactory` closure in PipelineQueue |
 | ProtocolGenerating | `protocolGenerator` protocol in PipelineQueue |
 | RecordingProvider | `recorderFactory` closure in WatchLoop |

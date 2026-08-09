@@ -81,7 +81,7 @@ flowchart TD
 
 ## Features
 
-- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in Chrome) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting)
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in Chrome) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp) — per app, off by default, and unlike the browser path it starts recording without a prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
@@ -166,7 +166,7 @@ cd meeting-transcriber
 
 | Permission | Required for | Notes |
 |------------|-------------|-------|
-| Screen Recording | Meeting detection (window titles) | System Settings → Privacy & Security |
+| Screen Recording | Optional — sharpens the meeting *title* and acts as a fallback for the audio tap. Detection itself works without it | System Settings → Privacy & Security |
 | Microphone | Mic recording | Prompted on first use |
 | Accessibility | Mute detection, participant reading (Teams) | System Settings → Privacy & Security |
 | App audio capture | — | No permission needed (purple dot indicator only) |
@@ -244,7 +244,7 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting), detection timing, update checks |
+| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
@@ -271,7 +271,7 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 | Problem | Solution |
 |---------|----------|
 | `claude not found` | Install Claude Code CLI, run `claude --version` — or switch to OpenAI-compatible provider in Settings |
-| No meeting detected | Grant Screen Recording permission (System Settings → Privacy & Security) |
+| No meeting detected | Check the app is enabled under Settings → General → Apps to Watch. Screen Recording is not required for detection; it only sharpens the meeting title |
 | No app audio | Requires macOS 14.2+ for CATapDescription audio capture |
 | Empty transcription | Check that the file contains an audio track — the app converts to 16 kHz mono automatically |
 | Models not loading | Models download on first run (WhisperKit ~1 GB, Parakeet ~50 MB); check internet connectivity |
