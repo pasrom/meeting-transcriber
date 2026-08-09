@@ -25,6 +25,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         var jobs: [UUID: PipelineJob] = [:]
         private(set) var updateSpeakerDBCalls: [[String: String]] = []
         private(set) var generateProtocolCallCount = 0
+        private(set) var warnings: [String] = []
         /// While true, `generateProtocol` parks after the `.generatingProtocol`
         /// transition, standing in for a slow LLM call so tests can observe the
         /// state the UI sees *during* generation.
@@ -38,7 +39,9 @@ final class AccidentalNamingAcceptTests: XCTestCase {
             jobs[id]?.state = newState
         }
 
-        func addWarning(id _: UUID, _: String) {}
+        func addWarning(id _: UUID, _ message: String) {
+            warnings.append(message)
+        }
 
         func setNamingMetadata(jobID _: UUID, slug _: String?, usedDiarizerMode _: DiarizerMode?) {}
 
@@ -57,9 +60,8 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         ///
         /// Deliberately unconditional, unlike the real path, which has two
         /// early returns before the flip (a missing transcript file, and a
-        /// protocol factory that turned nil after the probe) — each of which
-        /// leaves the job wedged in `.speakerNamingPending` with its sidecars
-        /// already deleted. Not modelled here; see the wedge test below.
+        /// protocol factory that turned nil after the probe). Both are handled
+        /// by the session rather than here — see the missing-transcript test.
         func generateProtocol(jobID: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
             generateProtocolCallCount += 1
             jobs[jobID]?.state = .generatingProtocol
@@ -187,12 +189,11 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         XCTAssertEqual(mock.jobs[job.id]?.state, .done)
     }
 
-    /// Stale cleanup calls `acceptAutoNames` directly, bypassing
-    /// `recordRecognition`. So the auto-names are committed to the protocol
-    /// with no row in the recognition log at all — unlike an explicit Skip.
-    /// This asymmetry is the discriminator for triaging a window that closed
-    /// on its own.
-    func testStaleCleanupWritesNoRecognitionRow() async throws {
+    /// Stale cleanup commits the auto-names for a job nobody ever decided, so it
+    /// logs like any other resolution — tagged `.stale`, which is what tells it
+    /// apart from a person clicking Skip. It used to write nothing at all,
+    /// leaving that outcome invisible.
+    func testStaleCleanupWritesStaleTaggedRow() async throws {
         let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
         let transcriptPath = tmp.appendingPathComponent("transcript.txt")
         try "] SPEAKER_0: hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
@@ -214,8 +215,15 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         // regression would already have queued on the actor — so the negative
         // assertion below fails loudly instead of racing past a pending write.
         await statsLog.append([])
-        let rows = await statsLog.loadRecent(within: 3600)
-        XCTAssertTrue(rows.isEmpty, "stale cleanup left \(rows.count) recognition row(s)")
+        var rows = await statsLog.loadRecent(within: 3600)
+        let deadline = Date().addingTimeInterval(2)
+        while rows.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+            rows = await statsLog.loadRecent(within: 3600)
+        }
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.action, .dismissed)
+        XCTAssertEqual(rows.first?.source, .stale)
     }
 
     /// Control for the test above: an explicit Skip *is* traceable. Every label
@@ -236,7 +244,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         mock.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .skipped)
+        session.completeSpeakerNaming(jobID: job.id, result: .skipped, source: .dialog)
 
         await waitUntil { mock.jobs[job.id]?.state == .done }
         // The JSONL append runs in a detached Task, so poll for the row.
@@ -248,19 +256,18 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         }
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.action, .dismissed)
+        XCTAssertEqual(rows.first?.source, .dialog, "a click in the dialog is attributable")
     }
 
-    /// `acceptAutoNames` destroys the naming data *before* the protocol task is
-    /// guaranteed to transition the job. Its `canGenerateProtocol` probe checks
-    /// that `transcriptPath` is non-nil but never that the file exists, while
-    /// `generateProtocolForExistingJob` guards on actually reading it. A Skip on
-    /// a job whose transcript went missing therefore deletes every sidecar and
-    /// then returns without a state change, leaving the job wedged in
-    /// `.speakerNamingPending` with nothing left to name and no protocol.
-    ///
-    /// This documents current behaviour, not desired behaviour: a fix that
-    /// makes the cleanup conditional on the transition should flip this test.
-    func testSkipWithMissingTranscriptWedgesJobInPendingState() async throws {
+    /// `acceptAutoNames` destroys the naming data before the protocol task is
+    /// guaranteed to transition the job, and its readiness probe only checks
+    /// that `transcriptPath` is non-nil — not that the file is still there. So
+    /// the generation task can bail on an unreadable transcript after the
+    /// sidecars are already gone. Every exit of that task must therefore be
+    /// terminal: a job left in `.speakerNamingPending` with no naming data
+    /// reopens the dialog on an empty placeholder and is dropped without a
+    /// protocol at the next launch.
+    func testSkipWithMissingTranscriptStillFinishesTheJob() async throws {
         let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
         // Non-nil path, no file behind it — e.g. the transcript was moved or
         // removed between the pipeline writing it and the user deciding.
@@ -274,19 +281,121 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         mock.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .skipped)
+        session.completeSpeakerNaming(jobID: job.id, result: .skipped, source: .dialog)
 
-        // Give the spawned task every chance to transition the job.
-        await waitUntil(
-            { mock.jobs[job.id]?.state != .speakerNamingPending }, timeout: 1,
-        )
+        await waitUntil { mock.jobs[job.id]?.state == .done }
 
         XCTAssertEqual(
-            mock.jobs[job.id]?.state, .speakerNamingPending,
-            "job is stuck: cleanup ran but nothing moved it out of pending",
+            mock.jobs[job.id]?.state, .done,
+            "an unreadable transcript must still resolve the job, not strand it",
         )
-        XCTAssertNil(session.speakerNamingDataByJob[job.id], "naming data is already gone")
-        XCTAssertEqual(mock.generateProtocolCallCount, 0, "no protocol was produced either")
+        XCTAssertNil(session.speakerNamingDataByJob[job.id], "naming data is gone")
+        XCTAssertEqual(mock.generateProtocolCallCount, 0, "no protocol could be produced")
+        XCTAssertEqual(mock.warnings.count, 1, "the user is told why there is no protocol")
+    }
+
+    // MARK: - Escape dismisses, never resolves
+
+    /// The load-bearing guarantee of the fix: the Escape handler runs the host's
+    /// dismiss action and never resolves the job. Skip used to be bound to
+    /// Escape, so this is the regression that must stay red if anyone rebinds
+    /// it.
+    func testExitCommandDismissesWithoutResolvingTheJob() throws {
+        var dismissed = 0
+        var results: [PipelineQueue.SpeakerNamingResult] = []
+        let view = SpeakerNamingView(
+            data: makeNamingData(jobID: UUID()),
+            gracePeriod: 0,
+            onDismissRequest: { dismissed += 1 },
+            onComplete: { results.append($0) },
+        )
+
+        try view.inspect().vStack().callOnExitCommand()
+
+        XCTAssertEqual(dismissed, 1)
+        XCTAssertTrue(results.isEmpty, "Escape must never resolve the job")
+    }
+
+    /// A host with no window to close installs no handler at all, so Escape
+    /// keeps bubbling. Voice enrollment renders this view inside a sheet, where
+    /// swallowing Escape would break sheet-dismisses-on-Escape for exactly one
+    /// stage of the flow.
+    func testExitCommandIsNotInstalledWithoutADismissHandler() throws {
+        let view = SpeakerNamingView(
+            data: makeNamingData(jobID: UUID()),
+            gracePeriod: 0,
+        ) { _ in }
+
+        XCTAssertThrowsError(try view.inspect().vStack().callOnExitCommand())
+    }
+
+    // MARK: - Headless resolution
+
+    /// Blocking-transcribe finishes on the auto-names with no dialog. The names
+    /// still reach the transcript, so the decision is logged like any other —
+    /// tagged `.headless`. It used to write no row, hiding an auto-accept that
+    /// nobody reviewed.
+    func testHeadlessAutoSkipWritesHeadlessTaggedRow() async throws {
+        let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
+        let logPath = tmp.appendingPathComponent("recognition_log.jsonl")
+        let statsLog = RecognitionStatsLog(path: logPath)
+
+        let session = makeSession(outputDir: tmp, statsLog: statsLog)
+        let mock = MockDelegate()
+        session.delegate = mock
+
+        var job = PipelineJob(
+            meetingTitle: "Standup", appName: "Test",
+            mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
+            autoSkipNaming: true,
+        )
+        job.state = .diarizing
+        mock.jobs[job.id] = job
+
+        let diarization = DiarizationResult(
+            segments: [.init(start: 0, end: 12, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 12],
+            autoNames: ["SPEAKER_0": "SPEAKER_0"],
+            embeddings: ["SPEAKER_0": [0.1, 0.2, 0.3]],
+        )
+        _ = session.resolveSpeakerNames(
+            diarization: diarization,
+            job: (jobID: job.id, title: "Standup", slug: "standup_abcd1234", participants: []),
+            diarizeProcess: MockDiarization(),
+            isDualSource: false, outputDir: tmp,
+        )
+
+        // No dialog is parked for a headless job.
+        XCTAssertNil(session.speakerNamingDataByJob[job.id])
+
+        var rows = await statsLog.loadRecent(within: 3600)
+        let deadline = Date().addingTimeInterval(2)
+        while rows.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+            rows = await statsLog.loadRecent(within: 3600)
+        }
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows.first?.source, .headless)
+    }
+
+    // MARK: - Log schema stays backward compatible
+
+    /// Rows written before `source` existed must still decode, and must read as
+    /// `nil` rather than being attributed to a source they never recorded.
+    /// `RecognitionStatsLog.loadRecent` drops lines it cannot decode, so a
+    /// non-optional field here would silently erase the entire history.
+    func testLegacyLogLineWithoutSourceStillDecodes() throws {
+        let legacy = """
+        {"action":"accepted","autoName":"Alice","jobID":"\(UUID().uuidString)",\
+        "label":"SPEAKER_0","meetingTitle":"Standup","track":"single",\
+        "ts":"2026-01-01T00:00:00Z","userName":"Alice"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let event = try decoder.decode(RecognitionEvent.self, from: Data(legacy.utf8))
+
+        XCTAssertEqual(event.action, .accepted)
+        XCTAssertNil(event.source)
     }
 
     // MARK: - Confirm side effects (why a stray Return is worse)
@@ -311,7 +420,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
 
         // Verbatim the auto-mapping — what Confirm submits when nobody edits a
         // field, because the name fields are seeded from the auto-names.
-        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]))
+        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]), source: .dialog)
 
         await waitUntil { !mock.updateSpeakerDBCalls.isEmpty }
         XCTAssertEqual(mock.updateSpeakerDBCalls.count, 1)
@@ -331,7 +440,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         mock.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .skipped)
+        session.completeSpeakerNaming(jobID: job.id, result: .skipped, source: .dialog)
         await waitUntil { mock.jobs[job.id]?.state == .done }
 
         XCTAssertTrue(mock.updateSpeakerDBCalls.isEmpty)
@@ -374,40 +483,5 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         let matcher = SpeakerMatcher(dbPath: tmp.appendingPathComponent("speakers.json"))
         matcher.saveDB([updated])
         XCTAssertEqual(matcher.match(embeddings: ["S0": wrongVoice])["S0"], "Alice")
-    }
-
-    // MARK: - Escape dismisses, never resolves
-
-    /// The load-bearing guarantee of the fix: the Escape handler runs the host's
-    /// dismiss action and never resolves the job. Skip used to be bound to
-    /// Escape, so this is the regression that must stay red if anyone rebinds
-    /// it.
-    func testExitCommandDismissesWithoutResolvingTheJob() throws {
-        var dismissed = 0
-        var results: [PipelineQueue.SpeakerNamingResult] = []
-        let view = SpeakerNamingView(
-            data: makeNamingData(jobID: UUID()),
-            gracePeriod: 0,
-            onDismissRequest: { dismissed += 1 },
-            onComplete: { results.append($0) },
-        )
-
-        try view.inspect().vStack().callOnExitCommand()
-
-        XCTAssertEqual(dismissed, 1)
-        XCTAssertTrue(results.isEmpty, "Escape must never resolve the job")
-    }
-
-    /// A host with no window to close installs no handler at all, so Escape
-    /// keeps bubbling. Voice enrollment renders this view inside a sheet, where
-    /// swallowing Escape would break sheet-dismisses-on-Escape for exactly one
-    /// stage of the flow.
-    func testExitCommandIsNotInstalledWithoutADismissHandler() throws {
-        let view = SpeakerNamingView(
-            data: makeNamingData(jobID: UUID()),
-            gracePeriod: 0,
-        ) { _ in }
-
-        XCTAssertThrowsError(try view.inspect().vStack().callOnExitCommand())
     }
 }

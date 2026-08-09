@@ -352,7 +352,9 @@ final class AppState {
                     // earlier skip race.
                     let pendingIDs = self.pipeline.queue.pendingSpeakerNamingJobs.map(\.id)
                     for jobID in pendingIDs {
-                        self.pipeline.queue.completeSpeakerNaming(jobID: jobID, result: .skipped)
+                        self.pipeline.queue.completeSpeakerNaming(
+                            jobID: jobID, result: .skipped, source: .rpc,
+                        )
                     }
                 }
             }

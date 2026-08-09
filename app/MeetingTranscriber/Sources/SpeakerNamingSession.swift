@@ -140,7 +140,14 @@ final class SpeakerNamingSession {
     /// Called by the UI (or the test handler, via the queue forwarder) when the
     /// user confirms, skips, or re-runs speaker naming. Always handles "late"
     /// completion — the pipeline never blocks on naming.
-    func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
+    /// `source` has no default on purpose: the queue's forwarders default it
+    /// for the UI, but a new path into the session must state where the
+    /// decision came from. An unattributed row would be indistinguishable from
+    /// one written before the field existed, which is exactly the ambiguity
+    /// this field was added to remove.
+    func completeSpeakerNaming(
+        jobID: UUID, result: SpeakerNamingResult, source: RecognitionSource,
+    ) {
         guard let data = speakerNamingDataByJob[jobID] else { return }
         let slug = delegate?.job(withID: jobID)?.namingSlug
 
@@ -149,6 +156,7 @@ final class SpeakerNamingSession {
             recordRecognition(
                 jobID: jobID, title: data.meetingTitle,
                 userMapping: userMapping, fallback: data.mapping,
+                source: source,
             )
             // Transition out of .speakerNamingPending synchronously so the UI's
             // close-when-empty check sees the change immediately. This synchronous
@@ -170,6 +178,7 @@ final class SpeakerNamingSession {
             recordRecognition(
                 jobID: jobID, title: data.meetingTitle,
                 userMapping: nil, fallback: data.mapping,
+                source: source,
             )
             acceptAutoNames(jobID: jobID, slug: slug)
         }
@@ -184,7 +193,8 @@ final class SpeakerNamingSession {
         guard let handler = speakerNamingHandler else { return }
         Task {
             let result = await handler(data)
-            completeSpeakerNaming(jobID: jobID, result: result)
+            // The handler stands in for the dialog, so it reports as the dialog.
+            completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
         }
     }
 
@@ -221,18 +231,43 @@ final class SpeakerNamingSession {
     private func generateProtocolForExistingJob(
         jobID: UUID, delegate: any SpeakerNamingSessionDelegate,
     ) async {
-        guard let job = delegate.job(withID: jobID),
-              let transcriptPath = job.transcriptPath,
+        // A job that is gone needs no transition. Anything else must reach a
+        // terminal state on every exit: `acceptAutoNames` has already deleted
+        // the naming sidecars by the time we get here, so bailing out without a
+        // transition would strand the job in `.speakerNamingPending` with
+        // nothing left to name — the naming window would keep reopening on an
+        // empty placeholder, and the next launch would drop the job with no
+        // protocol ever written.
+        guard let job = delegate.job(withID: jobID) else { return }
+        guard let transcriptPath = job.transcriptPath,
               let outputDir,
               let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8)
-        else { return }
+        else {
+            // Reachable when the transcript was moved or deleted between the
+            // pipeline writing it and the user resolving naming: the caller's
+            // readiness probe only checks that `transcriptPath` is non-nil.
+            delegate.addWarning(id: jobID, "Protocol not generated — transcript file is missing")
+            finishIfUnresolved(jobID: jobID, delegate: delegate)
+            return
+        }
         await delegate.generateProtocol(
             jobID: jobID,
             transcript: transcript,
             title: job.meetingTitle,
             protocolsDir: outputDir.appendingPathComponent("protocols"),
         )
-        if delegate.job(withID: jobID)?.state == .generatingProtocol {
+        finishIfUnresolved(jobID: jobID, delegate: delegate)
+    }
+
+    /// Move a job to `.done` unless something already advanced it. Accepts
+    /// `.speakerNamingPending` as well as `.generatingProtocol` because the
+    /// generation call can return before its own `.generatingProtocol`
+    /// transition — it guards on the protocol factory, which can go nil between
+    /// the readiness probe and the call. Both shapes leave the job pending, and
+    /// pending with its sidecars deleted is unrecoverable.
+    private func finishIfUnresolved(jobID: UUID, delegate: any SpeakerNamingSessionDelegate) {
+        let state = delegate.job(withID: jobID)?.state
+        if state == .generatingProtocol || state == .speakerNamingPending {
             delegate.updateJobState(id: jobID, to: .done)
         }
     }
@@ -309,6 +344,15 @@ final class SpeakerNamingSession {
             // its own. Don't stash naming data: there is no interactive client
             // to resolve it, and parking would wedge the job until the next
             // launch's 24h stale-cleanup.
+            //
+            // Log it as a resolution like every other path, tagged `.headless`:
+            // the names still land in the transcript, so leaving no row would
+            // hide an auto-accept nobody reviewed.
+            recordRecognition(
+                jobID: jobID, title: title,
+                userMapping: nil, fallback: autoNames,
+                source: .headless,
+            )
             return autoNames
         }
         // Production/interactive: stash the naming data so the queue parks the
@@ -363,6 +407,16 @@ final class SpeakerNamingSession {
         let now = Date()
         for job in pendingJobs where now.timeIntervalSince(job.enqueuedAt) > maxAge {
             logger.info("Auto-resolving stale pending naming for \(job.meetingTitle, privacy: .private)")
+            // Log it like any other resolution. This used to accept the
+            // auto-names with no row at all, which made a job that nobody ever
+            // decided indistinguishable from one that was never diarized.
+            if let data = speakerNamingDataByJob[job.id] {
+                recordRecognition(
+                    jobID: job.id, title: data.meetingTitle,
+                    userMapping: nil, fallback: data.mapping,
+                    source: .stale,
+                )
+            }
             acceptAutoNames(jobID: job.id, slug: job.namingSlug)
         }
     }
@@ -371,35 +425,19 @@ final class SpeakerNamingSession {
 
     /// Pull stashed forensics for a job and write the recognition-stats row.
     /// Falls back to the original SpeakerNamingData mapping when the stash is
-    /// missing (e.g. the user confirmed in a fresh app session).
+    /// missing (e.g. the user confirmed in a fresh app session). Logs outcome
+    /// counts immediately; the JSONL append runs in a detached Task.
     private func recordRecognition(
         jobID: UUID, title: String,
         // swiftlint:disable:next discouraged_optional_collection
         userMapping: [String: String]?, fallback: [String: String],
+        source: RecognitionSource,
     ) {
-        recordRecognition(
+        let events = RecognitionStats.buildEvents(
             suggested: stashedSuggestedAtDialog[jobID] ?? fallback,
             userMapping: userMapping,
             topCandidates: stashedTopCandidates[jobID] ?? [:],
-            jobID: jobID,
-            title: title,
-        )
-    }
-
-    /// Build recognition events and persist them off the pipeline path. Logs
-    /// outcome counts immediately; JSONL append runs in a detached Task.
-    private func recordRecognition(
-        suggested: [String: String],
-        // swiftlint:disable:next discouraged_optional_collection
-        userMapping: [String: String]?,
-        topCandidates: [String: [TopCandidate]],
-        jobID: UUID,
-        title: String,
-    ) {
-        let events = RecognitionStats.buildEvents(
-            suggested: suggested, userMapping: userMapping,
-            topCandidates: topCandidates,
-            jobID: jobID, meetingTitle: title,
+            jobID: jobID, meetingTitle: title, source: source,
         )
         var counts: [RecognitionAction: Int] = [:]
         for e in events {

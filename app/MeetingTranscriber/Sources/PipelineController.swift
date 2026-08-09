@@ -346,7 +346,9 @@ final class PipelineController {
     /// awaiting naming, returning whether it did (false → 404).
     private func resolveNaming(jobID: UUID, result: PipelineQueue.SpeakerNamingResult) -> Bool {
         guard pendingNamingData(forID: jobID) != nil else { return false }
-        queue.completeSpeakerNaming(jobID: jobID, result: result)
+        // Tagged `.rpc`: nobody was looking at a dialog, so a row from here must
+        // not read as a human decision in the recognition log.
+        queue.completeSpeakerNaming(jobID: jobID, result: result, source: .rpc)
         return true
     }
 

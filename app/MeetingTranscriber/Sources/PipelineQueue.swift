@@ -175,16 +175,18 @@ class PipelineQueue {
     /// Called by the UI (and the test handler) when the user confirms, skips, or
     /// re-runs speaker naming. Thin forwarder to the naming session, which
     /// always handles "late" completion — the pipeline never blocks on naming.
-    func completeSpeakerNaming(jobID: UUID, result: SpeakerNamingResult) {
-        naming.completeSpeakerNaming(jobID: jobID, result: result)
+    func completeSpeakerNaming(
+        jobID: UUID, result: SpeakerNamingResult, source: RecognitionSource = .dialog,
+    ) {
+        naming.completeSpeakerNaming(jobID: jobID, result: result, source: source)
     }
 
     /// Called by the UI when the user confirms or skips speaker naming without a
     /// specific job in hand — resolves the first pending job (or any stashed
     /// naming data) and forwards to the session.
-    func completeSpeakerNaming(result: SpeakerNamingResult) {
+    func completeSpeakerNaming(result: SpeakerNamingResult, source: RecognitionSource = .dialog) {
         if let jobID = pendingSpeakerNamingJobs.first?.id ?? naming.speakerNamingDataByJob.keys.first {
-            naming.completeSpeakerNaming(jobID: jobID, result: result)
+            naming.completeSpeakerNaming(jobID: jobID, result: result, source: source)
         }
     }
 

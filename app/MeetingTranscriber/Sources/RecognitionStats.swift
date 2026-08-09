@@ -8,6 +8,21 @@ enum RecognitionAction: String, Codable, CaseIterable {
     case accepted, corrected, added, skipped, dismissed
 }
 
+/// Which code path resolved a speaker-naming decision. Distinguishes a person
+/// acting in the dialog from the paths that resolve naming on their own, which
+/// otherwise produce byte-identical rows — the question that had to be answered
+/// by hand when triaging a naming window that closed without anyone deciding.
+enum RecognitionSource: String, Codable {
+    /// The "Name Speakers" window: someone clicked Confirm or Skip.
+    case dialog
+    /// Resolved over the automation API rather than by a person at the screen.
+    case rpc
+    /// 24 h stale cleanup accepted the auto-names for an abandoned job.
+    case stale
+    /// Headless blocking-transcribe finished on the auto-names, no dialog.
+    case headless
+}
+
 /// Which diarized track the speaker label belongs to.
 enum RecognitionTrack: String, Codable {
     case app, mic, single
@@ -37,6 +52,30 @@ struct RecognitionEvent: Codable, Equatable {
     // Optional so old log lines without this field still decode.
     // swiftlint:disable:next discouraged_optional_collection
     let topCandidates: [TopCandidate]?
+    /// Which path produced this decision. Optional for the same reason as
+    /// `topCandidates`: rows written before the field existed must still decode,
+    /// and they read as `nil` rather than being silently attributed to a source.
+    let source: RecognitionSource?
+
+    init(
+        ts: Date, jobID: UUID, meetingTitle: String, track: RecognitionTrack,
+        label: String, autoName: String?, userName: String?,
+        action: RecognitionAction,
+        // swiftlint:disable:next discouraged_optional_collection
+        topCandidates: [TopCandidate]?,
+        source: RecognitionSource? = nil,
+    ) {
+        self.ts = ts
+        self.jobID = jobID
+        self.meetingTitle = meetingTitle
+        self.track = track
+        self.label = label
+        self.autoName = autoName
+        self.userName = userName
+        self.action = action
+        self.topCandidates = topCandidates
+        self.source = source
+    }
 }
 
 /// Per-candidate distance forensics for a single match decision. Used both
@@ -79,6 +118,7 @@ enum RecognitionStats {
         topCandidates: [String: [TopCandidate]],
         jobID: UUID,
         meetingTitle: String,
+        source: RecognitionSource? = nil,
         now: Date = Date(),
     ) -> [RecognitionEvent] {
         let labels = Set(suggested.keys).union(userMapping?.keys ?? [:].keys).sorted()
@@ -98,6 +138,7 @@ enum RecognitionStats {
                 userName: user,
                 action: action,
                 topCandidates: topCandidates[label],
+                source: source,
             )
         }
     }

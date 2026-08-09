@@ -160,7 +160,9 @@ extension SpeakerNamingSession {
 
             if let handler = speakerNamingHandler {
                 let result = await handler(newNamingData)
-                completeSpeakerNaming(jobID: jobID, result: result)
+                // Same as the first-pass invocation: the handler stands in for
+                // the re-opened dialog, so it reports as the dialog.
+                completeSpeakerNaming(jobID: jobID, result: result, source: .dialog)
             }
         } catch {
             logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")

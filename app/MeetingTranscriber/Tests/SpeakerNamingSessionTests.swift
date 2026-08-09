@@ -132,7 +132,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
         mock.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]))
+        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]), source: .dialog)
 
         // The pending → generatingProtocol hop MUST be synchronous (the RPC
         // idempotency contract): it has already happened when the call returns,
@@ -159,7 +159,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
         mock.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .skipped)
+        session.completeSpeakerNaming(jobID: job.id, result: .skipped, source: .dialog)
 
         // Skip with no protocol generator is fully synchronous.
         XCTAssertEqual(mock.jobs[job.id]?.state, .done)
@@ -175,7 +175,9 @@ final class SpeakerNamingSessionTests: XCTestCase {
         session.delegate = mock
 
         // No speakerNamingDataByJob entry → guard returns immediately.
-        session.completeSpeakerNaming(jobID: UUID(), result: .confirmed(["SPEAKER_0": "Alice"]))
+        session.completeSpeakerNaming(
+            jobID: UUID(), result: .confirmed(["SPEAKER_0": "Alice"]), source: .dialog,
+        )
         XCTAssertTrue(mock.stateTransitions.isEmpty)
     }
 
@@ -193,7 +195,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         session.speakerNamingDataByJob[jobID] = makeNamingData(jobID: jobID)
         // Must not crash even though every delegate callback resolves to nil.
-        session.completeSpeakerNaming(jobID: jobID, result: .skipped)
+        session.completeSpeakerNaming(jobID: jobID, result: .skipped, source: .dialog)
 
         // removeNamingData still ran (session-owned, no delegate needed).
         XCTAssertNil(session.speakerNamingDataByJob[jobID])
@@ -283,7 +285,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
         recorder.jobs[job.id] = job
         session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
 
-        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]))
+        session.completeSpeakerNaming(jobID: job.id, result: .confirmed(["SPEAKER_0": "Alice"]), source: .dialog)
 
         // Wait until the re-apply flow is provably in-flight (parked inside the
         // delegate's generateProtocol, i.e. mid-"LLM generation").
