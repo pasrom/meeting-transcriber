@@ -90,6 +90,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `MenuBarView.swift` | Menu bar dropdown (state, actions, meeting info) |
 | `MenuBarIcon.swift` | Renders the animated waveform icon + badge overlays (permission, record-only, channel-silent) |
 | `AppPickerView.swift` | App picker sheet for manual recording of any running app |
+| `AudioImportTypes.swift` | File types offered by the batch-import and voice-enrollment `NSOpenPanel`s — single source of truth so the ffmpeg-gated vs. natively-decoded format lists stay pinned and testable |
 | `A11yID.swift` | Shared accessibility-identifier namespace — one constant per control, referenced by the view modifier, ViewInspector tests, and the `/ui/press` allowlist |
 | `SettingsView.swift` | Settings window — `TabView` shell hosting six topic-grouped sub-views in `Sources/Settings/` |
 | `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser) · Detection (Poll Interval, Grace Period) · Updates |
@@ -105,6 +106,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
 | `VoiceEnrollmentView.swift` | Voice enrollment sheet — seeds `speakers.json` from an existing audio file |
 | `AppSettings.swift` | `@Observable` settings persisted to UserDefaults |
+| `AppSettings+Computed.swift` | Values derived from stored `AppSettings` toggles, split out to keep `AppSettings.swift` under the line cap |
+| `LegacyDefaultsMigration.swift` | One-shot carry-over of settings from the pre-rename bundle identifier, since `UserDefaults` is scoped per identifier |
 | `UpdateChecker.swift` | Checks GitHub releases for newer versions, drives the menu bar update badge |
 | `Settings/PickerLanguages.swift` | Language picker entries for WhisperKit and Parakeet language selectors |
 | `LiveCaptionsState.swift` | `@Observable` live-captions state (per-channel hypotheses + finalised utterances) + RPC-wire types |
@@ -124,11 +127,17 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `MeetingDetector.swift` | Window title polling, pattern matching, confirmation counting, cooldown |
 | `MeetingTitleMatcher.swift` | Compiled idle/meeting title regex semantics for one `AppMeetingPattern` |
 | `PowerAssertionDetector.swift` | IOKit power assertion–based meeting detection (sandbox-safe); carries the Chrome WebRTC pattern for browser meetings (issue #503) |
+| `MicInputDetector.swift` | Third `MeetingDetecting` strategy: watches which processes hold `kAudioProcessPropertyIsRunningInput` via the Core Audio process-object API — covers call apps (WeChat, Tencent Meeting, FaceTime, WhatsApp) with no reliable power-assertion signal; each app opt-in and off by default |
 | `MeetingPatterns.swift` | Regex patterns for Teams, Zoom, Webex, browser (Chrome WebRTC) |
 | `BrowserConsentPolicy.swift` | Pure decision logic for the browser-meeting "ask before recording" prompt — decline cooldown (issue #503) |
+| `ConsentAnswer.swift` | Three-way outcome of a consent prompt (yes / no / unanswered) — kept distinct from a `Bool` so a decline and a timeout get different re-prompt cooldowns (issue #543) |
+| `BrowserConsentReadiness.swift` | Whether a browser-meeting consent prompt can actually reach the user — polls `NotificationVisibility` since the prompt is itself a notification and a broken notification channel can't report its own brokenness |
 | `ConsentPromptCoordinator.swift` | Coordinates an async yes/no recording-consent prompt: register pending decision by id, resolve once via answer or timeout |
 | `WatchLoop+Consent.swift` | Browser-meeting consent gate, split out of `WatchLoop`; only patterns with `requiresRecordingConsent` reach it |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
+| `RecordingProvider.swift` | Protocol abstraction over `DualSourceRecorder` for mock injection in `WatchLoop` tests |
+| `WatchLoop+RecordOnly.swift` | Record-only output branch (moves WAVs + writes `RecordingSidecar`), split out of `WatchLoop` |
+| `AudioPersistencePolicy.swift` | Decides per finished-job source file whether to relocate it into the output folder or leave it in place (staging-dir recording vs. user-picked import) |
 | `TranscribingEngine.swift` | `TranscribingEngine` protocol + `mergeDualSourceSegments` default impl |
 | `WhisperKitEngine.swift` | WhisperKit transcription engine (99+ languages, ~1 GB model) |
 | `ParakeetEngine.swift` | NVIDIA Parakeet TDT v3 via FluidAudio (25 EU languages, ~50 MB, ~10× faster) |
@@ -142,6 +151,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `PipelineEventLog.swift` | Append-only JSONL log of `PipelineQueue` job state transitions |
 | `StageTimingStats.swift` | Per-stage wall-clock duration tracking, backs `ProcessingStatsView` |
 | `ProcessedRecordingsLedger.swift` | File-backed ledger of mix-file paths that completed the pipeline (dedupes recovery re-processing) |
+| `InFlightRunRegistry.swift` | Process-wide record of currently-executing pipeline runs, so a second `PipelineQueue` built while the first is still working can't double-start the same job/audio (issue #558) |
 | `SnapshotWriterActor.swift` | Actor isolating pipeline queue snapshot writes (prevents main-actor stalls on macOS 26 rename deadlock) |
 | `SpeakerNamingSession.swift` | Collaborator `PipelineQueue` calls for the speaker-naming work still owned by the queue, split out for size |
 | `SpeakerNamingSession+Late.swift` | Late-confirm and late re-diarization paths for speaker naming |
@@ -197,7 +207,14 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/AppAudioCapture+PIDTranslation.swift` | Translates PIDs to CoreAudio `AudioObjectID`s (multi-process tap for Electron apps like Teams 2.x) |
 | `tools/audiotap/Sources/AppAudioCapture+DebugLogging.swift` | Per-buffer dBFS/RMS logging helpers extracted from `AppAudioCapture` (line-cap split) |
 | `tools/audiotap/Sources/AppAudioCapture+LiveSink.swift` | Live-buffer forwarding from CATap IOProc into `LiveAudioBuffer` sinks (line-cap split) |
+| `tools/audiotap/Sources/AppAudioCapture+AggregateDescription.swift` | The CFDictionary describing the private aggregate device wrapping a process tap (line-cap split from `AppAudioCapture`) |
+| `tools/audiotap/Sources/AppAudioCapture+Restart.swift` | Output-device-change restart path: off-main-queue, generation-tagged, deadline-bounded attempts (issue #588; line-cap split) |
+| `tools/audiotap/Sources/AppTapSession.swift` | Owns one tap attempt's HAL resources (tap, aggregate device, IOProc) and their release ordering, injectable for testing without hardware |
 | `tools/audiotap/Sources/MicCaptureHandler.swift` | AVAudioEngine → WAV |
+| `tools/audiotap/Sources/MicCaptureHandler+Restart.swift` | Mic-side device-change restart path: off-main-queue, generation-tagged, deadline-bounded attempts (issue #588; same pattern as `AppAudioCapture+Restart`) |
+| `tools/audiotap/Sources/MicEngineSession.swift` | Everything mic capture that touches `AVAudioEngine`/CoreAudio, behind a protocol so `MicCaptureHandler` is testable without hardware; one session = one engine lifetime, discarded and rebuilt on restart |
+| `tools/audiotap/Sources/MicChannelMap.swift` | Decides when a discrete multi-channel mic input needs an explicit converter `channelMap` — `AVAudioConverter`'s implicit downmix silently writes digital silence for most non-stereo layouts |
+| `tools/audiotap/Sources/MicConverterFactory.swift` | Builds the tap → WAV converter for one mic capture, applying `MicChannelMap`'s explicit channel selection when needed |
 | `tools/audiotap/Sources/AudioCaptureSession.swift` | Orchestrator (start/stop, computes micDelay) |
 | `tools/audiotap/Sources/AudioCaptureResult.swift` | Result struct |
 | `tools/audiotap/Sources/LiveAudioBuffer.swift` | Real-time audio sample snapshot yielded from capture callbacks (CATap IOProc + AVAudioEngine input tap) |
@@ -206,9 +223,12 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/DebugRMSReporter.swift` | Throttled RMS accumulator/reporter for audio debug logging |
 | `tools/audiotap/Sources/Helpers.swift` | `machTicksToSeconds`, `getDefaultOutputDeviceUID`, `writeAllToFileHandle` |
 | `tools/audiotap/Sources/MicRestartPolicy.swift` | Pure decision logic for mic engine restart on device change |
-| `tools/audiotap/Sources/MicRestartRetryPolicy.swift` | Retry/backoff policy for failed mic engine restarts |
+| `tools/audiotap/Sources/CaptureRestartRetryPolicy.swift` | Retry/backoff policy for a failed capture restart, shared by both the app-audio and mic channels (issue #379) |
+| `tools/audiotap/Sources/RestartArbiter.swift` | Bounds how long a *single* restart attempt may run — generation-tagged so a wedged attempt that eventually returns is rejected rather than adopted, and forbids output-file creation forever once timed out (issue #588) |
 | `tools/audiotap/Sources/OutputDeviceChangeCoordinator.swift` | State machine for output device change + tap restart flow |
 | `tools/audiotap/Sources/ProcessTreeEnumerator.swift` | Enumerates all PIDs under an `.app` bundle (Electron/Teams child-process support) |
+| `tools/audiotap/Sources/ProcessResponsibility.swift` | Groups a helper process with the app macOS holds *responsible* for it — needed for Safari, whose call audio comes from WebKit XPC services outside `Safari.app` rather than child processes under its bundle (issue #524) |
+| `tools/audiotap/Sources/SystemSettingsPaths.swift` | User-facing System Settings navigation paths (e.g. Screen Recording pane, renamed in macOS 15), kept in one place so the tap-error hint, permission UI, and channel-health notification name it identically |
 | `tools/audiotap/Sources/SampleRateQuery.swift` | Pure functions for sample rate detection and cross-validation |
 | `tools/audiotap/Sources/AVAudioNode+SafeInstallTap.swift` | Safe `installTapOnBus` wrapper catching `NSException` via `CExceptionCatcher` (issue #379) |
 | `tools/audiotap/Sources/AppAudioCapture+Resampling.swift` | Capture-time resampling for CATap buffers (line-cap split from `AppAudioCapture`) |
@@ -236,14 +256,18 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Permissions.swift` | Mic/accessibility permissions, project root detection |
 | `PermissionRow.swift` | Permission status row UI component (icon, detail, help popover) |
 | `PermissionHealthCheck.swift` | TCC verdict + live probe → `PermissionStatus`; drives exclamation badge overlay |
+| `NotificationVisibility.swift` | What the notification centre will actually *do* with a posted notification (alert style, Time Sensitive, scheduled delivery) — authorisation alone can read `.authorized` while the prompt never shows |
 | `ParticipantReader.swift` | Teams participant extraction via Accessibility API |
 | `DebugRPCServer.swift` | Embedded HTTP RPC server core (routing, auth) for shell-driven inspection. `#if !APPSTORE`, opt-in via `MEETINGTRANSCRIBER_DEBUG_RPC=1`. Bearer-token + Origin reject; binds 127.0.0.1 only. Endpoint handlers split into companion files below (line-cap) |
 | `DebugRPCServer+V1.swift` | `/v1` versioned automation API routing + response envelopes (`POST /v1/transcribe`, `/v1/jobs`, naming) |
 | `DebugRPCServer+Metrics.swift` | `GET /metrics` handler — cumulative CPU/RAM/instruction counters via `proc_pid_rusage` |
 | `DebugRPCServer+Screenshot.swift` | `GET /screenshot` handler (PNG of the largest visible window via ScreenCaptureKit) |
 | `DebugRPCServer+UITree.swift` | `GET /ui/tree` handler — read-only accessibility tree of an allowlisted window |
-| `DebugRPCServer+UIPress.swift` | `POST /ui/press` handler — presses an allowlisted control via in-process `AXUIElementPerformAction` |
+| `DebugRPCServer+UIPress.swift` | `POST /ui/press` handler — presses an allowlisted control via in-process `AXUIElementPerformAction`, or via `MouseInjection` when `"via":"click"` is requested |
+| `DebugRPCServer+UIType.swift` | `POST /ui/type` handler — types into an allowlisted plain-text field via `KeyboardInjection` |
 | `DebugRPCServer+AXElement.swift` | Shared self-pid `AXUIElement` tree walk backing `/ui/tree` and `/ui/press` |
+| `KeyboardInjection.swift` | Types text into the app's own UI via posted key events (not an AX set-value, which wouldn't fire a SwiftUI `TextField` binding) — backs `POST /ui/type` |
+| `MouseInjection.swift` | Clicks a point in the app's own UI via posted mouse events (real hit-testing, unlike some `kAXPressAction` controls that report success without effect) — backs `POST /ui/press` `"via":"click"` |
 | `HTTPRequest.swift` | Minimal HTTP/1.1 request parsing for `DebugRPCServer` (pure value type, line-cap split) |
 | `HTTPResponse.swift` | Minimal HTTP/1.1 response serialization for `DebugRPCServer` (pure value type, line-cap split) |
 | `RPCResourceMetrics.swift` | JSON-serializable resource-usage snapshot of the running process, backs `GET /metrics` |
@@ -346,6 +370,10 @@ AudioTapLib (CATapDescription)
 ```
 
 **Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
+
+**Restart bounding (issue #588):** a device-change restart on either channel can wedge inside AVFAudio/CoreAudio and never return (e.g. `AVAudioEngine.inputNode` looping on a dangling Bluetooth sub-device held by coreaudiod). `RestartArbiter` bounds how long a single restart attempt may run — attempts carry a generation and run off the main queue, so a result from a wedged attempt that eventually returns is rejected rather than adopted. `CaptureRestartRetryPolicy` bounds how many attempts are made and is shared by both channels. A channel that gives up tells the user directly (`AudioCaptureSession`/`DualSourceRecorder` expose which one) instead of only decaying to silence, which the asymmetric-silence detector would otherwise misreport as a routing/mute problem rather than a channel that is gone for good.
+
+**Safari support (issue #524):** the app-audio tap targets processes via macOS's *responsible-process* attribution (`ProcessResponsibility`) as well as bundle-path enumeration (`ProcessTreeEnumerator`) — Safari's call audio comes from WebKit XPC services outside `Safari.app`, unlike Electron/Chrome helpers that live inside their own bundle.
 
 ### Processing (DualSourceRecorder.stop())
 

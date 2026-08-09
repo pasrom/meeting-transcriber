@@ -81,7 +81,7 @@ flowchart TD
 
 ## Features
 
-- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, plus opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in Chrome) gated behind a recording-consent prompt
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in Chrome) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting)
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
@@ -244,7 +244,7 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser), detection timing, update checks |
+| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
