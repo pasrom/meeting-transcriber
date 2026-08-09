@@ -305,6 +305,28 @@ jobs:
         timeout-minutes: 12
         run: bash scripts/e2e-app.sh --no-build --naming-confirm
 
+      # Escape-dismisses-naming lane (issue #577): the only automated cover for
+      # "the user pressed Escape on the naming dialog". It has to be a real
+      # WindowServer keystroke — a synthetic NSEvent never reaches SwiftUI's exit
+      # command, because keycode 53 is translated only inside
+      # `interpretKeyEvents:`, which no responder in that window calls unless a
+      # name field holds focus. The lane deliberately does not focus one: the
+      # unfocused path is the one the fix nearly shipped broken.
+      # RUNNER PREREQUISITE: the runner shell needs an Accessibility grant, a
+      # one-time setup step alongside the mic / screen-recording grants (see the
+      # e2e-architecture skill). The driver preflights it and fails with its own
+      # message, so a missing grant reads as a missing grant rather than as a
+      # broken dismiss.
+      # PLACEMENT: cheap and non-level-sensitive, so it sits next to the other
+      # naming lane and still ahead of crash-recovery.
+      - name: Run live-recording E2E driver (speaker-naming escape)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # One transcribe + diarize to park the dialog, then a keystroke and two
+        # short polls; 8 min leaves margin without hiding a hang.
+        timeout-minutes: 8
+        run: bash scripts/e2e-app.sh --no-build --naming-escape
+
       # Title-source lane (issue #501): run the simulator with a window title
       # equal to the app name (no usable meeting-window title), then assert the
       # detected meeting title is the clean "MeetingSimulator Call" placeholder,

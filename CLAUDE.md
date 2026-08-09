@@ -282,10 +282,11 @@ Text injection works precisely because insertion *is* interpreted down there.
 Consequence for product code, not just tests: `onExitCommand` alone gives you a
 focus-dependent Escape, so a dialog that must always dismiss on Escape also needs
 a `.keyboardShortcut(.cancelAction)` carrier, which rides the focus-independent
-key-equivalent pass (`SpeakerNamingView.escapeDismissShortcut`). Physical Escape
-therefore stays manual QA — per the rule below, that a `keyboardShortcut` fires is
-framework behavior — while ViewInspector pins the handler wiring and `/state` pins
-the resulting window/job state.
+key-equivalent pass (`SpeakerNamingView.escapeDismissShortcut`). A physical Escape is
+drivable only from outside the process, via a WindowServer keystroke: that is what
+`scripts/e2e-app.sh --naming-escape` does, and it is why that lane (alone) needs an
+Accessibility grant on the runner. Below that layer, ViewInspector pins the handler
+wiring and `/state` pins the resulting window/job state.
 
 **Typing** is automatable via `POST /ui/type` (allowlisted plain text fields only —
 never a `SecureField`). It posts real key events, because an AX set-value does *not*

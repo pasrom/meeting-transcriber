@@ -46,6 +46,15 @@ PRs are excluded from the self-hosted runner.
 - Exercises the production code path end-to-end including TCC, audio
   routing, CATapDescription tap, and the dual-track recorder/diarizer
   handoff.
+- The `--naming-escape` lane is the only automated cover for "the user pressed
+  Escape on the naming dialog" (issue #577, where Escape used to commit the
+  auto-matched names). It parks a job at naming, fronts the app, posts a real
+  Escape via System Events, then asserts *both* halves of the fix: the window is
+  gone from `/state.windows`, and the job is still `speakerNamingPending` — a
+  dismiss, not a Skip. It deliberately does not click into a name field first,
+  because the unfocused path is the one the fix nearly shipped broken (the
+  dialog binds dismiss twice: `onExitCommand` for the focused case, a
+  `.cancelAction` carrier for the rest). Needs the two grants in step 6 below.
 - The `--naming-confirm` lane additionally drives the speaker-naming CONFIRM
   path end-to-end (enqueue a 2-speaker fixture, park at naming instead of
   auto-skipping, `POST /v1/jobs/<id>/naming` an anonymous mapping, then assert
@@ -137,6 +146,53 @@ PRs are excluded from the self-hosted runner.
    so this one is belt-and-suspenders).
 5. Verify Microphone + Screen & System Audio Recording show the dev `.app`
    with the toggle on.
+6. Grant **Accessibility** and **Automation** for the `--naming-escape` lane.
+   Nothing else needs them, and they are of a different shape than the grants
+   above: they key on a *binary path* and a *user account*, not on the app's
+   signing cert, so they survive app rebuilds but not a reinstall that moves the
+   binary.
+
+   The lane needs them because posting a real key event through the WindowServer
+   is the only way to reach SwiftUI's exit command — a synthetic `NSEvent` with
+   keycode 53 never gets there, since the translation to `cancelOperation:`
+   happens inside `interpretKeyEvents:`, which no responder in that window calls
+   unless a name field holds focus.
+
+   **Grant as the runner's own account.** The agent runs as its own user
+   (`runner`, `~/runners/<runner-name>/`), which on this host is also the console
+   user, and TCC is per-user: granting from the account a person normally uses
+   leaves the runner's database untouched, so a hand-run passes while CI keeps
+   skipping.
+
+   **The two do not attribute the same way** — the detail that cost the most
+   time here. Measured on the mini:
+
+   - **Automation** carried over from a hand-run to CI on its own.
+   - **Accessibility** did not. Granting Terminal did not help, nor did granting
+     `/usr/bin/osascript`. TCC attributes it to the *responsible* process, which
+     for a CI job is the service's top-level binary, so the entry that works is
+     the agent's own Node: `~/runners/<runner-name>/externals/node20/bin/node`.
+     The listener binary itself cannot be picked — the Accessibility chooser
+     greys out bare executables — and launchd starts `runsvc.sh` → node → the
+     listener anyway, so node is both the selectable and the correct answer.
+
+   Only the runner carrying the `audio` label serves this workflow, so only that
+   one needs the grant. A second runner given that label would need its own node
+   binary added, since the grant is per path.
+
+   To raise the prompts by hand, run the lane once in the runner's GUI session:
+   `E2E_TCC_PROMPT_TIMEOUT=300 bash scripts/e2e-app.sh --no-build --naming-escape`.
+   The env var widens the preflight's probe window from its 10 s CI default so
+   the prompt stays up long enough to answer; without it the probe gives up
+   first and the prompt goes with it. `tccutil` can only reset, and the MDM/PPPC
+   route is unavailable here (see step 3), so a click is unavoidable.
+
+   Until both are in place the lane **skips loudly and passes**, writing cause
+   and fix to the step summary. Deliberate: an ungranted host would otherwise
+   turn every PR red for a prerequisite unrelated to the change under test, and
+   a silent skip would be worse still, since it would read as coverage. The
+   tolerance is narrow — only the preflight's two missing-grant arms return
+   early; anything failing after them still fails the lane.
 
 After setup, every CI run rebuilds + re-signs the `.app`; the cdhash differs
 per build but the cert leaf SHA-1 doesn't, so TCC keeps the manual grant across

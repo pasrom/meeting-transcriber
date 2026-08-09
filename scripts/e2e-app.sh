@@ -36,6 +36,7 @@ MIC_DEVICE_CHANGE=false  # build the issue #379 fault-injection seam + assert th
 CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered into the pipeline on relaunch (issue #379 part 3)
 REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle and exit — restores a clean bundle after --mic-device-change
 NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via POST /v1/jobs/<id>/naming (see run_naming_confirm)
+NAMING_ESCAPE=false      # press a real Escape on the naming dialog + assert it dismisses without resolving (issue #577)
 TITLE_SOURCE=false       # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
 
 while [ $# -gt 0 ]; do
@@ -53,11 +54,13 @@ while [ $# -gt 0 ]; do
         --crash-recovery)   CRASH_RECOVERY=true ;;
         --redeploy-only)    REDEPLOY_ONLY=true ;;
         --naming-confirm)   NAMING_CONFIRM=true ;;
+        --naming-escape)    NAMING_ESCAPE=true ;;
         --title-source)     TITLE_SOURCE=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
+                  [--naming-escape]
                   [--naming-confirm] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
@@ -147,6 +150,12 @@ fi
 # --naming-confirm is a standalone lane (its own enqueue + poll + confirm flow).
 # Reject combinations up-front so a typo can't silently fall through to another
 # lane's branch in the dispatch chain below.
+if [ "$NAMING_ESCAPE" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$RECORD_ONLY" = true ] \
+    || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] \
+    || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ]; }; then
+    echo "Error: --naming-escape is a standalone lane; incompatible with the other lane flags" >&2
+    exit 2
+fi
 if [ "$NAMING_CONFIRM" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] \
     || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
     || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ]; }; then
@@ -591,8 +600,8 @@ _naming_confirm_cleanup() {
 # Self-heal a dead prior run's DB before anything touches it (CI-gated, all lanes).
 _naming_confirm_self_heal_db
 
-if [ "$NAMING_CONFIRM" = true ]; then
-    log "Enabling naming-confirm lane (diarize on, expected speakers = 2)"
+if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
+    log "Enabling naming lane (diarize on, expected speakers = 2)"
     # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
     # restores each domain to exactly its own pre-lane state.
     _NC_PRE_DIARIZE_STD="$(snapshot_default "$DEV_BUNDLE_ID" diarize)"
@@ -604,7 +613,10 @@ if [ "$NAMING_CONFIRM" = true ]; then
     log "[naming-confirm] pre-lane diarize(std='$_NC_PRE_DIARIZE_STD' ctr='$_NC_PRE_DIARIZE_CTR') numSpeakers(std='$_NC_PRE_NUMSPK_STD' ctr='$_NC_PRE_NUMSPK_CTR')"
     _set_dev_default diarize true bool
     _set_dev_default numSpeakers 2 int
-    if [ "${GITHUB_ACTIONS:-}" != "true" ]; then
+    if [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$NAMING_ESCAPE" != true ]; then
+        # Escape-lane runs never confirm — they dismiss — so nothing reaches
+        # updateSpeakerDB and the warning would be a false alarm on the one run
+        # people are told to perform by hand (the TCC setup run).
         log "[naming-confirm] WARNING: not running under CI. The speaker-DB"
         log "[naming-confirm] snapshot/restore is \$GITHUB_ACTIONS-gated, so this run"
         log "[naming-confirm] WILL enroll the fixture voices into your real"
@@ -700,7 +712,7 @@ on_exit() {
     # Naming-confirm: restore the runner's real speaker DB (CI-gated, no-op
     # locally) and the lane's diarize/numSpeakers overrides so a later run on
     # this host starts from the AppSettings defaults.
-    if [ "$NAMING_CONFIRM" = true ]; then
+    if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
         _naming_confirm_cleanup
     fi
 }
@@ -1192,6 +1204,159 @@ run_crash_recovery() {
 # /v1/jobs/<id>/naming → poll the job to done) and never calls
 # `_poll_for_new_lastjob_terminal`, so the global auto-skip other lanes rely on
 # is untouched.
+# --- Escape-dismisses-naming lane (issue #577) ----------------------------
+# Presses a REAL Escape on the open speaker-naming dialog and asserts the one
+# thing the fix is about: the window goes away and the job does NOT resolve.
+#
+# Why a WindowServer keystroke and not an RPC endpoint. A synthetic NSEvent
+# cannot do this: keycode 53 only becomes `cancelOperation:` inside
+# `interpretKeyEvents:`, which only text-input responders call, so with no name
+# field focused SwiftUI's exit command never sees it. Measured three ways (both
+# NSWindow.sendEvent and NSApplication.sendEvent in the live app, plus xctest)
+# — every one reports a clean dispatch and changes nothing, which is why an
+# in-process endpoint for this was built, found inert, and reverted.
+#
+# Deliberately does NOT click into a name field first. The dialog binds dismiss
+# twice — `onExitCommand` for the focused case and a `.cancelAction` carrier for
+# the rest — and it is the unfocused path that the fix nearly shipped broken,
+# so that is the one worth a lane.
+#
+# RUNNER PREREQUISITE: the shell running this needs an Accessibility grant
+# (System Settings → Privacy & Security → Accessibility), same one-time,
+# cert-independent shape as the existing mic / screen-recording grants. Checked
+# up front so a missing grant fails with its own message instead of looking like
+# a broken dismiss.
+run_naming_escape() {
+    local label="[naming-escape]"
+    [ -f "$DEFAULT_FIXTURE" ] || fail "$label: 2-speaker fixture not found: $DEFAULT_FIXTURE"
+
+    # Preflight both grants this lane needs, because they fail in different ways
+    # and only one of them fails loudly.
+    #
+    # Accessibility (posting keystrokes) refuses with a clear error. Automation
+    # (driving another process through System Events) does not: without it the
+    # AppleEvent simply never gets an answer and osascript sits there for its
+    # default 120 s timeout, which reads as a hung lane rather than a missing
+    # permission. So the probe wraps the *same* operation the lane performs in a
+    # short explicit timeout and treats the timeout as the diagnosis.
+    local probe
+    probe="$(osascript -e 'tell application "System Events" to key code 53' 2>&1)" || true
+    case "$probe" in
+        *"not allowed"*|*"assistive"*|*"1002"*)
+            # SKIP for the same reason the Automation arm skips: this is a host
+            # prerequisite that only a human at the GUI can satisfy, so failing
+            # on it would redden every PR for something unrelated to the change.
+            # The two grants are separate and can be half-configured — Automation
+            # granted, Accessibility not — so both arms need the same treatment
+            # or the lane just moves its red one step later.
+            log "$label: SKIP — this host may drive System Events but not post keystrokes."
+            log "$label: cause: $probe"
+            log "$label: fix: System Settings → Privacy & Security → Accessibility, enable the entry for the shell that runs this lane (it is usually already listed, unchecked)."
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                    echo "### naming-escape lane skipped"
+                    echo
+                    echo "This host has Automation but is missing the **Accessibility** grant, so the real-Escape assertion did not run."
+                    echo "Enable the runner's shell under System Settings → Privacy & Security → Accessibility, then this lane gates normally."
+                } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            return 0 ;;
+    esac
+    # The probe's window is short by default so a missing grant is reported in
+    # seconds rather than waited out. For the one-time setup run it has to be
+    # long enough for a human to answer the prompt it raises, hence the knob:
+    # E2E_TCC_PROMPT_TIMEOUT=300 bash scripts/e2e-app.sh --naming-escape
+    local tcc_timeout="${E2E_TCC_PROMPT_TIMEOUT:-10}"
+    probe="$(osascript -e "with timeout of ${tcc_timeout} seconds" \
+        -e 'tell application "System Events" to get name of first process whose frontmost is true' \
+        -e 'end timeout' 2>&1)" || true
+    case "$probe" in
+        *"timed out"*|*"-1712"*|*"not authori"*|*"-1743"*)
+            # SKIP, not FAIL. The grant can only be given by clicking Allow in
+            # the host's GUI session — no MDM profile here, and tccutil can only
+            # reset — so on an ungranted host this would turn every PR red for a
+            # reason unrelated to the change under test. Failing after this point
+            # still fails: only the missing prerequisite is tolerated, and it is
+            # reported loudly enough that nobody mistakes it for coverage.
+            log "$label: SKIP — this host cannot drive System Events (probe window ${tcc_timeout}s)."
+            log "$label: cause: $probe"
+            log "$label: fix: System Settings → Privacy & Security → Automation, allow the runner's shell to control System Events (and Accessibility for keystrokes). Both prompt on first use, so run this lane once by hand in the GUI session and click Allow."
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+                {
+                    echo "### naming-escape lane skipped"
+                    echo
+                    echo "This host is missing the **Automation** grant, so the real-Escape assertion did not run."
+                    echo "Grant it once in the GUI session (System Settings → Privacy & Security → Automation), then this lane gates normally."
+                } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            return 0 ;;
+    esac
+    log "$label: frontmost process is '$probe'"
+
+    local fixture_dir fixture_copy
+    fixture_dir="$(mktemp -d /tmp/e2e-naming-escape-fixture.XXXXXX)"
+    fixture_copy="$fixture_dir/two_speakers_de.wav"
+    cp "$DEFAULT_FIXTURE" "$fixture_copy" || fail "$label: could not copy fixture to $fixture_copy"
+
+    local enq job_id
+    enq="$(curl --silent --show-error --max-time 10 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -nc --arg p "$fixture_copy" '{paths: [$p]}')" \
+        "$RPC_BASE/v1/jobs" 2>/dev/null || echo '{}')"
+    job_id="$(jq -r '.jobIDs[0] // empty' <<<"$enq")"
+    [ -n "$job_id" ] || fail "$label: POST /v1/jobs did not return a job id (response: $enq)"
+    log "$label: enqueued job $job_id"
+
+    _naming_escape_parked() {
+        [ "$(rpc "/v1/jobs/$job_id" | jq -r '.state // empty')" = "speakerNamingPending" ]
+    }
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _naming_escape_parked \
+        || fail "$label: job $job_id never parked at speaker-naming within ${PIPELINE_TIMEOUT_S}s"
+
+    _naming_window_visible() {
+        [ "$(rpc /state | jq -r '[.windows[] | select(.id == "speaker-naming") | .isVisible] | first // false')" = "true" ]
+    }
+    poll_until 30 2 _naming_window_visible \
+        || fail "$label: naming window never became visible"
+    log "$label: naming window open, job parked"
+
+    # Front the app so the keystroke lands on it, then Escape. No click into the
+    # dialog: the point is that dismiss works without a focused field.
+    local front_err
+    front_err="$(osascript -e 'with timeout of 15 seconds' \
+        -e 'tell application "System Events" to tell process "MeetingTranscriber" to set frontmost to true' \
+        -e 'end timeout' 2>&1)" \
+        || fail "$label: could not front the app: $front_err"
+    sleep 1
+    local key_err
+    key_err="$(osascript -e 'tell application "System Events" to key code 53' 2>&1)" \
+        || fail "$label: could not post Escape: $key_err"
+
+    _naming_window_gone() {
+        ! _naming_window_visible
+    }
+    poll_until 15 1 _naming_window_gone \
+        || fail "$label: Escape did not dismiss the naming window (windows=$(rpc /state | jq -c '[.windows[]|{id,isVisible}]'))"
+    log "$label: window dismissed"
+
+    # The half that separates a dismiss from a Skip: the job must be untouched
+    # and still resolvable. A Skip here would have committed the auto-names and
+    # deleted the naming data.
+    local state
+    state="$(rpc "/v1/jobs/$job_id" | jq -r '.state // empty')"
+    [ "$state" = "speakerNamingPending" ] \
+        || fail "$label: Escape resolved the job (state=$state, expected speakerNamingPending)"
+    log "$label: job still parked — dismiss did not resolve it"
+
+    # Leave nothing pending behind; the dialog would reopen on the next launch.
+    curl --silent --show-error --max-time 10 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" --header "Content-Length: 0" \
+        "$RPC_BASE/v1/jobs/$job_id/naming/skip" >/dev/null 2>&1 || true
+    rm -rf "$fixture_dir"
+    log "$label: PASS"
+}
+
 run_naming_confirm() {
     local label="[naming-confirm]"
     [ -f "$DEFAULT_FIXTURE" ] || fail "$label: 2-speaker fixture not found: $DEFAULT_FIXTURE"
@@ -1537,6 +1702,8 @@ elif [ "$MIC_DEVICE_CHANGE" = true ]; then
     log "[mic-device-change] app survived the injected device-change restart ✅"
 elif [ "$CRASH_RECOVERY" = true ]; then
     run_crash_recovery
+elif [ "$NAMING_ESCAPE" = true ]; then
+    run_naming_escape
 elif [ "$NAMING_CONFIRM" = true ]; then
     run_naming_confirm
 elif [ "$TITLE_SOURCE" = true ]; then
