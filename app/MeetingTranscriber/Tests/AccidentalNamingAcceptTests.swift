@@ -50,8 +50,14 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         /// Mirrors the real `PipelineQueue.generateProtocol`, which flips the job
         /// to `.generatingProtocol` *before* awaiting the LLM
         /// (`PipelineQueue+Stages.swift:664`). That ordering is load-bearing
-        /// here: it is what drains `pendingSpeakerNamingJobs` and therefore what
-        /// closes the naming window.
+        /// here: it is what drains `pendingSpeakerNamingJobs`, the list the
+        /// naming window's auto-close keys off.
+        ///
+        /// Deliberately unconditional, unlike the real path, which has two
+        /// early returns before the flip (a missing transcript file, and a
+        /// protocol factory that turned nil after the probe) — each of which
+        /// leaves the job wedged in `.speakerNamingPending` with its sidecars
+        /// already deleted. Not modelled here; see the wedge test below.
         func generateProtocol(jobID: UUID, transcript _: String, title _: String, protocolsDir _: URL) async {
             generateProtocolCallCount += 1
             jobs[jobID]?.state = .generatingProtocol
@@ -163,12 +169,12 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         XCTAssertEqual(mock.jobs[job.id]?.state, .speakerNamingPending)
         XCTAssertNil(session.speakerNamingDataByJob[job.id])
 
-        // ...but the window does not linger: the job leaves the pending state
-        // as soon as generation *starts*, not when it finishes, because
-        // `generateProtocol` flips to `.generatingProtocol` before awaiting the
-        // LLM. So the spurious window closes again within milliseconds — a
-        // flash, which is why this path cannot explain a window that stayed up
-        // for a minute before closing.
+        // ...but the pending list drains as soon as generation *starts*, not
+        // when it finishes, because `generateProtocol` flips to
+        // `.generatingProtocol` before awaiting the LLM. The window's
+        // auto-close is wired to that list, so this path cannot hold a window
+        // open for the length of an LLM call. (The wiring itself lives in the
+        // scene and is not exercised here — this pins the state it keys off.)
         mock.holdProtocolGeneration = true
         await waitUntil { mock.jobs[job.id]?.state != .speakerNamingPending }
         XCTAssertEqual(mock.jobs[job.id]?.state, .generatingProtocol)
@@ -202,6 +208,10 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         session.cleanupStalePending(pendingJobs: [job], maxAge: -1)
         await waitUntil { mock.jobs[job.id]?.state == .done }
 
+        // An empty append is a no-op, but it serialises behind anything a
+        // regression would already have queued on the actor — so the negative
+        // assertion below fails loudly instead of racing past a pending write.
+        await statsLog.append([])
         let rows = await statsLog.loadRecent(within: 3600)
         XCTAssertTrue(rows.isEmpty, "stale cleanup left \(rows.count) recognition row(s)")
     }
@@ -236,6 +246,45 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         }
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.action, .dismissed)
+    }
+
+    /// `acceptAutoNames` destroys the naming data *before* the protocol task is
+    /// guaranteed to transition the job. Its `canGenerateProtocol` probe checks
+    /// that `transcriptPath` is non-nil but never that the file exists, while
+    /// `generateProtocolForExistingJob` guards on actually reading it. A Skip on
+    /// a job whose transcript went missing therefore deletes every sidecar and
+    /// then returns without a state change, leaving the job wedged in
+    /// `.speakerNamingPending` with nothing left to name and no protocol.
+    ///
+    /// This documents current behaviour, not desired behaviour: a fix that
+    /// makes the cleanup conditional on the transition should flip this test.
+    func testSkipWithMissingTranscriptWedgesJobInPendingState() async throws {
+        let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
+        // Non-nil path, no file behind it — e.g. the transcript was moved or
+        // removed between the pipeline writing it and the user deciding.
+        let missingTranscript = tmp.appendingPathComponent("gone.txt")
+
+        let session = makeSession(outputDir: tmp)
+        let mock = MockDelegate()
+        session.delegate = mock
+
+        let job = pendingJob(transcriptPath: missingTranscript)
+        mock.jobs[job.id] = job
+        session.speakerNamingDataByJob[job.id] = makeNamingData(jobID: job.id)
+
+        session.completeSpeakerNaming(jobID: job.id, result: .skipped)
+
+        // Give the spawned task every chance to transition the job.
+        await waitUntil(
+            { mock.jobs[job.id]?.state != .speakerNamingPending }, timeout: 1,
+        )
+
+        XCTAssertEqual(
+            mock.jobs[job.id]?.state, .speakerNamingPending,
+            "job is stuck: cleanup ran but nothing moved it out of pending",
+        )
+        XCTAssertNil(session.speakerNamingDataByJob[job.id], "naming data is already gone")
+        XCTAssertEqual(mock.generateProtocolCallCount, 0, "no protocol was produced either")
     }
 
     // MARK: - Confirm side effects (why a stray Return is worse)
@@ -292,7 +341,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
     /// The recent-samples FIFO is appended unconditionally, and matching takes
     /// the *closer* of the two anchors — so a short, wrong-voice confirmation
     /// still becomes a live match anchor for subsequent meetings.
-    func testShortConfirmationStillEntersSampleFIFO() {
+    func testShortConfirmationStillEntersSampleFIFO() throws {
         let existing = StoredSpeaker(
             name: "Alice",
             embeddings: [[1, 0, 0]],
@@ -314,5 +363,14 @@ final class AccidentalNamingAcceptTests: XCTestCase {
             updated.embeddings.contains(wrongVoice),
             "short confirmation still lands in the FIFO the matcher reads",
         )
+
+        // Storage alone would be harmless — the damage is that `match` reads the
+        // FIFO as a second anchor and takes whichever is closer. The centroid
+        // stayed clean and is orthogonal to the query, yet the polluted sample
+        // still auto-names a future wrong-voice speaker "Alice".
+        let tmp = try makeTempDirectory(prefix: "AccidentalNamingAcceptTests")
+        let matcher = SpeakerMatcher(dbPath: tmp.appendingPathComponent("speakers.json"))
+        matcher.saveDB([updated])
+        XCTAssertEqual(matcher.match(embeddings: ["S0": wrongVoice])["S0"], "Alice")
     }
 }
