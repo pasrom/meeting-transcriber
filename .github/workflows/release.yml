@@ -252,7 +252,9 @@ jobs:
 
           DMG=".build/release/MeetingTranscriber-${VERSION}.dmg"
 
-          # Upload DMG to public tap repo (main repo is private)
+          # Upload the DMG to the tap repo as well. Note the beta cask's url
+          # still points at the MAIN repo's release, so beta installs depend on
+          # that repo staying public — a mismatch worth normalising separately.
           PRERELEASE_FLAG=""
           [ "$PRERELEASE" = "true" ] && PRERELEASE_FLAG="--prerelease"
 
@@ -268,29 +270,115 @@ jobs:
           git clone https://x-access-token:${GH_TOKEN}@github.com/pasrom/homebrew-meeting-transcriber.git /tmp/tap
           cd /tmp/tap
 
+          BETA_CASK="Casks/meeting-transcriber@beta.rb"
+          STABLE_CASK="Casks/meeting-transcriber.rb"
+
+          # Seed a cask from the source repo if the tap does not carry it yet.
+          seed_cask() {
+            if [ ! -f "$1" ]; then
+              mkdir -p "$(dirname "$1")"
+              cp "${GITHUB_WORKSPACE}/$1" "$1"
+            fi
+          }
+
+          # Stages what it writes: a stable release can now touch two casks, so
+          # the commit below stages nothing itself and has no single "the cask"
+          # to name.
+          write_cask() {
+            seed_cask "$1"
+            sed -i '' "s/version \".*\"/version \"${VERSION}\"/" "$1"
+            sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" "$1"
+            git add "$1"
+            echo "Updated Cask formula ($1):"
+            cat "$1"
+          }
+
           if [ "$PRERELEASE" = "true" ]; then
-            CASK="Casks/meeting-transcriber@beta.rb"
+            # A pre-release only ever moves the beta channel.
+            write_cask "$BETA_CASK"
           else
-            CASK="Casks/meeting-transcriber.rb"
+            write_cask "$STABLE_CASK"
+
+            # A stable release also carries the beta channel forward, but only
+            # when it is actually newer. Without this the beta cask freezes at
+            # the last RC: a cycle that ships without one (0.6.0 → 0.7.0 both
+            # did) leaves beta users on older software than stable ones, with
+            # `brew upgrade` reporting them up to date. The two casks
+            # `conflicts_with` each other, so they cannot even install stable
+            # alongside to escape it.
+            #
+            # The version guard is the load-bearing half. Mid-cycle the beta
+            # channel legitimately runs ahead — with 0.8.0-rc1 published, a
+            # 0.7.1 hotfix must not drag beta backwards.
+            #
+            # `sort -V` alone cannot decide this: it orders 0.8.0-rc1 *after*
+            # 0.8.0, so the RC-to-stable step within one version — the most
+            # common case there is — would read as "beta is ahead" and strand
+            # exactly the users this change is for. So compare the release core
+            # with sort -V, and settle an equal core by SemVer's rule that a
+            # version without a pre-release suffix outranks one with it.
+            # Call this only as an `if`/`elif` condition. errexit is suspended
+            # for a function invoked that way, which is what lets the `[` tests
+            # below answer "false" instead of killing the step; a bare call
+            # would fail the release on every "leave alone" answer.
+            stable_is_newer() {
+              local beta="$1" stable="$2"
+              [ "$beta" = "$stable" ] && return 1
+              local beta_core="${beta%%-*}" stable_core="${stable%%-*}"
+              local beta_pre="" stable_pre=""
+              [ "$beta" != "$beta_core" ] && beta_pre="${beta#*-}"
+              [ "$stable" != "$stable_core" ] && stable_pre="${stable#*-}"
+              if [ "$beta_core" != "$stable_core" ]; then
+                [ "$(printf '%s\n%s\n' "$beta_core" "$stable_core" | sort -V | tail -1)" = "$stable_core" ]
+                return $?
+              fi
+              [ -z "$stable_pre" ] && [ -n "$beta_pre" ] && return 0
+              [ -z "$beta_pre" ] && return 1
+              [ "$(printf '%s\n%s\n' "$beta_pre" "$stable_pre" | sort -V | tail -1)" = "$stable_pre" ]
+            }
+
+            # Deliberately does NOT seed before reading. The source-repo file is
+            # a template carrying a placeholder version and sha, so seeding first
+            # would compare against a version that never shipped — and for any
+            # stable below the template's number the comparison says "beta is
+            # ahead", leaving a freshly seeded placeholder in the tree pointing
+            # at a release that does not exist. A tap without the cask has no
+            # beta users to strand, so write it outright.
+            if [ ! -f "$BETA_CASK" ]; then
+              echo "Tap carries no beta cask yet; seeding it at ${VERSION}."
+              write_cask "$BETA_CASK"
+            else
+              BETA_VERSION="$(sed -n 's/^ *version "\(.*\)"/\1/p' "$BETA_CASK" | head -1)"
+              if [ -z "$BETA_VERSION" ]; then
+                # Discard before rewriting. `write_cask` repairs by substituting
+                # the `version "..."` line, and the only way to reach here is
+                # that no such line matched — so stamping in place would be a
+                # silent no-op that commits the corrupt file and logs success.
+                # Dropping it first makes `seed_cask` restore a well-formed
+                # template, which then gets stamped.
+                echo "WARNING: could not read a version out of ${BETA_CASK}; restoring it from the template at ${VERSION}."
+                rm -f "$BETA_CASK"
+                write_cask "$BETA_CASK"
+              elif stable_is_newer "$BETA_VERSION" "$VERSION"; then
+                echo "Stable ${VERSION} is newer than beta ${BETA_VERSION}; carrying the beta channel forward."
+                write_cask "$BETA_CASK"
+              else
+                echo "Beta ${BETA_VERSION} is not behind stable ${VERSION}; leaving the beta channel alone."
+              fi
+            fi
           fi
-
-          # Seed beta cask from source repo if it doesn't exist in tap yet
-          if [ ! -f "$CASK" ]; then
-            mkdir -p "$(dirname "$CASK")"
-            cp "${GITHUB_WORKSPACE}/$CASK" "$CASK"
-          fi
-
-          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" "$CASK"
-          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA}\"/" "$CASK"
-
-          echo "Updated Cask formula ($CASK):"
-          cat "$CASK"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "$CASK"
-          git commit -m "Update $(basename "$CASK" .rb) to v${VERSION}"
-          git push
+          # `write_cask` already staged whatever it touched. A re-run of an
+          # already-successful release rewrites the same values, so stage
+          # emptiness is the normal no-op case, not a failure.
+          if git diff --cached --quiet; then
+            echo "Cask formulae already at v${VERSION}; nothing to commit."
+          else
+            git commit -m "Update casks to v${VERSION}"
+            git push
+          fi
 
       - name: Cleanup keychain
         if: always() && steps.dev-id.outputs.keychain-path != ''
