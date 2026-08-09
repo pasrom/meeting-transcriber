@@ -1,4 +1,6 @@
 @testable import MeetingTranscriber
+import SwiftUI
+import ViewInspector
 import XCTest
 
 /// Pins the ways speaker naming can resolve *without* a deliberate user
@@ -372,5 +374,40 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         let matcher = SpeakerMatcher(dbPath: tmp.appendingPathComponent("speakers.json"))
         matcher.saveDB([updated])
         XCTAssertEqual(matcher.match(embeddings: ["S0": wrongVoice])["S0"], "Alice")
+    }
+
+    // MARK: - Escape dismisses, never resolves
+
+    /// The load-bearing guarantee of the fix: the Escape handler runs the host's
+    /// dismiss action and never resolves the job. Skip used to be bound to
+    /// Escape, so this is the regression that must stay red if anyone rebinds
+    /// it.
+    func testExitCommandDismissesWithoutResolvingTheJob() throws {
+        var dismissed = 0
+        var results: [PipelineQueue.SpeakerNamingResult] = []
+        let view = SpeakerNamingView(
+            data: makeNamingData(jobID: UUID()),
+            gracePeriod: 0,
+            onDismissRequest: { dismissed += 1 },
+            onComplete: { results.append($0) },
+        )
+
+        try view.inspect().vStack().callOnExitCommand()
+
+        XCTAssertEqual(dismissed, 1)
+        XCTAssertTrue(results.isEmpty, "Escape must never resolve the job")
+    }
+
+    /// A host with no window to close installs no handler at all, so Escape
+    /// keeps bubbling. Voice enrollment renders this view inside a sheet, where
+    /// swallowing Escape would break sheet-dismisses-on-Escape for exactly one
+    /// stage of the flow.
+    func testExitCommandIsNotInstalledWithoutADismissHandler() throws {
+        let view = SpeakerNamingView(
+            data: makeNamingData(jobID: UUID()),
+            gracePeriod: 0,
+        ) { _ in }
+
+        XCTAssertThrowsError(try view.inspect().vStack().callOnExitCommand())
     }
 }

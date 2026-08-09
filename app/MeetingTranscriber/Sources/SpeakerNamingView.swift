@@ -74,6 +74,17 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// mode picker. `nil` for legacy jobs without a recorded mode — the
     /// picker initialises to `.offline` in that case.
     let currentDiarizerMode: DiarizerMode?
+    /// Number of jobs currently waiting for speaker naming. Part of the grace
+    /// gate's identity, not display state: a job arriving here force-activates
+    /// the app, so the buttons must re-lock even though the displayed data is
+    /// unchanged. See `NamingGraceKey`.
+    let pendingJobCount: Int
+    /// Invoked when the user asks to dismiss the dialog (Escape). Closing is a
+    /// no-op for the job — it stays `.speakerNamingPending` and can be reopened
+    /// from the menu bar — which is what makes it a safe thing to bind a stray
+    /// keystroke to. `nil` for hosts with no window to close (voice enrollment
+    /// renders this view inline), where Escape stays inert.
+    let onDismissRequest: (() -> Void)?
     let onComplete: (PipelineQueue.SpeakerNamingResult) -> Void
 
     /// Window after the dialog appears (or after Re-run produces a fresh `data.revision`)
@@ -91,13 +102,17 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         data: PipelineQueue.SpeakerNamingData,
         knownSpeakerNames: [String] = [],
         currentDiarizerMode: DiarizerMode? = nil,
+        pendingJobCount: Int = 1,
         gracePeriod: TimeInterval = Self.defaultKeyboardGracePeriod,
+        onDismissRequest: (() -> Void)? = nil,
         onComplete: @escaping (PipelineQueue.SpeakerNamingResult) -> Void,
     ) {
         self.data = data
         self.knownSpeakerNames = knownSpeakerNames
         self.currentDiarizerMode = currentDiarizerMode
+        self.pendingJobCount = pendingJobCount
         self.gracePeriod = gracePeriod
+        self.onDismissRequest = onDismissRequest
         self.onComplete = onComplete
         // Seed `names` and `rerunCount` synchronously so the view renders
         // its chip rows on first body evaluation (the chips depend on
@@ -128,6 +143,11 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// Re-run Stepper range for the given mode.
     static func rerunCountRange(for mode: DiarizerMode) -> ClosedRange<Int> {
         1 ... mode.speakerCap
+    }
+
+    /// Identity of the current grace window. Changing it re-locks the buttons.
+    var graceKey: NamingGraceKey {
+        NamingGraceKey(revision: data.revision, pendingJobCount: pendingJobCount)
     }
 
     @State private var keyboardGracePeriodActive: Bool = true
@@ -259,12 +279,18 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             rerunSection
 
             HStack(spacing: 12) {
+                // Deliberately no `.keyboardShortcut(.escape)`. Skip accepts the
+                // matcher's guesses and then deletes the naming data, so it is
+                // irreversible — while Escape means "dismiss this" to everyone
+                // who has ever used a Mac. Binding the two made a dismissal
+                // silently commit a low-confidence auto-match (issue #577).
+                // Escape now closes the window instead (see `onDismissRequest`),
+                // which leaves the job pending and re-openable.
                 Button("Skip") {
                     guard completedJobID != data.jobID else { return }
                     completedJobID = data.jobID
                     onComplete(.skipped)
                 }
-                .keyboardShortcut(.escape)
                 .disabled(keyboardGracePeriodActive)
                 .accessibilityIdentifier(A11yID.skipButton)
 
@@ -279,6 +305,8 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 .accessibilityIdentifier(A11yID.confirmButton)
             }
             .padding(.bottom, 8)
+
+            escapeDismissShortcut
         }
         .padding()
         .frame(minWidth: 400, maxHeight: 700)
@@ -292,11 +320,29 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         .onChange(of: data.revision) { _, _ in
             resetForCurrentPresentation()
         }
+        // Escape dismisses the window rather than resolving the job. The
+        // optional is passed straight through, so a host that supplies none
+        // installs no handler at all and Escape keeps bubbling — the voice
+        // enrollment flow renders this view in a sheet, where swallowing Escape
+        // would silently break sheet-dismisses-on-Escape for one stage only.
+        //
+        // `onExitCommand` alone is not enough, which is easy to miss: it only
+        // sees Escape once something translated the keystroke into
+        // `cancelOperation:`, and that translation happens in
+        // `interpretKeyEvents:`, which only text-input responders call. With no
+        // name field focused, AppKit's fallback emits `cancel:` instead and the
+        // handler never runs. The destructive binding this replaced did not have
+        // that gap — a `keyboardShortcut` rides the key-equivalent pass, which
+        // fires regardless of focus, which is exactly how a stray Escape reached
+        // Skip in the first place. So the dismiss is bound both ways (see
+        // `escapeDismissShortcut`) rather than trading one blind spot for another.
+        .onExitCommand(perform: onDismissRequest)
         // Keyboard-grace gate: keep Confirm + Skip disabled for `gracePeriod`
-        // seconds after the dialog appears AND after each Re-run produces a
-        // fresh `data.revision`. The `task(id:)` cancels + restarts when
-        // `data.revision` changes, re-locking the buttons each time.
-        .task(id: data.revision) {
+        // seconds after the dialog appears, after each Re-run produces a fresh
+        // `data.revision`, and whenever another job reaches naming and steals
+        // focus. The `task(id:)` cancels + restarts when `graceKey` changes,
+        // re-locking the buttons each time.
+        .task(id: graceKey) {
             guard gracePeriod > 0 else {
                 keyboardGracePeriodActive = false
                 return
@@ -311,6 +357,26 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         // the window (Cmd+Q, click X, app quit) leaves the job in
         // .speakerNamingPending so the user can re-open later. Explicit Skip
         // button still calls onComplete(.skipped).
+    }
+
+    /// Zero-sized carrier for the Escape key equivalent, present only when the
+    /// host gave us something to dismiss.
+    ///
+    /// A button rather than another view modifier because `.cancelAction` is the
+    /// documented way onto the key-equivalent pass, and that pass is what makes
+    /// Escape work with nothing focused. Not user-visible: the dialog's
+    /// affordances stay Skip and Confirm, and closing is already reachable by the
+    /// window's close button. Deliberately *not* behind the keyboard-grace gate —
+    /// dismissing changes nothing about the job, so there is no accident to
+    /// protect against, which is the whole reason Escape was moved here.
+    @ViewBuilder private var escapeDismissShortcut: some View {
+        if let onDismissRequest {
+            Button("", action: onDismissRequest)
+                .keyboardShortcut(.cancelAction)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Re-seed all per-presentation @State from the current `data`. Called

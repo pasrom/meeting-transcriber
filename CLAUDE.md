@@ -270,6 +270,23 @@ fires). **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panel
 (NSOpenPanel/NSAlert), TCC prompts, drag/focus order, visual appearance beyond dev-only
 snapshots.
 
+**Escape resists injection, and the reason shapes how Escape must be bound.** A
+hand-built `NSEvent` with keycode 53 does not reach SwiftUI's `onExitCommand`:
+tried via `NSWindow.sendEvent` in xctest, and in the live app via both
+`NSWindow.sendEvent` and `NSApplication.sendEvent` with the window made key and
+the app activated — all report a clean dispatch and change nothing. The
+mechanism: keycode 53 becomes `cancelOperation:` only inside
+`interpretKeyEvents:`, which only text-input responders call, so with no field
+focused AppKit's fallback emits `cancel:` instead, which `onExitCommand` ignores.
+Text injection works precisely because insertion *is* interpreted down there.
+Consequence for product code, not just tests: `onExitCommand` alone gives you a
+focus-dependent Escape, so a dialog that must always dismiss on Escape also needs
+a `.keyboardShortcut(.cancelAction)` carrier, which rides the focus-independent
+key-equivalent pass (`SpeakerNamingView.escapeDismissShortcut`). Physical Escape
+therefore stays manual QA — per the rule below, that a `keyboardShortcut` fires is
+framework behavior — while ViewInspector pins the handler wiring and `/state` pins
+the resulting window/job state.
+
 **Typing** is automatable via `POST /ui/type` (allowlisted plain text fields only —
 never a `SecureField`). It posts real key events, because an AX set-value does *not*
 fire the SwiftUI binding; that asymmetry is why there is no `/ui/setValue`. Pass

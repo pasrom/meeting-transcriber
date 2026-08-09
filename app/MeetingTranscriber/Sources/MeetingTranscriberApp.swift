@@ -283,15 +283,18 @@ struct MeetingTranscriberApp: App {
             knownSpeakerNames: appState.pipeline.queue.knownSpeakerNames,
             currentDiarizerMode: appState.pipeline.queue.usedDiarizerMode(forJobID: data.jobID)
                 ?? appState.settings.diarizerMode,
-        ) { result in
-            appState.pipeline.queue.completeSpeakerNaming(jobID: data.jobID, result: result)
-            if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
-                closeWindow(id: "speaker-naming")
-            } else {
-                appState.selectedNamingJobID =
-                    appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
-            }
-        }
+            pendingJobCount: appState.pipeline.queue.pendingSpeakerNamingJobs.count,
+            onDismissRequest: { closeWindow(id: "speaker-naming") },
+            onComplete: { result in
+                appState.pipeline.queue.completeSpeakerNaming(jobID: data.jobID, result: result)
+                if appState.pipeline.queue.pendingSpeakerNamingJobs.isEmpty {
+                    closeWindow(id: "speaker-naming")
+                } else {
+                    appState.selectedNamingJobID =
+                        appState.pipeline.queue.pendingSpeakerNamingJobs.first?.id
+                }
+            },
+        )
     }
 
     // MARK: - UI Actions
