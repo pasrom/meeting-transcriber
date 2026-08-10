@@ -238,6 +238,18 @@ extension PipelineQueue {
             try await appResample
             try await micResample
 
+            // Gate mic_16k here so transcription, mic diarization, and the
+            // persisted `_mic_16k.wav` (late re-diarization) all see the
+            // cleaned track — rationale on `dualTrackMicEchoSuppressionEnabled`.
+            if micEchoSuppressionEnabled {
+                try AudioMixer.suppressEchoInFile(
+                    appURL: app16k,
+                    micURL: mic16k,
+                    sampleRate: AudioConstants.targetSampleRate,
+                    micDelay: ctx.micDelay,
+                )
+            }
+
             // Transcribe each track separately
             let appSegments = try await engine.transcribeSegments(audioPath: app16k)
             let micSegments = try await engine.transcribeSegments(audioPath: mic16k)

@@ -110,6 +110,7 @@ final class PipelineController {
             diarizeEnabled: settings.diarize,
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
+            micEchoSuppressionEnabled: settings.dualTrackMicEchoSuppressionEnabled,
             speakerMatcherFactory: { SpeakerMatcher() },
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(),

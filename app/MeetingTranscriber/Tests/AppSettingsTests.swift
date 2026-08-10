@@ -307,6 +307,17 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "includePreReleases"))
     }
 
+    // MARK: - Dual-track mic echo suppression
+
+    func test_dualTrackMicEchoSuppressionEnabled_defaultsToFalse() {
+        XCTAssertFalse(settings.dualTrackMicEchoSuppressionEnabled)
+    }
+
+    func test_dualTrackMicEchoSuppressionEnabled_persistsToUserDefaults() {
+        settings.dualTrackMicEchoSuppressionEnabled = true
+        XCTAssertTrue(defaults.bool(forKey: "dualTrackMicEchoSuppressionEnabled"))
+    }
+
     // MARK: - Record Only
 
     func test_recordOnly_defaultsToFalse() {
