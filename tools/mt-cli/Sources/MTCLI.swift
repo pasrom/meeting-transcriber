@@ -11,9 +11,49 @@ struct MTCLI: AsyncParsableCommand {
             State.self, Healthz.self, Screenshot.self, UITree.self, UIPress.self,
             OpenSettings.self, CloseSettings.self, ConfirmBrowserConsent.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
-            WavVerdictCommand.self,
+            WavVerdictCommand.self, Watch.self,
         ],
     )
+}
+
+/// `mt-cli watch [status|start|stop|toggle]` — the scriptable surface behind a
+/// hotkey, a Shortcut or a Stream Deck key.
+///
+/// `start`/`stop` are offered alongside `toggle` on purpose: a button press
+/// expresses a desired end state, and any external controller's view of the app
+/// is slightly stale. A blind toggle after a meeting already ended does exactly
+/// the wrong thing and stays inverted; the idempotent verbs converge instead.
+///
+/// Every form prints the resulting `/v1/watch` status, so a caller can redraw
+/// from the response rather than racing a follow-up poll. A refusal (409, a
+/// manual recording owns the loop) or a failed postcondition (503) surfaces as
+/// a thrown `RPCError.http` — non-zero exit with the JSON body in the message.
+struct Watch: AsyncParsableCommand {
+    enum Action: String, ExpressibleByArgument, CaseIterable {
+        case status
+        case start
+        case stop
+        case toggle
+    }
+
+    static let configuration = CommandConfiguration(
+        abstract: "Read or change meeting watching. Prints the resulting status as JSON.",
+    )
+
+    @Argument(help: "status (default), start, stop, or toggle.")
+    var action: Action = .status
+
+    func run() async throws {
+        let client = try RPCClient.loadDefault()
+        let data = action == .status
+            ? try await client.get("/v1/watch")
+            : try await client.post(
+                "/v1/watch", json: ["action": action.rawValue],
+                timeout: RPCClient.watchControlTimeoutSeconds,
+            )
+        FileHandle.standardOutput.write(data)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+    }
 }
 
 struct State: AsyncParsableCommand {

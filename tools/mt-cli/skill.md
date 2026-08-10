@@ -16,6 +16,7 @@ machen" / "ist das im Menü sichtbar".
 - You want to see what the user sees → `mt-cli screenshot /tmp/x.png`, then Read it
 - You want to assert on UI structure (a Settings section exists, a control is enabled) without eyeballing a screenshot → `mt-cli ui-tree --window settings`
 - You want to drive a control (press a toggle/button) and check the effect → `mt-cli ui-press <identifier> --window settings`, then `mt-cli state`
+- You want to start or stop meeting watching without touching the menu bar → `mt-cli watch start` / `mt-cli watch stop` (prefer these over `toggle`, which flips blind)
 - You're debugging a UI bug and would otherwise have to ask the user to describe state
 - You're verifying a fix end-to-end after editing code
 
@@ -47,6 +48,8 @@ The app writes a 64-hex bearer token to
 | `GET /screenshot`   | `mt-cli screenshot` | PNG of frontmost window            |
 | `GET /ui/tree`      | `mt-cli ui-tree`    | Accessibility tree JSON (allowlisted windows) |
 | `POST /ui/press`    | `mt-cli ui-press`   | Press a control by identifier (allowlisted windows); assert via `state` |
+| `GET /v1/watch`     | `mt-cli watch`      | Whether the app is watching for meetings (`WatchStatusDTO`) |
+| `POST /v1/watch`    | `mt-cli watch start\|stop\|toggle` | Control watching; returns the resulting `WatchStatusDTO` |
 
 ## Build mt-cli
 

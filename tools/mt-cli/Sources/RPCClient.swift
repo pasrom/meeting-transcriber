@@ -52,6 +52,14 @@ struct RPCClient {
     /// the rest of the API is fast.
     static let screenshotTimeoutSeconds: TimeInterval = 15
 
+    /// `POST /v1/watch` blocks until the start settles — mic gate, engine sync,
+    /// queue rebuild, loop construction — so the "rest of the API is fast"
+    /// premise behind `requestTimeoutSeconds` does not hold for it. Set above
+    /// the server's own 20 s join bound so the server always answers first: a
+    /// client-side timeout would report failure for a start that then succeeds
+    /// anyway, since the work continues after the caller disconnects.
+    static let watchControlTimeoutSeconds: TimeInterval = 30
+
     static func loadDefault() throws -> Self {
         let url = defaultTokenURL
         guard let data = try? Data(contentsOf: url),
