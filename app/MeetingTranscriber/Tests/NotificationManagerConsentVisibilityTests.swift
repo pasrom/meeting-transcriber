@@ -91,7 +91,7 @@ final class NotificationManagerConsentVisibilityTests: XCTestCase {
     /// report "not asked" rather than reach for one.
     func test_appNotifyingDefault_reportsNotDetermined() async {
         struct BareNotifier: AppNotifying {
-            func notify(title _: String, body _: String) {}
+            func notify(title _: String, body _: String, urgency _: NotificationUrgency) {}
         }
         let visibility = await BareNotifier().notificationVisibility()
         XCTAssertEqual(visibility, .unread)

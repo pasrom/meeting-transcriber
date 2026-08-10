@@ -107,6 +107,9 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.micSilentActive)
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertTrue(notifier.calls[0].body.lowercased().contains("app-audio"))
+        // Wiring: the policy from `captureAlert` reaches the notifier. The
+        // policy itself is table-tested above.
+        XCTAssertEqual(notifier.calls.first?.urgency, .timeSensitive)
     }
 
     // MARK: - Latch + recovery
@@ -228,6 +231,30 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.appSilentActive)
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertEqual(notifier.calls[0].title, "Recording Appears Silent")
+        // Suppressible on purpose: a waiting room looks exactly like this.
+        XCTAssertEqual(notifier.calls.first?.urgency, .standard)
+    }
+
+    // MARK: - Focus / Do Not Disturb
+
+    /// The whole escalation policy, on the pure function. Rationale for each row
+    /// is in `ChannelHealthController.captureAlert`; what matters here is that
+    /// only the two cases without a benign reading break through, and that the
+    /// app + gaveUp combination no scenario test reaches is pinned too.
+    func testOnlyUnrecoverableCaptureFailuresBreakThroughFocus() {
+        let cases: [(channel: AudioChannel, gaveUp: Bool, expected: NotificationUrgency)] = [
+            (.app, false, .timeSensitive), // far side dead while you talk
+            (.mic, false, .standard), // looks like mute, or "No Microphone"
+            (.mic, true, .timeSensitive), // restart abandoned, track gone
+            (.app, true, .timeSensitive),
+        ]
+        for row in cases {
+            XCTAssertEqual(
+                ChannelHealthController.captureAlert(channel: row.channel, gaveUp: row.gaveUp).urgency,
+                row.expected,
+                "channel=\(row.channel) gaveUp=\(row.gaveUp)",
+            )
+        }
     }
 
     func testRecordingSilentRecoversWhenAnyChannelReturnsToSpeech() {

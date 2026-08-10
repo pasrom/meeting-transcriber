@@ -11,7 +11,13 @@ import UserNotifications
 /// Real implementation: `NotificationManager` (AppKit, used in menu bar app).
 /// Test implementation: `RecordingNotifier` (records calls, no side effects).
 protocol AppNotifying {
-    func notify(title: String, body: String)
+    /// The urgency is part of the requirement, not a defaulted convenience, so
+    /// that a conformer which ignores it has to say so. The reverse shape (a
+    /// 2-arg requirement plus a defaulted 3-arg extension) compiles just as
+    /// well and silently downgrades every time-sensitive notification a
+    /// forgetful conformer receives, which is the exact failure this urgency
+    /// exists to prevent. `notify(title:body:)` lives in the extension below.
+    func notify(title: String, body: String, urgency: NotificationUrgency)
 
     /// Ask the user whether to record a just-detected browser meeting (issue
     /// #503); true = record. `@MainActor` — the real prompt is UI. Defaults to
@@ -61,6 +67,13 @@ protocol AppNotifying {
 #endif
 
 extension AppNotifying {
+    /// Convenience for the majority of notifications, which have no deadline.
+    /// Static dispatch on purpose: it cannot be witnessed, so it can never
+    /// become a lossy override of the requirement above.
+    func notify(title: String, body: String) {
+        notify(title: title, body: body, urgency: .standard)
+    }
+
     // swiftlint:disable async_without_await
     /// Deny by default — only `NotificationManager` shows a real prompt, and
     /// "we could not ask" must never record.
@@ -547,5 +560,5 @@ final class AppState {
 
 /// No-op notifier for CLI targets and tests that don't need notifications.
 struct SilentNotifier: AppNotifying {
-    func notify(title _: String, body _: String) {}
+    func notify(title _: String, body _: String, urgency _: NotificationUrgency) {}
 }

@@ -38,7 +38,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
             self.answer = answer
         }
 
-        func notify(title _: String, body _: String) {}
+        func notify(title _: String, body _: String, urgency _: NotificationUrgency) {}
 
         // swiftlint:disable async_without_await
         @MainActor
@@ -82,7 +82,7 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
             continuation != nil
         }
 
-        func notify(title _: String, body _: String) {}
+        func notify(title _: String, body _: String, urgency _: NotificationUrgency) {}
 
         @MainActor
         func askToRecord(title _: String, body _: String) async -> ConsentAnswer {

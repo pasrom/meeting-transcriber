@@ -8,14 +8,14 @@
 /// the 600-line `file_length` cap: this double grows whenever `AppNotifying`
 /// does, so it is the piece under pressure.
 final class RecordingNotifier: AppNotifying {
-    private(set) var calls: [(title: String, body: String)] = []
+    private(set) var calls: [(title: String, body: String, urgency: NotificationUrgency)] = []
 
     /// What `notificationVisibility()` reports. Defaults to the protocol's
     /// own default so existing users of this double are unaffected.
     var reportedVisibility: NotificationVisibility = .unread
 
-    func notify(title: String, body: String) {
-        calls.append((title: title, body: body))
+    func notify(title: String, body: String, urgency: NotificationUrgency) {
+        calls.append((title: title, body: body, urgency: urgency))
     }
 
     // swiftlint:disable async_without_await

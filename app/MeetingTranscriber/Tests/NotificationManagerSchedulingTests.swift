@@ -153,6 +153,27 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertEqual(fake.removedIdentifiers, [posted.identifier])
     }
 
+    // MARK: - urgency
+
+    /// The mapping that makes a capture failure survive Do Not Disturb. The
+    /// entitlement that lets macOS honour it is injected at signing time; this
+    /// pins the level the app asks for, which is the half we control.
+    func testTimeSensitiveUrgencyPostsAtThatInterruptionLevel() {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        manager.notify(title: "Capture Channel Silent", body: "x", urgency: .timeSensitive)
+        XCTAssertEqual(fake.added.first?.content.interruptionLevel, .timeSensitive)
+    }
+
+    /// The counterpart, so raising one notification cannot quietly raise all of
+    /// them: everything posted without an explicit urgency stays suppressible.
+    func testPlainNotifyStaysActive() {
+        let (manager, fake) = makeManager()
+        manager.setUp()
+        manager.notify(title: "Protocol Ready", body: "x")
+        XCTAssertEqual(fake.added.first?.content.interruptionLevel, .active)
+    }
+
     // MARK: - pure content builder
 
     func testMakeNotificationContentMapsFields() {
@@ -161,9 +182,10 @@ final class NotificationManagerSchedulingTests: XCTestCase {
         XCTAssertEqual(content.body, "B")
         XCTAssertEqual(content.categoryIdentifier, "CAT")
         XCTAssertEqual(content.sound, .default)
-        // Only the consent prompt overrides this. A transcript-ready or
-        // permission-problem notice has no deadline and must not break through
-        // the user's Focus, so the default has to stay `.active`.
+        // Overridden only by the consent prompt and the capture-failure
+        // notices. A transcript-ready or permission-problem notice has no
+        // deadline and must not break through the user's Focus, so the default
+        // has to stay `.active`.
         XCTAssertEqual(content.interruptionLevel, .active)
     }
 

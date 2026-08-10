@@ -157,12 +157,8 @@ final class ChannelHealthController {
                 micSilentActive = false
             }
             let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
-            notifier.notify(
-                title: gaveUp ? "Capture Channel Lost" : "Capture Channel Silent",
-                body: gaveUp
-                    ? Self.captureGaveUpMessage(for: channel)
-                    : Self.asymmetricSilenceMessage(for: channel),
-            )
+            let alert = Self.captureAlert(channel: channel, gaveUp: gaveUp)
+            notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
 
         case .recovered:
             micSilentActive = false
@@ -179,6 +175,10 @@ final class ChannelHealthController {
             notifier.notify(
                 title: "Recording Appears Silent",
                 body: Self.silentRecordingMessage,
+                // Suppressible on purpose, see `captureAlert`: an auto-detected
+                // recording starts when the detector confirms rather than when
+                // anyone speaks, so a waiting room looks exactly like this.
+                urgency: .standard,
             )
 
         case .recovered:
@@ -189,6 +189,39 @@ final class ChannelHealthController {
         }
 
         return event
+    }
+
+    /// The whole notification for an asymmetric-silence episode: title, body and
+    /// whether it may break through a Focus mode. One function because all three
+    /// answer the same two questions, and three parallel branches on
+    /// `(channel, gaveUp)` would be free to drift into a "Capture Channel Lost"
+    /// title over a mere-silence body.
+    ///
+    /// On the urgency the test is not "how bad is this" but "does this have a
+    /// benign reading". Piercing Do Not Disturb is audible and interrupts a
+    /// meeting in progress, so it is only defensible where the answer is no: a
+    /// dead app-audio channel while the mic carries speech (the far side of a
+    /// call does not go digitally silent while you are talking, and this is the
+    /// case that cost a 62-minute interview 59 minutes of the other
+    /// participant), and an abandoned restart on either channel (the track
+    /// cannot come back on its own).
+    ///
+    /// A silent mic stays suppressible: that is what muting yourself looks like,
+    /// named as an intended trigger in `SettingsHelp.silentCaptureChannel`, and
+    /// what every recording looks like with "No Microphone" on. It still tints
+    /// the menu bar and still lands in Notification Center.
+    nonisolated static func captureAlert(
+        channel: AudioChannel,
+        gaveUp: Bool,
+    ) -> (title: String, body: String, urgency: NotificationUrgency) {
+        if gaveUp {
+            return ("Capture Channel Lost", captureGaveUpMessage(for: channel), .timeSensitive)
+        }
+        return (
+            "Capture Channel Silent",
+            asymmetricSilenceMessage(for: channel),
+            channel == .app ? .timeSensitive : .standard,
+        )
     }
 
     /// Message for a channel whose capture restart was abandoned (issue #588),

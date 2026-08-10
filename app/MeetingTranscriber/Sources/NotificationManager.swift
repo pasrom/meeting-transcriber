@@ -81,7 +81,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         scheduler.requestAuthorization()
     }
 
-    func notify(title: String, body: String) {
+    func notify(title: String, body: String, urgency: NotificationUrgency) {
         let deliverable = isSetUp && canDeliver()
 
         #if !APPSTORE
@@ -98,30 +98,31 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
         scheduler.add(UNNotificationRequest(
             identifier: UUID().uuidString,
-            content: Self.makeNotificationContent(title: title, body: body),
+            content: Self.makeNotificationContent(title: title, body: body, urgency: urgency),
             trigger: nil,
         ))
     }
 
     /// Pure builder for a notification's `UNMutableNotificationContent` (title,
-    /// body, sound, optional category, interruption level). Split out so the
-    /// content mapping is unit-testable without a real notification center.
+    /// body, sound, optional category, urgency). Split out so the content
+    /// mapping is unit-testable without a real notification center.
     ///
-    /// `interruptionLevel` defaults to `.active` — a banner that auto-dismisses
-    /// and is suppressed under Focus, which is right for anything the user can
-    /// read whenever they get round to it. Only the consent prompt overrides it;
-    /// see `postConsentNotification`.
+    /// `urgency` defaults to `.standard`, a banner that auto-dismisses and is
+    /// suppressed under Focus, which is right for anything the user can read
+    /// whenever they get round to it. `NotificationUrgency` is the app's whole
+    /// vocabulary here, so this is the only place a raw
+    /// `UNNotificationInterruptionLevel` is set.
     static func makeNotificationContent(
         title: String,
         body: String,
         categoryID: String? = nil,
-        interruptionLevel: UNNotificationInterruptionLevel = .active,
+        urgency: NotificationUrgency = .standard,
     ) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        content.interruptionLevel = interruptionLevel
+        content.interruptionLevel = urgency.interruptionLevel
         if let categoryID { content.categoryIdentifier = categoryID }
         return content
     }
@@ -271,8 +272,8 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
                 // suppressed outright by any Focus mode, so it expires unseen and
                 // browser meetings silently never record. `.timeSensitive` is the
                 // only level that breaks through Focus, and it needs the matching
-                // entitlement in Entitlements/*.entitlements to do so.
-                interruptionLevel: .timeSensitive,
+                // entitlement to do so; see `NotificationUrgency.timeSensitive`.
+                urgency: .timeSensitive,
             ),
             trigger: nil,
         ))
