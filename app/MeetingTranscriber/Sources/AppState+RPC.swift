@@ -131,7 +131,7 @@
                 liveCaptions: liveCaptionsSnapshot(),
                 watchState: watching.watchLoop?.state.rawValue,
                 pendingConsentApp: watching.watchLoop?.pendingConsentApp,
-                isManualRecording: isManualRecording,
+                isManualRecording: watching.isManualRecording,
                 notifications: notificationsSnapshot(),
                 // Built inside AppSettings (single-hop `self.` reads) to stay
                 // under the type-check budget — see `rpcSettingsSnapshot`.
@@ -140,6 +140,71 @@
                 updateStatus: updateStatusSnapshot(),
                 windows: windowsSnapshot(),
             )
+        }
+
+        /// Small, stable projection of the watching lifecycle for `/v1/watch`.
+        ///
+        /// Kept separate from `rpcStateSnapshot` on purpose: that snapshot is the
+        /// debug surface and is free to change shape, while this one is polled on
+        /// an interval by third-party controllers and carries a compatibility
+        /// promise. Locals are bound first (rather than reading the two-hop
+        /// `watching.watchLoop.…` `@Observable` chain inline) to keep the
+        /// memberwise init inside the type-check budget — see `rpcQueueStatus`.
+        func watchStatusDTO() -> WatchStatusDTO {
+            let loop = watching.watchLoop
+            let badge = currentBadge.rawValue
+            // nil means the probe has not run, which is not a permission
+            // problem. `BadgeKind.compute` treats it the same way, and the
+            // badge and this field must not disagree.
+            let healthy = permissions.health?.isHealthy != false
+            return WatchStatusDTO(
+                watching: watching.isWatching,
+                state: loop?.state.rawValue,
+                badge: badge,
+                manualRecording: watching.isManualRecording,
+                pendingConsentApp: loop?.pendingConsentApp,
+                permissionsHealthy: healthy,
+            )
+        }
+
+        /// The two `/v1/watch` seams, bundled so `buildDebugRPCServer` stays a
+        /// flat wiring list. Control is `async` because the start awaits the mic
+        /// gate before the loop exists — reporting a snapshot taken before that
+        /// settles would hand a remote key a stale answer to the press it just
+        /// made. Status is this small dedicated projection rather than `/state`,
+        /// which a polling controller must not be pinned to.
+        func watchRPCClosures() -> (
+            status: () -> WatchStatusDTO,
+            control: (WatchAction) async -> WatchControlOutcome,
+        ) {
+            let status: () -> WatchStatusDTO = { [weak self] in
+                self?.watchStatusDTO() ?? .notWatching
+            }
+            let control: (WatchAction) async -> WatchControlOutcome = { [weak self] action in
+                guard let self else { return .failed }
+                return await watching.applyWatchAction(action)
+            }
+            return (status, control)
+        }
+
+        /// The three per-job speaker-naming seams, bundled for the same reason as
+        /// `watchRPCClosures`: `buildDebugRPCServer` is a flat wiring list, and
+        /// grouping the closures that belong to one route family keeps it one.
+        func namingRPCClosures() -> (
+            status: (UUID) -> NamingStatusDTO?,
+            confirm: (UUID, [String: String]) -> Bool,
+            skip: (UUID) -> Bool,
+        ) {
+            let status: (UUID) -> NamingStatusDTO? = { [weak self] id in
+                self?.pipeline.namingStatus(forID: id)
+            }
+            let confirm: (UUID, [String: String]) -> Bool = { [weak self] id, mapping in
+                self?.pipeline.confirmNaming(jobID: id, mapping: mapping) ?? false
+            }
+            let skip: (UUID) -> Bool = { [weak self] id in
+                self?.pipeline.skipNaming(jobID: id) ?? false
+            }
+            return (status, confirm, skip)
         }
 
         /// Project the pinning-relevant properties of each named scene window.

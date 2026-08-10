@@ -114,10 +114,11 @@ struct AdvancedSettingsView: View {
                     Toggle("Local Automation API", isOn: $settings.debugRPCEnabled)
                     Text(
                         "Exposes the local automation API + pipeline state on"
-                            + " 127.0.0.1:9876 (POST /v1/transcribe, /v1/jobs; also"
-                            + " `mt-cli`). Localhost-only, bearer-token auth. Off by"
-                            + " default; enable for headless automation or"
-                            + " shell-driven inspection.",
+                            + " 127.0.0.1:9876 (POST /v1/transcribe, /v1/jobs, and"
+                            + " /v1/watch to start/stop watching from a hotkey or"
+                            + " Stream Deck; also `mt-cli`). Localhost-only,"
+                            + " bearer-token auth. Off by default; enable for"
+                            + " headless automation or shell-driven inspection.",
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)

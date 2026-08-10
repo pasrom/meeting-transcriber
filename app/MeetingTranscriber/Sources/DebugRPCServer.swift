@@ -88,6 +88,8 @@
         let confirmNaming: (UUID, [String: String]) -> Bool // POST .../naming
         let skipJobNaming: (UUID) -> Bool // POST .../naming/skip
         let transcribe: (URL, Double) async -> BlockingTranscribeResult // POST /v1/transcribe
+        let watchStatus: () -> WatchStatusDTO // GET /v1/watch
+        let watchControl: (WatchAction) async -> WatchControlOutcome // POST /v1/watch
         var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
         private let expectedAuth: String
         private var listener: NWListener?
@@ -114,6 +116,8 @@
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
             transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
+            watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
+            watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -129,6 +133,8 @@
             self.confirmNaming = confirmNaming
             self.skipJobNaming = skipJobNaming
             self.transcribe = transcribe
+            self.watchStatus = watchStatus
+            self.watchControl = watchControl
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -336,7 +342,7 @@
             // switch below, which compares against the raw `request.path`.
             let pathWithoutQuery = String(request.path.prefix { $0 != "?" })
             if pathWithoutQuery == "/v1/jobs" || pathWithoutQuery.hasPrefix("/v1/jobs/")
-                || pathWithoutQuery == "/v1/transcribe" {
+                || pathWithoutQuery == "/v1/transcribe" || pathWithoutQuery == "/v1/watch" {
                 return await routeV1(request, path: pathWithoutQuery)
             }
 

@@ -72,6 +72,8 @@
         /// - `GET  /v1/jobs/<id>/naming` — pending speaker-naming choice
         /// - `POST /v1/jobs/<id>/naming` — confirm speaker names `{mapping}`
         /// - `POST /v1/jobs/<id>/naming/skip` — skip naming for one job
+        /// - `GET  /v1/watch` — watching status
+        /// - `POST /v1/watch` — start/stop/toggle watching `{action}`
         func routeV1(_ request: HTTPRequest, path: String) async -> HTTPResponse {
             let idempotencyKey = request.headers["idempotency-key"]
             // `path` is query-stripped; read the opt-in off the raw target.
@@ -80,6 +82,17 @@
                 return await transcribeResponse(
                     body: request.body, idempotencyKey: idempotencyKey, includeTranscript: includeTranscript,
                 )
+            }
+            // Matched before the `/v1/jobs` component split below, which assumes
+            // comps[0..1] == ["v1", "jobs"]. No `Idempotency-Key` handling: the
+            // operation is already idempotent, and that header exists here only
+            // to stop duplicate *job creation*.
+            if path == "/v1/watch" {
+                switch request.method {
+                case "GET": return watchResponse(status: 200, reason: "OK")
+                case "POST": return await watchControlResponse(body: request.body)
+                default: return HTTPResponse.notFound()
+                }
             }
             // The caller (DebugRPCServer.route) already gated on the `/v1/jobs`
             // prefix, so comps[0..1] are always ["v1", "jobs"]; the count checks
@@ -115,6 +128,37 @@
         /// isn't awaiting naming (wrong state), 404 when the job id is unknown.
         private func namingFailureStatus(_ jobID: UUID) -> HTTPResponse {
             jobStatus(jobID) != nil ? HTTPResponse.conflict() : HTTPResponse.notFound()
+        }
+
+        // MARK: - /v1/watch
+
+        /// Render the current watch status with a caller-chosen status code.
+        /// GET and POST return the *same* body shape — one parser for a client,
+        /// and no POST-then-refetch race for a controller that needs to redraw
+        /// a key from the result. The code carries what the call achieved.
+        private func watchResponse(status: Int, reason: String) -> HTTPResponse {
+            guard let body = try? JSONEncoder().encode(watchStatus()) else {
+                return HTTPResponse.internalServerError()
+            }
+            return HTTPResponse(status: status, reason: reason, body: body, contentType: "application/json")
+        }
+
+        /// Apply a watch action and report the state it settled into.
+        ///
+        /// 409 for `.blocked` because `toggleWatching` silently refuses while a
+        /// manual recording owns the loop; a refusal that looks like success is
+        /// exactly the failure mode a remote key must not have. 503 for
+        /// `.failed` — the request was accepted but the state did not converge,
+        /// which is a different problem from being told no.
+        private func watchControlResponse(body: Data) async -> HTTPResponse {
+            guard let payload = try? JSONDecoder().decode(WatchActionPayload.self, from: body) else {
+                return HTTPResponse.badRequest()
+            }
+            switch await watchControl(payload.action) {
+            case .changed, .unchanged: return watchResponse(status: 200, reason: "OK")
+            case .blocked: return watchResponse(status: 409, reason: "Conflict")
+            case .failed: return watchResponse(status: 503, reason: "Service Unavailable")
+            }
         }
 
         private func enqueueResponse(body: Data, idempotencyKey: String?) -> HTTPResponse {

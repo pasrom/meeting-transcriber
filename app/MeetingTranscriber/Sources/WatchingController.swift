@@ -35,6 +35,15 @@ final class WatchingController {
     /// finishes.
     private var startTask: Task<Void, Never>?
 
+    /// See `defaultStartJoinTimeout`.
+    private let startJoinTimeout: Duration
+
+    /// Set while `startManualRecording` is in flight, i.e. from the call until
+    /// `watchLoop` holds the manual loop. `startTask`'s counterpart for the
+    /// manual path, so `isManualRecording` covers the window before the loop
+    /// exists.
+    private var manualStartTask: Task<Void, Never>?
+
     private let settings: AppSettings
     private let notifier: any AppNotifying
     private let pipeline: PipelineController
@@ -116,6 +125,7 @@ final class WatchingController {
                 Permissions.ensureAccessibilityAccess()
             #endif
         },
+        startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         makeDetector: (() -> any MeetingDetecting)? = nil,
     ) {
         self.settings = settings
@@ -127,6 +137,7 @@ final class WatchingController {
         self.ensureMicAccess = ensureMicAccess
         self.requestScreenRecording = requestScreenRecording
         self.requestAccessibility = requestAccessibility
+        self.startJoinTimeout = startJoinTimeout
         // Tests inject a deterministic detector; production defaults to one
         // filtered by the "Apps to Watch" toggles, re-read at each watch start.
         self.makeDetector = makeDetector ?? { [settings] in
@@ -177,6 +188,20 @@ final class WatchingController {
         watchLoop?.state == .recording
     }
 
+    /// Whether a manual (app-picker) recording owns the loop, or is on its way
+    /// to owning it. Exposed because `toggleWatching` silently refuses in that
+    /// state, and a silent refusal is invisible to a remote caller — the
+    /// automation API turns this into a 409.
+    ///
+    /// The in-flight half matters: `startManualRecording` assigns `watchLoop`
+    /// only after awaiting the mic gate, so reading the loop alone reports
+    /// "no manual recording" for the whole of that window, and a remote start
+    /// landing in it would build an auto loop that the manual task then
+    /// overwrites without stopping.
+    var isManualRecording: Bool {
+        manualStartTask != nil || watchLoop?.isManualRecording == true
+    }
+
     // MARK: - Start / Stop
 
     /// - Parameter userInitiated: True for a deliberate Start/Stop press, which
@@ -185,11 +210,18 @@ final class WatchingController {
     ///   system alert — including on the e2e runners, which force auto-watch on
     ///   and where a stray dialog can swallow the keystroke a lane sends.
     func toggleWatching(userInitiated: Bool = true) {
-        if let loop = watchLoop, loop.isManualRecording { return }
         if let loop = watchLoop, loop.isActive {
+            // Refuse only for a *manual* loop. Stopping a live auto loop is safe
+            // even while a manual start is registered, and the order matters:
+            // between registration and the manual task stopping that loop
+            // itself, a blanket refusal would turn a stop into an instant
+            // `.failed` — a 503 the docs describe as "did not settle within 20
+            // seconds" — and silently no-op the menu-bar toggle.
+            guard !loop.isManualRecording else { return }
             loop.stop()
             watchLoop = nil
         } else {
+            guard !isManualRecording else { return }
             // The start is async — mic access is awaited before `watchLoop` is
             // assigned — so a second toggle in that window would otherwise launch
             // a duplicate WatchLoop and rebuild the queue twice. Ignore it while
@@ -198,6 +230,16 @@ final class WatchingController {
             startTask = Task { @MainActor in
                 defer { startTask = nil }
                 await requestStartPermissions(userInitiated: userInitiated)
+
+                // A manual start can register while this task is parked on the
+                // permission gate, and nothing below re-checks. Whichever side
+                // assigned `watchLoop` last would win and orphan the other loop
+                // — still running, with no reference left to stop it. Bailing
+                // here rather than at the assignment also keeps `pipeline.rebuild()`
+                // from replacing the queue the manual loop is already wired to.
+                // Nothing leaks: `loop.start()` has not run, so there is no
+                // self-retaining watch task yet.
+                guard !isManualRecording else { return }
 
                 syncEngines?()
                 pipeline.rebuild()
@@ -248,62 +290,174 @@ final class WatchingController {
         }
     }
 
+    // MARK: - Idempotent control (automation API)
+
+    /// How long a control call waits for an in-flight start before giving up.
+    /// Generous against the ~2 s warm start, short enough that a wedged request
+    /// still answers well inside a polling controller's patience. Injectable so
+    /// a test can pin the give-up path without waiting it out.
+    static let defaultStartJoinTimeout: Duration = .seconds(20)
+
+    /// Join an in-flight start, giving up after `startJoinTimeout`. True when
+    /// the start settled, false on expiry.
+    ///
+    /// The bound is the point. On a fresh install `toggleWatching` awaits
+    /// `AVCaptureDevice.requestAccess`, which does not return until the dialog
+    /// is answered — and on an `LSUIElement` app that dialog can sit unnoticed
+    /// behind other windows. An unbounded join would hold the HTTP handler and
+    /// its connection open for as long as the prompt is up, and because every
+    /// verb joins the same task, each later POST would park and leak another
+    /// connection.
+    ///
+    /// Polls `startTask` rather than racing `await startTask?.value` in a task
+    /// group. Two things rule the group out: `Task.value` ignores cancellation,
+    /// so the losing child keeps waiting, and a group awaits every child before
+    /// it returns — the join would outlive its own timeout. Giving up must also
+    /// not cancel the start itself, which is a user action already in progress.
+    private func joinStart() async -> Bool {
+        let deadline = ContinuousClock.now + startJoinTimeout
+        while startTask != nil {
+            if Task.isCancelled { return false }
+            if ContinuousClock.now >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
+    /// Idempotent start. Awaits the in-flight async start — mic gate, engine
+    /// sync, queue rebuild, loop construction — so a caller that reports state
+    /// back observes the settled result instead of a snapshot taken mid-launch.
+    /// `toggleWatching` alone cannot offer that: it returns the moment the task
+    /// is spawned, and `startTask` is private.
+    ///
+    /// Starts as not user-initiated. Nobody is at the machine when this arrives
+    /// — that is the whole point of the endpoint — so the optional Accessibility
+    /// prompt must not be raised, exactly as for auto-watch.
+    @discardableResult
+    func startWatching() async -> WatchControlOutcome {
+        if isManualRecording { return .blocked }
+        if isWatching { return .unchanged }
+        toggleWatching(userInitiated: false)
+        // `toggleWatching` assigns `startTask` synchronously, so this always
+        // joins the task it just created — or, if another caller already had a
+        // start in flight, the one whose existence made our call a no-op.
+        guard await joinStart() else { return .failed }
+        // Re-check: a manual start can register while the auto start is parked,
+        // which makes that start bail and leaves `watchLoop` nil. The join
+        // settled and the dialog was answered, so this is the conflict 409
+        // describes, not the "did not settle" 503.
+        if isManualRecording { return .blocked }
+        return isWatching ? .changed : .failed
+    }
+
+    /// Idempotent stop. Awaits a pending start first: otherwise a stop issued
+    /// during the mic-access window lands before the loop exists, reports
+    /// "already stopped", and is then overwritten by the start completing.
+    ///
+    /// A manual recording is reported as `.unchanged` rather than `.blocked`:
+    /// `isWatching` is false by definition while one owns the loop, so the
+    /// requested end state already holds and there is nothing to refuse. That
+    /// is the asymmetry with `startWatching`, where `.blocked` is right because
+    /// starting would clobber the recording.
+    @discardableResult
+    func stopWatching() async -> WatchControlOutcome {
+        guard await joinStart() else { return .failed }
+        guard isWatching else { return .unchanged }
+        toggleWatching()
+        return isWatching ? .failed : .changed
+    }
+
+    /// Apply a watch action, resolving `.toggle` against settled state.
+    ///
+    /// The leading await matters for `.toggle`: deciding against a mid-launch
+    /// snapshot would read "not watching" for a loop that is seconds from
+    /// running, and start a second one. Settling first means a toggle racing a
+    /// start converges to on — the caller asked for a flip and gets a definite
+    /// answer, rather than a coin toss on where the mic prompt happened to be.
+    @discardableResult
+    func applyWatchAction(_ action: WatchAction) async -> WatchControlOutcome {
+        guard await joinStart() else { return .failed }
+        switch action {
+        case .start: return await startWatching()
+        case .stop: return await stopWatching()
+        case .toggle: return isWatching ? await stopWatching() : await startWatching()
+        }
+    }
+
     func startManualRecording(pid: pid_t, appName: String, title: String) {
+        // `toggleWatching`'s counterpart. The correctness added here rests on
+        // `manualStartTask` being accurate, and without this a second start
+        // replaces the field while the first is still in flight, whose `defer`
+        // then clears the second's registration and reopens the window.
+        guard manualStartTask == nil else { return }
+        manualStartTask = Task { @MainActor in
+            defer { manualStartTask = nil }
+            await performManualRecording(pid: pid, appName: appName, title: title)
+        }
+    }
+
+    /// Body of `startManualRecording`, split out so the task closure stays a
+    /// two-liner and the work is readable on its own.
+    private func performManualRecording(pid: pid_t, appName: String, title: String) async {
+        // Settle an auto start before reading `watchLoop`. Mid-flight it is
+        // still nil, so the stop below would find nothing and the auto task
+        // would later assign over the manual loop, orphaning a live recording
+        // with no way to stop it.
+        _ = await joinStart()
+
         // Stop auto-watch if active
         if let loop = watchLoop, loop.isActive, !loop.isManualRecording {
             loop.stop()
             watchLoop = nil
         }
 
-        Task { @MainActor in
-            _ = await ensureMicAccess()
+        _ = await ensureMicAccess()
 
-            pipeline.ensureQueue()
+        pipeline.ensureQueue()
 
-            // Manual recording never polls the detector, so WatchLoop's default
-            // (unfiltered) detector here is inert, and so is the consent gate
-            // that hangs off it: no detection means no prompt, hence no deny
-            // list to consult, hence the default in-memory store. If this path
-            // ever gains auto-detection, route it through `makeDetector()` like
-            // toggleWatching so the "Apps to Watch" filter still applies, and
-            // pass `denyListStore:` so a "Never for this app" is honoured here
-            // too.
-            let loop = WatchLoop(
-                recorderFactory: makeRecorderFactory(),
-                pipelineQueue: pipeline.queue,
-                pollInterval: settings.pollInterval,
-                noMic: settings.noMic,
-                micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
-                verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
-                recordOnly: { [settings] in settings.recordOnly },
-                recordOnlyDestination: { [settings] in
-                    .production(parent: settings.effectiveOutputDir)
-                },
-                notifier: notifier,
+        // Manual recording never polls the detector, so WatchLoop's default
+        // (unfiltered) detector here is inert, and so is the consent gate
+        // that hangs off it: no detection means no prompt, hence no deny
+        // list to consult, hence the default in-memory store. If this path
+        // ever gains auto-detection, route it through `makeDetector()` like
+        // toggleWatching so the "Apps to Watch" filter still applies, and
+        // pass `denyListStore:` so a "Never for this app" is honoured here
+        // too.
+        let loop = WatchLoop(
+            recorderFactory: makeRecorderFactory(),
+            pipelineQueue: pipeline.queue,
+            pollInterval: settings.pollInterval,
+            noMic: settings.noMic,
+            micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
+            verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
+            recordOnly: { [settings] in settings.recordOnly },
+            recordOnlyDestination: { [settings] in
+                .production(parent: settings.effectiveOutputDir)
+            },
+            notifier: notifier,
+        )
+        watchLoop = loop
+
+        // Wire channel-health monitoring + error notification on state
+        // transitions — same hook the auto-detect path installs, so the
+        // red-tint indicator and asymmetric-silence notification work
+        // for manual recordings too.
+        attachStateChangeHandler(to: loop, notifyOnRecording: false)
+
+        // Use cached health check result instead of live probe
+        if let health = permissions.health {
+            loop.permissionChecker = { health }
+        }
+
+        do {
+            try await loop.startManualRecording(pid: pid, appName: appName, title: title)
+            notifier.notify(
+                title: "Manual Recording",
+                body: "Recording: \(title)",
             )
-            watchLoop = loop
-
-            // Wire channel-health monitoring + error notification on state
-            // transitions — same hook the auto-detect path installs, so the
-            // red-tint indicator and asymmetric-silence notification work
-            // for manual recordings too.
-            attachStateChangeHandler(to: loop, notifyOnRecording: false)
-
-            // Use cached health check result instead of live probe
-            if let health = permissions.health {
-                loop.permissionChecker = { health }
-            }
-
-            do {
-                try await loop.startManualRecording(pid: pid, appName: appName, title: title)
-                notifier.notify(
-                    title: "Manual Recording",
-                    body: "Recording: \(title)",
-                )
-            } catch {
-                notifier.notify(title: "Error", body: error.localizedDescription)
-                watchLoop = nil
-            }
+        } catch {
+            notifier.notify(title: "Error", body: error.localizedDescription)
+            watchLoop = nil
         }
     }
 

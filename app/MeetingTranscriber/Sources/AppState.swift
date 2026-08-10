@@ -401,21 +401,14 @@ final class AppState {
             }
             // Per-job speaker-naming over the API: read the pending choice, then
             // confirm names or skip (accept auto-names) for that one job.
-            let namingStatus: (UUID) -> NamingStatusDTO? = { [weak self] id in
-                self?.pipeline.namingStatus(forID: id)
-            }
-            let confirmNaming: (UUID, [String: String]) -> Bool = { [weak self] id, mapping in
-                self?.pipeline.confirmNaming(jobID: id, mapping: mapping) ?? false
-            }
-            let skipJobNaming: (UUID) -> Bool = { [weak self] id in
-                self?.pipeline.skipNaming(jobID: id) ?? false
-            }
+            let naming = namingRPCClosures()
             // Blocking one-call: enqueue + wait until terminal (auto-skipping
             // the headless naming pause), returning the final status inline.
             let transcribe: (URL, Double) async -> BlockingTranscribeResult = { [weak self] url, maxWait in
                 guard let self else { return .noFile }
                 return await pipeline.transcribeAndWait(path: url, maxWaitSeconds: maxWait)
             }
+            let watch = watchRPCClosures()
             return DebugRPCServer(
                 port: port,
                 token: token,
@@ -427,10 +420,12 @@ final class AppState {
                 enqueueFiles: enqueueFilesRPC,
                 enqueueReturningIDs: enqueueReturningIDs,
                 jobStatus: jobStatus,
-                namingStatus: namingStatus,
-                confirmNaming: confirmNaming,
-                skipJobNaming: skipJobNaming,
+                namingStatus: naming.status,
+                confirmNaming: naming.confirm,
+                skipJobNaming: naming.skip,
                 transcribe: transcribe,
+                watchStatus: watch.status,
+                watchControl: watch.control,
             )
         }
     #endif
@@ -500,6 +495,15 @@ final class AppState {
     /// Whether the active loop is a manual recording (vs. auto-detect). Drives
     /// the menu-bar "Stop Recording" item; hoisted to a single-member accessor
     /// so the body reading it through `watching.watchLoop` stays cheap.
+    ///
+    /// Deliberately the loop-only predicate, not the controller's wider one.
+    /// The menu item asks "is there a recording I can stop", and during a
+    /// manual start that has registered but not yet built its loop the honest
+    /// answer is no: `stopManualRecording()` would find no loop, stop nothing,
+    /// and the recording would begin a moment later regardless. The wider
+    /// predicate belongs to the automation API, which asks the different
+    /// question of whether a manual recording owns *or is about to own* the
+    /// loop; see `watchStatusDTO()`.
     var isManualRecording: Bool {
         watching.watchLoop?.isManualRecording == true
     }
