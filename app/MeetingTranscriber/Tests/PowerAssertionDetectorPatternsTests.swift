@@ -85,16 +85,16 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
-    // MARK: - Chromium-family browsers (Brave / Edge / Chromium) — issue #503 follow-up
+    // MARK: - Chromium-family browsers (Brave / Edge / Chromium / Aside) — issue #503 follow-up
 
     /// The browser pattern is not Chrome-specific: every Chromium fork holds the
     /// same "WebRTC has active PeerConnections" assertion (it lives in Chromium's
-    /// content layer), so Brave/Edge/Chromium calls must detect identically. They
+    /// content layer), so Brave/Edge/Chromium/Aside calls must detect identically. They
     /// share the single "Google Chrome" browser-meetings identity (one toggle),
     /// but the detected meeting is titled by the concrete browser so a Brave call
     /// is not mislabeled "Google Chrome Call".
     func testChromiumFamilyWebRTCCallsAreDetected() {
-        for process in ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"] {
+        for process in ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"] {
             let detector = PowerAssertionDetector(
                 patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
                 confirmationCount: 1,
@@ -122,7 +122,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     func testChromiumFamilyMediaPlaybackIsNotDetected() {
         // The WebRTC keyword gate applies to every browser process: plain media
         // playback (no WebRTC in the assertion name) must not prompt.
-        for process in ["Brave Browser", "Microsoft Edge", "Chromium"] {
+        for process in ["Brave Browser", "Microsoft Edge", "Chromium", "Aside"] {
             let detector = PowerAssertionDetector(
                 patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
                 confirmationCount: 1,

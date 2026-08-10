@@ -103,13 +103,13 @@ extension AppMeetingPattern {
     /// (issue #503). Detection is by the WebRTC power assertion (see
     /// `PowerAssertionDetector`), not window titles — a browser's window title
     /// only reflects the active tab. Every Chromium fork (Chrome, Brave, Edge,
-    /// Chromium) emits the same assertion, so all four owner names share this one
+    /// Chromium, Aside) emits the same assertion, so all five owner names share this one
     /// browser identity (one "Google Chrome" toggle). `requiresRecordingConsent`
     /// routes it through a prompt instead of auto-start; `meetingPatterns` is
     /// empty (no title-based detection in the PoC).
     static let chromeBrowser = AppMeetingPattern(
         appName: "Google Chrome",
-        ownerNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
+        ownerNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"],
         meetingPatterns: [],
         requiresRecordingConsent: true,
     )

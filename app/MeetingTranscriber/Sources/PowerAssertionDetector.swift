@@ -59,7 +59,7 @@ class PowerAssertionDetector: MeetingDetecting {
         // "NoIdleSleepAssertion" named "WebRTC has active PeerConnections"
         // during any WebRTC call (Google Meet, Whereby, web Zoom/Teams/Webex).
         // The assertion lives in Chromium's content layer, so every fork
-        // (Chrome, Brave, Edge, Chromium) emits the same name — all four are
+        // (Chrome, Brave, Edge, Chromium, Aside) emits the same name — all five are
         // matched under one shared browser identity. Keyword-only, no
         // assertionTypes: a Chromium browser holds the same assertion type for
         // plain media playback (YouTube), so matching the type would fire on
@@ -67,7 +67,7 @@ class PowerAssertionDetector: MeetingDetecting {
         // only watched when the browser toggle adds "Google Chrome" to watchApps.
         AssertionPattern(
             appName: AppMeetingPattern.chromeBrowser.appName,
-            processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium"],
+            processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"],
             keywords: ["webrtc", "peerconnection"],
         ),
     ]
