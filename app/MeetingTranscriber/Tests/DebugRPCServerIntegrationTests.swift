@@ -43,6 +43,8 @@
             confirmNaming: @escaping (UUID, [String: String]) -> Bool = { _, _ in false },
             skipJobNaming: @escaping (UUID) -> Bool = { _ in false },
             transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
+            watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
+            watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
@@ -57,6 +59,8 @@
                 confirmNaming: confirmNaming,
                 skipJobNaming: skipJobNaming,
                 transcribe: transcribe,
+                watchStatus: watchStatus,
+                watchControl: watchControl,
             )
             self.server = server
             server.start()
@@ -1087,6 +1091,119 @@
                 firstLine.contains("200"),
                 "Expected 200 for loopback Host, got: \(firstLine)",
             )
+        }
+
+        // MARK: - /v1/watch
+
+        func testV1WatchGETReturnsStatus() async throws {
+            let dto = WatchStatusDTO(
+                watching: true, state: "recording", badge: "recording",
+                manualRecording: false, pendingConsentApp: nil, permissionsHealthy: true,
+            )
+            // Typed local, not a trailing closure: with only one argument
+            // SwiftLint suggests trailing syntax, which would bind to
+            // `enqueueFile` (the first function-type parameter) instead.
+            let status: () -> WatchStatusDTO = { dto }
+            let base = try await startServer(watchStatus: status)
+
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/watch"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(WatchStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.watching)
+            XCTAssertEqual(decoded.state, "recording")
+            XCTAssertEqual(decoded.badge, "recording")
+            XCTAssertTrue(decoded.permissionsHealthy)
+        }
+
+        /// The POST body must carry the state *after* the action, so a controller
+        /// can redraw from the response instead of racing a follow-up GET.
+        func testV1WatchPOSTStartReturnsResultingState() async throws {
+            var isWatching = false
+            let base = try await startServer(
+                watchStatus: {
+                    WatchStatusDTO(
+                        watching: isWatching, state: isWatching ? "watching" : nil, badge: "inactive",
+                        manualRecording: false, pendingConsentApp: nil, permissionsHealthy: true,
+                    )
+                },
+                watchControl: { action in
+                    guard action == .start else { return .unchanged }
+                    isWatching = true
+                    return .changed
+                },
+            )
+
+            var req = request("POST", base.appendingPathComponent("v1/watch"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(WatchStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.watching, "the response must reflect the post-action state, not the pre-action one")
+        }
+
+        /// `.unchanged` is a success: a key press asks for an outcome, and already
+        /// being in that outcome is not an error.
+        func testV1WatchPOSTUnchangedReturns200() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            // Declared sync (it never suspends); Swift coerces it to the async parameter.
+            let control: (WatchAction) -> WatchControlOutcome = { _ in .unchanged }
+            let base = try await startServer(watchControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/watch"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"stop"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+
+        /// A manual recording owning the loop must surface as 409, not a silent
+        /// 200 — `toggleWatching` refuses silently, and that refusal is invisible
+        /// to a remote caller unless the status code carries it.
+        func testV1WatchPOSTBlockedReturns409() async throws {
+            let dto = WatchStatusDTO(
+                watching: false, state: "recording", badge: "recording",
+                manualRecording: true, pendingConsentApp: nil, permissionsHealthy: true,
+            )
+            let base = try await startServer(watchStatus: { dto }, watchControl: { _ in .blocked })
+
+            var req = request("POST", base.appendingPathComponent("v1/watch"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"toggle"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 409)
+            // The body is the same shape on every status, so a client parses once
+            // and can show *why* it was refused.
+            let decoded = try JSONDecoder().decode(WatchStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.manualRecording)
+        }
+
+        func testV1WatchPOSTFailedReturns503() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let control: (WatchAction) -> WatchControlOutcome = { _ in .failed }
+            let base = try await startServer(watchControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/watch"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+        }
+
+        func testV1WatchPOSTUnknownActionReturns400() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let control: (WatchAction) -> WatchControlOutcome = { _ in .changed }
+            let base = try await startServer(watchControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/watch"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"pause"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        func testV1WatchRequiresAuth() async throws {
+            let base = try await startServer()
+            let (_, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/watch")),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 401)
         }
 
         /// A request streamed past the 64 KiB per-connection cap

@@ -465,6 +465,27 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             let txBody = Data(#"{"path":"\#(txFile.path)","maxWaitSeconds":0}"#.utf8)
             let tx = try await send("POST", "v1/transcribe", body: txBody)
             XCTAssertEqual(tx, 202)
+
+            // watch closures: the route tests stub these, and `DebugRPCServer.init`
+            // declares defaults for both, so deleting the wiring arguments at the
+            // `AppState` call site still compiles and leaves those tests green.
+            // Driving the real closures over the socket is what pins them.
+            let watchGet = try await send("GET", "v1/watch")
+            XCTAssertEqual(watchGet, 200)
+            let watchBad = try await send("POST", "v1/watch", body: Data(#"{"action":"nope"}"#.utf8))
+            XCTAssertEqual(watchBad, 400, "an unknown verb must not reach the controller")
+
+            // `stop` while not watching is a satisfied request, and reaching
+            // `.unchanged` proves the control closure ran rather than a default.
+            var stopReq = URLRequest(url: baseURL.appendingPathComponent("v1/watch"))
+            stopReq.httpMethod = "POST"
+            stopReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let stopBody = Data(#"{"action":"stop"}"#.utf8)
+            let (stopData, stopResp) = try await URLSession.shared.upload(for: stopReq, from: stopBody)
+            XCTAssertEqual(code(stopResp), 200)
+            let dto = try JSONDecoder().decode(WatchStatusDTO.self, from: stopData)
+            XCTAssertFalse(dto.watching)
+            XCTAssertFalse(dto.manualRecording)
         }
     #endif
 
