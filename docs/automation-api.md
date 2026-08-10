@@ -63,6 +63,8 @@ per connection; exceeding it closes the connection without sending a response.
 | `GET`  | `/v1/jobs/<id>/naming` | Read the pending speaker-naming choice for a job. |
 | `POST` | `/v1/jobs/<id>/naming` | Confirm speaker names for a job. |
 | `POST` | `/v1/jobs/<id>/naming/skip` | Skip naming for a job (accept auto-assigned names). |
+| `GET`  | `/v1/watch` | Read whether the app is watching for meetings. |
+| `POST` | `/v1/watch` | Start, stop or toggle meeting watching. |
 
 A query string is stripped before routing, so `/v1/jobs/<id>?foo=bar` still
 resolves the id. The one query parameter with meaning is `include=transcript`
@@ -202,6 +204,66 @@ Responses:
 - `409 Conflict` if the job exists but is not awaiting naming.
 - `404 Not Found` if the id is unknown.
 
+### GET /v1/watch
+
+Read whether the app is currently watching for meetings. Returns a
+[`WatchStatusDTO`](#watchstatusdto).
+
+```bash
+curl -sS "$BASE/v1/watch" -H "Authorization: Bearer $TOKEN"
+```
+
+Always `200 OK`. Before the app has finished starting up it reports a steady
+"not watching, nothing wrong" state rather than failing, so a client polling on
+an interval never has to special-case launch.
+
+### POST /v1/watch
+
+Start, stop or toggle meeting watching — the same thing the menu bar's *Start
+Watching* item does.
+
+```bash
+curl -sS -X POST "$BASE/v1/watch" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"toggle"}'
+```
+
+`action` is `start`, `stop`, or `toggle`.
+
+Prefer `start`/`stop` over `toggle` for anything that fires from a button, key
+or schedule. A toggle applies a *delta* to a state the caller cannot see
+reliably: if a meeting ended (or you started watching from the menu bar) since
+the caller last looked, a blind toggle does the opposite of what was intended
+and stays inverted until someone notices. `start` and `stop` express the desired
+end state and converge no matter what happened in between.
+
+The response body is a [`WatchStatusDTO`](#watchstatusdto) describing the state
+**after** the action, so a controller can redraw from the response instead of
+racing a follow-up `GET`.
+
+Responses:
+
+- `200 OK` — the request was satisfied. This covers *both* "the state changed"
+  and "it was already like that": asking an already-watching app to `start` is a
+  satisfied request, not an error. A `stop` while a manual recording owns the
+  loop is also `200`: the app is not watching, which is what was asked for.
+  Read `manualRecording` in the body if you need to distinguish that case.
+- `409 Conflict` — refused because a manual (app-picker) recording owns the
+  watch loop, and starting would clobber it. Stop that recording first. The body
+  is still a `WatchStatusDTO`, with `manualRecording: true`, so a client can
+  explain the refusal. Only `start` and a `toggle` that resolves to a start can
+  return this.
+- `503 Service Unavailable` — the action was attempted but the state did not
+  settle within 20 seconds. In practice this means an unanswered microphone
+  permission dialog: the first watch start on a fresh install blocks on it, and
+  on a menu-bar-only app that dialog can sit unnoticed behind other windows.
+  Answer it and retry. Note that a *denied* microphone does not produce a `503`
+  — watching starts regardless, because app audio records without it, so you get
+  `200` with `watching: true`. Check the badge or `permissionsHealthy` for that.
+- `400 Bad Request` — the body is not JSON, or `action` is not one of the three
+  verbs.
+
 ## Idempotency
 
 `POST /v1/jobs` and `POST /v1/transcribe` honour an `Idempotency-Key` request
@@ -274,6 +336,42 @@ known voice matched). `participants` are the meeting attendees read via
 accessibility, when available. Embeddings and audio are deliberately excluded
 (they are large and carry PII).
 
+### WatchStatusDTO
+
+```json
+{
+  "watching": true,
+  "state": "recording",
+  "badge": "recording",
+  "manualRecording": false,
+  "pendingConsentApp": "Google Chrome",
+  "permissionsHealthy": true
+}
+```
+
+`watching`, `badge`, `manualRecording` and `permissionsHealthy` are always
+present — everything a controller needs to render a button is guaranteed to be
+in every response. `state` and `pendingConsentApp` are nullable and, following
+the same convention as the job DTOs, their keys are **omitted** rather than sent
+as `null` when they have no value. Read them as "absent means none".
+
+- `watching`: whether the watch loop is running and not owned by a manual
+  recording. This is an explicit field rather than something you infer from
+  `state`, so the meaning cannot drift.
+- `state`: `idle`, `watching`, `recording`, or `error`. Absent when no watch loop
+  exists at all (the app is not watching).
+- `badge`: what the menu bar icon is showing: `inactive`, `recording`,
+  `transcribing`, `diarizing`, `processing`, `userAction`, `done`, `error`, or
+  `updateAvailable`. This is the single richest field for a physical button or
+  status display, since it folds the whole pipeline into one glanceable value.
+- `manualRecording`: an app-picker recording owns the loop. Watch control is
+  refused (`409`) while this is true.
+- `pendingConsentApp`: the app name awaiting a browser-meeting consent answer.
+  Absent when no prompt is parked. Resolve it with
+  `POST /action/confirmBrowserConsent`.
+- `permissionsHealthy`: false only when a permission probe has actually failed.
+  A check that has not run yet reports `true`.
+
 ## Status codes
 
 | Code | Meaning |
@@ -284,7 +382,8 @@ accessibility, when available. Embeddings and audio are deliberately excluded
 | `401` | Missing or wrong bearer token. |
 | `403` | Rejected by the Origin or Host guard. |
 | `404` | Unknown job id. Also `GET /v1/jobs/<id>/naming` when the job is not awaiting naming (the GET folds wrong-state into `404`; the POST naming routes use `409` instead). |
-| `409` | Confirm/skip naming on a job that exists but is not awaiting naming. |
+| `409` | Confirm/skip naming on a job that exists but is not awaiting naming. Also `POST /v1/watch` while a manual recording owns the watch loop. |
+| `503` | `POST /v1/watch` only: the start did not settle within 20 seconds (in practice, an unanswered microphone dialog). A *denied* microphone gives `200`, not this. |
 
 ## Typical flows
 
@@ -312,8 +411,40 @@ while :; do
 done
 ```
 
+**Control watching from a script, hotkey or button:**
+
+```bash
+# Read it (safe to poll on an interval — the payload is small and stable).
+curl -sS "$BASE/v1/watch" -H "Authorization: ******"
+
+# Ask for a state, don't flip one. See POST /v1/watch for why.
+curl -sS -X POST "$BASE/v1/watch" \
+  -H "Authorization: ******" -H "Content-Type: application/json" \
+  -d '{"action":"start"}'
+```
+
+Or via the bundled CLI, which handles the token and base URL for you:
+
+```bash
+mt-cli watch          # status
+mt-cli watch start
+mt-cli watch stop
+mt-cli watch toggle
+```
+
+For wiring this to a physical button — a Stream Deck key, a Shortcut, a global
+hotkey — see [`docs/stream-deck.md`](stream-deck.md), which covers the launcher
+side.
+
 ## Notes and limitations
 
+- **Starting watching can trigger a system permission prompt.** The first
+  `POST /v1/watch` with `start` on a fresh install asks for microphone (and
+  possibly Screen Recording) access, which surfaces as a macOS dialog. Triggered
+  from a button press or a schedule that dialog arrives unannounced, so grant
+  the permissions once interactively before relying on remote control. Check
+  `permissionsHealthy` in the response to detect the state where the app cannot
+  actually record.
 - **Speaker DB is read-only on the headless path.** The blocking
   `POST /v1/transcribe` path recognizes already-enrolled voices but does not
   enroll new speakers or write recognition stats. (The interactive
@@ -322,14 +453,16 @@ done
   improve its own speaker DB through this API. An opt-in auto-enroll mode is a
   possible follow-up.
 - **Polling only.** There is no push/webhook/SSE callback in v1; clients poll
-  `GET /v1/jobs/<id>`. Push delivery is a known deferred item.
+  `GET /v1/jobs/<id>`, or `GET /v1/watch` for the watching state. Push delivery
+  is a known deferred item. On loopback a 3–5 s poll costs effectively nothing.
 - **No file upload.** The `path` must already be readable on the host running the
   app. Cross-host submission (multipart upload, no shared filesystem) is not part
   of v1.
-- **`mt-cli` is inspection-only.** The bundled `tools/mt-cli` client covers the
-  debug endpoints (`state`, `healthz`, `screenshot`, `open-settings`,
-  `close-settings`); an `mt-cli transcribe` front for this API is a planned
-  follow-up. For now drive `/v1` with `curl` or any HTTP client.
+- **`mt-cli` covers inspection plus watch control.** The bundled `tools/mt-cli`
+  client wraps the debug endpoints (`state`, `healthz`, `screenshot`,
+  `open-settings`, `close-settings`) and `mt-cli watch`; an `mt-cli transcribe`
+  front for the job endpoints is a planned follow-up. For now drive the rest of
+  `/v1` with `curl` or any HTTP client.
 
 ## See also
 
