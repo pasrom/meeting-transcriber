@@ -270,29 +270,6 @@ final class ManagedCounter {
     }
 }
 
-// MARK: - AppNotifying spy
-
-/// Records all notify() calls for assertions.
-final class RecordingNotifier: AppNotifying {
-    private(set) var calls: [(title: String, body: String)] = []
-
-    /// What `notificationVisibility()` reports. Defaults to the protocol's
-    /// own default so existing users of this double are unaffected.
-    var reportedVisibility: NotificationVisibility = .unread
-
-    func notify(title: String, body: String) {
-        calls.append((title: title, body: body))
-    }
-
-    // swiftlint:disable async_without_await
-    @MainActor
-    func notificationVisibility() async -> NotificationVisibility {
-        reportedVisibility
-    }
-
-    // swiftlint:enable async_without_await
-}
-
 // MARK: - Shared Mock Classes
 
 /// Mock recorder that returns a pre-prepared fixture WAV as the recording result.
