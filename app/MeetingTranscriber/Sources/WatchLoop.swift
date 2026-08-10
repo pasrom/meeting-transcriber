@@ -490,12 +490,14 @@ class WatchLoop {
                 update { next in
                     next.lastError = "Record-only output failed: \(error.localizedDescription)"
                 }
-                // Record-only performs no state transition, so `lastError` is
-                // never surfaced on its own. The notification is the only way
-                // the user learns their fleet pipeline lost this recording.
+                // Record-only performs no state transition, so this notification
+                // is the entire report that a recording was lost. It breaks
+                // through Focus on the same test as `captureAlert`: a failed
+                // write has no benign reading.
                 notifier.notify(
                     title: "Record-only output failed",
                     body: error.localizedDescription,
+                    urgency: .timeSensitive,
                 )
             }
             return

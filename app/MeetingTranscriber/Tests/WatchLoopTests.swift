@@ -453,6 +453,12 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertNotNil(loop.lastError, "lastError must be set so failures are observable")
         XCTAssertEqual(notifier.calls.count, 1, "user must be notified on sidecar write failure")
         XCTAssertEqual(notifier.calls.first?.title, "Record-only output failed")
+        // Record-only performs no state transition, so this notification is the
+        // entire report that a recording was lost. At the suppressible default a
+        // Focus mode drops it and the loss is silent, which is the one outcome
+        // record-only cannot afford: a fleet client's whole job is to hand the
+        // audio on.
+        XCTAssertEqual(notifier.calls.first?.urgency, .timeSensitive)
     }
 
     func test_normalMode_enqueuesAndWritesNoSidecar() async throws {
