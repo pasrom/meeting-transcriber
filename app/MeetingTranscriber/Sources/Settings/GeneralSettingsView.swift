@@ -50,6 +50,7 @@ struct GeneralSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 browserConsentWarning
+                browserDenyList
             }
 
             Section("Detection") {
@@ -87,6 +88,33 @@ struct GeneralSettingsView: View {
     /// user. Rendered here rather than as a notification for the obvious reason,
     /// and kept out of the menu-bar permission badge because this permission only
     /// matters for this one opt-in feature.
+    /// Apps the user answered "Never for this app" about. Shown only when there
+    /// is something to show: an empty list would be a permanent empty box, and
+    /// the only reason to come here is to undo a Never that was a mistake.
+    @ViewBuilder private var browserDenyList: some View {
+        if settings.watchBrowserMeetings, !settings.browserAppsDenied.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Never record these apps")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(Array(settings.browserAppsDenied.enumerated()), id: \.element) { index, app in
+                    HStack {
+                        Text(app)
+                            .font(.caption)
+                        Spacer()
+                        Button("Remove") {
+                            settings.browserAppsDenied = BrowserAppDenyList(
+                                denied: settings.browserAppsDenied,
+                            ).reverting(app).denied
+                        }
+                        .accessibilityIdentifier(A11yID.browserAppRemove(index))
+                    }
+                }
+            }
+            .accessibilityIdentifier(A11yID.browserDenyListSection)
+        }
+    }
+
     @ViewBuilder private var browserConsentWarning: some View {
         if let readiness = browserConsentReadiness,
            let headline = readiness.headline,

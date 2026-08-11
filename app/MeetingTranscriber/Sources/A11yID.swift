@@ -21,6 +21,17 @@ enum A11yID {
     static let recordOnlyToggle = "recordOnlyToggle"
     static let watchBrowserToggle = "watchBrowserToggle"
     static let browserConsentWarning = "browserConsentWarning"
+    static let browserDenyListSection = "browserDenyListSection"
+    /// Per-row Remove button in the never-record list, addressed by ROW INDEX,
+    /// never by app name. `GET /ui/tree` publishes identifiers unredacted
+    /// precisely because they are app-set and never user input; interpolating
+    /// the app name would hand a holder of the local automation token the list
+    /// of apps the user refused to have recorded, through the one field that
+    /// endpoint deliberately does not sanitise.
+    static func browserAppRemove(_ index: Int) -> String {
+        "browserAppRemove.\(index)"
+    }
+
     static let recordOnlyBanner = "recordOnlyBanner"
     static let transcriptionSection = "transcriptionSection"
     static let protocolSection = "protocolSection"
