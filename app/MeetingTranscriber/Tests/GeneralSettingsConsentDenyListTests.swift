@@ -3,18 +3,18 @@ import ViewInspector
 import XCTest
 
 /// Wiring test for the never-record list in the General tab.
-/// `BrowserAppDenyListTests` owns the list logic; this only proves the tab
+/// `ConsentDenyListTests` owns the list logic; this only proves the tab
 /// renders the rows and that Remove writes back, which is the user's only way
 /// to undo a "Never for this app" they regret.
 @MainActor
-final class GeneralSettingsBrowserDenyListTests: XCTestCase {
+final class GeneralSettingsConsentDenyListTests: XCTestCase {
     private func makeSettings(browserMeetings: Bool, denied: [String]) throws -> AppSettings {
         let suiteName = "GeneralSettingsBrowserDenyListTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         addTeardownBlock { suite.removePersistentDomain(forName: suiteName) }
         let settings = AppSettings(defaults: suite)
         settings.watchBrowserMeetings = browserMeetings
-        settings.browserAppsDenied = denied
+        settings.consentDeniedApps = denied
         return settings
     }
 
@@ -31,29 +31,33 @@ final class GeneralSettingsBrowserDenyListTests: XCTestCase {
         // has a reason to exist once there is something to undo.
         let view = try view(browserMeetings: true, denied: [])
         XCTAssertNil(
-            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserDenyListSection),
+            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.consentDenyListSection),
         )
     }
 
-    func testSectionIsHiddenWhenBrowserWatchingIsOff() throws {
-        // The list is meaningless while the feature is off, and showing it
-        // would suggest the entries are doing something.
+    func testSectionStaysVisibleWhenBrowserWatchingIsOff() throws {
+        // Deliberately NOT gated on the browser toggle, though today only
+        // browser meetings can add an entry. The gate the deny list hangs off is
+        // `requiresRecordingConsent`, a general pattern property, so as soon as
+        // another app adopts it a denial made there would become impossible to
+        // undo behind a browser-specific switch. Emptiness is the only condition
+        // for hiding it.
         let view = try view(browserMeetings: false, denied: ["Fjordfox"])
-        XCTAssertNil(
-            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserDenyListSection),
+        XCTAssertNotNil(
+            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.consentDenyListSection),
         )
     }
 
     func testDeniedAppsAreListed() throws {
         let view = try view(browserMeetings: true, denied: ["Fjordfox", "Slack"])
         XCTAssertNotNil(
-            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserDenyListSection),
+            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.consentDenyListSection),
         )
         XCTAssertNotNil(
-            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserAppRemove(0)),
+            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.consentDeniedAppRemove(0)),
         )
         XCTAssertNotNil(
-            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserAppRemove(1)),
+            try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.consentDeniedAppRemove(1)),
         )
     }
 
@@ -64,7 +68,7 @@ final class GeneralSettingsBrowserDenyListTests: XCTestCase {
         let view = try view(browserMeetings: true, denied: ["Fjordfox", "Slack"])
         for app in ["Fjordfox", "Slack"] {
             XCTAssertNil(
-                try? view.inspect().find(viewWithAccessibilityIdentifier: "browserAppRemove.\(app)"),
+                try? view.inspect().find(viewWithAccessibilityIdentifier: "consentDeniedAppRemove.\(app)"),
                 "\(app): the row identifier must not carry the app name",
             )
         }
@@ -78,9 +82,9 @@ final class GeneralSettingsBrowserDenyListTests: XCTestCase {
             notificationVisibility: nil,
         )
         try view.inspect()
-            .find(viewWithAccessibilityIdentifier: A11yID.browserAppRemove(0))
+            .find(viewWithAccessibilityIdentifier: A11yID.consentDeniedAppRemove(0))
             .button()
             .tap()
-        XCTAssertEqual(settings.browserAppsDenied, ["Slack"])
+        XCTAssertEqual(settings.consentDeniedApps, ["Slack"])
     }
 }

@@ -245,11 +245,11 @@ The store is a small value type plus a defaults-backed adapter:
 
 ```swift
 /// Pure core: one name list in, membership and transitions out.
-struct BrowserAppDenyList: Equatable {
+struct ConsentDenyList: Equatable {
     var denied: [String]
     func isDenied(_ app: String) -> Bool
-    func denying(_ app: String) -> BrowserAppDenyList    // idempotent
-    func reverting(_ app: String) -> BrowserAppDenyList  // Settings "Remove"
+    func denying(_ app: String) -> ConsentDenyList    // idempotent
+    func reverting(_ app: String) -> ConsentDenyList  // Settings "Remove"
 }
 ```
 
@@ -264,7 +264,7 @@ branch), and a `.never` answer is recorded in `finishConsent`.
 
 One new UserDefaults key on `AppSettings`:
 
-- `browserAppsDenied: [String]`, read as `stringArray(forKey:) ?? []`
+- `consentDeniedApps: [String]`, read as `stringArray(forKey:) ?? []`
 
 No seeding and no migration: the deny list starts empty, and the four
 previously hard-coded browser names disappear from the source entirely (the
@@ -356,13 +356,13 @@ Verified line references are against branch `work` at the time of writing.
 1. `app/MeetingTranscriber/Sources/ConsentAnswer.swift`
    Add `.never`. `isGranted` unchanged.
 
-2. `app/MeetingTranscriber/Sources/BrowserAppDenyList.swift` (new)
-   `BrowserAppDenyList` (pure), the `BrowserAppDenyListStoring` protocol
+2. `app/MeetingTranscriber/Sources/ConsentDenyList.swift` (new)
+   `ConsentDenyList` (pure), the `ConsentDenyListStoring` protocol
    (`isDenied(_:)`, `deny(_:)`, `revert(_:)`), and an in-memory default.
 
 3. `app/MeetingTranscriber/Sources/AppSettings.swift` (+ a defaults-backed
-   `BrowserAppDenyListStoring` adapter, either here or in the new file)
-   `browserAppsDenied` with the empty-default read described above.
+   `ConsentDenyListStoring` adapter, either here or in the new file)
+   `consentDeniedApps` with the empty-default read described above.
 
 4. `app/MeetingTranscriber/Sources/MeetingPatterns.swift`
    Rename `chromeBrowser` to `browserMeetings`; `appName: "Browser Meetings"`,
@@ -439,7 +439,7 @@ The bulk of coverage goes to the pure functions this plan extracts:
 - `PowerAssertionDetector.meetingIdentity(...)` (synthesis incl. the consent
   flag),
 - `PowerAssertionDetector.unmatchedWatchedAssertionKeys` (widened),
-- `BrowserAppDenyList` (membership + transitions),
+- `ConsentDenyList` (membership + transitions),
 - `NotificationManager.consentAnswer(for:)` and `makeConsentCategory()`.
 
 A known trap in exactly this area: a test that feeds back the literal it
@@ -536,7 +536,7 @@ Every test below names what makes it able to fail.
 18. The Remove button on a deny-list row calls the store (assert the
     settings array write-back), located by its `A11yID` constant. One test
     per control kind, not per state; list-content logic (which rows appear)
-    is layer 1 via `BrowserAppDenyList`.
+    is layer 1 via `ConsentDenyList`.
 19. The existing browser-toggle wiring test stays as is.
 
 ### Layer 3: `/state` live (e2e-browser lane)

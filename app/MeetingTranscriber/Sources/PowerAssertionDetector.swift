@@ -42,6 +42,10 @@ class PowerAssertionDetector: MeetingDetecting {
             case perProcess
         }
 
+        /// Keywords pre-lowercased once, because `matches` runs for every
+        /// assertion on the machine on every poll and these are constants.
+        private let loweredKeywords: [String]
+
         init(
             appName: String,
             processNames: [String],
@@ -49,21 +53,66 @@ class PowerAssertionDetector: MeetingDetecting {
             assertionTypes: [String] = [],
             identity: Identity = .shared,
         ) {
+            // A process-open pattern MUST identify per process. Shared identity
+            // would file every unclaimed process on the machine into one
+            // confirmation counter and one cooldown slot, so two unrelated apps
+            // alternating across polls would confirm a meeting that never
+            // existed, and the title lookup would use a matcher compiled from a
+            // category with no owner names and so return nil forever. Nothing
+            // else rules the combination out, and it is the shortest spelling of
+            // a new open pattern, so it is trapped here.
+            assert(
+                !(processNames.isEmpty && identity == .shared),
+                "a process-open pattern must use .perProcess identity",
+            )
             self.appName = appName
             self.processNames = processNames
             self.keywords = keywords
             self.assertionTypes = assertionTypes
-            self.identity = identity
+            self.identity = processNames.isEmpty ? .perProcess : identity
+            loweredKeywords = keywords.map { $0.lowercased() }
+        }
+
+        /// Whether this pattern's keywords appear in an assertion name.
+        func matchesKeyword(in assertName: String) -> Bool {
+            let lowered = assertName.lowercased()
+            return loweredKeywords.contains { lowered.contains($0) }
         }
 
         /// The key every per-app piece of detector state is filed under:
         /// confirmation counts, cooldowns, the once-per-poll guard and the
         /// winning match. See `Identity`.
+        /// NOTE: the two arms draw from different namespaces — `.shared` yields
+        /// an app name we choose, `.perProcess` an executable name off the
+        /// assertion, which since matching went process-open is unbounded. A
+        /// process literally named "Zoom" or "WhatsApp" therefore shares a
+        /// confirmation counter and a cooldown with the native app of that name.
+        /// Narrow in practice (such a process is almost certainly that app, and
+        /// claimed processes are excluded from open matching anyway), and NOT
+        /// fixed by prefixing the key here: `reset(appName:)` writes the cooldown
+        /// from a bare identity string and cannot know which kind it is, so a
+        /// prefix silently stops every cooldown from applying. Fixing it properly
+        /// means carrying the identity kind through that API.
         func identityKey(processName: String) -> String {
             switch identity {
             case .shared: appName
             case .perProcess: processName
             }
+        }
+
+        /// Whether an assertion held by `processName` belongs to the same
+        /// identity as a meeting already detected under `meetingAppName`.
+        ///
+        /// `meetingAppName` is already the identity (`DetectedMeeting.pattern`
+        /// carries the process name for a per-process hit), so it is compared
+        /// against this assertion's key directly. It must NOT be run back
+        /// through `identityKey`: that arm ignores its argument for `.shared`
+        /// patterns, so both sides would collapse to `appName` and the predicate
+        /// would be true for every pattern, leaving `isMeetingActive` with no
+        /// filter at all and letting any watched app's call keep any other
+        /// app's finished recording running.
+        func identifies(meetingAppName: String, processName: String) -> Bool {
+            identityKey(processName: processName) == meetingAppName
         }
     }
 
@@ -145,15 +194,23 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Override in tests to inject mock data.
     var windowListProvider: () -> [[String: Any]] = MeetingDetector.systemWindowList
 
+    /// Identities the user answered "Never for this app" about, so they never
+    /// reach confirmation. Wired from the persisted deny list.
+    ///
+    /// Filtered here rather than only at the consent gate because a denial does
+    /// not expire. An app that holds a WebRTC assertion all day would otherwise
+    /// re-confirm every few polls forever, and each time the gate skipped it it
+    /// called `reset`, which clears the confirmation counters of EVERY app: a
+    /// Teams or Zoom call starting in one of those windows would lose its
+    /// accumulated count and be detected late or not at all. A denied identity
+    /// also cannot occupy the single consent slot or a poll's one returned
+    /// meeting if it never confirms.
+    var isIdentityDenied: (String) -> Bool = { _ in false }
+
     /// Compiled title matcher per watched app, so the window-title lookup
     /// classifies titles the same way `MeetingDetector` does (idle-tab titles
     /// skipped, meeting-pattern titles preferred).
     private let matchers: [String: MeetingTitleMatcher]
-
-    /// See `claimedProcesses(in:)`. From `defaultPatterns`, not `patterns`.
-    private let claimedProcesses = PowerAssertionDetector.claimedProcesses(
-        in: PowerAssertionDetector.defaultPatterns,
-    )
 
     init(
         patterns: [AssertionPattern] = PowerAssertionDetector.defaultPatterns,
@@ -197,6 +254,10 @@ class PowerAssertionDetector: MeetingDetecting {
                     // identity key, not the pattern name, so two browsers
                     // sharing the browser pattern never share a slot.
                     let key = pattern.identityKey(processName: processName)
+
+                    // Permanently refused: never confirm, so it cannot shadow
+                    // another meeting or force a counter-wiping reset.
+                    if isIdentityDenied(key) { continue }
 
                     // Skip apps in cooldown
                     if let until = cooldownUntil[key], Date() < until {
@@ -263,11 +324,21 @@ class PowerAssertionDetector: MeetingDetecting {
             )
 
         case .perProcess:
+            if category == nil {
+                // The drift guard in `init` only inspects `.shared` patterns, so
+                // a per-process pattern whose category `appName` does not resolve
+                // (a typo, or a rename applied on one side only) would otherwise
+                // fall to the initializer's `false` default and auto-record with
+                // no prompt. Fail towards asking.
+                logger.error(
+                    "No AppMeetingPattern for process-open category \(pattern.appName, privacy: .public); requiring consent",
+                )
+            }
             return AppMeetingPattern(
                 appName: processName,
                 ownerNames: [processName],
                 meetingPatterns: [],
-                requiresRecordingConsent: category?.requiresRecordingConsent ?? false,
+                requiresRecordingConsent: category?.requiresRecordingConsent ?? true,
             )
         }
     }
@@ -287,7 +358,7 @@ class PowerAssertionDetector: MeetingDetecting {
                 // process name for `.perProcess` patterns, so nothing would ever
                 // match and every browser recording would stop at the end grace.
                 for pattern in patterns
-                    where pattern.identityKey(processName: processName) == meeting.pattern.appName {
+                    where pattern.identifies(meetingAppName: meeting.pattern.appName, processName: processName) {
                     if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
                         return true
                     }
@@ -339,16 +410,24 @@ class PowerAssertionDetector: MeetingDetecting {
 
     // MARK: - Private
 
-    /// Processes a bound pattern already speaks for. A process-open pattern can
-    /// never take one of these, so a native client cannot also be seen as a
-    /// browser meeting.
+    /// Processes that belong to an app the user can watch in its own right. A
+    /// process-open pattern can never take one of these, so a native client is
+    /// never also seen as a browser meeting.
     ///
-    /// Always computed from ALL known patterns, never from the watched subset:
-    /// otherwise switching the Teams toggle off would hand Teams to the browser
-    /// path and record it anyway, against the user's explicit opt-out.
-    static func claimedProcesses(in patterns: [AssertionPattern]) -> Set<String> {
-        Set(patterns.flatMap(\.processNames))
-    }
+    /// Two sources, because an app can be known to this detector, to
+    /// `MicInputDetector`, or to both: the bound assertion patterns here, plus
+    /// every `AppMeetingPattern.ownerNames`, which is where the mic-detected
+    /// call apps (WeChat, WhatsApp, FaceTime, Tencent Meeting) are declared.
+    /// WhatsApp in particular is Electron and so a plausible holder of the very
+    /// assertion the open pattern keys on.
+    ///
+    /// Always from ALL known apps, never from the watched subset. Otherwise
+    /// switching an app's toggle off would hand it to the browser path and
+    /// record it anyway, against the user's explicit opt-out, which is the one
+    /// thing this exclusion exists to prevent.
+    static let claimedProcesses: Set<String> = Set(
+        defaultPatterns.flatMap(\.processNames) + AppMeetingPattern.all.flatMap(\.ownerNames),
+    )
 
     /// Whether one assertion matches one pattern.
     ///
@@ -367,89 +446,27 @@ class PowerAssertionDetector: MeetingDetecting {
         processName: String,
         assertName: String,
         assertType: String,
-        claimed: Set<String>,
     ) -> Bool {
         if pattern.processNames.isEmpty {
-            guard !claimed.contains(processName) else { return false }
+            // The name becomes the identity, the prompt body and the deny-list
+            // key, so a blank one would ask "A meeting is active in ." and store
+            // an unremovable blank row. The allowlist used to make this
+            // unreachable.
+            guard !processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return false
+            }
+            guard !claimedProcesses.contains(processName) else { return false }
         } else {
             guard pattern.processNames.contains(processName) else { return false }
         }
-        let lowerAssert = assertName.lowercased()
-        if pattern.keywords.contains(where: { lowerAssert.contains($0.lowercased()) }) {
-            return true
-        }
+        if pattern.matchesKeyword(in: assertName) { return true }
         return pattern.assertionTypes.contains(assertType)
     }
 
     private func matchAssertion(processName: String, assertName: String, assertType: String, pattern: AssertionPattern) -> Bool {
-        Self.matches(
-            pattern: pattern,
-            processName: processName,
-            assertName: assertName,
-            assertType: assertType,
-            claimed: claimedProcesses,
-        )
+        Self.matches(pattern: pattern, processName: processName, assertName: assertName, assertType: assertType)
     }
 
-    /// Keys ("process|name|type") for assertions from a watched meeting app that
-    /// produced no match this round. Pure so the selection logic is unit-testable;
-    /// the caller dedupes for the detector's lifetime and emits one log line each.
-    static func unmatchedWatchedAssertionKeys(
-        assertions: [Int32: [[String: Any]]],
-        patterns: [AssertionPattern],
-        hits: Set<String>,
-    ) -> [String] {
-        var keys: [String] = []
-        for pidAssertions in assertions.values {
-            for assertion in pidAssertions {
-                guard let processName = assertion["Process Name"] as? String else { continue }
-                let assertName = assertion["AssertName"] as? String ?? ""
-                let assertType = assertion["AssertType"] as? String ?? ""
-                guard patterns.contains(where: { pattern in
-                    interesting(
-                        pattern: pattern,
-                        processName: processName,
-                        assertName: assertName,
-                        hits: hits,
-                    )
-                }) else { continue }
-                keys.append("\(processName)|\(assertName)|\(assertType)")
-            }
-        }
-        return keys
-    }
-
-    /// Whether this assertion is worth telling the user about: it looks like a
-    /// meeting for `pattern` but produced no detection this round.
-    ///
-    /// Two arms. A bound pattern reports its own processes, as before. A
-    /// process-open pattern reports ANY process whose assertion NAME carries its
-    /// keywords, whoever holds it, which is the arm that did not exist: the
-    /// diagnostic used to be gated on the same allowlist it was meant to
-    /// diagnose, so a process that failed to match produced no log line at all
-    /// and a wrong or missing browser name was invisible from the outside. A
-    /// natively-claimed process is included on purpose: "we saw a WebRTC
-    /// assertion from Teams and deliberately did not act on it" is exactly the
-    /// kind of thing a support log should say.
-    private static func interesting(
-        pattern: AssertionPattern,
-        processName: String,
-        assertName: String,
-        hits: Set<String>,
-    ) -> Bool {
-        guard !hits.contains(pattern.identityKey(processName: processName)) else { return false }
-        if pattern.processNames.isEmpty {
-            let lowered = assertName.lowercased()
-            return pattern.keywords.contains { lowered.contains($0.lowercased()) }
-        }
-        return pattern.processNames.contains(processName)
-    }
-
-    /// Log, once per distinct key, that a watched meeting app is running but its
-    /// assertion matched nothing this round — the "detection silently not firing"
-    /// signal from issue #446, previously visible only via manual pmset. The
-    /// names are app/OS-generated metadata (no user content), logged `.public`
-    /// so a reporter's diagnostic export names the actual assertion.
     private func logUnmatchedWatchedAssertions(_ assertions: [Int32: [[String: Any]]], hits: Set<String>) {
         for key in Self.unmatchedWatchedAssertionKeys(
             assertions: assertions, patterns: patterns, hits: hits,

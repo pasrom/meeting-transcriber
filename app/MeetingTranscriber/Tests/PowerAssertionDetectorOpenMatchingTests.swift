@@ -1,60 +1,23 @@
 @testable import MeetingTranscriber
 import XCTest
 
-private let webRTC = "WebRTC has active PeerConnections"
-
-/// A browser name that appears nowhere in Sources, so no allowlist
-/// implementation can pass the tests below: the literal exists only here.
-private let unknownBrowser = "Fjordfox"
-
-private func assertionDict(processName: String, assertName: String) -> [Int32: [[String: Any]]] {
-    [1: [[
-        "Process Name": processName,
-        "AssertName": assertName,
-        "AssertType": "PreventUserIdleDisplaySleep",
-    ]]]
-}
-
-private func browserDetector() -> PowerAssertionDetector {
-    let detector = PowerAssertionDetector(
-        patterns: PowerAssertionDetector.patterns(
-            watching: [AppMeetingPattern.browserMeetings.appName],
-        ),
-        confirmationCount: 1,
-    )
-    detector.windowListProvider = { [] }
-    return detector
-}
-
-private func browserPattern() throws -> PowerAssertionDetector.AssertionPattern {
-    try XCTUnwrap(
-        PowerAssertionDetector.defaultPatterns
-            .first { $0.appName == AppMeetingPattern.browserMeetings.appName },
-    )
-}
-
 /// Process-open browser matching: the WebRTC assertion name is the signal, and
 /// the process holding it is no longer checked against a hard-coded list of
 /// Chromium forks. Every fork therefore works without a release, which is what
 /// this change is for.
 final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
-    private var claimed: Set<String> {
-        PowerAssertionDetector.claimedProcesses(in: PowerAssertionDetector.defaultPatterns)
-    }
-
     // MARK: - Open matching
 
     func testAnUnknownBrowserIsDetected() throws {
         // The whole point: a fork nobody has heard of holds the assertion and is
         // recognised. No allowlist implementation can pass this.
-        let pattern = try browserPattern()
+        let pattern = try PowerAssertionFixture.browserPattern()
         XCTAssertTrue(pattern.processNames.isEmpty, "the browser pattern must accept any process")
         XCTAssertTrue(PowerAssertionDetector.matches(
             pattern: pattern,
-            processName: unknownBrowser,
-            assertName: webRTC,
+            processName: PowerAssertionFixture.unknownBrowser,
+            assertName: PowerAssertionFixture.webRTC,
             assertType: "PreventUserIdleDisplaySleep",
-            claimed: claimed,
         ))
     }
 
@@ -62,21 +25,22 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // Without this the open pattern would fire on every process that keeps
         // the display awake, starting with a video player.
         XCTAssertFalse(try PowerAssertionDetector.matches(
-            pattern: browserPattern(),
-            processName: unknownBrowser,
+            pattern: PowerAssertionFixture.browserPattern(),
+            processName: PowerAssertionFixture.unknownBrowser,
             assertName: "Playing audio",
             assertType: "PreventUserIdleDisplaySleep",
-            claimed: claimed,
         ))
     }
 
     func testUnknownBrowserReachesTheConsentPromptThroughTheDetector() {
         // End to end through checkOnce, not just the pure matcher: an unknown
         // fork must arrive as a per-process identity that still requires consent.
-        let detector = browserDetector()
-        detector.assertionProvider = { assertionDict(processName: unknownBrowser, assertName: webRTC) }
+        let detector = PowerAssertionFixture.browserDetector()
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertionDict(processName: PowerAssertionFixture.unknownBrowser, assertName: PowerAssertionFixture.webRTC)
+        }
         let meeting = detector.checkOnce()
-        XCTAssertEqual(meeting?.pattern.appName, unknownBrowser)
+        XCTAssertEqual(meeting?.pattern.appName, PowerAssertionFixture.unknownBrowser)
         XCTAssertTrue(
             meeting?.pattern.requiresRecordingConsent ?? false,
             "an unknown process must never auto-record",
@@ -90,11 +54,10 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // call. Without this it would fire twice: once under its own pattern
         // with auto-start, once as a browser meeting with a consent prompt.
         XCTAssertFalse(try PowerAssertionDetector.matches(
-            pattern: browserPattern(),
+            pattern: PowerAssertionFixture.browserPattern(),
             processName: "MSTeams",
-            assertName: webRTC,
+            assertName: PowerAssertionFixture.webRTC,
             assertType: "PreventUserIdleDisplaySleep",
-            claimed: claimed,
         ))
     }
 
@@ -108,11 +71,10 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         )
         XCTAssertFalse(browserOnly.contains { $0.appName == "Microsoft Teams" })
         XCTAssertFalse(try PowerAssertionDetector.matches(
-            pattern: browserPattern(),
+            pattern: PowerAssertionFixture.browserPattern(),
             processName: "MSTeams",
-            assertName: webRTC,
+            assertName: PowerAssertionFixture.webRTC,
             assertType: "PreventUserIdleDisplaySleep",
-            claimed: PowerAssertionDetector.claimedProcesses(in: PowerAssertionDetector.defaultPatterns),
         ))
     }
 
@@ -124,14 +86,32 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // browser, which no native pattern claims. An exclusion written against
         // the service instead would silently kill web meetings, which is most of
         // what this feature is for, and nothing else would notice.
-        for browser in ["Google Chrome", "Brave Browser", unknownBrowser] {
-            let detector = browserDetector()
-            detector.assertionProvider = { assertionDict(processName: browser, assertName: webRTC) }
+        for browser in ["Google Chrome", "Brave Browser", PowerAssertionFixture.unknownBrowser] {
+            let detector = PowerAssertionFixture.browserDetector()
+            detector.assertionProvider = { PowerAssertionFixture.assertionDict(processName: browser, assertName: PowerAssertionFixture.webRTC) }
             XCTAssertEqual(
                 detector.checkOnce()?.pattern.appName, browser,
                 "\(browser): a web meeting must still be detected",
             )
         }
+    }
+
+    func testABlankProcessNameIsRejected() throws {
+        // The name becomes the identity, the prompt body and the deny-list key,
+        // so a blank one would ask "A meeting is active in ." and leave a blank
+        // row in Settings that matches nothing.
+        XCTAssertFalse(try PowerAssertionDetector.matches(
+            pattern: PowerAssertionFixture.browserPattern(),
+            processName: "",
+            assertName: PowerAssertionFixture.webRTC,
+            assertType: "PreventUserIdleDisplaySleep",
+        ))
+        XCTAssertFalse(try PowerAssertionDetector.matches(
+            pattern: PowerAssertionFixture.browserPattern(),
+            processName: "   ",
+            assertName: PowerAssertionFixture.webRTC,
+            assertType: "PreventUserIdleDisplaySleep",
+        ))
     }
 
     // MARK: - Firefox, deliberately flipped
@@ -143,11 +123,10 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // process claiming an active PeerConnection is a candidate and the
         // consent prompt (with its "Never for this app" action) is the filter.
         XCTAssertTrue(try PowerAssertionDetector.matches(
-            pattern: browserPattern(),
+            pattern: PowerAssertionFixture.browserPattern(),
             processName: "firefox",
-            assertName: webRTC,
+            assertName: PowerAssertionFixture.webRTC,
             assertType: "PreventUserIdleDisplaySleep",
-            claimed: claimed,
         ))
     }
 
@@ -158,20 +137,41 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // reported processes that were already on the allowlist, so a process
         // that failed to match produced no log line at all.
         let keys = try PowerAssertionDetector.unmatchedWatchedAssertionKeys(
-            assertions: assertionDict(processName: "MSTeams", assertName: webRTC),
-            patterns: [browserPattern()],
+            assertions: PowerAssertionFixture.assertionDict(
+                processName: PowerAssertionFixture.unknownBrowser,
+                assertName: PowerAssertionFixture.webRTC,
+            ),
+            patterns: [PowerAssertionFixture.browserPattern()],
             hits: [],
         )
-        XCTAssertEqual(keys, ["MSTeams|\(webRTC)|PreventUserIdleDisplaySleep"])
+        XCTAssertEqual(
+            keys,
+            ["\(PowerAssertionFixture.unknownBrowser)|\(PowerAssertionFixture.webRTC)|PreventUserIdleDisplaySleep"],
+        )
+    }
+
+    func testANativeClientsWebRTCAssertionIsNotReportedByTheOpenPattern() throws {
+        // Teams is excluded from open matching by design and its own pattern
+        // reports its own misses. Reporting it here made the log say "detection
+        // is not firing" during a native call that was detected perfectly,
+        // pointing a bug report at a failure that never happened.
+        let keys = try PowerAssertionDetector.unmatchedWatchedAssertionKeys(
+            assertions: PowerAssertionFixture.assertionDict(
+                processName: "MSTeams", assertName: PowerAssertionFixture.webRTC,
+            ),
+            patterns: [PowerAssertionFixture.browserPattern()],
+            hits: [],
+        )
+        XCTAssertEqual(keys, [])
     }
 
     func testAMatchedAssertionIsNotReported() throws {
         // Control: without it a diagnostic that reported everything would pass
         // the test above.
         let keys = try PowerAssertionDetector.unmatchedWatchedAssertionKeys(
-            assertions: assertionDict(processName: unknownBrowser, assertName: webRTC),
-            patterns: [browserPattern()],
-            hits: [unknownBrowser],
+            assertions: PowerAssertionFixture.assertionDict(processName: PowerAssertionFixture.unknownBrowser, assertName: PowerAssertionFixture.webRTC),
+            patterns: [PowerAssertionFixture.browserPattern()],
+            hits: [PowerAssertionFixture.unknownBrowser],
         )
         XCTAssertEqual(keys, [])
     }
@@ -180,8 +180,8 @@ final class PowerAssertionDetectorOpenMatchingTests: XCTestCase {
         // Second control: the diagnostic is about WebRTC assertions that did not
         // act, not about every assertion on the machine.
         let keys = try PowerAssertionDetector.unmatchedWatchedAssertionKeys(
-            assertions: assertionDict(processName: unknownBrowser, assertName: "Playing audio"),
-            patterns: [browserPattern()],
+            assertions: PowerAssertionFixture.assertionDict(processName: PowerAssertionFixture.unknownBrowser, assertName: "Playing audio"),
+            patterns: [PowerAssertionFixture.browserPattern()],
             hits: [],
         )
         XCTAssertEqual(keys, [])

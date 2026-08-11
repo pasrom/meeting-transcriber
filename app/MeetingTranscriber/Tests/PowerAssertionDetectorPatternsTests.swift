@@ -1,14 +1,6 @@
 @testable import MeetingTranscriber
 import XCTest
 
-private func assertionDict(processName: String, assertName: String) -> [Int32: [[String: Any]]] {
-    [1: [[
-        "Process Name": processName,
-        "AssertName": assertName,
-        "AssertType": "PreventUserIdleDisplaySleep",
-    ]]]
-}
-
 /// Tests for `PowerAssertionDetector.patterns(watching:)` — the "Apps to Watch"
 /// toggle filtering (`AppSettings.watchApps`) that `WatchingController`'s default
 /// detector applies. Split out of `PowerAssertionDetectorTests` (which is at the
@@ -45,7 +37,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         )
         detector.windowListProvider = { [] }
         detector.assertionProvider = {
-            assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
+            PowerAssertionFixture.assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
         }
         let meeting = detector.checkOnce()
         XCTAssertEqual(meeting?.pattern.appName, "Google Chrome")
@@ -65,7 +57,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         )
         detector.windowListProvider = { [] }
         detector.assertionProvider = {
-            assertionDict(processName: "Google Chrome", assertName: "Playing audio")
+            PowerAssertionFixture.assertionDict(processName: "Google Chrome", assertName: "Playing audio")
         }
         XCTAssertNil(detector.checkOnce())
     }
@@ -87,7 +79,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         )
         detector.windowListProvider = { [] }
         detector.assertionProvider = {
-            assertionDict(processName: "firefox", assertName: "WebRTC has active PeerConnections")
+            PowerAssertionFixture.assertionDict(processName: "firefox", assertName: "WebRTC has active PeerConnections")
         }
         let meeting = detector.checkOnce()
         XCTAssertEqual(meeting?.pattern.appName, "firefox")
@@ -109,7 +101,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
             )
             detector.windowListProvider = { [] }
             detector.assertionProvider = {
-                assertionDict(processName: process, assertName: "WebRTC has active PeerConnections")
+                PowerAssertionFixture.assertionDict(processName: process, assertName: "WebRTC has active PeerConnections")
             }
             let meeting = detector.checkOnce()
             XCTAssertEqual(
@@ -137,7 +129,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
             )
             detector.windowListProvider = { [] }
             detector.assertionProvider = {
-                assertionDict(processName: process, assertName: "Playing audio")
+                PowerAssertionFixture.assertionDict(processName: process, assertName: "Playing audio")
             }
             XCTAssertNil(detector.checkOnce(), "\(process): media playback must not be a meeting")
         }
@@ -219,12 +211,12 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         detector.windowListProvider = { [] }
 
         detector.assertionProvider = {
-            assertionDict(processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
+            PowerAssertionFixture.assertionDict(processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
         }
         XCTAssertNil(detector.checkOnce(), "a Teams call must not be detected when only Zoom is watched")
 
         detector.assertionProvider = {
-            assertionDict(processName: "zoom.us", assertName: "zoom call")
+            PowerAssertionFixture.assertionDict(processName: "zoom.us", assertName: "zoom call")
         }
         XCTAssertNotNil(detector.checkOnce(), "a Zoom call must still be detected")
     }
@@ -250,13 +242,13 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // second poll; poll twice each so the assertions actually distinguish
         // "filtered out" (never fires) from "would fire".
         detector.assertionProvider = {
-            assertionDict(processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
+            PowerAssertionFixture.assertionDict(processName: "MSTeams", assertName: "Microsoft Teams Call in progress")
         }
         _ = detector.checkOnce()
         XCTAssertNil(detector.checkOnce(), "Teams off → a Teams call must never fire, even after two polls")
 
         detector.assertionProvider = {
-            assertionDict(processName: "zoom.us", assertName: "zoom call")
+            PowerAssertionFixture.assertionDict(processName: "zoom.us", assertName: "zoom call")
         }
         _ = detector.checkOnce()
         XCTAssertNotNil(detector.checkOnce(), "Zoom on → a Zoom call must fire")
@@ -277,7 +269,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
             )
             d.windowListProvider = { [] }
             d.assertionProvider = {
-                assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
+                PowerAssertionFixture.assertionDict(processName: "Google Chrome", assertName: "WebRTC has active PeerConnections")
             }
             return d
         }

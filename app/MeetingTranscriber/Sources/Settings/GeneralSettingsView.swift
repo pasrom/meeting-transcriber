@@ -45,14 +45,15 @@ struct GeneralSettingsView: View {
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)
                 Text(
                     """
-                    Detects meetings in any Chromium browser (Google Meet, Whereby, web Zoom/Teams). \
-                    Asks before recording, and you can tell it never to ask about an app again.
+                    Detects web meetings (Google Meet, Whereby, web Zoom/Teams) by the WebRTC \
+                    signal, so any browser works. Other apps that place calls can trigger it too; \
+                    it always asks before recording, and "Never for this app" stops one for good.
                     """,
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 browserConsentWarning
-                browserDenyList
+                consentDenyList
             }
 
             Section("Detection") {
@@ -86,37 +87,43 @@ struct GeneralSettingsView: View {
         .formStyle(.grouped)
     }
 
-    /// Warns when browser watching is on but the consent prompt cannot reach the
-    /// user. Rendered here rather than as a notification for the obvious reason,
-    /// and kept out of the menu-bar permission badge because this permission only
-    /// matters for this one opt-in feature.
-    /// Apps the user answered "Never for this app" about. Shown only when there
-    /// is something to show: an empty list would be a permanent empty box, and
-    /// the only reason to come here is to undo a Never that was a mistake.
-    @ViewBuilder private var browserDenyList: some View {
-        if settings.watchBrowserMeetings, !settings.browserAppsDenied.isEmpty {
+    /// Apps the user answered "Never for this app" about.
+    ///
+    /// Shown whenever the list is non-empty, deliberately NOT gated on the
+    /// browser toggle. Today only browser meetings ask for consent, but the
+    /// gate it hangs off is `requiresRecordingConsent`, a general pattern
+    /// property, and the moment another app adopts it a denial made there would
+    /// become impossible to undo behind a browser-specific switch. An empty
+    /// list stays hidden: the only reason to come here is to take back a Never.
+    ///
+    /// Writes go through `ConsentDenyListStore`, the same path the consent gate
+    /// uses, so list semantics live in one place instead of two.
+    @ViewBuilder private var consentDenyList: some View {
+        if !settings.consentDeniedApps.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Never record these apps")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                ForEach(Array(settings.browserAppsDenied.enumerated()), id: \.element) { index, app in
+                ForEach(Array(settings.consentDeniedApps.enumerated()), id: \.element) { index, app in
                     HStack {
                         Text(app)
                             .font(.caption)
                         Spacer()
                         Button("Remove") {
-                            settings.browserAppsDenied = BrowserAppDenyList(
-                                denied: settings.browserAppsDenied,
-                            ).reverting(app).denied
+                            ConsentDenyListStore(settings: settings).revert(app)
                         }
-                        .accessibilityIdentifier(A11yID.browserAppRemove(index))
+                        .accessibilityIdentifier(A11yID.consentDeniedAppRemove(index))
                     }
                 }
             }
-            .accessibilityIdentifier(A11yID.browserDenyListSection)
+            .accessibilityIdentifier(A11yID.consentDenyListSection)
         }
     }
 
+    /// Warns when browser watching is on but the consent prompt cannot reach the
+    /// user. Rendered here rather than as a notification for the obvious reason,
+    /// and kept out of the menu-bar permission badge because this permission only
+    /// matters for this one opt-in feature.
     @ViewBuilder private var browserConsentWarning: some View {
         if let readiness = browserConsentReadiness,
            let headline = readiness.headline,

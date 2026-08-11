@@ -111,8 +111,16 @@ final class WatchingController {
     /// so the toggle wiring stays assertable: a test can configure one
     /// strategy's injectable providers without reaching into the composite.
     static func defaultDetectors(settings: AppSettings) -> [any MeetingDetecting] {
-        [
-            PowerAssertionDetector(patterns: PowerAssertionDetector.patterns(watching: settings.watchApps)),
+        let assertions = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: settings.watchApps),
+        )
+        // Read through the settings each poll rather than captured once, so a
+        // Settings "Remove" takes effect without restarting the watch loop.
+        assertions.isIdentityDenied = { [settings] app in
+            settings.consentDeniedApps.contains(app)
+        }
+        return [
+            assertions,
             MicInputDetector(patterns: MicInputDetector.patterns(watching: settings.watchApps)),
         ]
     }
@@ -172,7 +180,7 @@ final class WatchingController {
                         .production(parent: settings.effectiveOutputDir)
                     },
                     notifier: notifier,
-                    denyListStore: BrowserAppDenyListStore(settings: settings),
+                    denyListStore: ConsentDenyListStore(settings: settings),
                 )
 
                 attachStateChangeHandler(to: loop, notifyOnRecording: true)

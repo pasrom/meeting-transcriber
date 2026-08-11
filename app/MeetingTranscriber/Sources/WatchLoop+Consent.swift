@@ -29,15 +29,9 @@ extension WatchLoop {
         guard pendingConsentApp == nil else { return true }
 
         let app = meeting.pattern.appName
-        // "Never for this app" outranks every cooldown: it is an answer about
-        // the app, so unlike a decline it never expires. Checked before the
-        // policy so no amount of elapsed time can revive the question.
-        guard !denyListStore.isDenied(app) else {
-            detector.reset(appName: app)
-            return true
-        }
-
-        guard case .ask = consentPolicy.decision(app: app, now: nowProvider()) else {
+        guard case .ask = consentPolicy.decision(
+            app: app, now: nowProvider(), isDenied: denyListStore.isDenied(app),
+        ) else {
             detector.reset(appName: app) // re-detect after the debounce
             return true
         }

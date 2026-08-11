@@ -4,6 +4,35 @@ import XCTest
 final class BrowserConsentPolicyTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
 
+    // MARK: - "Never for this app" outranks the cooldowns
+
+    func testDeniedOutranksAnExpiredCooldown() {
+        // The precedence that matters: a decline goes quiet and then asks again,
+        // a denial must not. Asserted here rather than only through the live
+        // poll loop, so the ordering between the two is pinned by construction.
+        var policy = BrowserConsentPolicy()
+        policy.recordDecline(app: "Fjordfox", now: t0)
+        let longAfter = t0.addingTimeInterval(policy.declineCooldown * 10)
+        XCTAssertEqual(policy.decision(app: "Fjordfox", now: longAfter), .ask)
+        XCTAssertEqual(policy.decision(app: "Fjordfox", now: longAfter, isDenied: true), .denied)
+    }
+
+    func testDeniedIgnoresTimeEntirely() {
+        // No instant is consulted, so no clock change or long uptime revives it.
+        let policy = BrowserConsentPolicy()
+        XCTAssertEqual(policy.decision(app: "Fjordfox", now: t0, isDenied: true), .denied)
+        XCTAssertEqual(
+            policy.decision(app: "Fjordfox", now: .distantFuture, isDenied: true), .denied,
+        )
+    }
+
+    func testNotDeniedIsUnaffected() {
+        // Control: the flag defaults false and changes nothing on its own.
+        let policy = BrowserConsentPolicy()
+        XCTAssertEqual(policy.decision(app: "Fjordfox", now: t0), .ask)
+        XCTAssertEqual(policy.decision(app: "Fjordfox", now: t0, isDenied: false), .ask)
+    }
+
     // MARK: - An unanswered prompt is not a "no" (issue #543)
 
     /// Saying no and never seeing the question are different answers, and they

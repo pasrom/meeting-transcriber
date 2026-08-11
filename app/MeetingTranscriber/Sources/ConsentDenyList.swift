@@ -17,7 +17,7 @@ import Foundation
 /// Entries are process names exactly as the power assertion reports them, and
 /// they are matched exactly: the detector matches process names that way, and a
 /// looser rule here would silence an app the user was never asked about.
-struct BrowserAppDenyList: Equatable {
+struct ConsentDenyList: Equatable {
     /// Insertion-ordered, so the Settings rows do not reshuffle between renders.
     private(set) var denied: [String]
 
@@ -50,11 +50,11 @@ struct BrowserAppDenyList: Equatable {
 /// and the Settings rows, so the list never needs to cross an actor boundary
 /// and cannot race the poll loop's reads.
 @MainActor
-protocol BrowserAppDenyListStoring: AnyObject {
-    var denyList: BrowserAppDenyList { get set }
+protocol ConsentDenyListStoring: AnyObject {
+    var denyList: ConsentDenyList { get set }
 }
 
-extension BrowserAppDenyListStoring {
+extension ConsentDenyListStoring {
     func isDenied(_ app: String) -> Bool {
         denyList.isDenied(app)
     }
@@ -69,30 +69,30 @@ extension BrowserAppDenyListStoring {
 }
 
 /// Default for tests and for any `WatchLoop` built without an explicit store.
-final class InMemoryBrowserAppDenyListStore: BrowserAppDenyListStoring {
-    var denyList: BrowserAppDenyList
+final class InMemoryConsentDenyListStore: ConsentDenyListStoring {
+    var denyList: ConsentDenyList
 
-    init(denyList: BrowserAppDenyList = BrowserAppDenyList()) {
+    init(denyList: ConsentDenyList = ConsentDenyList()) {
         self.denyList = denyList
     }
 }
 
-/// The persisting store, backed by `AppSettings.browserAppsDenied`.
+/// The persisting store, backed by `AppSettings.consentDeniedApps`.
 ///
 /// Everything that exercises the gate injects the in-memory store, so nothing
-/// else would notice if this adapter forgot to write. `BrowserAppDenyListStore`
+/// else would notice if this adapter forgot to write. `ConsentDenyListStore`
 /// tests round-trip it against a real defaults suite for exactly that reason: a
 /// Never that does not survive a relaunch is the failure the user would feel.
 @MainActor
-final class BrowserAppDenyListStore: BrowserAppDenyListStoring {
+final class ConsentDenyListStore: ConsentDenyListStoring {
     private let settings: AppSettings
 
     init(settings: AppSettings) {
         self.settings = settings
     }
 
-    var denyList: BrowserAppDenyList {
-        get { BrowserAppDenyList(denied: settings.browserAppsDenied) }
-        set { settings.browserAppsDenied = newValue.denied }
+    var denyList: ConsentDenyList {
+        get { ConsentDenyList(denied: settings.consentDeniedApps) }
+        set { settings.consentDeniedApps = newValue.denied }
     }
 }
