@@ -13,7 +13,7 @@ extension AppSettings {
         if watchTeams { apps.append("Microsoft Teams") }
         if watchZoom { apps.append("Zoom") }
         if watchWebex { apps.append("Webex") }
-        if watchBrowserMeetings { apps.append(AppMeetingPattern.chromeBrowser.appName) }
+        if watchBrowserMeetings { apps.append(AppMeetingPattern.browserMeetings.appName) }
         if watchWeChat { apps.append(AppMeetingPattern.wechat.appName) }
         if watchTencentMeeting { apps.append(AppMeetingPattern.tencentMeeting.appName) }
         if watchFaceTime { apps.append(AppMeetingPattern.faceTime.appName) }

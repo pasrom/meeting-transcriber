@@ -102,14 +102,19 @@ extension AppMeetingPattern {
     /// inside a Chromium browser, which the native-app patterns above miss
     /// (issue #503). Detection is by the WebRTC power assertion (see
     /// `PowerAssertionDetector`), not window titles — a browser's window title
-    /// only reflects the active tab. Every Chromium fork (Chrome, Brave, Edge,
-    /// Chromium, Aside) emits the same assertion, so all five owner names share this one
-    /// browser identity (one "Google Chrome" toggle). `requiresRecordingConsent`
-    /// routes it through a prompt instead of auto-start; `meetingPatterns` is
-    /// empty (no title-based detection in the PoC).
-    static let chromeBrowser = AppMeetingPattern(
-        appName: "Google Chrome",
-        ownerNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"],
+    /// only reflects the active tab.
+    ///
+    /// This is a *category*, not an identity: a detected call is carried under
+    /// the concrete browser process ("Brave Browser"), synthesised per hit by
+    /// `PowerAssertionDetector.meetingIdentity`. The category exists so the
+    /// master toggle has a token to append to `watchApps`, and so the
+    /// `requiresRecordingConsent` policy has one home. `appName` is therefore a
+    /// token no real process can carry, and `ownerNames` is empty: a shared
+    /// owner list would let any fork's window title be picked for another
+    /// fork's meeting. `meetingPatterns` is empty (no title-based detection).
+    static let browserMeetings = AppMeetingPattern(
+        appName: "Browser Meetings",
+        ownerNames: [],
         meetingPatterns: [],
         requiresRecordingConsent: true,
     )
@@ -143,7 +148,7 @@ extension AppMeetingPattern {
         meetingPatterns: [],
     )
 
-    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, chromeBrowser, wechat, tencentMeeting, faceTime, whatsApp]
+    static let all: [AppMeetingPattern] = [teams, zoom, webex, simulator, browserMeetings, wechat, tencentMeeting, faceTime, whatsApp]
 
     static let byName: [String: AppMeetingPattern] = {
         var dict: [String: AppMeetingPattern] = [:]

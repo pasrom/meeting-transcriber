@@ -180,9 +180,12 @@ final class AppSettingsTests: XCTestCase {
         )
     }
 
-    func testWatchBrowserMeetingsAppendsChromeToWatchApps() {
+    func testWatchBrowserMeetingsAppendsTheBrowserCategoryToWatchApps() {
+        // The appended token is the browser *category*, deliberately a name no
+        // real process carries: individual browsers are identified per process
+        // at detection time, so this one token switches the whole family on.
         settings.watchBrowserMeetings = true
-        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Zoom", "Webex", "Google Chrome"])
+        XCTAssertEqual(settings.watchApps, ["Microsoft Teams", "Zoom", "Webex", "Browser Meetings"])
     }
 
     func testWatchBrowserMeetingsPersists() {

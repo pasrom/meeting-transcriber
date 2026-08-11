@@ -17,7 +17,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     func testPatternsWatchingAllKeepsEveryPattern() {
         // Every user-facing app watched (natives + browser) → every default pattern.
         let names = PowerAssertionDetector
-            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex", "Google Chrome"])
+            .patterns(watching: ["Microsoft Teams", "Zoom", "Webex", AppMeetingPattern.browserMeetings.appName])
             .map(\.appName)
         XCTAssertEqual(Set(names), Set(PowerAssertionDetector.defaultPatterns.map(\.appName)))
     }
@@ -25,22 +25,22 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     // MARK: - Browser (Chrome / WebRTC) pattern — issue #503
 
     func testBrowserPatternIsOptInViaWatching() {
-        // The Chrome browser pattern ships in defaults but is only watched when
-        // the browser toggle adds "Google Chrome" to watchApps — off by default,
+        // The browser pattern ships in defaults but is only watched when the
+        // browser toggle adds the category token to watchApps — off by default,
         // so the native-only selection must not include it.
         XCTAssertFalse(
             PowerAssertionDetector.patterns(watching: ["Microsoft Teams", "Zoom", "Webex"])
-                .map(\.appName).contains("Google Chrome"),
+                .map(\.appName).contains(AppMeetingPattern.browserMeetings.appName),
         )
         XCTAssertTrue(
-            PowerAssertionDetector.patterns(watching: ["Google Chrome"])
-                .map(\.appName).contains("Google Chrome"),
+            PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName])
+                .map(\.appName).contains(AppMeetingPattern.browserMeetings.appName),
         )
     }
 
     func testChromeWebRTCCallIsDetected() {
         let detector = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
             confirmationCount: 1,
         )
         detector.windowListProvider = { [] }
@@ -60,7 +60,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // display-sleep assertion, but its name has no WebRTC marker — the
         // keyword match must reject it so we don't prompt on every video.
         let detector = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
             confirmationCount: 1,
         )
         detector.windowListProvider = { [] }
@@ -75,7 +75,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // (Firefox has its own assertion mechanism) holding a WebRTC-named
         // assertion must not fire the browser pattern.
         let detector = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
             confirmationCount: 1,
         )
         detector.windowListProvider = { [] }
@@ -90,13 +90,12 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     /// The browser pattern is not Chrome-specific: every Chromium fork holds the
     /// same "WebRTC has active PeerConnections" assertion (it lives in Chromium's
     /// content layer), so Brave/Edge/Chromium/Aside calls must detect identically. They
-    /// share the single "Google Chrome" browser-meetings identity (one toggle),
-    /// but the detected meeting is titled by the concrete browser so a Brave call
-    /// is not mislabeled "Google Chrome Call".
+    /// share one toggle but NOT one identity: each fork is carried as itself, so
+    /// a Brave call is a "Brave Browser" meeting and never a Chrome one.
     func testChromiumFamilyWebRTCCallsAreDetected() {
         for process in ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"] {
             let detector = PowerAssertionDetector(
-                patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+                patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
                 confirmationCount: 1,
             )
             detector.windowListProvider = { [] }
@@ -105,8 +104,8 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
             }
             let meeting = detector.checkOnce()
             XCTAssertEqual(
-                meeting?.pattern.appName, "Google Chrome",
-                "\(process): WebRTC call must fire under the shared browser identity",
+                meeting?.pattern.appName, process,
+                "\(process): a WebRTC call must be carried under the browser that held it",
             )
             XCTAssertTrue(
                 meeting?.pattern.requiresRecordingConsent ?? false,
@@ -124,7 +123,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // playback (no WebRTC in the assertion name) must not prompt.
         for process in ["Brave Browser", "Microsoft Edge", "Chromium", "Aside"] {
             let detector = PowerAssertionDetector(
-                patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+                patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
                 confirmationCount: 1,
             )
             detector.windowListProvider = { [] }
@@ -135,32 +134,41 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         }
     }
 
-    func testBrowserProcessNamesMatchOwnerNames() {
-        // The browser AssertionPattern's processNames (used for detection) and
-        // chromeBrowser.ownerNames (used for the window-title lookup) are two
-        // hand-maintained copies of the same Chromium family. A fork added to
-        // one list only would detect without a title, or title without
-        // detecting, silently. Pin them equal so drift fails here.
+    func testBrowserCategoryOwnsNoProcessNames() {
+        // This replaces a test that pinned the browser AssertionPattern's
+        // processNames equal to the category's ownerNames, because the two
+        // lists were hand-maintained copies of the same Chromium family and
+        // drift between them was silent. There is now only one list: the title
+        // comes from the process that actually asserted, so the category holds
+        // no owner names at all and there is nothing left to drift. Pin the
+        // emptiness, because a non-empty list here would silently restore the
+        // leak where one fork supplies another fork's meeting title.
+        XCTAssertTrue(AppMeetingPattern.browserMeetings.ownerNames.isEmpty)
         let browser = PowerAssertionDetector.defaultPatterns.first { pattern in
-            pattern.appName == AppMeetingPattern.chromeBrowser.appName
+            pattern.appName == AppMeetingPattern.browserMeetings.appName
         }
-        XCTAssertEqual(browser?.processNames, AppMeetingPattern.chromeBrowser.ownerNames)
+        XCTAssertEqual(browser?.identity, .perProcess)
     }
 
-    func testTwoFamilyBrowsersInOnePollCountOnce() {
-        // Two Chromium browsers each holding a WebRTC assertion in the same poll
-        // share the one browser identity. The once-per-poll guard must count that
-        // as a single hit, not double-increment toward confirmation — otherwise
-        // the pair would confirm in one poll instead of the required two.
+    func testOneBrowserWithTwoCallsInOnePollCountsOnce() {
+        // This used to pin two DIFFERENT browsers counting once between them,
+        // because they shared a single browser identity. They no longer do: each
+        // fork counts for itself (see PowerAssertionDetectorIdentityTests). What
+        // the once-per-poll guard still has to do is stop ONE browser from
+        // double-incrementing when it holds two WebRTC assertions in the same
+        // poll, which a browser with two calls open does; otherwise it would
+        // confirm in one poll instead of the required two.
         let detector = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(watching: ["Google Chrome"]),
+            patterns: PowerAssertionDetector.patterns(
+                watching: [AppMeetingPattern.browserMeetings.appName],
+            ),
             confirmationCount: 2,
         )
         detector.windowListProvider = { [] }
         detector.assertionProvider = {
             [
                 10: [[
-                    "Process Name": "Google Chrome",
+                    "Process Name": "Brave Browser",
                     "AssertName": "WebRTC has active PeerConnections",
                     "AssertType": "PreventUserIdleDisplaySleep",
                 ]],
@@ -171,8 +179,8 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
                 ]],
             ]
         }
-        XCTAssertNil(detector.checkOnce(), "two browsers in one poll must count once, not reach confirmation")
-        XCTAssertNotNil(detector.checkOnce(), "the shared counter reaches confirmation on the second poll")
+        XCTAssertNil(detector.checkOnce(), "two assertions from one browser in one poll must count once")
+        XCTAssertNotNil(detector.checkOnce(), "its counter reaches confirmation on the second poll")
     }
 
     func testPatternsWatchingSubsetDropsUnselectedApps() {

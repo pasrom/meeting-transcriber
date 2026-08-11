@@ -24,16 +24,22 @@ final class AppMeetingPatternTests: XCTestCase {
         XCTAssertEqual(AppMeetingPattern.all.count, 9)
     }
 
-    // MARK: - Chrome Browser Pattern (issue #503)
+    // MARK: - Browser meetings category (issue #503)
 
-    func testForAppNameReturnsChromeBrowser() {
-        let pattern = AppMeetingPattern.forAppName("Google Chrome")
-        XCTAssertEqual(pattern?.appName, "Google Chrome")
-        XCTAssertTrue(pattern?.ownerNames.contains("Google Chrome") ?? false)
+    func testBrowserCategoryIsNotReachableByABrowserName() {
+        // This used to assert that "Google Chrome" resolved to the browser
+        // pattern. It deliberately no longer does: the category is keyed by a
+        // token no process carries, so a real Chrome hit cannot resolve back to
+        // a family-wide pattern and pick up another fork's owner names.
+        XCTAssertNil(AppMeetingPattern.forAppName("Google Chrome"))
+        XCTAssertEqual(
+            AppMeetingPattern.forAppName("Browser Meetings")?.appName,
+            AppMeetingPattern.browserMeetings.appName,
+        )
     }
 
-    func testChromeBrowserRequiresRecordingConsent() {
-        XCTAssertTrue(AppMeetingPattern.chromeBrowser.requiresRecordingConsent)
+    func testBrowserCategoryRequiresRecordingConsent() {
+        XCTAssertTrue(AppMeetingPattern.browserMeetings.requiresRecordingConsent)
     }
 
     func testNativePatternsDoNotRequireRecordingConsent() {

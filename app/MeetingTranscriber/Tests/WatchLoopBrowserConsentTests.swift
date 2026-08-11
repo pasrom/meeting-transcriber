@@ -115,7 +115,14 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
 
     private func browserMeeting() -> DetectedMeeting {
         DetectedMeeting(
-            pattern: .chromeBrowser,
+            // A browser meeting is carried under the concrete browser, not a
+            // shared family identity (see `PowerAssertionDetector.meetingIdentity`).
+            pattern: AppMeetingPattern(
+                appName: "Google Chrome",
+                ownerNames: ["Google Chrome"],
+                meetingPatterns: [],
+                requiresRecordingConsent: true,
+            ),
             windowTitle: "Google Chrome Call",
             ownerName: "Google Chrome",
             windowPID: 5632,
@@ -163,14 +170,18 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
     }
 
     func testConsentPromptNamesTheConcreteBrowser() async {
-        // Brave/Edge/Chromium share the one "Google Chrome" toggle identity, but
-        // the consent prompt is the surface that gates recording — it must name
-        // the actual browser so a Brave user recognises the call and does not
-        // decline it as a phantom Chrome prompt (which would then suppress the
-        // whole family for the decline cooldown).
+        // Brave/Edge/Chromium share the one browser toggle, but each is its own
+        // identity. The consent prompt is the surface that gates recording, so
+        // it must name the actual browser: a Brave user has to recognise the
+        // call rather than decline it as a phantom Chrome prompt.
         let spy = ConsentSpy(answer: .declined)
         let brave = DetectedMeeting(
-            pattern: .chromeBrowser,
+            pattern: AppMeetingPattern(
+                appName: "Brave Browser",
+                ownerNames: ["Brave Browser"],
+                meetingPatterns: [],
+                requiresRecordingConsent: true,
+            ),
             windowTitle: "Brave Browser Call",
             ownerName: "Brave Browser",
             windowPID: 5632,

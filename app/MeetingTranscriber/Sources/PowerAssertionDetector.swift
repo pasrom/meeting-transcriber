@@ -24,12 +24,46 @@ class PowerAssertionDetector: MeetingDetecting {
         /// Teams, whose WebView holds a display-sleep "Video Wake Lock" even with
         /// no call in progress, so it must stay keyword-only.
         let assertionTypes: [String]
+        /// How a hit is carried downstream. Deliberately independent of
+        /// `processNames`: a pattern can accept a fixed list of processes and
+        /// still identify each of them separately.
+        let identity: Identity
 
-        init(appName: String, processNames: [String], keywords: [String], assertionTypes: [String] = []) {
+        /// `.shared`: every process in `processNames` is the same app, so the
+        /// pattern's own `appName` is the identity (Teams is one app whether it
+        /// asserts as `MSTeams` or `Microsoft Teams`). `.perProcess`: each
+        /// process is its own app, so the concrete process name is the identity.
+        /// Browser meetings are `.perProcess` because the Chromium forks that
+        /// share this pattern are *different browsers*, not aliases of one:
+        /// aliasing them made a decline in one silence the others, let one keep
+        /// another's recording alive, and let one supply another's window title.
+        enum Identity {
+            case shared
+            case perProcess
+        }
+
+        init(
+            appName: String,
+            processNames: [String],
+            keywords: [String],
+            assertionTypes: [String] = [],
+            identity: Identity = .shared,
+        ) {
             self.appName = appName
             self.processNames = processNames
             self.keywords = keywords
             self.assertionTypes = assertionTypes
+            self.identity = identity
+        }
+
+        /// The key every per-app piece of detector state is filed under:
+        /// confirmation counts, cooldowns, the once-per-poll guard and the
+        /// winning match. See `Identity`.
+        func identityKey(processName: String) -> String {
+            switch identity {
+            case .shared: appName
+            case .perProcess: processName
+            }
         }
     }
 
@@ -59,16 +93,20 @@ class PowerAssertionDetector: MeetingDetecting {
         // "NoIdleSleepAssertion" named "WebRTC has active PeerConnections"
         // during any WebRTC call (Google Meet, Whereby, web Zoom/Teams/Webex).
         // The assertion lives in Chromium's content layer, so every fork
-        // (Chrome, Brave, Edge, Chromium, Aside) emits the same name — all five are
-        // matched under one shared browser identity. Keyword-only, no
+        // (Chrome, Brave, Edge, Chromium, Aside) emits the same name and they share
+        // this one pattern. They do NOT share an identity: `.perProcess` carries
+        // each fork as itself, so a call in one browser cannot silence, prolong,
+        // mistitle or misattribute a call in another. Keyword-only, no
         // assertionTypes: a Chromium browser holds the same assertion type for
         // plain media playback (YouTube), so matching the type would fire on
         // every video — the WebRTC name is the meeting-specific signal. Opt-in:
-        // only watched when the browser toggle adds "Google Chrome" to watchApps.
+        // only watched when the browser toggle adds the category token to
+        // watchApps.
         AssertionPattern(
-            appName: AppMeetingPattern.chromeBrowser.appName,
+            appName: AppMeetingPattern.browserMeetings.appName,
             processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"],
             keywords: ["webrtc", "peerconnection"],
+            identity: .perProcess,
         ),
     ]
 
@@ -116,6 +154,10 @@ class PowerAssertionDetector: MeetingDetecting {
         self.patterns = patterns
         self.confirmationCount = confirmationCount
         matchers = patterns.reduce(into: [:]) { dict, pattern in
+            // `.perProcess` patterns build their matcher per hit from the
+            // concrete process, so there is nothing to precompile and nothing
+            // for the drift guard below to complain about.
+            guard pattern.identity == .shared else { return }
             guard let meetingPattern = AppMeetingPattern.forAppName(pattern.appName) else {
                 // Drift guard: a watched assertion app with no matching
                 // AppMeetingPattern would silently title every meeting with the
@@ -132,7 +174,7 @@ class PowerAssertionDetector: MeetingDetecting {
     func checkOnce() -> DetectedMeeting? {
         let assertions = assertionProvider()
         var hitsThisRound: Set<String> = []
-        var firstMatch: [String: (pid: Int32, processName: String, assertName: String)] = [:]
+        var firstMatch: [String: (pid: Int32, processName: String, pattern: AssertionPattern)] = [:]
 
         for (pid, pidAssertions) in assertions {
             for assertion in pidAssertions {
@@ -143,18 +185,23 @@ class PowerAssertionDetector: MeetingDetecting {
                 let assertType = assertion["AssertType"] as? String ?? ""
 
                 for pattern in patterns {
+                    // Every piece of per-app state below is filed under the
+                    // identity key, not the pattern name, so two browsers
+                    // sharing the browser pattern never share a slot.
+                    let key = pattern.identityKey(processName: processName)
+
                     // Skip apps in cooldown
-                    if let until = cooldownUntil[pattern.appName], Date() < until {
+                    if let until = cooldownUntil[key], Date() < until {
                         continue
                     }
 
-                    // Only count each pattern once per poll
-                    guard !hitsThisRound.contains(pattern.appName) else { continue }
+                    // Only count each identity once per poll
+                    guard !hitsThisRound.contains(key) else { continue }
 
                     if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
-                        hitsThisRound.insert(pattern.appName)
-                        firstMatch[pattern.appName] = (pid, processName, assertName)
-                        consecutiveHits[pattern.appName, default: 0] += 1
+                        hitsThisRound.insert(key)
+                        firstMatch[key] = (pid, processName, pattern)
+                        consecutiveHits[key, default: 0] += 1
                     }
                 }
             }
@@ -163,18 +210,13 @@ class PowerAssertionDetector: MeetingDetecting {
         logUnmatchedWatchedAssertions(assertions, hits: hitsThisRound)
 
         // Check confirmation threshold
-        for (appName, hits) in consecutiveHits {
-            if hits >= confirmationCount, let match = firstMatch[appName] {
-                let meetingPattern = AppMeetingPattern.forAppName(appName) ?? AppMeetingPattern(
-                    appName: appName,
-                    ownerNames: [match.processName],
-                    meetingPatterns: [],
+        for (key, hits) in consecutiveHits {
+            if hits >= confirmationCount, let match = firstMatch[key] {
+                let meetingPattern = Self.meetingIdentity(
+                    pattern: match.pattern, processName: match.processName,
                 )
-                // Browser meetings share one "Google Chrome" identity but can run
-                // in any Chromium fork; title the placeholder by the concrete
-                // browser process so a Brave/Edge call is not labeled as Chrome.
-                let placeholderApp = meetingPattern.requiresRecordingConsent ? match.processName : appName
-                let title = lookupWindowTitle(appName: appName) ?? Self.placeholderTitle(appName: placeholderApp)
+                let title = lookupWindowTitle(for: meetingPattern, pattern: match.pattern)
+                    ?? Self.placeholderTitle(appName: meetingPattern.appName)
                 return DetectedMeeting(
                     pattern: meetingPattern,
                     windowTitle: title,
@@ -184,12 +226,42 @@ class PowerAssertionDetector: MeetingDetecting {
             }
         }
 
-        // Reset counters for apps with no hit this round
-        for appName in consecutiveHits.keys where !hitsThisRound.contains(appName) {
-            consecutiveHits[appName] = 0
+        // Reset counters for identities with no hit this round
+        for key in consecutiveHits.keys where !hitsThisRound.contains(key) {
+            consecutiveHits[key] = 0
         }
 
         return nil
+    }
+
+    /// The `AppMeetingPattern` a confirmed hit is carried under.
+    ///
+    /// `.shared` patterns resolve their declared app, keeping today's behaviour.
+    /// `.perProcess` patterns synthesise a pattern for the concrete process.
+    ///
+    /// The synthesis MUST carry the category's `requiresRecordingConsent`
+    /// forward. `AppMeetingPattern`'s initializer defaults it to false, and a
+    /// synthesised browser identity that dropped the flag would auto-record a
+    /// call with no prompt, which is the exact inverse of the browser-meeting
+    /// safety story. `testPerProcessIdentityKeepsTheConsentRequirement` pins it.
+    static func meetingIdentity(pattern: AssertionPattern, processName: String) -> AppMeetingPattern {
+        let category = AppMeetingPattern.forAppName(pattern.appName)
+        switch pattern.identity {
+        case .shared:
+            return category ?? AppMeetingPattern(
+                appName: pattern.appName,
+                ownerNames: [processName],
+                meetingPatterns: [],
+            )
+
+        case .perProcess:
+            return AppMeetingPattern(
+                appName: processName,
+                ownerNames: [processName],
+                meetingPatterns: [],
+                requiresRecordingConsent: category?.requiresRecordingConsent ?? false,
+            )
+        }
     }
 
     func isMeetingActive(_ meeting: DetectedMeeting) -> Bool {
@@ -201,7 +273,13 @@ class PowerAssertionDetector: MeetingDetecting {
                     continue
                 }
                 let assertType = assertion["AssertType"] as? String ?? ""
-                for pattern in patterns where pattern.appName == meeting.pattern.appName {
+                // Same rule as `checkOnce`: an assertion keeps this meeting
+                // alive only when it resolves to the SAME identity. Comparing
+                // `pattern.appName` would compare a category token against a
+                // process name for `.perProcess` patterns, so nothing would ever
+                // match and every browser recording would stop at the end grace.
+                for pattern in patterns
+                    where pattern.identityKey(processName: processName) == meeting.pattern.appName {
                     if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
                         return true
                     }
@@ -233,8 +311,22 @@ class PowerAssertionDetector: MeetingDetecting {
     /// window carries the other person's name), skips idle-tab titles (Teams'
     /// Calendar tab etc.), and returns nil when nothing usable is found so the
     /// caller can substitute a placeholder instead of the raw assertion name.
-    private func lookupWindowTitle(appName: String) -> String? {
-        matchers[appName]?.selectWindowTitle(from: windowListProvider())
+    /// `.shared` patterns use the matcher compiled at init. `.perProcess` hits
+    /// build one from the synthesised identity, whose `ownerNames` is exactly
+    /// the one process that asserted, so only that browser's own windows can
+    /// supply the title. A shared owner list would let any fork in the family
+    /// contribute, which is how an unrelated tab title reached the protocol
+    /// filename and the model prompt. Building it costs nothing: the
+    /// synthesised pattern carries no regexes to compile.
+    private func lookupWindowTitle(
+        for meetingPattern: AppMeetingPattern,
+        pattern: AssertionPattern,
+    ) -> String? {
+        let matcher = switch pattern.identity {
+        case .shared: matchers[pattern.appName]
+        case .perProcess: MeetingTitleMatcher(pattern: meetingPattern)
+        }
+        return matcher?.selectWindowTitle(from: windowListProvider())
     }
 
     // MARK: - Private

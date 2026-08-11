@@ -35,11 +35,12 @@ extension WatchLoop {
         }
 
         pendingConsentApp = app
-        // Name the concrete browser in the prompt. Brave/Edge/Chromium share the
-        // one "Google Chrome" toggle identity (so keying stays on `app` for a
-        // family-wide debounce), but the user must recognise which app is being
-        // recorded — "A meeting is active in Google Chrome" for a Brave call
-        // reads as a false positive and a decline suppresses the whole family.
+        // `app` is already the concrete browser: a browser meeting is carried
+        // under the process that held the assertion, so the debounce above and
+        // the name below refer to the same one browser. `ownerName` is kept as
+        // the source with a fallback because it is the value the detector read
+        // straight off the assertion, and an empty identity would otherwise
+        // produce a prompt naming nothing at all.
         let browserName = meeting.ownerName.isEmpty ? app : meeting.ownerName
         consentTask = Task { [weak self] in
             guard let self else { return }
