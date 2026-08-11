@@ -76,11 +76,12 @@ KEEPER_PID=""
 RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 RECORDINGS_DIR="$HOME/Downloads/MeetingTranscriber/recordings"
-# Resolve the target browser. All four are Chromium forks; issue #503 detection
-# matches each under the shared "Google Chrome" identity, so the lane differs
-# only in which .app it launches and how it labels diagnostics. BROWSER_LABEL is
-# also the process name the fork holds its WebRTC assertion under (== the app's
-# CFBundleExecutable), which the detection pattern keys on.
+# Resolve the target browser. All four are Chromium forks sharing one detection
+# pattern, but each is carried under its OWN identity, so the lane differs only
+# in which .app it launches and how it labels diagnostics. BROWSER_LABEL is also
+# the process name the fork holds its WebRTC assertion under (== the app's
+# CFBundleExecutable), which the detection pattern keys on AND which the
+# resulting meeting is identified by.
 case "$BROWSER" in
     chrome)   BROWSER_LABEL="Google Chrome";  BROWSER_APP_NAME="Google Chrome.app" ;;
     brave)    BROWSER_LABEL="Brave Browser";  BROWSER_APP_NAME="Brave Browser.app" ;;
@@ -233,7 +234,7 @@ fi
 # debugRPCEnabled + autoWatch are set-and-leave (like e2e-app.sh — harmless on).
 defaults write "$BUNDLE_ID" debugRPCEnabled -bool true
 defaults write "$BUNDLE_ID" autoWatch -bool true
-_set_dev_bool watchBrowserMeetings true   # append "Google Chrome" to watchApps
+_set_dev_bool watchBrowserMeetings true   # append the browser category to watchApps
 _set_dev_bool recordOnly true             # sidecar + WAVs, skip transcription/protocol
 _set_dev_bool noMic true                  # app-track only; no mic needed for the proof
 
@@ -401,18 +402,19 @@ fi
 # invisible prompt cannot tell apart either. Polling is race-free against
 # however long Chrome takes to hold the assertion.
 log "Waiting up to ${DETECT_TIMEOUT_S}s for the consent prompt to park"
-# pendingConsentApp is the shared browser-meetings identity ("Google Chrome"),
-# NOT the concrete browser: Brave/Edge/Chromium all detect under it (issue #503),
-# so this assertion is correct and unchanged whichever fork this run drives.
+# pendingConsentApp is the CONCRETE browser, not a shared family identity: a
+# meeting is carried under the process that held the assertion. That is what
+# keeps a decline in one fork from silencing the others, so asserting the
+# concrete name here is what would catch a regression back to shared keying.
 _consent_parked() {
     assert_app_alive
-    [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "Google Chrome" ]
+    [ "$(rpc /state | jq -r '.pendingConsentApp // ""')" = "$BROWSER_LABEL" ]
 }
 poll_until "$DETECT_TIMEOUT_S" 2 _consent_parked || {
     _dump_detection_diag
     fail "no browser consent prompt parked within ${DETECT_TIMEOUT_S}s — $BROWSER_LABEL detection or the assertion never fired"
 }
-log "Consent prompt parked (identity Google Chrome; browser $BROWSER_LABEL)"
+log "Consent prompt parked (identity $BROWSER_LABEL)"
 
 # confirm-browser-consent answers the parked prompt in place of a click.
 log "Granting consent over RPC"
