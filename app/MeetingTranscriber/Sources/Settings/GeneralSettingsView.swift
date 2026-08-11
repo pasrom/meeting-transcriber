@@ -44,8 +44,10 @@ struct GeneralSettingsView: View {
                 Toggle("Browser Web Meetings", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)
                 Text(
-                    "Detects meetings in Chromium browsers such as Chrome, Brave, Edge, and Aside "
-                        + "(Google Meet, Whereby, web Zoom/Teams). Asks before recording.",
+                    """
+                    Detects meetings in any Chromium browser (Google Meet, Whereby, web Zoom/Teams). \
+                    Asks before recording, and you can tell it never to ask about an app again.
+                    """,
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

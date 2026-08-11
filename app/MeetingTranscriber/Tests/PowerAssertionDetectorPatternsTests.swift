@@ -70,10 +70,17 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         XCTAssertNil(detector.checkOnce())
     }
 
-    func testNonChromeWebRTCAssertionIsNotDetected() {
-        // The pattern matches by exact process name; a non-Chromium process
-        // (Firefox has its own assertion mechanism) holding a WebRTC-named
-        // assertion must not fire the browser pattern.
+    func testNonChromeWebRTCAssertionIsNowDetectedToo() {
+        // Deliberately inverted. This used to assert that a non-Chromium process
+        // holding a WebRTC-named assertion must NOT fire, which was true only
+        // because the pattern carried a hard-coded list of Chromium forks. That
+        // list is gone: matching is by the assertion name, so any process
+        // claiming an active PeerConnection is a candidate and the consent
+        // prompt, with its "Never for this app" action, is the filter.
+        //
+        // Kept rather than deleted because the case is still worth pinning from
+        // the other side: an unlisted process must arrive as its own identity
+        // and must still require consent.
         let detector = PowerAssertionDetector(
             patterns: PowerAssertionDetector.patterns(watching: [AppMeetingPattern.browserMeetings.appName]),
             confirmationCount: 1,
@@ -82,7 +89,9 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         detector.assertionProvider = {
             assertionDict(processName: "firefox", assertName: "WebRTC has active PeerConnections")
         }
-        XCTAssertNil(detector.checkOnce())
+        let meeting = detector.checkOnce()
+        XCTAssertEqual(meeting?.pattern.appName, "firefox")
+        XCTAssertTrue(meeting?.pattern.requiresRecordingConsent ?? false)
     }
 
     // MARK: - Chromium-family browsers (Brave / Edge / Chromium / Aside) — issue #503 follow-up

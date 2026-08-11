@@ -92,19 +92,22 @@ class PowerAssertionDetector: MeetingDetecting {
         // Browser meetings (issue #503): a Chromium browser holds a
         // "NoIdleSleepAssertion" named "WebRTC has active PeerConnections"
         // during any WebRTC call (Google Meet, Whereby, web Zoom/Teams/Webex).
-        // The assertion lives in Chromium's content layer, so every fork
-        // (Chrome, Brave, Edge, Chromium, Aside) emits the same name and they share
-        // this one pattern. They do NOT share an identity: `.perProcess` carries
-        // each fork as itself, so a call in one browser cannot silence, prolong,
-        // mistitle or misattribute a call in another. Keyword-only, no
-        // assertionTypes: a Chromium browser holds the same assertion type for
-        // plain media playback (YouTube), so matching the type would fire on
-        // every video — the WebRTC name is the meeting-specific signal. Opt-in:
-        // only watched when the browser toggle adds the category token to
-        // watchApps.
+        // The assertion lives in Chromium's content layer, so every fork emits
+        // the same name. `processNames` is therefore EMPTY: the name is the
+        // signal, and listing forks only meant a new one needed a release, with
+        // a wrong name failing silently. Any process claiming an active
+        // PeerConnection is a candidate; the consent prompt and its "Never for
+        // this app" action are the filter, which is what makes it safe to let
+        // Electron apps through (`matches` excludes native meeting clients, see
+        // there). `.perProcess` carries each browser as itself, so a call in one
+        // cannot silence, prolong, mistitle or misattribute a call in another.
+        // Keyword-only, no assertionTypes: a Chromium browser holds the same
+        // assertion type for plain media playback (YouTube), so matching the
+        // type would fire on every video. Opt-in: only watched when the browser
+        // toggle adds the category token to watchApps.
         AssertionPattern(
             appName: AppMeetingPattern.browserMeetings.appName,
-            processNames: ["Google Chrome", "Brave Browser", "Microsoft Edge", "Chromium", "Aside"],
+            processNames: [], // process-open: see `matches`
             keywords: ["webrtc", "peerconnection"],
             identity: .perProcess,
         ),
@@ -146,6 +149,11 @@ class PowerAssertionDetector: MeetingDetecting {
     /// classifies titles the same way `MeetingDetector` does (idle-tab titles
     /// skipped, meeting-pattern titles preferred).
     private let matchers: [String: MeetingTitleMatcher]
+
+    /// See `claimedProcesses(in:)`. From `defaultPatterns`, not `patterns`.
+    private let claimedProcesses = PowerAssertionDetector.claimedProcesses(
+        in: PowerAssertionDetector.defaultPatterns,
+    )
 
     init(
         patterns: [AssertionPattern] = PowerAssertionDetector.defaultPatterns,
@@ -331,13 +339,56 @@ class PowerAssertionDetector: MeetingDetecting {
 
     // MARK: - Private
 
-    private func matchAssertion(processName: String, assertName: String, assertType: String, pattern: AssertionPattern) -> Bool {
-        guard pattern.processNames.contains(processName) else { return false }
+    /// Processes a bound pattern already speaks for. A process-open pattern can
+    /// never take one of these, so a native client cannot also be seen as a
+    /// browser meeting.
+    ///
+    /// Always computed from ALL known patterns, never from the watched subset:
+    /// otherwise switching the Teams toggle off would hand Teams to the browser
+    /// path and record it anyway, against the user's explicit opt-out.
+    static func claimedProcesses(in patterns: [AssertionPattern]) -> Set<String> {
+        Set(patterns.flatMap(\.processNames))
+    }
+
+    /// Whether one assertion matches one pattern.
+    ///
+    /// Bound patterns check the process first, as before. Process-open patterns
+    /// accept any process except one claimed by a bound pattern: Teams is
+    /// Electron and plausibly holds the identical WebRTC assertion during a
+    /// call, so without the exclusion a native Teams call would fire twice, once
+    /// auto-starting under its own pattern and once prompting as a browser
+    /// meeting.
+    ///
+    /// The exclusion is keyed on the process, not the service, which is what
+    /// keeps web meetings working: Zoom, Teams or Webex taken in a browser hold
+    /// the assertion under the browser, and no native pattern claims a browser.
+    static func matches(
+        pattern: AssertionPattern,
+        processName: String,
+        assertName: String,
+        assertType: String,
+        claimed: Set<String>,
+    ) -> Bool {
+        if pattern.processNames.isEmpty {
+            guard !claimed.contains(processName) else { return false }
+        } else {
+            guard pattern.processNames.contains(processName) else { return false }
+        }
         let lowerAssert = assertName.lowercased()
         if pattern.keywords.contains(where: { lowerAssert.contains($0.lowercased()) }) {
             return true
         }
         return pattern.assertionTypes.contains(assertType)
+    }
+
+    private func matchAssertion(processName: String, assertName: String, assertType: String, pattern: AssertionPattern) -> Bool {
+        Self.matches(
+            pattern: pattern,
+            processName: processName,
+            assertName: assertName,
+            assertType: assertType,
+            claimed: claimedProcesses,
+        )
     }
 
     /// Keys ("process|name|type") for assertions from a watched meeting app that
@@ -348,22 +399,50 @@ class PowerAssertionDetector: MeetingDetecting {
         patterns: [AssertionPattern],
         hits: Set<String>,
     ) -> [String] {
-        let watched = Set(patterns.flatMap(\.processNames))
         var keys: [String] = []
         for pidAssertions in assertions.values {
             for assertion in pidAssertions {
-                guard let processName = assertion["Process Name"] as? String,
-                      watched.contains(processName),
-                      let pattern = patterns.first(where: { $0.processNames.contains(processName) }),
-                      !hits.contains(pattern.appName) else {
-                    continue
-                }
+                guard let processName = assertion["Process Name"] as? String else { continue }
                 let assertName = assertion["AssertName"] as? String ?? ""
                 let assertType = assertion["AssertType"] as? String ?? ""
+                guard patterns.contains(where: { pattern in
+                    interesting(
+                        pattern: pattern,
+                        processName: processName,
+                        assertName: assertName,
+                        hits: hits,
+                    )
+                }) else { continue }
                 keys.append("\(processName)|\(assertName)|\(assertType)")
             }
         }
         return keys
+    }
+
+    /// Whether this assertion is worth telling the user about: it looks like a
+    /// meeting for `pattern` but produced no detection this round.
+    ///
+    /// Two arms. A bound pattern reports its own processes, as before. A
+    /// process-open pattern reports ANY process whose assertion NAME carries its
+    /// keywords, whoever holds it, which is the arm that did not exist: the
+    /// diagnostic used to be gated on the same allowlist it was meant to
+    /// diagnose, so a process that failed to match produced no log line at all
+    /// and a wrong or missing browser name was invisible from the outside. A
+    /// natively-claimed process is included on purpose: "we saw a WebRTC
+    /// assertion from Teams and deliberately did not act on it" is exactly the
+    /// kind of thing a support log should say.
+    private static func interesting(
+        pattern: AssertionPattern,
+        processName: String,
+        assertName: String,
+        hits: Set<String>,
+    ) -> Bool {
+        guard !hits.contains(pattern.identityKey(processName: processName)) else { return false }
+        if pattern.processNames.isEmpty {
+            let lowered = assertName.lowercased()
+            return pattern.keywords.contains { lowered.contains($0.lowercased()) }
+        }
+        return pattern.processNames.contains(processName)
     }
 
     /// Log, once per distinct key, that a watched meeting app is running but its
@@ -372,7 +451,9 @@ class PowerAssertionDetector: MeetingDetecting {
     /// names are app/OS-generated metadata (no user content), logged `.public`
     /// so a reporter's diagnostic export names the actual assertion.
     private func logUnmatchedWatchedAssertions(_ assertions: [Int32: [[String: Any]]], hits: Set<String>) {
-        for key in Self.unmatchedWatchedAssertionKeys(assertions: assertions, patterns: patterns, hits: hits) {
+        for key in Self.unmatchedWatchedAssertionKeys(
+            assertions: assertions, patterns: patterns, hits: hits,
+        ) {
             guard loggedMissKeys.insert(key).inserted else { continue }
             logger.info("""
             Watched meeting app is running but its power assertion did not match \
