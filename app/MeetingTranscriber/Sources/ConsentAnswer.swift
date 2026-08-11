@@ -20,6 +20,12 @@ enum ConsentAnswer: Equatable {
     case declined
     /// Nobody answered before `NotificationManager.consentPromptTimeout`.
     case expired
+    /// The user said no *about this app*, not about this call: the "Never for
+    /// this app" action. Distinct from `.declined` because a decline expires
+    /// with the cooldown and this does not — it goes on `BrowserAppDenyList`
+    /// and is only undone in Settings. Mapping it onto `.declined` would
+    /// re-prompt ten minutes later, which is the thing the user just said no to.
+    case never
 
     /// Whether a recording may start.
     var isGranted: Bool {

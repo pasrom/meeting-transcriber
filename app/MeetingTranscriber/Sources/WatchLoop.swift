@@ -86,6 +86,7 @@ class WatchLoop {
     /// Suppresses re-prompting after a browser-meeting decline (issue #503).
     /// Internal so the consent gate can live in `WatchLoop+Consent.swift`.
     var consentPolicy: BrowserConsentPolicy
+    let denyListStore: any BrowserAppDenyListStoring
 
     /// The app whose consent prompt is currently parked, nil when no question
     /// is open. The answer is awaited in `consentTask` rather than inline, so
@@ -136,6 +137,7 @@ class WatchLoop {
         },
         pidAliveCheck: @escaping (pid_t) -> Bool = { kill($0, 0) == 0 },
         consentPolicy: BrowserConsentPolicy = BrowserConsentPolicy(),
+        denyListStore: any BrowserAppDenyListStoring = InMemoryBrowserAppDenyListStore(),
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -153,6 +155,7 @@ class WatchLoop {
         self.sleepProvider = sleepProvider
         self.pidAliveCheck = pidAliveCheck
         self.consentPolicy = consentPolicy
+        self.denyListStore = denyListStore
     }
 
     nonisolated static var defaultOutputDir: URL {

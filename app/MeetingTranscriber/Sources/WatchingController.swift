@@ -172,6 +172,7 @@ final class WatchingController {
                         .production(parent: settings.effectiveOutputDir)
                     },
                     notifier: notifier,
+                    denyListStore: BrowserAppDenyListStore(settings: settings),
                 )
 
                 attachStateChangeHandler(to: loop, notifyOnRecording: true)
@@ -199,9 +200,13 @@ final class WatchingController {
             pipeline.ensureQueue()
 
             // Manual recording never polls the detector, so WatchLoop's default
-            // (unfiltered) detector here is inert. If this path ever gains
-            // auto-detection, route it through `makeDetector()` like toggleWatching
-            // so the "Apps to Watch" filter still applies.
+            // (unfiltered) detector here is inert, and so is the consent gate
+            // that hangs off it: no detection means no prompt, hence no deny
+            // list to consult, hence the default in-memory store. If this path
+            // ever gains auto-detection, route it through `makeDetector()` like
+            // toggleWatching so the "Apps to Watch" filter still applies, and
+            // pass `denyListStore:` so a "Never for this app" is honoured here
+            // too.
             let loop = WatchLoop(
                 recorderFactory: makeRecorderFactory(),
                 pipelineQueue: pipeline.queue,

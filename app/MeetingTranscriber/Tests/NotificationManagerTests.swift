@@ -188,24 +188,36 @@ final class NotificationManagerTests: XCTestCase {
     // MARK: - Browser consent prompt (issue #503)
 
     func testConsentGrantedOnlyForRecordAction() {
-        XCTAssertTrue(NotificationManager.consentGranted(for: NotificationManager.recordActionID))
+        XCTAssertEqual(NotificationManager.consentAnswer(for: NotificationManager.recordActionID), .granted)
+    }
+
+    func testNeverActionIsItsOwnAnswerNotADecline() {
+        // The distinction the deny list rests on: a decline is about this call
+        // and expires with the cooldown, Never is about the app and does not.
+        // Mapping Never onto .declined would re-prompt ten minutes later.
+        XCTAssertEqual(NotificationManager.consentAnswer(for: NotificationManager.neverActionID), .never)
+        XCTAssertFalse(ConsentAnswer.never.isGranted)
     }
 
     func testConsentDeclinedForIgnoreDismissAndDefault() {
-        XCTAssertFalse(NotificationManager.consentGranted(for: NotificationManager.ignoreActionID))
-        XCTAssertFalse(NotificationManager.consentGranted(for: UNNotificationDismissActionIdentifier))
-        XCTAssertFalse(NotificationManager.consentGranted(for: UNNotificationDefaultActionIdentifier))
-        XCTAssertFalse(NotificationManager.consentGranted(for: "something-else"))
+        XCTAssertEqual(NotificationManager.consentAnswer(for: NotificationManager.ignoreActionID), .declined)
+        XCTAssertEqual(NotificationManager.consentAnswer(for: UNNotificationDismissActionIdentifier), .declined)
+        XCTAssertEqual(NotificationManager.consentAnswer(for: UNNotificationDefaultActionIdentifier), .declined)
+        XCTAssertEqual(NotificationManager.consentAnswer(for: "something-else"), .declined)
     }
 
-    func testConsentCategoryHasRecordAndIgnoreActions() {
+    func testConsentCategoryHasRecordIgnoreAndNeverActions() {
         let category = NotificationManager.makeConsentCategory()
         XCTAssertEqual(category.identifier, NotificationManager.consentCategoryID)
         XCTAssertEqual(
             category.actions.map(\.identifier),
-            [NotificationManager.recordActionID, NotificationManager.ignoreActionID],
+            [
+                NotificationManager.recordActionID,
+                NotificationManager.ignoreActionID,
+                NotificationManager.neverActionID,
+            ],
         )
-        XCTAssertEqual(category.actions.map(\.title), ["Record", "Ignore"])
+        XCTAssertEqual(category.actions.map(\.title), ["Record", "Ignore", "Never for this app"])
     }
 
     /// Neither action may carry `.foreground`. The delegate callback fires

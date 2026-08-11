@@ -29,6 +29,14 @@ extension WatchLoop {
         guard pendingConsentApp == nil else { return true }
 
         let app = meeting.pattern.appName
+        // "Never for this app" outranks every cooldown: it is an answer about
+        // the app, so unlike a decline it never expires. Checked before the
+        // policy so no amount of elapsed time can revive the question.
+        guard !denyListStore.isDenied(app) else {
+            detector.reset(appName: app)
+            return true
+        }
+
         guard case .ask = consentPolicy.decision(app: app, now: nowProvider()) else {
             detector.reset(appName: app) // re-detect after the debounce
             return true
@@ -82,10 +90,21 @@ extension WatchLoop {
         guard answer.isGranted else {
             // A refusal and a prompt nobody saw are different facts, and the
             // cooldown treats them differently: ten minutes of quiet after a
-            // no, one minute after silence.
+            // no, one minute after silence. Never is a third fact and outlives
+            // both, and takes no cooldown of its own.
             switch answer {
-            case .expired: consentPolicy.recordExpiry(app: app, now: nowProvider())
-            default: consentPolicy.recordDecline(app: app, now: nowProvider())
+            case .expired:
+                consentPolicy.recordExpiry(app: app, now: nowProvider())
+
+            case .never:
+                // No decline cooldown alongside it. The denial already
+                // suppresses, and a cooldown would outlive a Settings "Remove"
+                // by up to ten minutes, so undoing a mistaken Never would
+                // silently keep doing nothing.
+                denyListStore.deny(app)
+
+            default:
+                consentPolicy.recordDecline(app: app, now: nowProvider())
             }
             detector.reset(appName: app)
             return

@@ -21,10 +21,11 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
     /// Notification category + action identifiers for the "record this browser
     /// meeting?" prompt. The category is registered in `setUp()`; the action
-    /// identifier the user taps maps to a Bool via `consentGranted(for:)`.
+    /// identifier the user taps maps to an answer via `consentAnswer(for:)`.
     static let consentCategoryID = "BROWSER_MEETING_CONSENT"
     static let recordActionID = "BROWSER_MEETING_RECORD"
     static let ignoreActionID = "BROWSER_MEETING_IGNORE"
+    static let neverActionID = "BROWSER_MEETING_NEVER"
     /// How long an unanswered prompt stays open before it resolves itself as
     /// `.expired`. Five minutes, not one: it no longer blocks anything (the
     /// watch loop kept polling since issue #543), and a minute was only ever
@@ -178,18 +179,28 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
         // is not necessarily the one that asked.
         let record = UNNotificationAction(identifier: recordActionID, title: "Record", options: [])
         let ignore = UNNotificationAction(identifier: ignoreActionID, title: "Ignore", options: [])
+        // Never is what makes process-open detection tolerable: any app holding
+        // a WebRTC assertion can reach this prompt, so the user needs a way to
+        // retire one permanently rather than declining it every ten minutes.
+        let never = UNNotificationAction(identifier: neverActionID, title: "Never for this app", options: [])
         return UNNotificationCategory(
             identifier: consentCategoryID,
-            actions: [record, ignore],
+            actions: [record, ignore, never],
             intentIdentifiers: [],
             options: [],
         )
     }
 
-    /// Pure mapping: only the explicit Record action grants consent. Ignore, a
-    /// swipe-away dismiss, and the default body tap all decline.
-    static func consentGranted(for actionIdentifier: String) -> Bool {
-        actionIdentifier == recordActionID
+    /// Pure mapping from the tapped action to an answer. Only the explicit
+    /// Record action grants consent; Never is its own durable answer; Ignore, a
+    /// swipe-away dismiss, the default body tap and anything unrecognised all
+    /// decline, so an unknown identifier can never start a recording.
+    static func consentAnswer(for actionIdentifier: String) -> ConsentAnswer {
+        switch actionIdentifier {
+        case recordActionID: .granted
+        case neverActionID: .never
+        default: .declined
+        }
     }
 
     /// Post an actionable "record this browser meeting?" prompt and await the
@@ -274,7 +285,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     func resolveConsent(responseIdentifier: String, actionIdentifier: String) {
         consentCoordinator.resolve(
             id: responseIdentifier,
-            granted: Self.consentGranted(for: actionIdentifier),
+            answer: Self.consentAnswer(for: actionIdentifier),
         )
     }
 

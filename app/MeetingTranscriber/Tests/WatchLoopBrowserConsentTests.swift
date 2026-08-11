@@ -113,18 +113,18 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         }
     }
 
-    private func browserMeeting() -> DetectedMeeting {
+    private func browserMeeting(process: String = "Google Chrome") -> DetectedMeeting {
         DetectedMeeting(
             // A browser meeting is carried under the concrete browser, not a
             // shared family identity (see `PowerAssertionDetector.meetingIdentity`).
             pattern: AppMeetingPattern(
-                appName: "Google Chrome",
-                ownerNames: ["Google Chrome"],
+                appName: process,
+                ownerNames: [process],
                 meetingPatterns: [],
                 requiresRecordingConsent: true,
             ),
-            windowTitle: "Google Chrome Call",
-            ownerName: "Google Chrome",
+            windowTitle: "\(process) Call",
+            ownerName: process,
             windowPID: 5632,
         )
     }
@@ -138,10 +138,76 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
         )
     }
 
+    // MARK: - "Never for this app" (deny list)
+
+    func testDeniedAppIsNeverPromptedEvenPastTheCooldown() async {
+        // The time jump is the point: a decline goes quiet for ten minutes and
+        // then asks again. Never must still be silent afterwards, so this fails
+        // against an implementation that treats Never as a mere decline.
+        let spy = ConsentSpy(answer: .granted)
+        let store = InMemoryBrowserAppDenyListStore(
+            denyList: BrowserAppDenyList(denied: ["Fjordfox"]),
+        )
+        var now = Date()
+        let (loop, recorder) = makeLoop(
+            detector: FixedDetector(browserMeeting(process: "Fjordfox")),
+            spy: spy,
+            denyListStore: store,
+        ) { now }
+        loop.start()
+        await waitFor(spy.calls == 0, timeout: .milliseconds(500))
+        now = now.addingTimeInterval(BrowserConsentPolicy().declineCooldown * 2)
+        await waitFor(spy.calls == 0, timeout: .milliseconds(500))
+        XCTAssertEqual(spy.calls, 0, "a denied app must never reach the prompt")
+        XCTAssertFalse(recorder.startCalled, "and must never be recorded")
+        loop.stop()
+    }
+
+    func testNeverRecordsTheDenialAndSilencesOnlyThatApp() async {
+        let spy = ConsentSpy(answer: .never)
+        let store = InMemoryBrowserAppDenyListStore()
+        let detector = SwappableDetector(browserMeeting(process: "Fjordfox"))
+        let (loop, recorder) = makeLoop(detector: detector, spy: spy, denyListStore: store)
+        loop.start()
+        await waitFor(spy.calls >= 1)
+        await waitFor(store.denyList.isDenied("Fjordfox"), timeout: .seconds(1))
+        XCTAssertTrue(store.denyList.isDenied("Fjordfox"))
+        XCTAssertFalse(recorder.startCalled, "Never must not start a recording")
+
+        // Control: the denial is about one app, not about browser meetings as a
+        // whole. A global flag would pass the assertion above and fail here.
+        // The proof is that a different browser still reaches the prompt; what
+        // it is answered with is this spy's fixed `.never`, so asserting on the
+        // list afterwards would only measure the spy.
+        let callsAfterNever = spy.calls
+        detector.meeting = browserMeeting(process: "Brave Browser")
+        await waitFor(spy.calls > callsAfterNever, timeout: .seconds(2))
+        XCTAssertGreaterThan(spy.calls, callsAfterNever, "a browser the user never refused must still be asked")
+        loop.stop()
+    }
+
+    func testRecordRemembersNothing() async {
+        // Falsifiable against an answer switch that misroutes .granted into the
+        // deny transition, which would silence the app the user just approved.
+        let spy = ConsentSpy(answer: .granted)
+        let store = InMemoryBrowserAppDenyListStore()
+        let (loop, _) = makeLoop(
+            detector: FixedDetector(browserMeeting(process: "Fjordfox")),
+            spy: spy,
+            denyListStore: store,
+        )
+        loop.start()
+        await waitFor(spy.calls >= 1)
+        XCTAssertEqual(store.denyList.denied, [], "Record is an answer about one call, not about the app")
+        loop.stop()
+    }
+
     private func makeLoop(
         detector: any MeetingDetecting,
         spy: any AppNotifying,
         consentPolicy: BrowserConsentPolicy = BrowserConsentPolicy(),
+        denyListStore: any BrowserAppDenyListStoring = InMemoryBrowserAppDenyListStore(),
+        nowProvider: @escaping () -> Date = Date.init,
     ) -> (WatchLoop, MockRecorder) {
         let recorder = MockRecorder()
         recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix_\(UUID().uuidString).wav")
@@ -151,7 +217,9 @@ final class WatchLoopBrowserConsentTests: XCTestCase {
             pollInterval: 0.05,
             endGracePeriod: 0.05,
             notifier: spy,
+            nowProvider: nowProvider,
             consentPolicy: consentPolicy,
+            denyListStore: denyListStore,
         )
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
