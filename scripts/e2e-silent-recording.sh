@@ -136,18 +136,10 @@ if [ "$NO_BUILD" = false ]; then
         resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
             || die "Developer ID re-sign failed"
     else
-        # Local-dev path: self-signed cert from setup-self-hosted-runner.sh.
-        # Resolve the SHA-1 directly from the keychain (the .pem written
-        # to /tmp/ by the setup script is volatile — gone on every reboot
-        # on the self-hosted Mini). Unlock with empty password (matches
-        # the keychain creation in setup-self-hosted-runner.sh), then
-        # sign with the hash.
-        DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
-        DEV_CERT_NAME="MeetingTranscriberDevSelfHosted"
+        # Local-dev path: self-signed cert from setup-self-hosted-runner.sh,
+        # resolved from the keychain by dev_signing_identity.
         if [ -f "$DEV_KEYCHAIN" ]; then
-            security unlock-keychain -p "" "$DEV_KEYCHAIN" 2>/dev/null || true
-            DEV_CERT_HASH="$(security find-identity -v -p codesigning "$DEV_KEYCHAIN" \
-                | awk -v name="$DEV_CERT_NAME" '$0 ~ name { print $2; exit }')"
+            DEV_CERT_HASH="$(dev_signing_identity)"
             if [ -n "$DEV_CERT_HASH" ]; then
                 echo "▸ Re-signing with self-signed dev cert (SHA1=${DEV_CERT_HASH})..."
                 # codesign honours `--keychain` for the signing identity but

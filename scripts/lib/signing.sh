@@ -220,6 +220,35 @@ identity_sha1() {
     return 0
 }
 
+# The self-hosted runner's own signing identity, installed by
+# scripts/setup-self-hosted-runner.sh. Overridable so a test can point at a
+# fixture keychain.
+DEV_KEYCHAIN="${DEV_KEYCHAIN:-$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db}"
+DEV_CERT_NAME="${DEV_CERT_NAME:-MeetingTranscriberDevSelfHosted}"
+
+# dev_signing_identity → SHA-1 of that certificate, empty when it is not there.
+#
+# Resolved from the KEYCHAIN, which is where the setup script installs it and
+# where codesign reads it from when signing. The lanes used to hash the export
+# copy the setup script also leaves in /tmp/meetingtranscriber-setup — and macOS
+# discards /tmp across a reboot, after which a lane aborted with "run
+# scripts/setup-self-hosted-runner.sh first" although the keychain and the
+# identity were both intact. Nothing depends on that copy any more; it is an
+# artifact to look at.
+#
+# The unlock belongs here rather than at the call sites: the empty password is a
+# property of how the setup script creates THIS keychain, and codesign needs the
+# private key a moment later.
+# The lookup itself is identity_sha1's, so there is one definition of how a name
+# becomes a hash — including its refusal to guess between two certificates whose
+# names both contain the string, which here means an identity left behind under a
+# renamed variant.
+dev_signing_identity() {
+    [ -f "$DEV_KEYCHAIN" ] || return 0
+    security unlock-keychain -p "" "$DEV_KEYCHAIN" 2>/dev/null || true
+    identity_sha1 "$DEV_CERT_NAME" "$DEV_KEYCHAIN"
+}
+
 # resign_deployed_bundle <app-bundle> <identity> [keychain]
 #
 # Re-sign a bundle that was built and deployed elsewhere, with a stable identity

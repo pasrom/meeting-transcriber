@@ -31,13 +31,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-CERT_NAME="MeetingTranscriberDevSelfHosted"
+# The certificate name and keychain path come from the library, which is also
+# where the e2e lanes look the identity up: spelling either of them twice means a
+# rename here makes every lane abort with "run scripts/setup-self-hosted-runner.sh
+# first" right after this script succeeded.
+# shellcheck source=lib/signing.sh
+source "$SCRIPT_DIR/lib/signing.sh"
+CERT_NAME="$DEV_CERT_NAME"
 CERT_ORG="meetingtranscriber-self-hosted"
 # Dedicated keychain with empty password keeps everything non-interactive:
 # - `-A` ACL imports don't need TouchID
 # - `set-key-partition-list -k ""` succeeds without prompts
 # Login keychain has neither property over SSH, hence the separation.
-DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
 DEV_KEYCHAIN_PASS=""
 APP_BUNDLE_PATH="$HOME/Applications/MeetingTranscriber-Dev.app"
 # /tmp because world-readable; the cert file may also be useful for a
@@ -55,8 +60,13 @@ fail() { printf '[setup] FAIL: %s\n' "$*" >&2; exit 1; }
 # cert from it without nuking other identities the operator may have added),
 # neither (full create). /tmp is volatile so the cert-only-missing case
 # is common after a reboot.
+# `-v` matches how dev_signing_identity queries it. Without the flag this check
+# also counts an identity the codesigning policy REJECTS (the invalid-key-usage
+# state described below), so the script would report "already there, skipping"
+# while every lane reports the identity missing and advises running this script —
+# advice that could then never help.
 if [ -f "$DEV_KEYCHAIN" ] \
-    && security find-identity -p codesigning "$DEV_KEYCHAIN" 2>/dev/null \
+    && security find-identity -v -p codesigning "$DEV_KEYCHAIN" 2>/dev/null \
         | grep -q "$CERT_NAME"; then
     if [ ! -f "$CERT_PATH" ]; then
         log "Re-exporting cert from dev keychain → $CERT_PATH"
@@ -200,8 +210,6 @@ security unlock-keychain -p "$DEV_KEYCHAIN_PASS" "$DEV_KEYCHAIN" \
 # lanes now do; signing it bare used to leave the very bundle a human grants
 # TCC to without any (issue #609).
 log "Signing with $CERT_NAME"
-# shellcheck source=lib/signing.sh
-source "$SCRIPT_DIR/lib/signing.sh"
 resign_deployed_bundle "$APP_BUNDLE_PATH" "$CERT_HASH" "$DEV_KEYCHAIN" \
     || fail "codesign failed"
 

@@ -333,6 +333,76 @@ test_resign_drops_a_profile_it_cannot_honour() {
     return "$rc"
 }
 
+# The runner's identity comes from the keychain, which persists, and not from the
+# export copy the setup script leaves in /tmp, which macOS discards on reboot.
+test_dev_identity_comes_from_the_keychain() {
+    local workdir out rc=0
+    workdir="$(mktemp -d)"
+    mkdir -p "$workdir/bin"
+    : > "$workdir/dev.keychain-db"
+    # A find-identity transcript, so the assertion is about parsing the keychain's
+    # answer rather than about this machine happening to hold that certificate.
+    #
+    # The transcript DEPENDS on the keychain argument: asked about our keychain it
+    # answers with the dev certificate, asked about anything else (or about no
+    # keychain at all, i.e. the ambient search list) it answers with a different
+    # one. Without that, a lookup that dropped the keychain argument and read the
+    # user's search list — the "identity came from the wrong source" bug this
+    # function exists to prevent — would satisfy the assertion just as well.
+    cat > "$workdir/bin/security" <<STUB
+#!/usr/bin/env bash
+case "\$1" in
+    find-identity)
+        if [ "\${!#}" = "$workdir/dev.keychain-db" ]; then
+            printf '  1) AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555 "Apple Development: someone"\n'
+            printf '  2) 1234567890ABCDEF1234567890ABCDEF12345678 "MeetingTranscriberDevSelfHosted"\n'
+            printf '     2 valid identities found\n'
+        else
+            printf '  1) 9999888877776666555544443333222211110000 "MeetingTranscriberDevSelfHosted"\n'
+            printf '     1 valid identities found\n'
+        fi ;;
+esac
+exit 0
+STUB
+    chmod +x "$workdir/bin/security"
+
+    out="$(PATH="$workdir/bin:$PATH" \
+        DEV_KEYCHAIN="$workdir/dev.keychain-db" \
+        SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" \
+        bash -c 'set -euo pipefail; source "$SIGNING_LIB"; dev_signing_identity' 2>/dev/null)"
+
+    if [ "$out" != "1234567890ABCDEF1234567890ABCDEF12345678" ]; then
+        echo "  expected the dev certificate's SHA-1 from the keychain, got: ${out:-<empty>}" >&2
+        rc=1
+    fi
+
+    # An absent keychain is a normal answer, not a failure: the lanes decide what
+    # to do about it, and one of them only warns.
+    out="$(PATH="$workdir/bin:$PATH" \
+        DEV_KEYCHAIN="$workdir/absent.keychain-db" \
+        SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" \
+        bash -c 'set -euo pipefail; source "$SIGNING_LIB"; dev_signing_identity' 2>/dev/null)"
+    if [ -n "$out" ]; then
+        echo "  expected nothing for an absent keychain, got: $out" >&2
+        rc=1
+    fi
+
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+test_no_lane_depends_on_the_volatile_cert_copy() {
+    local offenders
+    offenders="$(grep -ln 'meetingtranscriber-setup' "$REPO_ROOT"/scripts/e2e-*.sh 2>/dev/null)"
+    if [ -n "$offenders" ]; then
+        echo "  these lanes read the setup script's /tmp export copy, which macOS" >&2
+        echo "  discards on reboot — after which the lane aborts although the" >&2
+        echo "  keychain and the identity are intact:" >&2
+        printf '  %s\n' "$offenders" >&2
+        return 1
+    fi
+}
+
 # The defect was never in the library, it was in copies of a codesign call. Only
 # the two scripts that sign a bundle they just built may name a certificate;
 # anything re-signing a bundle someone else built goes through the helper, which
@@ -369,6 +439,10 @@ run_test "a failed re-sign leaves the bundle exactly as it arrived" \
     test_failed_resign_leaves_the_bundle_intact
 run_test "a profile the new signature cannot honour is removed" \
     test_resign_drops_a_profile_it_cannot_honour
+run_test "the runner's identity is resolved from the keychain" \
+    test_dev_identity_comes_from_the_keychain
+run_test "no lane depends on the volatile /tmp certificate copy" \
+    test_no_lane_depends_on_the_volatile_cert_copy
 run_test "only the build scripts name a signing certificate" \
     test_only_the_build_scripts_name_a_certificate
 echo

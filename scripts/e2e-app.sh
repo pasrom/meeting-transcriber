@@ -352,15 +352,10 @@ else
         resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
             || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
     else
-        DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
-        DEV_CERT_PATH="/tmp/meetingtranscriber-setup/dev-cert.crt"
-        if [ ! -f "$DEV_KEYCHAIN" ] || [ ! -f "$DEV_CERT_PATH" ]; then
-            fail "no Developer ID and dev keychain missing ($DEV_KEYCHAIN / $DEV_CERT_PATH) — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
-        fi
-        DEV_CERT_HASH="$(openssl x509 -in "$DEV_CERT_PATH" -noout -fingerprint -sha1 \
-            | sed 's/^.*=//' | tr -d ':')"
+        DEV_CERT_HASH="$(dev_signing_identity)"
+        [ -n "$DEV_CERT_HASH" ] \
+            || fail "no Developer ID and no '$DEV_CERT_NAME' identity in $DEV_KEYCHAIN — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
         log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
-        security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
         resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
             || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
     fi
