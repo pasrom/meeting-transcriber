@@ -294,6 +294,56 @@ final class WatchLoopTests: XCTestCase {
         }
     }
 
+    func testManualRecordingStartsWhenOnlyAccessibilityDenied() async throws {
+        let (loop, recorder) = makeTestWatchLoop()
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .healthy, accessibility: .denied)
+        }
+
+        // Accessibility feeds participant reading and mute detection, neither of
+        // which this path uses, and Settings presents it as optional. Refusing
+        // over it left the app recording an auto-detected meeting while turning
+        // down the one the user asked for by hand.
+        try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
+
+        XCTAssertTrue(recorder.startCalled)
+        XCTAssertTrue(loop.isManualRecording)
+    }
+
+    func testManualRecordingRefusalNamesOnlyBlockingPermissions() async {
+        let (loop, _) = makeTestWatchLoop()
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .broken, accessibility: .denied)
+        }
+
+        do {
+            try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
+            XCTFail("Expected permissionDenied error")
+        } catch let error as RecorderError {
+            guard case let .permissionDenied(reason) = error else {
+                XCTFail("Expected permissionDenied, got \(error)")
+                return
+            }
+            XCTAssertTrue(reason.contains("Microphone"))
+            // Naming a permission that had nothing to do with the refusal sends
+            // the user to the wrong pane in System Settings.
+            XCTAssertFalse(reason.contains("Accessibility"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testMicLessManualRecordingStartsWithoutMicrophonePermission() async throws {
+        let (loop, recorder) = makeTestWatchLoop(noMic: true)
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .denied)
+        }
+
+        try await loop.startManualRecording(pid: 123, appName: "Test", title: "Test")
+
+        XCTAssertTrue(recorder.startCalled)
+    }
+
     // MARK: - RecordOnlyDestination
 
     func test_production_destinationSplitsScopeAndWriteDir() {

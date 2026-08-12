@@ -224,9 +224,10 @@ class WatchLoop {
             return
         }
 
+        // Gate on what this path needs, not on overall health (see `blocksRecording`).
         let health = await permissionChecker()
-        if !health.isHealthy {
-            throw RecorderError.permissionDenied(health.notificationBody)
+        if let refusal = health.recordingRefusalReason(noMic: noMic) {
+            throw RecorderError.permissionDenied(refusal)
         }
 
         // Stop auto-watch if active
