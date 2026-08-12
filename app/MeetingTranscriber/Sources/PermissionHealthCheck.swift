@@ -55,6 +55,47 @@ enum PermissionProblem: Equatable {
         }
         return "\(key)=\(isBroken ? "broken" : "denied")"
     }
+
+    /// Whether this problem has to stop a recording from starting, as opposed to
+    /// only degrading a side feature. `noMic` recordings capture app audio only
+    /// and open no mic file at all (`DualSourceRecorder.start`), so the grant they
+    /// never ask for cannot block them.
+    ///
+    /// Accessibility never blocks: its only consumer is `ParticipantReader` (Teams
+    /// participant names, read in `handleMeeting`), which a recording does not need.
+    /// Settings labels it optional too, via `PermissionRow(optional: true)`, but that
+    /// row is not independent corroboration: its wording promises a mute detection
+    /// that does not exist, since mute handling is sample-level in `AudioMixer` and
+    /// level-based in `ChannelHealthController`, neither of which touches
+    /// Accessibility. Nothing links the row to this switch either, so flipping one
+    /// leaves them disagreeing with no compile error and no failing test.
+    ///
+    /// Screen Recording keeps blocking even though it is only *one* of two
+    /// sufficient grants for the app-audio tap, the other being the
+    /// `NSAudioCaptureUsageDescription` "Audio Recording" grant. That one has no
+    /// preflight API and is not modelled here, so a denied Screen Recording cannot
+    /// be told apart from a tap that will silently capture nothing. Someone who
+    /// clicked "Record App..." is sitting in front of the machine and can act on a
+    /// refusal, so the interactive path errs towards refusing, trading an over-block
+    /// (Audio Recording granted, Screen Recording denied) for never handing back a
+    /// silent file. The auto-detected path does not weigh this differently, it does
+    /// not weigh it at all: `handleMeeting` starts the recorder with no permission
+    /// check of any kind.
+    ///
+    /// The switch is exhaustive on purpose, but it guards less than it looks like.
+    /// Once a permission has `PermissionProblem` cases, every classification over
+    /// them has to be decided rather than defaulted. It does not force that first
+    /// step: `problems` below is hand-written, so a status field added to
+    /// `HealthCheckResult` compiles with no case at all and is then silently
+    /// unreported and non-blocking. Adding a permission means editing `problems`
+    /// too, and nothing but this sentence says so.
+    func blocksRecording(noMic: Bool) -> Bool {
+        switch self {
+        case .screenRecordingDenied, .screenRecordingBroken: true
+        case .microphoneDenied, .microphoneBroken: !noMic
+        case .accessibilityDenied, .accessibilityBroken: false
+        }
+    }
 }
 
 struct HealthCheckResult: Equatable {
@@ -94,6 +135,30 @@ struct HealthCheckResult: Equatable {
 
     var isHealthy: Bool {
         problems.isEmpty
+    }
+
+    /// The subset of `problems` that has to stop a recording from starting.
+    ///
+    /// A different question from `isHealthy`, which stays the aggregate "every
+    /// permission is fine" behind the menu bar badge, the permission notification
+    /// and `/state`. Sharing the `problems` list keeps their *input* identical, not
+    /// their verdict: a denied optional permission is reported by one and ignored
+    /// by the other, which is the whole point and also means the badge still calls
+    /// it an error while a recording proceeds.
+    func recordingBlockers(noMic: Bool) -> [PermissionProblem] {
+        problems.filter { $0.blocksRecording(noMic: noMic) }
+    }
+
+    /// Why a recording must be refused, or nil when nothing blocks it. Names only
+    /// the blocking problems, so a refusal never points at a permission that was
+    /// irrelevant to it.
+    ///
+    /// One call rather than a separate predicate and message, so a caller cannot
+    /// ask the two with different arguments and refuse with an empty reason.
+    func recordingRefusalReason(noMic: Bool) -> String? {
+        let blockers = recordingBlockers(noMic: noMic)
+        guard !blockers.isEmpty else { return nil }
+        return blockers.map(\.description).joined(separator: "\n")
     }
 
     var notificationBody: String {
