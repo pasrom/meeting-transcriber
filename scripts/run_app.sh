@@ -70,10 +70,16 @@ SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}
 # time-sensitive consent prompt (issue #543).
 # shellcheck source=lib/signing.sh
 source "$SCRIPT_DIR/lib/signing.sh"
-prepare_signing "$APP_BUNDLE" "$SPM_DIR/Entitlements/Homebrew.entitlements" "$DEV_BUNDLE_ID" "$SIGN_HASH"
+# $DEV_ENTITLEMENTS is that same path, named once in the library so this build
+# and any later re-sign of the deployed bundle cannot drift apart (issue #609).
+prepare_signing "$APP_BUNDLE" "$DEV_ENTITLEMENTS" "$DEV_BUNDLE_ID" "$SIGN_HASH"
 if [ -n "$SIGNING_IDENTITY" ]; then
-    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$SIGNING_ENTITLEMENTS" "$APP_BUNDLE" 2>/dev/null && \
-        echo "  Signed with: $SIGNING_IDENTITY (+ entitlements)"
+    # Failure is fatal and its stderr is kept. This used to be `2>/dev/null && echo`,
+    # which hid both: a bad entitlements path left the bundle completely UNSIGNED
+    # with no diagnostic, and every lane that rsyncs it then loses its TCC grants.
+    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$SIGNING_ENTITLEMENTS" "$APP_BUNDLE" \
+        || { echo "codesign failed for $APP_BUNDLE (identity $SIGNING_IDENTITY, entitlements $SIGNING_ENTITLEMENTS)" >&2; exit 1; }
+    echo "  Signed with: $SIGNING_IDENTITY (+ entitlements)"
 fi
 verify_signing "$APP_BUNDLE"
 

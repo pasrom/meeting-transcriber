@@ -133,9 +133,7 @@ if [ "$NO_BUILD" = false ]; then
     fi
     if [ -n "${DEVELOPER_ID:-}" ]; then
         echo "▸ Re-signing with Developer ID '$DEVELOPER_ID'…"
-        SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
-        [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
-        codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
             || die "Developer ID re-sign failed"
     else
         # Local-dev path: self-signed cert from setup-self-hosted-runner.sh.
@@ -156,8 +154,7 @@ if [ "$NO_BUILD" = false ]; then
                 # still consults the user-domain search list for trust-chain
                 # resolution. Prepending the dev keychain matches scripts/e2e-app.sh.
                 "$ROOT/scripts/keychain-prepend.sh" "$DEV_KEYCHAIN" 2>/dev/null || true
-                codesign --force --sign "$DEV_CERT_HASH" --keychain "$DEV_KEYCHAIN" \
-                    "$DEV_BUNDLE_DEPLOY" >/dev/null \
+                resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
                     || die "dev-cert re-sign failed"
             else
                 echo "  Run scripts/setup-self-hosted-runner.sh to (re-)create it" >&2

@@ -335,7 +335,10 @@ else
     # without re-signing TCC would see a different cert SHA on every
     # rebuild and lose the grant. CI path uses the imported Developer ID;
     # local-dev path falls back to the self-signed cert from
-    # setup-self-hosted-runner.sh.
+    # setup-self-hosted-runner.sh. resign_deployed_bundle carries the dev
+    # entitlements through that re-sign, and skips it entirely when the build
+    # already used this certificate — a bare codesign would silently strip both
+    # the microphone and the time-sensitive entitlement (issue #609).
     if [ -n "${DEVELOPER_ID:-}" ]; then
         log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
         # Re-assert the signing keychain right before codesign — a parallel
@@ -346,9 +349,7 @@ else
         if [ -n "${E2E_SIGNING_KEYCHAIN:-}" ]; then
             "$SCRIPT_DIR/keychain-prepend.sh" "$E2E_SIGNING_KEYCHAIN"
         fi
-        SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
-        [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
-        codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
             || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
     else
         DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
@@ -360,9 +361,7 @@ else
             | sed 's/^.*=//' | tr -d ':')"
         log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
         security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
-        codesign --force --sign "$DEV_CERT_HASH" \
-            --keychain "$DEV_KEYCHAIN" \
-            "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
             || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
     fi
 fi

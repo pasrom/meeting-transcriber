@@ -41,7 +41,12 @@ ok "mt-cli built"
 # --- Assemble + sign bundle. ---
 cp "$SPM_DIR/.build/release/MeetingTranscriber" "$APP_BINARY"
 SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
-codesign --force --sign "$SIGN_HASH" "$APP_BUNDLE" 2>/dev/null
+# Through the shared helper: signing bare would strip the entitlements the
+# bundle was built with, and this lane launches the bundle it signs (issue #609).
+# shellcheck source=lib/signing.sh
+source "$REPO_ROOT/scripts/lib/signing.sh"
+resign_deployed_bundle "$APP_BUNDLE" "$SIGN_HASH" \
+    || fail "codesign failed for $APP_BUNDLE (identity $SIGN_HASH)"
 ok "signed"
 
 # --- Launch with env var. ---

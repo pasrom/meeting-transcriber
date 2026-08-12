@@ -202,9 +202,7 @@ else
         if [ -n "${E2E_SIGNING_KEYCHAIN:-}" ]; then
             "$SCRIPT_DIR/keychain-prepend.sh" "$E2E_SIGNING_KEYCHAIN"
         fi
-        SIGN_ARGS=(--force --sign "$DEVELOPER_ID")
-        [ -n "${E2E_SIGNING_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$E2E_SIGNING_KEYCHAIN")
-        codesign "${SIGN_ARGS[@]}" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
             || fail "codesign with Developer ID failed"
     else
         DEV_KEYCHAIN="$HOME/Library/Keychains/meetingtranscriber-dev.keychain-db"
@@ -215,8 +213,7 @@ else
             | sed 's/^.*=//' | tr -d ':')"
         log "Re-signing with self-signed dev cert ($DEV_CERT_HASH)"
         security unlock-keychain -p "" "$DEV_KEYCHAIN" || true
-        codesign --force --sign "$DEV_CERT_HASH" \
-            --keychain "$DEV_KEYCHAIN" "$DEV_BUNDLE_DEPLOY" >/dev/null \
+        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
             || fail "codesign with dev cert failed"
     fi
 fi

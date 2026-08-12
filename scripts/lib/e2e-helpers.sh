@@ -9,10 +9,13 @@
 #
 # This file has no shebang and no `set -e` — it inherits the caller's.
 # Sourcing it also gives the caller $RELEASE_BUNDLE_ID / $DEV_BUNDLE_ID, so no
-# driver has to restate an identifier that only Info.plist should own.
+# driver has to restate an identifier that only Info.plist should own, plus
+# resign_deployed_bundle, which every driver that deploys a bundle needs.
 
 # shellcheck source=bundle-ids.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bundle-ids.sh"
+# shellcheck source=signing.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/signing.sh"
 
 # Graceful AppleScript quit → SIGTERM → SIGKILL ladder. Returns 0 when
 # the process is gone, 1 if it survived even SIGKILL (unusual; means

@@ -195,11 +195,14 @@ security unlock-keychain -p "$DEV_KEYCHAIN_PASS" "$DEV_KEYCHAIN" \
 
 # Sign explicitly with our cert — run_app.sh's signing step uses
 # `find-identity -v` and so won't pick up our untrusted cert. Doing it
-# here keeps run_app.sh untouched for other callers.
+# here keeps run_app.sh untouched for other callers. Through the shared
+# helper, so this bootstrap keeps the bundle's entitlements the way the e2e
+# lanes now do; signing it bare used to leave the very bundle a human grants
+# TCC to without any (issue #609).
 log "Signing with $CERT_NAME"
-codesign --force --sign "$CERT_HASH" \
-    --keychain "$DEV_KEYCHAIN" \
-    "$APP_BUNDLE_PATH" >/dev/null \
+# shellcheck source=lib/signing.sh
+source "$SCRIPT_DIR/lib/signing.sh"
+resign_deployed_bundle "$APP_BUNDLE_PATH" "$CERT_HASH" "$DEV_KEYCHAIN" \
     || fail "codesign failed"
 
 log "Signed: $(codesign -dv "$APP_BUNDLE_PATH" 2>&1 | grep -E 'Identifier|Authority' | head -2 | tr '\n' ' ')"
