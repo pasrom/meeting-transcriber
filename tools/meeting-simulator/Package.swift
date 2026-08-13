@@ -1,5 +1,15 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
+
+// The same gate the app package runs under. `treatAllWarnings(as:)` is what
+// pins the manifest to tools-version 6.2; it does not exist in 6.0.
+let strictSwiftSettings: [SwiftSetting] = [
+    .treatAllWarnings(as: .error),
+    .unsafeFlags([
+        "-Xfrontend", "-warn-long-function-bodies=300",
+        "-Xfrontend", "-warn-long-expression-type-checking=300",
+    ]),
+]
 
 let package = Package(
     name: "meeting-simulator",
@@ -14,6 +24,7 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources",
+            swiftSettings: strictSwiftSettings,
         ),
     ]
 )
