@@ -53,40 +53,19 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - name: Install SwiftLint
-        run: brew install swiftlint
-      # SwiftFormat is version-pinned because `brew install` pulls whatever is
-      # current that day, which makes an unrelated PR go red on a tool release
-      # nobody chose. The two rules 0.62.0 turned on by default are switched off
-      # in .swiftformat instead, so the pin can track the current release rather
-      # than freeze at the last one that happened to agree with us. Uses the
-      # official prebuilt CLI binary from the GitHub release (single-file zip).
-      #
-      # The runner image pre-installs a newer SwiftFormat on the Homebrew path,
-      # which precedes /usr/local/bin, so `mv`-ing the pin there is shadowed.
-      # Prepend the pin dir via $GITHUB_PATH (front of PATH for later steps).
-      - name: Install SwiftFormat (pinned)
-        env:
-          SWIFTFORMAT_VERSION: "0.62.1"
+      # Both linters are pinned to an exact release *and* an exact checksum,
+      # rather than installed with `brew install`. Why: scripts/tool-versions.sh.
+      # How: scripts/ci/install-lint-tool.sh. Verification is a separate step
+      # because $GITHUB_PATH only takes effect for *later* steps, so a check in
+      # the install step would assert against the binary the pin replaces.
+      - name: Install pinned lint tools
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
-            "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip"
-          unzip -o -j "$RUNNER_TEMP/swiftformat.zip" -d "$RUNNER_TEMP/swiftformat-bin"
-          chmod +x "$RUNNER_TEMP/swiftformat-bin/swiftformat"
-          xattr -dr com.apple.quarantine "$RUNNER_TEMP/swiftformat-bin/swiftformat" || true
-          echo "$RUNNER_TEMP/swiftformat-bin" >> "$GITHUB_PATH"
-      # Hard-fail loudly if the pin is ever shadowed by a pre-installed
-      # SwiftFormat again, instead of silently reformatting the codebase.
-      - name: Verify SwiftFormat version
-        env:
-          SWIFTFORMAT_VERSION: "0.62.1"
+          bash scripts/ci/install-lint-tool.sh swiftlint
+          bash scripts/ci/install-lint-tool.sh swiftformat
+      - name: Verify pinned lint tools
         run: |
-          got="$(swiftformat --version)"
-          echo "swiftformat resolves to: $(command -v swiftformat) ($got)"
-          if [ "$got" != "$SWIFTFORMAT_VERSION" ]; then
-            echo "::error::Expected pinned SwiftFormat $SWIFTFORMAT_VERSION but got $got (shadowed by a pre-installed binary)."
-            exit 1
-          fi
+          bash scripts/ci/install-lint-tool.sh swiftlint --verify
+          bash scripts/ci/install-lint-tool.sh swiftformat --verify
       # SwiftFormat path list lives in scripts/lint.sh; calling it keeps CI and
       # local lint runs aligned. SwiftLint stays an explicit step to use the
       # github-actions-logging reporter (annotations in the PR diff).
@@ -119,8 +98,10 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - name: Install SwiftLint
-        run: brew install swiftlint
+      - name: Install pinned SwiftLint
+        run: bash scripts/ci/install-lint-tool.sh swiftlint
+      - name: Verify pinned SwiftLint
+        run: bash scripts/ci/install-lint-tool.sh swiftlint --verify
       - name: Build & Analyze
         run: |
           # pipefail: without it `xcodebuild ... | tee` masks an xcodebuild
