@@ -643,4 +643,87 @@ final class WorkflowIntegrationTests: XCTestCase {
         // No warnings (this is intentional, not a failure)
         XCTAssertTrue(queue.jobs.first?.warnings.isEmpty ?? false)
     }
+
+    // MARK: - Echo bleed warning
+
+    /// Modulated noise: the detector correlates envelopes, so a signal needs an
+    /// envelope. Varying the modulation per seed is what makes two talkers
+    /// independent; reseeding only the carrier leaves identical envelopes and
+    /// two unrelated talkers then correlate at 1.0.
+    private func speechLike(seconds: Double, seed: UInt64, rate: Int = 16000) -> [Float] {
+        var state = seed
+        let syllableRate = 2.4 + Double(seed % 7) * 0.35
+        let phase = Double(seed % 11) / 11 * 2 * .pi
+        return (0 ..< Int(Double(rate) * seconds)).map { i in
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            let carrier = Float(Int32(bitPattern: UInt32(truncatingIfNeeded: state >> 33))) / Float(Int32.max)
+            let t = Double(i) / Double(rate)
+            return carrier * Float(max(0, sin(2 * .pi * syllableRate * t + phase)))
+        }
+    }
+
+    private func writeTrack(_ samples: [Float], to url: URL) throws {
+        try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: url)
+    }
+
+    private func runDualSource(_ h: Harness, app: URL, mic: URL) async {
+        h.queue.speakerNamingHandler = { _ in .skipped }
+        h.queue.enqueue(PipelineJob(
+            meetingTitle: "meeting", appName: "File",
+            mixPath: nil, appPath: app, micPath: mic,
+            micDelay: 0,
+        ))
+        await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
+    }
+
+    /// The whole point of the feature: a recording made over loudspeakers says so.
+    /// Asserted through the real pipeline, not just the detector, because the
+    /// warning reaching the job is the behaviour users get.
+    func testDualSourceWithLoudspeakerBleedWarnsOnTheJob() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("bleed")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 40, seed: 11)
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        // The room path: attenuated and delayed by 15 ms.
+        let delay = 16000 * 15 / 1000
+        var bled = [Float](repeating: 0, count: far.count)
+        for i in delay ..< far.count {
+            bled[i] = far[i - delay] * 0.5
+        }
+        try writeTrack(bled, to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
+        XCTAssertTrue(
+            warnings.contains("picked up by the microphone"),
+            "expected an echo-bleed warning, got: \(warnings)",
+        )
+    }
+
+    /// The negative case guards the same path: two people on separate devices
+    /// must not be told to put on headphones.
+    func testDualSourceWithIndependentTracksDoesNotWarn() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("clean")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(speechLike(seconds: 40, seed: 12), to: appURL)
+        try writeTrack(speechLike(seconds: 40, seed: 91), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
+        XCTAssertFalse(
+            warnings.contains("picked up by the microphone"),
+            "independent tracks must not be reported as bleed, got: \(warnings)",
+        )
+    }
 }
