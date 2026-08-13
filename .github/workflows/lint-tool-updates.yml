@@ -1,0 +1,33 @@
+name: Lint tool updates
+
+# A pin without an update path is how the formatter ended up two minors behind
+# every machine that used it. Dependabot cannot watch these versions - they sit
+# in a shell file, not a package manifest - so this asks upstream once a week
+# and opens an issue when a pin falls behind. It never fails the run: a tool
+# release is news, not a broken build.
+
+on:
+  schedule:
+    # Mondays 05:40 UTC. Off the hour because scheduled runs bunch up on it and
+    # get delayed; early enough that the issue is there before the week starts.
+    - cron: "40 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compare the pins against the latest releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/check-lint-tool-updates.sh
