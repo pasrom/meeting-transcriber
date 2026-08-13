@@ -8,6 +8,20 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         ProcessInfo.processInfo.environment["CI"] != nil
     }
 
+    /// Byte-exact image comparison tests the rasteriser as much as the icon. An
+    /// Xcode update re-renders every badge identically to the eye and fails all
+    /// 29 references at once, which is exactly what happened between May and
+    /// August and cost half an hour to prove harmless. A perceptual tolerance
+    /// absorbs that.
+    ///
+    /// It is not blind: the smallest genuine difference in this suite is one
+    /// animation frame against its neighbour, and those still fail against each
+    /// other at these values. Anything a person would call a changed badge fails
+    /// by a wide margin.
+    private static let icon = Snapshotting<NSImage, NSImage>.image(
+        precision: 0.99, perceptualPrecision: 0.98,
+    )
+
     override func invokeTest() {
         withSnapshotTesting(record: .missing) {
             super.invokeTest()
@@ -19,7 +33,7 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         let staticBadges: [BadgeKind] = [.inactive, .userAction, .done, .error, .updateAvailable]
         for badge in staticBadges {
             let image = MenuBarIcon.image(badge: badge)
-            assertSnapshot(of: image, as: .image, named: "\(badge)")
+            assertSnapshot(of: image, as: Self.icon, named: "\(badge)")
         }
     }
 
@@ -27,7 +41,7 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         try XCTSkipIf(isCI, "Snapshot tests are machine-dependent")
         for frame in 0 ..< MenuBarIcon.frameCount {
             let image = MenuBarIcon.image(badge: .recording, animationFrame: frame)
-            assertSnapshot(of: image, as: .image, named: "frame\(frame)")
+            assertSnapshot(of: image, as: Self.icon, named: "frame\(frame)")
         }
     }
 
@@ -35,7 +49,7 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         try XCTSkipIf(isCI, "Snapshot tests are machine-dependent")
         for frame in 0 ..< MenuBarIcon.frameCount {
             let image = MenuBarIcon.image(badge: .transcribing, animationFrame: frame)
-            assertSnapshot(of: image, as: .image, named: "frame\(frame)")
+            assertSnapshot(of: image, as: Self.icon, named: "frame\(frame)")
         }
     }
 
@@ -43,7 +57,7 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         try XCTSkipIf(isCI, "Snapshot tests are machine-dependent")
         for frame in 0 ..< MenuBarIcon.frameCount {
             let image = MenuBarIcon.image(badge: .diarizing, animationFrame: frame)
-            assertSnapshot(of: image, as: .image, named: "frame\(frame)")
+            assertSnapshot(of: image, as: Self.icon, named: "frame\(frame)")
         }
     }
 
@@ -51,7 +65,7 @@ final class MenuBarIconSnapshotTests: XCTestCase {
         try XCTSkipIf(isCI, "Snapshot tests are machine-dependent")
         for frame in 0 ..< MenuBarIcon.frameCount {
             let image = MenuBarIcon.image(badge: .processing, animationFrame: frame)
-            assertSnapshot(of: image, as: .image, named: "frame\(frame)")
+            assertSnapshot(of: image, as: Self.icon, named: "frame\(frame)")
         }
     }
 
