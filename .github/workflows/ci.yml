@@ -55,11 +55,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Install SwiftLint
         run: brew install swiftlint
-      # SwiftFormat is version-pinned: `brew install` always pulls the latest,
-      # and 0.62.0 turned on new default rules (wrapIfStatementBodies /
-      # wrapIfExpressionBodies) that would reformat the committed codebase
-      # repo-wide. Pin to the last release whose defaults match the committed
-      # style; bump deliberately alongside a matching reformat. Uses the
+      # SwiftFormat is version-pinned because `brew install` pulls whatever is
+      # current that day, which makes an unrelated PR go red on a tool release
+      # nobody chose. The two rules 0.62.0 turned on by default are switched off
+      # in .swiftformat instead, so the pin can track the current release rather
+      # than freeze at the last one that happened to agree with us. Uses the
       # official prebuilt CLI binary from the GitHub release (single-file zip).
       #
       # The runner image pre-installs a newer SwiftFormat on the Homebrew path,
@@ -67,7 +67,7 @@ jobs:
       # Prepend the pin dir via $GITHUB_PATH (front of PATH for later steps).
       - name: Install SwiftFormat (pinned)
         env:
-          SWIFTFORMAT_VERSION: "0.61.1"
+          SWIFTFORMAT_VERSION: "0.62.1"
         run: |
           curl -fsSL -o "$RUNNER_TEMP/swiftformat.zip" \
             "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip"
@@ -79,7 +79,7 @@ jobs:
       # SwiftFormat again, instead of silently reformatting the codebase.
       - name: Verify SwiftFormat version
         env:
-          SWIFTFORMAT_VERSION: "0.61.1"
+          SWIFTFORMAT_VERSION: "0.62.1"
         run: |
           got="$(swiftformat --version)"
           echo "swiftformat resolves to: $(command -v swiftformat) ($got)"

@@ -22,6 +22,12 @@
 # and `private(set)`, so we let SwiftLint handle order validation and keep
 # SwiftFormat focused on whitespace / commas / wrapping.
 --disable modifierOrder
+# On by default since 0.62.0. The committed style keeps a short guard-style
+# body on the `if` line (`if fed { return nil }`), and there are 473 of them,
+# so turning these on is a repo-wide reformat in exchange for nothing.
+# Disabling them is what lets the pin track the current release.
+--disable wrapIfStatementBodies
+--disable wrapIfExpressionBodies
 
 # File scope
 --exclude FluidAudio,.build,app/MeetingTranscriber/.build,tools/audiotap/.build,tools/meeting-simulator/.build
