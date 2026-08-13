@@ -30,9 +30,26 @@ case "$MODE" in
     --lint-only)   RUN_FORMAT=false ;;
 esac
 
+# shellcheck source=scripts/tool-versions.sh
+source scripts/tool-versions.sh
+
+# Warn, never fail: CI runs the pinned binaries, this machine runs whatever is
+# installed, and a mismatch means a local pass and a CI pass are two different
+# claims. That is not hypothetical - the formatter pin sat two minors behind
+# the machines using it, so `--fix` here rewrote files the pinned check then
+# rejected. Warning rather than blocking on purpose: an unrelated one-line fix
+# should not be gated on a toolchain upgrade.
+warn_version_drift() {
+    local tool="$1" expected="$2" got="$3"
+    if [[ "$got" != "$expected" ]]; then
+        echo "Warning: local $tool is $got, CI pins $expected. Results can differ; 'brew upgrade $tool' to match." >&2
+    fi
+}
+
 # --- SwiftFormat (formatter) ---
 if [[ "$RUN_FORMAT" == "true" ]]; then
     if command -v swiftformat &>/dev/null; then
+        warn_version_drift swiftformat "$SWIFTFORMAT_VERSION" "$(swiftformat --version || echo unknown)"
         if [[ "$MODE" == "--fix" ]]; then
             echo "Running swiftformat..."
             swiftformat "${SWIFT_DIRS[@]}"
@@ -51,6 +68,7 @@ fi
 # `-warnings-as-errors` for full zero-warning enforcement.
 if [[ "$RUN_LINT" == "true" ]]; then
     if command -v swiftlint &>/dev/null; then
+        warn_version_drift swiftlint "$SWIFTLINT_VERSION" "$(swiftlint version || echo unknown)"
         if [[ "$MODE" == "--fix" ]]; then
             echo "Running swiftlint --fix..."
             swiftlint lint --fix --strict
