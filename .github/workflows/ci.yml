@@ -127,7 +127,10 @@ jobs:
           # failure, leaving swiftlint analyze to pass against an empty log.
           set -o pipefail
           cd app/MeetingTranscriber
-          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' build-for-testing 2>&1 | tee /tmp/xcodebuild.log
+          # SWIFT_SUPPRESS_WARNINGS=NO: without it xcodebuild fails outright on
+          # AudioTapLib's warning gate. Reason at the flag in
+          # tools/audiotap/Package.swift.
+          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' SWIFT_SUPPRESS_WARNINGS=NO build-for-testing 2>&1 | tee /tmp/xcodebuild.log
           cd "$GITHUB_WORKSPACE"
           swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
       - name: Cancel run on failure
