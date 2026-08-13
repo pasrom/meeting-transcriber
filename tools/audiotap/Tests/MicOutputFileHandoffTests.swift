@@ -43,7 +43,12 @@ final class MicOutputFileHandoffTests: XCTestCase {
         let fake = Fake()
         let handler = MicCaptureHandler(outputURL: url) { fake }
         try handler.start()
-        let block = try XCTUnwrap(fake.tapBlock, "start() must install the production tap block")
+        // `nonisolated(unsafe)`: a tap block is a bare function value, so the
+        // `@preconcurrency` import does not reach it and the dispatch closure
+        // below cannot capture it otherwise. Deliberately not a lock or a queue:
+        // any real ordering primitive would establish the happens-before edge
+        // this test exists to leave out.
+        nonisolated(unsafe) let block = try XCTUnwrap(fake.tapBlock, "start() must install the production tap block")
 
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 256))

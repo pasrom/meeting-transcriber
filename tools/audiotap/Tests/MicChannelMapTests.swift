@@ -123,12 +123,9 @@ final class MicChannelMapTests: XCTestCase {
 
         let outBuf = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: 1600))
         var error: NSError?
-        var fed = false
+        let feed = FeedOnce(buffer: inBuf)
         converter.convert(to: outBuf, error: &error) { _, status in
-            if fed { status.pointee = .noDataNow; return nil }
-            fed = true
-            status.pointee = .haveData
-            return inBuf
+            feed.next(status)
         }
         if let error { throw error }
 

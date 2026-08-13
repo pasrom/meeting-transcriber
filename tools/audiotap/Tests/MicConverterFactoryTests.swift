@@ -59,12 +59,9 @@ final class MicConverterFactoryTests: XCTestCase {
             AVAudioPCMBuffer(pcmFormat: setup.converter.outputFormat, frameCapacity: 1600),
         )
         var error: NSError?
-        var fed = false
+        let feed = FeedOnce(buffer: inBuf)
         setup.converter.convert(to: outBuf, error: &error) { _, status in
-            if fed { status.pointee = .noDataNow; return nil }
-            fed = true
-            status.pointee = .haveData
-            return inBuf
+            feed.next(status)
         }
         XCTAssertNil(error)
 
