@@ -2,9 +2,14 @@
 
 ## Prerequisites
 
-- macOS 14.2+
-- Xcode 16+ (Swift toolchain)
+- macOS 14.2+ to run the app (the audio tap needs it)
+- Xcode 26+ to build it. Every package manifest declares `swift-tools-version: 6.2`, which arrived with Swift 6.2 in Xcode 26; an older Xcode fails on the manifest before it compiles anything.
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (for protocol generation)
+
+If you run `./scripts/lint.sh`, you also need SwiftLint and SwiftFormat 0.62.0 or
+newer; the format config disables rules older versions do not recognise and will
+reject outright. CI pins exact versions, listed in `scripts/tool-versions.sh`, and
+`lint.sh` warns when your local ones differ.
 
 ## Setup
 
