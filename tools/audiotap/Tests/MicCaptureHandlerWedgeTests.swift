@@ -103,7 +103,7 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         var remaining = sessions
         // Typed locals, not trailing closures: SwiftFormat restyles a labelled
         // closure argument into a trailing one and mangles the call.
-        let factory: () -> MicEngineSessionProviding = {
+        let factory: () -> any MicEngineSessionProviding = {
             remaining.isEmpty ? WedgingSession() : remaining.removeFirst()
         }
         guard let decideRetry else {

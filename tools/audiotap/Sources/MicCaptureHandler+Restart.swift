@@ -77,7 +77,7 @@ extension MicCaptureHandler {
         // attempt always builds a new session rather than reusing the engine.
         let candidate = sessionFactory()
         var rate: Double?
-        var thrown: Error?
+        var thrown: (any Error)?
         do {
             rate = try startEngine(deviceUID: deviceUID, on: candidate)
         } catch {
@@ -121,7 +121,7 @@ extension MicCaptureHandler {
     /// Publish a successful attempt, or discard it if the session was sealed
     /// while it was on its way here. Main queue only.
     private func adopt(
-        _ candidate: MicEngineSessionProviding,
+        _ candidate: any MicEngineSessionProviding,
         deviceUID: String?,
         generation: Int,
         rate: Double?,

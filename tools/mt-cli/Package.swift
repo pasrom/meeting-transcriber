@@ -9,6 +9,7 @@ let strictSwiftSettings: [SwiftSetting] = [
         "-Xfrontend", "-warn-long-function-bodies=300",
         "-Xfrontend", "-warn-long-expression-type-checking=300",
     ]),
+    .enableUpcomingFeature("ExistentialAny"),
 ]
 
 let package = Package(

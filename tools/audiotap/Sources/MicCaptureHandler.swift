@@ -31,8 +31,8 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// never touches audio hardware (the CI runner has no input device) and can
     /// be made to block on demand, which is how the issue #588 wedge is
     /// exercised without a Bluetooth headset.
-    let sessionFactory: () -> MicEngineSessionProviding
-    var session: MicEngineSessionProviding
+    let sessionFactory: () -> any MicEngineSessionProviding
+    var session: any MicEngineSessionProviding
     /// `internal` (not `private`) so the cross-file `+Timeline` extension can
     /// write gap-fill silence to it.
     ///
@@ -99,7 +99,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// use a schedule that does not spend six seconds proving a give-up.
     let decideRetry: @Sendable (Int) -> CaptureRestartRetryAction
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
-    var configChangeObserver: NSObjectProtocol?
+    var configChangeObserver: (any NSObjectProtocol)?
     var selectedDeviceUID: String?
     /// Wall-clock anchoring so a device-restart gap becomes silence in the WAV
     /// instead of an under-run (issue #379 follow-up — see `+Timeline`).
@@ -136,7 +136,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         debugFault: DebugTapFault? = nil,
         removeInputTap: @escaping (AVAudioEngine) -> Void = { $0.inputNode.removeTap(onBus: 0) },
     ) {
-        let factory: () -> MicEngineSessionProviding = {
+        let factory: () -> any MicEngineSessionProviding = {
             MicEngineSession(removeInputTap: removeInputTap)
         }
         self.init(
@@ -157,7 +157,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
         debugFault: DebugTapFault? = nil,
-        sessionFactory: @escaping () -> MicEngineSessionProviding,
+        sessionFactory: @escaping () -> any MicEngineSessionProviding,
         decideRetry: @escaping @Sendable (Int) -> CaptureRestartRetryAction
             = CaptureRestartRetryPolicy.decide,
     ) {
@@ -202,7 +202,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     // swiftlint:disable function_body_length
     @discardableResult
-    func startEngine(deviceUID: String?, on session: MicEngineSessionProviding) throws -> Double {
+    func startEngine(deviceUID: String?, on session: any MicEngineSessionProviding) throws -> Double {
         // The one call in here that can block forever (issue #588).
         let hwFormat = try session.hardwareFormat(deviceUID: deviceUID)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")

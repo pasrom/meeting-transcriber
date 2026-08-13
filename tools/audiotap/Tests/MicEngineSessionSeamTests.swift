@@ -31,7 +31,7 @@ final class MicEngineSessionSeamTests: XCTestCase {
         // built is a broken test either way.
         // swiftlint:disable:next force_unwrapping
         var format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
-        var hardwareFormatError: Error?
+        var hardwareFormatError: (any Error)?
 
         func hardwareFormat(deviceUID: String?) throws -> AVAudioFormat {
             calls.append(.hardwareFormat(deviceUID: deviceUID))
