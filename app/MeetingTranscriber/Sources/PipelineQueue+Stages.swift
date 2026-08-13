@@ -238,6 +238,13 @@ extension PipelineQueue {
             try await appResample
             try await micResample
 
+            // Both tracks now exist at 16 kHz. Check here, before transcription,
+            // whether they carry the same speech: that means the loudspeaker
+            // output is coming back through the microphone, and the merge below
+            // has no dedup, so every affected utterance lands in the transcript
+            // twice.
+            warnIfEchoBleed(jobID: ctx.jobID, appURL: app16k, micURL: mic16k)
+
             // Transcribe each track separately
             let appSegments = try await engine.transcribeSegments(audioPath: app16k)
             let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
