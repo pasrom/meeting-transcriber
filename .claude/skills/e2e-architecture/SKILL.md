@@ -62,6 +62,25 @@ PRs are excluded from the self-hosted runner.
   the speaker DB learns the voices); it snapshots + restores the runner's real
   `speakers.json`/`recognition_log.jsonl` (`$GITHUB_ACTIONS`-gated) so the
   confirm never pollutes the persistent speaker DB.
+- The `--echo-bleed` lane (issue #581) is the odd one out: it records nothing.
+  A recording made on loudspeakers carries the remote voices on the microphone
+  track too, so the same speech is transcribed twice; the pipeline measures that
+  before transcription and reports the verdict on `GET /v1/jobs/<id>`. The Mini
+  has no microphone, only a virtual input device, so there is no acoustic path
+  to bleed through and the condition cannot be produced live. The driver
+  synthesises the audio instead (`scripts/fixtures/make-echo-pair.py`, stdlib
+  Python), enqueues each `_app`/`_mic` pair through `POST /v1/jobs` — where
+  `PairedRecordingResolver` turns it into one real dual-source job, which the
+  lane asserts by requiring exactly one job id back — and reads the verdict off
+  the job. **Two pairs, differing by exactly one term:** without the clean
+  control the lane would stay green against a detector that answers yes to
+  everything, and a false positive here tells a user their recording is broken
+  when it is not. The control additionally asserts `windowsScored`, because a
+  verdict computed over too few windows says "not affected" for want of
+  evidence rather than for want of bleed. Both fixture properties that are not
+  obvious — the local side has to be gated into short bursts, and that gate's
+  period has to stay under one analysis window — are measured, and the reasoning
+  is in the generator's docstring. Touches no settings and needs no grants.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
