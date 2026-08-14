@@ -646,20 +646,12 @@ final class WorkflowIntegrationTests: XCTestCase {
 
     // MARK: - Echo bleed warning
 
-    /// Modulated noise: the detector correlates envelopes, so a signal needs an
-    /// envelope. Varying the modulation per seed is what makes two talkers
-    /// independent; reseeding only the carrier leaves identical envelopes and
-    /// two unrelated talkers then correlate at 1.0.
-    private func speechLike(seconds: Double, seed: UInt64, rate: Int = 16000) -> [Float] {
-        var state = seed
-        let syllableRate = 2.4 + Double(seed % 7) * 0.35
-        let phase = Double(seed % 11) / 11 * 2 * .pi
-        return (0 ..< Int(Double(rate) * seconds)).map { i in
-            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            let carrier = Float(Int32(bitPattern: UInt32(truncatingIfNeeded: state >> 33))) / Float(Int32.max)
-            let t = Double(i) / Double(rate)
-            return carrier * Float(max(0, sin(2 * .pi * syllableRate * t + phase)))
-        }
+    /// The shared aperiodic generator, deliberately not a local copy: an
+    /// earlier sine-enveloped one here made two talkers at different syllable
+    /// rates nearly orthogonal, so the negative case certified a margin real
+    /// recordings do not have.
+    private func speechLike(seconds: Double, seed: UInt64) -> [Float] {
+        EchoTestAudio.speechLike(seconds: seconds, seed: seed)
     }
 
     private func writeTrack(_ samples: [Float], to url: URL) throws {
@@ -689,13 +681,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         let appURL = recordings.appendingPathComponent("meeting_app.wav")
         let micURL = recordings.appendingPathComponent("meeting_mic.wav")
         try writeTrack(far, to: appURL)
-        // The room path: attenuated and delayed by 15 ms.
-        let delay = 16000 * 15 / 1000
-        var bled = [Float](repeating: 0, count: far.count)
-        for i in delay ..< far.count {
-            bled[i] = far[i - delay] * 0.5
-        }
-        try writeTrack(bled, to: micURL)
+        try writeTrack(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5), to: micURL)
 
         await runDualSource(h, app: appURL, mic: micURL)
 

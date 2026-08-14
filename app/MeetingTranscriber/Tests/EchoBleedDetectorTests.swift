@@ -13,54 +13,12 @@ import XCTest
 final class EchoBleedDetectorTests: XCTestCase {
     private let rate = 16000
 
-    /// Deterministic pseudo-noise; a fixed seed keeps the assertions stable.
-    private func noise(seconds: Double, seed: UInt64) -> [Float] {
-        var state = seed
-        return (0 ..< Int(Double(rate) * seconds)).map { _ in
-            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            return Float(Int32(bitPattern: UInt32(truncatingIfNeeded: state >> 33))) / Float(Int32.max)
-        }
-    }
-
-    /// Speech-like: noise shaped by a slow **aperiodic** envelope.
-    ///
-    /// Two properties matter and both were learned the hard way. The envelope
-    /// has to vary with the seed, not just the carrier, or two supposedly
-    /// independent talkers correlate at exactly 1.0 because the detector
-    /// compares envelopes. And it must not be periodic: a sine envelope
-    /// correlates with itself at every multiple of its period, so a copy
-    /// delayed far outside the search window is still "found", which made the
-    /// lag-boundary test pass for the wrong reason.
     private func speechLike(seconds: Double, seed: UInt64) -> [Float] {
-        var state = seed &+ 1
-        func next() -> Double {
-            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            return Double(UInt32(truncatingIfNeeded: state >> 33)) / Double(UInt32.max)
-        }
-        // One envelope control point per 120 ms, linearly interpolated: syllable
-        // rhythm without a period to lock onto.
-        let step = Int(0.12 * Double(rate))
-        let points = (0 ... (Int(Double(rate) * seconds) / step + 2)).map { _ in
-            let v = next()
-            return v < 0.35 ? 0.0 : v // pauses
-        }
-        return (0 ..< Int(Double(rate) * seconds)).map { i in
-            let carrier = Float(next() * 2 - 1)
-            let idx = i / step
-            let frac = Double(i % step) / Double(step)
-            let env = points[idx] * (1 - frac) + points[idx + 1] * frac
-            return carrier * Float(env)
-        }
+        EchoTestAudio.speechLike(seconds: seconds, seed: seed)
     }
 
-    /// The room path: attenuated and delayed.
     private func bleed(_ source: [Float], delayMs: Double, gain: Float) -> [Float] {
-        let d = Int(delayMs / 1000 * Double(rate))
-        var out = [Float](repeating: 0, count: source.count)
-        for i in d ..< source.count {
-            out[i] = source[i - d] * gain
-        }
-        return out
+        EchoTestAudio.bleed(source, delayMs: delayMs, gain: gain)
     }
 
     // MARK: - The two populations
