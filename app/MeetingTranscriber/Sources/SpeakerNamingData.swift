@@ -18,7 +18,6 @@ extension PipelineQueue {
         let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
         let isDualSource: Bool
-
         /// Per-instance identity for SwiftUI `.onChange` change-detection.
         /// Late re-diarization can produce a `mapping`/`speakingTimes` set
         /// that compares byte-equal to the previous run (same speaker count,

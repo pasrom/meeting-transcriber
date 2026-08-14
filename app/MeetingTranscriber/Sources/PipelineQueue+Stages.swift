@@ -301,10 +301,7 @@ extension PipelineQueue {
             "[\(ctx.shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
         )
 
-        return TranscriptionOutput(
-            transcript: transcript, cachedSegments: cachedSegments,
-            isDualSource: isDualSource,
-        )
+        return TranscriptionOutput(transcript: transcript, cachedSegments: cachedSegments, isDualSource: isDualSource)
     }
 
     /// Stage 2 — optional speaker diarization. Returns the transcript with

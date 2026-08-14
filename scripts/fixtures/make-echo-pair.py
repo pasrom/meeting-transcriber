@@ -142,6 +142,10 @@ def main():
         sys.exit(f"sample rates differ: {args.app} is {app_rate} Hz, {args.local} is {local_rate} Hz")
     if not app:
         sys.exit(f"{args.app}: no samples")
+    if not local:
+        # Mirrors the check above: without it the tiling divides by zero and the
+        # lane reports a Python traceback instead of which file was empty.
+        sys.exit(f"{args.local}: no samples")
 
     count = len(app)
     mic = gate(tiled(local, count), app_rate, args.local_burst, args.local_gap)

@@ -28,17 +28,34 @@ extension PipelineQueue {
     /// envelope pass over them synchronously would block the UI for as long as
     /// it takes. Every neighbouring stage awaits for the same reason.
     ///
-    /// Returns the verdict. The caller carries it to the naming stage, where it
-    /// decides whether the microphone track's embeddings may reach the speaker
-    /// database.
+    /// The verdict is recorded on the job (`recordEchoVerdict`), which is where
+    /// every later reader takes it from — the naming stage derives its
+    /// `EchoVerdict` from `job.echo`. Returned as well purely so a caller that
+    /// wants it need not re-read the job.
     @discardableResult
     func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoVerdict {
+        // Clamped exactly as `AudioMixer.mix` clamps it, and for the same
+        // reason: a device switch mid-recording can reset the first-frame
+        // timestamp on one source only (issue #99), and an absurd delay here
+        // would push every candidate lag past the end of the window, so every
+        // window scores nil and the whole detector silently no-ops.
+        let delay = AudioMixer.clampMicDelay(micDelay)
         let result = await Task.detached(priority: .utility) { () -> EchoBleedDetector.Result? in
             let analysed = Self.echoBleedAnalysisSeconds
-            guard let (app, rate) = Self.loadBounded(appURL, maxSeconds: analysed),
-                  let (mic, _) = Self.loadBounded(micURL, maxSeconds: analysed)
-            else { return nil }
-            return EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate, micDelay: micDelay)
+            guard let (app, appRate) = Self.loadBounded(appURL, maxSeconds: analysed),
+                  let (mic, micRate) = Self.loadBounded(micURL, maxSeconds: analysed)
+            else {
+                logger.warning("echo_bleed skipped: a track could not be read")
+                return nil
+            }
+            // One rate feeds both envelopes, so mismatched tracks would sit on
+            // different time bases and every lag would be meaningless — a
+            // confident wrong verdict rather than an absent one.
+            guard appRate == micRate else {
+                logger.warning("echo_bleed skipped: track sample rates differ (\(appRate, privacy: .public) vs \(micRate, privacy: .public))")
+                return nil
+            }
+            return EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: appRate, micDelay: delay)
         }.value
 
         guard let result else { return .notMeasured }
@@ -65,7 +82,10 @@ extension PipelineQueue {
         // fraction of it.
         let analysedSeconds = Double(scored) * EchoBleedDetector.windowSeconds
         let minutes = Int((analysedSeconds / 60).rounded())
-        let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) minutes analysed."
+        // "1 minutes" is reachable: the minimum firing configuration is three
+        // ten-second windows, and the E2E fixture produces four.
+        let span = minutes == 1 ? "minute" : "minutes"
+        let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) \(span) analysed."
         let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
         // Third sentence because the consequence is otherwise invisible: naming
         // speakers on this recording will look like it worked and teach the app
