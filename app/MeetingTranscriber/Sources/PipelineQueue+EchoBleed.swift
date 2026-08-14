@@ -53,6 +53,14 @@ extension PipelineQueue {
             ),
         )
         logger.info("echo_bleed share=\(percent, privacy: .public)% windows=\(scored, privacy: .public) affected=\(hits, privacy: .public)")
+        // The per-window series, so a field report is diagnosable with no audio
+        // attached. It answers the two questions the share alone cannot: whether
+        // a miss sat just under the threshold or nowhere near it, and whether the
+        // windows peaked at one stable lag (bleed travels a fixed path) or
+        // scattered across the search range (a coincidence). Numbers only — no
+        // audio, no transcript, nothing derived from what was said.
+        let detail = Self.windowDetail(result.windowScores)
+        logger.info("echo_bleed windows=\(detail, privacy: .public)")
         guard result.isAffected else { return }
 
         // Says what was measured, not more: the share is over the windows that
@@ -63,6 +71,17 @@ extension PipelineQueue {
         let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) minutes analysed."
         let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
         addWarning(id: jobID, "\(head) \(tail)")
+    }
+
+    /// Renders the per-window series as `corr@lagms` pairs, e.g.
+    /// `0.79@20 0.83@20 0.87@10`. Compact on purpose: this goes out on every
+    /// dual-source job, and a long recording has dozens of windows.
+    nonisolated static func windowDetail(_ scores: [EchoBleedDetector.WindowScore]) -> String {
+        scores.map { score in
+            let corr = String(format: "%.2f", score.correlation)
+            let lagMs = Int((score.lagSeconds * 1000).rounded())
+            return "\(corr)@\(lagMs)"
+        }.joined(separator: " ")
     }
 
     /// Reads at most `maxSeconds` of a mono file as Float32. `nonisolated` so it

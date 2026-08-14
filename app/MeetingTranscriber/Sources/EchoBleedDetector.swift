@@ -44,11 +44,23 @@ enum EchoBleedDetector {
     /// anywhere. That is a different defect, handled by the channel-health path.
     static let silenceFloorDBFS = -70.0
 
+    /// One window's measurement, kept so a field report is diagnosable without
+    /// the audio. The lag is what separates real bleed from a coincidence: bleed
+    /// peaks at a stable lag near the recorder's own track offset, whereas two
+    /// tracks that merely happen to rise and fall together peak wherever.
+    struct WindowScore: Equatable {
+        let correlation: Double
+        let lagSeconds: Double
+    }
+
     struct Result: Equatable {
         /// Share of 10 s windows whose two tracks carry the same audio.
         let affectedWindowShare: Double
         let windowsScored: Int
         let windowsAffected: Int
+        /// Per-window measurements, in order. Empty is impossible for a
+        /// non-nil result: a `Result` is only produced once a window scored.
+        let windowScores: [WindowScore]
 
         var isAffected: Bool {
             windowsScored >= EchoBleedDetector.minScoredWindows
@@ -92,24 +104,29 @@ enum EchoBleedDetector {
         let maxLag = Int(maxLagSeconds / frameSeconds)
         let centreLag = Int((micDelay / frameSeconds).rounded())
         var affected = 0
-        var scored = 0
+        var scores: [WindowScore] = []
         for w in 0 ..< windows {
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
-            guard let r = peakCorrelation(
+            guard let peak = peakCorrelation(
                 Array(appEnvelope[range]),
                 Array(micEnvelope[range]),
                 maxLag: maxLag,
                 centre: centreLag,
             )
             else { continue }
-            scored += 1
-            if r > correlationThreshold { affected += 1 }
+            scores.append(WindowScore(
+                correlation: peak.correlation,
+                lagSeconds: Double(peak.lag) * frameSeconds,
+            ))
+            if peak.correlation > correlationThreshold { affected += 1 }
         }
+        let scored = scores.count
         guard scored > 0 else { return nil }
         return Result(
             affectedWindowShare: Double(affected) / Double(scored),
             windowsScored: scored,
             windowsAffected: affected,
+            windowScores: scores,
         )
     }
 
@@ -138,16 +155,16 @@ enum EchoBleedDetector {
         return out
     }
 
-    /// Highest normalised correlation of `b` against `a` over the lag range.
-    /// `nil` when either side is flat in this window, which carries no evidence
-    /// either way.
+    /// Highest normalised correlation of `b` against `a` over the lag range, and
+    /// the lag it peaked at. `nil` when either side is flat in this window,
+    /// which carries no evidence either way.
     private static func peakCorrelation(
         _ a: [Double],
         _ b: [Double],
         maxLag: Int,
         centre: Int,
-    ) -> Double? {
-        var best: Double?
+    ) -> (correlation: Double, lag: Int)? {
+        var best: (correlation: Double, lag: Int)?
         for offset in -maxLag ... maxLag {
             let lag = centre + offset
             let x: ArraySlice<Double>
@@ -162,7 +179,11 @@ enum EchoBleedDetector {
                 y = b[0 ..< (b.count + lag)]
             }
             guard let r = correlation(x, y) else { continue }
-            best = max(best ?? r, r)
+            // Floor at -infinity rather than 0: a correlation is signed, and the
+            // first candidate has to win however negative it is.
+            if r > (best?.correlation ?? -.infinity) {
+                best = (correlation: r, lag: lag)
+            }
         }
         return best
     }
