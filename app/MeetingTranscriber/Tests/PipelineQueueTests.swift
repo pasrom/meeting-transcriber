@@ -372,6 +372,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
 
         queue.cancelJob(id: job.id)
@@ -517,6 +518,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         try SpeakerNamingStore(outputDir: tmpDir).save(namingData, slug: "naming_ghost")
 
@@ -2635,6 +2637,7 @@ final class PipelineQueueTests: XCTestCase {
             ],
             participants: ["Alice", "Speaker C", "Speaker D"],
             isDualSource: false,
+            echoVerdict: nil,
         )
 
         let encoded = try JSONEncoder().encode(data)
@@ -2665,12 +2668,14 @@ final class PipelineQueueTests: XCTestCase {
             mapping: mapping, speakingTimes: speakingTimes,
             embeddings: embeddings, audioPath: nil,
             segments: [], participants: [], isDualSource: false,
+            echoVerdict: nil,
         )
         let second = PipelineQueue.SpeakerNamingData(
             jobID: jobID, meetingTitle: "Standup",
             mapping: mapping, speakingTimes: speakingTimes,
             embeddings: embeddings, audioPath: nil,
             segments: [], participants: [], isDualSource: false,
+            echoVerdict: nil,
         )
 
         XCTAssertNotEqual(first.revision, second.revision)
@@ -2686,6 +2691,7 @@ final class PipelineQueueTests: XCTestCase {
             mapping: ["S": "Alice"], speakingTimes: ["S": 60],
             embeddings: ["S": [0.1]], audioPath: nil,
             segments: [], participants: [], isDualSource: false,
+            echoVerdict: nil,
         )
 
         let encoded = try JSONEncoder().encode(original)
@@ -2862,6 +2868,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         queue.speakerNamingDataByJob[job.id] = namingData
 
@@ -2902,6 +2909,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         queue.speakerNamingDataByJob[job.id] = namingData
 
@@ -2951,6 +2959,7 @@ final class PipelineQueueTests: XCTestCase {
             mapping: [:], speakingTimes: [:], embeddings: [:],
             audioPath: nil, segments: [], participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
 
         let doneExpectation = XCTestExpectation(description: "Job transitions to done after skip")
@@ -3002,6 +3011,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         queue.speakerNamingDataByJob[job.id] = namingData
 
@@ -3060,6 +3070,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: true,
+            echoVerdict: nil,
         )
         queue.speakerNamingDataByJob[job.id] = namingData
 
@@ -3115,6 +3126,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         queue.speakerNamingDataByJob[job.id] = namingData
 
@@ -3851,6 +3863,7 @@ final class PipelineQueueTests: XCTestCase {
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
         let json = try JSONEncoder().encode(namingData)
         try json.write(to: recordingsDir.appendingPathComponent("snapshot_test_naming.json"))

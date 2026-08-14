@@ -119,6 +119,7 @@ final class AccidentalNamingAcceptTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
+            echoVerdict: nil,
         )
     }
 

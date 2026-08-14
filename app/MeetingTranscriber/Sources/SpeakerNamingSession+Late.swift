@@ -28,10 +28,30 @@ extension SpeakerNamingSession {
         for (label, name) in mapping where !name.isEmpty {
             fullMapping[label] = name
         }
+        // Hold back what an echo-affected recording must not teach the app. The
+        // filter sits here rather than in `updateDB` because this is the only
+        // place a job's embeddings reach the database, and it is the last point
+        // at which the track each one came from is still readable — `updateDB`
+        // sees labels but never parses them. Dropping an entry is enough to
+        // suppress the write: `updateDB` skips any label with no embedding.
+        //
+        // Note this filters `fullMapping`'s effect, not `fullMapping` itself.
+        // The transcript rewrite below still uses every name the user gave, so a
+        // quarantined speaker is still named in the transcript — only the voice
+        // is not memorised.
+        let admissible = EchoEmbeddingQuarantine.admissible(
+            namingData.embeddings,
+            verdict: namingData.echo,
+            isDualSource: namingData.isDualSource,
+        )
+        if admissible.count != namingData.embeddings.count {
+            let held = namingData.embeddings.count - admissible.count
+            logger.info("echo_quarantine held=\(held, privacy: .public) of=\(namingData.embeddings.count, privacy: .public)")
+        }
         delegate.updateSpeakerDB(
             matcher: matcher,
             mapping: fullMapping,
-            embeddings: namingData.embeddings,
+            embeddings: admissible,
             // Thread the per-speaker speaking times so the matcher's
             // centroid-quality filter (short segments stay as fallback samples,
             // long ones seed the centroid) sees real durations.
@@ -251,6 +271,12 @@ extension SpeakerNamingSession {
                 SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
             },
             participants: prior.participants, isDualSource: prior.isDualSource,
+            // Carried forward, never recomputed: a re-run re-diarizes the same
+            // audio, so the verdict still holds, and the tracks it was measured
+            // from are long gone by now. Dropping it here would quietly lift the
+            // quarantine for anyone who pressed Re-run on an affected recording
+            // — the one case where they are most likely to.
+            echoVerdict: prior.echoVerdict,
         )
     }
 

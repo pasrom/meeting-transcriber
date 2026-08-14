@@ -1,5 +1,29 @@
 import Foundation
 
+/// What the echo detector concluded about one recording.
+///
+/// Three cases and not a `Bool`, because the third one is load-bearing
+/// everywhere this travels: *not measured* is not *measured and clean*. A
+/// single-source job is never analysed, and a dual-source pair can be silent or
+/// too short for one full window, in which case no honest verdict exists. Code
+/// that collapses those into `false` reports a recording as fine that nobody
+/// ever looked at — and on the speaker-database side, decides it is safe to
+/// learn from audio it never checked.
+enum EchoVerdict: String, Codable, Equatable {
+    case notMeasured = "not_measured"
+    case clean
+    case affected
+
+    /// Decodes an unrecognised value as `notMeasured` rather than throwing.
+    /// This rides in persisted naming data that is read with a lenient decode,
+    /// so a case added by a later version would otherwise discard the whole
+    /// file — losing a user's pending speaker naming to a field they don't have.
+    init(from decoder: any Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .notMeasured
+    }
+}
+
 /// Decides whether a dual-source recording has the loudspeaker output coming
 /// back through the microphone, so both tracks carry the same speech.
 ///

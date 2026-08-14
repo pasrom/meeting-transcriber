@@ -27,7 +27,12 @@ extension PipelineQueue {
     /// is `@MainActor`; decoding up to two ten-minute tracks and running the
     /// envelope pass over them synchronously would block the UI for as long as
     /// it takes. Every neighbouring stage awaits for the same reason.
-    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async {
+    ///
+    /// Returns the verdict. The caller carries it to the naming stage, where it
+    /// decides whether the microphone track's embeddings may reach the speaker
+    /// database.
+    @discardableResult
+    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoVerdict {
         let analysed = Self.echoBleedAnalysisSeconds
         let result = await Task.detached(priority: .utility) { () -> EchoBleedDetector.Result? in
             guard let (app, rate) = Self.loadBounded(appURL, maxSeconds: analysed),
@@ -36,7 +41,7 @@ extension PipelineQueue {
             return EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate, micDelay: micDelay)
         }.value
 
-        guard let result else { return }
+        guard let result else { return .notMeasured }
         let percent = Int((result.affectedWindowShare * 100).rounded())
         let scored = result.windowsScored
         let hits = result.windowsAffected
@@ -61,7 +66,7 @@ extension PipelineQueue {
         // audio, no transcript, nothing derived from what was said.
         let detail = Self.windowDetail(result.windowScores)
         logger.info("echo_bleed windows=\(detail, privacy: .public)")
-        guard result.isAffected else { return }
+        guard result.isAffected else { return .clean }
 
         // Says what was measured, not more: the share is over the windows that
         // were scored inside the analysed span, which for a long meeting is a
@@ -70,7 +75,13 @@ extension PipelineQueue {
         let minutes = Int((analysedSeconds / 60).rounded())
         let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) minutes analysed."
         let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
-        addWarning(id: jobID, "\(head) \(tail)")
+        // Third sentence because the consequence is otherwise invisible: naming
+        // speakers on this recording will look like it worked and teach the app
+        // nothing. Saying so here is honest — the quarantine follows from this
+        // same verdict, so it is a statement of fact rather than a prediction.
+        let db = "Voices from this recording are not added to the speaker database."
+        addWarning(id: jobID, "\(head) \(tail) \(db)")
+        return .affected
     }
 
     /// Renders the per-window series as `corr@lagms` pairs, e.g.

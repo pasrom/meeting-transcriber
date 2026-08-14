@@ -311,6 +311,9 @@ enum VoiceEnrollmentLogic {
             },
             participants: [],
             isDualSource: false,
+            // Enrollment reads one user-picked file, so there is no microphone
+            // track to quarantine and nothing was ever measured.
+            echoVerdict: .notMeasured,
         )
         let speakerCount = Set(diarization.segments.map(\.speaker)).count
         return VoiceEnrollmentView.NamingPayload(

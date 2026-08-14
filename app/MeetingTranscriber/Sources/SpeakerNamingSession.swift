@@ -286,6 +286,7 @@ final class SpeakerNamingSession {
         job: (jobID: UUID, title: String, slug: String, participants: [String]),
         diarizeProcess: any DiarizationProvider,
         isDualSource: Bool, outputDir: URL,
+        echoVerdict: EchoVerdict = .notMeasured,
     ) -> [String: String] {
         let (jobID, title, slug, participants) = job
         // No embeddings → no matching or dialog; keep the diarizer's own names.
@@ -325,6 +326,7 @@ final class SpeakerNamingSession {
             },
             participants: participants,
             isDualSource: isDualSource,
+            echoVerdict: echoVerdict,
         )
 
         // Persist naming data and set slug + mode early.

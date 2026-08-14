@@ -32,6 +32,7 @@ final class SpeakerNamingStoreTests: XCTestCase {
             embeddings: embeddings, audioPath: nil,
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
             participants: [], isDualSource: false,
+            echoVerdict: nil,
         )
     }
 
