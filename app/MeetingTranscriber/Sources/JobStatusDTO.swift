@@ -51,12 +51,13 @@ struct EchoDetectionDTO: Codable, Equatable {
     let affectedWindowShare: Double
     let windowsScored: Int
     let windowsAffected: Int
-    /// Whether the echo was removed from the microphone track. Only meaningful
-    /// when `detected`; false there means the recording still carries the
-    /// bleed, because the setting is off, the weights were unavailable, or the
-    /// canceller failed. That distinction is what decides whether the speaker
-    /// database may learn from this recording.
-    var cancelled = false
+    /// Whether the echo was **measurably** removed from the microphone track —
+    /// not merely attempted. Only meaningful when `detected`; false there means
+    /// the recording still carries the bleed, because the setting is off, the
+    /// weights were unavailable, the canceller failed, or it ran and did not
+    /// help. That distinction decides whether the speaker database may learn
+    /// from this recording.
+    var cancelled: Bool
 
     /// The detector's own result, narrowed to what belongs on a wire and in a
     /// persisted job. The per-window series stays behind: it grows with the
@@ -66,6 +67,24 @@ struct EchoDetectionDTO: Codable, Equatable {
         affectedWindowShare = result.affectedWindowShare
         windowsScored = result.windowsScored
         windowsAffected = result.windowsAffected
+        cancelled = false
+    }
+
+    /// Spelled out because `cancelled` was added after this shape was already
+    /// being persisted, and a synthesized decode throws on a missing key even
+    /// when the property has a default — the trap `PipelineJob.autoSkipNaming`
+    /// and `RecordingSidecar` both document. Without this, one job carrying an
+    /// older `echo` object fails the decode of the WHOLE snapshot array, which
+    /// drops every parked job including unrelated ones awaiting speaker naming.
+    /// Absent reads as `false`, which is also the conservative answer: not
+    /// cleaned, so the quarantine holds.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        detected = try c.decode(Bool.self, forKey: .detected)
+        affectedWindowShare = try c.decode(Double.self, forKey: .affectedWindowShare)
+        windowsScored = try c.decode(Int.self, forKey: .windowsScored)
+        windowsAffected = try c.decode(Int.self, forKey: .windowsAffected)
+        cancelled = try c.decodeIfPresent(Bool.self, forKey: .cancelled) ?? false
     }
 }
 
