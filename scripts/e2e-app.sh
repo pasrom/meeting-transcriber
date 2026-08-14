@@ -1804,10 +1804,6 @@ run_echo_bleed() {
     _eb_assert_scored "$label" "affected pair" "$affected_status"
     jq -e '.echo.affectedWindowShare >= 0.5' <<<"$affected_status" >/dev/null \
         || fail "$label: affected share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") below 0.5 (measured 1.0 on this fixture)"
-    # The structured verdict and the sentence the user actually sees are separate
-    # channels, and only one of them is in front of the person with the problem.
-    jq -e '(.warnings | length) >= 1' <<<"$affected_status" >/dev/null \
-        || fail "$label: affected job carries the verdict but no warning — the menu-bar channel is silent on a recording the API calls affected"
     log "$label: affected pair detected, share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") over $(jq -r '.echo.windowsScored' <<<"$affected_status") windows ✅"
 
     # --- clean control ----------------------------------------------------
@@ -1846,6 +1842,13 @@ run_echo_bleed() {
     # feature at all.
     jq -e '.echo.cancelled == true' <<<"$final" >/dev/null \
         || fail "$label: bleed detected but never cancelled — the microphone track still carries the remote side: $(jq -c '.echo' <<<"$final")"
+    # The structured verdict and the sentence the user actually sees are separate
+    # channels, and only one of them is in front of the person with the problem.
+    # Asserted here for the same reason as `cancelled`: the warning is written
+    # after the cancellation outcome is known, so it does not exist yet at the
+    # moment the verdict first appears.
+    jq -e '(.warnings | length) >= 1' <<<"$final" >/dev/null \
+        || fail "$label: affected job carries the verdict but no warning — the menu-bar channel is silent on a recording the API calls affected"
     local clean_final
     clean_final="$(rpc "/v1/jobs/$clean_job")"
     jq -e '.echo.cancelled == false' <<<"$clean_final" >/dev/null \
