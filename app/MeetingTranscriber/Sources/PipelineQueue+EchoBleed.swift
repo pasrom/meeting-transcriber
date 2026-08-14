@@ -123,3 +123,49 @@ extension PipelineQueue {
         return (Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))), rate)
     }
 }
+
+extension PipelineQueue {
+    /// Removes the loudspeaker echo from the 16 kHz microphone track, in place.
+    ///
+    /// **Overwriting `mic_16k.wav` is the design, not a shortcut.** Transcription,
+    /// the dual-track diarization, and the `<slug>_mic_16k.wav` sidecar that late
+    /// re-diarization reads back all take that one path. Writing the cleaned
+    /// audio anywhere else would leave the first pass and every later pass
+    /// disagreeing about what the microphone heard, and the phantom speaker
+    /// would come back the moment someone reopened naming. The raw `_mic.wav`
+    /// the recorder produced is untouched, so nothing is lost.
+    ///
+    /// Returns whether the track was replaced. Every failure is soft: the
+    /// recording stays exactly as it was and the detector's warning still
+    /// stands, which is the behaviour before this existed.
+    func cancelEcho(jobID: UUID, appURL: URL, micURL: URL) async -> Bool {
+        guard let modelPath = await EchoCancellerModel.ensureAvailable() else {
+            logger.warning("echo_cancel_skipped: weights unavailable")
+            return false
+        }
+        let applied = await Task.detached(priority: .utility) { () -> Bool in
+            guard let canceller = EchoCanceller(modelPath: modelPath) else { return false }
+            do {
+                // Whole-track, matching the two `resampleFile` calls that just
+                // ran on the same audio: this pipeline already holds both
+                // tracks in memory at this point, so streaming in chunks would
+                // add a continuity question without changing the peak.
+                let reference = try AudioMixer.loadAudioFileAsFloat32(url: appURL)
+                let mic = try AudioMixer.loadAudioFileAsFloat32(url: micURL)
+                let cleaned = try canceller.process(mic: mic, reference: reference)
+                try AudioMixer.saveWAV(
+                    samples: cleaned, sampleRate: AudioConstants.targetSampleRate, url: micURL,
+                )
+                return true
+            } catch {
+                logger.error("echo_cancel_failed \(error.localizedDescription, privacy: .public)")
+                return false
+            }
+        }.value
+        if applied {
+            recordEchoCancelled(jobID: jobID)
+            logger.info("echo_cancel_applied")
+        }
+        return applied
+    }
+}

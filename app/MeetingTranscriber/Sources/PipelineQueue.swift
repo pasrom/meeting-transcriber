@@ -59,6 +59,11 @@ class PipelineQueue {
     let micLabel: String
     let speakerMatcherFactory: () -> SpeakerMatcher
     let vadConfig: VADConfig?
+    /// Whether an echo-affected recording gets its microphone track cleaned.
+    /// Resolved at queue construction like `vadConfig`, so a job behaves the
+    /// way the settings looked when it was enqueued rather than changing under
+    /// a user who flips the switch mid-run.
+    let echoCancellationEnabled: Bool
     /// nil disables JSONL logging. AppState injects a real instance for production;
     /// tests leave it nil unless they explicitly want to assert on the log.
     let recognitionStatsLog: RecognitionStatsLog?
@@ -230,6 +235,7 @@ class PipelineQueue {
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
+        echoCancellationEnabled = true
         self.recognitionStatsLog = nil
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
@@ -301,6 +307,7 @@ class PipelineQueue {
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
+        echoCancellationEnabled: Bool = true,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
@@ -333,6 +340,7 @@ class PipelineQueue {
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
+        self.echoCancellationEnabled = echoCancellationEnabled
         self.recognitionStatsLog = recognitionStatsLog
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
@@ -508,6 +516,14 @@ class PipelineQueue {
     func recordEchoVerdict(jobID: UUID, _ verdict: EchoDetectionDTO) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].echo = verdict
+    }
+
+    /// Marks the recording as cleaned. Kept separate from `recordEchoVerdict`
+    /// because the detection and the cancellation are two stages apart: the
+    /// verdict is what the audio looked like, this is what was done about it.
+    func recordEchoCancelled(jobID: UUID) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].echo?.cancelled = true
     }
 
     /// Reset the elapsed timer for a new pipeline stage.

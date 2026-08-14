@@ -31,6 +31,7 @@ final class WorkflowIntegrationTests: XCTestCase {
     private func makeHarness(
         diarizeEnabled: Bool = false,
         stagingDir: URL? = nil,
+        echoCancellation: Bool = false,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -61,6 +62,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: diarizeEnabled,
             micLabel: "Me",
+            echoCancellationEnabled: echoCancellation,
         )
 
         queue.onJobStateChange = { [collector] _, old, new in
@@ -652,6 +654,62 @@ final class WorkflowIntegrationTests: XCTestCase {
     /// recordings do not have.
     private func speechLike(seconds: Double, seed: UInt64) -> [Float] {
         EchoTestAudio.speechLike(seconds: seconds, seed: seed)
+    }
+
+    /// The affected pair again, but with cancellation allowed to run: the
+    /// verdict must still say bleed was found, and the job must record that it
+    /// was removed. Those are different facts and both matter — the first is
+    /// what the recording was, the second is what the app did about it, and
+    /// only the pair together decides whether the speaker database may learn
+    /// from this meeting.
+    func testEchoCancellationCleansTheAffectedPair() async throws {
+        guard await EchoCancellerModel.ensureAvailable() != nil else {
+            throw XCTSkip("LocalVQE weights unavailable (offline, or the pinned revision moved)")
+        }
+        let (h, _) = try makeHarness(echoCancellation: true)
+        let recordings = tmpDir.appendingPathComponent("cancelled")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 40, seed: 11)
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        let echo = try XCTUnwrap(h.queue.jobs.first?.echo)
+        XCTAssertTrue(echo.detected, "the recording was affected and the verdict must still say so")
+        XCTAssertTrue(echo.cancelled, "with the setting on, the microphone track must have been cleaned")
+        XCTAssertEqual(
+            EchoVerdict(echo), .clean,
+            "a cleaned recording carries no bleed, so the speaker DB quarantine must not apply to it",
+        )
+    }
+
+    /// With the switch off the audio is left exactly as recorded, and the
+    /// quarantine stays in force. This is what makes the setting meaningful
+    /// rather than decorative.
+    func testEchoCancellationOffLeavesTheRecordingAndTheQuarantineAlone() async throws {
+        let (h, _) = try makeHarness(echoCancellation: false)
+        let recordings = tmpDir.appendingPathComponent("uncancelled")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 40, seed: 11)
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        let echo = try XCTUnwrap(h.queue.jobs.first?.echo)
+        XCTAssertTrue(echo.detected)
+        XCTAssertFalse(echo.cancelled, "the switch is off, so nothing may touch the audio")
+        XCTAssertEqual(
+            EchoVerdict(echo), .affected,
+            "uncleaned bleed must keep the quarantine in force",
+        )
     }
 
     private func writeTrack(_ samples: [Float], to url: URL) throws {

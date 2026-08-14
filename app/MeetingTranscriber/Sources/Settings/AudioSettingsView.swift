@@ -21,6 +21,7 @@ struct AudioSettingsView: View {
                 }
             }
 
+            EchoCancellationSection(settings: settings)
             VoiceActivityDetectionSection(settings: settings)
 
             PerChannelIndicatorSection(settings: settings)
@@ -35,6 +36,21 @@ struct AudioSettingsView: View {
             position: .unspecified,
         )
         audioDevices = session.devices.map { (id: $0.uniqueID, name: $0.localizedName) }
+    }
+}
+
+private struct EchoCancellationSection: View {
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        Section("Echo") {
+            HelpfulToggle(
+                title: "Remove loudspeaker echo from the microphone",
+                help: SettingsHelp.echoCancellation,
+                isOn: $settings.echoCancellationEnabled,
+            )
+            .accessibilityIdentifier(A11yID.echoCancellationToggle)
+        }
     }
 }
 

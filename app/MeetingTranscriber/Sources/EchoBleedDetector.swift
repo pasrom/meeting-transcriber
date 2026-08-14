@@ -20,12 +20,17 @@ enum EchoVerdict: Equatable {
     case clean
     case affected
 
+    /// A recording whose echo was successfully removed reads as `clean`: the
+    /// microphone track no longer carries the other side's voice, so there is
+    /// nothing left to hold back from the speaker database. `affected`
+    /// therefore means "bleed found AND still present", which is exactly the
+    /// condition the quarantine exists for.
     init(_ detection: EchoDetectionDTO?) {
         guard let detection else {
             self = .notMeasured
             return
         }
-        self = detection.detected ? .affected : .clean
+        self = (detection.detected && !detection.cancelled) ? .affected : .clean
     }
 }
 

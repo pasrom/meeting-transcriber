@@ -36,6 +36,7 @@ enum A11yID {
     static let transcriptionSection = "transcriptionSection"
     static let protocolSection = "protocolSection"
     static let outputFolderSection = "outputFolderSection"
+    static let echoCancellationToggle = "echoCancellationToggle"
     static let vadSection = "vadSection"
     static let diarizationSection = "diarizationSection"
     static let liveTranscriptionSection = "liveTranscriptionSection"

@@ -51,6 +51,12 @@ struct EchoDetectionDTO: Codable, Equatable {
     let affectedWindowShare: Double
     let windowsScored: Int
     let windowsAffected: Int
+    /// Whether the echo was removed from the microphone track. Only meaningful
+    /// when `detected`; false there means the recording still carries the
+    /// bleed, because the setting is off, the weights were unavailable, or the
+    /// canceller failed. That distinction is what decides whether the speaker
+    /// database may learn from this recording.
+    var cancelled = false
 
     /// The detector's own result, narrowed to what belongs on a wire and in a
     /// persisted job. The per-window series stays behind: it grows with the

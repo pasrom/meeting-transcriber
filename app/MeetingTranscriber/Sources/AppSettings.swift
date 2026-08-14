@@ -1,3 +1,10 @@
+// swiftlint:disable file_length
+// Over the 600-line cap by a handful of lines and suppressed rather than split,
+// following `PipelineQueue+Stages.swift`. A split here is not the usual file
+// move: these are STORED properties, which Swift cannot put in an extension, so
+// splitting means restructuring the type into nested config values — a change
+// that would conflict with every open branch that adds a setting, and there are
+// several. Worth doing deliberately, on its own, when the queue is quiet.
 import SwiftUI
 
 // SwiftFormat strips redundant raw values matching their case name, which then
@@ -283,6 +290,13 @@ final class AppSettings {
         didSet { defaults.set(diarize, forKey: "diarize") }
     }
 
+    /// Remove the loudspeaker echo when the detector finds it. On by default:
+    /// the switch turns processing OFF, it is not a gate in front of it (see
+    /// CLAUDE.md > Echo bleed).
+    var echoCancellationEnabled: Bool {
+        didSet { defaults.set(echoCancellationEnabled, forKey: "echoCancellationEnabled") }
+    }
+
     var vadEnabled: Bool {
         didSet { defaults.set(vadEnabled, forKey: "vadEnabled") }
     }
@@ -524,6 +538,7 @@ final class AppSettings {
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
+        echoCancellationEnabled = defaults.object(forKey: "echoCancellationEnabled") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
         diarizerMode = (defaults.string(forKey: "diarizerMode")

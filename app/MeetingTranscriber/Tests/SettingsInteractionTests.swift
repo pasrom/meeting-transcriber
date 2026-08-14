@@ -38,6 +38,25 @@ final class SettingsInteractionTests: XCTestCase {
         AppSettings(defaults: defaults)
     }
 
+    // MARK: - Echo cancellation toggle
+
+    /// One wiring test for the control, per the repo's GUI-testing rule: the
+    /// decision logic is covered at the value layer, so all this has to prove
+    /// is that the switch is connected to the setting the pipeline reads.
+    func testEchoCancellationToggleWritesBackToSettings() throws {
+        let settings = makeSettings()
+        XCTAssertTrue(settings.echoCancellationEnabled, "on by default: an affected recording is broken either way")
+
+        // The identifier sits on the `HelpfulToggle` wrapper, which renders the
+        // real `Toggle` inside a row with its help badge — so reach through it
+        // rather than asserting on the wrapper.
+        let view = AudioSettingsView(settings: settings)
+        let row = try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.echoCancellationToggle)
+        try row.find(ViewType.Toggle.self).tap()
+
+        XCTAssertFalse(settings.echoCancellationEnabled, "tapping the switch must reach the setting the queue reads")
+    }
+
     // MARK: - Picker write-back
 
     func testEnginePickerSelectionWritesBackToSettings() throws {

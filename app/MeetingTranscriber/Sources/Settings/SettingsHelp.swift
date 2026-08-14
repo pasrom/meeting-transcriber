@@ -6,6 +6,14 @@ import Foundation
 /// (no inline string literals inflating SwiftUI expression type-checking), and
 /// so the help copy is auditable in one place.
 enum SettingsHelp {
+    static let echoCancellation =
+        "When a meeting runs over loudspeakers, the microphone picks up the other side " +
+        "as well, so their words are transcribed twice and an extra speaker appears. " +
+        "This removes that echo from the microphone track before transcription. It runs " +
+        "only on recordings where the echo is actually detected, and it removes only the " +
+        "echo, leaving voices and room sound untouched. Turn it off to keep recordings " +
+        "exactly as captured; headphones avoid the problem in the first place."
+
     static let vad =
         "Voice Activity Detection trims silent stretches out of the recording before " +
         "transcription, which speeds up processing and can improve accuracy. Enable it " +

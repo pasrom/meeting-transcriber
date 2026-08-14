@@ -129,6 +129,7 @@ final class HelpBadgeTests: XCTestCase {
     // MARK: - Catalog
 
     func testHelpCatalogStringsAreNonEmpty() {
+        XCTAssertFalse(SettingsHelp.echoCancellation.isEmpty)
         XCTAssertFalse(SettingsHelp.vad.isEmpty)
         XCTAssertFalse(SettingsHelp.silentCaptureChannel.isEmpty)
         XCTAssertFalse(SettingsHelp.asymmetricSilenceWarning.isEmpty)
@@ -136,13 +137,14 @@ final class HelpBadgeTests: XCTestCase {
 
     // MARK: - Adoption in AudioSettingsView (issue #505)
 
-    /// VAD toggle + Detect Silent Capture Channel toggle + Warn-after row each
-    /// carry a clickable info badge. All three rows are visible with defaults
-    /// (perChannelIndicatorEnabled defaults to true → warn-after row shown).
+    /// Echo-cancellation toggle + VAD toggle + Detect Silent Capture Channel
+    /// toggle + Warn-after row each carry a clickable info badge. All four rows
+    /// are visible with defaults (perChannelIndicatorEnabled defaults to true →
+    /// warn-after row shown).
     func testAudioTabShowsHelpBadgesForNamedOptions() throws {
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = true
-        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 3)
+        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 4)
     }
 
     /// The warn-after badge lives on the conditional slider row, so it drops
@@ -150,7 +152,7 @@ final class HelpBadgeTests: XCTestCase {
     func testWarnAfterHelpBadgeHiddenWhenDetectionOff() throws {
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = false
-        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 2)
+        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 3)
     }
 
     /// Each option must carry ITS help string (not merely some badge), so a
