@@ -30,10 +30,13 @@ extension PipelineQueue {
     ///
     /// The verdict is recorded on the job (`recordEchoVerdict`), which is where
     /// every later reader takes it from — the naming stage derives its
-    /// `EchoVerdict` from `job.echo`. Returned as well purely so a caller that
-    /// wants it need not re-read the job.
-    @discardableResult
-    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoVerdict {
+    /// `EchoVerdict` from `job.echo`. The measurement is returned so the caller
+    /// can decide whether to clean the track and then report both facts
+    /// together. This deliberately does NOT warn: the warning has to wait until
+    /// the outcome of that cleaning is known.
+    func measureEchoBleed(
+        jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval,
+    ) async -> EchoBleedDetector.Result? {
         // Clamped exactly as `AudioMixer.mix` clamps it, and for the same
         // reason: a device switch mid-recording can reset the first-frame
         // timestamp on one source only (issue #99), and an absurd delay here
@@ -58,7 +61,7 @@ extension PipelineQueue {
             return EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: appRate, micDelay: delay)
         }.value
 
-        guard let result else { return .notMeasured }
+        guard let result else { return nil }
         let percent = Int((result.affectedWindowShare * 100).rounded())
         let scored = result.windowsScored
         let hits = result.windowsAffected
@@ -75,25 +78,37 @@ extension PipelineQueue {
         // audio, no transcript, nothing derived from what was said.
         let detail = Self.windowDetail(result.windowScores)
         logger.info("echo_bleed windows=\(detail, privacy: .public)")
-        guard result.isAffected else { return .clean }
+        return result
+    }
 
+    /// Tells the user what was found and what was done about it.
+    ///
+    /// Emitted after the cancellation attempt, not before it. The earlier
+    /// version warned first and cleaned afterwards, so a successfully cleaned
+    /// recording carried a permanent warning saying its speech would appear
+    /// twice and its voices would not be learned — both false by then, and both
+    /// visible in the menu bar, the API and the persisted job forever.
+    func warnAboutEcho(jobID: UUID, result: EchoBleedDetector.Result, cancelled: Bool) {
         // Says what was measured, not more: the share is over the windows that
         // were scored inside the analysed span, which for a long meeting is a
         // fraction of it.
-        let analysedSeconds = Double(scored) * EchoBleedDetector.windowSeconds
+        let percent = Int((result.affectedWindowShare * 100).rounded())
+        let analysedSeconds = Double(result.windowsScored) * EchoBleedDetector.windowSeconds
         let minutes = Int((analysedSeconds / 60).rounded())
         // "1 minutes" is reachable: the minimum firing configuration is three
         // ten-second windows, and the E2E fixture produces four.
         let span = minutes == 1 ? "minute" : "minutes"
         let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) \(span) analysed."
+        if cancelled {
+            addWarning(id: jobID, "\(head) It was removed from the recording automatically. Using headphones avoids it entirely.")
+            return
+        }
         let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
         // Third sentence because the consequence is otherwise invisible: naming
         // speakers on this recording will look like it worked and teach the app
-        // nothing. Saying so here is honest — the quarantine follows from this
-        // same verdict, so it is a statement of fact rather than a prediction.
+        // nothing.
         let db = "Voices from this recording are not added to the speaker database."
         addWarning(id: jobID, "\(head) \(tail) \(db)")
-        return .affected
     }
 
     /// Renders the per-window series as `corr@lagms` pairs, e.g.
@@ -125,47 +140,123 @@ extension PipelineQueue {
 }
 
 extension PipelineQueue {
-    /// Removes the loudspeaker echo from the 16 kHz microphone track, in place.
+    /// Removes the loudspeaker echo from the 16 kHz microphone track, and only
+    /// reports success when the removal is **measured**.
     ///
-    /// **Overwriting `mic_16k.wav` is the design, not a shortcut.** Transcription,
-    /// the dual-track diarization, and the `<slug>_mic_16k.wav` sidecar that late
-    /// re-diarization reads back all take that one path. Writing the cleaned
-    /// audio anywhere else would leave the first pass and every later pass
-    /// disagreeing about what the microphone heard, and the phantom speaker
-    /// would come back the moment someone reopened naming. The raw `_mic.wav`
-    /// the recorder produced is untouched, so nothing is lost.
+    /// The flag this sets is consumed by the speaker-database quarantine, so an
+    /// attempt marker will not do: a canceller that runs and achieves nothing
+    /// would lift the very protection the detection exists for. So the detector
+    /// is re-run on the cleaned track, and the track is only adopted when the
+    /// bleed is actually gone. Re-measuring costs about what the first
+    /// measurement cost, which is a rounding error against transcription.
     ///
-    /// Returns whether the track was replaced. Every failure is soft: the
-    /// recording stays exactly as it was and the detector's warning still
-    /// stands, which is the behaviour before this existed.
-    func cancelEcho(jobID: UUID, appURL: URL, micURL: URL) async -> Bool {
+    /// **Overwriting `mic_16k.wav` is the design.** Transcription, the
+    /// dual-track diarization, and the `<slug>_mic_16k.wav` sidecar that late
+    /// re-diarization reads back all take that one path, so cleaning it once
+    /// fixes every consumer. The cleaned audio is written beside it first and
+    /// only swapped in after it verifies, so a failure leaves the run's track
+    /// exactly as it was.
+    ///
+    /// Returns whether the track was replaced. Every failure is soft.
+    func cancelEcho(
+        jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval,
+    ) async -> Bool {
         guard let modelPath = await EchoCancellerModel.ensureAvailable() else {
             logger.warning("echo_cancel_skipped: weights unavailable")
             return false
         }
-        let applied = await Task.detached(priority: .utility) { () -> Bool in
+        let delay = AudioMixer.clampMicDelay(micDelay)
+        let staged = micURL.deletingLastPathComponent().appendingPathComponent("mic_16k_aec.wav")
+
+        let verified = await Task.detached(priority: .utility) { () -> Bool in
             guard let canceller = EchoCanceller(modelPath: modelPath) else { return false }
             do {
-                // Whole-track, matching the two `resampleFile` calls that just
-                // ran on the same audio: this pipeline already holds both
-                // tracks in memory at this point, so streaming in chunks would
-                // add a continuity question without changing the peak.
-                let reference = try AudioMixer.loadAudioFileAsFloat32(url: appURL)
+                let app = try AudioMixer.loadAudioFileAsFloat32(url: appURL)
                 let mic = try AudioMixer.loadAudioFileAsFloat32(url: micURL)
-                let cleaned = try canceller.process(mic: mic, reference: reference)
-                try AudioMixer.saveWAV(
-                    samples: cleaned, sampleRate: AudioConstants.targetSampleRate, url: micURL,
+                let rate = AudioConstants.targetSampleRate
+                let cleaned = try canceller.process(
+                    mic: mic,
+                    reference: Self.alignReference(app, micDelay: delay, sampleRate: rate),
                 )
+                // Prove it worked before anything downstream can read it. Same
+                // detector, same delay, so the two numbers are comparable.
+                //
+                // A `nil` verdict here is SUCCESS, not failure. The same call on
+                // the same tracks returned a measurement moments ago, so nothing
+                // about length or overlap can have changed — the only thing that
+                // can is the microphone dropping below the signal floor, which
+                // is the echo being gone entirely. Measured on a track that was
+                // pure bleed: 4 of 4 windows before, too quiet to measure after.
+                // Reading that as a failed cancellation would reject the best
+                // possible outcome and keep the quarantine on a clean recording.
+                let after = EchoBleedDetector.analyse(
+                    app: app, mic: cleaned, sampleRate: rate, micDelay: delay,
+                )
+                guard after?.isAffected != true else {
+                    logger.warning("echo_cancel_ineffective: the bleed is still measurable, keeping the recording as captured")
+                    return false
+                }
+                try AudioMixer.saveWAV(samples: cleaned, sampleRate: rate, url: staged)
+                _ = try FileManager.default.replaceItemAt(micURL, withItemAt: staged)
                 return true
             } catch {
                 logger.error("echo_cancel_failed \(error.localizedDescription, privacy: .public)")
+                try? FileManager.default.removeItem(at: staged)
                 return false
             }
         }.value
-        if applied {
+
+        if verified {
             recordEchoCancelled(jobID: jobID)
             logger.info("echo_cancel_applied")
         }
-        return applied
+        return verified
+    }
+
+    /// Shifts the app track onto the microphone's own timeline.
+    ///
+    /// The canceller pairs `reference[i]` with `mic[i]`, and the model estimates
+    /// only the acoustic delay — a few tens of milliseconds — never a file
+    /// offset. `micDelay > 0` means the mic started late, so `mic[i]` was
+    /// recorded while `app[i + delay]` was playing. Feeding the tracks
+    /// unshifted puts the echo in the microphone *before* the reference that
+    /// caused it, which no echo canceller can undo, and the run then removes
+    /// nothing while returning success.
+    nonisolated static func alignReference(
+        _ app: [Float], micDelay: TimeInterval, sampleRate: Int,
+    ) -> [Float] {
+        let shift = Int((micDelay * Double(sampleRate)).rounded())
+        if shift > 0 {
+            return shift < app.count ? Array(app[shift...]) : []
+        }
+        if shift < 0 {
+            return [Float](repeating: 0, count: -shift) + app
+        }
+        return app
+    }
+}
+
+extension PipelineQueue {
+    /// Measure, then clean, then report both facts together.
+    ///
+    /// Cleaning happens before anything reads the track: transcription and the
+    /// diarization stage both take `mic_16k.wav`, so this is the one point
+    /// where fixing it fixes every consumer at once — including the sidecar a
+    /// late re-diarization reads back. Extracted from the transcribe stage,
+    /// which is at its function-length cap. Takes the three values it needs
+    /// rather than the stage's private job context, so nothing has to widen its
+    /// visibility for this.
+    func handleEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async {
+        guard let echo = await measureEchoBleed(
+            jobID: jobID, appURL: appURL, micURL: micURL, micDelay: micDelay,
+        ), echo.isAffected else { return }
+
+        var cleaned = false
+        if echoCancellationEnabled {
+            cleaned = await cancelEcho(
+                jobID: jobID, appURL: appURL, micURL: micURL, micDelay: micDelay,
+            )
+        }
+        warnAboutEcho(jobID: jobID, result: echo, cancelled: cleaned)
     }
 }

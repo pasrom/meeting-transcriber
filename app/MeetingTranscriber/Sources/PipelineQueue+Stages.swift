@@ -243,17 +243,9 @@ extension PipelineQueue {
             // output is coming back through the microphone, and the merge below
             // has no dedup, so every affected utterance lands in the transcript
             // twice.
-            let echoVerdict = await warnIfEchoBleed(
+            await handleEchoBleed(
                 jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
             )
-            // Clean the microphone track in place before anything reads it.
-            // Both transcription below and the diarization stage take
-            // `mic_16k.wav`, so this is the one point where fixing it fixes
-            // every consumer at once — including the sidecar a late
-            // re-diarization reads back.
-            if echoVerdict == .affected, echoCancellationEnabled {
-                _ = await cancelEcho(jobID: ctx.jobID, appURL: app16k, micURL: mic16k)
-            }
 
             // Transcribe each track separately
             let appSegments = try await engine.transcribeSegments(audioPath: app16k)

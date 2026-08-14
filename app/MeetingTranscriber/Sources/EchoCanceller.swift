@@ -20,12 +20,16 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "EchoCan
 /// streaming state.
 enum EchoCancellerError: LocalizedError {
     case tooShort(samples: Int)
+    case tooLong(samples: Int)
     case processingFailed(code: Int32, reason: String)
 
     var errorDescription: String? {
         switch self {
         case let .tooShort(samples):
             "recording too short for echo cancellation (\(samples) samples)"
+
+        case let .tooLong(samples):
+            "recording too long for echo cancellation (\(samples) samples)"
 
         case let .processingFailed(code, reason):
             "echo cancellation failed (\(code)): \(reason)"
@@ -75,6 +79,13 @@ final class EchoCanceller {
         guard n >= Self.minimumSamples else {
             throw EchoCancellerError.tooShort(samples: n)
         }
+        // The C API counts samples in an Int32. At 16 kHz that ceiling is ~37
+        // hours, far past anything real, but converting past it TRAPS — a
+        // process kill inside a detached task, not the recoverable throw this
+        // function promises.
+        guard n <= Int(Int32.max) else {
+            throw EchoCancellerError.tooLong(samples: n)
+        }
         var out = [Float](repeating: 0, count: n)
         let rc = out.withUnsafeMutableBufferPointer { outBuf -> Int32 in
             mic.withUnsafeBufferPointer { micBuf in
@@ -90,7 +101,7 @@ final class EchoCanceller {
         // overlap had no reference to cancel against and is passed through, so
         // the returned track keeps the caller's original length.
         let tail = mic.count > n ? Array(mic[n...]) : []
-        return realign(out, hop: Int(localvqe_hop_length(ctx))) + tail
+        return realign(out, hop: Int(localvqe_hop_length(ctx)), tail: mic[..<n]) + tail
     }
 
     /// Removes the model's processing delay so the returned track sits on the
@@ -106,10 +117,13 @@ final class EchoCanceller {
     /// track: an uncorrected 16 ms would push every microphone segment late by
     /// more than one detector frame, on the exact recordings already known to
     /// have an alignment problem.
-    private func realign(_ out: [Float], hop: Int) -> [Float] {
+    private func realign(_ out: [Float], hop: Int, tail: ArraySlice<Float>) -> [Float] {
         guard hop > 0, out.count > hop else { return out }
         // The first hop is a synthesis-window ramp from zero, so dropping it
-        // costs nothing real. The tail is padded to keep the caller's length.
-        return Array(out[hop...]) + [Float](repeating: 0, count: hop)
+        // costs nothing real. The shift leaves the last hop with no cleaned
+        // sample behind it, so it is filled from the untouched microphone
+        // rather than with silence: 16 ms of uncancelled audio is a better
+        // splice than 16 ms of nothing.
+        return Array(out[hop...]) + Array(tail.suffix(hop))
     }
 }

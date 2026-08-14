@@ -10,8 +10,9 @@ enum SettingsHelp {
         "When a meeting runs over loudspeakers, the microphone picks up the other side " +
         "as well, so their words are transcribed twice and an extra speaker appears. " +
         "This removes that echo from the microphone track before transcription. It runs " +
-        "only on recordings where the echo is actually detected, and it removes only the " +
-        "echo, leaving voices and room sound untouched. Turn it off to keep recordings " +
+        "only on recordings where the echo is actually detected, and it is checked " +
+        "afterwards: if the echo is still measurable the recording is kept as captured. " +
+        "It targets the echo rather than voices or room sound. Turn it off to keep recordings " +
         "exactly as captured; headphones avoid the problem in the first place."
 
     static let vad =

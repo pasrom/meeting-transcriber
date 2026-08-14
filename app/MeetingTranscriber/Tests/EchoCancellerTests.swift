@@ -108,6 +108,48 @@ final class EchoCancellerTests: XCTestCase {
         )
     }
 
+    /// The gap every other layer had: all of them run at `micDelay == 0`, where
+    /// the reference alignment cannot matter. A microphone that started late is
+    /// missing that opening stretch, so its copy of the app audio sits earlier
+    /// in file-index terms; feeding the tracks unshifted puts the echo in the
+    /// microphone BEFORE the reference that caused it, which no echo canceller
+    /// can undo. It then removes nothing and still returns success — and that
+    /// success lifts the speaker-database quarantine.
+    func testLateStartingMicrophoneNeedsTheReferenceAligned() async throws {
+        let canceller = try await makeCanceller()
+        let far = try await loadFixtureAs16kMono(fixtureURL())
+        let delay = 2.0
+        let lateStart = Int(delay * Double(rate))
+        // Everything the mic would have captured, minus the two seconds it was
+        // not yet recording.
+        let mic = Array(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5).dropFirst(lateStart))
+
+        let aligned = PipelineQueue.alignReference(far, micDelay: delay, sampleRate: rate)
+        let cleaned = try canceller.process(mic: mic, reference: aligned)
+        let reduction = 10 * log10(Self.energy(mic.dropFirst(512)) / max(Self.energy(cleaned.dropFirst(512)), 1e-12))
+        XCTAssertGreaterThan(
+            reduction, 6.0,
+            "with the reference shifted onto the microphone's timeline the bleed must go, got \(String(format: "%.1f", reduction)) dB",
+        )
+    }
+
+    /// The control for the test above: unaligned, the same audio must NOT come
+    /// out clean. Without this the aligned test could pass on a canceller that
+    /// ignores its reference entirely.
+    func testLateStartingMicrophoneIsNotCleanedWithoutAlignment() async throws {
+        let canceller = try await makeCanceller()
+        let far = try await loadFixtureAs16kMono(fixtureURL())
+        let lateStart = Int(2.0 * Double(rate))
+        let mic = Array(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5).dropFirst(lateStart))
+
+        let cleaned = try canceller.process(mic: mic, reference: far)
+        let reduction = 10 * log10(Self.energy(mic.dropFirst(512)) / max(Self.energy(cleaned.dropFirst(512)), 1e-12))
+        XCTAssertLessThan(
+            reduction, 6.0,
+            "an unshifted reference cannot cancel a late-started microphone; a pass here would mean the aligned test proves nothing",
+        )
+    }
+
     private static func energy(_ x: some Collection<Float>) -> Double {
         x.reduce(0.0) { $0 + Double($1) * Double($1) }
     }
