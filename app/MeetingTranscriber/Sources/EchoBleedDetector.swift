@@ -33,6 +33,13 @@ enum EchoBleedDetector {
     static let maxLagSeconds = 0.2
     static let correlationThreshold = 0.7
     static let affectedShareThreshold = 0.15
+    /// A share is only evidence once there is something to take a share of.
+    /// With one scored window the share is quantised to 0 % or 100 %, so a
+    /// single coincidentally hot window in a short clip would produce a
+    /// confident verdict; the corpus shows even clean recordings throw isolated
+    /// hot windows. Both floors must be cleared, not either.
+    static let minScoredWindows = 3
+    static let minAffectedWindows = 2
     /// Below this a track carries no signal, and a dead channel cannot bleed
     /// anywhere. That is a different defect, handled by the channel-health path.
     static let silenceFloorDBFS = -70.0
@@ -41,9 +48,12 @@ enum EchoBleedDetector {
         /// Share of 10 s windows whose two tracks carry the same audio.
         let affectedWindowShare: Double
         let windowsScored: Int
+        let windowsAffected: Int
 
         var isAffected: Bool {
-            affectedWindowShare > EchoBleedDetector.affectedShareThreshold
+            windowsScored >= EchoBleedDetector.minScoredWindows
+                && windowsAffected >= EchoBleedDetector.minAffectedWindows
+                && affectedWindowShare > EchoBleedDetector.affectedShareThreshold
         }
     }
 
@@ -51,7 +61,19 @@ enum EchoBleedDetector {
     /// less than one full window of overlap. A share computed over half a window
     /// is not a measurement, and reporting one would put a claim about the user's
     /// audio behind a number that cannot support it.
-    static func analyse(app: [Float], mic: [Float], sampleRate: Int) -> Result? {
+    /// `micDelay` is the recorder's own estimate of how far the mic track lags
+    /// the app track, the same value the merge and the mic diarization are
+    /// shifted by. The lag search is centred on it rather than on zero: the two
+    /// files' sample 0 are not simultaneous, and a mic that starts more than the
+    /// search window late (a Bluetooth device spinning up manages this) would
+    /// put real bleed outside the window and read as clean. A false negative
+    /// there is invisible, which is the worst kind.
+    static func analyse(
+        app: [Float],
+        mic: [Float],
+        sampleRate: Int,
+        micDelay: TimeInterval = 0,
+    ) -> Result? {
         let overlap = min(app.count, mic.count)
         let framesPerWindow = Int(windowSeconds / frameSeconds)
         let samplesPerFrame = Int(Double(sampleRate) * frameSeconds)
@@ -68,6 +90,7 @@ enum EchoBleedDetector {
         guard windows > 0 else { return nil }
 
         let maxLag = Int(maxLagSeconds / frameSeconds)
+        let centreLag = Int((micDelay / frameSeconds).rounded())
         var affected = 0
         var scored = 0
         for w in 0 ..< windows {
@@ -76,13 +99,18 @@ enum EchoBleedDetector {
                 Array(appEnvelope[range]),
                 Array(micEnvelope[range]),
                 maxLag: maxLag,
+                centre: centreLag,
             )
             else { continue }
             scored += 1
             if r > correlationThreshold { affected += 1 }
         }
         guard scored > 0 else { return nil }
-        return Result(affectedWindowShare: Double(affected) / Double(scored), windowsScored: scored)
+        return Result(
+            affectedWindowShare: Double(affected) / Double(scored),
+            windowsScored: scored,
+            windowsAffected: affected,
+        )
     }
 
     // MARK: - Pieces
@@ -113,17 +141,23 @@ enum EchoBleedDetector {
     /// Highest normalised correlation of `b` against `a` over the lag range.
     /// `nil` when either side is flat in this window, which carries no evidence
     /// either way.
-    private static func peakCorrelation(_ a: [Double], _ b: [Double], maxLag: Int) -> Double? {
+    private static func peakCorrelation(
+        _ a: [Double],
+        _ b: [Double],
+        maxLag: Int,
+        centre: Int,
+    ) -> Double? {
         var best: Double?
-        for lag in -maxLag ... maxLag {
+        for offset in -maxLag ... maxLag {
+            let lag = centre + offset
             let x: ArraySlice<Double>
             let y: ArraySlice<Double>
             if lag >= 0 {
-                guard a.count - lag > maxLag else { continue }
+                guard lag < a.count else { continue }
                 x = a[0 ..< (a.count - lag)]
                 y = b[lag ..< b.count]
             } else {
-                guard a.count + lag > maxLag else { continue }
+                guard -lag < a.count else { continue }
                 x = a[(-lag) ..< a.count]
                 y = b[0 ..< (b.count + lag)]
             }

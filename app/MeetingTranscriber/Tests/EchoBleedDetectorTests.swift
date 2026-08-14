@@ -22,28 +22,35 @@ final class EchoBleedDetectorTests: XCTestCase {
         }
     }
 
-    /// Speech-like: noise shaped by a slow envelope, so the 10 ms envelope has
-    /// structure to correlate. Flat noise correlates on nothing.
+    /// Speech-like: noise shaped by a slow **aperiodic** envelope.
     ///
-    /// The **envelope** has to vary with the seed, not just the noise beneath
-    /// it. A first version modulated every talker identically and only reseeded
-    /// the carrier, which made two supposedly independent talkers correlate at
-    /// exactly 1.0 — the detector compares envelopes, so identical envelopes are
-    /// identical evidence. The tests caught it, which is the point of having the
-    /// negative cases.
+    /// Two properties matter and both were learned the hard way. The envelope
+    /// has to vary with the seed, not just the carrier, or two supposedly
+    /// independent talkers correlate at exactly 1.0 because the detector
+    /// compares envelopes. And it must not be periodic: a sine envelope
+    /// correlates with itself at every multiple of its period, so a copy
+    /// delayed far outside the search window is still "found", which made the
+    /// lag-boundary test pass for the wrong reason.
     private func speechLike(seconds: Double, seed: UInt64) -> [Float] {
-        let raw = noise(seconds: seconds, seed: seed)
-        let syllableRate = 2.4 + Double(seed % 7) * 0.35 // distinct talkers, 2.4 to 4.5 Hz
-        let phase = Double(seed % 11) / 11 * 2 * .pi
-        let pauseRate = 0.13 + Double(seed % 5) * 0.06
-        var out = [Float](repeating: 0, count: raw.count)
-        for i in raw.indices {
-            let t = Double(i) / Double(rate)
-            let env = max(0, sin(2 * .pi * syllableRate * t + phase))
-                * (sin(2 * .pi * pauseRate * t + phase) > -0.3 ? 1 : 0)
-            out[i] = raw[i] * Float(env)
+        var state = seed &+ 1
+        func next() -> Double {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(UInt32(truncatingIfNeeded: state >> 33)) / Double(UInt32.max)
         }
-        return out
+        // One envelope control point per 120 ms, linearly interpolated: syllable
+        // rhythm without a period to lock onto.
+        let step = Int(0.12 * Double(rate))
+        let points = (0 ... (Int(Double(rate) * seconds) / step + 2)).map { _ in
+            let v = next()
+            return v < 0.35 ? 0.0 : v // pauses
+        }
+        return (0 ..< Int(Double(rate) * seconds)).map { i in
+            let carrier = Float(next() * 2 - 1)
+            let idx = i / step
+            let frac = Double(i % step) / Double(step)
+            let env = points[idx] * (1 - frac) + points[idx + 1] * frac
+            return carrier * Float(env)
+        }
     }
 
     /// The room path: attenuated and delayed.
@@ -138,5 +145,66 @@ final class EchoBleedDetectorTests: XCTestCase {
         let mic = Array(bleed(app, delayMs: 15, gain: 0.5).prefix(30 * rate))
         let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
         XCTAssertTrue(result.isAffected)
+    }
+
+    // MARK: - The boundaries the constants live on
+
+    /// Bleed at a delay inside the search window is still bleed.
+    func testDelayInsideTheLagWindowIsDetected() throws {
+        let app = speechLike(seconds: 60, seed: 21)
+        let mic = bleed(app, delayMs: 150, gain: 0.5) // maxLagSeconds is 0.2
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertTrue(result.isAffected)
+    }
+
+    /// The failure this guards is invisible: a mic that starts late puts real
+    /// bleed outside the search window and the recording reads as clean. The
+    /// recorder knows the offset, so passing it must restore detection.
+    func testDelayBeyondTheLagWindowNeedsMicDelayToBeFound() throws {
+        let app = speechLike(seconds: 60, seed: 22)
+        let mic = bleed(app, delayMs: 500, gain: 0.5)
+
+        let blind = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertFalse(blind.isAffected, "500 ms is outside the +/-200 ms window, so nothing is found")
+
+        let informed = try XCTUnwrap(EchoBleedDetector.analyse(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0.5,
+        ))
+        XCTAssertTrue(informed.isAffected, "centred on the known offset, the same bleed is found")
+    }
+
+    /// Two windows cannot carry a share: the value is quantised to 0, 50 or
+    /// 100 %, so a single coincidence would read as a confident verdict.
+    func testTooFewWindowsWithholdsTheVerdict() throws {
+        let app = speechLike(seconds: 25, seed: 23)
+        let mic = bleed(app, delayMs: 15, gain: 0.5)
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertEqual(result.windowsScored, 2)
+        XCTAssertGreaterThan(result.affectedWindowShare, 0.9, "the windows themselves do correlate")
+        XCTAssertFalse(result.isAffected, "but two windows are not enough to claim it")
+    }
+
+    /// Real conversation is not two independent signals: both sides fall quiet
+    /// around the same turns, which lifts the correlation well above zero
+    /// without any bleed. The clean recordings in the corpus reach 0.3 to 0.55
+    /// per window, and the threshold has to survive that.
+    func testTurnTakingWithoutBleedStaysBelowTheThreshold() throws {
+        let rawA = speechLike(seconds: 120, seed: 24)
+        let rawB = speechLike(seconds: 120, seed: 61)
+        var app = [Float](repeating: 0, count: rawA.count)
+        var mic = [Float](repeating: 0, count: rawB.count)
+        for i in rawA.indices {
+            // A shared slow turn pattern: whoever holds the floor is loud, the
+            // other stays quiet but not silent. Different voices, common rhythm.
+            let t = Double(i) / Double(rate)
+            let floorIsApp = sin(2 * .pi * 0.05 * t) > 0
+            app[i] = rawA[i] * Float(floorIsApp ? 1.0 : 0.15)
+            mic[i] = rawB[i] * Float(floorIsApp ? 0.15 : 1.0)
+        }
+        let result = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
+        XCTAssertFalse(
+            result.isAffected,
+            "turn taking is not bleed; share was \(result.affectedWindowShare)",
+        )
     }
 }
