@@ -141,6 +141,9 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        pair, present-and-false on the control. The control is
                        what keeps the lane from passing on a detector that says
                        yes to everything. Standalone lane. Needs python3.
+                       Leaves two finished jobs and a recognition-log row behind
+                       (it skips their naming so nothing stays parked); it never
+                       enrolls a voice, so speakers.json is untouched.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0

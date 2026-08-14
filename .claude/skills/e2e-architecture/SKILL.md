@@ -80,7 +80,13 @@ PRs are excluded from the self-hosted runner.
   evidence rather than for want of bleed. Both fixture properties that are not
   obvious — the local side has to be gated into short bursts, and that gate's
   period has to stay under one analysis window — are measured, and the reasoning
-  is in the generator's docstring. Touches no settings and needs no grants.
+  is in the generator's docstring. Touches no settings and needs no grants, but
+  it is **not** residue-free: it resolves both jobs with
+  `POST /v1/jobs/<id>/naming/skip` so nothing is left parked in the persisted
+  job store, and that appends a row to the runner's real
+  `recognition_log.jsonl` and leaves two terminal-job records. It does not
+  enroll voices — skipping never writes an embedding — so unlike
+  `--naming-confirm` there is nothing to snapshot around `speakers.json`.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.

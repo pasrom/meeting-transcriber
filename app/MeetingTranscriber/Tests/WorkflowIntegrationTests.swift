@@ -685,6 +685,10 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         await runDualSource(h, app: appURL, mic: micURL)
 
+        XCTAssertEqual(
+            h.queue.jobs.first?.echo?.detected, true,
+            "the structured verdict is what a driver reads; assert it, not only the sentence",
+        )
         let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
         XCTAssertTrue(
             warnings.contains("picked up by the microphone"),
@@ -706,6 +710,14 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         await runDualSource(h, app: appURL, mic: micURL)
 
+        // Asserting the absence of a sentence is not enough on its own: it
+        // stays true when the detector never ran, which is the failure this
+        // feature's own comments warn is invisible. The verdict has to be
+        // present AND false — measured, and found clean.
+        XCTAssertEqual(
+            h.queue.jobs.first?.echo?.detected, false,
+            "the clean pair must be measured and found clean, not left unmeasured",
+        )
         let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
         XCTAssertFalse(
             warnings.contains("picked up by the microphone"),
