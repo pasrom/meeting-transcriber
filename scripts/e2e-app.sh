@@ -1838,6 +1838,18 @@ run_echo_bleed() {
         || fail "$label: affected job settled as '$final_state', expected done. error=$(jq -r '.error // "<none>"' <<<"$final")"
     jq -e '.echo.detected == true' <<<"$final" >/dev/null \
         || fail "$label: the verdict did not survive the job finishing: $(jq -c '.echo' <<<"$final")"
+    # `cancelled` is asserted HERE and not where the verdict first appears: the
+    # verdict is recorded before the canceller runs, so reading it at first
+    # sight races the work it is meant to prove. The verdict says what the
+    # recording was; this says what the app did about it, and a detector that
+    # fires while nothing cleans the audio leaves the transcript as broken as no
+    # feature at all.
+    jq -e '.echo.cancelled == true' <<<"$final" >/dev/null \
+        || fail "$label: bleed detected but never cancelled — the microphone track still carries the remote side: $(jq -c '.echo' <<<"$final")"
+    local clean_final
+    clean_final="$(rpc "/v1/jobs/$clean_job")"
+    jq -e '.echo.cancelled == false' <<<"$clean_final" >/dev/null \
+        || fail "$label: the clean control was cancelled; nothing may touch audio the detector found nothing in"
     log "$label: verdict intact on the finished job ✅"
     log "$label: PASS"
 }
