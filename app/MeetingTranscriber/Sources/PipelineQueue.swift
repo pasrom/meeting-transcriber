@@ -501,6 +501,15 @@ class PipelineQueue {
         jobs[index].warnings.append(message)
     }
 
+    /// Attach the echo detector's verdict to a job. Recorded even when it did
+    /// not fire, so a later "why does my transcript have duplicates" can tell a
+    /// missed detection from one that never ran.
+    /// Internal (not private) because `PipelineQueue+EchoBleed.swift` calls it.
+    func recordEchoVerdict(jobID: UUID, _ verdict: EchoDetectionDTO) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].echo = verdict
+    }
+
     /// Reset the elapsed timer for a new pipeline stage.
     /// Internal (not private) because the stage methods in PipelineQueue+Stages.swift call it.
     func startElapsedTimer() {

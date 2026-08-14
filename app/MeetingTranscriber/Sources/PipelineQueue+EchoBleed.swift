@@ -10,43 +10,68 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 /// Lives in its own file rather than in `PipelineQueue+Stages.swift`, which is
 /// already at the length where `file_length` had to be suppressed.
 ///
-/// The warning is the whole feature on purpose. The app cannot repair the
-/// recording after the fact without altering audio, and the user's remedy is
-/// both simple and complete: headphones. Reporting it also gives the transcript
-/// a reason for the duplicated lines it will contain.
+/// The warning rides the menu-bar job entry and the automation API, both of
+/// which are always reachable. That matters: a notification is not, and this
+/// app has already been bitten by making a feature depend on one being seen.
 extension PipelineQueue {
     /// Only this much of a recording is analysed. The detector needs enough to
     /// characterise the meeting, not all of it, and reading a two-hour track
     /// whole would add a second large peak next to the one `mix` already makes.
     /// The affected recordings measured so far carry bleed through 34 % to 77 %
-    /// of their windows, so the opening minutes show it.
+    /// of their windows, so the opening minutes show it. The cost is that bleed
+    /// starting later goes unseen, which is why the warning names the span it
+    /// looked at instead of claiming the whole recording.
     static let echoBleedAnalysisSeconds = 600.0
 
-    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL) {
-        guard let (app, rate) = Self.loadBounded(appURL),
-              let (mic, _) = Self.loadBounded(micURL),
-              let result = EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate)
-        else { return }
+    /// Async, and the work runs off the main actor on purpose. `PipelineQueue`
+    /// is `@MainActor`; decoding up to two ten-minute tracks and running the
+    /// envelope pass over them synchronously would block the UI for as long as
+    /// it takes. Every neighbouring stage awaits for the same reason.
+    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async {
+        let analysed = Self.echoBleedAnalysisSeconds
+        let result = await Task.detached(priority: .utility) { () -> EchoBleedDetector.Result? in
+            guard let (app, rate) = Self.loadBounded(appURL, maxSeconds: analysed),
+                  let (mic, _) = Self.loadBounded(micURL, maxSeconds: analysed)
+            else { return nil }
+            return EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate, micDelay: micDelay)
+        }.value
 
+        guard let result else { return }
         let percent = Int((result.affectedWindowShare * 100).rounded())
-        logger.info(
-            "echo_bleed share=\(percent, privacy: .public)% windows=\(result.windowsScored, privacy: .public)",
+        let scored = result.windowsScored
+        let hits = result.windowsAffected
+        // Recorded whether or not it fires. A driver, and a field report, must be
+        // able to tell "analysed, nothing found" from "never analysed", and a
+        // near-miss share is what makes a false negative diagnosable later.
+        recordEchoVerdict(
+            jobID: jobID,
+            EchoDetectionDTO(
+                detected: result.isAffected,
+                affectedWindowShare: result.affectedWindowShare,
+                windowsScored: scored,
+                windowsAffected: hits,
+            ),
         )
+        logger.info("echo_bleed share=\(percent, privacy: .public)% windows=\(scored, privacy: .public) affected=\(hits, privacy: .public)")
         guard result.isAffected else { return }
 
-        addWarning(
-            id: jobID,
-            "Speaker output was picked up by the microphone in \(percent)% of this recording, "
-                + "so remote speech may appear twice in the transcript. Using headphones avoids it.",
-        )
+        // Says what was measured, not more: the share is over the windows that
+        // were scored inside the analysed span, which for a long meeting is a
+        // fraction of it.
+        let analysedSeconds = Double(scored) * EchoBleedDetector.windowSeconds
+        let minutes = Int((analysedSeconds / 60).rounded())
+        let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) minutes analysed."
+        let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
+        addWarning(id: jobID, "\(head) \(tail)")
     }
 
-    /// Reads at most `echoBleedAnalysisSeconds` of a mono file as Float32.
-    private static func loadBounded(_ url: URL) -> ([Float], Int)? {
+    /// Reads at most `maxSeconds` of a mono file as Float32. `nonisolated` so it
+    /// can run off the main actor.
+    nonisolated private static func loadBounded(_ url: URL, maxSeconds: Double) -> ([Float], Int)? {
         guard let file = try? AVAudioFile(forReading: url) else { return nil }
         let rate = Int(file.processingFormat.sampleRate)
         guard rate > 0 else { return nil }
-        let wanted = min(Double(file.length), echoBleedAnalysisSeconds * Double(rate))
+        let wanted = min(Double(file.length), maxSeconds * Double(rate))
         let frames = AVAudioFrameCount(wanted)
         guard frames > 0,
               let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames),

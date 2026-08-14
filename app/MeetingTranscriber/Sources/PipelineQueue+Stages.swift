@@ -243,7 +243,9 @@ extension PipelineQueue {
             // output is coming back through the microphone, and the merge below
             // has no dedup, so every affected utterance lands in the transcript
             // twice.
-            warnIfEchoBleed(jobID: ctx.jobID, appURL: app16k, micURL: mic16k)
+            await warnIfEchoBleed(
+                jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
+            )
 
             // Transcribe each track separately
             let appSegments = try await engine.transcribeSegments(audioPath: app16k)
