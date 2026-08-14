@@ -59,7 +59,6 @@ final class VoiceEnrollmentViewTests: XCTestCase { // swiftlint:disable:this bal
             },
             participants: [],
             isDualSource: false,
-            echoVerdict: nil,
         )
         return VoiceEnrollmentView.NamingPayload(
             url: url,

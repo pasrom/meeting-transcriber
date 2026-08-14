@@ -9,18 +9,23 @@ import Foundation
 /// that collapses those into `false` reports a recording as fine that nobody
 /// ever looked at — and on the speaker-database side, decides it is safe to
 /// learn from audio it never checked.
-enum EchoVerdict: String, Codable, Equatable {
-    case notMeasured = "not_measured"
+///
+/// Not persisted, and deliberately so: `PipelineJob.echo` is the one stored
+/// copy, and this is derived from it wherever a decision needs the three-way
+/// distinction. A second stored copy could go stale against the first, and the
+/// way it would fail is silent — a recording that was affected reading as
+/// unmeasured, which lifts the quarantine on the audio that most needs it.
+enum EchoVerdict: Equatable {
+    case notMeasured
     case clean
     case affected
 
-    /// Decodes an unrecognised value as `notMeasured` rather than throwing.
-    /// This rides in persisted naming data that is read with a lenient decode,
-    /// so a case added by a later version would otherwise discard the whole
-    /// file — losing a user's pending speaker naming to a field they don't have.
-    init(from decoder: any Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = Self(rawValue: raw) ?? .notMeasured
+    init(_ detection: EchoDetectionDTO?) {
+        guard let detection else {
+            self = .notMeasured
+            return
+        }
+        self = detection.detected ? .affected : .clean
     }
 }
 
@@ -78,13 +83,25 @@ enum EchoBleedDetector {
     }
 
     struct Result: Equatable {
-        /// Share of 10 s windows whose two tracks carry the same audio.
-        let affectedWindowShare: Double
-        let windowsScored: Int
-        let windowsAffected: Int
-        /// Per-window measurements, in order. Empty is impossible for a
-        /// non-nil result: a `Result` is only produced once a window scored.
+        /// Per-window measurements, in order, and the only stored state.
+        /// Never empty: a `Result` is only produced once a window scored.
         let windowScores: [WindowScore]
+
+        var windowsScored: Int {
+            windowScores.count
+        }
+
+        /// Derived rather than counted alongside the series, so the summary and
+        /// the evidence it summarises cannot disagree — and so the threshold
+        /// lives next to the field it defines instead of in the scoring loop.
+        var windowsAffected: Int {
+            windowScores.count { $0.correlation > EchoBleedDetector.correlationThreshold }
+        }
+
+        /// Share of 10 s windows whose two tracks carry the same audio.
+        var affectedWindowShare: Double {
+            windowsScored > 0 ? Double(windowsAffected) / Double(windowsScored) : 0
+        }
 
         var isAffected: Bool {
             windowsScored >= EchoBleedDetector.minScoredWindows
@@ -122,36 +139,29 @@ enum EchoBleedDetector {
         let appEnvelope = envelope(app, count: overlap, samplesPerFrame: samplesPerFrame)
         let micEnvelope = envelope(mic, count: overlap, samplesPerFrame: samplesPerFrame)
 
-        let windows = min(appEnvelope.count, micEnvelope.count) / framesPerWindow
-        guard windows > 0 else { return nil }
+        // Both envelopes are built from the same `overlap` and frame size, so
+        // they are the same length; and the guard above already forced at least
+        // one whole window.
+        let windows = appEnvelope.count / framesPerWindow
 
         let maxLag = Int(maxLagSeconds / frameSeconds)
         let centreLag = Int((micDelay / frameSeconds).rounded())
-        var affected = 0
-        var scores: [WindowScore] = []
-        for w in 0 ..< windows {
+        let scores = (0 ..< windows).compactMap { w -> WindowScore? in
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
             guard let peak = peakCorrelation(
-                Array(appEnvelope[range]),
-                Array(micEnvelope[range]),
+                appEnvelope[range],
+                micEnvelope[range],
                 maxLag: maxLag,
                 centre: centreLag,
             )
-            else { continue }
-            scores.append(WindowScore(
+            else { return nil }
+            return WindowScore(
                 correlation: peak.correlation,
                 lagSeconds: Double(peak.lag) * frameSeconds,
-            ))
-            if peak.correlation > correlationThreshold { affected += 1 }
+            )
         }
-        let scored = scores.count
-        guard scored > 0 else { return nil }
-        return Result(
-            affectedWindowShare: Double(affected) / Double(scored),
-            windowsScored: scored,
-            windowsAffected: affected,
-            windowScores: scores,
-        )
+        guard !scores.isEmpty else { return nil }
+        return Result(windowScores: scores)
     }
 
     // MARK: - Pieces
@@ -183,25 +193,24 @@ enum EchoBleedDetector {
     /// the lag it peaked at. `nil` when either side is flat in this window,
     /// which carries no evidence either way.
     private static func peakCorrelation(
-        _ a: [Double],
-        _ b: [Double],
+        _ a: ArraySlice<Double>,
+        _ b: ArraySlice<Double>,
         maxLag: Int,
         centre: Int,
     ) -> (correlation: Double, lag: Int)? {
         var best: (correlation: Double, lag: Int)?
         for offset in -maxLag ... maxLag {
             let lag = centre + offset
-            let x: ArraySlice<Double>
-            let y: ArraySlice<Double>
-            if lag >= 0 {
-                guard lag < a.count else { continue }
-                x = a[0 ..< (a.count - lag)]
-                y = b[lag ..< b.count]
-            } else {
-                guard -lag < a.count else { continue }
-                x = a[(-lag) ..< a.count]
-                y = b[0 ..< (b.count + lag)]
-            }
+            // Shifting `b` right by `lag` and clipping both to the part that
+            // still overlaps. Written once rather than as a mirrored pair of
+            // branches: a negative lag is the same slice arithmetic with the
+            // two offsets swapped.
+            let overlap = a.count - abs(lag)
+            guard overlap > 1 else { continue }
+            let aStart = a.startIndex + max(0, -lag)
+            let bStart = b.startIndex + max(0, lag)
+            let x = a[aStart ..< (aStart + overlap)]
+            let y = b[bStart ..< (bStart + overlap)]
             guard let r = correlation(x, y) else { continue }
             // Floor at -infinity rather than 0: a correlation is signed, and the
             // first candidate has to win however negative it is.
@@ -212,19 +221,21 @@ enum EchoBleedDetector {
         return best
     }
 
+    /// The two slices are equal-length by construction in `peakCorrelation`.
+    /// Iterated pairwise over the slices rather than copied into arrays first:
+    /// this runs once per candidate lag per window, so the copies added up
+    /// without buying anything.
     private static func correlation(_ x: ArraySlice<Double>, _ y: ArraySlice<Double>) -> Double? {
-        let n = min(x.count, y.count)
+        let n = x.count
         guard n > 1 else { return nil }
-        let xs = Array(x.prefix(n))
-        let ys = Array(y.prefix(n))
-        let mx = xs.reduce(0, +) / Double(n)
-        let my = ys.reduce(0, +) / Double(n)
+        let mx = x.reduce(0, +) / Double(n)
+        let my = y.reduce(0, +) / Double(n)
         var num = 0.0
         var dx = 0.0
         var dy = 0.0
-        for i in 0 ..< n {
-            let a = xs[i] - mx
-            let b = ys[i] - my
+        for (xi, yi) in zip(x, y) {
+            let a = xi - mx
+            let b = yi - my
             num += a * b
             dx += a * a
             dy += b * b

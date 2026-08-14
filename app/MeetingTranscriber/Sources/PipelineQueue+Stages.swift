@@ -35,10 +35,6 @@ extension PipelineQueue {
         /// Segments cached for diarization reuse (avoids double transcription).
         let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
-        /// The echo detector's verdict. Carried here so the naming stage can
-        /// hold the microphone track's embeddings back from the speaker DB
-        /// without looking the job up again.
-        let echoVerdict: EchoVerdict
     }
 
     /// Typed errors thrown by the pipeline stages.
@@ -233,9 +229,6 @@ extension PipelineQueue {
         // Segments cached for potential diarization reuse (avoids double transcription)
         var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource = ctx.appPath != nil && ctx.micPath != nil
-        // Stays `.notMeasured` on the single-source branch: nothing is analysed
-        // there, and that must not travel downstream as "measured, clean".
-        var echoVerdict = EchoVerdict.notMeasured
         if let appAudioPath = ctx.appPath, let micAudioPath = ctx.micPath {
             // Dual-source: resample both tracks to 16kHz concurrently
             let app16k = workDir.appendingPathComponent("app_16k.wav")
@@ -250,7 +243,7 @@ extension PipelineQueue {
             // output is coming back through the microphone, and the merge below
             // has no dedup, so every affected utterance lands in the transcript
             // twice.
-            echoVerdict = await warnIfEchoBleed(
+            await warnIfEchoBleed(
                 jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
             )
 
@@ -310,7 +303,7 @@ extension PipelineQueue {
 
         return TranscriptionOutput(
             transcript: transcript, cachedSegments: cachedSegments,
-            isDualSource: isDualSource, echoVerdict: echoVerdict,
+            isDualSource: isDualSource,
         )
     }
 
@@ -376,7 +369,7 @@ extension PipelineQueue {
                     diarization: currentDiarization,
                     job: (jobID: ctx.jobID, title: ctx.title, slug: ctx.slug, participants: ctx.participants),
                     diarizeProcess: diarizeProcess, isDualSource: transcription.isDualSource,
-                    outputDir: outputDir, echoVerdict: transcription.echoVerdict,
+                    outputDir: outputDir,
                 )
             }
 

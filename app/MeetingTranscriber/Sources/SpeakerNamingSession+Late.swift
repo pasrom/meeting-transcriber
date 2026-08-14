@@ -41,7 +41,7 @@ extension SpeakerNamingSession {
         // is not memorised.
         let admissible = EchoEmbeddingQuarantine.admissible(
             namingData.embeddings,
-            verdict: namingData.echo,
+            verdict: EchoVerdict(job.echo),
             isDualSource: namingData.isDualSource,
         )
         if admissible.count != namingData.embeddings.count {
@@ -271,12 +271,6 @@ extension SpeakerNamingSession {
                 SpeakerNamingData.Segment(start: seg.start, end: seg.end, speaker: seg.speaker)
             },
             participants: prior.participants, isDualSource: prior.isDualSource,
-            // Carried forward, never recomputed: a re-run re-diarizes the same
-            // audio, so the verdict still holds, and the tracks it was measured
-            // from are long gone by now. Dropping it here would quietly lift the
-            // quarantine for anyone who pressed Re-run on an affected recording
-            // — the one case where they are most likely to.
-            echoVerdict: prior.echoVerdict,
         )
     }
 

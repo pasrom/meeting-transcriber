@@ -18,17 +18,6 @@ extension PipelineQueue {
         let segments: [Segment] // for extracting speaker snippets
         let participants: [String] // Teams participant names as suggestions
         let isDualSource: Bool
-        /// The echo detector's verdict for this recording. Optional only as a
-        /// wire-format concession: naming data persists across restarts, so a
-        /// file written before this existed decodes with the key absent. Read it
-        /// through `echo`, never directly.
-        let echoVerdict: EchoVerdict?
-        /// The verdict, with an absent one resolved to `notMeasured` — which is
-        /// what a file predating the detector means, and is deliberately not
-        /// `clean` (see `EchoVerdict`).
-        var echo: EchoVerdict {
-            echoVerdict ?? .notMeasured
-        }
 
         /// Per-instance identity for SwiftUI `.onChange` change-detection.
         /// Late re-diarization can produce a `mapping`/`speakingTimes` set
@@ -41,7 +30,7 @@ extension PipelineQueue {
 
         private enum CodingKeys: String, CodingKey {
             case jobID, meetingTitle, mapping, speakingTimes, embeddings,
-                 audioPath, segments, participants, isDualSource, echoVerdict
+                 audioPath, segments, participants, isDualSource
         }
 
         struct Segment: Codable {

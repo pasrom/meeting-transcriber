@@ -172,7 +172,6 @@
                 segments: [],
                 participants: [],
                 isDualSource: false,
-                echoVerdict: nil,
             )
 
             let snapshot = state.rpcStateSnapshot()

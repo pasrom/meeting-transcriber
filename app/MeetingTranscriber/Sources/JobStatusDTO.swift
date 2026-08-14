@@ -51,6 +51,16 @@ struct EchoDetectionDTO: Codable, Equatable {
     let affectedWindowShare: Double
     let windowsScored: Int
     let windowsAffected: Int
+
+    /// The detector's own result, narrowed to what belongs on a wire and in a
+    /// persisted job. The per-window series stays behind: it grows with the
+    /// recording, and a caller polling a job does not want it.
+    init(_ result: EchoBleedDetector.Result) {
+        detected = result.isAffected
+        affectedWindowShare = result.affectedWindowShare
+        windowsScored = result.windowsScored
+        windowsAffected = result.windowsAffected
+    }
 }
 
 extension JobStatusDTO {

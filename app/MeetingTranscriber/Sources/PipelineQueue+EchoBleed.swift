@@ -21,7 +21,7 @@ extension PipelineQueue {
     /// of their windows, so the opening minutes show it. The cost is that bleed
     /// starting later goes unseen, which is why the warning names the span it
     /// looked at instead of claiming the whole recording.
-    static let echoBleedAnalysisSeconds = 600.0
+    nonisolated static let echoBleedAnalysisSeconds = 600.0
 
     /// Async, and the work runs off the main actor on purpose. `PipelineQueue`
     /// is `@MainActor`; decoding up to two ten-minute tracks and running the
@@ -33,8 +33,8 @@ extension PipelineQueue {
     /// database.
     @discardableResult
     func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoVerdict {
-        let analysed = Self.echoBleedAnalysisSeconds
         let result = await Task.detached(priority: .utility) { () -> EchoBleedDetector.Result? in
+            let analysed = Self.echoBleedAnalysisSeconds
             guard let (app, rate) = Self.loadBounded(appURL, maxSeconds: analysed),
                   let (mic, _) = Self.loadBounded(micURL, maxSeconds: analysed)
             else { return nil }
@@ -48,15 +48,7 @@ extension PipelineQueue {
         // Recorded whether or not it fires. A driver, and a field report, must be
         // able to tell "analysed, nothing found" from "never analysed", and a
         // near-miss share is what makes a false negative diagnosable later.
-        recordEchoVerdict(
-            jobID: jobID,
-            EchoDetectionDTO(
-                detected: result.isAffected,
-                affectedWindowShare: result.affectedWindowShare,
-                windowsScored: scored,
-                windowsAffected: hits,
-            ),
-        )
+        recordEchoVerdict(jobID: jobID, EchoDetectionDTO(result))
         logger.info("echo_bleed share=\(percent, privacy: .public)% windows=\(scored, privacy: .public) affected=\(hits, privacy: .public)")
         // The per-window series, so a field report is diagnosable with no audio
         // attached. It answers the two questions the share alone cannot: whether

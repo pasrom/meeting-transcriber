@@ -24,7 +24,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             segments: [],
             participants: [],
             isDualSource: false,
-            echoVerdict: nil,
         )
     }
 
@@ -436,7 +435,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             segments: [.init(start: 0, end: 5, speaker: "SPEAKER_00")],
             participants: [],
             isDualSource: false,
-            echoVerdict: nil,
         )
         let sut = SpeakerNamingView(data: dataWithAudio) { _ in }
         let body = try sut.inspect()
@@ -530,7 +528,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             segments: [],
             participants: ["Dave", "Eve"],
             isDualSource: false,
-            echoVerdict: nil,
         )
         let sut = SpeakerNamingView(data: data) { _ in }
         let body = try sut.inspect()
@@ -554,7 +551,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             segments: [],
             participants: ["Dave"],
             isDualSource: false,
-            echoVerdict: nil,
         )
         let sut = SpeakerNamingView(data: data, gracePeriod: 0) { result = $0 }
         let body = try sut.inspect()
@@ -581,7 +577,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             segments: [],
             participants: ["Dave"],
             isDualSource: false,
-            echoVerdict: nil,
         )
         let sut = SpeakerNamingView(
             data: data,

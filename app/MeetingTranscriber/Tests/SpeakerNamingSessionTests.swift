@@ -101,15 +101,12 @@ final class SpeakerNamingSessionTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: false,
-            echoVerdict: nil,
         )
     }
 
     /// A dual-track naming set: one speaker per track, prefixed the way
     /// `mergeDualTrackDiarization` prefixes them.
-    private func makeDualTrackNamingData(
-        jobID: UUID, verdict: EchoVerdict,
-    ) -> PipelineQueue.SpeakerNamingData {
+    private func makeDualTrackNamingData(jobID: UUID) -> PipelineQueue.SpeakerNamingData {
         let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded
         let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
         return PipelineQueue.SpeakerNamingData(
@@ -122,19 +119,32 @@ final class SpeakerNamingSessionTests: XCTestCase {
             segments: [],
             participants: [],
             isDualSource: true,
-            echoVerdict: verdict,
         )
     }
 
-    private func pendingJob(namingSlug: String?, transcriptPath: URL?) -> PipelineJob {
+    private func pendingJob(
+        namingSlug: String?, transcriptPath: URL?, echo: EchoDetectionDTO? = nil,
+    ) -> PipelineJob {
         var job = PipelineJob(
             meetingTitle: "Standup", appName: "Test",
             mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
         )
+        job.echo = echo
         job.state = .speakerNamingPending
         job.namingSlug = namingSlug
         job.transcriptPath = transcriptPath
         return job
+    }
+
+    /// A detector result with the given per-window correlations, so the tests
+    /// go through the real `Result` → DTO mapping rather than asserting against
+    /// a hand-built verdict that could disagree with what the detector emits.
+    private func echoResult(correlations: [Double]) -> EchoBleedDetector.Result {
+        EchoBleedDetector.Result(
+            windowScores: correlations.map { correlation in
+                EchoBleedDetector.WindowScore(correlation: correlation, lagSeconds: 0.015)
+            },
+        )
     }
 
     private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 2) async {
@@ -159,9 +169,12 @@ final class SpeakerNamingSessionTests: XCTestCase {
         let mock = MockDelegate()
         session.delegate = mock
 
-        let job = pendingJob(namingSlug: "standup_abcd1234", transcriptPath: transcriptPath)
+        let job = pendingJob(
+            namingSlug: "standup_abcd1234", transcriptPath: transcriptPath,
+            echo: EchoDetectionDTO(echoResult(correlations: [0.9, 0.9, 0.9, 0.9])),
+        )
         mock.jobs[job.id] = job
-        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id, verdict: .affected)
+        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id)
 
         let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
         let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded
@@ -193,9 +206,12 @@ final class SpeakerNamingSessionTests: XCTestCase {
         let mock = MockDelegate()
         session.delegate = mock
 
-        let job = pendingJob(namingSlug: "standup_abcd1234", transcriptPath: transcriptPath)
+        let job = pendingJob(
+            namingSlug: "standup_abcd1234", transcriptPath: transcriptPath,
+            echo: EchoDetectionDTO(echoResult(correlations: [0.2, 0.2, 0.2, 0.2])),
+        )
         mock.jobs[job.id] = job
-        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id, verdict: .clean)
+        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id)
 
         let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
         let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded

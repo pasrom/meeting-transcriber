@@ -258,7 +258,7 @@ final class PipelineControllerTests: XCTestCase {
             jobID: job.id, meetingTitle: "Q3 Sync",
             mapping: mapping, speakingTimes: speakingTimes,
             embeddings: [:], audioPath: nil, segments: [], participants: participants,
-            isDualSource: false, echoVerdict: nil,
+            isDualSource: false,
         )
         pc.queue.updateJobState(id: job.id, to: .speakerNamingPending)
         return job.id
