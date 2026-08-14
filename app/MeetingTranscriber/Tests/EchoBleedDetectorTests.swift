@@ -118,9 +118,23 @@ final class EchoBleedDetectorTests: XCTestCase {
     /// The failure this guards is invisible: a mic that starts late puts real
     /// bleed outside the search window and the recording reads as clean. The
     /// recorder knows the offset, so passing it must restore detection.
-    func testDelayBeyondTheLagWindowNeedsMicDelayToBeFound() throws {
+    /// A microphone that started half a second late — a Bluetooth device
+    /// spinning up — which is the case `micDelay` exists for.
+    ///
+    /// The fixture has to model a *late start*, not a long acoustic path. Those
+    /// are opposite index relationships and only one of them is physical: the
+    /// recorder's convention (`AudioMixer.mix` prepends zeros to a late mic,
+    /// `mergeDualSourceSegments` shifts mic times by `+micDelay`) means the mic
+    /// file is *missing* its first `micDelay` seconds, so its copy of the app
+    /// audio sits EARLIER in file-index terms. A fixture built by adding delay
+    /// instead puts the peak on the opposite side, where an inverted search
+    /// centre still finds it and the test certifies the wrong sign.
+    func testMicThatStartedLateNeedsMicDelayToBeFound() throws {
         let app = speechLike(seconds: 60, seed: 22)
-        let mic = bleed(app, delayMs: 500, gain: 0.5)
+        // Everything the mic would have captured, minus the half second it was
+        // not yet recording.
+        let lateStart = Int(0.5 * Double(rate))
+        let mic = Array(bleed(app, delayMs: 15, gain: 0.5).dropFirst(lateStart))
 
         let blind = try XCTUnwrap(EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate))
         XCTAssertFalse(blind.isAffected, "500 ms is outside the +/-200 ms window, so nothing is found")

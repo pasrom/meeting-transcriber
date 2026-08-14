@@ -145,7 +145,15 @@ enum EchoBleedDetector {
         let windows = appEnvelope.count / framesPerWindow
 
         let maxLag = Int(maxLagSeconds / frameSeconds)
-        let centreLag = Int((micDelay / frameSeconds).rounded())
+        // Negative, and the sign is the whole point. `micDelay > 0` means the
+        // mic started LATE, so its file is missing that opening stretch and its
+        // copy of the app audio sits *earlier* in file-index terms — the same
+        // convention `AudioMixer.mix` encodes by prepending zeros to a late mic
+        // and `mergeDualSourceSegments` by shifting mic times `+micDelay`.
+        // `peakCorrelation` pairs `app[k]` with `mic[k + lag]`, so the match is
+        // at `lag = -micDelay`. Getting this backwards is worse than passing no
+        // delay at all: it searches twice the offset away from the peak.
+        let centreLag = -Int((micDelay / frameSeconds).rounded())
         let scores = (0 ..< windows).compactMap { w -> WindowScore? in
             let range = (w * framesPerWindow) ..< ((w + 1) * framesPerWindow)
             guard let peak = peakCorrelation(
