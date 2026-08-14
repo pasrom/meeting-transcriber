@@ -70,16 +70,17 @@ jobs:
     # ~4–6 min each → ~14 min observed. Plus Sortformer naming-dialog
     # (~30 s), channel-health (~30 s), silent-recording (~45 s), live-captions
     # (~2 min), naming-confirm (~4 min typical, up to ~10 min worst case: two
-    # 240 s polls + RPC-ready + baseline), echo-bleed (~8 min: two file-driven
-    # transcribe + diarize cycles), crash-recovery (~5 min: record →
-    # kill → relaunch → recover → transcribe) → ~34 min wall. The level-sensitive
+    # 240 s polls + RPC-ready + baseline), echo-bleed (~12 min: two file-driven
+    # transcribe + diarize cycles plus a cancellation and its verification),
+    # crash-recovery (~5 min: record →
+    # kill → relaunch → recover → transcribe) → ~38 min wall. The level-sensitive
     # lanes (channel-health, silent-recording, live-captions) run before
     # naming-confirm so its transcribe/diarize load stays off their tight
-    # timing windows; crash-recovery stays last. 58 min job budget gives
+    # timing windows; crash-recovery stays last. 64 min job budget gives
     # honest margin; each lane has its own step-timeout below so a hang in
     # lane N surfaces as `timed_out` on that step (not as an opaque job-level
     # `cancelled`).
-    timeout-minutes: 58
+    timeout-minutes: 64
 
     steps:
       - uses: actions/checkout@v7
@@ -359,9 +360,11 @@ jobs:
       - name: "Run echo-bleed verdict E2E (issue #581)"
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
-        # Two jobs, each transcribing both tracks and then diarizing; ~8 min
-        # typical. 14 min leaves margin without hiding a hang.
-        timeout-minutes: 14
+        # Two jobs, each transcribing both tracks and then diarizing, plus —
+        # on the affected pair — a 2.8 MB model fetch on a cold runner, the
+        # cancellation itself, and a second detector pass to verify it. 20 min
+        # leaves margin without hiding a hang.
+        timeout-minutes: 20
         run: bash scripts/e2e-app.sh --no-build --echo-bleed
 
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
