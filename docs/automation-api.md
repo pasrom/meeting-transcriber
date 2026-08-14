@@ -244,7 +244,8 @@ Scope and limits:
     "detected": true,
     "affectedWindowShare": 0.62,
     "windowsScored": 34,
-    "windowsAffected": 21
+    "windowsAffected": 21,
+    "cancelled": true
   }
 }
 ```
@@ -278,6 +279,11 @@ reports it here.
 - `windowsScored` / `windowsAffected`: the counts the share is computed from. A
   verdict needs a minimum of both before it claims anything, so a share alone is
   not the whole decision.
+- `cancelled`: whether the echo was removed from the microphone track before
+  transcription. Only meaningful together with `detected`. `detected: true,
+  cancelled: false` means the recording still carries the bleed — the setting is
+  off, the model was unavailable, or cancellation failed — and is the only
+  combination where the transcript may contain the remote side twice.
 
 **An absent `echo` is not a clean verdict.** It means no measurement was made:
 the job was single-source, one track was silent, or the tracks overlapped for
