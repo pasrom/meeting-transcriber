@@ -77,28 +77,29 @@ enum Permissions {
         return false
     }
 
-    private static let accessibilityPromptLock = OSAllocatedUnfairLock(initialState: false)
-    // swiftlint:disable:next unused_declaration
-    static func ensureAccessibilityAccess() -> Bool {
-        if AXIsProcessTrusted() { return true }
-        let alreadyPrompted = accessibilityPromptLock.withLock { prompted -> Bool in
-            if prompted { return true }
-            prompted = true
-            return false
-        }
-        guard !alreadyPrompted else {
-            logger.warning("permission_denied resource=accessibility status=already_prompted")
-            return false
-        }
+    /// Ask macOS for Accessibility, every time the caller decides the moment is
+    /// right.
+    ///
+    /// Unlike its Screen Recording sibling this keeps no one-shot flag. The
+    /// alert can be dismissed without an answer, and it can stack behind the
+    /// Screen Recording one raised moments earlier; a process-wide flag burns on
+    /// that dismissal and never asks again, which is the dead end this call was
+    /// added to remove. `WatchingController` gates it on a deliberate Start
+    /// Watching with Teams watching enabled, so "every call" already means
+    /// "every time the user asks for the feature that needs it".
+    ///
+    /// Deliberately silent. `AXIsProcessTrustedWithOptions` reports the trust
+    /// state as of the call and never waits for the user, so it returns false
+    /// while the dialog is still on screen. Logging that as a denial would put a
+    /// warning nobody caused into the diagnostics bundle users attach to bug
+    /// reports. `PermissionHealthCheck` reports the real state on the next
+    /// activation.
+    static func ensureAccessibilityAccess() {
+        guard !AXIsProcessTrusted() else { return }
         // `kAXTrustedCheckOptionPrompt` is a C global imported as
         // `Unmanaged<CFString>!`, which Swift 6 treats as shared mutable
         // state. The value is set by AppKit at process load and never
         // mutates; bridge once via a nonisolated(unsafe) wrapper.
-        let options = [Self.axPromptKey: true] as CFDictionary
-        let granted = AXIsProcessTrustedWithOptions(options)
-        if !granted {
-            logger.warning("permission_denied resource=accessibility status=user_denied_prompt")
-        }
-        return granted
+        _ = AXIsProcessTrustedWithOptions([axPromptKey: true] as CFDictionary)
     }
 }

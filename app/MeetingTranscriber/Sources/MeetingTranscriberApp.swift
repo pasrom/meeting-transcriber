@@ -141,7 +141,7 @@ struct MeetingTranscriberApp: App {
             }
             .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
                 if !appState.isWatching {
-                    appState.watching.toggleWatching()
+                    appState.watching.toggleWatching(userInitiated: false)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in

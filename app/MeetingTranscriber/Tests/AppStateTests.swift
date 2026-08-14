@@ -257,7 +257,11 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, _) = makeState()
         addTeardownBlock { state.watching.watchLoop?.stop() }
 
-        state.watching.toggleWatching()
+        // `AppState.init` does not expose the permission seams, so this is the
+        // one path that reaches the production defaults. Auto-watch exercises
+        // the same start without the optional Accessibility prompt, which would
+        // otherwise be a real TCC call from a unit test.
+        state.watching.toggleWatching(userInitiated: false)
         await waitFor(state.watching.watchLoop != nil)
 
         XCTAssertNotNil(state.watching.watchLoop)
@@ -267,7 +271,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         let (state, _) = makeState()
         addTeardownBlock { state.watching.watchLoop?.stop() }
 
-        state.watching.toggleWatching()
+        state.watching.toggleWatching(userInitiated: false)
         await waitFor(state.watching.watchLoop?.isActive == true)
 
         XCTAssertEqual(state.watching.watchLoop?.isActive, true)

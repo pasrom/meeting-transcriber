@@ -63,6 +63,34 @@ final class WatchingController {
     /// check reports the state.
     private let requestScreenRecording: () -> Void
 
+    /// Accessibility request, fired at watch start. Injectable so tests skip
+    /// the real TCC prompt.
+    ///
+    /// `PermissionHealthCheck` already reports a missing Accessibility grant as
+    /// a problem — red menu-bar badge plus a notification — because
+    /// `ParticipantReader` needs it to read the Teams roster via
+    /// `AXUIElementCreateApplication`. Without this call nothing ever showed the
+    /// prompt, so the app diagnosed the problem but never offered the fix and
+    /// the user had to find the Accessibility pane unaided.
+    ///
+    /// It belongs at watch start for the same reason the Screen-Recording
+    /// request does: the health check runs on every activation, so prompting
+    /// there would interrupt a user who is trying to work.
+    ///
+    /// Narrower than its two siblings on three axes, because full computer
+    /// control is the most invasive grant on macOS and this one only enriches a
+    /// recording. It fires only from a user-initiated toggle, since auto-watch
+    /// otherwise raises a system alert three seconds after every launch with no
+    /// click of any kind; only when `watchTeams` is on, since the roster read is
+    /// the grant's sole consumer and is itself Teams-gated; and the production
+    /// default is compiled out of the sandboxed build, which cannot use the API
+    /// against another process at all.
+    ///
+    /// The result is ignored, like the other two gates. Watching, capture and
+    /// transcription all work without the grant, so a refusal must not block the
+    /// start.
+    private let requestAccessibility: () -> Void
+
     /// Meeting detector factory for the auto-detect path. Injectable so tests can
     /// supply a deterministic detector instead of the IOKit-backed
     /// `PowerAssertionDetector`.
@@ -83,6 +111,11 @@ final class WatchingController {
         liveTranscription: LiveTranscriptionCoordinator,
         ensureMicAccess: @escaping () async -> Bool = { await Permissions.ensureMicrophoneAccess() },
         requestScreenRecording: @escaping () -> Void = { Permissions.ensureScreenRecordingAccess() },
+        requestAccessibility: @escaping () -> Void = {
+            #if !APPSTORE
+                Permissions.ensureAccessibilityAccess()
+            #endif
+        },
         makeDetector: (() -> any MeetingDetecting)? = nil,
     ) {
         self.settings = settings
@@ -93,6 +126,7 @@ final class WatchingController {
         self.liveTranscription = liveTranscription
         self.ensureMicAccess = ensureMicAccess
         self.requestScreenRecording = requestScreenRecording
+        self.requestAccessibility = requestAccessibility
         // Tests inject a deterministic detector; production defaults to one
         // filtered by the "Apps to Watch" toggles, re-read at each watch start.
         self.makeDetector = makeDetector ?? { [settings] in
@@ -145,7 +179,12 @@ final class WatchingController {
 
     // MARK: - Start / Stop
 
-    func toggleWatching() {
+    /// - Parameter userInitiated: True for a deliberate Start/Stop press, which
+    ///   is the one moment where asking for an optional permission is warranted.
+    ///   The auto-watch path passes false so an unattended launch raises no
+    ///   system alert — including on the e2e runners, which force auto-watch on
+    ///   and where a stray dialog can swallow the keystroke a lane sends.
+    func toggleWatching(userInitiated: Bool = true) {
         if let loop = watchLoop, loop.isManualRecording { return }
         if let loop = watchLoop, loop.isActive {
             loop.stop()
@@ -158,8 +197,7 @@ final class WatchingController {
             guard startTask == nil else { return }
             startTask = Task { @MainActor in
                 defer { startTask = nil }
-                _ = await ensureMicAccess()
-                requestScreenRecording()
+                await requestStartPermissions(userInitiated: userInitiated)
 
                 syncEngines?()
                 pipeline.rebuild()
@@ -192,6 +230,21 @@ final class WatchingController {
                 watchLoop = loop
                 loop.start()
             }
+        }
+    }
+
+    /// The permissions a watch start asks for, in the order the user meets
+    /// them. Only the mic gate is awaited, because capture cannot begin without
+    /// it; the other two register the app in their System Settings pane and are
+    /// reported by `PermissionHealthCheck` afterwards, so a refusal delays
+    /// nothing here.
+    ///
+    /// - Parameter userInitiated: see `toggleWatching`.
+    private func requestStartPermissions(userInitiated: Bool) async {
+        _ = await ensureMicAccess()
+        requestScreenRecording()
+        if userInitiated, settings.watchTeams {
+            requestAccessibility()
         }
     }
 

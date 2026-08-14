@@ -29,9 +29,12 @@ final class WatchingControllerTests: XCTestCase {
     private func makeController(
         ensureMicAccess: @escaping () async -> Bool = { true },
         requestScreenRecording: @escaping () -> Void = {},
+        requestAccessibility: @escaping () -> Void = {},
+        watchTeams: Bool = true,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
     ) -> WatchingController {
         let settings = AppSettings()
+        settings.watchTeams = watchTeams
         let notifier = RecordingNotifier()
         let pipeline = PipelineController(settings: settings, notifier: notifier)
         pipeline.queue = PipelineQueue(logDir: tmpDir)
@@ -56,6 +59,7 @@ final class WatchingControllerTests: XCTestCase {
             liveTranscription: liveTranscription,
             ensureMicAccess: ensureMicAccess,
             requestScreenRecording: requestScreenRecording,
+            requestAccessibility: requestAccessibility,
             makeDetector: makeDetector,
         )
     }
@@ -79,6 +83,64 @@ final class WatchingControllerTests: XCTestCase {
         await waitFor(requested)
 
         XCTAssertTrue(requested, "toggleWatching must ask for Screen Recording")
+    }
+
+    // MARK: - requestAccessibility seam
+
+    /// The health check already flags a missing Accessibility grant with a red
+    /// menu-bar badge and a notification, but nothing used to ask for it, so the
+    /// app reported a problem it never offered to fix. Asking on a deliberate
+    /// Start Watching — where the participant read that needs it happens — is
+    /// what closes that gap, and pinning it here keeps the request from being
+    /// dropped again.
+    func testToggleWatchingRequestsAccessibility() async {
+        var requested = false
+        // Not trailing-closure: a trailing closure binds to the last param
+        // (`makeDetector`), not `requestAccessibility`.
+        // swiftlint:disable:next trailing_closure
+        let controller = makeController(requestAccessibility: { requested = true })
+        addTeardownBlock { await controller.watchLoop?.stop() }
+
+        controller.toggleWatching()
+        await waitFor(requested)
+
+        XCTAssertTrue(requested, "toggleWatching must ask for Accessibility")
+    }
+
+    /// The roster read is the grant's only consumer and is itself Teams-gated,
+    /// so someone watching only Zoom, Webex or a browser must never be asked for
+    /// full computer control. The prompt also used to burn a process-wide
+    /// one-shot, so enabling Teams later in the same session then never asked
+    /// for the grant that had by then become necessary.
+    func testToggleWatchingSkipsAccessibilityWhenTeamsNotWatched() async {
+        var requested = false
+        let controller = makeController(
+            requestAccessibility: { requested = true },
+            watchTeams: false,
+        )
+        addTeardownBlock { await controller.watchLoop?.stop() }
+
+        controller.toggleWatching()
+        await waitFor(controller.watchLoop != nil)
+
+        XCTAssertFalse(requested, "watchTeams off must not ask for Accessibility")
+    }
+
+    /// Auto-watch reaches `toggleWatching` three seconds after launch with no
+    /// click of any kind, so an unconditional request raised a system alert on
+    /// every launch. It also fires mid-lane on the e2e runners, which force
+    /// auto-watch on, where a dialog can take the keystroke the naming lane
+    /// sends and fail it for a reason unrelated to the code under test.
+    func testAutoWatchStartDoesNotRequestAccessibility() async {
+        var requested = false
+        // swiftlint:disable:next trailing_closure
+        let controller = makeController(requestAccessibility: { requested = true })
+        addTeardownBlock { await controller.watchLoop?.stop() }
+
+        controller.toggleWatching(userInitiated: false)
+        await waitFor(controller.watchLoop != nil)
+
+        XCTAssertFalse(requested, "auto-watch must not ask for Accessibility")
     }
 
     // MARK: - ensureMicAccess seam
