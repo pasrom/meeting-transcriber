@@ -84,12 +84,12 @@ def write_mono16(path, samples, rate):
 def tiled(src, count):
     """Repeats `src` up to `count` samples. The local track only has to be as
     long as the remote one; which words it repeats does not matter, since the
-    detector correlates envelopes between the two tracks and never within one."""
-    out = array.array("h", bytes(2 * count))
-    length = len(src)
-    for i in range(count):
-        out[i] = src[i % length]
-    return out
+    detector correlates envelopes between the two tracks and never within one.
+
+    Whole-array repetition rather than a per-sample loop: at 16 kHz these are
+    hundreds of thousands of samples and the loop dominated the run."""
+    repeats = -(-count // len(src))
+    return (src * repeats)[:count]
 
 
 def gate(samples, rate, burst_seconds, gap_seconds):

@@ -1686,9 +1686,6 @@ run_title_source() {
 # No settings are touched. The verdict does not depend on any of them, so a lane
 # that mutates the runner's defaults would add a restore path and a way to leave
 # the host dirty for nothing.
-_EB_JOB=""
-_EB_STATUS=""
-
 # Enqueue one synthesised pair; echoes its job id. Asserts the two files came
 # back as ONE job: PairedRecordingResolver has to recognise the _app/_mic stem
 # pair, and if it does not the pipeline silently runs two single-source jobs
@@ -1713,16 +1710,18 @@ _eb_enqueue() {
 # report a two-minute wait instead of the error that caused it.
 _eb_settled() {
     assert_app_alive
-    _EB_STATUS="$(rpc "/v1/jobs/$_EB_JOB")"
+    # Writes the caller's `_EB_STATUS`: bash locals are dynamically scoped, so
+    # the lane declares it and this stashes the last response for the
+    # post-loop assertions. Same shape the naming lanes use.
+    _EB_STATUS="$(rpc "/v1/jobs/$1")"
     jq -e '.echo != null or .state == "done" or .state == "error"' <<<"$_EB_STATUS" >/dev/null 2>&1
 }
 
 # Waits for the verdict on $1 and leaves it in $_EB_STATUS.
 _eb_await_verdict() {
     local label="$1" job="$2"
-    _EB_JOB="$job"
     _EB_STATUS=""
-    poll_until "$PIPELINE_TIMEOUT_S" 3 _eb_settled \
+    poll_until "$PIPELINE_TIMEOUT_S" 3 _eb_settled "$job" \
         || fail "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s (last: $_EB_STATUS)"
     jq -e '.echo != null' <<<"$_EB_STATUS" >/dev/null \
         || fail "$label: job $job reached state=$(jq -r '.state // "?"' <<<"$_EB_STATUS") with NO echo verdict. Every dual-source job is measured, so a missing verdict means the tracks never reached the detector. error=$(jq -r '.error // "<none>"' <<<"$_EB_STATUS")"
@@ -1734,27 +1733,40 @@ _eb_await_verdict() {
 # the lane in the persisted job store, where a later run reads it as its own.
 # Best effort: this is teardown, and a job that will not settle is not this
 # lane's failure to report.
-_EB_RELEASE_JOB=""
 _eb_settled_or_skipped() {
     local state
-    state="$(rpc "/v1/jobs/$_EB_RELEASE_JOB" | jq -r '.state // empty')"
+    state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
     case "$state" in
         done|error) return 0 ;;
         speakerNamingPending)
-            curl --silent --max-time 10 -X POST \
+            # Same call the naming-escape lane makes; the explicit zero
+            # Content-Length matters for a POST with no body.
+            curl --silent --show-error --max-time 10 -X POST \
                 --header "Authorization: Bearer $RPC_TOKEN" \
-                "$RPC_BASE/v1/jobs/$_EB_RELEASE_JOB/naming/skip" >/dev/null 2>&1 || true
+                --header "Content-Length: 0" \
+                "$RPC_BASE/v1/jobs/$1/naming/skip" >/dev/null 2>&1 || true
             ;;
     esac
     return 1
 }
 _eb_release() {
-    _EB_RELEASE_JOB="$1"
-    poll_until "$PIPELINE_TIMEOUT_S" 2 _eb_settled_or_skipped || true
+    poll_until "$PIPELINE_TIMEOUT_S" 2 _eb_settled_or_skipped "$1" || true
+}
+
+# Asserts a verdict was computed over enough windows to mean anything. Shared
+# by both pairs: on the affected one it guards against a verdict resting on a
+# single lucky window, and on the control it is what stops "not affected" from
+# meaning "not enough evidence to say".
+_eb_assert_scored() {
+    local label="$1" which="$2" status="$3"
+    jq -e '.echo.windowsScored >= 3' <<<"$status" >/dev/null \
+        || fail "$label: $which scored only $(jq -r '.echo.windowsScored' <<<"$status") window(s); a verdict needs at least 3"
 }
 
 run_echo_bleed() {
     local label="[echo-bleed]"
+    # Stashed by _eb_settled through bash's dynamic scoping (see there).
+    local _EB_STATUS=""
     require_command python3
 
     local gen="$ROOT/scripts/fixtures/make-echo-pair.py"
@@ -1786,8 +1798,7 @@ run_echo_bleed() {
     # Measured 4 of 4 windows on this fixture. Asserting a floor well under that
     # keeps the lane from re-litigating the threshold, while still failing if the
     # verdict decays to a single lucky window.
-    jq -e '.echo.windowsScored >= 3' <<<"$affected_status" >/dev/null \
-        || fail "$label: affected pair scored only $(jq -r '.echo.windowsScored' <<<"$affected_status") window(s); a verdict needs at least 3"
+    _eb_assert_scored "$label" "affected pair" "$affected_status"
     jq -e '.echo.affectedWindowShare >= 0.5' <<<"$affected_status" >/dev/null \
         || fail "$label: affected share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") below 0.5 (measured 1.0 on this fixture)"
     # The structured verdict and the sentence the user actually sees are separate
@@ -1805,10 +1816,7 @@ run_echo_bleed() {
 
     jq -e '.echo.detected == false' <<<"$clean_status" >/dev/null \
         || fail "$label: clean control reported as affected. Its microphone track is the same gated local speech as the affected pair with the bleed term removed, so this is a false positive: $(jq -c '.echo' <<<"$clean_status")"
-    # Without this the control proves nothing: a verdict computed over too few
-    # windows says "not affected" for want of evidence, not for want of bleed.
-    jq -e '.echo.windowsScored >= 3' <<<"$clean_status" >/dev/null \
-        || fail "$label: clean control scored only $(jq -r '.echo.windowsScored' <<<"$clean_status") window(s), so its clean verdict carries no evidence"
+    _eb_assert_scored "$label" "clean control" "$clean_status"
     jq -e '.echo.windowsAffected == 0' <<<"$clean_status" >/dev/null \
         || fail "$label: clean control has $(jq -r '.echo.windowsAffected' <<<"$clean_status") affected window(s); measured 0, with its hottest window at 0.35 against a 0.7 threshold"
     log "$label: clean control measured over $(jq -r '.echo.windowsScored' <<<"$clean_status") windows and found nothing ✅"
