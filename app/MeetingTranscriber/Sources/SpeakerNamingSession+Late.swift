@@ -28,10 +28,31 @@ extension SpeakerNamingSession {
         for (label, name) in mapping where !name.isEmpty {
             fullMapping[label] = name
         }
+        // Hold back what an echo-affected recording must not teach the app. The
+        // filter sits here rather than in `updateDB` because this is the only
+        // place a job's embeddings reach the database, and it is the last point
+        // at which the track each one came from is still readable — `updateDB`
+        // sees labels but never parses them. Dropping an entry is enough to
+        // suppress the write: `updateDB` skips any label with no embedding.
+        //
+        // Note this filters `fullMapping`'s effect, not `fullMapping` itself.
+        // The transcript rewrite below still uses every name the user gave, so a
+        // quarantined speaker is still named in the transcript — only the voice
+        // is not memorised.
+        let admissible = EchoEmbeddingQuarantine.admissible(
+            namingData.embeddings,
+            verdict: EchoVerdict(job.echo),
+            isDualSource: namingData.isDualSource,
+            provenSilentAppTrack: micSpeakersOverSilence(namingData, verdict: EchoVerdict(job.echo), slug: slug),
+        )
+        if admissible.count != namingData.embeddings.count {
+            let held = namingData.embeddings.count - admissible.count
+            logger.info("echo_quarantine held=\(held, privacy: .public) of=\(namingData.embeddings.count, privacy: .public)")
+        }
         delegate.updateSpeakerDB(
             matcher: matcher,
             mapping: fullMapping,
-            embeddings: namingData.embeddings,
+            embeddings: admissible,
             // Thread the per-speaker speaking times so the matcher's
             // centroid-quality filter (short segments stay as fallback samples,
             // long ones seed the centroid) sees real durations.
@@ -70,6 +91,29 @@ extension SpeakerNamingSession {
 
         removeNamingData(jobID: jobID, slug: slug)
         delegate.updateJobState(id: jobID, to: .done)
+    }
+
+    /// Microphone speakers who did their talking while the app track carried
+    /// nothing, and so cannot have been bleed.
+    ///
+    /// Without this an affected recording teaches the app nothing at all —
+    /// including the voice of the person sitting at the machine, whose own
+    /// track was never in doubt. The evidence comes from the persisted app
+    /// sidecar, the same file late re-diarization reads; if it is missing, the
+    /// answer is "no evidence", and the whole microphone track stays held.
+    private func micSpeakersOverSilence(
+        _ namingData: SpeakerNamingData, verdict: EchoVerdict, slug: String?,
+    ) -> Set<String> {
+        guard verdict == .affected, let outputDir, let slug else { return [] }
+        let proven = AppTrackSilence.micSpeakersProvenClean(
+            segments: namingData.segments,
+            appTrackURL: outputDir.appendingPathComponent("recordings")
+                .appendingPathComponent("\(slug)_app_16k.wav"),
+        )
+        if !proven.isEmpty {
+            logger.info("echo_quarantine_admitted count=\(proven.count, privacy: .public) spoke only over a silent app track")
+        }
+        return proven
     }
 
     // MARK: - Late Re-diarization

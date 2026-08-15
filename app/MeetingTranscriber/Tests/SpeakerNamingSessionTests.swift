@@ -19,6 +19,10 @@ final class SpeakerNamingSessionTests: XCTestCase {
         private(set) var warnings: [(id: UUID, message: String)] = []
         private(set) var generateProtocolCalls: [(jobID: UUID, title: String)] = []
         private(set) var updateSpeakerDBCallCount = 0
+        /// The embeddings each write actually carried. Recorded separately from
+        /// the call count because the echo quarantine is invisible in the count:
+        /// the write still happens, it just carries less.
+        private(set) var updateSpeakerDBEmbeddings: [[String: [Float]]] = []
         private(set) var metadataUpdates: [(jobID: UUID, slug: String?, mode: DiarizerMode?)] = []
         private(set) var stageStartCount = 0
         private(set) var stageEndCount = 0
@@ -42,9 +46,10 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func updateSpeakerDB(
             matcher _: SpeakerMatcher, mapping _: [String: String],
-            embeddings _: [String: [Float]], speakingTimes _: [String: TimeInterval],
+            embeddings: [String: [Float]], speakingTimes _: [String: TimeInterval],
         ) {
             updateSpeakerDBCallCount += 1
+            updateSpeakerDBEmbeddings.append(embeddings)
         }
 
         func generateProtocol(jobID: UUID, transcript _: String, title: String, protocolsDir _: URL) {
@@ -99,15 +104,47 @@ final class SpeakerNamingSessionTests: XCTestCase {
         )
     }
 
-    private func pendingJob(namingSlug: String?, transcriptPath: URL?) -> PipelineJob {
+    /// A dual-track naming set: one speaker per track, prefixed the way
+    /// `mergeDualTrackDiarization` prefixes them.
+    private func makeDualTrackNamingData(jobID: UUID) -> PipelineQueue.SpeakerNamingData {
+        let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded
+        let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
+        return PipelineQueue.SpeakerNamingData(
+            jobID: jobID,
+            meetingTitle: "Standup",
+            mapping: [remote: remote, local: local],
+            speakingTimes: [remote: 30, local: 30],
+            embeddings: [remote: [1, 0, 0], local: [0, 1, 0]],
+            audioPath: nil,
+            segments: [],
+            participants: [],
+            isDualSource: true,
+        )
+    }
+
+    private func pendingJob(
+        namingSlug: String?, transcriptPath: URL?, echo: EchoDetectionDTO? = nil,
+    ) -> PipelineJob {
         var job = PipelineJob(
             meetingTitle: "Standup", appName: "Test",
             mixPath: nil, appPath: nil, micPath: nil, micDelay: 0,
         )
+        job.echo = echo
         job.state = .speakerNamingPending
         job.namingSlug = namingSlug
         job.transcriptPath = transcriptPath
         return job
+    }
+
+    /// A detector result with the given per-window correlations, so the tests
+    /// go through the real `Result` → DTO mapping rather than asserting against
+    /// a hand-built verdict that could disagree with what the detector emits.
+    private func echoResult(correlations: [Double]) -> EchoBleedDetector.Result {
+        EchoBleedDetector.Result(
+            windowScores: correlations.map { correlation in
+                EchoBleedDetector.WindowScore(correlation: correlation, lagSeconds: 0.015)
+            },
+        )
     }
 
     private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 2) async {
@@ -115,6 +152,84 @@ final class SpeakerNamingSessionTests: XCTestCase {
         while !condition(), Date() < deadline {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
+    }
+
+    // MARK: - Echo quarantine
+
+    /// Drives the real confirm path, because the pure filter being correct is
+    /// only half the claim: the other half is that this is the code path a
+    /// confirmation actually takes, from the dialog and from the automation API
+    /// alike. Both reach `reapplySpeakerNames`.
+    func testConfirmOnAnEchoAffectedRecordingWithholdsTheMicrophoneVoice() async throws {
+        let tmp = try makeTempDirectory(prefix: "SpeakerNamingSessionTests")
+        let transcriptPath = tmp.appendingPathComponent("transcript.txt")
+        try "] R_SPEAKER_0: hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let session = makeSession(outputDir: tmp)
+        let mock = MockDelegate()
+        session.delegate = mock
+
+        let job = pendingJob(
+            namingSlug: "standup_abcd1234", transcriptPath: transcriptPath,
+            echo: EchoDetectionDTO(echoResult(correlations: [0.9, 0.9, 0.9, 0.9])),
+        )
+        mock.jobs[job.id] = job
+        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id)
+
+        let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
+        let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded
+        session.completeSpeakerNaming(
+            jobID: job.id,
+            result: .confirmed([remote: "Speaker A", local: "Speaker B"]),
+            source: .dialog,
+        )
+
+        await waitUntil { mock.jobs[job.id]?.state == .done }
+        let written = try XCTUnwrap(mock.updateSpeakerDBEmbeddings.first)
+        XCTAssertNil(
+            written[local],
+            "The microphone track of an affected recording carries the remote voice too; its embedding must never reach the speaker DB, which has no rollback",
+        )
+        XCTAssertEqual(
+            written[remote],
+            [1, 0, 0],
+            "The app track is upstream of the bleed, so a remote participant named here is still learned",
+        )
+    }
+
+    func testConfirmOnACleanRecordingStillLearnsBothTracks() async throws {
+        let tmp = try makeTempDirectory(prefix: "SpeakerNamingSessionTests")
+        let transcriptPath = tmp.appendingPathComponent("transcript.txt")
+        try "] R_SPEAKER_0: hello".write(to: transcriptPath, atomically: true, encoding: .utf8)
+
+        let session = makeSession(outputDir: tmp)
+        let mock = MockDelegate()
+        session.delegate = mock
+
+        let job = pendingJob(
+            namingSlug: "standup_abcd1234", transcriptPath: transcriptPath,
+            echo: EchoDetectionDTO(echoResult(correlations: [0.2, 0.2, 0.2, 0.2])),
+        )
+        mock.jobs[job.id] = job
+        session.speakerNamingDataByJob[job.id] = makeDualTrackNamingData(jobID: job.id)
+
+        let local = SpeakerKey(track: .mic, id: "SPEAKER_0").encoded
+        let remote = SpeakerKey(track: .app, id: "SPEAKER_0").encoded
+        session.completeSpeakerNaming(
+            jobID: job.id,
+            result: .confirmed([remote: "Speaker A", local: "Speaker B"]),
+            source: .dialog,
+        )
+
+        await waitUntil { mock.jobs[job.id]?.state == .done }
+        let written = try XCTUnwrap(mock.updateSpeakerDBEmbeddings.first)
+        XCTAssertEqual(
+            written[local],
+            [0, 1, 0],
+            "A clean recording must still enroll the person at the machine: a quarantine that "
+                + "fires unconditionally would silently stop the app learning the user's own voice",
+        )
+        XCTAssertEqual(written[remote], [1, 0, 0])
     }
 
     // MARK: - Confirm
