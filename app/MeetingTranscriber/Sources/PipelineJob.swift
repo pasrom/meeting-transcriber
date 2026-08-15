@@ -67,6 +67,9 @@ struct PipelineJob: Identifiable, Codable {
     var state: JobState
     var error: String?
     var warnings: [String]
+    /// The echo detector's verdict, once the transcription stage has run it.
+    /// Nil for single-source jobs and whenever no verdict was possible.
+    var echo: EchoDetectionDTO?
     var transcriptPath: URL?
     var protocolPath: URL?
     var namingSlug: String?
@@ -115,6 +118,7 @@ struct PipelineJob: Identifiable, Codable {
         self.state = .waiting
         self.error = nil
         self.warnings = []
+        self.echo = nil
         self.transcriptPath = nil
         self.protocolPath = nil
         self.namingSlug = nil
