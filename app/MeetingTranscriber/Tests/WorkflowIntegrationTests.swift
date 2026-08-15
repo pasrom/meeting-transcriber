@@ -643,4 +643,142 @@ final class WorkflowIntegrationTests: XCTestCase {
         // No warnings (this is intentional, not a failure)
         XCTAssertTrue(queue.jobs.first?.warnings.isEmpty ?? false)
     }
+
+    // MARK: - Echo bleed warning
+
+    /// The shared aperiodic generator, deliberately not a local copy: an
+    /// earlier sine-enveloped one here made two talkers at different syllable
+    /// rates nearly orthogonal, so the negative case certified a margin real
+    /// recordings do not have.
+    private func speechLike(seconds: Double, seed: UInt64) -> [Float] {
+        EchoTestAudio.speechLike(seconds: seconds, seed: seed)
+    }
+
+    private func writeTrack(_ samples: [Float], to url: URL) throws {
+        try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: url)
+    }
+
+    private func runDualSource(_ h: Harness, app: URL, mic: URL) async {
+        h.queue.speakerNamingHandler = { _ in .skipped }
+        h.queue.enqueue(PipelineJob(
+            meetingTitle: "meeting", appName: "File",
+            mixPath: nil, appPath: app, micPath: mic,
+            micDelay: 0,
+        ))
+        await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
+    }
+
+    /// The whole point of the feature: a recording made over loudspeakers says so.
+    /// Asserted through the real pipeline, not just the detector, because the
+    /// warning reaching the job is the behaviour users get.
+    func testDualSourceWithLoudspeakerBleedWarnsOnTheJob() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("bleed")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let far = speechLike(seconds: 40, seed: 11)
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        XCTAssertEqual(
+            h.queue.jobs.first?.echo?.detected, true,
+            "the structured verdict is what a driver reads; assert it, not only the sentence",
+        )
+        let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
+        XCTAssertTrue(
+            warnings.contains("picked up by the microphone"),
+            "expected an echo-bleed warning, got: \(warnings)",
+        )
+    }
+
+    /// The negative case guards the same path: two people on separate devices
+    /// must not be told to put on headphones.
+    func testDualSourceWithIndependentTracksDoesNotWarn() async throws {
+        let (h, _) = try makeHarness()
+        let recordings = tmpDir.appendingPathComponent("clean")
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+
+        let appURL = recordings.appendingPathComponent("meeting_app.wav")
+        let micURL = recordings.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(speechLike(seconds: 40, seed: 12), to: appURL)
+        try writeTrack(speechLike(seconds: 40, seed: 91), to: micURL)
+
+        await runDualSource(h, app: appURL, mic: micURL)
+
+        // Asserting the absence of a sentence is not enough on its own: it
+        // stays true when the detector never ran, which is the failure this
+        // feature's own comments warn is invisible. The verdict has to be
+        // present AND false — measured, and found clean.
+        XCTAssertEqual(
+            h.queue.jobs.first?.echo?.detected, false,
+            "the clean pair must be measured and found clean, not left unmeasured",
+        )
+        let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
+        XCTAssertFalse(
+            warnings.contains("picked up by the microphone"),
+            "independent tracks must not be reported as bleed, got: \(warnings)",
+        )
+    }
+
+    // MARK: - Withholding a verdict beats guessing one
+
+    /// A recording the detector could not read must come back as *not measured*,
+    /// which is a different thing from clean. The distinction is load bearing:
+    /// the naming stage lifts the embedding quarantine on `notMeasured`, and a
+    /// downstream reader is told an absent `echo` means nobody looked.
+    @MainActor
+    func testUnreadableTrackLeavesTheJobUnmeasured() async throws {
+        let (h, _) = try makeHarness()
+        let dir = tmpDir.appendingPathComponent("unreadable")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        try writeTrack(speechLike(seconds: 40, seed: 31), to: appURL)
+
+        let id = UUID()
+        let verdict = await h.queue.warnIfEchoBleed(
+            jobID: id,
+            appURL: appURL,
+            micURL: dir.appendingPathComponent("never-written.wav"),
+            micDelay: 0,
+        )
+        XCTAssertEqual(verdict, .notMeasured)
+    }
+
+    /// Two tracks at different sample rates are the case that would produce a
+    /// confident *wrong* answer rather than none: one rate feeds both envelopes,
+    /// so the second track's time base would silently be off by that ratio and
+    /// every lag with it. Withholding is the only honest result.
+    @MainActor
+    func testMismatchedSampleRatesLeaveTheJobUnmeasured() async throws {
+        let (h, _) = try makeHarness()
+        let dir = tmpDir.appendingPathComponent("rate-mismatch")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // Same content on both sides, so a detector that ignored the mismatch
+        // would have every reason to report something.
+        let far = speechLike(seconds: 40, seed: 32)
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        let micURL = dir.appendingPathComponent("meeting_mic.wav")
+        try AudioMixer.saveWAV(samples: far, sampleRate: 16000, url: appURL)
+        try AudioMixer.saveWAV(samples: far, sampleRate: 8000, url: micURL)
+
+        let id = UUID()
+        h.queue.enqueue(PipelineJob(
+            meetingTitle: "meeting", appName: "File",
+            mixPath: nil, appPath: appURL, micPath: micURL, micDelay: 0,
+        ))
+        let verdict = await h.queue.warnIfEchoBleed(
+            jobID: id, appURL: appURL, micURL: micURL, micDelay: 0,
+        )
+        XCTAssertEqual(verdict, .notMeasured)
+        XCTAssertNil(
+            h.queue.jobs.first?.echo,
+            "nothing may be recorded on the job either; a stored verdict here would read as measured",
+        )
+    }
 }
