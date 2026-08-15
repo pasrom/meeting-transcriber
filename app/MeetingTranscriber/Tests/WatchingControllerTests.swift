@@ -34,33 +34,12 @@ final class WatchingControllerTests: XCTestCase {
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
     ) -> WatchingController {
-        let settings = AppSettings()
-        settings.watchTeams = watchTeams
-        let notifier = RecordingNotifier()
-        let pipeline = PipelineController(settings: settings, notifier: notifier)
-        pipeline.queue = PipelineQueue(logDir: tmpDir)
-        let channelHealth = ChannelHealthController(
-            notifier: notifier,
-            debounceSeconds: { 0 },
-            indicatorEnabled: { false },
-        )
-        let permissions = PermissionsController(notifier: notifier)
-        let liveTranscription = LiveTranscriptionCoordinator(
-            captions: LiveCaptionsState(),
-            liveEnabled: { false },
-            engineSupportsLive: { false },
-            verboseDiagnostics: { false },
-        )
-        return WatchingController(
-            settings: settings,
-            notifier: notifier,
-            pipeline: pipeline,
-            channelHealth: channelHealth,
-            permissions: permissions,
-            liveTranscription: liveTranscription,
+        WatchingControllerFactory.make(
+            logDir: tmpDir,
             ensureMicAccess: ensureMicAccess,
             requestScreenRecording: requestScreenRecording,
             requestAccessibility: requestAccessibility,
+            watchTeams: watchTeams,
             startJoinTimeout: startJoinTimeout,
             makeDetector: makeDetector,
         )
@@ -583,13 +562,4 @@ final class WatchingControllerTests: XCTestCase {
 @MainActor
 private final class ControllerBox {
     var controller: WatchingController?
-}
-
-private actor CallCounter {
-    private var count = 0
-
-    func next() -> Int {
-        defer { count += 1 }
-        return count
-    }
 }
