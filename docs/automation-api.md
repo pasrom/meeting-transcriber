@@ -301,7 +301,13 @@ Scope and limits:
   "transcriptPath": "/Users/me/.../standup.md",
   "protocolPath": "/Users/me/.../standup-protocol.md",
   "error": null,
-  "warnings": []
+  "warnings": [],
+  "echo": {
+    "detected": true,
+    "affectedWindowShare": 0.62,
+    "windowsScored": 34,
+    "windowsAffected": 21
+  }
 }
 ```
 
@@ -313,9 +319,37 @@ Scope and limits:
 - `error`: a message string when `state == "error"`, else `null`.
 - `warnings`: zero or more non-fatal warning strings (for example a partial
   diarization failure on one track).
+- `echo`: the echo-bleed verdict, see below. Absent for a single-source job and
+  for a dual-source job no verdict could be reached on.
 - `transcript`: the transcript text, present **only** when the request opted in
   via `?include=transcript` (see [Inline transcript](#inline-transcript)). Absent
   otherwise, so the default shape is unchanged.
+
+#### Echo verdict
+
+A dual-source recording made on loudspeakers carries the remote voices on the
+microphone track as well, so the same speech is transcribed twice and appears
+twice in the transcript. The pipeline measures this before transcription and
+reports it here.
+
+- `detected`: whether the recording is judged affected. This is the same verdict
+  that produces the human-readable entry in `warnings`; assert on this field and
+  not on the sentence, which is free to be reworded.
+- `affectedWindowShare`: `0…1`, the share of analysed windows whose two tracks
+  carry the same audio.
+- `windowsScored` / `windowsAffected`: the counts the share is computed from. A
+  verdict needs a minimum of both before it claims anything, so a share alone is
+  not the whole decision.
+
+**An absent `echo` is not a clean verdict.** It means no measurement was made:
+the job was single-source, one track was silent, or the tracks overlapped for
+less than one analysis window. A driver that treats missing as clean will report
+a recording as unaffected that was never looked at. Only `"detected": false`
+means analysed and clean.
+
+The analysis covers the opening minutes of a recording rather than all of it, so
+`windowsScored` is the honest denominator: for a long meeting it describes a
+prefix, and bleed that starts later is not seen.
 
 ### NamingStatusDTO
 
