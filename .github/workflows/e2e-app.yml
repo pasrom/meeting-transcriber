@@ -70,15 +70,16 @@ jobs:
     # ~4–6 min each → ~14 min observed. Plus Sortformer naming-dialog
     # (~30 s), channel-health (~30 s), silent-recording (~45 s), live-captions
     # (~2 min), naming-confirm (~4 min typical, up to ~10 min worst case: two
-    # 240 s polls + RPC-ready + baseline), crash-recovery (~5 min: record →
-    # kill → relaunch → recover → transcribe) → ~26 min wall. The level-sensitive
+    # 240 s polls + RPC-ready + baseline), echo-bleed (~8 min: two file-driven
+    # transcribe + diarize cycles), crash-recovery (~5 min: record →
+    # kill → relaunch → recover → transcribe) → ~34 min wall. The level-sensitive
     # lanes (channel-health, silent-recording, live-captions) run before
     # naming-confirm so its transcribe/diarize load stays off their tight
-    # timing windows; crash-recovery stays last. 44 min job budget gives
+    # timing windows; crash-recovery stays last. 58 min job budget gives
     # honest margin; each lane has its own step-timeout below so a hang in
     # lane N surfaces as `timed_out` on that step (not as an opaque job-level
     # `cancelled`).
-    timeout-minutes: 44
+    timeout-minutes: 58
 
     steps:
       - uses: actions/checkout@v7
@@ -338,6 +339,30 @@ jobs:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
         timeout-minutes: 8
         run: bash scripts/e2e-app.sh --no-build --title-source
+
+      # Echo-bleed lane (issue #581): a dual-source recording made on
+      # loudspeakers carries the remote voices on the microphone track too, so
+      # the same speech is transcribed twice and appears twice in the
+      # transcript. The pipeline measures that before transcription and reports
+      # the verdict on GET /v1/jobs/<id>; this lane drives that chain in the
+      # deployed app.
+      # The condition cannot be recorded here — the Mini has no microphone, only
+      # a virtual input device, so there is no acoustic path to bleed through.
+      # The driver synthesises two dual-source pairs from the shipped fixtures
+      # instead, differing by exactly one term, and asserts detected on the
+      # affected pair and present-and-false on the control. The control is what
+      # keeps the lane green-able only by a detector that discriminates: without
+      # it, one that answers yes to everything would pass.
+      # PLACEMENT: no live audio at all, so it is not level-sensitive, but it
+      # runs two full transcribe + diarize cycles — kept with the other
+      # file-driven lanes and ahead of crash-recovery's SIGKILL teardown.
+      - name: "Run echo-bleed verdict E2E (issue #581)"
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # Two jobs, each transcribing both tracks and then diarizing; ~8 min
+        # typical. 14 min leaves margin without hiding a hang.
+        timeout-minutes: 14
+        run: bash scripts/e2e-app.sh --no-build --echo-bleed
 
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
       # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +

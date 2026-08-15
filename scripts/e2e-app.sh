@@ -38,6 +38,7 @@ REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle a
 NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via POST /v1/jobs/<id>/naming (see run_naming_confirm)
 NAMING_ESCAPE=false      # press a real Escape on the naming dialog + assert it dismisses without resolving (issue #577)
 TITLE_SOURCE=false       # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
+ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -56,11 +57,12 @@ while [ $# -gt 0 ]; do
         --naming-confirm)   NAMING_CONFIRM=true ;;
         --naming-escape)    NAMING_ESCAPE=true ;;
         --title-source)     TITLE_SOURCE=true ;;
+        --echo-bleed)       ECHO_BLEED=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
-                  [--naming-escape]
+                  [--naming-escape] [--echo-bleed]
                   [--naming-confirm] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
@@ -130,6 +132,18 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        placeholder — not the raw IOKit assertion name. Fails against
                        the pre-fix detector, so it proves the deployed
                        detection → title-selection chain end-to-end.
+  --echo-bleed         Assert the echo-bleed verdict end to end. Synthesises two
+                       dual-source pairs from the shipped fixtures — one whose
+                       microphone track carries the app track back from the
+                       loudspeaker, one clean control differing by exactly that
+                       term — enqueues each via POST /v1/jobs, and asserts the
+                       verdict on GET /v1/jobs/<id>: detected on the affected
+                       pair, present-and-false on the control. The control is
+                       what keeps the lane from passing on a detector that says
+                       yes to everything. Standalone lane. Needs python3.
+                       Leaves two finished jobs and a recognition-log row behind
+                       (it skips their naming so nothing stays parked); it never
+                       enrolls a voice, so speakers.json is untouched.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -168,6 +182,15 @@ fi
 # it defaults to the 2-speaker fixture further below.)
 if [ "$NAMING_CONFIRM" = true ] && [ -n "$SIMULATOR_FIXTURE" ]; then
     echo "Error: --naming-confirm ignores --fixture (it always uses the 2-speaker fixture)" >&2
+    exit 2
+fi
+# --echo-bleed builds its own audio from the shipped fixtures and never records,
+# so it shares nothing with the meeting lanes and would only mask a typo.
+if [ "$ECHO_BLEED" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
+    || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
+    || [ "$TWO_MEETINGS" = true ] || [ "$TITLE_SOURCE" = true ] || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --echo-bleed is a standalone lane; incompatible with the other lane flags and --fixture" >&2
     exit 2
 fi
 
@@ -487,6 +510,10 @@ _NC_PRE_NUMSPK_CTR=""
 # for why a copy is mandatory). Cleaned up by _naming_confirm_cleanup on any exit.
 _NC_FIXTURE_DIR=""
 
+# Temp dir holding the echo lane's synthesised dual-source pairs. Its own mktemp
+# dir, removed by on_exit; the shipped fixtures it is built from are read-only.
+_EB_FIXTURE_DIR=""
+
 # True when any durable backup / absent marker exists on disk.
 _naming_confirm_backup_present() {
     local f
@@ -708,6 +735,12 @@ on_exit() {
     # this host starts from the AppSettings defaults.
     if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
         _naming_confirm_cleanup
+    fi
+    # Echo lane: drop the synthesised pairs (our own mktemp dir, never a real
+    # recordings directory).
+    if [ -n "${_EB_FIXTURE_DIR:-}" ] && [ -d "$_EB_FIXTURE_DIR" ]; then
+        rm -rf "$_EB_FIXTURE_DIR"
+        _EB_FIXTURE_DIR=""
     fi
 }
 # Single cleanup hook, but the signal paths must EXIT after cleaning up: a
@@ -1635,6 +1668,180 @@ run_title_source() {
     log "$label: PASS — no usable window title fell back to the clean placeholder ✅"
 }
 
+# --- echo-bleed lane ------------------------------------------------------
+#
+# A dual-source recording made on loudspeakers carries the remote voices on the
+# microphone track too, so the same speech is transcribed twice and lands in the
+# transcript twice. The pipeline measures that before transcription and reports
+# the verdict on GET /v1/jobs/<id>. This lane drives that chain in the deployed
+# app: synthesise a pair, enqueue it, read the verdict back.
+#
+# It cannot record the condition live. The runner is a Mac mini with no
+# microphone, only a virtual input device, so there is no acoustic path for a
+# loudspeaker to bleed through. The synthesised pair is the better instrument
+# anyway: it makes the expected verdict exact instead of a property of the room.
+#
+# TWO pairs are enqueued, differing by exactly one term. Without the clean
+# control the lane would stay green against a detector that answers yes to
+# everything, which is the failure mode that actually matters here — a false
+# positive tells the user their recording is broken when it is not.
+#
+# No settings are touched. The verdict does not depend on any of them, so a lane
+# that mutates the runner's defaults would add a restore path and a way to leave
+# the host dirty for nothing.
+# Enqueue one synthesised pair; echoes its job id. Asserts the two files came
+# back as ONE job: PairedRecordingResolver has to recognise the _app/_mic stem
+# pair, and if it does not the pipeline silently runs two single-source jobs
+# that can never be compared against each other, so nothing is ever measured.
+_eb_enqueue() {
+    local label="$1" dir="$2" stem="$3"
+    local enq ids
+    enq="$(curl --silent --show-error --max-time 15 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -nc --arg a "$dir/${stem}_app.wav" --arg m "$dir/${stem}_mic.wav" '{paths: [$a, $m]}')" \
+        "$RPC_BASE/v1/jobs" 2>/dev/null || echo '{}')"
+    ids="$(jq -r '.jobIDs | length' <<<"$enq" 2>/dev/null || echo 0)"
+    [ "$ids" = "1" ] \
+        || fail "$label: POST /v1/jobs returned $ids job(s) for one _app/_mic pair, expected 1 (response: $enq)"
+    jq -r '.jobIDs[0]' <<<"$enq"
+}
+
+# True once the job carries a verdict, or has settled without one. Settling
+# without one is a failure, but it has to be READ as one: polling only for the
+# verdict would turn a job that errored in its first second into a timeout, and
+# report a two-minute wait instead of the error that caused it.
+_eb_settled() {
+    assert_app_alive
+    # Writes the caller's `_EB_STATUS`: bash locals are dynamically scoped, so
+    # the lane declares it and this stashes the last response for the
+    # post-loop assertions. Same shape the naming lanes use.
+    _EB_STATUS="$(rpc "/v1/jobs/$1")"
+    jq -e '.echo != null or .state == "done" or .state == "error"' <<<"$_EB_STATUS" >/dev/null 2>&1
+}
+
+# Waits for the verdict on $1 and leaves it in $_EB_STATUS.
+_eb_await_verdict() {
+    local label="$1" job="$2"
+    _EB_STATUS=""
+    poll_until "$PIPELINE_TIMEOUT_S" 3 _eb_settled "$job" \
+        || fail "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s (last: $_EB_STATUS)"
+    jq -e '.echo != null' <<<"$_EB_STATUS" >/dev/null \
+        || fail "$label: job $job reached state=$(jq -r '.state // "?"' <<<"$_EB_STATUS") with NO echo verdict. Every dual-source job is measured, so a missing verdict means the tracks never reached the detector. error=$(jq -r '.error // "<none>"' <<<"$_EB_STATUS")"
+    log "$label: verdict $(jq -c '.echo' <<<"$_EB_STATUS")"
+}
+
+# Let a job finish rather than leaving it parked at speaker naming. Diarization
+# is on by default, so an enqueued job parks there and would otherwise outlive
+# the lane in the persisted job store, where a later run reads it as its own.
+# Best effort: this is teardown, and a job that will not settle is not this
+# lane's failure to report.
+_eb_settled_or_skipped() {
+    local state
+    state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
+    case "$state" in
+        done|error) return 0 ;;
+        speakerNamingPending)
+            # Same call the naming-escape lane makes; the explicit zero
+            # Content-Length matters for a POST with no body.
+            curl --silent --show-error --max-time 10 -X POST \
+                --header "Authorization: Bearer $RPC_TOKEN" \
+                --header "Content-Length: 0" \
+                "$RPC_BASE/v1/jobs/$1/naming/skip" >/dev/null 2>&1 || true
+            ;;
+    esac
+    return 1
+}
+_eb_release() {
+    poll_until "$PIPELINE_TIMEOUT_S" 2 _eb_settled_or_skipped "$1" || true
+}
+
+# Asserts a verdict was computed over enough windows to mean anything. Shared
+# by both pairs: on the affected one it guards against a verdict resting on a
+# single lucky window, and on the control it is what stops "not affected" from
+# meaning "not enough evidence to say".
+_eb_assert_scored() {
+    local label="$1" which="$2" status="$3"
+    jq -e '.echo.windowsScored >= 3' <<<"$status" >/dev/null \
+        || fail "$label: $which scored only $(jq -r '.echo.windowsScored' <<<"$status") window(s); a verdict needs at least 3"
+}
+
+run_echo_bleed() {
+    local label="[echo-bleed]"
+    # Stashed by _eb_settled through bash's dynamic scoping (see there).
+    local _EB_STATUS=""
+    require_command python3
+
+    local gen="$ROOT/scripts/fixtures/make-echo-pair.py"
+    local app_src="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
+    local local_src="$ROOT/app/MeetingTranscriber/Tests/Fixtures/three_speakers_de.wav"
+    [ -f "$gen" ]       || fail "$label: fixture generator missing: $gen"
+    [ -f "$app_src" ]   || fail "$label: fixture missing: $app_src"
+    [ -f "$local_src" ] || fail "$label: fixture missing: $local_src"
+
+    # Separate directories per pair. The resolver groups on directory AND stem,
+    # so this keeps the two pairs apart no matter what stem names are chosen.
+    _EB_FIXTURE_DIR="$(mktemp -d /tmp/e2e-echo-bleed.XXXXXX)"
+    local affected_dir="$_EB_FIXTURE_DIR/affected" clean_dir="$_EB_FIXTURE_DIR/clean"
+    log "$label: synthesising pairs under $_EB_FIXTURE_DIR"
+    python3 "$gen" --app "$app_src" --local "$local_src" --out "$affected_dir" --stem meeting --bleed 1.0 \
+        | sed 's/^/    /' || fail "$label: could not synthesise the affected pair"
+    python3 "$gen" --app "$app_src" --local "$local_src" --out "$clean_dir" --stem meeting --bleed 0 \
+        | sed 's/^/    /' || fail "$label: could not synthesise the clean control"
+
+    # --- affected pair ----------------------------------------------------
+    local affected_job
+    affected_job="$(_eb_enqueue "$label" "$affected_dir" meeting)"
+    log "$label: affected pair enqueued as $affected_job"
+    _eb_await_verdict "$label" "$affected_job"
+    local affected_status="$_EB_STATUS"
+
+    jq -e '.echo.detected == true' <<<"$affected_status" >/dev/null \
+        || fail "$label: affected pair NOT detected. The microphone track is the app track delayed 15 ms at unit gain, which is the condition itself: $(jq -c '.echo' <<<"$affected_status")"
+    # Measured 4 of 4 windows on this fixture. Asserting a floor well under that
+    # keeps the lane from re-litigating the threshold, while still failing if the
+    # verdict decays to a single lucky window.
+    _eb_assert_scored "$label" "affected pair" "$affected_status"
+    jq -e '.echo.affectedWindowShare >= 0.5' <<<"$affected_status" >/dev/null \
+        || fail "$label: affected share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") below 0.5 (measured 1.0 on this fixture)"
+    # The structured verdict and the sentence the user actually sees are separate
+    # channels, and only one of them is in front of the person with the problem.
+    jq -e '(.warnings | length) >= 1' <<<"$affected_status" >/dev/null \
+        || fail "$label: affected job carries the verdict but no warning — the menu-bar channel is silent on a recording the API calls affected"
+    log "$label: affected pair detected, share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") over $(jq -r '.echo.windowsScored' <<<"$affected_status") windows ✅"
+
+    # --- clean control ----------------------------------------------------
+    local clean_job
+    clean_job="$(_eb_enqueue "$label" "$clean_dir" meeting)"
+    log "$label: clean control enqueued as $clean_job"
+    _eb_await_verdict "$label" "$clean_job"
+    local clean_status="$_EB_STATUS"
+
+    jq -e '.echo.detected == false' <<<"$clean_status" >/dev/null \
+        || fail "$label: clean control reported as affected. Its microphone track is the same gated local speech as the affected pair with the bleed term removed, so this is a false positive: $(jq -c '.echo' <<<"$clean_status")"
+    _eb_assert_scored "$label" "clean control" "$clean_status"
+    jq -e '.echo.windowsAffected == 0' <<<"$clean_status" >/dev/null \
+        || fail "$label: clean control has $(jq -r '.echo.windowsAffected' <<<"$clean_status") affected window(s); measured 0, with its hottest window at 0.35 against a 0.7 threshold"
+    log "$label: clean control measured over $(jq -r '.echo.windowsScored' <<<"$clean_status") windows and found nothing ✅"
+
+    # --- the verdict has to survive the job finishing ---------------------
+    # Finished jobs are reaped from the queue and read back out of the terminal
+    # store. A verdict that only exists on the live job is invisible to exactly
+    # the caller most likely to look: one polling after the fact.
+    _eb_release "$affected_job"
+    _eb_release "$clean_job"
+    local final
+    final="$(rpc "/v1/jobs/$affected_job")"
+    local final_state
+    final_state="$(jq -r '.state // empty' <<<"$final")"
+    [ "$final_state" = "done" ] \
+        || fail "$label: affected job settled as '$final_state', expected done. error=$(jq -r '.error // "<none>"' <<<"$final")"
+    jq -e '.echo.detected == true' <<<"$final" >/dev/null \
+        || fail "$label: the verdict did not survive the job finishing: $(jq -c '.echo' <<<"$final")"
+    log "$label: verdict intact on the finished job ✅"
+    log "$label: PASS"
+}
+
 if [ "$REIMPORT_LATEST" = true ]; then
     # Skip the live-record phase and reuse a WAV produced by an earlier
     # `--record-only --keep-recordings` run on this host. Picks the
@@ -1702,6 +1909,8 @@ elif [ "$NAMING_CONFIRM" = true ]; then
     run_naming_confirm
 elif [ "$TITLE_SOURCE" = true ]; then
     run_title_source
+elif [ "$ECHO_BLEED" = true ]; then
+    run_echo_bleed
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
