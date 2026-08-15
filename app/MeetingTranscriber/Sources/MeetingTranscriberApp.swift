@@ -230,6 +230,13 @@ struct MeetingTranscriberApp: App {
 
         Window("Record App", id: "record-app") {
             AppPickerView(
+                appsProvider: SystemRunningAppsProvider(),
+                // The controller's wide predicate, not `appState.isManualRecording`.
+                // That one is loop-only for the menu bar's Stop item and reads
+                // false for the whole in-flight window. This window outlives the
+                // menu item that opened it — it closes only on its own Start or
+                // Cancel — so it has to stay truthful across both halves.
+                startWouldBeRefused: appState.watching.isManualRecording,
                 onStartRecording: { pid, appName, title in
                     appState.watching.startManualRecording(pid: pid, appName: appName, title: title)
                     closeWindow(id: "record-app")

@@ -38,6 +38,11 @@ struct SystemRunningAppsProvider: RunningAppsProvider {
 @MainActor
 struct AppPickerView: View {
     let appsProvider: any RunningAppsProvider
+    /// Whether a manual start would be refused right now. Pass the controller's
+    /// wide predicate, not `AppState.isManualRecording`; see
+    /// `AppPickerStartState.resolve`. Deliberately has no default: a default
+    /// would let the wiring at the call site be deleted with every test green.
+    let startWouldBeRefused: Bool
     let onStartRecording: (pid_t, String, String) -> Void
     let onCancel: () -> Void
 
@@ -46,13 +51,21 @@ struct AppPickerView: View {
     @State private var meetingTitle: String = ""
 
     init(
-        appsProvider: any RunningAppsProvider = SystemRunningAppsProvider(),
+        appsProvider: any RunningAppsProvider,
+        startWouldBeRefused: Bool,
         onStartRecording: @escaping (pid_t, String, String) -> Void,
         onCancel: @escaping () -> Void,
     ) {
         self.appsProvider = appsProvider
+        self.startWouldBeRefused = startWouldBeRefused
         self.onStartRecording = onStartRecording
         self.onCancel = onCancel
+    }
+
+    /// Bound in one place rather than inline in `body`, which keeps the button's
+    /// two modifiers cheap to type-check.
+    private var startState: AppPickerStartState {
+        .resolve(hasSelection: selectedApp != nil, startWouldBeRefused: startWouldBeRefused)
     }
 
     var body: some View {
@@ -103,6 +116,12 @@ struct AppPickerView: View {
                 TextField("Meeting title (optional)", text: $meetingTitle)
                     .textFieldStyle(.roundedBorder)
 
+                if let explanation = startState.explanation {
+                    Text(explanation)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack {
                     Button("Cancel") {
                         onCancel()
@@ -117,7 +136,7 @@ struct AppPickerView: View {
                         onStartRecording(app.id, app.name, title)
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(selectedApp == nil)
+                    .disabled(!startState.allowsStart)
                 }
             }
             .padding()

@@ -22,6 +22,7 @@ final class AppPickerViewTests: XCTestCase {
     func testStartButtonExists() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -32,6 +33,7 @@ final class AppPickerViewTests: XCTestCase {
     func testStartButtonDisabledWithoutSelection() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -40,9 +42,32 @@ final class AppPickerViewTests: XCTestCase {
         XCTAssertTrue(button.isDisabled())
     }
 
+    /// Wiring only: the decision itself is covered in `AppPickerStartStateTests`.
+    ///
+    /// Asserts the explanation rather than `isDisabled()` on purpose. Nothing is
+    /// selected here, so the button is disabled either way and that assertion
+    /// would pass even with the state unwired: measured, it does. The text is the
+    /// one signal that only appears when `startWouldBeRefused` actually
+    /// reaches the view. `allowsStart` is covered as a value one layer down, and
+    /// the loss itself is prevented by the guard in `WatchingController`, not
+    /// here, so an unpinned `.disabled` costs a bad press and not a recording.
+    func testStartButtonExplainsARefusedStart() throws {
+        let sut = AppPickerView(
+            appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: true,
+            onStartRecording: { _, _, _ in },
+            onCancel: {},
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(
+            try body.find(text: "Another recording is already starting or under way. The menu bar shows it once it is running."),
+        )
+    }
+
     func testCancelButtonExists() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -54,6 +79,7 @@ final class AppPickerViewTests: XCTestCase {
         var called = false
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: { called = true },
         )
@@ -67,6 +93,7 @@ final class AppPickerViewTests: XCTestCase {
     func testHeaderShown() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -79,6 +106,7 @@ final class AppPickerViewTests: XCTestCase {
     func testMeetingTitlePlaceholderExists() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -92,6 +120,7 @@ final class AppPickerViewTests: XCTestCase {
     func testRefreshButtonExists() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: testApps),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
@@ -106,6 +135,7 @@ final class AppPickerViewTests: XCTestCase {
     func testEmptyAppListStillShowsButtons() throws {
         let sut = AppPickerView(
             appsProvider: MockAppsProvider(apps: []),
+            startWouldBeRefused: false,
             onStartRecording: { _, _, _ in },
             onCancel: {},
         )
