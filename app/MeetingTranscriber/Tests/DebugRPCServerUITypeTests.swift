@@ -315,8 +315,13 @@
         /// Fail closed: with no running application there is no window to focus or
         /// post into, so resolution yields nothing rather than a half-usable target.
         @MainActor
-        func testTargetResolutionYieldsNothingWithoutAnApplication() {
-            XCTAssertNil(NSApp, "precondition: xctest has no NSApplication")
+        func testTargetResolutionYieldsNothingWithoutAnApplication() throws {
+            // Skip rather than fail: `NSApplication.shared` is process-global and
+            // irreversible, so a sibling test that touched it invalidates this
+            // premise for every later test in the same process. CI runs
+            // `swift test --parallel`, which gives each class its own process, so
+            // the assertions below still run there.
+            try XCTSkipUnless(NSApp == nil, "another test already created the shared NSApplication")
 
             XCTAssertNil(DebugRPCServer.uiTypeTarget(forWindowIdentifier: "settings"))
             XCTAssertNil(DebugRPCServer.nsWindow(forIdentifier: "settings"))
