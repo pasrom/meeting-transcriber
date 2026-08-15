@@ -57,6 +57,7 @@ class PipelineQueue {
     let diarizeEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
+    let micEchoSuppressionEnabled: Bool
     let speakerMatcherFactory: () -> SpeakerMatcher
     let vadConfig: VADConfig?
     /// nil disables JSONL logging. AppState injects a real instance for production;
@@ -227,6 +228,7 @@ class PipelineQueue {
         self.diarizeEnabled = false
         self.numSpeakers = 0
         self.micLabel = "Me"
+        self.micEchoSuppressionEnabled = false
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
@@ -301,6 +303,7 @@ class PipelineQueue {
         diarizeEnabled: Bool = false,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
+        micEchoSuppressionEnabled: Bool = false,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
@@ -330,6 +333,7 @@ class PipelineQueue {
         // of micLabel for both the tagging and the re-split, so sanitizing here
         // keeps them consistent.)
         self.micLabel = micLabel == DiarizationProcess.remoteSpeakerLabel ? "Me" : micLabel
+        self.micEchoSuppressionEnabled = micEchoSuppressionEnabled
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig

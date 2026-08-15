@@ -191,6 +191,16 @@ final class AppSettings {
         didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
     }
 
+    /// Gate the mic track with `AudioMixer.suppressEcho` before transcription
+    /// and diarization (dual-source recordings only). Without a headset the mic
+    /// re-captures the loudspeaker playback of the remote side; `mix()` already
+    /// gates that echo, but transcription reads the raw per-track files, not
+    /// the mix. Config-only, no UI (issue #422):
+    /// `defaults write app.meetingtranscriber dualTrackMicEchoSuppressionEnabled -bool true`
+    var dualTrackMicEchoSuppressionEnabled: Bool {
+        didSet { defaults.set(dualTrackMicEchoSuppressionEnabled, forKey: "dualTrackMicEchoSuppressionEnabled") }
+    }
+
     /// Master switch for the per-channel signal indicator. When on, AppState runs a
     /// ~10 Hz level poller while recording and flips the menu-bar red when one
     /// channel goes silent while the other carries audio. Default: on.
@@ -511,6 +521,7 @@ final class AppSettings {
         noMic = defaults.object(forKey: "noMic") as? Bool ?? false
         recordOnly = defaults.object(forKey: "recordOnly") as? Bool ?? false
         micDeviceUID = defaults.object(forKey: "micDeviceUID") as? String ?? ""
+        dualTrackMicEchoSuppressionEnabled = defaults.object(forKey: "dualTrackMicEchoSuppressionEnabled") as? Bool ?? false
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
         liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false

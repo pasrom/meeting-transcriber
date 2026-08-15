@@ -167,6 +167,28 @@ enum AudioMixer {
         }
     }
 
+    /// File-level wrapper for `suppressEcho`: gates the mic track at `micURL`
+    /// against the app track at `appURL` and rewrites `micURL` in place.
+    /// No-op when either track is empty — a silent/dead channel must not turn
+    /// a valid mic file into a zero-frame WAV.
+    static func suppressEchoInFile(
+        appURL: URL,
+        micURL: URL,
+        sampleRate: Int,
+        micDelay: TimeInterval = 0,
+    ) throws {
+        let appSamples = try loadAudioFileAsFloat32(url: appURL)
+        var micSamples = try loadAudioFileAsFloat32(url: micURL)
+        guard !appSamples.isEmpty, !micSamples.isEmpty else { return }
+        suppressEcho(
+            appSamples: appSamples,
+            micSamples: &micSamples,
+            sampleRate: sampleRate,
+            micDelay: clampMicDelay(micDelay),
+        )
+        try saveWAV(samples: micSamples, sampleRate: sampleRate, url: micURL)
+    }
+
     // MARK: - Resampling
 
     /// Resample audio using AVAudioConverter (proper anti-aliasing filter).
