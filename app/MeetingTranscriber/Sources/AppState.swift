@@ -195,7 +195,12 @@ final class AppState {
         // This is the only production construction of `AppSettings` — tests
         // inject their own, so none of them touch the real domains.
         LegacyDefaultsMigration.run(into: .standard)
-        return AppSettings()
+        let settings = AppSettings()
+        // Once, here, rather than from `customOutputDir` — that getter is read
+        // during view updates, and repairing there would write observed state
+        // mid-`body`.
+        settings.repairStaleCustomOutputDirBookmark()
+        return settings
     }
 
     private static func makeUpdateChecker() -> UpdateChecker {

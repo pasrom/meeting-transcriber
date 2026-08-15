@@ -152,6 +152,102 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(defaults.double(forKey: "pollInterval"), 1.0)
     }
 
+    // MARK: - Output Directory (issue #626)
+
+    /// The Settings UI derives the folder it shows from `effectiveOutputDir`.
+    /// While `customOutputDirBookmark` was a computed passthrough to
+    /// `UserDefaults`, `@Observable` had no stored property to track, so
+    /// choosing a new folder never invalidated the view and the label kept
+    /// showing the previous path until the app was relaunched.
+    func testCustomOutputDirBookmarkNotifiesObservers() throws {
+        let dir = try makeTempDirectory(prefix: "AppSettingsOutputDir")
+        let changed = expectation(description: "effectiveOutputDir observers notified")
+        withObservationTracking {
+            _ = settings.effectiveOutputDir
+        } onChange: {
+            changed.fulfill()
+        }
+
+        settings.setCustomOutputDir(dir)
+
+        wait(for: [changed], timeout: 1.0)
+        // The notification is only half of it: assert the derived value the UI
+        // actually renders followed too. A plain `dir.bookmarkData()` would not
+        // resolve under `.withSecurityScope`, leaving this on the default path
+        // and the test green either way — hence the real API.
+        XCTAssertEqual(
+            settings.effectiveOutputDir.resolvingSymlinksInPath().path,
+            dir.resolvingSymlinksInPath().path,
+        )
+    }
+
+    /// The counterpart: reading the derived value must not write to the observed
+    /// bookmark. `body` reads `effectiveOutputDir`, so a mutation on this path
+    /// would invalidate the view during its own update.
+    func testReadingEffectiveOutputDirDoesNotMutateTheBookmark() throws {
+        let dir = try makeTempDirectory(prefix: "AppSettingsOutputDir")
+        settings.setCustomOutputDir(dir)
+        let bookmark = try XCTUnwrap(settings.customOutputDirBookmark)
+
+        withObservationTracking {
+            _ = settings.effectiveOutputDir
+        } onChange: {
+            XCTFail("reading effectiveOutputDir must not mutate observed state")
+        }
+        _ = settings.effectiveOutputDir
+
+        XCTAssertEqual(settings.customOutputDirBookmark, bookmark)
+    }
+
+    /// Repair is a no-op while the bookmark still resolves. The stale branch
+    /// itself needs a folder moved out from under a live bookmark, which isn't
+    /// reproducible in-process — it stays covered by the launch call site only.
+    func testRepairLeavesAResolvableBookmarkAlone() throws {
+        let dir = try makeTempDirectory(prefix: "AppSettingsOutputDir")
+        settings.setCustomOutputDir(dir)
+        let bookmark = try XCTUnwrap(settings.customOutputDirBookmark)
+
+        settings.repairStaleCustomOutputDirBookmark()
+
+        XCTAssertEqual(settings.customOutputDirBookmark, bookmark)
+    }
+
+    func testClearCustomOutputDirNotifiesObservers() throws {
+        let dir = try makeTempDirectory(prefix: "AppSettingsOutputDir")
+        settings.setCustomOutputDir(dir)
+
+        let changed = expectation(description: "reset notifies observers")
+        withObservationTracking {
+            _ = settings.effectiveOutputDir
+        } onChange: {
+            changed.fulfill()
+        }
+
+        settings.clearCustomOutputDir()
+
+        wait(for: [changed], timeout: 1.0)
+        XCTAssertEqual(settings.effectiveOutputDir, AppPaths.downloadsProtocolsDir)
+    }
+
+    /// Guards the other half of the move to a stored property: the bookmark
+    /// must still round-trip through `UserDefaults` across launches.
+    func testCustomOutputDirBookmarkPersistsAcrossInstances() throws {
+        let dir = try makeTempDirectory(prefix: "AppSettingsOutputDir")
+        settings.setCustomOutputDir(dir)
+        let bookmark = try XCTUnwrap(settings.customOutputDirBookmark)
+        XCTAssertEqual(defaults.data(forKey: "customOutputDirBookmark"), bookmark)
+
+        let reloaded = AppSettings(defaults: defaults, apiKeyAccount: apiKeyAccount)
+        XCTAssertEqual(reloaded.customOutputDirBookmark, bookmark)
+        XCTAssertEqual(
+            reloaded.effectiveOutputDir.resolvingSymlinksInPath().path,
+            dir.resolvingSymlinksInPath().path,
+        )
+
+        reloaded.clearCustomOutputDir()
+        XCTAssertNil(defaults.data(forKey: "customOutputDirBookmark"))
+    }
+
     // MARK: - watchApps
 
     func testWatchAppsAllEnabled() {
