@@ -390,6 +390,13 @@ final class WatchingController {
         // replaces the field while the first is still in flight, whose `defer`
         // then clears the second's registration and reopens the window.
         guard manualStartTask == nil else { return }
+        // Refuse while one is already recording. Without this the assignment
+        // below replaces `watchLoop` without stopping the live loop, so its
+        // recording is never enqueued while its recorder keeps capturing,
+        // retained by its own monitor task and reachable by nothing (#624).
+        // The picker disables Start for the same reason, but it cannot be the
+        // enforcement: a recording can begin between opening it and pressing.
+        guard watchLoop?.isManualRecording != true else { return }
         manualStartTask = Task { @MainActor in
             defer { manualStartTask = nil }
             await performManualRecording(pid: pid, appName: appName, title: title)
