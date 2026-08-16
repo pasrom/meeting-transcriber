@@ -180,4 +180,25 @@ final class EchoSegmentClassifierTests: XCTestCase {
         )
         XCTAssertEqual(out, [.echoOnly])
     }
+
+    /// Guards, not decoration: both arms are reachable from the pipeline. A
+    /// zero rate comes from an unreadable header, and an empty envelope from a
+    /// track shorter than one 10 ms frame. Either way the answer has to be "no
+    /// verdict" rather than a division by zero or a confident nothing.
+    func testZeroSampleRateDecidesNothing() {
+        let out = EchoSegmentClassifier.classify(
+            app: [0.1, 0.2], mic: [0.1, 0.2], sampleRate: 0, micDelay: 0,
+            micSegments: [seg(0, 1)],
+        )
+        XCTAssertEqual(out, [.undecided])
+    }
+
+    func testTrackShorterThanOneFrameDecidesNothing() {
+        let tiny = [Float](repeating: 0.5, count: 10) // 0.6 ms at 16 kHz
+        let out = EchoSegmentClassifier.classify(
+            app: tiny, mic: tiny, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(0, 1)],
+        )
+        XCTAssertEqual(out, [.undecided])
+    }
 }

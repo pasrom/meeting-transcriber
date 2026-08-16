@@ -58,10 +58,13 @@ enum EchoSegmentClassifier {
         micDelay: TimeInterval,
         micSegments: [TimestampedSegment],
     ) -> [EchoSegmentVerdict] {
-        guard !micSegments.isEmpty, sampleRate > 0 else { return [] }
+        // One verdict per segment, always. A shorter array would still be safe
+        // at today's only call site, which ignores a count that does not match,
+        // but it is a contract a later caller would reasonably index into.
+        guard !micSegments.isEmpty else { return [] }
         let framesPerSecond = 1.0 / frameSeconds
         let samplesPerFrame = Int(frameSeconds * Double(sampleRate))
-        guard samplesPerFrame > 0 else { return micSegments.map { _ in .undecided } }
+        guard sampleRate > 0, samplesPerFrame > 0 else { return micSegments.map { _ in .undecided } }
 
         let appEnvelope = envelope(app, samplesPerFrame)
         let micEnvelope = envelope(mic, samplesPerFrame)

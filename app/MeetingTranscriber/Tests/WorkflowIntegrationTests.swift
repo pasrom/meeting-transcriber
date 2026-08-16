@@ -888,4 +888,53 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(h.queue.jobs.first?.echo?.detected, false, "the control must be measured and found clean")
         XCTAssertEqual(micLines(transcript).count, 2, "nothing may be removed from a recording without bleed")
     }
+
+    /// The classification step has the same duty as the detector: an unreadable
+    /// or mismatched pair yields no verdicts, so the merge leaves every segment
+    /// alone. Silently classifying against a half-read track would remove lines
+    /// on evidence nobody has.
+    @MainActor
+    func testClassificationWithAnUnreadableTrackRemovesNothing() async throws {
+        let (h, _) = try makeHarness()
+        let dir = tmpDir.appendingPathComponent("classify-unreadable")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        try writeTrack(speechLike(seconds: 40, seed: 81), to: appURL)
+
+        let verdicts = await h.queue.classifyMicEcho(
+            verdict: .affected,
+            appURL: appURL,
+            micURL: dir.appendingPathComponent("never-written.wav"),
+            micDelay: 0,
+            micSegments: [TimestampedSegment(start: 0, end: 10, text: "x")],
+        )
+        XCTAssertTrue(verdicts.isEmpty)
+    }
+
+    /// Nothing is classified on a recording nobody called affected, and nothing
+    /// on one with no microphone segments. Both are the cheap exits that keep
+    /// the second audio decode off the ordinary path.
+    @MainActor
+    func testClassificationSkipsUnaffectedRecordingsEntirely() async throws {
+        let (h, _) = try makeHarness()
+        let dir = tmpDir.appendingPathComponent("classify-clean")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        let micURL = dir.appendingPathComponent("meeting_mic.wav")
+        let far = speechLike(seconds: 40, seed: 82)
+        try writeTrack(far, to: appURL)
+        try writeTrack(EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5), to: micURL)
+        let segments = [TimestampedSegment(start: 2, end: 30, text: "x")]
+
+        for verdict in [EchoVerdict.clean, .notMeasured] {
+            let out = await h.queue.classifyMicEcho(
+                verdict: verdict, appURL: appURL, micURL: micURL, micDelay: 0, micSegments: segments,
+            )
+            XCTAssertTrue(out.isEmpty, "\(verdict) must not classify anything, even on audio that would light up")
+        }
+        let noSegments = await h.queue.classifyMicEcho(
+            verdict: .affected, appURL: appURL, micURL: micURL, micDelay: 0, micSegments: [],
+        )
+        XCTAssertTrue(noSegments.isEmpty)
+    }
 }
