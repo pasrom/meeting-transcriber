@@ -518,6 +518,10 @@ class PipelineQueue {
     /// Record how many microphone segments the merge left out of the transcript.
     /// Written after the verdict rather than with it: the count only exists once
     /// the segments are known, which is two stages later.
+    /// The optional chain doubles as the guard: segments are only ever
+    /// suppressed on an `.affected` verdict, so a nil `echo` means this count
+    /// belongs to no measurement, and dropping it is more honest than
+    /// inventing a verdict record to hang it on.
     /// Internal (not private) because `PipelineQueue+Stages.swift` calls it.
     func recordSuppressedSegments(jobID: UUID, _ count: Int) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }

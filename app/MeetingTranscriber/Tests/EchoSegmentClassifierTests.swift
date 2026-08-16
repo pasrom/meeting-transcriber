@@ -70,6 +70,35 @@ final class EchoSegmentClassifierTests: XCTestCase {
         )
     }
 
+    /// Double talk with an asymmetry: the far end is loud, the person at the
+    /// machine is soft and only ever speaks while the far end does — the
+    /// interjecting listener. A gain estimate that averages over the whole
+    /// recording absorbs the soft voice into the loudspeaker path: the fitted
+    /// gain comes out a little high, the prediction "explains" the quiet
+    /// voice, and the segment reads as a copy. That deletes the words of
+    /// exactly the participant least able to shout over the far end, so this
+    /// must never be `.echoOnly` however soft the local side is.
+    ///
+    /// The masking is the point of the fixture: a local speaker who also
+    /// talks into the far end's pauses leaves unexplainable energy there and
+    /// is safe under any gain estimate. Only pure double talk exposes the
+    /// bias.
+    func testSoftLocalSpeakerOverTheFarEndIsNeverRemovable() {
+        let app = EchoTestAudio.speechLike(seconds: 30, seed: 12)
+        let echo = EchoTestAudio.bleed(app, delayMs: 15, gain: 0.5)
+        var own = EchoTestAudio.speechLike(seconds: 30, seed: 77)
+        for i in own.indices where echo[i] == 0 {
+            own[i] = 0
+        }
+        let mic = zip(echo, own).map { $0 + 0.3 * $1 }
+
+        let out = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(5, 25)],
+        )
+        XCTAssertNotEqual(out, [.echoOnly], "a soft local speaker is still a speaker, not part of the room path")
+    }
+
     /// Per segment, not per recording: one call has to tell the two apart in the
     /// same pair, which is what a real meeting looks like.
     func testEchoAndOwnVoiceAreSeparatedWithinOneRecording() {
@@ -166,6 +195,35 @@ final class EchoSegmentClassifierTests: XCTestCase {
             micSegments: [seg(5, 30)],
         )
         XCTAssertEqual(informed, [.echoOnly], "told the offset, the same segment is recognised as the copy it is")
+    }
+
+    /// A Bluetooth loudspeaker adds 100–200 ms of path delay that `micDelay`
+    /// knows nothing about — it only says when the files started. The detector
+    /// already measured, per window, at what lag the tracks actually match, so
+    /// the classifier has to take its alignment from that measurement. Blind,
+    /// the copy no longer predicts the microphone and every duplicate is kept;
+    /// informed, the same segment is recognised as the copy it is.
+    func testBluetoothPathDelayComesFromTheDetectorsMeasurement() throws {
+        let app = EchoTestAudio.speechLike(seconds: 40, seed: 23)
+        let mic = EchoTestAudio.bleed(app, delayMs: 150, gain: 0.5)
+        let result = try XCTUnwrap(
+            EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate, micDelay: 0),
+            "the detector has to produce the measurement this test threads through",
+        )
+        XCTAssertTrue(result.isAffected, "the detector's lag search covers the Bluetooth range")
+
+        let blind = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(5, 35)],
+        )
+        XCTAssertNotEqual(blind, [.echoOnly], "150 ms out of alignment, the copy no longer explains the segment")
+
+        let informed = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(5, 35)],
+            windowScores: result.windowScores,
+        )
+        XCTAssertEqual(informed, [.echoOnly], "given the measured lag, the same segment is the copy it is")
     }
 
     /// Attenuation varies with the room, so the decision may not be tuned to one

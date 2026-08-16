@@ -51,12 +51,32 @@ enum EchoSegmentClassifier {
     private static let speechPercentile = 0.90
     private static let activityFraction = 0.10
 
+    /// Where in the sorted per-block mic/app ratios the gain is read. Low,
+    /// because local speech only ever pushes ratios up; high enough that the
+    /// occasional under-shooting block (envelope jitter, segment edges) does
+    /// not set the gain from noise.
+    private static let gainQuantile = 0.2
+    /// Ratios are taken over blocks of this many frames rather than single
+    /// frames. The alignment is whole frames, but the acoustic path adds a
+    /// sub-frame remainder that makes single-frame ratios scatter around the
+    /// true gain — and a low quantile would then read the scatter's floor,
+    /// not the gain. A block absorbs the remainder while staying shorter
+    /// than a syllable pause, so blocks where the echo is alone stay clean.
+    private static let gainBlockFrames = 5
+
+    /// `windowScores` is the detector's own per-window measurement of where
+    /// the two tracks actually match. When present it carries the acoustic
+    /// path delay (a Bluetooth loudspeaker adds 100–200 ms) that `micDelay`
+    /// alone cannot know — `micDelay` only says when the files started, not
+    /// how long the sound took to travel. Empty means nobody measured, and
+    /// the alignment falls back to `micDelay`.
     static func classify(
         app: [Float],
         mic: [Float],
         sampleRate: Int,
         micDelay: TimeInterval,
         micSegments: [TimestampedSegment],
+        windowScores: [EchoBleedDetector.WindowScore] = [],
     ) -> [EchoSegmentVerdict] {
         // One verdict per segment, always. A shorter array would still be safe
         // at today's only call site, which ignores a count that does not match,
@@ -80,7 +100,7 @@ enum EchoSegmentClassifier {
         // and `mergeDualSourceSegments` use. Getting the sign backwards here is
         // invisible: the prediction stops matching, every segment reads as local
         // speech, and nothing is ever dropped.
-        let offset = Int((AudioMixer.clampMicDelay(micDelay) * framesPerSecond).rounded())
+        let offset = Int((alignment(micDelay: micDelay, windowScores: windowScores) * framesPerSecond).rounded())
 
         let path = FittedPath(
             appEnvelope: appEnvelope,
@@ -137,6 +157,27 @@ enum EchoSegmentClassifier {
         }
     }
 
+    /// The mic-to-app alignment in seconds, preferring what was measured over
+    /// what was configured. The detector's affected windows peaked where the
+    /// bleed actually sits, which is the file-start offset plus the acoustic
+    /// path — a Bluetooth speaker's 100–200 ms would otherwise misalign every
+    /// prediction and silently no-op the whole dedup. The median over the hot
+    /// windows, because bleed travels one path and a lone outlier window must
+    /// not steer the alignment. Negated: the detector pairs `app[k]` with
+    /// `mic[k + lag]` while this pairs `mic[i]` with `app[i + offset]`, so the
+    /// two conventions are mirror images. Cold windows are ignored — their
+    /// peak lag is wherever a coincidence put it.
+    static func alignment(
+        micDelay: TimeInterval, windowScores: [EchoBleedDetector.WindowScore],
+    ) -> TimeInterval {
+        let hotLags = windowScores
+            .filter { $0.correlation > EchoBleedDetector.correlationThreshold }
+            .map(\.lagSeconds)
+            .sorted()
+        guard !hotLags.isEmpty else { return AudioMixer.clampMicDelay(micDelay) }
+        return -hotLags[hotLags.count / 2]
+    }
+
     private static func envelope(_ samples: [Float], _ samplesPerFrame: Int) -> [Double] {
         let frames = samples.count / samplesPerFrame
         guard frames > 0 else { return [] }
@@ -157,9 +198,21 @@ enum EchoSegmentClassifier {
         return sorted[index] * activityFraction
     }
 
-    /// Least squares fit of the loudspeaker-to-microphone gain, over the frames
-    /// where the far end is actually playing. One gain for the recording: the
-    /// path is a room, and a room does not change between sentences.
+    /// The loudspeaker-to-microphone gain, read as a low quantile of the
+    /// blockwise mic/app envelope ratios over the stretches where the far end
+    /// is actually playing. One gain for the recording: the path is a room,
+    /// and a room does not change between sentences.
+    ///
+    /// Not a least-squares fit, and the reason is one-sided: local speech
+    /// only ever ADDS energy on top of the copy, so every double-talk frame
+    /// pushes an averaging fit upward, never down. An inflated gain lets the
+    /// prediction "explain" a soft local speaker and read a mixed segment as
+    /// a copy — the one deletion this must never make, and it hits exactly
+    /// the participant least able to talk over the far end. The blocks where
+    /// the echo is alone sit at the true gain, and no amount of talking over
+    /// the other blocks can push a low quantile off them. When the local side
+    /// truly never pauses the estimate still errs high, but no further than
+    /// the fit it replaces.
     ///
     /// Zero when the app track never plays, which makes every prediction zero and
     /// every audible segment local speech. That is not a fallback, it is the
@@ -167,17 +220,37 @@ enum EchoSegmentClassifier {
     private static func estimateGain(
         _ appEnvelope: [Double], _ micEnvelope: [Double], offset: Int, floor: Double,
     ) -> Double {
-        var numerator = 0.0
-        var denominator = 0.0
-        for frame in micEnvelope.indices {
-            let index = frame + offset
-            guard index >= 0, index < appEnvelope.count else { continue }
-            let source = appEnvelope[index]
-            guard source > floor else { continue }
-            numerator += source * micEnvelope[frame]
-            denominator += source * source
+        var ratios: [(ratio: Double, weight: Double)] = []
+        for blockStart in stride(from: 0, to: micEnvelope.count, by: gainBlockFrames) {
+            var appSum = 0.0
+            var micSum = 0.0
+            var counted = 0
+            for frame in blockStart ..< min(blockStart + gainBlockFrames, micEnvelope.count) {
+                let index = frame + offset
+                guard index >= 0, index < appEnvelope.count else { continue }
+                appSum += appEnvelope[index]
+                micSum += micEnvelope[frame]
+                counted += 1
+            }
+            // The same activity floor as elsewhere, scaled to the block: a
+            // block the far end barely reaches carries a ratio of noise.
+            guard counted > 0, appSum > floor * Double(counted) else { continue }
+            ratios.append((ratio: micSum / appSum, weight: appSum))
         }
-        guard denominator > 0 else { return 0 }
-        return numerator / denominator
+        guard !ratios.isEmpty else { return 0 }
+        // Quantile by app energy, not by block count. Blocks on an envelope
+        // ramp under-read the ratio (the acoustic remainder of the delay
+        // dominates when the far end is barely audible), and counting them
+        // like full blocks would hand the quantile to the ramps. Weighting by
+        // how much the far end actually played keeps the estimate with the
+        // evidence.
+        ratios.sort { $0.ratio < $1.ratio }
+        let target = ratios.reduce(0) { $0 + $1.weight } * gainQuantile
+        var cumulative = 0.0
+        for entry in ratios {
+            cumulative += entry.weight
+            if cumulative >= target { return entry.ratio }
+        }
+        return ratios[ratios.count - 1].ratio
     }
 }
