@@ -457,6 +457,10 @@ class MockEngine: TranscribingEngine {
     var transcriptionProgress: Double = 1.0
     var providesTimestamps = true
     var segmentsToReturn: [TimestampedSegment] = []
+    /// Per-track override, keyed on a filename suffix (e.g. "app_16k.wav").
+    /// A dual-source test needs the two tracks to say different things once
+    /// the far end falls silent, which one shared list cannot express.
+    var segmentsByPathSuffix: [String: [TimestampedSegment]] = [:]
     var transcribeCallCount = 0
     var shouldThrow = false
 
@@ -464,10 +468,13 @@ class MockEngine: TranscribingEngine {
         modelState = .loaded
     }
 
-    func transcribeSegments(audioPath _: URL) throws -> [TimestampedSegment] {
+    func transcribeSegments(audioPath: URL) throws -> [TimestampedSegment] {
         transcribeCallCount += 1
         if shouldThrow {
             throw NSError(domain: "MockEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock transcription error"])
+        }
+        if let perTrack = segmentsByPathSuffix.first(where: { audioPath.path.hasSuffix($0.key) }) {
+            return perTrack.value
         }
         return segmentsToReturn
     }

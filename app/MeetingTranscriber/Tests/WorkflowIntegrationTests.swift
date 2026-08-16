@@ -742,13 +742,13 @@ final class WorkflowIntegrationTests: XCTestCase {
         try writeTrack(speechLike(seconds: 40, seed: 31), to: appURL)
 
         let id = UUID()
-        let verdict = await h.queue.warnIfEchoBleed(
+        let analysis = await h.queue.warnIfEchoBleed(
             jobID: id,
             appURL: appURL,
             micURL: dir.appendingPathComponent("never-written.wav"),
             micDelay: 0,
         )
-        XCTAssertEqual(verdict, .notMeasured)
+        XCTAssertEqual(analysis.verdict, .notMeasured)
     }
 
     /// Two tracks at different sample rates are the case that would produce a
@@ -774,10 +774,10 @@ final class WorkflowIntegrationTests: XCTestCase {
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: appURL, micPath: micURL, micDelay: 0,
         ))
-        let verdict = await h.queue.warnIfEchoBleed(
+        let analysis = await h.queue.warnIfEchoBleed(
             jobID: id, appURL: appURL, micURL: micURL, micDelay: 0,
         )
-        XCTAssertEqual(verdict, .notMeasured)
+        XCTAssertEqual(analysis.verdict, .notMeasured)
         XCTAssertNil(
             h.queue.jobs.first?.echo,
             "nothing may be recorded on the job either; a stored verdict here would read as measured",
@@ -847,6 +847,85 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
     }
 
+    /// What the transcripts of an affected recording look like once the far
+    /// end falls silent: the app track has one utterance, the microphone has
+    /// its bleed copy plus the local answer right behind it. The two mic
+    /// segments share a diarized speaker and sit within the merge gap, which
+    /// is the arrangement that folds the suppressed copy into a kept block.
+    private func configureDedupTracks(_ engine: MockEngine) {
+        engine.segmentsByPathSuffix = [
+            "app_16k.wav": [
+                TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+            ],
+            "mic_16k.wav": [
+                TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+                TimestampedSegment(start: 29, end: 58, text: "local sentence"),
+            ],
+        ]
+    }
+
+    /// The same acceptance criterion with diarization on, which is the default.
+    /// Stage 2 re-renders the transcript from the cached segments, and that
+    /// second rendering has to leave the suppressed copies out BEFORE speaker
+    /// blocks are merged — a suppressed segment that merges into an adjacent
+    /// kept block smuggles its text past the final render filter. Otherwise
+    /// the user with default settings gets the duplicates back while the job
+    /// still reports them as removed.
+    @MainActor
+    func testDiarizedTranscriptAlsoWritesTheFarEndOnce() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+        configureDedupTracks(h.engine)
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-diarized"), bleed: true)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        let transcript = try String(
+            contentsOf: XCTUnwrap(h.queue.jobs.first?.transcriptPath), encoding: .utf8,
+        )
+        XCTAssertEqual(
+            transcript.components(separatedBy: "far end talking").count - 1, 1,
+            "the diarized rendering must not reintroduce the suppressed copy, got:\n\(transcript)",
+        )
+        XCTAssertTrue(
+            transcript.contains("local sentence"),
+            "the local speaker still has to survive, got:\n\(transcript)",
+        )
+        XCTAssertEqual(h.queue.jobs.first?.echo?.suppressedSegments, 1)
+    }
+
+    /// The late re-diarization rewrite renders from the persisted segments the
+    /// same way stage 2 does, so it carries the same duty: a re-run after the
+    /// meeting must not resurrect the suppressed copies either.
+    @MainActor
+    func testLateRerunKeepsTheFarEndWrittenOnce() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true)
+        configureDedupTracks(h.engine)
+        var callCount = 0
+        h.queue.speakerNamingHandler = { _ in
+            callCount += 1
+            return callCount == 1 ? .rerun(2) : .skipped
+        }
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-late"), bleed: true)
+
+        h.queue.enqueue(PipelineJob(
+            meetingTitle: "meeting", appName: "File",
+            mixPath: nil, appPath: pair.app, micPath: pair.mic,
+            micDelay: 0,
+        ))
+        await h.queue.processNext()
+        await awaitJobTerminalState(h.queue, timeout: 30)
+
+        XCTAssertEqual(callCount, 2, "the rerun has to actually run the late path")
+        let transcript = try String(
+            contentsOf: XCTUnwrap(h.queue.jobs.first?.transcriptPath), encoding: .utf8,
+        )
+        XCTAssertEqual(
+            transcript.components(separatedBy: "far end talking").count - 1, 1,
+            "the late rewrite must not resurrect the suppressed copy, got:\n\(transcript)",
+        )
+        XCTAssertTrue(transcript.contains("local sentence"))
+    }
+
     /// Off means off. A switch that quietly keeps working is worse than none,
     /// and this one exists precisely for someone who wants the raw two-track
     /// text back, so it has to be provable rather than assumed.
@@ -902,7 +981,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         try writeTrack(speechLike(seconds: 40, seed: 81), to: appURL)
 
         let verdicts = await h.queue.classifyMicEcho(
-            verdict: .affected,
+            analysis: EchoBleedAnalysis(verdict: .affected),
             appURL: appURL,
             micURL: dir.appendingPathComponent("never-written.wav"),
             micDelay: 0,
@@ -928,12 +1007,14 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         for verdict in [EchoVerdict.clean, .notMeasured] {
             let out = await h.queue.classifyMicEcho(
-                verdict: verdict, appURL: appURL, micURL: micURL, micDelay: 0, micSegments: segments,
+                analysis: EchoBleedAnalysis(verdict: verdict),
+                appURL: appURL, micURL: micURL, micDelay: 0, micSegments: segments,
             )
             XCTAssertTrue(out.isEmpty, "\(verdict) must not classify anything, even on audio that would light up")
         }
         let noSegments = await h.queue.classifyMicEcho(
-            verdict: .affected, appURL: appURL, micURL: micURL, micDelay: 0, micSegments: [],
+            analysis: EchoBleedAnalysis(verdict: .affected),
+            appURL: appURL, micURL: micURL, micDelay: 0, micSegments: [],
         )
         XCTAssertTrue(noSegments.isEmpty)
     }
