@@ -2127,7 +2127,6 @@ run_echo_bleed() {
         || fail "$label: affected job carries the verdict but no warning — the menu-bar channel is silent on a recording the API calls affected"
     log "$label: affected pair detected, share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") over $(jq -r '.echo.windowsScored' <<<"$affected_status") windows ✅"
 
-
     # --- clean control ----------------------------------------------------
     local clean_job
     clean_job="$(_eb_enqueue "$label" "$clean_dir" meeting)"
@@ -2190,7 +2189,9 @@ run_echo_bleed() {
     [ -n "$transcript" ] && [ -f "$transcript" ] \
         || fail "$label: finished job has no transcript on disk (transcriptPath=$transcript)"
     local lines
-    lines="$(wc -l < "$transcript" | tr -d ' ')"
+    # awk rather than `wc -l`: saveTranscript writes no trailing newline, so wc
+    # misses the final line and this floor would silently demand three.
+    lines="$(awk 'END { print NR }' "$transcript")"
     [ "${lines:-0}" -ge 2 ] \
         || fail "$label: transcript is down to $lines line(s) after dedup — the local speaker has to survive the far end, not be removed with it"
     log "$label: transcript still carries $lines lines after dedup ✅"

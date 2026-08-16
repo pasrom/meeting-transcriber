@@ -23,6 +23,8 @@ struct AudioSettingsView: View {
 
             VoiceActivityDetectionSection(settings: settings)
 
+            EchoSection(settings: settings)
+
             PerChannelIndicatorSection(settings: settings)
         }
         .formStyle(.grouped)
@@ -49,13 +51,6 @@ private struct VoiceActivityDetectionSection: View {
                 isOn: $settings.vadEnabled,
             )
 
-            HelpfulToggle(
-                title: "Remove echoed remote speech from the transcript",
-                help: SettingsHelp.echoDedup,
-                isOn: $settings.echoDedupEnabled,
-            )
-            .accessibilityIdentifier(A11yID.echoDedupToggle)
-
             if settings.vadEnabled {
                 HStack {
                     Text("Threshold:")
@@ -67,6 +62,26 @@ private struct VoiceActivityDetectionSection: View {
             }
         }
         .accessibilityIdentifier(A11yID.vadSection)
+        .recordOnlyDisabled(settings.recordOnly)
+    }
+}
+
+/// Its own section rather than a row inside the VAD one: the VAD threshold
+/// slider sits directly under whatever shares that section, and a threshold
+/// row reading as if it tuned the echo removal is exactly the knob this
+/// feature refuses to have.
+private struct EchoSection: View {
+    @Bindable var settings: AppSettings
+
+    var body: some View {
+        Section("Echo") {
+            HelpfulToggle(
+                title: "Remove echoed remote speech from the transcript",
+                help: SettingsHelp.echoDedup,
+                isOn: $settings.echoDedupEnabled,
+            )
+            .accessibilityIdentifier(A11yID.echoDedupToggle)
+        }
         .recordOnlyDisabled(settings.recordOnly)
     }
 }
