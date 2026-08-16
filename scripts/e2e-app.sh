@@ -2127,6 +2127,7 @@ run_echo_bleed() {
         || fail "$label: affected job carries the verdict but no warning — the menu-bar channel is silent on a recording the API calls affected"
     log "$label: affected pair detected, share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") over $(jq -r '.echo.windowsScored' <<<"$affected_status") windows ✅"
 
+
     # --- clean control ----------------------------------------------------
     local clean_job
     clean_job="$(_eb_enqueue "$label" "$clean_dir" meeting)"
@@ -2156,6 +2157,43 @@ run_echo_bleed() {
     jq -e '.echo.detected == true' <<<"$final" >/dev/null \
         || fail "$label: the verdict did not survive the job finishing: $(jq -c '.echo' <<<"$final")"
     log "$label: verdict intact on the finished job ✅"
+
+    # The dedup half, asserted here and not next to the verdict above: the
+    # verdict is recorded BEFORE transcription, so at the moment it appears the
+    # merge that suppresses anything has not run yet and the count is still 0.
+    # Reading it there passed against a working build and would have passed
+    # against a broken one too.
+    #
+    # On the count rather than on transcript text: what the engine makes of a
+    # bleed copy is not stable enough to grep for, while "how many microphone
+    # segments were left out" is exactly the effect, and it is the number a fleet
+    # caller reads.
+    jq -e '.echo.suppressedSegments >= 1' <<<"$final" >/dev/null \
+        || fail "$label: affected pair had nothing suppressed. Its microphone track IS the app track, so every microphone segment is a duplicate: $(jq -c '.echo' <<<"$final")"
+    log "$label: $(jq -r '.echo.suppressedSegments' <<<"$final") microphone segment(s) left out of the transcript ✅"
+
+    # The control that stops this from being "drop the microphone track". Without
+    # it the lane passes against a build that removes the user's own words from
+    # every recording and still leaves a plausible transcript behind.
+    local clean_final
+    clean_final="$(rpc "/v1/jobs/$clean_job")"
+    jq -e '(.echo.suppressedSegments // 0) == 0' <<<"$clean_final" >/dev/null \
+        || fail "$label: clean control had $(jq -r '.echo.suppressedSegments' <<<"$clean_final") segment(s) removed. Nothing may be dropped from a recording without bleed: $(jq -c '.echo' <<<"$clean_final")"
+    log "$label: clean control kept every microphone segment ✅"
+
+    # The acceptance criterion, stated as plainly as a driver can state it: the
+    # transcript still has to say something. Removing duplicates and removing the
+    # meeting look identical in every count asserted above, and this pair carries
+    # a local speaker the far end never played.
+    local transcript
+    transcript="$(jq -r '.transcriptPath // empty' <<<"$final")"
+    [ -n "$transcript" ] && [ -f "$transcript" ] \
+        || fail "$label: finished job has no transcript on disk (transcriptPath=$transcript)"
+    local lines
+    lines="$(wc -l < "$transcript" | tr -d ' ')"
+    [ "${lines:-0}" -ge 2 ] \
+        || fail "$label: transcript is down to $lines line(s) after dedup — the local speaker has to survive the far end, not be removed with it"
+    log "$label: transcript still carries $lines lines after dedup ✅"
     log "$label: PASS"
 }
 
