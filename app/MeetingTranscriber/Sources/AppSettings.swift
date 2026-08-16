@@ -291,6 +291,18 @@ final class AppSettings {
         didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
     }
 
+    /// Leave the far end out of the transcript when the microphone only picked
+    /// it up from the loudspeaker.
+    ///
+    /// On by default because duplicated remote speech is wrong output rather
+    /// than a missing feature: this repairs a defect, so the repair is the
+    /// normal state. The switch exists because the repair removes lines, and
+    /// anyone who wants the raw two-track text should be able to have it back
+    /// without editing a plist.
+    var echoDedupEnabled: Bool {
+        didSet { defaults.set(echoDedupEnabled, forKey: "echoDedupEnabled") }
+    }
+
     var diarizerMode: DiarizerMode {
         didSet { defaults.set(diarizerMode.rawValue, forKey: "diarizerMode") }
     }
@@ -483,6 +495,7 @@ final class AppSettings {
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
+        echoDedupEnabled = defaults.object(forKey: "echoDedupEnabled") as? Bool ?? true
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
         numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0

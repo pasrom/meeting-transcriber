@@ -49,6 +49,13 @@ private struct VoiceActivityDetectionSection: View {
                 isOn: $settings.vadEnabled,
             )
 
+            HelpfulToggle(
+                title: "Remove echoed remote speech from the transcript",
+                help: SettingsHelp.echoDedup,
+                isOn: $settings.echoDedupEnabled,
+            )
+            .accessibilityIdentifier(A11yID.echoDedupToggle)
+
             if settings.vadEnabled {
                 HStack {
                     Text("Threshold:")

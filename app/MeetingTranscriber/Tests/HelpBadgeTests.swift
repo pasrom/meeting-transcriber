@@ -132,25 +132,34 @@ final class HelpBadgeTests: XCTestCase {
         XCTAssertFalse(SettingsHelp.vad.isEmpty)
         XCTAssertFalse(SettingsHelp.silentCaptureChannel.isEmpty)
         XCTAssertFalse(SettingsHelp.asymmetricSilenceWarning.isEmpty)
+        XCTAssertFalse(SettingsHelp.echoDedup.isEmpty)
     }
 
     // MARK: - Adoption in AudioSettingsView (issue #505)
 
-    /// VAD toggle + Detect Silent Capture Channel toggle + Warn-after row each
-    /// carry a clickable info badge. All three rows are visible with defaults
-    /// (perChannelIndicatorEnabled defaults to true → warn-after row shown).
+    /// VAD toggle + echo-dedup toggle + Detect Silent Capture Channel toggle +
+    /// Warn-after row each carry a clickable info badge. All four rows are
+    /// visible with defaults (perChannelIndicatorEnabled defaults to true →
+    /// warn-after row shown).
     func testAudioTabShowsHelpBadgesForNamedOptions() throws {
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = true
-        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 3)
+        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 4)
     }
 
     /// The warn-after badge lives on the conditional slider row, so it drops
     /// out with the row when per-channel detection is off.
+    ///
+    /// Asserted as a difference of exactly one rather than an absolute count:
+    /// the claim is about that row disappearing, and pinning the total made
+    /// this test fail for the unrelated reason that the tab gained an option.
     func testWarnAfterHelpBadgeHiddenWhenDetectionOff() throws {
         let settings = AppSettings(defaults: defaults)
+        settings.perChannelIndicatorEnabled = true
+        let shown = try infoBadgeCount(in: AudioSettingsView(settings: settings))
         settings.perChannelIndicatorEnabled = false
-        XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 2)
+        let hidden = try infoBadgeCount(in: AudioSettingsView(settings: settings))
+        XCTAssertEqual(hidden, shown - 1)
     }
 
     /// Each option must carry ITS help string (not merely some badge), so a

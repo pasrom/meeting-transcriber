@@ -261,7 +261,20 @@ extension PipelineQueue {
         let suppressed = segments.count { $0.suppressed }
         if suppressed > 0 {
             recordSuppressedSegments(jobID: ctx.jobID, suppressed)
-            logger.info("echo_dedup suppressed=\(suppressed, privacy: .public) of=\(micSegments.count, privacy: .public) microphone segments")
+        }
+        if !micEchoVerdicts.isEmpty {
+            // The whole distribution, not just the count that was acted on. The
+            // threshold between "copy" and "someone spoke" is the one number a
+            // field report will dispute ("it deleted my sentence"), and without
+            // seeing how the segments fell there is nothing to reason from.
+            // Numbers only: no audio, no transcript, nothing said.
+            let kept = micEchoVerdicts.count { $0 == .ownVoice }
+            let mixed = micEchoVerdicts.count { $0 == .mixed }
+            let unknown = micEchoVerdicts.count { $0 == .undecided }
+            logger
+                .info(
+                    "echo_dedup suppressed=\(suppressed, privacy: .public) mixed=\(mixed, privacy: .public) own=\(kept, privacy: .public) undecided=\(unknown, privacy: .public) of=\(micSegments.count, privacy: .public)",
+                )
         }
         return segments
     }

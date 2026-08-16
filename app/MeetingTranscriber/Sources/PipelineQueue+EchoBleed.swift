@@ -116,7 +116,7 @@ extension PipelineQueue {
         micDelay: TimeInterval,
         micSegments: [TimestampedSegment],
     ) async -> [EchoSegmentVerdict] {
-        guard verdict == .affected, !micSegments.isEmpty else { return [] }
+        guard echoDedupEnabled, verdict == .affected, !micSegments.isEmpty else { return [] }
         let delay = AudioMixer.clampMicDelay(micDelay)
         return await Task.detached(priority: .utility) { () -> [EchoSegmentVerdict] in
             let analysed = Self.echoBleedAnalysisSeconds

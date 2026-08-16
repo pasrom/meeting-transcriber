@@ -31,6 +31,7 @@ final class WorkflowIntegrationTests: XCTestCase {
     private func makeHarness(
         diarizeEnabled: Bool = false,
         stagingDir: URL? = nil,
+        echoDedupEnabled: Bool = true,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -60,6 +61,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             logDir: tmpDir,
             stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: diarizeEnabled,
+            echoDedupEnabled: echoDedupEnabled,
             micLabel: "Me",
         )
 
@@ -843,6 +845,28 @@ final class WorkflowIntegrationTests: XCTestCase {
             h.queue.jobs.first?.echo?.suppressedSegments, 1,
             "the count is the only machine-readable evidence that anything was removed",
         )
+    }
+
+    /// Off means off. A switch that quietly keeps working is worse than none,
+    /// and this one exists precisely for someone who wants the raw two-track
+    /// text back, so it has to be provable rather than assumed.
+    @MainActor
+    func testDedupSwitchedOffKeepsTheDuplicates() async throws {
+        let (h, _) = try makeHarness(echoDedupEnabled: false)
+        h.engine.segmentsToReturn = [
+            TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+            TimestampedSegment(start: 32, end: 58, text: "local sentence"),
+        ]
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-off"), bleed: true)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        let transcript = try String(
+            contentsOf: XCTUnwrap(h.queue.jobs.first?.transcriptPath), encoding: .utf8,
+        )
+        XCTAssertEqual(h.queue.jobs.first?.echo?.detected, true, "the warning still fires; only the removal is off")
+        XCTAssertEqual(micLines(transcript).count, 2, "with dedup off the second copy has to stay")
+        XCTAssertEqual(h.queue.jobs.first?.echo?.suppressedSegments, 0)
     }
 
     /// The control that stops the feature from being a plain "drop the mic
