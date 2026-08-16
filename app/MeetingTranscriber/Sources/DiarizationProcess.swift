@@ -69,14 +69,7 @@ enum DiarizationProcess {
         }
 
         if micDelay != 0 {
-            mic = mic.map { seg in
-                TimestampedSegment(
-                    start: seg.start + micDelay,
-                    end: seg.end + micDelay,
-                    text: seg.text,
-                    speaker: seg.speaker,
-                )
-            }
+            mic = mic.map { $0.shifted(by: micDelay) }
         }
 
         for i in app.indices {
@@ -260,12 +253,13 @@ enum DiarizationProcess {
         for seg in segments.dropFirst() {
             let silenceGap = seg.start - current.end
             if seg.speaker == current.speaker, silenceGap <= mergeGapThreshold {
-                current = TimestampedSegment(
-                    start: current.start,
-                    end: seg.end,
-                    text: "\(current.text) \(seg.text)",
-                    speaker: current.speaker,
-                )
+                // Extends the running block in place rather than rebuilding it,
+                // so fields the merge has no business changing stay what they
+                // were. Callers must drop suppressed segments before merging:
+                // once two segments are one block, no flag can separate their
+                // texts again.
+                current.end = seg.end
+                current.text = "\(current.text) \(seg.text)"
             } else {
                 merged.append(current)
                 current = seg

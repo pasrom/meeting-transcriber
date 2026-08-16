@@ -8,10 +8,17 @@ import WhisperKit
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WhisperKitEngine")
 
 /// A transcribed segment with timestamps and optional speaker label.
+///
+/// Every field is `var` on purpose: downstream passes (delay shift, VAD
+/// remap, block merge) adjust one or two fields on an existing value, and
+/// copy-and-mutate is what keeps the fields they do NOT touch. A memberwise
+/// rebuild instead silently resets whatever it forgot to pass — that is how
+/// the delay shift once dropped `suppressed` and reintroduced the very
+/// duplicates it marks (issue #581).
 struct TimestampedSegment: Codable {
-    let start: TimeInterval // seconds
-    let end: TimeInterval // seconds
-    let text: String
+    var start: TimeInterval // seconds
+    var end: TimeInterval // seconds
+    var text: String
     var speaker: String = ""
     /// Set when this microphone segment is the loudspeaker output coming back
     /// through the microphone, i.e. a second copy of something the app track
@@ -53,6 +60,17 @@ extension [TimestampedSegment] {
 }
 
 extension TimestampedSegment {
+    /// A copy moved by `offset` seconds. The one sanctioned way to put a
+    /// segment on a different timeline: it touches nothing but the two
+    /// timestamps, so a field added to the type later travels along instead
+    /// of resetting to its default.
+    func shifted(by offset: TimeInterval) -> TimestampedSegment {
+        var copy = self
+        copy.start += offset
+        copy.end += offset
+        return copy
+    }
+
     /// Format timestamp as [MM:SS] or [H:MM:SS] for long recordings.
     var formattedTimestamp: String {
         let total = Int(start)
