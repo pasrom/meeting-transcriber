@@ -781,4 +781,87 @@ final class WorkflowIntegrationTests: XCTestCase {
             "nothing may be recorded on the job either; a stored verdict here would read as measured",
         )
     }
+
+    // MARK: - Dedup: the far end appears once, the local speaker survives
+
+    /// Builds a pair whose first half is nothing but the loudspeaker coming back
+    /// and whose second half is the person at the machine talking into a silent
+    /// far end. The mock engine returns the same two segments for both tracks,
+    /// which is exactly the duplication a real bleed produces.
+    private func writeDedupPair(_ dir: URL, bleed: Bool) throws -> (app: URL, mic: URL) {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let rate = EchoTestAudio.rate
+        var far = speechLike(seconds: 60, seed: 71)
+        // Far end silent for the second half, so the local half cannot be echo.
+        for i in (30 * rate) ..< far.count {
+            far[i] = 0
+        }
+
+        var mic = bleed
+            ? EchoTestAudio.bleed(far, delayMs: 15, gain: 0.5)
+            : speechLike(seconds: 60, seed: 72)
+        let local = speechLike(seconds: 60, seed: 73)
+        for i in (30 * rate) ..< mic.count {
+            mic[i] = local[i]
+        }
+
+        let appURL = dir.appendingPathComponent("meeting_app.wav")
+        let micURL = dir.appendingPathComponent("meeting_mic.wav")
+        try writeTrack(far, to: appURL)
+        try writeTrack(mic, to: micURL)
+        return (appURL, micURL)
+    }
+
+    private func micLines(_ transcript: String) -> [String] {
+        transcript.split(separator: "\n").map(String.init).filter { $0.contains("] Me:") }
+    }
+
+    /// The acceptance criterion for the whole feature: a unique sentence spoken
+    /// locally has to survive while the far end is running, and the far end's
+    /// own words must stop appearing twice.
+    @MainActor
+    func testBleedIsWrittenOnceAndLocalSpeechSurvives() async throws {
+        let (h, _) = try makeHarness()
+        h.engine.segmentsToReturn = [
+            TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+            TimestampedSegment(start: 32, end: 58, text: "local sentence"),
+        ]
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-bleed"), bleed: true)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        let transcript = try String(
+            contentsOf: XCTUnwrap(h.queue.jobs.first?.transcriptPath), encoding: .utf8,
+        )
+        let kept = micLines(transcript)
+        XCTAssertEqual(kept.count, 1, "the echoed half must not be written a second time, got:\n\(transcript)")
+        XCTAssertTrue(
+            kept.first?.contains("local sentence") ?? false,
+            "the surviving microphone line must be the one nobody played, got: \(kept)",
+        )
+        XCTAssertEqual(
+            h.queue.jobs.first?.echo?.suppressedSegments, 1,
+            "the count is the only machine-readable evidence that anything was removed",
+        )
+    }
+
+    /// The control that stops the feature from being a plain "drop the mic
+    /// track": two people on separate devices keep every word they said.
+    @MainActor
+    func testIndependentTracksKeepEveryMicrophoneLine() async throws {
+        let (h, _) = try makeHarness()
+        h.engine.segmentsToReturn = [
+            TimestampedSegment(start: 2, end: 28, text: "far end talking"),
+            TimestampedSegment(start: 32, end: 58, text: "local sentence"),
+        ]
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("dedup-clean"), bleed: false)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        let transcript = try String(
+            contentsOf: XCTUnwrap(h.queue.jobs.first?.transcriptPath), encoding: .utf8,
+        )
+        XCTAssertEqual(h.queue.jobs.first?.echo?.detected, false, "the control must be measured and found clean")
+        XCTAssertEqual(micLines(transcript).count, 2, "nothing may be removed from a recording without bleed")
+    }
 }

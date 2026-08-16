@@ -510,6 +510,15 @@ class PipelineQueue {
         jobs[index].echo = verdict
     }
 
+    /// Record how many microphone segments the merge left out of the transcript.
+    /// Written after the verdict rather than with it: the count only exists once
+    /// the segments are known, which is two stages later.
+    /// Internal (not private) because `PipelineQueue+Stages.swift` calls it.
+    func recordSuppressedSegments(jobID: UUID, _ count: Int) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].echo?.suppressedSegments = count
+    }
+
     /// Reset the elapsed timer for a new pipeline stage.
     /// Internal (not private) because the stage methods in PipelineQueue+Stages.swift call it.
     func startElapsedTimer() {

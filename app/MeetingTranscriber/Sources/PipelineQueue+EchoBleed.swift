@@ -96,6 +96,43 @@ extension PipelineQueue {
         return .affected
     }
 
+    /// Per microphone segment: is it the loudspeaker coming back?
+    ///
+    /// Only runs on a recording the detector already called affected. Removing
+    /// transcript lines is a visible edit, so it is tied to the verdict the user
+    /// was told about rather than applied on any recording that happens to
+    /// correlate. The known cost: a recording too short for a verdict keeps its
+    /// duplicates, which is the same span where the warning stays silent.
+    ///
+    /// Loads the two tracks a second time rather than sharing the detector's
+    /// copy. The stage it sits in runs two Whisper passes, so a bounded decode
+    /// beside them does not register, and threading megabytes of samples from a
+    /// detached task through the actor to keep them alive would cost more than
+    /// it saves.
+    func classifyMicEcho(
+        verdict: EchoVerdict,
+        appURL: URL,
+        micURL: URL,
+        micDelay: TimeInterval,
+        micSegments: [TimestampedSegment],
+    ) async -> [EchoSegmentVerdict] {
+        guard verdict == .affected, !micSegments.isEmpty else { return [] }
+        let delay = AudioMixer.clampMicDelay(micDelay)
+        return await Task.detached(priority: .utility) { () -> [EchoSegmentVerdict] in
+            let analysed = Self.echoBleedAnalysisSeconds
+            guard let (app, appRate) = Self.loadBounded(appURL, maxSeconds: analysed),
+                  let (mic, micRate) = Self.loadBounded(micURL, maxSeconds: analysed),
+                  appRate == micRate
+            else {
+                logger.warning("echo_dedup skipped: tracks unreadable or at different rates")
+                return []
+            }
+            return EchoSegmentClassifier.classify(
+                app: app, mic: mic, sampleRate: appRate, micDelay: delay, micSegments: micSegments,
+            )
+        }.value
+    }
+
     /// Renders the per-window series as `corr@lagms` pairs, e.g.
     /// `0.79@20 0.83@20 0.87@10`. Compact on purpose: this goes out on every
     /// dual-source job, and a long recording has dozens of windows.

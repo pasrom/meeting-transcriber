@@ -43,14 +43,30 @@ enum DiarizationProcess {
     /// time. Pure timestamp math over transcript segments — lives here next to
     /// the diarization assignment that reads `remoteSpeakerLabel` back, rather
     /// than on the engine protocol (the engine doesn't care about speaker tags).
+    ///
+    /// `micEchoVerdicts`, when supplied, is one verdict per element of
+    /// `micSegments` from `EchoSegmentClassifier`. Segments it calls
+    /// `.echoOnly` are the loudspeaker coming back and are marked suppressed, so
+    /// the rendered transcript carries the far end once instead of twice. An
+    /// empty array means nobody measured, which is not the same as nothing to
+    /// remove: it leaves every segment exactly as it was before this existed.
+    /// A short array is treated the same way, because a mismatched count means
+    /// the verdicts belong to different segments than these.
     static func mergeDualSourceSegments(
         appSegments: [TimestampedSegment],
         micSegments: [TimestampedSegment],
         micDelay: TimeInterval = 0,
         micLabel: String = "Me",
+        micEchoVerdicts: [EchoSegmentVerdict] = [],
     ) -> [TimestampedSegment] {
         var app = appSegments
         var mic = micSegments
+
+        if micEchoVerdicts.count == mic.count {
+            for i in mic.indices where micEchoVerdicts[i] == .echoOnly {
+                mic[i].suppressed = true
+            }
+        }
 
         if micDelay != 0 {
             mic = mic.map { seg in
