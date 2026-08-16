@@ -51,6 +51,23 @@ enum EchoSegmentClassifier {
     private static let speechPercentile = 0.90
     private static let activityFraction = 0.10
 
+    /// Longest segment that may be called a copy. A verdict pools amplitude
+    /// over the whole segment, so the longer it is, the smaller the share a
+    /// local utterance inside it contributes and the more certainly it is
+    /// averaged away. Past this length the number stops being a statement about
+    /// the segment.
+    ///
+    /// Anchored on the detector's own minimum evidence span rather than picked:
+    /// a segment longer than everything the detector needs to reach a verdict at
+    /// all cannot be localised by one pooled residual.
+    ///
+    /// This is not a theoretical bound. `ParakeetEngine.transcribeSegments`
+    /// emits a SINGLE segment spanning the entire recording when the model
+    /// returns no per-token timings, and removing that would delete everything
+    /// the local person said for the whole meeting.
+    static let maxRemovableSegmentSeconds =
+        EchoBleedDetector.windowSeconds * Double(EchoBleedDetector.minScoredWindows)
+
     /// Where in the sorted per-block mic/app ratios the gain is read. Low,
     /// because local speech only ever pushes ratios up; high enough that the
     /// occasional under-shooting block (envelope jitter, segment edges) does
@@ -151,7 +168,13 @@ enum EchoSegmentClassifier {
             guard micEnergy / Double(last - first) > micFloor else { return .undecided }
 
             let residual = (micEnergy - explained) / micEnergy
-            if residual <= echoResidualCeiling { return .echoOnly }
+            if residual <= echoResidualCeiling {
+                // Explained, but only removable if the segment is short enough
+                // for that to mean something. Reported as mixed rather than
+                // undecided: the far end demonstrably IS in here, we just
+                // cannot say it is all that is.
+                return segment.end - segment.start <= maxRemovableSegmentSeconds ? .echoOnly : .mixed
+            }
             if residual >= ownVoiceResidualFloor { return .ownVoice }
             return .mixed
         }

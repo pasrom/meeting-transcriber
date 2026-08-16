@@ -259,4 +259,38 @@ final class EchoSegmentClassifierTests: XCTestCase {
         )
         XCTAssertEqual(out, [.undecided])
     }
+
+    /// A whole recording arriving as ONE segment is not hypothetical: when
+    /// Parakeet gets no per-token timings it emits exactly that, a single
+    /// segment spanning the full duration. Pooled over minutes the verdict says
+    /// nothing about any moment in it, and calling it a copy would delete
+    /// everything the local person said for the whole meeting.
+    ///
+    /// The recording here is pure bleed, so the residual really is near zero.
+    /// The point is that the answer must still not be "removable": below some
+    /// length the pooled number stops being a statement about a segment.
+    func testASegmentSpanningTheWholeRecordingIsNeverRemovable() {
+        let app = EchoTestAudio.speechLike(seconds: 120, seed: 31)
+        let mic = EchoTestAudio.bleed(app, delayMs: 15, gain: 0.5)
+
+        let out = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(0, 120)],
+        )
+        XCTAssertNotEqual(out, [.echoOnly], "a two-minute segment pools away any local speech inside it")
+    }
+
+    /// The guard must not swallow ordinary segments. Engines emit seconds, not
+    /// minutes, and those still have to be removable or the feature does
+    /// nothing.
+    func testOrdinarySegmentLengthsAreStillRemovable() {
+        let app = EchoTestAudio.speechLike(seconds: 120, seed: 32)
+        let mic = EchoTestAudio.bleed(app, delayMs: 15, gain: 0.5)
+
+        let out = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(10, 18), seg(40, 65)],
+        )
+        XCTAssertEqual(out, [.echoOnly, .echoOnly])
+    }
 }
