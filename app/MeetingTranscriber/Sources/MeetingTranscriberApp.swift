@@ -108,6 +108,9 @@ struct MeetingTranscriberApp: App {
                 updateChecker: appState.updateChecker,
                 onStartStop: { appState.watching.toggleWatching() },
                 onRecordApp: { bringWindowToFront(id: "record-app") },
+                onRecordMicrophone: { appState.watching.startMicrophoneRecording() },
+                noMic: appState.settings.noMic,
+                manualRecordingPendingOrActive: appState.watching.isManualRecording,
                 onStopManualRecording: appState.isManualRecording ? {
                     appState.watching.stopManualRecording()
                 } : nil,

@@ -6,6 +6,7 @@ final class ManualRecordingTests: XCTestCase {
     private func makeLoop(
         recorder: MockRecorder? = nil,
         pipelineQueue: PipelineQueue? = nil,
+        noMic: Bool = false,
     ) -> (WatchLoop, MockRecorder) {
         let mock = recorder ?? MockRecorder()
         mock.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
@@ -15,6 +16,7 @@ final class ManualRecordingTests: XCTestCase {
             pipelineQueue: pipelineQueue,
             pollInterval: 0.05,
             maxDuration: 10,
+            noMic: noMic,
         )
         loop.permissionChecker = {
             HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
@@ -149,17 +151,9 @@ final class ManualRecordingTests: XCTestCase {
     func testStartMicrophoneRecordingIgnoresTheNoMicSetting() async throws {
         // `noMic` governs whether an *app* recording also takes the mic. It must
         // not be able to turn the microphone entry point into a recording of
-        // nothing; the menu keeps the item out of reach instead.
-        let mock = MockRecorder()
-        mock.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
-        let loop = WatchLoop(
-            detector: MeetingDetector(patterns: AppMeetingPattern.all),
-            recorderFactory: { mock },
-            pollInterval: 0.05,
-            maxDuration: 10,
-            noMic: true,
-        )
-        loop.permissionChecker = { HealthCheckResult(screenRecording: .healthy, microphone: .healthy) }
+        // nothing. Refusing the request belongs to `WatchingController`, which
+        // can say so; by the time the loop is asked, the answer is the mic.
+        let (loop, mock) = makeLoop(noMic: true)
 
         try await loop.startMicrophoneRecording()
         defer { loop.stop() }

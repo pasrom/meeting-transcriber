@@ -7,6 +7,16 @@ struct MenuBarView: View {
     var updateChecker: UpdateChecker?
     let onStartStop: () -> Void
     let onRecordApp: () -> Void
+    let onRecordMicrophone: () -> Void
+    /// Whether the user set "No Microphone (app audio only)". Only reaches the
+    /// microphone item, which it disables with a reason.
+    let noMic: Bool
+    /// The *wide* predicate: a manual recording that is running, or a start that
+    /// has registered and not yet built its loop. `state == .recording` misses
+    /// that second window, and the microphone item would sit enabled through it
+    /// handing back a dead click, which is what `AppPickerStartState` was built
+    /// to avoid on the picker.
+    let manualRecordingPendingOrActive: Bool
     let onStopManualRecording: (() -> Void)?
     let onOpenLastProtocol: () -> Void
     let onOpenProtocol: (URL) -> Void
@@ -19,6 +29,22 @@ struct MenuBarView: View {
 
     private var state: TranscriberState {
         status?.state ?? .idle
+    }
+
+    private var microphoneAvailability: MicrophoneRecordingAvailability {
+        .resolve(
+            isRecording: manualRecordingPendingOrActive || state == .recording,
+            noMic: noMic,
+        )
+    }
+
+    /// Hoisted out of the `ViewBuilder`: an `Optional.map` returning an
+    /// interpolated string, coalesced with `??`, inside an overloaded `Text`
+    /// initializer is the exact shape that blew the 300 ms type-check budget in
+    /// this file before (see the note on `body`).
+    private func meetingLabel(_ meeting: MeetingInfo) -> String {
+        guard let pid = meeting.pid else { return meeting.app }
+        return "\(meeting.app) (PID \(pid))"
     }
 
     // The sections below are hoisted out of `body` into separate computed
@@ -76,7 +102,7 @@ struct MenuBarView: View {
                     .fontWeight(.medium)
                 // A microphone-only recording owns no process, so there is no
                 // PID to show and a placeholder would only read as a real one.
-                Text(meeting.pid.map { "\(meeting.app) (PID \($0))" } ?? meeting.app)
+                Text(meetingLabel(meeting))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -114,6 +140,15 @@ struct MenuBarView: View {
             }
             .keyboardShortcut(".")
         } else if state != .recording {
+            Button {
+                onRecordMicrophone()
+            } label: {
+                Label("Record Microphone", systemImage: "mic.circle")
+            }
+            .keyboardShortcut("m")
+            .disabled(!microphoneAvailability.allowsStart)
+            .help(microphoneAvailability.disabledReason ?? "Record the system microphone, with no app audio")
+
             Button {
                 onRecordApp()
             } label: {

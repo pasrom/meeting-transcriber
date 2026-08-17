@@ -18,6 +18,40 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         try await super.tearDown()
     }
 
+    /// The "No Microphone (app audio only)" setting has to be enforced here,
+    /// not only by the menu item's `.disabled`. A disabled control is an
+    /// explanation, never an enforcement: the automation API reaches this same
+    /// method, and without the guard it would record the one thing that setting
+    /// exists to keep off tape.
+    func testMicrophoneRecordingIsRefusedWhenTheUserTurnedTheMicrophoneOff() async {
+        let controller = WatchingControllerFactory.make(logDir: tmpDir, noMic: true)
+
+        controller.startMicrophoneRecording()
+
+        // A start that was not refused builds its loop within a few main-actor
+        // hops; nothing to await here, so give it those hops before asserting.
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        XCTAssertNil(controller.watchLoop, "no recording may begin while the microphone is switched off")
+        XCTAssertFalse(controller.isManualRecording)
+    }
+
+    func testMicrophoneRecordingStartsWhenTheMicrophoneIsAllowed() async {
+        // Control for the refusal above: without it a method that never starts
+        // anything would pass just as well.
+        let controller = WatchingControllerFactory.make(logDir: tmpDir, noMic: false)
+        addTeardownBlock { await controller.stopManualRecording() }
+
+        controller.startMicrophoneRecording()
+        for _ in 0 ..< 20 {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(controller.isManualRecording)
+    }
+
     /// Issue #624: a second manual start while one is already recording used to
     /// overwrite `watchLoop` without stopping the live loop, so its audio was
     /// never enqueued while its recorder kept capturing, retained by its own

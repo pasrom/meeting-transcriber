@@ -385,6 +385,29 @@ final class WatchingController {
     }
 
     func startManualRecording(pid: pid_t, appName: String, title: String) {
+        beginManualRecording(.app(pid: pid, appName: appName, title: title))
+    }
+
+    /// Record the system microphone with no app audio, for a meeting happening
+    /// in the room (issue #633). Same ownership rules as the app path.
+    ///
+    /// Refused outright while "No Microphone (app audio only)" is set. The menu
+    /// disables the item for the same reason, but a disabled control cannot be
+    /// the enforcement: every other entry point onto this path (the automation
+    /// API, a future shortcut) would otherwise record the one thing that setting
+    /// exists to keep off tape, with no compile error and nothing failing.
+    func startMicrophoneRecording() {
+        guard !settings.noMic else {
+            notifier.notify(
+                title: "Microphone Recording Refused",
+                body: MicrophoneRecordingAvailability.blockedByNoMicSetting.disabledReason ?? "",
+            )
+            return
+        }
+        beginManualRecording(.microphone)
+    }
+
+    private func beginManualRecording(_ request: ManualRecordingRequest) {
         // `toggleWatching`'s counterpart. The correctness added here rests on
         // `manualStartTask` being accurate, and without this a second start
         // replaces the field while the first is still in flight, whose `defer`
@@ -399,13 +422,13 @@ final class WatchingController {
         guard watchLoop?.isManualRecording != true else { return }
         manualStartTask = Task { @MainActor in
             defer { manualStartTask = nil }
-            await performManualRecording(pid: pid, appName: appName, title: title)
+            await performManualRecording(request)
         }
     }
 
-    /// Body of `startManualRecording`, split out so the task closure stays a
+    /// Body of `beginManualRecording`, split out so the task closure stays a
     /// two-liner and the work is readable on its own.
-    private func performManualRecording(pid: pid_t, appName: String, title: String) async {
+    private func performManualRecording(_ request: ManualRecordingRequest) async {
         // Settle an auto start before reading `watchLoop`. Mid-flight it is
         // still nil, so the stop below would find nothing and the auto task
         // would later assign over the manual loop, orphaning a live recording
@@ -457,10 +480,20 @@ final class WatchingController {
         }
 
         do {
-            try await loop.startManualRecording(pid: pid, appName: appName, title: title)
+            switch request {
+            case let .app(pid, appName, title):
+                try await loop.startManualRecording(pid: pid, appName: appName, title: title)
+
+            case .microphone:
+                try await loop.startMicrophoneRecording()
+            }
+            // Read the title back off the loop rather than re-deriving it here:
+            // the loop stamps it into `manualRecordingInfo`, and that is the
+            // same value the job and the record-only sidecar get, so the
+            // notification cannot end up naming the recording something else.
             notifier.notify(
                 title: "Manual Recording",
-                body: "Recording: \(title)",
+                body: "Recording: \(loop.manualRecordingInfo?.title ?? "")",
             )
         } catch {
             notifier.notify(title: "Error", body: error.localizedDescription)

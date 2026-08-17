@@ -16,11 +16,13 @@ enum WatchingControllerFactory {
         requestScreenRecording: @escaping () -> Void = {},
         requestAccessibility: @escaping () -> Void = {},
         watchTeams: Bool = true,
+        noMic: Bool = false,
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
     ) -> WatchingController {
         let settings = AppSettings()
         settings.watchTeams = watchTeams
+        settings.noMic = noMic
         let notifier = RecordingNotifier()
         let pipeline = PipelineController(settings: settings, notifier: notifier)
         pipeline.queue = PipelineQueue(logDir: logDir)

@@ -36,6 +36,9 @@ final class MenuBarViewTests: XCTestCase {
         updateChecker: UpdateChecker? = nil,
         onNameSpeakers: (() -> Void)? = nil,
         onStopManualRecording: (() -> Void)? = nil,
+        onRecordMicrophone: @escaping () -> Void = {},
+        noMic: Bool = false,
+        manualRecordingPendingOrActive: Bool = false,
     ) -> MenuBarView {
         MenuBarView(
             status: status,
@@ -44,6 +47,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: updateChecker,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: onRecordMicrophone,
+            noMic: noMic,
+            manualRecordingPendingOrActive: manualRecordingPendingOrActive,
             onStopManualRecording: onStopManualRecording,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -162,6 +168,60 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Quit"))
     }
 
+    // MARK: - Record Microphone (issue #633)
+
+    func testRecordMicrophoneButtonShownWhenIdle() throws {
+        let sut = makeView(status: makeStatus(state: .idle))
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(button: "Record Microphone"))
+    }
+
+    func testRecordMicrophoneButtonCallsCallback() throws {
+        var called = false
+        // swiftlint:disable:next trailing_closure
+        let sut = makeView(status: makeStatus(state: .idle), onRecordMicrophone: { called = true })
+
+        try sut.inspect().find(button: "Record Microphone").tap()
+
+        XCTAssertTrue(called)
+    }
+
+    func testRecordMicrophoneButtonHiddenWhileRecording() throws {
+        // Same rule as Record App...: the menu offers Stop Recording instead.
+        let sut = makeView(status: makeStatus(state: .recording))
+        let body = try sut.inspect()
+        XCTAssertThrowsError(try body.find(button: "Record Microphone"))
+    }
+
+    func testRecordMicrophoneButtonDisabledWhenNoMicIsSet() throws {
+        // Visible but dead, on purpose: someone who set "No Microphone" months
+        // ago needs to see the entry to learn why it cannot run, and starting
+        // anyway would record nothing.
+        let sut = makeView(status: makeStatus(state: .idle), noMic: true)
+
+        let button = try sut.inspect().find(button: "Record Microphone")
+        XCTAssertTrue(button.isDisabled())
+    }
+
+    func testRecordMicrophoneButtonDisabledWhileAManualStartIsStillInFlight() throws {
+        // The window between registering a start and the loop existing. The
+        // narrow `state == .recording` predicate misses it, leaving the item
+        // enabled and the click silently dropped by the ownership guard.
+        let sut = makeView(status: makeStatus(state: .idle), manualRecordingPendingOrActive: true)
+
+        let button = try sut.inspect().find(button: "Record Microphone")
+        XCTAssertTrue(button.isDisabled())
+    }
+
+    func testRecordMicrophoneButtonEnabledWhenTheMicrophoneIsAllowed() throws {
+        // Control for the assertion above: without it a button that was always
+        // disabled would pass just as well.
+        let sut = makeView(status: makeStatus(state: .idle), noMic: false)
+
+        let button = try sut.inspect().find(button: "Record Microphone")
+        XCTAssertFalse(button.isDisabled())
+    }
+
     // MARK: - Button tap callbacks
 
     func testStartStopButtonCallsCallback() throws {
@@ -173,6 +233,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: { called = true },
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -197,6 +260,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -221,6 +287,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -245,6 +314,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -269,6 +341,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: { called = true },
             onOpenProtocol: { _ in },
@@ -293,6 +368,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -353,6 +431,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -389,6 +470,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -412,6 +496,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -448,6 +535,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -483,6 +573,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -520,6 +613,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -557,6 +653,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: { called = true },
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -596,6 +695,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: { called = true },
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -670,6 +772,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
@@ -808,6 +913,9 @@ final class MenuBarViewTests: XCTestCase {
             updateChecker: nil,
             onStartStop: {},
             onRecordApp: {},
+            onRecordMicrophone: {},
+            noMic: false,
+            manualRecordingPendingOrActive: false,
             onStopManualRecording: nil,
             onOpenLastProtocol: {},
             onOpenProtocol: { _ in },
