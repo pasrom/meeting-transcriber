@@ -63,5 +63,8 @@ enum TranscriberState: String, Codable {
 struct MeetingInfo: Codable {
     let app: String
     let title: String
-    let pid: Int
+    /// The process being recorded, or nil for a microphone-only recording,
+    /// which has no owning process. Encodes as an absent key rather than a
+    /// sentinel, so a reader cannot mistake it for a real PID.
+    let pid: Int?
 }

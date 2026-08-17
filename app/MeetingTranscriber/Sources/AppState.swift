@@ -539,7 +539,7 @@ final class AppState {
             MeetingInfo(
                 app: manual.appName,
                 title: manual.title,
-                pid: Int(manual.pid),
+                pid: manual.pid.map(Int.init),
             )
         } else {
             loop.currentMeeting.map { meeting in

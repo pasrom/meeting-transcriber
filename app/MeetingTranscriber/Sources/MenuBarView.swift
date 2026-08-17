@@ -74,7 +74,9 @@ struct MenuBarView: View {
                 Text(meeting.title)
                     .font(.subheadline)
                     .fontWeight(.medium)
-                Text("\(meeting.app) (PID \(meeting.pid))")
+                // A microphone-only recording owns no process, so there is no
+                // PID to show and a placeholder would only read as a real one.
+                Text(meeting.pid.map { "\(meeting.app) (PID \($0))" } ?? meeting.app)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

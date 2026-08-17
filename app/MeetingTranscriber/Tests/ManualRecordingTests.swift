@@ -133,6 +133,99 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertEqual(transitions[1].1, .idle)
     }
 
+    // MARK: - Microphone-only recording (issue #633)
+
+    func testStartMicrophoneRecordingOpensNoTap() async throws {
+        let (loop, mock) = makeLoop()
+        try await loop.startMicrophoneRecording()
+        defer { loop.stop() }
+
+        XCTAssertEqual(
+            mock.capturedSource, .micOnly,
+            "a microphone recording must not tap any process; a source carrying a PID here would record whatever app happened to be at it",
+        )
+    }
+
+    func testStartMicrophoneRecordingIgnoresTheNoMicSetting() async throws {
+        // `noMic` governs whether an *app* recording also takes the mic. It must
+        // not be able to turn the microphone entry point into a recording of
+        // nothing; the menu keeps the item out of reach instead.
+        let mock = MockRecorder()
+        mock.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+        let loop = WatchLoop(
+            detector: MeetingDetector(patterns: AppMeetingPattern.all),
+            recorderFactory: { mock },
+            pollInterval: 0.05,
+            maxDuration: 10,
+            noMic: true,
+        )
+        loop.permissionChecker = { HealthCheckResult(screenRecording: .healthy, microphone: .healthy) }
+
+        try await loop.startMicrophoneRecording()
+        defer { loop.stop() }
+
+        XCTAssertEqual(mock.capturedSource, .micOnly)
+    }
+
+    func testMicrophoneRecordingHasNoTargetPID() async throws {
+        let (loop, _) = makeLoop()
+        try await loop.startMicrophoneRecording()
+        defer { loop.stop() }
+
+        XCTAssertTrue(loop.isManualRecording)
+        XCTAssertNil(loop.manualRecordingInfo?.pid, "there is no process behind a microphone recording")
+        XCTAssertEqual(loop.manualRecordingInfo?.appName, ManualRecordingInfo.microphoneAppName)
+        XCTAssertEqual(loop.manualRecordingInfo?.title, ManualRecordingInfo.microphoneTitle)
+    }
+
+    func testStopMicrophoneRecordingEnqueuesJob() async throws {
+        let queue = PipelineQueue()
+        let (loop, _) = makeLoop(pipelineQueue: queue)
+        try await loop.startMicrophoneRecording()
+
+        loop.stopManualRecording()
+
+        XCTAssertEqual(loop.state, .idle)
+        XCTAssertEqual(queue.jobs.count, 1)
+        XCTAssertEqual(queue.jobs.first?.meetingTitle, ManualRecordingInfo.microphoneTitle)
+        XCTAssertEqual(queue.jobs.first?.appName, ManualRecordingInfo.microphoneAppName)
+    }
+
+    func testMicrophoneRecordingIsRefusedWithoutTheMicrophoneGrant() async {
+        let (loop, mock) = makeLoop()
+        loop.permissionChecker = { HealthCheckResult(screenRecording: .healthy, microphone: .denied) }
+
+        do {
+            try await loop.startMicrophoneRecording()
+            XCTFail("a microphone recording without the microphone grant captures nothing")
+        } catch {
+            XCTAssertFalse(mock.startCalled)
+            XCTAssertEqual(loop.state, .idle)
+        }
+    }
+
+    func testMicrophoneRecordingStartsWithoutTheScreenRecordingGrant() async throws {
+        // The other half of the gate change: no tap is opened, so the grant
+        // that only ever stood in for the tap must not refuse this.
+        let (loop, _) = makeLoop()
+        loop.permissionChecker = { HealthCheckResult(screenRecording: .denied, microphone: .healthy) }
+
+        try await loop.startMicrophoneRecording()
+        defer { loop.stop() }
+
+        XCTAssertEqual(loop.state, .recording)
+    }
+
+    func testSecondMicrophoneRecordingWhileRecordingIsNoOp() async throws {
+        let (loop, _) = makeLoop()
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+
+        try await loop.startMicrophoneRecording()
+
+        XCTAssertEqual(loop.manualRecordingInfo?.pid, 1234, "the running app recording must survive")
+        loop.stop()
+    }
+
     // MARK: - Auto-watch interaction
 
     func testStartManualRecordingStopsAutoWatch() async throws {

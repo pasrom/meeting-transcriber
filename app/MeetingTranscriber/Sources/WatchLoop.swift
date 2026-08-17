@@ -3,13 +3,6 @@ import os.log
 
 private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WatchLoop")
 
-/// Info about a manually started recording session.
-struct ManualRecordingInfo: Equatable {
-    let pid: pid_t
-    let appName: String
-    let title: String
-}
-
 /// Native Swift watch loop that replaces the Python watcher.
 ///
 /// Orchestrates: meeting detection → recording → enqueue to PipelineQueue.
@@ -219,13 +212,40 @@ class WatchLoop {
     // MARK: - Manual Recording
 
     func startManualRecording(pid: pid_t, appName: String, title: String) async throws {
+        try await startManualRecording(
+            source: .forApp(pid: pid, noMic: noMic),
+            appName: appName,
+            title: title,
+        )
+    }
+
+    /// Record the microphone with no process tap, for a meeting that happens in
+    /// the room rather than in an app (issue #633).
+    ///
+    /// Deliberately ignores `noMic`: that setting decides whether an *app*
+    /// recording also takes the microphone, and honouring it here would turn
+    /// this into a recording of nothing. Keeping the entry point out of reach
+    /// while it is set is the menu's job, not this one's — a caller that got
+    /// here asked for the microphone by name.
+    func startMicrophoneRecording() async throws {
+        try await startManualRecording(
+            source: .micOnly,
+            appName: ManualRecordingInfo.microphoneAppName,
+            title: ManualRecordingInfo.microphoneTitle,
+        )
+    }
+
+    private func startManualRecording(
+        source: RecordingSource,
+        appName: String,
+        title: String,
+    ) async throws {
         guard state != .recording else {
             logger.warning("Cannot start manual recording — already recording")
             return
         }
 
         // Gate on what this path needs, not on overall health (see `blocksRecording`).
-        let source = RecordingSource.forApp(pid: pid, noMic: noMic)
         let health = await permissionChecker()
         if let refusal = health.recordingRefusalReason(for: source) {
             throw RecorderError.permissionDenied(refusal)
@@ -244,6 +264,7 @@ class WatchLoop {
             debugLogging: verboseDiagnostics(),
         )
 
+        let pid = source.appPID
         activeRecorder = recorder
         update { next in
             next.phase = .recording
@@ -256,7 +277,8 @@ class WatchLoop {
             await self.monitorManualRecording(pid: pid)
         }
 
-        logger.info("Manual recording started for \(appName) (PID \(pid)): \(title, privacy: .private)")
+        let target = pid.map { "PID \($0)" } ?? "no target process"
+        logger.info("Manual recording started for \(appName) (\(target)): \(title, privacy: .private)")
     }
 
     func stopManualRecording() {
@@ -282,32 +304,6 @@ class WatchLoop {
             next.manualRecordingInfo = nil
             next.detail = ""
             if let failureMessage { next.lastError = failureMessage }
-        }
-    }
-
-    private func monitorManualRecording(pid: pid_t) async {
-        let startTime = nowProvider()
-        while !Task.isCancelled {
-            let decision = ManualRecordingMonitorPolicy.step(
-                target: pidAliveCheck(pid) ? .alive : .exited,
-                elapsed: nowProvider().timeIntervalSince(startTime),
-                maxDuration: maxDuration,
-            )
-            switch decision {
-            case .continuePolling:
-                break
-
-            case .stopPidExited:
-                logger.info("Monitored app (PID \(pid)) exited — stopping manual recording")
-                stopManualRecording()
-                return
-
-            case .stopMaxDurationExceeded:
-                logger.info("Max recording duration reached — stopping manual recording")
-                stopManualRecording()
-                return
-            }
-            try? await sleepProvider(pollInterval)
         }
     }
 
