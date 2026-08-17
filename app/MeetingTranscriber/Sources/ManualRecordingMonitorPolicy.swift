@@ -9,6 +9,23 @@ enum ManualRecordingMonitorDecision: Equatable {
     case stopMaxDurationExceeded
 }
 
+/// What the monitor found when it looked for the process a manual recording is
+/// tied to.
+///
+/// A three-state enum rather than a `Bool` because a microphone-only recording
+/// targets no process at all, and the two ways to say that with a bool are both
+/// wrong: `true` claims a liveness check that never ran, `false` ends the
+/// recording immediately.
+enum ManualRecordingTarget: Equatable {
+    /// The monitored process is still running.
+    case alive
+    /// The monitored process has exited, which ends the recording.
+    case exited
+    /// The recording targets no process, so nothing can exit and only the
+    /// duration cap is left to stop it.
+    case untargeted
+}
+
 /// Pure decision logic for `WatchLoop.monitorManualRecording`. Splits
 /// the poll-loop's two stop conditions (monitored process died, max
 /// recording duration exceeded) out of the async loop so they can be
@@ -23,8 +40,9 @@ enum ManualRecordingMonitorPolicy {
     /// duration cap.
     ///
     /// - Parameters:
-    ///   - pidAlive: Whether the process the recorder is monitoring is
-    ///     still alive. Production checks this with `kill(pid, 0) == 0`.
+    ///   - target: What the monitor found when it looked for the process the
+    ///     recording is tied to. Production reads `.alive`/`.exited` from
+    ///     `kill(pid, 0) == 0`; `.untargeted` is the microphone-only case.
     ///   - elapsed: Time elapsed since the monitor started.
     ///   - maxDuration: Absolute cap on recording duration.
     /// - Returns: `.stopPidExited` first if the process died, otherwise
@@ -33,11 +51,11 @@ enum ManualRecordingMonitorPolicy {
     ///   dies exactly at the max-duration boundary surfaces as a clean
     ///   exit rather than a timeout.
     static func step(
-        pidAlive: Bool,
+        target: ManualRecordingTarget,
         elapsed: TimeInterval,
         maxDuration: TimeInterval,
     ) -> ManualRecordingMonitorDecision {
-        if !pidAlive {
+        if target == .exited {
             return .stopPidExited
         }
         if elapsed > maxDuration {

@@ -288,7 +288,7 @@ class WatchLoop {
         let startTime = nowProvider()
         while !Task.isCancelled {
             let decision = ManualRecordingMonitorPolicy.step(
-                pidAlive: pidAliveCheck(pid),
+                target: pidAliveCheck(pid) ? .alive : .exited,
                 elapsed: nowProvider().timeIntervalSince(startTime),
                 maxDuration: maxDuration,
             )

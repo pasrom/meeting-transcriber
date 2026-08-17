@@ -11,7 +11,7 @@ final class ManualRecordingMonitorPolicyTests: XCTestCase {
     func testContinuesWhenProcessAliveAndUnderMaxDuration() {
         XCTAssertEqual(
             ManualRecordingMonitorPolicy.step(
-                pidAlive: true, elapsed: 10, maxDuration: 100,
+                target: .alive, elapsed: 10, maxDuration: 100,
             ),
             .continuePolling,
         )
@@ -22,7 +22,7 @@ final class ManualRecordingMonitorPolicyTests: XCTestCase {
     func testStopsWhenProcessExited() {
         XCTAssertEqual(
             ManualRecordingMonitorPolicy.step(
-                pidAlive: false, elapsed: 10, maxDuration: 100,
+                target: .exited, elapsed: 10, maxDuration: 100,
             ),
             .stopPidExited,
         )
@@ -33,7 +33,7 @@ final class ManualRecordingMonitorPolicyTests: XCTestCase {
         // signal and should win.
         XCTAssertEqual(
             ManualRecordingMonitorPolicy.step(
-                pidAlive: false, elapsed: 200, maxDuration: 100,
+                target: .exited, elapsed: 200, maxDuration: 100,
             ),
             .stopPidExited,
         )
@@ -44,7 +44,7 @@ final class ManualRecordingMonitorPolicyTests: XCTestCase {
     func testStopsWhenElapsedStrictlyGreaterThanMaxDuration() {
         XCTAssertEqual(
             ManualRecordingMonitorPolicy.step(
-                pidAlive: true, elapsed: 100.5, maxDuration: 100,
+                target: .alive, elapsed: 100.5, maxDuration: 100,
             ),
             .stopMaxDurationExceeded,
         )
@@ -56,9 +56,35 @@ final class ManualRecordingMonitorPolicyTests: XCTestCase {
         // if production behaviour ever changes.
         XCTAssertEqual(
             ManualRecordingMonitorPolicy.step(
-                pidAlive: true, elapsed: 100, maxDuration: 100,
+                target: .alive, elapsed: 100, maxDuration: 100,
             ),
             .continuePolling,
+        )
+    }
+
+    // MARK: - No target process (microphone-only recording)
+
+    func testKeepsPollingWithNoTargetProcess() {
+        // A mic-only recording has no process whose exit could end it, so the
+        // absence must read as "nothing to stop for", not as an exit. Both
+        // bools were wrong here, which is why this is a third case: `.alive`
+        // would claim a liveness check that never ran.
+        XCTAssertEqual(
+            ManualRecordingMonitorPolicy.step(
+                target: .untargeted, elapsed: 10, maxDuration: 100,
+            ),
+            .continuePolling,
+        )
+    }
+
+    func testDurationCapStillAppliesWithNoTargetProcess() {
+        // The remaining stop condition. Without it a mic-only recording that
+        // the user forgets about would run until the app quits.
+        XCTAssertEqual(
+            ManualRecordingMonitorPolicy.step(
+                target: .untargeted, elapsed: 100.5, maxDuration: 100,
+            ),
+            .stopMaxDurationExceeded,
         )
     }
 }
