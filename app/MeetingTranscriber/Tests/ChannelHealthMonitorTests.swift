@@ -204,6 +204,74 @@ final class ChannelHealthMonitorTests: XCTestCase {
         XCTAssertEqual(event, .recovered(channel: .app))
     }
 
+    // MARK: - Channels the recording never opened (issue #633)
+
+    func testAbsentAppChannelIsNotReportedAsDead() {
+        // A microphone-only recording leaves `appLevelDBFS` pinned at -120 for
+        // its whole life. Before the topology reached the monitor this was a
+        // *guaranteed* false positive, not an unlikely one: the first speech on
+        // the mic opened an `.app` episode, and the episode could never resolve,
+        // because resolving needs the app channel to rise above the speech
+        // threshold and a channel that was never opened never will.
+        var monitor = ChannelHealthMonitor(
+            silenceThresholdDBFS: -60, speechThresholdDBFS: -50, debounceSeconds: 5,
+            channels: CapturedChannels(mic: true, app: false),
+        )
+
+        XCTAssertNil(monitor.update(micDBFS: -25, appDBFS: -120, now: t0))
+        XCTAssertNil(monitor.update(micDBFS: -25, appDBFS: -120, now: t0.addingTimeInterval(600)))
+    }
+
+    func testAbsentAppChannelControlCaseStillFiresWhenTheChannelExists() {
+        // The control the assertion above needs: identical levels, identical
+        // timing, only the topology differs. Without this the test above would
+        // also pass if the monitor had simply stopped detecting anything.
+        var monitor = makeMonitor(debounce: 5)
+
+        _ = monitor.update(micDBFS: -25, appDBFS: -120, now: t0)
+        XCTAssertEqual(
+            monitor.update(micDBFS: -25, appDBFS: -120, now: t0.addingTimeInterval(600)),
+            .started(channel: .app, quietSince: t0),
+        )
+    }
+
+    func testAbsentMicChannelIsNotReportedAsDead() {
+        // The mirror case, reachable today: "No Microphone (app audio only)"
+        // opens no mic file, so its -120 is by design too.
+        var monitor = ChannelHealthMonitor(
+            silenceThresholdDBFS: -60, speechThresholdDBFS: -50, debounceSeconds: 5,
+            channels: CapturedChannels(mic: false, app: true),
+        )
+
+        XCTAssertNil(monitor.update(micDBFS: -120, appDBFS: -25, now: t0))
+        XCTAssertNil(monitor.update(micDBFS: -120, appDBFS: -25, now: t0.addingTimeInterval(600)))
+    }
+
+    func testAbsentMicChannelControlCaseStillFiresWhenTheChannelExists() {
+        var monitor = makeMonitor(debounce: 5)
+
+        _ = monitor.update(micDBFS: -120, appDBFS: -25, now: t0)
+        XCTAssertEqual(
+            monitor.update(micDBFS: -120, appDBFS: -25, now: t0.addingTimeInterval(600)),
+            .started(channel: .mic, quietSince: t0),
+        )
+    }
+
+    func testAnOpenedChannelGoingSilentIsStillReported() {
+        // The topology guard must not blunt the real signal it sits next to: a
+        // mic that exists and dies still has to be caught.
+        var monitor = ChannelHealthMonitor(
+            silenceThresholdDBFS: -60, speechThresholdDBFS: -50, debounceSeconds: 5,
+            channels: .micAndApp,
+        )
+
+        _ = monitor.update(micDBFS: -120, appDBFS: -25, now: t0)
+        XCTAssertEqual(
+            monitor.update(micDBFS: -120, appDBFS: -25, now: t0.addingTimeInterval(10)),
+            .started(channel: .mic, quietSince: t0),
+        )
+    }
+
     // MARK: - Custom thresholds
 
     func testCustomThresholdsAreHonored() {

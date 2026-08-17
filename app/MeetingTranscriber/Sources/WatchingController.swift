@@ -517,7 +517,13 @@ final class WatchingController {
                         body: "Recording: \(meeting.windowTitle)",
                     )
                 }
-                self?.channelHealth.start { [weak self] in self?.watchLoop?.activeRecorder }
+                // No source means no live recording, so there are no channels to
+                // watch and starting the monitor would only assume a topology.
+                if let source = self?.watchLoop?.activeRecordingSource {
+                    self?.channelHealth.start(source: source) { [weak self] in
+                        self?.watchLoop?.activeRecorder
+                    }
+                }
 
             case .error:
                 if let err = loop?.lastError {

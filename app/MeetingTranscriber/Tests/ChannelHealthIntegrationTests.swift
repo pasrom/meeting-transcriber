@@ -391,4 +391,78 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertTrue(message.lowercased().contains("restart"))
         XCTAssertNotEqual(message, ChannelHealthController.asymmetricSilenceMessage(for: .mic))
     }
+
+    // MARK: - Microphone-only recordings (issue #633)
+
+    private static let micOnly = CapturedChannels(mic: true, app: false)
+
+    func testMicrophoneOnlyRecordingRaisesNoDeadAppChannelAlert() {
+        // The whole point of the fix. Before it this sequence produced a
+        // `.timeSensitive` notification, one that deliberately pierces Focus,
+        // telling the user to enable Screen Recording for a recording that
+        // never wanted a tap.
+        let (controller, recorder, notifier, _) = makeController()
+        controller.simulateStartForTests(channels: Self.micOnly)
+        recorder.micLevelDBFS = -20
+        recorder.appLevelDBFS = -120
+
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
+
+        XCTAssertTrue(notifier.calls.isEmpty, "reported: \(notifier.calls.map(\.title))")
+        XCTAssertFalse(controller.appSilentActive)
+    }
+
+    func testTheSameLevelsStillAlertWhenTheAppChannelWasOpened() {
+        // Control case: identical levels and timing, only the topology differs.
+        // Without it the assertion above would also pass on a controller that
+        // had stopped alerting altogether.
+        let (controller, recorder, notifier, _) = makeController()
+        controller.simulateStartForTests()
+        recorder.micLevelDBFS = -20
+        recorder.appLevelDBFS = -120
+
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
+
+        XCTAssertEqual(notifier.calls.first?.title, "Capture Channel Silent")
+        XCTAssertTrue(controller.appSilentActive)
+    }
+
+    func testMicrophoneOnlyRecordingNeverTintsTheAppHalfOfTheIcon() {
+        // Symmetric silence paints both halves. With no app channel the bottom
+        // half would claim a dead tap that does not exist.
+        let (controller, recorder, _, _) = makeController()
+        controller.simulateStartForTests(channels: Self.micOnly)
+        recorder.micLevelDBFS = -120
+        recorder.appLevelDBFS = -120
+
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
+
+        XCTAssertTrue(controller.recordingSilentActive, "a silent mic-only recording is still silent")
+        XCTAssertTrue(controller.micSilentOverlay)
+        XCTAssertFalse(controller.appSilentOverlay, "there is no app channel to paint")
+    }
+
+    func testASilentAppOnlyRecordingIsNotToldToCheckAMicrophoneItNeverOpened() {
+        // With "No Microphone" the mic reads a permanent -120, so symmetric
+        // silence fires on any silent app track — and the dual-source wording
+        // sends the user after an input device the recording never touched.
+        let message = ChannelHealthController.silentRecordingMessage(for: .appOnly)
+
+        XCTAssertFalse(message.contains("Both capture channels"), "only one channel was opened")
+        XCTAssertFalse(message.lowercased().contains("input device"), "no microphone was opened")
+        XCTAssertNotEqual(message, ChannelHealthController.silentRecordingMessage(for: .micAndApp))
+        XCTAssertNotEqual(message, ChannelHealthController.silentRecordingMessage(for: .micOnly))
+    }
+
+    func testASilentMicrophoneOnlyRecordingIsToldWhatToCheck() {
+        let message = ChannelHealthController.silentRecordingMessage(for: Self.micOnly)
+
+        XCTAssertFalse(message.contains("Both capture channels"), "there is only one")
+        XCTAssertFalse(message.contains("meeting app"), "a room recording has no meeting app")
+        XCTAssertTrue(message.lowercased().contains("input device"))
+        XCTAssertNotEqual(message, ChannelHealthController.silentRecordingMessage(for: .micAndApp))
+    }
 }

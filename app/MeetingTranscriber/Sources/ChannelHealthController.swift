@@ -57,6 +57,23 @@ final class ChannelHealthController {
 
     @ObservationIgnored private var levelMonitorTask: Task<Void, Never>?
 
+    /// Which channels the recording being watched actually opened. Set by
+    /// `start(source:recorderProvider:)`; the levels alone cannot say, because
+    /// an unopened channel and a dead one both read -120 dBFS.
+    @ObservationIgnored private var channels: CapturedChannels = .micAndApp
+
+    /// Red tint for the menu bar's **top** half. Composed here rather than at
+    /// the call site so the topology that suppresses a phantom channel is
+    /// applied in exactly one place.
+    var micSilentOverlay: Bool {
+        channels.mic && (micSilentActive || recordingSilentActive)
+    }
+
+    /// Red tint for the menu bar's **bottom** half.
+    var appSilentOverlay: Bool {
+        channels.app && (appSilentActive || recordingSilentActive)
+    }
+
     private let notifier: any AppNotifying
     private let debounceSeconds: () -> TimeInterval
     private let indicatorEnabled: () -> Bool
@@ -81,9 +98,13 @@ final class ChannelHealthController {
     /// `recorderProvider` is supplied by the caller (it resolves the live
     /// `WatchLoop.activeRecorder`) so the controller stays free of an AppState
     /// back-reference. A tick where it returns nil is skipped, not fatal.
-    func start(recorderProvider: @escaping @MainActor () -> (any RecordingProvider)?) {
+    func start(
+        source: RecordingSource,
+        recorderProvider: @escaping @MainActor () -> (any RecordingProvider)?,
+    ) {
         guard indicatorEnabled() else { return }
         guard levelMonitorTask == nil else { return }
+        channels = source.capturedChannels
         rebuild()
         levelMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -111,7 +132,8 @@ final class ChannelHealthController {
     /// Rebuilds both monitors with the current settings-driven debounce. Also
     /// exposed as a test seam so the "user changed threshold between recordings"
     /// path can be simulated without spinning up the polling Task.
-    func simulateStartForTests() {
+    func simulateStartForTests(channels: CapturedChannels = .micAndApp) {
+        self.channels = channels
         rebuild()
     }
 
@@ -129,7 +151,7 @@ final class ChannelHealthController {
     #endif
 
     private func rebuild() {
-        channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds())
+        channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds(), channels: channels)
         silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
     }
 
@@ -174,7 +196,7 @@ final class ChannelHealthController {
             recordingSilentActive = true
             notifier.notify(
                 title: "Recording Appears Silent",
-                body: Self.silentRecordingMessage,
+                body: Self.silentRecordingMessage(for: channels),
                 // Suppressible on purpose, see `captureAlert`: an auto-detected
                 // recording starts when the detector confirms rather than when
                 // anyone speaks, so a waiting room looks exactly like this.
@@ -257,8 +279,32 @@ final class ChannelHealthController {
         }
     }
 
-    nonisolated static let silentRecordingMessage: String =
-        "Both capture channels have been silent since the recording started. "
-            + "Check the audio routing — the meeting app may have claimed the mic "
-            + "in exclusive mode (e.g. AirPods HFP), or the system input device may be muted."
+    /// Message for a recording where every channel it opened has stayed at the
+    /// noise floor.
+    ///
+    /// The dual-source wording names the meeting app and both channels, which
+    /// is the wrong advice for a recording that has neither. A microphone-only
+    /// recording (issue #633) is made in a room, so what to check is the input
+    /// device, not an app's exclusive claim on it.
+    nonisolated static func silentRecordingMessage(for channels: CapturedChannels) -> String {
+        switch (channels.mic, channels.app) {
+        case (true, false):
+            "The microphone has been silent since the recording started. "
+                + "Check that the right input device is selected and that it is not muted."
+
+        case (false, true):
+            // "No Microphone (app audio only)". The mic reads a permanent -120
+            // here, so this fires on any silent app track — and advice about an
+            // input device would point at one the recording never opened.
+            "The app-audio channel has been silent since the recording started. "
+                + "Check that the meeting app is actually playing audio, and whether a "
+                + "third-party audio tool (SoundSource, Audio Hijack, Loopback, Krisp) is "
+                + "intercepting it."
+
+        default:
+            "Both capture channels have been silent since the recording started. "
+                + "Check the audio routing — the meeting app may have claimed the mic "
+                + "in exclusive mode (e.g. AirPods HFP), or the system input device may be muted."
+        }
+    }
 }

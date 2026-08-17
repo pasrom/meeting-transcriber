@@ -41,6 +41,49 @@ private final class CapturingRecorder: RecordingProvider {
 /// correctly. This test pins the auto-watch path to the same contract.
 @MainActor
 final class WatchLoopActiveRecorderTests: XCTestCase {
+    /// `WatchingController` starts channel-health monitoring from
+    /// `onStateChange`, and it needs the recording's topology to know which
+    /// channels exist. `apply` fires that callback synchronously, so anything
+    /// the handler reads has to be true *by the time the phase moves*, not
+    /// merely by the time `start` returns. A source published after the phase
+    /// leaves the handler with nil and silently disables the indicator for the
+    /// whole path, which is exactly what a stored mirror invites.
+    func testTheRecordingSourceIsReadableFromTheRecordingTransition() async throws {
+        let recorder = CapturingRecorder()
+        let loop = WatchLoop(
+            detector: ImmediatelyInactiveDetector(),
+            recorderFactory: { recorder },
+            pipelineQueue: nil,
+            pollInterval: 0.01,
+            endGracePeriod: 0.01,
+            maxDuration: 10,
+            noMic: true,
+        )
+        loop.permissionChecker = {
+            HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
+        }
+
+        var sourceAtTransition: RecordingSource?
+        loop.onStateChange = { [weak loop] _, new in
+            guard new == .recording else { return }
+            sourceAtTransition = loop?.activeRecordingSource
+        }
+
+        let meeting = DetectedMeeting(
+            pattern: .teams,
+            windowTitle: "Test Meeting | Microsoft Teams",
+            ownerName: "Microsoft Teams",
+            windowPID: 4242,
+        )
+
+        try await loop.handleMeeting(meeting)
+
+        XCTAssertEqual(
+            sourceAtTransition, .appOnly(pid: 4242),
+            "the channel-health wiring reads this from the transition; nil there means no monitoring for auto-detected meetings",
+        )
+    }
+
     func testHandleMeetingExposesActiveRecorderForChannelHealthPolling() async throws {
         let recorder = CapturingRecorder()
         let loop = WatchLoop(

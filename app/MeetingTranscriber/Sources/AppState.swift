@@ -519,13 +519,13 @@ final class AppState {
     /// `hasPermissionProblem` — reading two `channelHealth.*` flags through the
     /// sub-controller inline is more than the body can afford on slow CI.
     var micSilentOverlay: Bool {
-        channelHealth.micSilentActive || channelHealth.recordingSilentActive
+        channelHealth.micSilentOverlay
     }
 
     /// Menu-bar **bottom-half** red tint: app-audio channel silent, OR both
     /// channels silent. See `micSilentOverlay`.
     var appSilentOverlay: Bool {
-        channelHealth.appSilentActive || channelHealth.recordingSilentActive
+        channelHealth.appSilentOverlay
     }
 
     // Internal (not private): also formats `postedAt` in the RPC snapshot

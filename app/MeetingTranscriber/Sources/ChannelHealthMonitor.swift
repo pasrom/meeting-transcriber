@@ -28,6 +28,11 @@ struct ChannelHealthMonitor {
     let speechThresholdDBFS: Double
     let debounceSeconds: TimeInterval
 
+    /// Which channels this recording actually opened. A channel that was never
+    /// opened reads as permanently silent, and reporting that as a dead channel
+    /// is a guaranteed false positive rather than an unlikely one.
+    let channels: CapturedChannels
+
     private var episode: Episode?
 
     private struct Episode {
@@ -40,10 +45,12 @@ struct ChannelHealthMonitor {
         silenceThresholdDBFS: Double = -60,
         speechThresholdDBFS: Double = -50,
         debounceSeconds: TimeInterval = 90,
+        channels: CapturedChannels = .micAndApp,
     ) {
         self.silenceThresholdDBFS = silenceThresholdDBFS
         self.speechThresholdDBFS = speechThresholdDBFS
         self.debounceSeconds = debounceSeconds
+        self.channels = channels
     }
 
     mutating func update(micDBFS: Double, appDBFS: Double, now: Date) -> ChannelHealthEvent? {
@@ -82,14 +89,21 @@ struct ChannelHealthMonitor {
 
     // MARK: - Internals
 
+    /// A channel only counts as the silent side of an asymmetry when the
+    /// recording opened it. Without that guard a microphone-only recording
+    /// reports its absent app channel as dead the moment anyone speaks, and an
+    /// app-only recording does the same for the microphone the user switched
+    /// off — in both cases permanently, since recovery needs the channel to
+    /// rise above the speech threshold and a channel that does not exist never
+    /// will.
     private func asymmetricChannel(micDBFS: Double, appDBFS: Double) -> AudioChannel? {
         let micSilent = micDBFS <= silenceThresholdDBFS
         let micSpeech = micDBFS >= speechThresholdDBFS
         let appSilent = appDBFS <= silenceThresholdDBFS
         let appSpeech = appDBFS >= speechThresholdDBFS
 
-        if micSilent && appSpeech { return .mic }
-        if appSilent && micSpeech { return .app }
+        if channels.mic, micSilent, appSpeech { return .mic }
+        if channels.app, appSilent, micSpeech { return .app }
         return nil
     }
 

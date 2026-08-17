@@ -58,4 +58,24 @@ extension RecordingSource {
     static func forApp(pid: pid_t, noMic: Bool) -> Self {
         noMic ? .appOnly(pid: pid) : .appAndMic(pid: pid)
     }
+
+    var capturedChannels: CapturedChannels {
+        CapturedChannels(mic: capturesMicrophone, app: capturesAppAudio)
+    }
+}
+
+/// Which capture channels a recording actually opens.
+///
+/// The health monitors need exactly this and nothing else about the source.
+/// They read per-channel levels, and `RecordingProvider` documents `-120` dBFS
+/// as "no capture session is active **or** the tap stopped delivering buffers",
+/// so a level alone cannot tell a channel that was never opened from one that
+/// died. Without this they report the first as the second.
+struct CapturedChannels: Equatable {
+    let mic: Bool
+    let app: Bool
+
+    /// The ordinary dual-source recording, and the default the monitors assume
+    /// when nobody says otherwise.
+    static let micAndApp = Self(mic: true, app: true)
 }

@@ -159,23 +159,6 @@ class WatchLoop {
         PowerAssertionDetector()
     }
 
-    var isActive: Bool {
-        state != .idle
-    }
-
-    /// Value-type view of the five observable fields. Useful for tests,
-    /// `AppState+RPC` snapshots, and as the input/output shape for the
-    /// upcoming pure-function reducer slice.
-    var snapshot: WatchLoopState {
-        WatchLoopState(
-            phase: state,
-            currentMeeting: currentMeeting,
-            lastError: lastError,
-            detail: detail,
-            manualRecordingInfo: manualRecordingInfo,
-        )
-    }
-
     // MARK: - Start / Stop
 
     func start() {
@@ -383,9 +366,10 @@ class WatchLoop {
             next.detail = "Recording: \(title)"
         }
 
+        let source = RecordingSource.forApp(pid: meeting.windowPID, noMic: noMic)
         let recorder = await recorderFactory()
         try recorder.start(
-            source: .forApp(pid: meeting.windowPID, noMic: noMic),
+            source: source,
             micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )
