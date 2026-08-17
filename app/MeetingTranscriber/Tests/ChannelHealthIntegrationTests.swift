@@ -394,15 +394,13 @@ final class ChannelHealthIntegrationTests: XCTestCase {
 
     // MARK: - Microphone-only recordings (issue #633)
 
-    private static let micOnly = CapturedChannels(mic: true, app: false)
-
     func testMicrophoneOnlyRecordingRaisesNoDeadAppChannelAlert() {
         // The whole point of the fix. Before it this sequence produced a
         // `.timeSensitive` notification, one that deliberately pierces Focus,
         // telling the user to enable Screen Recording for a recording that
         // never wanted a tap.
         let (controller, recorder, notifier, _) = makeController()
-        controller.simulateStartForTests(channels: Self.micOnly)
+        controller.simulateStartForTests(channels: .micOnly)
         recorder.micLevelDBFS = -20
         recorder.appLevelDBFS = -120
 
@@ -433,7 +431,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         // Symmetric silence paints both halves. With no app channel the bottom
         // half would claim a dead tap that does not exist.
         let (controller, recorder, _, _) = makeController()
-        controller.simulateStartForTests(channels: Self.micOnly)
+        controller.simulateStartForTests(channels: .micOnly)
         recorder.micLevelDBFS = -120
         recorder.appLevelDBFS = -120
 
@@ -458,7 +456,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
     }
 
     func testASilentMicrophoneOnlyRecordingIsToldWhatToCheck() {
-        let message = ChannelHealthController.silentRecordingMessage(for: Self.micOnly)
+        let message = ChannelHealthController.silentRecordingMessage(for: .micOnly)
 
         XCTAssertFalse(message.contains("Both capture channels"), "there is only one")
         XCTAssertFalse(message.contains("meeting app"), "a room recording has no meeting app")

@@ -65,13 +65,21 @@ final class ChannelHealthController {
     /// Red tint for the menu bar's **top** half. Composed here rather than at
     /// the call site so the topology that suppresses a phantom channel is
     /// applied in exactly one place.
+    ///
+    /// The observable flags are read into a local first, deliberately. Written
+    /// as `channels.mic && (...)` the `&&` short-circuits, so on a recording
+    /// without this channel the getters never run and `@Observable` registers no
+    /// dependency on them for that render pass.
     var micSilentOverlay: Bool {
-        channels.mic && (micSilentActive || recordingSilentActive)
+        let silent = micSilentActive || recordingSilentActive
+        return channels.mic && silent
     }
 
-    /// Red tint for the menu bar's **bottom** half.
+    /// Red tint for the menu bar's **bottom** half. See `micSilentOverlay` for
+    /// why the flags are read before the topology is consulted.
     var appSilentOverlay: Bool {
-        channels.app && (appSilentActive || recordingSilentActive)
+        let silent = appSilentActive || recordingSilentActive
+        return channels.app && silent
     }
 
     private let notifier: any AppNotifying
@@ -102,9 +110,12 @@ final class ChannelHealthController {
         source: RecordingSource,
         recorderProvider: @escaping @MainActor () -> (any RecordingProvider)?,
     ) {
+        // Before the guards: a start that turns back still records which
+        // channels this recording has, so a stale topology from the previous
+        // one cannot decide what the icon paints.
+        channels = source.capturedChannels
         guard indicatorEnabled() else { return }
         guard levelMonitorTask == nil else { return }
-        channels = source.capturedChannels
         rebuild()
         levelMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
@@ -127,6 +138,10 @@ final class ChannelHealthController {
         micSilentActive = false
         appSilentActive = false
         recordingSilentActive = false
+        // Topology is per-recording state like the rest of this: leaving the
+        // last one's behind would let it decide what the next start paints
+        // before that start gets to say.
+        channels = .micAndApp
     }
 
     /// Rebuilds both monitors with the current settings-driven debounce. Also

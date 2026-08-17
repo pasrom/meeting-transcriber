@@ -215,7 +215,7 @@ final class ChannelHealthMonitorTests: XCTestCase {
         // threshold and a channel that was never opened never will.
         var monitor = ChannelHealthMonitor(
             silenceThresholdDBFS: -60, speechThresholdDBFS: -50, debounceSeconds: 5,
-            channels: CapturedChannels(mic: true, app: false),
+            channels: .micOnly,
         )
 
         XCTAssertNil(monitor.update(micDBFS: -25, appDBFS: -120, now: t0))
@@ -240,7 +240,7 @@ final class ChannelHealthMonitorTests: XCTestCase {
         // opens no mic file, so its -120 is by design too.
         var monitor = ChannelHealthMonitor(
             silenceThresholdDBFS: -60, speechThresholdDBFS: -50, debounceSeconds: 5,
-            channels: CapturedChannels(mic: false, app: true),
+            channels: .appOnly,
         )
 
         XCTAssertNil(monitor.update(micDBFS: -120, appDBFS: -25, now: t0))

@@ -60,7 +60,17 @@ extension RecordingSource {
     }
 
     var capturedChannels: CapturedChannels {
-        CapturedChannels(mic: capturesMicrophone, app: capturesAppAudio)
+        switch self {
+        case .appAndMic: .micAndApp
+        case .appOnly: .appOnly
+        case .micOnly: .micOnly
+        }
+    }
+
+    /// How this source names its target in logs. One wording so `PID 1234`
+    /// finds every line about that recording, whichever subsystem wrote it.
+    var logDescription: String {
+        appPID.map { "PID \($0)" } ?? "microphone only"
     }
 }
 
@@ -71,11 +81,24 @@ extension RecordingSource {
 /// as "no capture session is active **or** the tap stopped delivering buffers",
 /// so a level alone cannot tell a channel that was never opened from one that
 /// died. Without this they report the first as the second.
+/// The three values mirror `RecordingSource`'s three cases, and the memberwise
+/// init stays private so the fourth combination stays unbuildable: a recording
+/// with neither channel is the state `RecordingSource` exists to rule out, and
+/// a projection of it must not quietly hand that state back.
 struct CapturedChannels: Equatable {
     let mic: Bool
     let app: Bool
 
+    private init(mic: Bool, app: Bool) {
+        self.mic = mic
+        self.app = app
+    }
+
     /// The ordinary dual-source recording, and the default the monitors assume
     /// when nobody says otherwise.
     static let micAndApp = Self(mic: true, app: true)
+    /// "No Microphone (app audio only)".
+    static let appOnly = Self(mic: false, app: true)
+    /// A microphone-only recording (issue #633).
+    static let micOnly = Self(mic: true, app: false)
 }
