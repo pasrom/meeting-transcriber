@@ -3,6 +3,22 @@ import os.log
 
 private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", category: "AudioCaptureSession")
 
+/// Errors raised by `AudioCaptureSession` itself, before either track's
+/// hardware is touched. Deliberately not `@available`-gated so a caller can
+/// match on it without the OS check the session class carries.
+public enum AudioCaptureSessionError: LocalizedError, Equatable {
+    /// Neither an app-audio nor a mic output URL was supplied, so the session
+    /// would run and record nothing.
+    case noTracksRequested
+
+    public var errorDescription: String? {
+        switch self {
+        case .noTracksRequested:
+            "Capture session needs at least one of an app-audio or a microphone output"
+        }
+    }
+}
+
 /// Orchestrates app audio capture + optional mic recording.
 /// Replaces the CLI entry point — call `start()` and `stop()` directly from the host app.
 @available(macOS 14.2, *)
@@ -10,7 +26,7 @@ public class AudioCaptureSession {
     private let pids: [pid_t]
     private let sampleRate: Int
     private let channels: Int
-    private let appOutputURL: URL
+    private let appOutputURL: URL?
     private let micOutputURL: URL?
     private let micDeviceUID: String?
     private let debugLogging: Bool
@@ -36,7 +52,11 @@ public class AudioCaptureSession {
     /// - Parameter pids: PIDs to capture audio from. For Electron/WebView2
     ///   apps (Teams 2.x, Slack, Discord) this should include the root PID
     ///   plus helper/renderer children; for native Cocoa apps a
-    ///   single-element array is fine.
+    ///   single-element array is fine. Ignored when `appOutputURL` is nil.
+    /// - Parameter appOutputURL: Where to write the app-audio track, or nil to
+    ///   open no process tap at all. Nil is the microphone-only shape: the
+    ///   session then has exactly one channel and a mic failure is terminal
+    ///   rather than a degradation (see `CaptureTrackPolicy`).
     /// - Parameter appLiveSink: Optional real-time buffer callback for the app
     ///   audio track (CATap output, interleaved Float32 at the tap's native
     ///   rate, typically 48 kHz). Called from the IOProc thread — non-blocking.
@@ -45,7 +65,7 @@ public class AudioCaptureSession {
     ///   Called from the AVAudioEngine tap thread — non-blocking.
     public init(
         pids: [pid_t],
-        appOutputURL: URL,
+        appOutputURL: URL?,
         sampleRate: Int = 48000,
         channels: Int = 2,
         micOutputURL: URL? = nil,
@@ -67,34 +87,41 @@ public class AudioCaptureSession {
         self.micDebugFault = micDebugFault
     }
 
-    /// Start capturing app audio (and optionally mic audio).
+    /// Start capturing app audio, mic audio, or both — whichever output URLs
+    /// were supplied. At least one is required.
     public func start() throws {
-        // Create app output file and get its file descriptor
-        // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
-        FileManager.default.createFile(
-            atPath: appOutputURL.path,
-            contents: nil,
-            attributes: [.posixPermissions: 0o600],
-        )
-        let handle = try FileHandle(forWritingTo: appOutputURL)
-
-        let capture = AppAudioCapture(
-            pids: pids,
-            outputFileDescriptor: handle.fileDescriptor,
-            sampleRate: sampleRate,
-            channels: channels,
-            debugLogging: debugLogging,
-            liveSink: appLiveSink,
-        )
-        do {
-            try capture.start()
-        } catch {
-            try? handle.close()
-            throw error
+        guard appOutputURL != nil || micOutputURL != nil else {
+            throw AudioCaptureSessionError.noTracksRequested
         }
-        appFileHandle = handle
-        capture.onGiveUp = { [weak self] in self?.appCaptureGaveUp = true }
-        appCapture = capture
+
+        if let appOutputURL {
+            // Create app output file and get its file descriptor
+            // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
+            FileManager.default.createFile(
+                atPath: appOutputURL.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600],
+            )
+            let handle = try FileHandle(forWritingTo: appOutputURL)
+
+            let capture = AppAudioCapture(
+                pids: pids,
+                outputFileDescriptor: handle.fileDescriptor,
+                sampleRate: sampleRate,
+                channels: channels,
+                debugLogging: debugLogging,
+                liveSink: appLiveSink,
+            )
+            do {
+                try capture.start()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            appFileHandle = handle
+            capture.onGiveUp = { [weak self] in self?.appCaptureGaveUp = true }
+            appCapture = capture
+        }
 
         // Start mic capture if requested
         if let micURL = micOutputURL {
@@ -109,6 +136,14 @@ public class AudioCaptureSession {
                 mic.onGiveUp = { [weak self] in self?.micCaptureGaveUp = true }
                 micCapture = mic
             } catch {
+                // With an app track this is a degradation and the recording is
+                // still worth keeping, which is why it has always been
+                // swallowed. Without one the microphone IS the recording, so
+                // the same swallow would hand back a session that captures
+                // nothing while reporting success. Nothing to tear down on the
+                // way out: reaching here with no app capture means none was
+                // ever started, so no file handle was opened either.
+                guard appCapture != nil else { throw error }
                 logger.error("Failed to start mic capture: \(error.localizedDescription, privacy: .public). Continuing with app audio only.")
             }
         }

@@ -52,6 +52,7 @@ final class AudioCaptureResultTests: XCTestCase {
     private static let micURL = URL(fileURLWithPath: "/tmp/mic.wav")
 
     private func make(
+        appURL: URL? = AudioCaptureResultTests.appURL,
         micRecorded: Bool = true,
         appTicks: UInt64 = 1000,
         micTicks: UInt64 = 5000,
@@ -61,7 +62,7 @@ final class AudioCaptureResultTests: XCTestCase {
         configuredChannels: Int = 2,
     ) -> AudioCaptureResult {
         AudioCaptureResult.make(
-            appOutputURL: Self.appURL,
+            appOutputURL: appURL,
             micOutputURL: Self.micURL,
             configured: (sampleRate: configuredRate, channels: configuredChannels),
             app: .init(firstFrameTicks: appTicks, sampleRate: appRate, channels: appChannels),
@@ -119,5 +120,34 @@ final class AudioCaptureResultTests: XCTestCase {
 
     func testMakeUsesAppReportedChannelsWhenNonZero() {
         XCTAssertEqual(make(appChannels: 1, configuredChannels: 2).actualChannels, 1)
+    }
+
+    // MARK: - Sessions with no app track (microphone-only recordings)
+
+    func testMakeCarriesNoAppURLWhenNoAppTrackWasRequested() {
+        // Distinct from "the tap ran and wrote nothing", which still yields a
+        // URL to an empty file. Downstream reads the nil as "this recording
+        // never had a second track", not as a capture failure.
+        XCTAssertNil(make(appURL: nil).appAudioFileURL)
+    }
+
+    func testMakeStillCarriesTheMicURLWithoutAnAppTrack() {
+        XCTAssertEqual(make(appURL: nil, micRecorded: true).micAudioFileURL, Self.micURL)
+    }
+
+    func testMakeFallsBackToConfiguredFormatWithoutAnAppTrack() {
+        // No app capture ever reports a rate or a channel count, so the
+        // configured values are all there is; a zero here would make
+        // `buildRecording` divide by it downstream.
+        let result = make(appURL: nil, appRate: 0, appChannels: 0, configuredRate: 48000, configuredChannels: 2)
+
+        XCTAssertEqual(result.actualSampleRate, 48000)
+        XCTAssertEqual(result.actualChannels, 2)
+    }
+
+    func testMakeReportsNoMicDelayWithoutAnAppTrack() {
+        // There is no app first frame to measure the mic against, so the delay
+        // must stay 0 rather than becoming the mic's own absolute timestamp.
+        XCTAssertEqual(make(appURL: nil, appTicks: 0, micTicks: 5000).micDelay, 0)
     }
 }

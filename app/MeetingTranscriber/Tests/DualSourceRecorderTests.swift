@@ -397,6 +397,29 @@ final class DualSourceRecorderTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
     }
 
+    /// No app temp at all (no tap was ever opened) → same shape as the 0-byte
+    /// case above. The sibling above covers a tap that ran and produced
+    /// nothing; this one covers a session that deliberately had no app track,
+    /// which is the only case where there is no temp URL to inspect.
+    func testBuildRecordingWithoutAnAppTempProducesMixFromMic() throws {
+        let dir = try makeTempDirectory(prefix: "build_mic_notap")
+        let micWav = dir.appendingPathComponent("20260311_140000_mic.wav")
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+
+        let result = try DualSourceRecorder.buildRecording(
+            from: AudioCaptureResult(
+                appAudioFileURL: nil, micAudioFileURL: micWav,
+                actualSampleRate: 48000, actualChannels: 2, micDelay: 0,
+            ),
+            recordingsDir: dir, timestamp: "20260311_140000", recordingStartDate: Date(timeIntervalSince1970: 1000),
+            format: CaptureFormat(requestedChannels: 2, requestedRate: 48000, targetRate: 16000),
+        )
+
+        XCTAssertNil(result.appPath, "no app track")
+        XCTAssertEqual(result.micPath, micWav)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.mixPath.path))
+    }
+
     /// Both channels present → both tracks surface and the mix is produced via
     /// AudioMixer (delay alignment + mixing).
     func testBuildRecordingAppAndMicProducesMixedTracks() throws {

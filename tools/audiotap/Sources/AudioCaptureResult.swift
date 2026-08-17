@@ -2,8 +2,11 @@ import Foundation
 
 /// Result returned by `AudioCaptureSession.stop()`.
 public struct AudioCaptureResult: Sendable {
-    /// URL of the raw app audio file (interleaved float32 PCM).
-    public let appAudioFileURL: URL
+    /// URL of the raw app audio file (interleaved float32 PCM), nil when the
+    /// session opened no process tap at all (a microphone-only recording).
+    /// Distinct from a tap that ran and wrote nothing, which still yields a URL
+    /// pointing at an empty file.
+    public let appAudioFileURL: URL?
     /// URL of the mic audio WAV file (nil if mic was not recorded).
     public let micAudioFileURL: URL?
     /// Actual sample rate of the aggregate device (may differ from requested).
@@ -17,7 +20,7 @@ public struct AudioCaptureResult: Sendable {
     /// other modules can't construct one — declare it `public` to complete the
     /// type's public API. (Lets the app's test target build fixtures directly.)
     public init(
-        appAudioFileURL: URL,
+        appAudioFileURL: URL?,
         micAudioFileURL: URL?,
         actualSampleRate: Int,
         actualChannels: Int,
@@ -55,7 +58,7 @@ extension AudioCaptureResult {
     /// Sample rate / channels fall back to `configured` when the app track
     /// reported 0 (never wrote output).
     static func make(
-        appOutputURL: URL,
+        appOutputURL: URL?,
         micOutputURL: URL?,
         configured: (sampleRate: Int, channels: Int),
         app: AppReadings,

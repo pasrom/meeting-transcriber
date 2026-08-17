@@ -350,9 +350,13 @@ class DualSourceRecorder: RecordingProvider {
         let micDelay = captureResult.micDelay
         let actualChannels = captureResult.actualChannels
 
-        // Query raw file size before it gets deleted — needed for rate cross-check
+        // Query raw file size before it gets deleted — needed for rate cross-check.
+        // nil means no tap was ever opened (a mic-only recording), which is not
+        // the same as a tap that opened and wrote nothing.
         let tempURL = captureResult.appAudioFileURL
-        let appRawBytes = (try? FileManager.default.attributesOfItem(atPath: tempURL.path)[.size] as? Int) ?? 0
+        let appRawBytes = tempURL.flatMap { url in
+            (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        } ?? 0
 
         // Cross-check rate using mic duration (mic file is opened once here, reused below)
         let micDuration: Double? = if let micURL = captureResult.micAudioFileURL,
@@ -395,7 +399,7 @@ class DualSourceRecorder: RecordingProvider {
         var appSamples: [Float] = []
         var appSamples16k: [Float] = []
 
-        if appRawBytes > 0 {
+        if let tempURL, appRawBytes > 0 {
             let raw = try Data(contentsOf: tempURL)
 
             let floatCount = raw.count / MemoryLayout<Float>.size
@@ -419,13 +423,16 @@ class DualSourceRecorder: RecordingProvider {
             try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: format.targetRate, url: appFile)
             appPath = appFile
             logger.info("App audio saved: \(appFile.lastPathComponent) (\(actualRate)→\(format.targetRate) Hz)")
-        } else if FileManager.default.fileExists(atPath: tempURL.path) {
+        } else if let tempURL, FileManager.default.fileExists(atPath: tempURL.path) {
             // Clean up empty temp file left by failed app audio capture
             try? FileManager.default.removeItem(at: tempURL)
             logger.warning("App audio capture produced 0 bytes — temp file cleaned up")
         }
 
-        if appPath == nil {
+        // Only a session that asked for an app track can have failed to get
+        // one. A mic-only recording has no tap to blame and must not log as if
+        // something went wrong.
+        if appPath == nil, tempURL != nil {
             logger.warning("No app audio captured — capture may have failed to create the tap")
         }
 
@@ -471,7 +478,7 @@ class DualSourceRecorder: RecordingProvider {
         // The raw app temp is the canonical recovery source on the crash-
         // recovery path. Drop it only now that a durable mix exists, so a
         // failure anywhere above leaves it intact for the next recovery attempt.
-        if appRawBytes > 0 {
+        if let tempURL, appRawBytes > 0 {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
