@@ -172,6 +172,36 @@ final class ManualRecordingTests: XCTestCase {
         XCTAssertEqual(loop.manualRecordingInfo?.title, ManualRecordingInfo.microphoneTitle)
     }
 
+    func testTheLiveSourceOfAMicrophoneRecordingHasNoAppChannel() async throws {
+        // What the channel-health wiring reads to decide which channels exist.
+        // Getting this wrong on the manual path is what makes the indicator
+        // report the absent app channel as a dead one.
+        let (loop, _) = makeLoop()
+        try await loop.startMicrophoneRecording()
+        defer { loop.stop() }
+
+        XCTAssertEqual(loop.activeRecordingSource, .micOnly)
+    }
+
+    func testTheLiveSourceOfAnAppRecordingCarriesItsPIDAndTheMicSetting() async throws {
+        let (loop, _) = makeLoop(noMic: true)
+        try await loop.startManualRecording(pid: 77, appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+
+        XCTAssertEqual(loop.activeRecordingSource, .appOnly(pid: 77))
+    }
+
+    func testThereIsNoLiveSourceWhileNothingRecords() async throws {
+        let (loop, _) = makeLoop()
+
+        XCTAssertNil(loop.activeRecordingSource, "nothing is recording, so there are no channels to watch")
+
+        try await loop.startMicrophoneRecording()
+        loop.stopManualRecording()
+
+        XCTAssertNil(loop.activeRecordingSource, "and none again once it stopped")
+    }
+
     func testStopMicrophoneRecordingEnqueuesJob() async throws {
         let queue = PipelineQueue()
         let (loop, _) = makeLoop(pipelineQueue: queue)

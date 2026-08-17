@@ -138,9 +138,10 @@ final class ChannelHealthController {
         micSilentActive = false
         appSilentActive = false
         recordingSilentActive = false
-        // Topology is per-recording state like the rest of this: leaving the
-        // last one's behind would let it decide what the next start paints
-        // before that start gets to say.
+        // Per-recording state like the flags above. Defensive rather than
+        // load-bearing: every `start` sets the topology before its own guards,
+        // so no reader can reach a stale value. Deliberately untested for that
+        // reason — a test for it passes with the line deleted.
         channels = .micAndApp
     }
 

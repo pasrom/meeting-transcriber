@@ -43,6 +43,39 @@ final class RecordingSourceTests: XCTestCase {
         }
     }
 
+    // MARK: - The projection the health monitors consume
+
+    func testCapturedChannelsMirrorsEachCase() {
+        // A transposition here inverts the whole topology fix silently: the
+        // monitors would suppress the channel that exists and report the one
+        // that does not, and every assertion about them would still pass.
+        XCTAssertEqual(RecordingSource.appAndMic(pid: 1).capturedChannels, .micAndApp)
+        XCTAssertEqual(RecordingSource.appOnly(pid: 1).capturedChannels, .appOnly)
+        XCTAssertEqual(RecordingSource.micOnly.capturedChannels, .micOnly)
+    }
+
+    func testCapturedChannelsAgreesWithTheSourceItProjects() {
+        // The projection and the source must answer the same two questions the
+        // same way; they are read by different layers.
+        for source: RecordingSource in [.appAndMic(pid: 1), .appOnly(pid: 1), .micOnly] {
+            XCTAssertEqual(source.capturedChannels.mic, source.capturesMicrophone, "\(source)")
+            XCTAssertEqual(source.capturedChannels.app, source.capturesAppAudio, "\(source)")
+        }
+    }
+
+    // MARK: - Logging
+
+    func testLogDescriptionNamesThePIDSoLogsStayGreppable() {
+        // `PID 1234` has to find every line about that recording, whichever
+        // subsystem wrote it.
+        XCTAssertEqual(RecordingSource.appAndMic(pid: 1234).logDescription, "PID 1234")
+        XCTAssertEqual(RecordingSource.appOnly(pid: 1234).logDescription, "PID 1234")
+    }
+
+    func testLogDescriptionSaysSoWhenThereIsNoTarget() {
+        XCTAssertEqual(RecordingSource.micOnly.logDescription, "microphone only")
+    }
+
     // MARK: - Deriving the source from the user's settings
 
     func testAppRecordingKeepsTheMicrophoneByDefault() {

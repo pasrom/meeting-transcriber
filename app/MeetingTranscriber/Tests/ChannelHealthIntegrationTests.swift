@@ -411,6 +411,43 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.appSilentActive)
     }
 
+    /// Drives the real `start(source:)` rather than the `simulateStartForTests`
+    /// seam, because that seam was the only thing the topology assertions went
+    /// through — the production entry point that reads `source.capturedChannels`
+    /// had no coverage at all, and it is the one that has to be right.
+    func testTheProductionStartWiresTheTopologyFromTheSource() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.micLevelDBFS = -20
+        recorder.appLevelDBFS = -120
+        controller.start(source: .micOnly) { recorder }
+        defer { controller.stop() }
+
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
+
+        XCTAssertTrue(notifier.calls.isEmpty, "reported: \(notifier.calls.map(\.title))")
+        XCTAssertFalse(controller.appSilentOverlay)
+    }
+
+    func testAMicrophoneOnlyRecordingDoesNotSuppressTheNextDualSourceOne() {
+        // The topology is per-recording, and the one that matters is the one
+        // the *current* start declared. Asserted through the production entry
+        // point both times, because that is what carries the value.
+        let (controller, recorder, notifier, _) = makeController()
+        controller.start(source: .micOnly) { recorder }
+        controller.stop()
+
+        controller.start(source: .appAndMic(pid: 1)) { recorder }
+        defer { controller.stop() }
+        recorder.micLevelDBFS = -20
+        recorder.appLevelDBFS = -120
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
+
+        XCTAssertEqual(notifier.calls.first?.title, "Capture Channel Silent")
+        XCTAssertTrue(controller.appSilentOverlay)
+    }
+
     func testTheSameLevelsStillAlertWhenTheAppChannelWasOpened() {
         // Control case: identical levels and timing, only the topology differs.
         // Without it the assertion above would also pass on a controller that
