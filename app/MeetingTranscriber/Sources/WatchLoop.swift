@@ -225,8 +225,9 @@ class WatchLoop {
         }
 
         // Gate on what this path needs, not on overall health (see `blocksRecording`).
+        let source = RecordingSource.forApp(pid: pid, noMic: noMic)
         let health = await permissionChecker()
-        if let refusal = health.recordingRefusalReason(noMic: noMic) {
+        if let refusal = health.recordingRefusalReason(for: source) {
             throw RecorderError.permissionDenied(refusal)
         }
 
@@ -239,7 +240,7 @@ class WatchLoop {
 
         let recorder = await recorderFactory()
         try recorder.start(
-            source: .forApp(pid: pid, noMic: noMic), micDeviceUID: micDeviceUID,
+            source: source, micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )
 
