@@ -238,10 +238,9 @@ class DualSourceRecorder: RecordingProvider {
     var micLiveSink: LiveAudioSink?
     var appLiveSink: LiveAudioSink?
 
-    /// Start recording app audio and optionally mic.
+    /// Start recording whichever channels `source` asks for.
     func start(
-        appPID: pid_t,
-        noMic: Bool = false,
+        source: RecordingSource,
         micDeviceUID: String? = nil,
         debugLogging: Bool = false,
     ) throws {
@@ -257,15 +256,22 @@ class DualSourceRecorder: RecordingProvider {
         startTimestamp = ts
 
         // ── AudioTapLib capture session ──
-        let appTempURL = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.appRaw)")
-        let micURL: URL? = noMic ? nil : recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
+        // A source with no target opens no tap at all, so it gets neither a
+        // temp file nor a PID list; the session then has the mic as its only
+        // channel and treats a mic failure as terminal.
+        let appTempURL: URL? = source.capturesAppAudio
+            ? recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.appRaw)")
+            : nil
+        let micURL: URL? = source.capturesMicrophone
+            ? recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
+            : nil
 
         // Electron/WebView2 apps (Teams 2.x, Slack, Discord) render call
         // audio in helper/renderer children rather than the shell process
         // the OS sees as the window owner. Tap the whole bundle tree so we
         // catch whichever child holds the audio handle; fall back to the
         // root PID alone if the bundle URL is unavailable.
-        let effectivePids = Self.resolveTapPIDs(rootPID: appPID)
+        let effectivePids = source.appPID.map { Self.resolveTapPIDs(rootPID: $0) } ?? []
 
         // Mic device-change e2e (issue #379): inject a one-shot tap fault so the
         // app self-triggers a mid-recording restart with an invalid format and
@@ -296,7 +302,8 @@ class DualSourceRecorder: RecordingProvider {
         isRecording = true
         recordingStartDate = Date()
 
-        logger.info("Recording started: PID \(appPID), \(self.recordRate) Hz, \(self.appChannels)ch")
+        let target = source.appPID.map(String.init) ?? "microphone only"
+        logger.info("Recording started: \(target), \(self.recordRate) Hz, \(self.appChannels)ch")
     }
 
     /// Stop recording and produce a mixed WAV. The capture session is the only

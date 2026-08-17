@@ -47,10 +47,10 @@ final class ManualRecordingTests: XCTestCase {
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
         XCTAssertTrue(mock.startCalled)
         // Not just "was start called": the manual-start pid must actually reach
-        // the recorder (mock default is -1, so a dropped/wrong pid fails here).
-        // Full noMic/micDeviceUID threading is pinned by
+        // the recorder (mock default is nil, so a dropped/wrong pid fails here).
+        // Full source/micDeviceUID threading is pinned by
         // WatchLoopTests.testStartManualRecordingThreadsRecorderParams.
-        XCTAssertEqual(mock.capturedAppPID, 1234)
+        XCTAssertEqual(mock.capturedSource?.appPID, 1234)
         loop.stop()
     }
 

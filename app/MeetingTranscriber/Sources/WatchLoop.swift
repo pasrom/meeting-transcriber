@@ -239,7 +239,7 @@ class WatchLoop {
 
         let recorder = await recorderFactory()
         try recorder.start(
-            appPID: pid, noMic: noMic, micDeviceUID: micDeviceUID,
+            source: .forApp(pid: pid, noMic: noMic), micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )
 
@@ -388,8 +388,7 @@ class WatchLoop {
 
         let recorder = await recorderFactory()
         try recorder.start(
-            appPID: meeting.windowPID,
-            noMic: noMic,
+            source: .forApp(pid: meeting.windowPID, noMic: noMic),
             micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
         )

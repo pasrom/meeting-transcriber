@@ -194,8 +194,10 @@ final class WatchLoopTests: XCTestCase {
         try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Meeting")
         defer { loop.stop() }
 
-        XCTAssertEqual(recorder.capturedAppPID, 42, "manual start must tap the requested PID")
-        XCTAssertTrue(recorder.capturedNoMic, "loop's noMic=true must reach the recorder")
+        XCTAssertEqual(
+            recorder.capturedSource, .appOnly(pid: 42),
+            "manual start must tap the requested PID, and the loop's noMic=true must reach the recorder as an app-only source",
+        )
         XCTAssertEqual(recorder.capturedMicDeviceUID, "mock-mic-uid", "loop's micDeviceUID must reach the recorder")
     }
 

@@ -3,7 +3,7 @@ import Foundation
 /// Abstraction for recording, enabling mock injection in tests.
 @MainActor
 protocol RecordingProvider {
-    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging: Bool) throws
+    func start(source: RecordingSource, micDeviceUID: String?, debugLogging: Bool) throws
     func stop() throws -> RecordingResult
 
     /// Instantaneous app-audio level in dBFS. -120 when no capture session is

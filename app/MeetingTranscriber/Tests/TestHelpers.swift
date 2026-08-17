@@ -285,8 +285,7 @@ class MockRecorder: RecordingProvider {
     /// threads them through (appPID, noMic, micDeviceUID) instead of only checking
     /// `startCalled`. Defaults are deliberately "impossible" values so an unset or
     /// dropped argument fails an equality assertion rather than passing silently.
-    var capturedAppPID: pid_t = -1
-    var capturedNoMic = false
+    var capturedSource: RecordingSource?
     var capturedMicDeviceUID: String?
 
     /// Per-channel level overrides for asymmetric-silence tests. Both default to -120
@@ -304,10 +303,9 @@ class MockRecorder: RecordingProvider {
     /// specific meeting-start time (e.g. filename-anchoring tests).
     var recordingStartDate: Date?
 
-    func start(appPID: pid_t, noMic: Bool, micDeviceUID: String?, debugLogging _: Bool) {
+    func start(source: RecordingSource, micDeviceUID: String?, debugLogging _: Bool) {
         startCalled = true
-        capturedAppPID = appPID
-        capturedNoMic = noMic
+        capturedSource = source
         capturedMicDeviceUID = micDeviceUID
     }
 
