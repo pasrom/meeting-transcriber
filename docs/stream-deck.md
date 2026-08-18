@@ -121,6 +121,32 @@ mt-cli watch toggle
 mt-cli watch status
 ```
 
+## A key for meetings in the room
+
+Everything above wires a key to *watching*, which arms the detector and waits
+for an app to hold a call. A meeting around a table has no app to detect, so it
+has its own resource, `/v1/record`, which records the system microphone and no
+app audio. Same recipe, one path changed:
+
+```bash
+TOKEN=$(cat "$HOME/Library/Application Support/MeetingTranscriber/.rpc-token")
+curl -sS --fail-with-body -X POST http://127.0.0.1:9876/v1/record \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"start"}'
+```
+
+Or `mt-cli record start` / `mt-cli record stop`.
+
+Two things differ from a watch key, and both matter for a button:
+
+- **Nothing stops it but you.** A detected meeting ends when the call does; a
+  room does not, so the recording runs until a `stop` (or the duration cap).
+  This is the one place where having a second key really is worth it.
+- **`412` means it is not recording and never started.** Either "No Microphone
+  (app audio only)" is on in Settings, or the microphone permission is denied.
+  Unlike the other error codes this one does not clear by pressing again.
+
 ## Start and stop beat toggle
 
 `toggle` is the obvious binding and the worst one, because a button press is a
@@ -173,7 +199,8 @@ told.
 | `401` | Token rotated, or the API was toggled off and on. Re-read the file — do not cache it. |
 | Connection refused | App not running, or **Settings → Advanced → Local Automation API** is off. |
 | Token file missing | Same — the file is written when the API starts. |
-| `409` | A manual recording from the app picker owns the loop. Stop it in the menu bar first. |
+| `409` | A recording already owns the loop: from the app picker, or a detected meeting. Stop it first. |
+| `412` | `/v1/record` only. "No Microphone" is set, or the mic permission is denied. Pressing again will not help. |
 | Browser opens on every press | "Access in background" is unticked on the Website action. |
 | Nothing happens, no error | The Shortcut name in the URL does not match, or is not URL-encoded. |
 
