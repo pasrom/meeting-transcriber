@@ -129,6 +129,31 @@ final class WavHeaderRepairTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: validURL), validBefore, "a finalized WAV must be left unchanged")
     }
 
+    /// The repair must not age the file forward. Everything downstream reads
+    /// mtime to decide whether a writer is still alive, and this runs first at
+    /// launch: a file stamped "modified now" reads as a live recording, which
+    /// defers the crash rescue that was about to happen while the cleanup pass
+    /// deletes the raw app track it needed. A header rewrite is metadata, not
+    /// newly captured audio, and must not claim to be.
+    func testRepairPreservesTheFilesModificationDate() throws {
+        let (url, _) = try writeFinalizedWav(seconds: 0.4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try corruptHeader(at: url)
+        let crashedAt = Date(timeIntervalSinceNow: -120)
+        try FileManager.default.setAttributes([.modificationDate: crashedAt], ofItemAtPath: url.path)
+
+        XCTAssertTrue(try WavHeaderRepair.repairIfNeeded(at: url), "the fixture should need repairing")
+
+        let after = try XCTUnwrap(
+            FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date,
+        )
+        XCTAssertEqual(
+            after.timeIntervalSince1970, crashedAt.timeIntervalSince1970, accuracy: 1,
+            "the repaired file must keep the age its audio actually has",
+        )
+        XCTAssertGreaterThan(readableFrames(url), 0, "and it must still have been repaired")
+    }
+
     func testRepairUnfinalizedSkipsRecentlyModifiedWavs() throws {
         // A WAV still being written by a live recording legitimately has a zero
         // data size. The launch scan must not "repair" it: stamping a partial

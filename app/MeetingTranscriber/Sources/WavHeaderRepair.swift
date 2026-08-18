@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "WavHeaderRepair")
 
 /// Repairs an unfinalized WAV — one whose `RIFF`/`data` chunk sizes were left
 /// at placeholder values because the writer was killed before it closed the
@@ -52,10 +55,35 @@ enum WavHeaderRepair {
         // would make a filesize-derived size wrong, corrupting a valid file).
         guard declaredDataSize == 0 else { return false }
 
+        // Captured before the rewrite and restored after it: repairing a
+        // header is not capturing audio, but an in-place write stamps the file
+        // as modified now. The crash-recovery chain reads mtime to answer "is a
+        // writer still alive?", and this runs immediately before it, so a
+        // bumped mtime makes a crashed recording look live — deferring its
+        // rescue while `cleanupTempFiles`, which judges the raw app temp by its
+        // own age, deletes the very track that rescue needed. The file keeps
+        // the age its audio actually has.
+        let capturedAt = (try? FileManager.default
+            .attributesOfItem(atPath: url.path)[.modificationDate]) as? Date
+
         try handle.seek(toOffset: UInt64(dataOffset + 4))
         try handle.write(contentsOf: leBytes(UInt32(actualDataSize)))
         try handle.seek(toOffset: 4)
         try handle.write(contentsOf: leBytes(UInt32(correctRiffSize)))
+        try handle.close()
+        if let capturedAt {
+            do {
+                try FileManager.default.setAttributes(
+                    [.modificationDate: capturedAt], ofItemAtPath: url.path,
+                )
+            } catch {
+                // Worth a line: a silent failure here puts the file back in the
+                // state this restore exists to prevent, and the consequence
+                // (a crashed recording read as live, its app track deleted)
+                // surfaces nowhere near the cause.
+                logger.warning("Could not restore the modification date after a header repair")
+            }
+        }
         return true
     }
 
