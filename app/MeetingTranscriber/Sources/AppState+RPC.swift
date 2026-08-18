@@ -187,6 +187,55 @@
             return (status, control)
         }
 
+        /// Small, stable projection of the microphone-recording lifecycle for
+        /// `/v1/record`, the sibling of `watchStatusDTO()` and kept separate from
+        /// `rpcStateSnapshot` for the same reason.
+        func recordStatusDTO() -> RecordStatusDTO {
+            let loop = watching.watchLoop
+            // Asked through `recordingBlockers`, the same function the gate
+            // inside `WatchLoop` consults, so this cannot come to a different
+            // verdict than the refusal a POST would produce. nil means the probe
+            // has not run, which is not a permission problem — `BadgeKind.compute`
+            // and `WatchStatusDTO.permissionsHealthy` read an unknown result the
+            // same way.
+            let micHealthy = permissions.health?.recordingBlockers(for: .micOnly).isEmpty ?? true
+            return RecordStatusDTO(
+                recording: watching.isRecordingMicrophoneOnly,
+                startPending: watching.isManualStartPending,
+                state: loop?.state.rawValue,
+                badge: currentBadge.rawValue,
+                otherRecordingActive: watching.isRecordingOtherThanMicrophone,
+                noMic: settings.noMic,
+                microphoneHealthy: micHealthy,
+            )
+        }
+
+        /// The two `/v1/record` seams, bundled like `watchRPCClosures` so
+        /// `buildDebugRPCServer` stays a flat wiring list. Control is `async`
+        /// because the start awaits the mic gate, the queue and the loop before
+        /// there is anything true to report.
+        func recordRPCClosures() -> (
+            status: () -> RecordStatusDTO,
+            control: (RecordAction) async -> RecordControlOutcome,
+        ) {
+            let status: () -> RecordStatusDTO = { [weak self] in
+                self?.recordStatusDTO() ?? .notRecording
+            }
+            let control: (RecordAction) async -> RecordControlOutcome = { [weak self] action in
+                guard let self else { return .failed }
+                // Seed the health cache before answering. The status projection
+                // reads that cache while the gate inside the start path falls
+                // back to a *live* probe when it is empty, so on an unprobed
+                // launch `GET` would report a healthy microphone and the `POST`
+                // right after it would refuse with a 412 whose body says nothing
+                // is wrong. One probe closes that, and after it both sides read
+                // the same value.
+                if permissions.health == nil { await permissions.check() }
+                return await watching.applyRecordAction(action)
+            }
+            return (status, control)
+        }
+
         /// The three per-job speaker-naming seams, bundled for the same reason as
         /// `watchRPCClosures`: `buildDebugRPCServer` is a flat wiring list, and
         /// grouping the closures that belong to one route family keeps it one.

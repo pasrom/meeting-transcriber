@@ -74,6 +74,8 @@
         /// - `POST /v1/jobs/<id>/naming/skip` — skip naming for one job
         /// - `GET  /v1/watch` — watching status
         /// - `POST /v1/watch` — start/stop/toggle watching `{action}`
+        /// - `GET  /v1/record` — microphone-recording status
+        /// - `POST /v1/record` — start/stop/toggle a microphone recording `{action}`
         func routeV1(_ request: HTTPRequest, path: String) async -> HTTPResponse {
             let idempotencyKey = request.headers["idempotency-key"]
             // `path` is query-stripped; read the opt-in off the raw target.
@@ -87,13 +89,7 @@
             // comps[0..1] == ["v1", "jobs"]. No `Idempotency-Key` handling: the
             // operation is already idempotent, and that header exists here only
             // to stop duplicate *job creation*.
-            if path == "/v1/watch" {
-                switch request.method {
-                case "GET": return watchResponse(status: 200, reason: "OK")
-                case "POST": return await watchControlResponse(body: request.body)
-                default: return HTTPResponse.notFound()
-                }
-            }
+            if let response = await controlResourceResponse(request, path: path) { return response }
             // The caller (DebugRPCServer.route) already gated on the `/v1/jobs`
             // prefix, so comps[0..1] are always ["v1", "jobs"]; the count checks
             // below just keep indexing safe.
@@ -124,6 +120,51 @@
             return HTTPResponse.notFound()
         }
 
+        /// The paths `controlResourceResponse` claims. `DebugRPCServer.route`
+        /// reads the same set to decide what to hand to `routeV1`, so a third
+        /// resource is added in one place: splitting the two lists is how a new
+        /// resource ends up answering 404 with its handler sitting right there.
+        static let controlResourcePaths: Set<String> = ["/v1/watch", "/v1/record"]
+
+        /// The two lifecycle resources — watching and microphone recording —
+        /// which share a shape: GET reads the status, POST applies an action and
+        /// answers with the state it settled into. Nil when `path` is neither, so
+        /// the caller falls through to the `/v1/jobs` routing below.
+        ///
+        /// Matched here, before that routing splits the path into components and
+        /// assumes it starts `["v1", "jobs"]`. Neither takes an
+        /// `Idempotency-Key`: both are already idempotent, and that header exists
+        /// on this API only to stop duplicate *job creation*.
+        private func controlResourceResponse(
+            _ request: HTTPRequest, path: String,
+        ) async -> HTTPResponse? {
+            guard Self.controlResourcePaths.contains(path) else { return nil }
+            switch (path, request.method) {
+            case ("/v1/watch", "GET"): return jsonResponse(watchStatus())
+            case ("/v1/watch", "POST"): return await watchControlResponse(body: request.body)
+            case ("/v1/record", "GET"): return jsonResponse(recordStatus())
+            case ("/v1/record", "POST"): return await recordControlResponse(body: request.body)
+            default: return HTTPResponse.notFound()
+            }
+        }
+
+        /// JSON-encode a status payload with a caller-chosen code. Both control
+        /// resources answer GET and POST with the *same* body shape, so a client
+        /// parses one thing, and the code carries what the call achieved.
+        ///
+        /// Not snapshotted atomically with that outcome: the body is built after
+        /// the action's `await` resumes, so a stop landing in between is
+        /// reflected. Still better than making the client refetch, which races
+        /// the same way and costs a round trip.
+        private func jsonResponse(
+            _ payload: some Encodable, status: Int = 200, reason: String = "OK",
+        ) -> HTTPResponse {
+            guard let body = try? JSONEncoder().encode(payload) else {
+                return HTTPResponse.internalServerError()
+            }
+            return HTTPResponse(status: status, reason: reason, body: body, contentType: "application/json")
+        }
+
         /// Failure status for confirm/skip naming: 409 when the job exists but
         /// isn't awaiting naming (wrong state), 404 when the job id is unknown.
         private func namingFailureStatus(_ jobID: UUID) -> HTTPResponse {
@@ -131,17 +172,6 @@
         }
 
         // MARK: - /v1/watch
-
-        /// Render the current watch status with a caller-chosen status code.
-        /// GET and POST return the *same* body shape — one parser for a client,
-        /// and no POST-then-refetch race for a controller that needs to redraw
-        /// a key from the result. The code carries what the call achieved.
-        private func watchResponse(status: Int, reason: String) -> HTTPResponse {
-            guard let body = try? JSONEncoder().encode(watchStatus()) else {
-                return HTTPResponse.internalServerError()
-            }
-            return HTTPResponse(status: status, reason: reason, body: body, contentType: "application/json")
-        }
 
         /// Apply a watch action and report the state it settled into.
         ///
@@ -155,9 +185,35 @@
                 return HTTPResponse.badRequest()
             }
             switch await watchControl(payload.action) {
-            case .changed, .unchanged: return watchResponse(status: 200, reason: "OK")
-            case .blocked: return watchResponse(status: 409, reason: "Conflict")
-            case .failed: return watchResponse(status: 503, reason: "Service Unavailable")
+            case .changed, .unchanged: return jsonResponse(watchStatus())
+            case .blocked: return jsonResponse(watchStatus(), status: 409, reason: "Conflict")
+            case .failed: return jsonResponse(watchStatus(), status: 503, reason: "Service Unavailable")
+            }
+        }
+
+        // MARK: - /v1/record
+
+        /// Apply a record action and report the state it settled into.
+        ///
+        /// The extra code over `/v1/watch` is 412. A `start` that cannot capture
+        /// anything — "No Microphone" is set, or the microphone permission is
+        /// denied or broken — is not a transient failure to retry (503) and not
+        /// somebody else holding the loop (409). It stays refused until a switch
+        /// is flipped, and the body says which one: `noMic` and
+        /// `microphoneHealthy` tell the two apart.
+        ///
+        /// The contrast with `/v1/watch` is deliberate: a denied microphone
+        /// answers `200` there, because app audio still records without it. Here
+        /// nothing would, so 200 would be a lie.
+        private func recordControlResponse(body: Data) async -> HTTPResponse {
+            guard let payload = try? JSONDecoder().decode(RecordActionPayload.self, from: body) else {
+                return HTTPResponse.badRequest()
+            }
+            switch await recordControl(payload.action) {
+            case .changed, .unchanged: return jsonResponse(recordStatus())
+            case .blocked: return jsonResponse(recordStatus(), status: 409, reason: "Conflict")
+            case .refused: return jsonResponse(recordStatus(), status: 412, reason: "Precondition Failed")
+            case .failed: return jsonResponse(recordStatus(), status: 503, reason: "Service Unavailable")
             }
         }
 

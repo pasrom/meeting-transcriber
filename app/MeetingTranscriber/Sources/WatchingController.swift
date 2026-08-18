@@ -42,9 +42,9 @@ final class WatchingController {
     /// `watchLoop` holds the manual loop. `startTask`'s counterpart for the
     /// manual path, so `isManualRecording` covers the window before the loop
     /// exists.
-    private var manualStartTask: Task<Void, Never>?
+    var manualStartTask: Task<ManualRecordingStartResult, Never>?
 
-    private let settings: AppSettings
+    let settings: AppSettings
     private let notifier: any AppNotifying
     private let pipeline: PipelineController
     private let channelHealth: ChannelHealthController
@@ -105,6 +105,16 @@ final class WatchingController {
     /// `PowerAssertionDetector`.
     private let makeDetector: () -> any MeetingDetecting
 
+    /// Recorder factory, the `makeDetector` seam's counterpart for capture.
+    ///
+    /// Injectable so a test can assert that a start succeeded, or make one fail
+    /// on demand, without opening the machine's real input device.
+    /// `DualSourceRecorder` writes into `AppPaths.recordingsDir`, the production
+    /// staging directory that orphan recovery scans, which is not somewhere a
+    /// unit test may leave files. (It does start on the hosted CI runners, so
+    /// this is about where the bytes land, not about whether capture works.)
+    private let makeRecorder: @MainActor () -> any RecordingProvider
+
     /// Engine-sync hook, wired by `activate`. Bridges to
     /// `EngineController.syncEngineSettings()`; nil until `activate` runs, in
     /// which case the up-front sync is skipped (EngineController's own reactive
@@ -127,6 +137,7 @@ final class WatchingController {
         },
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         makeDetector: (() -> any MeetingDetecting)? = nil,
+        makeRecorder: @escaping @MainActor () -> any RecordingProvider = { DualSourceRecorder() },
     ) {
         self.settings = settings
         self.notifier = notifier
@@ -138,36 +149,12 @@ final class WatchingController {
         self.requestScreenRecording = requestScreenRecording
         self.requestAccessibility = requestAccessibility
         self.startJoinTimeout = startJoinTimeout
+        self.makeRecorder = makeRecorder
         // Tests inject a deterministic detector; production defaults to one
         // filtered by the "Apps to Watch" toggles, re-read at each watch start.
         self.makeDetector = makeDetector ?? { [settings] in
             Self.defaultDetector(settings: settings)
         }
-    }
-
-    /// The auto-detect detector, filtered by the user's "Apps to Watch" toggles
-    /// (`settings.watchApps`). Extracted so the toggle → detection wiring is
-    /// unit-testable without spinning up a watch loop.
-    static func defaultDetector(settings: AppSettings) -> any MeetingDetecting {
-        CompositeMeetingDetector(defaultDetectors(settings: settings))
-    }
-
-    /// The strategies `defaultDetector` composes, in priority order. Split out
-    /// so the toggle wiring stays assertable: a test can configure one
-    /// strategy's injectable providers without reaching into the composite.
-    static func defaultDetectors(settings: AppSettings) -> [any MeetingDetecting] {
-        let assertions = PowerAssertionDetector(
-            patterns: PowerAssertionDetector.patterns(watching: settings.watchApps),
-        )
-        // Read through the settings each poll rather than captured once, so a
-        // Settings "Remove" takes effect without restarting the watch loop.
-        assertions.isIdentityDenied = { [settings] app in
-            settings.consentDeniedApps.contains(app)
-        }
-        return [
-            assertions,
-            MicInputDetector(patterns: MicInputDetector.patterns(watching: settings.watchApps)),
-        ]
     }
 
     /// Wire the engine-sync hook. Called once from `AppState.init` after its
@@ -290,7 +277,18 @@ final class WatchingController {
         }
     }
 
-    // MARK: - Idempotent control (automation API)
+    /// Whether a manual start may take over the loop it found, given what that
+    /// loop is doing. False while it is recording: taking it over stops it, and
+    /// a recording in progress is not something a later start may end.
+    ///
+    /// A pure function over the phase rather than an inline comparison, because
+    /// the guard it backs only fires in a race that no test can schedule
+    /// reliably — this is the layer that can be pinned.
+    static func mayTakeOverLoop(in state: WatchLoop.State) -> Bool {
+        state != .recording
+    }
+
+    // MARK: - Settling in-flight starts (shared by both control surfaces)
 
     /// How long a control call waits for an in-flight start before giving up.
     /// Generous against the ~2 s warm start, short enough that a wedged request
@@ -314,9 +312,48 @@ final class WatchingController {
     /// so the losing child keeps waiting, and a group awaits every child before
     /// it returns — the join would outlive its own timeout. Giving up must also
     /// not cancel the start itself, which is a user action already in progress.
-    private func joinStart() async -> Bool {
+    ///
+    func joinStart() async -> Bool {
+        await join { self.startTask != nil }
+    }
+
+    /// Bounded wait for the manual start alone, for a caller that just launched
+    /// one and has to answer for how it went.
+    ///
+    /// The task parks on the microphone TCC prompt, which on a menu-bar app can
+    /// sit unanswered behind other windows for as long as nobody looks. Awaiting
+    /// its value directly would hold an HTTP handler and its connection open for
+    /// exactly that long — the leak `joinStart` above exists to prevent. The task
+    /// clears `manualStartTask` in its own `defer`, so polling that is polling
+    /// its completion, and giving up here does not cancel a start the user may
+    /// still be about to answer.
+    func joinManualStart() async -> Bool {
+        await join { self.manualStartTask != nil }
+    }
+
+    /// Settle *both* in-flight starts, auto and manual, under one deadline.
+    ///
+    /// `/v1/record` waits for a quiet moment before deciding what a request
+    /// means: reading the loop mid-launch reports "nothing is recording", and
+    /// the start that follows would then be a second one.
+    ///
+    /// One predicate rather than two joins in sequence, for two reasons. The
+    /// bound stays the 20 seconds the API documents instead of doubling to 40,
+    /// which would put it above the client's own timeout and report a start that
+    /// then succeeds as a failure. And it is the stricter question: waiting for
+    /// one and then the other can watch the auto start finish, spend the second
+    /// wait on the manual one, and return true while a fresh auto start is
+    /// already in flight again.
+    func joinStarts() async -> Bool {
+        await join { self.startTask != nil || self.manualStartTask != nil }
+    }
+
+    /// Bounded wait for an in-flight start, shared by both joins. True when it
+    /// settled, false on expiry or cancellation. See `joinStart` for why the
+    /// bound and the polling shape are what they are.
+    private func join(while inFlight: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + startJoinTimeout
-        while startTask != nil {
+        while inFlight() {
             if Task.isCancelled { return false }
             if ContinuousClock.now >= deadline { return false }
             try? await Task.sleep(for: .milliseconds(50))
@@ -324,65 +361,7 @@ final class WatchingController {
         return true
     }
 
-    /// Idempotent start. Awaits the in-flight async start — mic gate, engine
-    /// sync, queue rebuild, loop construction — so a caller that reports state
-    /// back observes the settled result instead of a snapshot taken mid-launch.
-    /// `toggleWatching` alone cannot offer that: it returns the moment the task
-    /// is spawned, and `startTask` is private.
-    ///
-    /// Starts as not user-initiated. Nobody is at the machine when this arrives
-    /// — that is the whole point of the endpoint — so the optional Accessibility
-    /// prompt must not be raised, exactly as for auto-watch.
-    @discardableResult
-    func startWatching() async -> WatchControlOutcome {
-        if isManualRecording { return .blocked }
-        if isWatching { return .unchanged }
-        toggleWatching(userInitiated: false)
-        // `toggleWatching` assigns `startTask` synchronously, so this always
-        // joins the task it just created — or, if another caller already had a
-        // start in flight, the one whose existence made our call a no-op.
-        guard await joinStart() else { return .failed }
-        // Re-check: a manual start can register while the auto start is parked,
-        // which makes that start bail and leaves `watchLoop` nil. The join
-        // settled and the dialog was answered, so this is the conflict 409
-        // describes, not the "did not settle" 503.
-        if isManualRecording { return .blocked }
-        return isWatching ? .changed : .failed
-    }
-
-    /// Idempotent stop. Awaits a pending start first: otherwise a stop issued
-    /// during the mic-access window lands before the loop exists, reports
-    /// "already stopped", and is then overwritten by the start completing.
-    ///
-    /// A manual recording is reported as `.unchanged` rather than `.blocked`:
-    /// `isWatching` is false by definition while one owns the loop, so the
-    /// requested end state already holds and there is nothing to refuse. That
-    /// is the asymmetry with `startWatching`, where `.blocked` is right because
-    /// starting would clobber the recording.
-    @discardableResult
-    func stopWatching() async -> WatchControlOutcome {
-        guard await joinStart() else { return .failed }
-        guard isWatching else { return .unchanged }
-        toggleWatching()
-        return isWatching ? .failed : .changed
-    }
-
-    /// Apply a watch action, resolving `.toggle` against settled state.
-    ///
-    /// The leading await matters for `.toggle`: deciding against a mid-launch
-    /// snapshot would read "not watching" for a loop that is seconds from
-    /// running, and start a second one. Settling first means a toggle racing a
-    /// start converges to on — the caller asked for a flip and gets a definite
-    /// answer, rather than a coin toss on where the mic prompt happened to be.
-    @discardableResult
-    func applyWatchAction(_ action: WatchAction) async -> WatchControlOutcome {
-        guard await joinStart() else { return .failed }
-        switch action {
-        case .start: return await startWatching()
-        case .stop: return await stopWatching()
-        case .toggle: return isWatching ? await stopWatching() : await startWatching()
-        }
-    }
+    // MARK: - Manual recording
 
     func startManualRecording(pid: pid_t, appName: String, title: String) {
         beginManualRecording(.app(pid: pid, appName: appName, title: title))
@@ -407,28 +386,41 @@ final class WatchingController {
         beginManualRecording(.microphone)
     }
 
-    private func beginManualRecording(_ request: ManualRecordingRequest) {
+    /// Start a manual recording, or refuse. Returns the start's task so a caller
+    /// that has to answer for the outcome can await it; nil means one of the two
+    /// ownership guards below refused before anything began.
+    @discardableResult
+    func beginManualRecording(
+        _ request: ManualRecordingRequest,
+    ) -> Task<ManualRecordingStartResult, Never>? {
         // `toggleWatching`'s counterpart. The correctness added here rests on
         // `manualStartTask` being accurate, and without this a second start
         // replaces the field while the first is still in flight, whose `defer`
         // then clears the second's registration and reopens the window.
-        guard manualStartTask == nil else { return }
+        guard manualStartTask == nil else { return nil }
         // Refuse while one is already recording. Without this the assignment
         // below replaces `watchLoop` without stopping the live loop, so its
         // recording is never enqueued while its recorder keeps capturing,
         // retained by its own monitor task and reachable by nothing (#624).
         // The picker disables Start for the same reason, but it cannot be the
         // enforcement: a recording can begin between opening it and pressing.
-        guard watchLoop?.isManualRecording != true else { return }
-        manualStartTask = Task { @MainActor in
+        guard watchLoop?.isManualRecording != true else { return nil }
+        let task = Task { @MainActor in
             defer { manualStartTask = nil }
-            await performManualRecording(request)
+            return await performManualRecording(request)
         }
+        // Assigned after construction, not inline: the body is `@MainActor` and
+        // so is this, so it cannot run before we return, and the field is set
+        // for the whole window either way.
+        manualStartTask = task
+        return task
     }
 
     /// Body of `beginManualRecording`, split out so the task closure stays a
     /// two-liner and the work is readable on its own.
-    private func performManualRecording(_ request: ManualRecordingRequest) async {
+    private func performManualRecording(
+        _ request: ManualRecordingRequest,
+    ) async -> ManualRecordingStartResult {
         // Settle an auto start before reading `watchLoop`. Mid-flight it is
         // still nil, so the stop below would find nothing and the auto task
         // would later assign over the manual loop, orphaning a live recording
@@ -437,6 +429,19 @@ final class WatchingController {
 
         // Stop auto-watch if active
         if let loop = watchLoop, loop.isActive, !loop.isManualRecording {
+            // Re-checked here, and not only wherever the caller checked it: that
+            // check ran before this task was scheduled, and the poll loop can
+            // have entered a meeting in the meantime. Stopping the loop then
+            // truncates a recording in progress, which is the loss #624 was
+            // about, reachable from the app picker (its window outlives the
+            // state it was opened in) and from the automation API alike.
+            guard Self.mayTakeOverLoop(in: loop.state) else {
+                notifier.notify(
+                    title: "Recording Refused",
+                    body: "A meeting is already being recorded",
+                )
+                return .blockedByActiveRecording
+            }
             loop.stop()
             watchLoop = nil
         }
@@ -495,9 +500,18 @@ final class WatchingController {
                 title: "Manual Recording",
                 body: "Recording: \(loop.manualRecordingInfo?.title ?? "")",
             )
+            return .started
         } catch {
             notifier.notify(title: "Error", body: error.localizedDescription)
             watchLoop = nil
+            // The permission arm is told apart by the error the gate raises, not
+            // by re-asking the health check here: only the loop knows which
+            // source it was about to record, and the whole point of that gate is
+            // that the answer differs per source.
+            guard let recorderError = error as? RecorderError,
+                  case .permissionDenied = recorderError
+            else { return .failed }
+            return .permissionRefused
         }
     }
 
@@ -514,9 +528,14 @@ final class WatchingController {
     /// the `LiveTranscriptionController`. `async` so the coordinator can await the
     /// prior recording's stop-time flush before reusing a kept EOU session.
     private func makeRecorderFactory() -> @MainActor () async -> any RecordingProvider {
-        { [weak self] in
-            let recorder = DualSourceRecorder()
-            await self?.liveTranscription.attachSinks(to: recorder)
+        { [weak self, makeRecorder] in
+            let recorder = makeRecorder()
+            // Live captions tap the concrete recorder's buffer sinks, so this is
+            // the production recorder or nothing. An injected double has no
+            // sinks and needs none: captions are off in every test that uses one.
+            if let dualSource = recorder as? DualSourceRecorder {
+                await self?.liveTranscription.attachSinks(to: dualSource)
+            }
             return recorder
         }
     }

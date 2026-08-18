@@ -90,6 +90,8 @@
         let transcribe: (URL, Double) async -> BlockingTranscribeResult // POST /v1/transcribe
         let watchStatus: () -> WatchStatusDTO // GET /v1/watch
         let watchControl: (WatchAction) async -> WatchControlOutcome // POST /v1/watch
+        let recordStatus: () -> RecordStatusDTO // GET /v1/record
+        let recordControl: (RecordAction) async -> RecordControlOutcome // POST /v1/record
         var idempotency = IdempotencyStore() // Idempotency-Key -> job IDs; internal for the +V1 extension
         private let expectedAuth: String
         private var listener: NWListener?
@@ -118,6 +120,8 @@
             transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
             watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
             watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
+            recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
+            recordControl: @escaping (RecordAction) async -> RecordControlOutcome = { _ in .failed },
         ) {
             self.port = NWEndpoint.Port(rawValue: port) ?? NWEndpoint.Port.any
             self.expectedAuth = "Bearer \(token)"
@@ -135,6 +139,8 @@
             self.transcribe = transcribe
             self.watchStatus = watchStatus
             self.watchControl = watchControl
+            self.recordStatus = recordStatus
+            self.recordControl = recordControl
         }
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
@@ -342,7 +348,8 @@
             // switch below, which compares against the raw `request.path`.
             let pathWithoutQuery = String(request.path.prefix { $0 != "?" })
             if pathWithoutQuery == "/v1/jobs" || pathWithoutQuery.hasPrefix("/v1/jobs/")
-                || pathWithoutQuery == "/v1/transcribe" || pathWithoutQuery == "/v1/watch" {
+                || pathWithoutQuery == "/v1/transcribe"
+                || Self.controlResourcePaths.contains(pathWithoutQuery) {
                 return await routeV1(request, path: pathWithoutQuery)
             }
 

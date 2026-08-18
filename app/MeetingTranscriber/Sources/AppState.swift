@@ -414,6 +414,7 @@ final class AppState {
                 return await pipeline.transcribeAndWait(path: url, maxWaitSeconds: maxWait)
             }
             let watch = watchRPCClosures()
+            let record = recordRPCClosures()
             return DebugRPCServer(
                 port: port,
                 token: token,
@@ -431,6 +432,8 @@ final class AppState {
                 transcribe: transcribe,
                 watchStatus: watch.status,
                 watchControl: watch.control,
+                recordStatus: record.status,
+                recordControl: record.control,
             )
         }
     #endif
