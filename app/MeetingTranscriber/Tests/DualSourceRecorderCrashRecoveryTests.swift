@@ -388,6 +388,45 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
         )
     }
 
+    /// An empty track must never become a mix. Recovery reaches this stem
+    /// before the janitor does, so a `buildRecording` that read zero samples as
+    /// audio would write a silent `_mix.wav` — and the orphan scan enqueues
+    /// every untracked mix, so a start that captured nothing would come back as
+    /// a meeting to transcribe.
+    func testAStemWhoseTrackNeverGotAudioProducesNoMix() throws {
+        let dir = try makeTempDirectory(prefix: "crash_empty_track_mix")
+        let stem = "20260311_250000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [], sampleRate: 16000, url: micWav)
+        try backdate([marker, micWav])
+
+        let count = DualSourceRecorder.recoverCrashedRecordings(in: dir)
+
+        XCTAssertEqual(count, 0, "there was nothing to recover")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent(stem + RecordingFileSuffix.mix).path),
+            "a silent mix would be picked up by the orphan scan and transcribed as a meeting",
+        )
+    }
+
+    /// A marker whose tracks are both gone: a start that threw before either
+    /// file was created, or a stem someone cleaned up by hand. Recovery has
+    /// nothing to rebuild from and must say so, because its caller counts a
+    /// return as a rescued recording and hands the mix path on.
+    func testRecoveringAStemWithNoTracksAtAllThrows() throws {
+        let dir = try makeTempDirectory(prefix: "crash_no_tracks")
+
+        XCTAssertThrowsError(
+            try DualSourceRecorder.recoverCrashedRecording(stem: "20260311_260000", in: dir),
+        ) { error in
+            guard case RecorderError.noAudioData = error else {
+                return XCTFail("expected noAudioData, got \(error)")
+            }
+        }
+    }
+
     /// Zero the `data` size the way a writer killed mid-stream does.
     private func leaveHeaderUnfinalized(at url: URL) throws {
         var data = try Data(contentsOf: url)
