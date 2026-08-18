@@ -34,7 +34,7 @@ final class WatchingControllerTests: XCTestCase {
         startJoinTimeout: Duration = WatchingController.defaultStartJoinTimeout,
         makeDetector: @escaping () -> any MeetingDetecting = { makeSilentDetector() },
     ) -> WatchingController {
-        WatchingControllerFactory.make(
+        makeWatchingController(
             logDir: tmpDir,
             ensureMicAccess: ensureMicAccess,
             requestScreenRecording: requestScreenRecording,

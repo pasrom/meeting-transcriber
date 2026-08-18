@@ -24,7 +24,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
     /// method, and without the guard it would record the one thing that setting
     /// exists to keep off tape.
     func testMicrophoneRecordingIsRefusedWhenTheUserTurnedTheMicrophoneOff() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, noMic: true)
+        let controller = makeWatchingController(logDir: tmpDir, noMic: true)
 
         controller.startMicrophoneRecording()
 
@@ -43,7 +43,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         // anything would pass just as well.
         // Seeded health: without it the loop runs a live TCC probe whose answer
         // depends on the runner, and this test asserts a start *succeeds*.
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir, noMic: false, permissionHealth: .allHealthy,
         )
         addTeardownBlock { await controller.stopManualRecording() }
@@ -69,7 +69,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
     /// is told nothing.
     func testAnAppPickerStartIsRefusedWhileAnAutoDetectedMeetingIsRecording() async {
         let notifier = RecordingNotifier()
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy,
         )
         let (loop, _) = makeTestWatchLoop(detector: FixedMeetingDetector())
@@ -77,10 +77,13 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         loop.start()
         addTeardownBlock { await loop.stop() }
         await waitFor(loop.state == .recording, timeout: .seconds(2))
-        XCTAssertFalse(
-            loop.isManualRecording,
-            "precondition: an auto meeting is what makes the ownership guards insufficient",
-        )
+        // The wait is the precondition, so assert it: if it ever expires the
+        // loop is merely `.watching`, the start is then correctly NOT refused,
+        // and the assertions below would report a timeout as a production
+        // regression. `isManualRecording` is deliberately not the check here —
+        // an auto meeting never sets `manualRecordingInfo`, so it reads false in
+        // every state and could not fail.
+        XCTAssertEqual(loop.state, .recording, "precondition: the meeting must be recording by now")
 
         controller.startManualRecording(pid: 1234, appName: "Safari", title: "Second")
         await waitFor(!controller.isManualRecording, timeout: .seconds(2))
@@ -93,6 +96,29 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         )
     }
 
+    /// The refusal's *result*, which the picker path above cannot observe: it
+    /// goes through `startManualRecording`, which discards the task.
+    ///
+    /// `.blockedByActiveRecording` is produced in one place and consumed in one,
+    /// where `/v1/record` maps it to the documented 409. Nothing pinned that
+    /// mapping's input: changing the returned case to `.failed` left all tests
+    /// green while the endpoint answered 503 in exactly the race this guard
+    /// covers, telling a client to retry a conflict the docs say to stop on.
+    func testATakeoverRefusalReportsItselfAsBlockedRatherThanFailed() async {
+        let controller = makeWatchingController(logDir: tmpDir, permissionHealth: .allHealthy)
+        let (loop, _) = makeTestWatchLoop(detector: FixedMeetingDetector())
+        controller.watchLoop = loop
+        loop.start()
+        addTeardownBlock { await loop.stop() }
+        await waitFor(loop.state == .recording, timeout: .seconds(2))
+        XCTAssertEqual(loop.state, .recording, "precondition: the meeting must be recording by now")
+
+        let start = controller.beginManualRecording(.app(pid: 1234, appName: "Safari", title: "Second"))
+
+        let outcome = await start?.value
+        XCTAssertEqual(outcome, .blockedByActiveRecording, "a live recording is a conflict, not a failure")
+    }
+
     /// Issue #624: a second manual start while one is already recording used to
     /// overwrite `watchLoop` without stopping the live loop, so its audio was
     /// never enqueued while its recorder kept capturing, retained by its own
@@ -101,7 +127,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
     func testSecondManualStartIsRefusedWhileOneIsRecording() async throws {
         let micGate = AsyncGate()
         // swiftlint:disable:next trailing_closure
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, ensureMicAccess: {
+        let controller = makeWatchingController(logDir: tmpDir, ensureMicAccess: {
             await micGate.wait()
             return true
         })

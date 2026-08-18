@@ -29,7 +29,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     // MARK: - Start
 
     func testStartRecordsTheMicrophoneAndReportsTheChange() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, permissionHealth: .allHealthy)
+        let controller = makeWatchingController(logDir: tmpDir, permissionHealth: .allHealthy)
         addTeardownBlock { await controller.stopManualRecording() }
 
         let outcome = await controller.applyRecordAction(.start)
@@ -43,7 +43,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// must not build a second loop over the live one, which is the loss #624
     /// was about.
     func testSecondStartIsUnchangedAndKeepsTheRecordingItFound() async throws {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
         let loop = try await microphoneRecording(on: controller)
 
         let outcome = await controller.applyRecordAction(.start)
@@ -57,7 +57,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// setting by starting anyway would record nothing, and retrying changes
     /// nothing until the user turns it off.
     func testStartIsRefusedWhileTheMicrophoneIsSwitchedOff() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, noMic: true)
+        let controller = makeWatchingController(logDir: tmpDir, noMic: true)
 
         let outcome = await controller.applyRecordAction(.start)
 
@@ -69,7 +69,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// second permission check here, so the refusal names the source the loop
     /// was actually about to record.
     func testStartIsRefusedWhenTheMicrophonePermissionIsDenied() async {
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir,
             permissionHealth: HealthCheckResult(screenRecording: .healthy, microphone: .denied),
         )
@@ -85,7 +85,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// Recording only ever gated the process tap, and a microphone recording
     /// opens none (#633).
     func testStartProceedsWhileScreenRecordingIsDenied() async {
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir,
             permissionHealth: HealthCheckResult(screenRecording: .denied, microphone: .healthy),
         )
@@ -100,7 +100,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// 409, and the assertion that carries it is the second one: a refusal that
     /// still clobbered the running recording would be the bug, not the code.
     func testStartIsBlockedWhileAnAppRecordingOwnsTheLoop() async throws {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
         let loop = try await appRecording(on: controller)
 
         let outcome = await controller.applyRecordAction(.start)
@@ -116,7 +116,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// and a start would sail past them and clobber a meeting in progress. Only
     /// the availability check above stands between a remote key press and that.
     func testStartIsBlockedWhileAnAutoDetectedMeetingIsBeingRecorded() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
         let (loop, _) = makeTestWatchLoop(detector: FixedMeetingDetector())
         controller.watchLoop = loop
         loop.start()
@@ -140,7 +140,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
         // Explicit label, not a trailing closure: `make` takes several
         // function-type parameters and binding by position is exactly the trap
         // the RPC integration tests warn about.
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             // swiftlint:disable:next trailing_closure
             logDir: tmpDir, permissionHealth: .allHealthy, makeRecorder: { ThrowingRecorder() },
         )
@@ -155,7 +155,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// active auto loop before it knows whether it can record, so without the
     /// re-arm a 412 answers "nothing changed" while detection is off for good.
     func testARefusedStartPutsMeetingWatchingBack() async {
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir,
             permissionHealth: HealthCheckResult(screenRecording: .healthy, microphone: .denied),
         )
@@ -175,7 +175,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// prompt the docs name as the cause of a 503.
     func testAStartWaitsForAnInFlightOneWithinASingleBound() async {
         let gate = AsyncGate()
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir,
             ensureMicAccess: {
                 await gate.wait()
@@ -221,7 +221,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// whole run: without the bound the call never returns at all.
     func testTheStartThisCallLaunchesIsBoundedToo() async {
         let gate = AsyncGate()
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             logDir: tmpDir,
             ensureMicAccess: {
                 await gate.wait()
@@ -255,7 +255,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     // MARK: - Stop
 
     func testStopEndsAMicrophoneRecording() async throws {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
         _ = try await microphoneRecording(on: controller)
 
         let outcome = await controller.applyRecordAction(.stop)
@@ -265,7 +265,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     }
 
     func testStopWithNothingRecordingIsUnchanged() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
 
         let outcome = await controller.applyRecordAction(.stop)
 
@@ -277,7 +277,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// Reported as `.unchanged` rather than `.blocked` because no microphone
     /// recording is running, so the asked-for end state already holds.
     func testStopLeavesAnAppRecordingAlone() async throws {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir)
+        let controller = makeWatchingController(logDir: tmpDir)
         let loop = try await appRecording(on: controller)
 
         let outcome = await controller.applyRecordAction(.stop)
@@ -293,7 +293,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     /// path is exactly that shape, which is also why the factory's default
     /// carries one.
     func testAStopThatLosesTheRecordingIsNotReportedAsSuccess() async {
-        let controller = WatchingControllerFactory.make(
+        let controller = makeWatchingController(
             // swiftlint:disable:next trailing_closure
             logDir: tmpDir, permissionHealth: .allHealthy, makeRecorder: { MockRecorder() },
         )
@@ -309,7 +309,7 @@ final class WatchingControllerRecordControlTests: XCTestCase {
     // MARK: - Toggle
 
     func testToggleStartsThenStops() async {
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, permissionHealth: .allHealthy)
+        let controller = makeWatchingController(logDir: tmpDir, permissionHealth: .allHealthy)
         addTeardownBlock { await controller.stopManualRecording() }
 
         let started = await controller.applyRecordAction(.toggle)
