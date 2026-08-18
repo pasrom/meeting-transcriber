@@ -62,6 +62,19 @@ PRs are excluded from the self-hosted runner.
   the speaker DB learns the voices); it snapshots + restores the runner's real
   `speakers.json`/`recognition_log.jsonl` (`$GITHUB_ACTIONS`-gated) so the
   confirm never pollutes the persistent speaker DB.
+- The `--mic-only` lane (issue #633) records the microphone with no app audio,
+  driving `POST /v1/record` instead of a detected meeting, and asserts the
+  record-only sidecar carries a mic track, `trigger` is `manual`, and there is
+  **no** app track. That last one is the point: nothing else in the suite would
+  notice a microphone-only recording quietly opening a process tap. It is the
+  only lane that mutates a machine-global setting, pointing the default audio
+  output at the loopback for its own duration (see setup step 1 for why), so it
+  is also the only one whose teardown can leave the host in a worse state than
+  it found it. It restores the device only after re-reading it, keeps its marker
+  when a restore fails, and every `e2e-app.sh` invocation heals a dead run's
+  marker before any lane can record. A machine left on the loopback would record
+  a mic track that is a bit-perfect copy of the app track on every later
+  dual-source lane, which no lane asserts against.
 - The `--echo-bleed` lane (issue #581) is the odd one out: it records nothing.
   A recording made on loudspeakers carries the remote voices on the microphone
   track too, so the same speech is transcribed twice; the pipeline measures that
@@ -149,10 +162,24 @@ PRs are excluded from the self-hosted runner.
   so the grants survive rebuilds.
 
 **One-time self-hosted runner setup**:
-1. `brew install blackhole-2ch` then reboot (or `sudo killall coreaudiod`),
-   set BlackHole 2ch as the default Input in System Settings → Sound.
-   Mac mini hosts have no built-in mic; without a virtual input device
-   the dual-source recorder hits the libmalloc abort path.
+1. `brew install blackhole-2ch switchaudio-osx` then reboot (or
+   `sudo killall coreaudiod`), set BlackHole 2ch as the default Input in
+   System Settings → Sound. Mac mini hosts have no built-in mic; without a
+   virtual input device the dual-source recorder hits the libmalloc abort path.
+
+   **BlackHole as the input carries no signal on its own**, and that is worth
+   knowing before reading a silent mic track as a bug. It is a loopback: its
+   input carries exactly what something plays into its *output*, and the default
+   output is the speakers, which nothing routes back. Measured 2026-08-18: four
+   mic tracks sampled from earlier runs each read -120 dBFS, while the analyzer
+   reports -22 dBFS for the shipped fixture. Every lane except `--mic-only` is
+   unaffected, because the app track comes from the CATap, which reads process
+   output and touches no device at all.
+
+   `switchaudio-osx` is what `--mic-only` uses to point the default output at
+   the loopback for its own duration (and to put it back). Only that lane needs
+   it, and it preflights for it with this hint, so a runner without it fails
+   loudly rather than recording silence.
 2. Configure auto-login for the runner user so loginwindow brings up an
    Aqua session at boot. CATapDescription captures silence in non-GUI
    contexts even when API calls return `noErr`.
