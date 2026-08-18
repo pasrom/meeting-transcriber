@@ -191,6 +191,30 @@ jobs:
       # the env-gated assertion in `scripts/e2e-app.sh` would have caught it.
       # `--no-build` reuses the dev .app from the first step; only the
       # UserDefaults flip + meeting trigger differ. Adds ~30s to total lane.
+      # PLACEMENT: after the record-only producer and its re-import consumer,
+      # because those two are a pair (`--keep-recordings` exists so the second
+      # reuses the first's WAV) and this lane writes a `_mix.wav` of its own into
+      # the same directory. Kept adjacent to another `e2e-app.sh` invocation so a
+      # routing marker stranded by a hard kill here is healed by the next step.
+      #
+      # Microphone-only lane (issue #633): drives POST /v1/record instead of a
+      # detected meeting and asserts the sidecar carries a mic track and NO app
+      # track. Nothing else in this workflow would notice if a microphone-only
+      # recording quietly opened a process tap.
+      #
+      # It reroutes the machine's default OUTPUT into the loopback device that is
+      # the default INPUT, for its own duration, because nothing else feeds that
+      # input. The mechanism, its failure modes and the measurement behind it are
+      # documented at the routing block in scripts/e2e-app.sh; note the script
+      # restores the device only after verifying the switch, and heals a dead
+      # run's marker at startup — but only for its own lanes, not for the other
+      # e2e-*.sh drivers in this workflow.
+      - name: Run live-recording E2E driver (microphone only)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --no-build --mic-only
+
       - name: Run live-recording E2E driver (Sortformer naming dialog)
         env:
           DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}

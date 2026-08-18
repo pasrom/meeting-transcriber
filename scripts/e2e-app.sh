@@ -28,6 +28,7 @@ APP_AFTER=quit           # quit | leave
 SIMULATOR_FIXTURE=""     # custom audio fixture for the simulator
 NO_BUILD=false           # skip build/deploy/re-sign — use whatever's at ~/Applications already
 TWO_MEETINGS=false       # trigger two back-to-back meetings to validate cooldown + state reset
+MIC_ONLY=false           # drive a microphone-only recording over /v1/record and assert its sidecar
 RECORD_ONLY=false        # validate record-only mode (sidecar+WAV instead of transcript)
 REIMPORT_RECORDED=false  # chain a record-only meeting with re-import via POST /action/enqueueFile
 REIMPORT_LATEST=false    # skip live-record phase, re-import the freshest *_mix.wav already on disk
@@ -47,6 +48,7 @@ while [ $# -gt 0 ]; do
         --no-build)         NO_BUILD=true ;;
         --fixture)          shift; SIMULATOR_FIXTURE="$1" ;;
         --two-meetings)     TWO_MEETINGS=true ;;
+        --mic-only)         MIC_ONLY=true ;;
         --record-only)      RECORD_ONLY=true ;;
         --reimport-recorded) REIMPORT_RECORDED=true ;;
         --reimport-latest)  REIMPORT_LATEST=true ;;
@@ -68,6 +70,11 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
   --two-meetings       Run two meetings back-to-back (cooldown + state-reset coverage).
+  --mic-only           Record the microphone with no app audio (issue #633) via
+                       POST /v1/record, and assert the sidecar carries a mic track
+                       and NO app track. Reroutes the default OUTPUT to BlackHole
+                       2ch for the lane's duration so the loopback input has
+                       something to hear, and restores it on any exit.
   --record-only        Enable record-only mode: assert on sidecar JSON + mix WAV instead
                        of transcript/protocol. Exercises the WatchLoop branch that
                        skips VAD/transcription/diarization/protocol generation.
@@ -184,6 +191,16 @@ if [ "$NAMING_CONFIRM" = true ] && [ -n "$SIMULATOR_FIXTURE" ]; then
     echo "Error: --naming-confirm ignores --fixture (it always uses the 2-speaker fixture)" >&2
     exit 2
 fi
+# --mic-only drives its own recording over /v1/record and reroutes the machine's
+# audio output; sharing a run with a meeting lane would have the detector start a
+# second recording next to it.
+if [ "$MIC_ONLY" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$NAMING_CONFIRM" = true ] \
+    || [ "$NAMING_ESCAPE" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
+    || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
+    || [ "$TWO_MEETINGS" = true ] || [ "$ECHO_BLEED" = true ] || [ "$TITLE_SOURCE" = true ]; }; then
+    echo "Error: --mic-only is a standalone lane; incompatible with the other lane flags" >&2
+    exit 2
+fi
 # --echo-bleed builds its own audio from the shipped fixtures and never records,
 # so it shares nothing with the meeting lanes and would only mask a typo.
 if [ "$ECHO_BLEED" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
@@ -280,6 +297,16 @@ PIPELINE_TIMEOUT_S=240
 # finalize (~3 s) + sidecar write (instant). 60 s gives ample buffer.
 RECORD_ONLY_DEADLINE_S=60
 
+# wav-verdict calibration, shared by every lane that asserts a track carries
+# signal. The threshold is the analyzer's own silence floor; the active-seconds
+# floor is what separates a real capture from a "one second then silence"
+# wedge, so it is set against the fixture's measured content (two_speakers_de.wav
+# is 49.8 s long and carries 37.5 s above the threshold) rather than at a token
+# value that any partial capture would clear.
+WAV_VERDICT_THRESHOLD_DBFS=-50
+WAV_VERDICT_MIN_ACTIVE_S=3
+WAV_VERDICT_FIXTURE_MIN_ACTIVE_S=25
+
 # Sidecar write completes before the recorder's async tail bytes do — give
 # the WAV's AVAudioFile close a moment before re-feeding it to the engine.
 # Observed worst case on Mini is ~1 s; 2 s is honest margin.
@@ -314,6 +341,124 @@ rpc() {
         "$RPC_BASE$path" 2>/dev/null || true
 }
 
+
+# --- Mic-only lane: audio routing ------------------------------------------
+#
+# The lane needs one invariant that no default configuration guarantees: the
+# default INPUT must be a loopback of the default OUTPUT, so that playing a
+# fixture is the same as speaking into the microphone. It arranges the second
+# half itself, pointing the default output at the loopback device for its own
+# duration, and asserts the first half in its preflight rather than assuming it.
+#
+# Why it is needed at all, measured 2026-08-18: with the output on the speakers,
+# four mic tracks sampled from earlier runs on this host each read -120 dBFS
+# (a sample, not a census), while the analyzer reports -22 dBFS for the shipped
+# fixture. With the output routed into the loopback this lane records -22 dBFS.
+# The app track is unaffected either way because it comes from the CATap, which
+# reads process output and touches no device at all.
+#
+# Restoring the routing matters more than setting it. A machine left on the
+# loopback goes silent AND records, on every later dual-source lane, a mic track
+# that is a bit-perfect copy of the app track. That is textbook echo bleed: it
+# would skew the echo detector on runs that have nothing to do with this lane,
+# and no lane asserts against it, so CI would stay green while the meaning of
+# every recording quietly changed. Hence:
+#
+#   - the marker is written BEFORE the switch, so a kill can never strand the
+#     machine with no record of where to go back to;
+#   - it is deleted only AFTER the restore has been verified by re-reading the
+#     device, so a restore that fails keeps its own repair instructions;
+#   - it carries the owning PID, so a concurrent run heals a dead run's marker
+#     and never steals a live one;
+#   - the self-heal runs before every early exit, not just before the lane.
+_MIC_ONLY_DEVICE="BlackHole 2ch"
+_MIC_ONLY_OUTPUT_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-mic-only-previous-output"
+
+# Read the current default output, or empty on failure.
+_mic_only_current_output() {
+    SwitchAudioSource -c -t output 2>/dev/null || true
+}
+
+_mic_only_switch_output() {
+    local previous
+    previous="$(_mic_only_current_output)"
+    [ -n "$previous" ] || fail "[mic-only] could not read the current default output device"
+    # No benign "already on the loopback" path: on this host that is never a
+    # resting state, it is the signature of a previous run that failed to
+    # restore, and skipping would hide exactly the damage this file guards.
+    [ "$previous" != "$_MIC_ONLY_DEVICE" ] \
+        || fail "[mic-only] default output is already $_MIC_ONLY_DEVICE, which means an earlier run never restored it; fix the machine's audio output before re-running"
+    mkdir -p "$(dirname "$_MIC_ONLY_OUTPUT_MARKER")"
+    # PID first so a reader can tell a live owner from a dead one; the device
+    # name may contain spaces, so it takes the whole rest of the line.
+    printf '%s %s' "$$" "$previous" >"$_MIC_ONLY_OUTPUT_MARKER"
+    SwitchAudioSource -t output -s "$_MIC_ONLY_DEVICE" >/dev/null \
+        || fail "[mic-only] could not set default output to $_MIC_ONLY_DEVICE"
+    local now
+    now="$(_mic_only_current_output)"
+    [ "$now" = "$_MIC_ONLY_DEVICE" ] \
+        || fail "[mic-only] default output is '$now' after switching; expected $_MIC_ONLY_DEVICE"
+    log "[mic-only] default output $previous -> $_MIC_ONLY_DEVICE (restores on exit)"
+}
+
+# Restore and only then forget. $1 = "trap" when called from the exit trap,
+# where a failure must warn rather than mask the run's real status; any other
+# caller gets a hard failure, because a self-heal that cannot repair the machine
+# must stop the run rather than hand the next lane a poisoned device.
+_mic_only_restore_output() {
+    local mode="${1:-trap}"
+    [ -f "$_MIC_ONLY_OUTPUT_MARKER" ] || return 0
+    local raw owner previous now
+    raw="$(cat "$_MIC_ONLY_OUTPUT_MARKER" 2>/dev/null || true)"
+    owner="${raw%% *}"
+    previous="${raw#* }"
+    if [ -z "$raw" ] || [ -z "$previous" ] || [ "$owner" = "$raw" ]; then
+        _mic_only_report "$mode" "[mic-only] output marker is unreadable ('$raw'); set the default output by hand"
+        return 0
+    fi
+    if ! SwitchAudioSource -t output -s "$previous" >/dev/null 2>&1; then
+        _mic_only_report "$mode" "[mic-only] could not restore default output to '$previous' (device gone?); marker kept at $_MIC_ONLY_OUTPUT_MARKER"
+        return 0
+    fi
+    now="$(_mic_only_current_output)"
+    if [ "$now" != "$previous" ]; then
+        _mic_only_report "$mode" "[mic-only] default output is '$now' after restoring; expected '$previous'; marker kept"
+        return 0
+    fi
+    # Verified: only now is the marker safe to drop.
+    rm -f "$_MIC_ONLY_OUTPUT_MARKER"
+    log "[mic-only] default output restored to $previous"
+}
+
+_mic_only_report() {
+    local mode="$1" message="$2"
+    if [ "$mode" = "trap" ]; then
+        log "WARNING: $message"
+    else
+        fail "$message"
+    fi
+}
+
+# Startup self-heal, run by every invocation of this script before any lane can
+# record. Only acts on a marker whose owner is gone: a live owner means another
+# run holds the routing, and restoring it under that run would both break it and
+# strand the machine once it switches again.
+_mic_only_self_heal_output() {
+    [ -f "$_MIC_ONLY_OUTPUT_MARKER" ] || return 0
+    local owner
+    owner="$(cut -d' ' -f1 <"$_MIC_ONLY_OUTPUT_MARKER" 2>/dev/null || true)"
+    if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then
+        fail "[mic-only] another run (pid $owner) currently holds the audio routing; wait for it to finish"
+    fi
+    log "[mic-only] leftover output-routing marker from a dead run detected; self-healing"
+    _mic_only_restore_output heal
+}
+
+# Heal a dead run's routing before anything else happens on this machine.
+# Deliberately here and not after the traps: `--redeploy-only` and every
+# preflight `fail` exit long before those, and the marker they would leave
+# unhealed poisons the mic track of every later lane on this host.
+_mic_only_self_heal_output
 
 # --- preflight ------------------------------------------------------------
 
@@ -401,9 +546,26 @@ fi
 # Record-only lanes assert the captured app track is non-silent via
 # `mt-cli wav-verdict` (the same analyzer the browser lane uses). Only that
 # mode needs it, so build lazily to keep the processing lane unchanged.
-if [ "$RECORD_ONLY" = true ] && [ ! -x "$MTCLI" ]; then
-    log "Building mt-cli (app-track silence guard)"
+if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ]; } && [ ! -x "$MTCLI" ]; then
+    # record-only asserts the app track carries signal; mic-only needs the same
+    # analyzer for its mic track AND drives `record start/stop` through it.
+    log "Building mt-cli (track silence guard + record control)"
     (cd "$MTCLI_PKG" && swift build -c release) || fail "mt-cli build failed"
+fi
+
+if [ "$MIC_ONLY" = true ]; then
+    command -v SwitchAudioSource >/dev/null 2>&1 \
+        || fail "--mic-only needs SwitchAudioSource to route the default output into the loopback input: brew install switchaudio-osx"
+    SwitchAudioSource -a -t output 2>/dev/null | grep -qx "$_MIC_ONLY_DEVICE" \
+        || fail "--mic-only needs $_MIC_ONLY_DEVICE as an output device: brew install blackhole-2ch (then reboot or restart coreaudiod)"
+    # The lane's actual premise, asserted rather than assumed: it feeds the
+    # default OUTPUT, and only a default input that loops that back turns the
+    # fixture into captured microphone audio. Without this check a host with a
+    # real default microphone silences its speakers, records the room, and
+    # fails 60 s later with a message blaming microphone capture.
+    _MIC_ONLY_INPUT="$(SwitchAudioSource -c -t input 2>/dev/null || true)"
+    [ "$_MIC_ONLY_INPUT" = "$_MIC_ONLY_DEVICE" ] \
+        || fail "--mic-only needs the default INPUT to be $_MIC_ONLY_DEVICE (the loopback it routes the output into), but it is '$_MIC_ONLY_INPUT'. Set it in System Settings > Sound, or unplug the device that took over."
 fi
 
 # `autoWatch` triggers the same `.autoWatchStart` notification an
@@ -413,7 +575,16 @@ fi
 defaults write "$DEV_BUNDLE_ID" debugRPCEnabled -bool true
 defaults write "$DEV_BUNDLE_ID" autoWatch -bool true
 
-if [ "$RECORD_ONLY" = true ]; then
+if [ "$MIC_ONLY" = true ]; then
+    # Record-only so the lane needs no ASR models, and auto-watch OFF so nothing
+    # detects a meeting and starts a second recording next to the manual one.
+    log "Enabling record-only mode and disabling auto-watch for the mic-only lane"
+    defaults write "$DEV_BUNDLE_ID" recordOnly -bool true
+    defaults write "$DEV_BUNDLE_ID" autoWatch -bool false
+    mkdir -p "$RECORDINGS_DIR"
+    touch "$RECORD_ONLY_MARKER"
+    RECORD_ONLY=true   # reuse the record-only cleanup + marker-bounded sweep
+elif [ "$RECORD_ONLY" = true ]; then
     log "Enabling record-only mode (no transcript/protocol generation)"
     defaults write "$DEV_BUNDLE_ID" recordOnly -bool true
     mkdir -p "$RECORDINGS_DIR"
@@ -620,7 +791,6 @@ _naming_confirm_cleanup() {
 
 # Self-heal a dead prior run's DB before anything touches it (CI-gated, all lanes).
 _naming_confirm_self_heal_db
-
 if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
     log "Enabling naming lane (diarize on, expected speakers = 2)"
     # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
@@ -704,6 +874,12 @@ on_exit() {
     [ -n "$_ON_EXIT_RAN" ] && return 0
     _ON_EXIT_RAN=1
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
+    if [ "$MIC_ONLY" = true ]; then
+        # The lane turns auto-watch off; nothing else here would turn it back
+        # on, and a human using the dev app on this host would find detection
+        # silently disabled.
+        defaults write "$DEV_BUNDLE_ID" autoWatch -bool true 2>/dev/null || true
+    fi
     if [ "$RECORD_ONLY" = true ]; then
         defaults delete "$DEV_BUNDLE_ID" recordOnly 2>/dev/null || true
         # Marker-bounded cleanup: only files created since `touch $MARKER`
@@ -736,6 +912,10 @@ on_exit() {
     if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
         _naming_confirm_cleanup
     fi
+    # Mic-only: hand the machine's audio output back before anything else runs
+    # on this host. Unconditional, not gated on $MIC_ONLY, so a marker left by a
+    # previous run is cleared even when this run never touched the routing.
+    _mic_only_restore_output
     # Echo lane: drop the synthesised pairs (our own mktemp dir, never a real
     # recordings directory).
     if [ -n "${_EB_FIXTURE_DIR:-}" ] && [ -d "$_EB_FIXTURE_DIR" ]; then
@@ -751,6 +931,7 @@ on_exit() {
 trap on_exit EXIT
 trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
+
 
 # Trigger one meeting, poll until a new pipeline job reaches a terminal
 # state, assert it landed in `done` with a non-trivial transcript. Reads
@@ -953,6 +1134,155 @@ run_one_meeting() {
     SIM_PID=""
 }
 
+# --- Shared sidecar assertions ---------------------------------------------
+#
+# Extracted so the record-only and mic-only lanes cannot drift on the parts that
+# are properties of a *sidecar* rather than of a lane. Each lane keeps its own
+# jq for what makes it that lane (trigger, which track must be present).
+
+# Wait for a `*_meta.json` newer than $2 to appear, then dump it.
+# Sets $SIDECAR_PATH; an out-variable rather than stdout because `log` writes
+# there and command substitution would swallow the run log into the value.
+await_new_sidecar() {
+    local label="$1" marker="$2"
+    log "$label: polling $RECORDINGS_DIR for sidecar (timeout ${RECORD_ONLY_DEADLINE_S}s)"
+    local deadline=$(( $(date +%s) + RECORD_ONLY_DEADLINE_S ))
+    SIDECAR_PATH=""
+    while true; do
+        SIDECAR_PATH="$(find "$RECORDINGS_DIR" -type f -name '*_meta.json' -newer "$marker" -print 2>/dev/null | head -1)"
+        [ -n "$SIDECAR_PATH" ] && break
+        [ "$(date +%s)" -lt "$deadline" ] || fail "$label: no *_meta.json appeared in $RECORDINGS_DIR within ${RECORD_ONLY_DEADLINE_S}s"
+        sleep 2
+    done
+    log "$label: found sidecar $SIDECAR_PATH"
+    jq -C . "$SIDECAR_PATH" | sed 's/^/    /'
+}
+
+# The lane-independent half of the schema: shape and timestamps.
+assert_sidecar_common() {
+    local label="$1" sidecar="$2" check
+    check="$(jq -r '
+        if .version != 2 then "version != 2 (got: \(.version))"
+        elif (.startedAt | type) != "string" then "startedAt not string"
+        elif (.stoppedAt | type) != "string" then "stoppedAt not string"
+        elif (.startedAt | fromdateiso8601? // -1) < 0 then "startedAt not ISO8601"
+        elif (.stoppedAt | fromdateiso8601? // -1) < 0 then "stoppedAt not ISO8601"
+        elif (.stoppedAt | fromdateiso8601) <= (.startedAt | fromdateiso8601) then "stoppedAt <= startedAt"
+        else "ok"
+        end
+    ' "$sidecar")"
+    [ "$check" = "ok" ] || fail "$label: sidecar schema invalid: $check"
+}
+
+# Assert one track named in the sidecar exists and carries audio.
+# $4 is the active-seconds floor: pass the fixture-calibrated one where the
+# lane controls what is played, so a capture that dies partway is caught.
+assert_sidecar_track_has_signal() {
+    local label="$1" sidecar="$2" key="$3" min_active="$4" hint="$5"
+    local name path verdict
+    name="$(jq -r ".files.$key // empty" "$sidecar")"
+    [ -n "$name" ] || fail "$label: sidecar has no $key track (.files.$key is null). $hint"
+    path="$(dirname "$sidecar")/$name"
+    [ -f "$path" ] || fail "$label: $key track WAV not found: $path"
+    # `=` form for the negative threshold: ArgumentParser reads a bare `-50` as
+    # another flag and errors out.
+    if verdict="$("$MTCLI" wav-verdict "$path" --threshold-dbfs=$WAV_VERDICT_THRESHOLD_DBFS --min-active-seconds="$min_active")"; then
+        log "$label: $key track $name capture OK: $verdict"
+    else
+        fail "$label: $key track $name is silent/too quiet (reason above). $hint"
+    fi
+}
+
+# Record-only short-circuits before the pipeline, so `lastJob` must not move.
+assert_last_job_unchanged() {
+    local label="$1" lj_id
+    lj_id="$(rpc /state | jq -r '.lastJob.jobID // empty')"
+    [ "$lj_id" = "$PRE_LAST_JOB_ID" ] \
+        || fail "$label: lastJob.jobID changed to '$lj_id' (was '$PRE_LAST_JOB_ID') — the pipeline should have been skipped in record-only mode"
+}
+
+# Mic-only lane (issue #633): no meeting, no detector, no app audio. Starts the
+# recording over POST /v1/record, plays the fixture into the loopback input so
+# the microphone has something to capture, stops over the same route, and asserts
+# the sidecar describes a single-track recording.
+#
+# `afplay` rather than the meeting-simulator, and auto-watch off: this lane wants
+# sound, not a detectable meeting. The simulator holds a power assertion, and the
+# watch loop would start an auto recording alongside the manual one.
+run_mic_only() {
+    local label="[mic-only]"
+
+    _mic_only_switch_output
+
+    log "$label: starting microphone recording over POST /v1/record"
+    "$MTCLI" record start >/dev/null || fail "$label: mt-cli record start failed"
+
+    # Assert the app agrees it is recording before feeding it audio: a start that
+    # answered 200 while nothing runs would otherwise surface later as a
+    # confusing "no sidecar appeared".
+    local status
+    status="$("$MTCLI" record)" || fail "$label: mt-cli record status failed"
+    echo "$status" | jq -e '.recording == true' >/dev/null \
+        || fail "$label: /v1/record reports recording=false right after a 200 start: $status"
+    log "$label: recording confirmed: $status"
+
+    log "$label: playing $SIMULATOR_FIXTURE into the loopback input"
+    afplay "$SIMULATOR_FIXTURE" || fail "$label: afplay failed; the microphone had nothing to capture"
+
+    log "$label: stopping recording"
+    "$MTCLI" record stop >/dev/null || fail "$label: mt-cli record stop failed"
+
+    # `record stop` is synchronous through mix + sidecar write, so this resolves
+    # on the first iteration or never; the deadline only bounds a regression.
+    local sidecar
+    await_new_sidecar "$label" "$RECORD_ONLY_MARKER"
+    sidecar="$SIDECAR_PATH"
+
+    # `trigger` is what tells a fleet consumer a short recording was deliberate
+    # rather than a false detection, and this lane is its only live producer.
+    # The identity fields are asserted for the same reason: nothing else records
+    # under them, so a drift would ship unnoticed.
+    local schema_check
+    schema_check="$(jq -r '
+        if .trigger != "manual" then "trigger != manual (got: \(.trigger // "absent"))"
+        elif .appName != "Microphone" then "appName != Microphone (got: \(.appName // "absent"))"
+        elif .title != "Microphone Recording" then "title != Microphone Recording (got: \(.title // "absent"))"
+        elif (.micDelaySeconds // 0) != 0 then "micDelaySeconds != 0 (got: \(.micDelaySeconds)) — there is no app track to align against"
+        elif (.files.mic // "") == "" then "files.mic missing"
+        elif (.files.mic | endswith("_mic.wav") | not) then "files.mic doesn'"'"'t end with _mic.wav (got: \(.files.mic))"
+        else "ok"
+        end
+    ' "$sidecar")"
+    [ "$schema_check" = "ok" ] || fail "$label: sidecar schema invalid: $schema_check"
+    assert_sidecar_common "$label" "$sidecar"
+
+    # THE assertion this lane exists for. Everything else here would also hold
+    # for an ordinary dual-source recording.
+    #
+    # Known limit, worth stating rather than implying: `.files.app` is written
+    # only when the tap delivered bytes, so this catches a tap that opens AND
+    # captures, not one that opens and yields nothing. Distinguishing those needs
+    # the recording source on `/state`, which it does not expose today.
+    local app_filename
+    app_filename="$(jq -r '.files.app // empty' "$sidecar")"
+    [ -z "$app_filename" ] || fail "$label: sidecar carries an app track ($app_filename); a microphone-only recording must open no process tap"
+    log "$label: no app track in the sidecar, as required"
+
+    assert_sidecar_track_has_signal "$label" "$sidecar" mic "$WAV_VERDICT_FIXTURE_MIN_ACTIVE_S" \
+        "Either the default output is no longer routed into the loopback input, or microphone capture regressed."
+
+    # Negative: record-only short-circuits before VAD/transcription/protocol, and
+    # a manual trigger must not be the exception that slips past it.
+    local unexpected
+    unexpected="$(find "$RECORDINGS_DIR" -maxdepth 1 -type f -newer "$RECORD_ONLY_MARKER" \
+        \( -name '*.txt' -o -name '*.md' \) 2>/dev/null | head -5)"
+    [ -z "$unexpected" ] || fail "$label: a microphone recording must not produce transcript/protocol; found: $unexpected"
+    assert_last_job_unchanged "$label"
+    assert_app_alive
+
+    log "$label: PASS"
+}
+
 # Record-only counterpart: trigger one meeting, wait for sidecar+WAV to
 # land in `recordings/`, assert schema/files, negative-assert that no
 # transcript/protocol got written and `lastJob` didn't advance.
@@ -991,19 +1321,14 @@ run_one_record_only_meeting() {
     # Schema check in one jq invocation — emits "ok" or a human-readable reason.
     local schema_check
     schema_check="$(jq -r '
-        if .version != 2 then "version != 2 (got: \(.version))"
-        elif .trigger != "auto" then "trigger != auto (got: \(.trigger // "absent"))"
-        elif (.startedAt | type) != "string" then "startedAt not string"
-        elif (.stoppedAt | type) != "string" then "stoppedAt not string"
-        elif (.startedAt | fromdateiso8601? // -1) < 0 then "startedAt not ISO8601"
-        elif (.stoppedAt | fromdateiso8601? // -1) < 0 then "stoppedAt not ISO8601"
-        elif (.stoppedAt | fromdateiso8601) <= (.startedAt | fromdateiso8601) then "stoppedAt <= startedAt"
+        if .trigger != "auto" then "trigger != auto (got: \(.trigger // "absent"))"
         elif (.files.mix // "") == "" then "files.mix missing"
         elif (.files.mix | endswith("_mix.wav") | not) then "files.mix doesn'\''t end with _mix.wav (got: \(.files.mix))"
         else "ok"
         end
     ' "$sidecar")"
     [ "$schema_check" = "ok" ] || fail "$label: sidecar schema invalid: $schema_check"
+    assert_sidecar_common "$label" "$sidecar"
 
     # Mix WAV must live next to the sidecar and be non-trivial.
     local sidecar_dir mix_filename mix_path mix_size
@@ -1012,8 +1337,8 @@ run_one_record_only_meeting() {
     mix_path="$sidecar_dir/$mix_filename"
     [ -f "$mix_path" ] || fail "$label: mix WAV not found: $mix_path"
     mix_size="$(wc -c <"$mix_path" | tr -d ' ')"
-    # 16 kHz mono 16-bit PCM = 32 KB/sec. Fixture two_speakers_de.wav is ~10 s,
-    # so expect > 64 KB even after worst-case truncation.
+    # 16 kHz mono 16-bit PCM = 32 KB/sec. Fixture two_speakers_de.wav is 49.8 s,
+    # so expect > 64 KB even after heavy truncation.
     [ "$mix_size" -gt 65536 ] || fail "$label: mix WAV suspiciously small: $mix_size bytes (expected > 64 KB)"
     log "$label: mix WAV $mix_path ($mix_size bytes)"
 
@@ -1030,16 +1355,8 @@ run_one_record_only_meeting() {
     # TCC audio-capture grant, or a regressed capture path).
     # `=` form for the negative threshold: ArgumentParser reads a bare `-50` as
     # another flag and errors out.
-    local app_filename app_path app_verdict
-    app_filename="$(jq -r '.files.app // empty' "$sidecar")"
-    [ -n "$app_filename" ] || fail "$label: sidecar has no app track (.files.app is null): dual-source capture wrote no app audio (the tap never attached or produced 0 bytes)."
-    app_path="$sidecar_dir/$app_filename"
-    [ -f "$app_path" ] || fail "$label: app track WAV not found: $app_path"
-    if app_verdict="$("$MTCLI" wav-verdict "$app_path" --threshold-dbfs=-50 --min-active-seconds=3)"; then
-        log "$label: app track $app_filename capture OK: $app_verdict"
-    else
-        fail "$label: app track $app_filename is silent/too quiet (reason above): system-audio capture produced no usable signal. Likely a wrong tap PID set, a missing TCC audio-capture grant, or a regressed capture path."
-    fi
+    assert_sidecar_track_has_signal "$label" "$sidecar" app "$WAV_VERDICT_FIXTURE_MIN_ACTIVE_S" \
+        "System-audio capture produced no usable signal: likely a wrong tap PID set, a missing TCC audio-capture grant, or a regressed capture path."
 
     # Negative: record-only short-circuits before VAD/transcription/protocol.
     # No `.txt`/`.md` files from THIS meeting should exist in recordings/.
@@ -1879,6 +2196,10 @@ elif [ "$REIMPORT_RECORDED" = true ]; then
     log "Sleeping ${RECORDER_FINALIZE_WAIT_S}s before re-import to let recorder finalize tail bytes"
     sleep "$RECORDER_FINALIZE_WAIT_S"
     run_one_reimport "[reimport]" "$LAST_RECORDED_MIX_PATH"
+elif [ "$MIC_ONLY" = true ]; then
+    # Before the record-only arm: the mic-only lane turns RECORD_ONLY on to
+    # reuse its cleanup, so testing RECORD_ONLY first would run the wrong lane.
+    run_mic_only
 elif [ "$RECORD_ONLY" = true ]; then
     if [ "$TWO_MEETINGS" = true ]; then
         run_one_record_only_meeting "[1/2]"
