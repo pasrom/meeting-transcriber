@@ -23,8 +23,13 @@ enum WatchingControllerFactory {
     ///   `AppPaths.recordingsDir` — the production staging directory that orphan
     ///   recovery scans. Real `.micOnly` capture is the live lane's job, not a
     ///   unit test's; see the `e2e-architecture` skill.
+    /// - Parameter notifier: pass one to assert on the refusals this controller
+    ///   reports. A silent refusal is the failure mode several of its guards
+    ///   exist to avoid, so "was the user told" is part of the behaviour, not a
+    ///   detail. Defaults to a fresh spy when a test does not care.
     static func make(
         logDir: URL,
+        notifier: RecordingNotifier = RecordingNotifier(),
         ensureMicAccess: @escaping () async -> Bool = { true },
         requestScreenRecording: @escaping () -> Void = {},
         requestAccessibility: @escaping () -> Void = {},
@@ -44,7 +49,6 @@ enum WatchingControllerFactory {
         let settings = AppSettings(defaults: UserDefaults(suiteName: suite) ?? .standard)
         settings.watchTeams = watchTeams
         settings.noMic = noMic
-        let notifier = RecordingNotifier()
         let pipeline = PipelineController(settings: settings, notifier: notifier)
         pipeline.queue = PipelineQueue(logDir: logDir)
         let channelHealth = ChannelHealthController(

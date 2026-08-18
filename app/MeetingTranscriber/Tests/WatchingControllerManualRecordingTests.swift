@@ -56,6 +56,43 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         XCTAssertTrue(controller.isManualRecording)
     }
 
+    /// The app-picker half of the #624 ownership rule, which the two guards in
+    /// `beginManualRecording` do not cover: an auto-detected meeting sets no
+    /// `manualRecordingInfo`, so `isManualRecording` reads false and a picker
+    /// start sails past both of them into the takeover that stops the loop.
+    ///
+    /// Reachable in practice because the picker window outlives the state it was
+    /// opened in: open it while idle, a meeting starts, press Start. The refusal
+    /// that prevents it lives where the takeover happens, so this pins the
+    /// behaviour for the picker path the way the record endpoint pins it for its
+    /// own. Losing it means a live meeting is truncated into a job and the user
+    /// is told nothing.
+    func testAnAppPickerStartIsRefusedWhileAnAutoDetectedMeetingIsRecording() async {
+        let notifier = RecordingNotifier()
+        let controller = WatchingControllerFactory.make(
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy,
+        )
+        let (loop, _) = makeTestWatchLoop(detector: FixedMeetingDetector())
+        controller.watchLoop = loop
+        loop.start()
+        addTeardownBlock { await loop.stop() }
+        await waitFor(loop.state == .recording, timeout: .seconds(2))
+        XCTAssertFalse(
+            loop.isManualRecording,
+            "precondition: an auto meeting is what makes the ownership guards insufficient",
+        )
+
+        controller.startManualRecording(pid: 1234, appName: "Safari", title: "Second")
+        await waitFor(!controller.isManualRecording, timeout: .seconds(2))
+
+        XCTAssertIdentical(controller.watchLoop, loop, "the meeting's loop must still be the owner")
+        XCTAssertEqual(loop.state, .recording, "the meeting must still be recording")
+        XCTAssertTrue(
+            notifier.calls.contains { $0.title == "Recording Refused" },
+            "a refusal the user cannot see is the failure this guard exists to avoid; got \(notifier.calls)",
+        )
+    }
+
     /// Issue #624: a second manual start while one is already recording used to
     /// overwrite `watchLoop` without stopping the live loop, so its audio was
     /// never enqueued while its recorder kept capturing, retained by its own
