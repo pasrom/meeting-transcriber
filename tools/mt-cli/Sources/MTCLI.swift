@@ -11,48 +11,91 @@ struct MTCLI: AsyncParsableCommand {
             State.self, Healthz.self, Screenshot.self, UITree.self, UIPress.self,
             OpenSettings.self, CloseSettings.self, ConfirmBrowserConsent.self,
             SeedSpeaker.self, RenameSpeaker.self, DeleteSpeaker.self, MergeSpeakers.self,
-            WavVerdictCommand.self, Watch.self,
+            WavVerdictCommand.self, Watch.self, Record.self,
         ],
     )
 }
 
-/// `mt-cli watch [status|start|stop|toggle]` — the scriptable surface behind a
-/// hotkey, a Shortcut or a Stream Deck key.
+/// The verb set both `/v1` lifecycle resources accept.
 ///
 /// `start`/`stop` are offered alongside `toggle` on purpose: a button press
 /// expresses a desired end state, and any external controller's view of the app
 /// is slightly stale. A blind toggle after a meeting already ended does exactly
 /// the wrong thing and stays inverted; the idempotent verbs converge instead.
 ///
-/// Every form prints the resulting `/v1/watch` status, so a caller can redraw
-/// from the response rather than racing a follow-up poll. A refusal (409, a
-/// manual recording owns the loop) or a failed postcondition (503) surfaces as
-/// a thrown `RPCError.http` — non-zero exit with the JSON body in the message.
-struct Watch: AsyncParsableCommand {
-    enum Action: String, ExpressibleByArgument, CaseIterable {
-        case status
-        case start
-        case stop
-        case toggle
+/// Shared by the two subcommands below. Not the wire contract — the server's
+/// `WatchAction` and `RecordAction` are, and those stay separate so a verb added
+/// to one resource does not silently appear on the other.
+enum ControlAction: String, ExpressibleByArgument, CaseIterable {
+    case status
+    case start
+    case stop
+    case toggle
+}
+
+/// Read or change one `/v1` lifecycle resource, printing the resulting status.
+///
+/// Always prints the state *after* the call, so a caller can redraw from the
+/// response rather than racing a follow-up poll. A refusal surfaces as a thrown
+/// `RPCError.http` — non-zero exit with the JSON body in the message.
+private func runControl(resource: String, action: ControlAction) async throws {
+    let client = try RPCClient.loadDefault()
+    let data = action == .status
+        ? try await client.get(resource)
+        : try await client.post(
+            resource, json: ["action": action.rawValue],
+            timeout: RPCClient.controlTimeoutSeconds,
+        )
+    FileHandle.standardOutput.write(data)
+    FileHandle.standardOutput.write(Data("\n".utf8))
+}
+
+/// `mt-cli record [status|start|stop|toggle]` — the microphone counterpart to
+/// `mt-cli watch`, for a meeting happening in the room rather than in an app
+/// (issue #633).
+///
+/// What differs from watching is the refusals, and both are worth knowing before
+/// scripting against it. `409` means something else is being recorded and
+/// starting would clobber it. `412` means nothing would be captured: either "No
+/// Microphone (app audio only)" is set, or the microphone permission is denied
+/// or broken. A 412 will not clear on its own, so a retry loop should stop on
+/// it; the printed body says which of the two it was.
+struct Record: AsyncParsableCommand {
+    /// The resource this command drives. Named rather than inlined at the call
+    /// site so a test can pin it: `Record` and `Watch` differ in this one
+    /// string, and getting it wrong starts the wrong thing without a compile
+    /// error.
+    static let resource = "/v1/record"
+
+    static let configuration = CommandConfiguration(
+        abstract: "Read or change microphone recording. Prints the resulting status as JSON.",
+    )
+
+    @Argument(help: "status (default), start, stop, or toggle.")
+    var action: ControlAction = .status
+
+    func run() async throws {
+        try await runControl(resource: Self.resource, action: action)
     }
+}
+
+/// `mt-cli watch [status|start|stop|toggle]` — the scriptable surface behind a
+/// hotkey, a Shortcut or a Stream Deck key.
+///
+/// A refusal here is `409`: a manual recording owns the loop.
+struct Watch: AsyncParsableCommand {
+    /// See `Record.resource`.
+    static let resource = "/v1/watch"
 
     static let configuration = CommandConfiguration(
         abstract: "Read or change meeting watching. Prints the resulting status as JSON.",
     )
 
     @Argument(help: "status (default), start, stop, or toggle.")
-    var action: Action = .status
+    var action: ControlAction = .status
 
     func run() async throws {
-        let client = try RPCClient.loadDefault()
-        let data = action == .status
-            ? try await client.get("/v1/watch")
-            : try await client.post(
-                "/v1/watch", json: ["action": action.rawValue],
-                timeout: RPCClient.watchControlTimeoutSeconds,
-            )
-        FileHandle.standardOutput.write(data)
-        FileHandle.standardOutput.write(Data("\n".utf8))
+        try await runControl(resource: Self.resource, action: action)
     }
 }
 
