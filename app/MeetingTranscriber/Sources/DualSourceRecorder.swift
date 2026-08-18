@@ -100,6 +100,7 @@ class DualSourceRecorder: RecordingProvider {
     nonisolated static func cleanupTempFiles(
         recordingsDir: URL = AppPaths.recordingsDir,
         minAge: TimeInterval = 30,
+        reapMarkersWrittenBefore: Date? = nil,
     ) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
@@ -107,6 +108,7 @@ class DualSourceRecorder: RecordingProvider {
             includingPropertiesForKeys: nil,
         ) else { return }
         let cutoff = Date().addingTimeInterval(-minAge)
+        let markerCutoff = reapMarkersWrittenBefore ?? launchedAt
 
         for file in entries where RecordingFileSuffix.stripAppRaw(from: file.lastPathComponent) != nil {
             if let mtime = (try? fm.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date,
@@ -115,6 +117,85 @@ class DualSourceRecorder: RecordingProvider {
             logger.info("Removed orphaned temp file: \(file.lastPathComponent)")
         }
 
+        // Markers whose recording can never be rescued. A start that threw
+        // before capture opened leaves one with no tracks at all; a track that
+        // never received a buffer is a bare header. Either way recovery fails
+        // on that stem at every launch and every watch-start, warning each
+        // time, and nothing else deletes a marker — so without this pass they
+        // are permanent.
+        //
+        // The guard is "written before this process existed", NOT the `minAge`
+        // window pass 1 uses, because the two files age differently: a raw temp
+        // is touched on every buffer, so a live one is always fresh, while a
+        // marker is written once at start and never again. Its age is the
+        // recording's length, so any window at all eventually expires under a
+        // recording that is still running — and a mic wedged mid-capture (the
+        // issue #588 shape) delivers no buffers, leaving a bare-header track
+        // that reads as nothing worth keeping. Reaping there would strand the
+        // recording for good: once the marker is gone a later crash leaves a
+        // lone `_mic.wav`, which is invisible to crash recovery AND to the
+        // orphan scan, which only takes paired groups. This pass also runs on
+        // every watch-start, behind a re-mix that can take minutes, so "the
+        // recording only just began" is not a bound that holds.
+        for file in entries {
+            guard let stem = RecordingFileSuffix.stripInProgress(from: file.lastPathComponent),
+                  let written = (try? fm.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date,
+                  written < markerCutoff,
+                  !isStillRescuable(stem: stem, in: recordingsDir) else { continue }
+            try? fm.removeItem(at: file)
+            logger.info("Removed marker for a recording that captured nothing: \(file.lastPathComponent)")
+        }
+    }
+
+    /// When this process started, as the kernel records it. Anchors the marker
+    /// reaping above: a marker this process wrote is necessarily younger, so
+    /// its own live recording can never be reaped, however long it runs. A
+    /// lazily-initialised `Date()` would not do — nothing guarantees it is
+    /// touched before the first `start()`. Unreadable resolves to the distant
+    /// past, which reaps nothing at all: leaving a stale marker costs a warning
+    /// per launch, reaping a live one costs the recording.
+    nonisolated private static let launchedAt: Date = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return .distantPast }
+        let started = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(started.tv_sec) + Double(started.tv_usec) / 1_000_000)
+    }()
+
+    /// Size of a track that never received a buffer. Measured, not assumed:
+    /// `AVAudioFile` pads its header with a JUNK chunk to a 4 KB boundary, so
+    /// a mic file this app opened and closed empty is exactly this large, not
+    /// the canonical 44 bytes a hand-built WAV header would be. Anything
+    /// carrying audio is larger; the blind spot is a foreign 44-byte-header
+    /// file holding under 4 KB of PCM, a tenth of a second nobody would want
+    /// rescued.
+    nonisolated private static let emptyTrackBytes = 4096
+
+    /// Whether a later recovery pass could still rescue this stem: no mix yet,
+    /// and either a raw app temp or a mic track with PCM past its header. A
+    /// stem that already has a mix is finished whatever its marker says, and
+    /// leaving that marker would turn into a false crash the moment the
+    /// finished job moves the mix into the output folder.
+    ///
+    /// Size is the test, not readability: an unfinalized header reads as zero
+    /// frames while its PCM is intact, so probing readability here would reap
+    /// the marker of a recording that is entirely rescuable. The cost of the
+    /// cruder test is that a large unreadable track keeps its marker and warns
+    /// once per launch, which is the direction to err in.
+    ///
+    /// The rejected empty track is left on disk. It is not user-visible (this
+    /// is the app's staging directory), so it is 4 KB of litter rather than
+    /// something to explain, and deleting audio files here is a far worse
+    /// failure mode than keeping them.
+    nonisolated private static func isStillRescuable(stem: String, in dir: URL) -> Bool {
+        let fm = FileManager.default
+        let mix = dir.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        guard !fm.fileExists(atPath: mix.path) else { return false }
+        if crashedTemp(stem: stem, in: dir) != nil { return true }
+        let mic = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        let size = (try? fm.attributesOfItem(atPath: mic.path)[.size] as? Int) ?? 0
+        return size > emptyTrackBytes
     }
 
     // MARK: - Crash recovery (#379 durability, part 3)
@@ -333,7 +414,17 @@ class DualSourceRecorder: RecordingProvider {
             micLiveSink: micLiveSink,
             micDebugFault: micDebugFault,
         )
-        try session.start()
+        do {
+            try session.start()
+        } catch {
+            // Nothing else would ever remove it: `stop()` is unreachable with
+            // `isRecording` still false, and the cleanup pass below keys on
+            // tracks this start never created. The marker means "interrupted
+            // mid-recording", and a start that never opened is not that.
+            try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: recDir))
+            startTimestamp = nil
+            throw error
+        }
         captureSession = session
 
         isRecording = true

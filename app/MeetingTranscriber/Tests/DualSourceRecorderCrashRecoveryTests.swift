@@ -186,28 +186,179 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
         )
     }
 
-    /// Once a stem has been dealt with, nothing may still look crashed. The
-    /// recorder's own removal in `stop()` is not drivable here (it needs a live
-    /// capture session), and deliberately does not have to be: `stop()` writes
-    /// the mix before dropping the marker, and a stem with a mix is excluded
-    /// from recovery whatever became of its marker.
-    func testNothingLooksCrashedOnceRecoveryHasDealtWithIt() throws {
-        let dir = try makeTempDirectory(prefix: "crash_marker_cleared")
-        let stem = "20260311_180000"
+    /// A start that threw before capture opened leaves a marker and no tracks.
+    /// Nothing else removes one: `stop()` never ran, and recovery fails on
+    /// `noAudioData` every launch and every watch-start, warning each time.
+    func testAMarkerFromAStartThatCapturedNothingIsCleanedUp() throws {
+        let dir = try makeTempDirectory(prefix: "marker_no_tracks")
+        let stem = "20260311_200000"
         let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
         try Data().write(to: marker)
-        let micWav = dir.appendingPathComponent(stem + "_mic.wav")
-        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
-        try backdate([micWav])
+        try backdate([marker])
 
-        _ = DualSourceRecorder.recoverCrashedRecordings(in: dir)
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "a marker with no audio is a dead end")
+    }
+
+    /// Same dead end one step later: the mic file exists but never received a
+    /// buffer, so it is a bare header and there is still nothing to rescue.
+    func testAMarkerBesideATrackThatNeverGotAudioIsCleanedUp() throws {
+        let dir = try makeTempDirectory(prefix: "marker_empty_track")
+        let stem = "20260311_210000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [], sampleRate: 16000, url: micWav)
+        try backdate([marker, micWav])
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "an empty track rescues nothing")
+    }
+
+    /// The control case. A janitor that deleted every old marker would pass the
+    /// two tests above and quietly throw away the recordings this whole
+    /// mechanism exists to rescue, since it runs on the same launch, right
+    /// after recovery.
+    func testCleanupKeepsAMarkerWhoseTrackStillHoldsAudio() throws {
+        let dir = try makeTempDirectory(prefix: "marker_with_audio")
+        let stem = "20260311_220000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+        try backdate([marker, micWav])
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
 
         XCTAssertTrue(
-            DualSourceRecorder.crashedRecordingStems(
-                in: (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [],
-            ).isEmpty,
-            "nothing may still look crashed once it has been dealt with",
+            FileManager.default.fileExists(atPath: marker.path),
+            "the marker of a rescuable recording must survive the cleanup pass",
         )
+    }
+
+    /// A recording that started moments ago has a marker and no tracks yet,
+    /// which is the same shape on disk as a failed start. Only age tells them
+    /// apart, and the queue rebuild that runs this pass fires on watch-start,
+    /// immediately before the loop may begin recording.
+    func testCleanupKeepsAFreshMarker() throws {
+        let dir = try makeTempDirectory(prefix: "marker_fresh")
+        let marker = DualSourceRecorder.inProgressMarker(stem: "20260311_230000", in: dir)
+        try Data().write(to: marker)
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path), "a recording may have just started")
+    }
+
+    /// THE guard for this pass. A marker is written once at start and never
+    /// touched, so its age is simply how long the recording has been running:
+    /// no age window survives a long one. A mic wedged mid-capture (issue #588)
+    /// delivers no buffers either, so its track stays at bare-header size and
+    /// reads as worthless. Reaping there strands the recording for good, since
+    /// a later crash then leaves a lone mic track that neither crash recovery
+    /// nor the orphan scan will look at. Only "written before this process
+    /// existed" can tell a foreign leftover from our own running capture.
+    func testCleanupKeepsAnOldMarkerWrittenByTheRunningProcess() throws {
+        let dir = try makeTempDirectory(prefix: "marker_ours")
+        let stem = "20260311_250000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [], sampleRate: 16000, url: micWav) // wedged: nothing flushed
+        try backdate([marker, micWav]) // and running long enough to look ancient
+
+        DualSourceRecorder.cleanupTempFiles(
+            recordingsDir: dir, reapMarkersWrittenBefore: Date(timeIntervalSinceNow: -300),
+        )
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: marker.path),
+            "a marker younger than the process that would reap it is a live recording, not a leftover",
+        )
+    }
+
+    /// The threshold pinned from the side that loses data. Between an empty
+    /// track and a full second of audio there is room to raise it without any
+    /// test noticing, and every byte of that room is somebody's recording.
+    func testCleanupKeepsAMarkerWhoseTrackHoldsASingleFrame() throws {
+        let dir = try makeTempDirectory(prefix: "marker_one_frame")
+        let stem = "20260311_260000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [0.2], sampleRate: 16000, url: micWav)
+        try backdate([marker, micWav])
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: marker.path),
+            "one frame is still audio, and the marker is what gets it rescued",
+        )
+    }
+
+    /// The app-audio half of the same predicate, and the case that makes it
+    /// load-bearing. The pass deletes stale raw temps before it looks at
+    /// markers, so a temp still present here is one being written right now:
+    /// a live recording belonging to another instance of the app, whose marker
+    /// predates ours. Reaping it would strip a running capture of its only
+    /// crash signal.
+    func testCleanupKeepsAMarkerBesideALiveRawAppTemp() throws {
+        let dir = try makeTempDirectory(prefix: "marker_raw_temp")
+        let stem = "20260311_270000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        try backdate([marker])
+        let appTmp = dir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
+        try writeRawFloat32([Float](repeating: 0.3, count: 16000), to: appTmp) // fresh: still being written
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: marker.path),
+            "a temp that survived the pass above is a live writer, not a leftover",
+        )
+    }
+
+    /// A marker beside a finished mix is stale, not a crash. Left alone it
+    /// would become a false crash the moment the finished job moves the mix
+    /// into the output folder, leaving marker plus mic track behind.
+    func testAMarkerBesideAFinishedMixIsReaped() throws {
+        let dir = try makeTempDirectory(prefix: "marker_finished")
+        let stem = "20260311_280000"
+        let marker = DualSourceRecorder.inProgressMarker(stem: stem, in: dir)
+        try Data().write(to: marker)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+        let mix = dir.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: mix)
+        try backdate([marker, micWav, mix])
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir, reapMarkersWrittenBefore: Date())
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: marker.path),
+            "a recording with a mix is finished, whatever its marker says",
+        )
+    }
+
+    /// Freshness spans every track, not just the app temp. A mic channel that
+    /// gave up while the app track keeps growing (issue #588) is a live
+    /// recording, and re-mixing under its writer would corrupt it.
+    func testARecordingWhoseMicDiedButWhoseAppTrackGrowsIsNotRecovered() throws {
+        let dir = try makeTempDirectory(prefix: "crash_mic_died")
+        let stem = "20260311_240000"
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+        try backdate([micWav]) // the dead channel, cold
+        let appTmp = dir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
+        try writeRawFloat32([Float](repeating: 0.3, count: 16000), to: appTmp) // still being written
+
+        let count = DualSourceRecorder.recoverCrashedRecordings(in: dir)
+
+        XCTAssertEqual(count, 0, "one live track is enough to mean the recording is still running")
     }
 
     /// The launch sequence in the order `PipelineController` actually runs it.
@@ -235,23 +386,6 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
             try AudioMixer.loadAudioFileAsFloat32(url: dir.appendingPathComponent(stem + "_mix.wav")).count, 0,
             "the recovered mix must carry both tracks",
         )
-    }
-
-    /// Freshness spans every track, not just the app temp. A mic channel that
-    /// gave up while the app track keeps growing (issue #588) is a live
-    /// recording, and re-mixing under its writer would corrupt it.
-    func testARecordingWhoseMicDiedButWhoseAppTrackGrowsIsNotRecovered() throws {
-        let dir = try makeTempDirectory(prefix: "crash_mic_died")
-        let stem = "20260311_240000"
-        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
-        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
-        try backdate([micWav]) // the dead channel, cold
-        let appTmp = dir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
-        try writeRawFloat32([Float](repeating: 0.3, count: 16000), to: appTmp) // still being written
-
-        let count = DualSourceRecorder.recoverCrashedRecordings(in: dir)
-
-        XCTAssertEqual(count, 0, "one live track is enough to mean the recording is still running")
     }
 
     /// Zero the `data` size the way a writer killed mid-stream does.
