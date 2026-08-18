@@ -358,17 +358,3 @@ actor OutcomeBox {
         value
     }
 }
-
-/// A recorder whose `start` fails the way a busy or absent input device does.
-/// Injected through the `makeRecorder:` seam so the non-permission failure arm
-/// is reachable without hardware.
-@MainActor
-final class ThrowingRecorder: RecordingProvider {
-    func start(source _: RecordingSource, micDeviceUID _: String?, debugLogging _: Bool) throws {
-        throw RecorderError.noAudioData
-    }
-
-    func stop() throws -> RecordingResult {
-        throw RecorderError.notRecording
-    }
-}

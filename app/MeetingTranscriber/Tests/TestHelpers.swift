@@ -333,6 +333,21 @@ class MockRecorder: RecordingProvider {
     }
 }
 
+/// A recorder whose `start` fails the way a busy or absent input device does.
+/// Injected through the `makeRecorder:` seam so the non-permission failure arm
+/// is reachable without hardware. Shared so the files that need it don't reach
+/// across into each other.
+@MainActor
+final class ThrowingRecorder: RecordingProvider {
+    func start(source _: RecordingSource, micDeviceUID _: String?, debugLogging _: Bool) throws {
+        throw RecorderError.noAudioData
+    }
+
+    func stop() throws -> RecordingResult {
+        throw RecorderError.notRecording
+    }
+}
+
 /// A `MeetingDetecting` stub that never detects a meeting and reports any given
 /// meeting as inactive — so a `WatchLoop.handleMeeting(...)` ends immediately.
 /// Shared so per-test files don't each redeclare it.

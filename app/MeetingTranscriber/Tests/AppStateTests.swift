@@ -738,41 +738,6 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertTrue(notifier.calls.isEmpty)
     }
 
-    // MARK: - startManualRecording (async, environment-sensitive)
-
-    // DualSourceRecorder.start() requires real audio hardware — will throw in CI.
-    // AppState catches the error and fires notify("Error", ...) / sets watchLoop = nil.
-    // Both paths fire exactly one notification, so we assert on that.
-
-    func testStartManualRecordingSendsNotification() async {
-        let (state, notifier) = makeState()
-        state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
-        addTeardownBlock { state.watching.watchLoop?.stop() }
-
-        state.watching.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
-        // Success → "Manual Recording" / hardware unavailable → "Error"
-        await waitFor(!notifier.calls.isEmpty)
-
-        XCTAssertTrue(
-            notifier.calls.contains { $0.title == "Manual Recording" || $0.title == "Error" },
-            "Expected a notification but got none. calls: \(notifier.calls)",
-        )
-    }
-
-    func testStartManualRecordingStopsExistingAutoWatchLoop() async {
-        let (state, _) = makeState()
-        state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .healthy))
-        let (existingLoop, _) = makeTestWatchLoop()
-        existingLoop.start()
-        state.watching.watchLoop = existingLoop
-        XCTAssertTrue(existingLoop.isActive)
-
-        state.watching.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
-        await waitFor(!existingLoop.isActive)
-
-        XCTAssertFalse(existingLoop.isActive, "Existing auto-watch loop should be stopped")
-    }
-
     // MARK: - Engine Switching
 
     func testActiveTranscriptionEngineDefaultsToWhisperKit() {

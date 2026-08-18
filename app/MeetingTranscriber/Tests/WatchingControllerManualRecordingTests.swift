@@ -56,6 +56,72 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         XCTAssertTrue(controller.isManualRecording)
     }
 
+    // MARK: - What the user is told
+
+    /// A start reports itself. These two live here rather than at the
+    /// `AppState` level, where they used to accept either outcome because the
+    /// production recorder decided it by whether the machine had a usable input
+    /// device: this is the level that owns the recorder seam, so each outcome
+    /// can be asked for and asserted on its own.
+    func testAStartedRecordingIsReportedToTheUser() async {
+        let notifier = RecordingNotifier()
+        let controller = makeWatchingController(
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy,
+        )
+        addTeardownBlock { await controller.stopManualRecording() }
+
+        controller.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        // Wait for the report, not for `isManualRecording`: the loop sets that
+        // inside the start, one statement before the notification, so waiting
+        // on it can win the race and read an empty list.
+        await waitFor(!notifier.calls.isEmpty, timeout: .seconds(2))
+
+        XCTAssertEqual(notifier.calls.first?.title, "Manual Recording")
+        XCTAssertTrue(controller.isManualRecording)
+    }
+
+    /// The other outcome, and the one that matters more: capture that cannot
+    /// open has to be reported. A silent failure is indistinguishable from a
+    /// recording in progress, so the user finds out when the protocol never
+    /// arrives.
+    func testACaptureThatCannotOpenIsReportedToTheUser() async {
+        let notifier = RecordingNotifier()
+        let controller = makeWatchingController(
+            // Explicit label and all arguments on one line: `make` takes several
+            // function-type parameters, so binding by position is the trap the
+            // RPC integration tests warn about — and splitting the last argument
+            // onto its own line is what lets the formatter turn it back into the
+            // trailing closure this comment exists to prevent.
+            // swiftlint:disable:next trailing_closure
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy, makeRecorder: { ThrowingRecorder() },
+        )
+        addTeardownBlock { await controller.stopManualRecording() }
+
+        controller.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        await waitFor(!notifier.calls.isEmpty, timeout: .seconds(2))
+
+        XCTAssertEqual(notifier.calls.first?.title, "Error")
+        XCTAssertFalse(controller.isManualRecording, "a start that failed is not a recording")
+    }
+
+    /// A manual start takes over from meeting watching. The auto loop has to be
+    /// stopped, not merely dropped: the controller's reference is what stops
+    /// it, so overwriting it would leave a detector polling forever with no
+    /// owner.
+    func testAManualStartStopsTheAutoWatchLoopItTakesOverFrom() async {
+        let controller = makeWatchingController(logDir: tmpDir, permissionHealth: .allHealthy)
+        let (existingLoop, _) = makeTestWatchLoop()
+        existingLoop.start()
+        controller.watchLoop = existingLoop
+        addTeardownBlock { await controller.stopManualRecording() }
+        XCTAssertTrue(existingLoop.isActive, "precondition")
+
+        controller.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
+        await waitFor(!existingLoop.isActive, timeout: .seconds(2))
+
+        XCTAssertFalse(existingLoop.isActive, "the loop being taken over from must be stopped")
+    }
+
     /// The app-picker half of the #624 ownership rule, which the two guards in
     /// `beginManualRecording` do not cover: an auto-detected meeting sets no
     /// `manualRecordingInfo`, so `isManualRecording` reads false and a picker
