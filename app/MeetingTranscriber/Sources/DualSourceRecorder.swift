@@ -114,6 +114,7 @@ class DualSourceRecorder: RecordingProvider {
             try? fm.removeItem(at: file)
             logger.info("Removed orphaned temp file: \(file.lastPathComponent)")
         }
+
     }
 
     // MARK: - Crash recovery (#379 durability, part 3)
@@ -131,11 +132,32 @@ class DualSourceRecorder: RecordingProvider {
         var seen = Set<String>()
         var stems: [String] = []
         for name in filenames {
-            guard let stem = RecordingFileSuffix.stripAppRaw(from: name) else { continue }
+            // Either signal identifies a crash, and a dual-source one leaves
+            // both, so the `seen` set keeps such a stem from being reported
+            // twice. Nothing else counts: see `RecordingFileSuffix.inProgress`
+            // for why a lone mic track must never be read as an interruption.
+            guard let stem = RecordingFileSuffix.stripAppRaw(from: name)
+                ?? RecordingFileSuffix.stripInProgress(from: name) else { continue }
             guard !mixStems.contains(stem), seen.insert(stem).inserted else { continue }
             stems.append(stem)
         }
         return stems
+    }
+
+    /// When this stem's audio was last written, across whichever tracks exist,
+    /// or nil when it has none (nothing to recover, and nothing to wait for).
+    nonisolated private static func lastTrackWrite(stem: String, in dir: URL) -> Date? {
+        let fm = FileManager.default
+        let candidates = RecordingFileSuffix.appRawAny.map { stem + $0 } + [stem + RecordingFileSuffix.mic]
+        return candidates
+            .map { dir.appendingPathComponent($0) }
+            .compactMap { (try? fm.attributesOfItem(atPath: $0.path)[.modificationDate]) as? Date }
+            .max()
+    }
+
+    /// Path of the in-progress marker for one recording.
+    nonisolated static func inProgressMarker(stem: String, in dir: URL) -> URL {
+        dir.appendingPathComponent(stem + RecordingFileSuffix.inProgress)
     }
 
     /// Locate a crashed stem's surviving temp, current format first. Returns
@@ -164,17 +186,20 @@ class DualSourceRecorder: RecordingProvider {
     /// would otherwise be lost.
     @discardableResult
     nonisolated static func recoverCrashedRecording(stem: String, in recDir: URL) throws -> URL {
-        guard let temp = crashedTemp(stem: stem, in: recDir) else {
-            throw RecorderError.noAudioData
-        }
+        let temp = crashedTemp(stem: stem, in: recDir)
         let micWav = recDir.appendingPathComponent(stem + RecordingFileSuffix.mic)
         let hasMic = FileManager.default.fileExists(atPath: micWav.path)
+        // No app temp is the microphone-only shape, which is recoverable from
+        // the mic track alone. With neither there is nothing to rescue.
+        guard temp != nil || hasMic else {
+            throw RecorderError.noAudioData
+        }
         if hasMic { _ = try? WavHeaderRepair.repairIfNeeded(at: micWav) }
 
-        let rate = temp.isLegacy ? defaultRecordRate : AudioConstants.targetSampleRate
-        let channels = temp.isLegacy ? defaultAppChannels : 1
+        let rate = temp?.isLegacy == true ? defaultRecordRate : AudioConstants.targetSampleRate
+        let channels = temp?.isLegacy == true ? defaultAppChannels : 1
         let result = AudioCaptureResult(
-            appAudioFileURL: temp.url,
+            appAudioFileURL: temp?.url,
             micAudioFileURL: hasMic ? micWav : nil,
             actualSampleRate: rate,
             actualChannels: channels,
@@ -215,11 +240,18 @@ class DualSourceRecorder: RecordingProvider {
         let cutoff = Date().addingTimeInterval(-minAge)
         var recovered = 0
         for stem in crashedRecordingStems(in: names) {
-            guard let temp = crashedTemp(stem: stem, in: dir) else { continue }
-            if let mtime = (try? fm.attributesOfItem(atPath: temp.url.path)[.modificationDate]) as? Date,
-               mtime > cutoff { continue }
+            // Freshness is read off the TRACKS, not the marker: the marker is
+            // written once at start, so an hour into a live recording it looks
+            // ancient while the tracks are still growing. Re-mixing under a
+            // running writer is what this guard exists to prevent.
+            if lastTrackWrite(stem: stem, in: dir).map({ $0 > cutoff }) ?? true { continue }
             do {
                 let mix = try recoverCrashedRecording(stem: stem, in: dir)
+                // The mix alone would already stop `crashedRecordingStems` from
+                // re-reporting this stem; the marker goes too so a recovery
+                // whose mix is later moved into the output folder cannot look
+                // like a fresh crash.
+                try? fm.removeItem(at: inProgressMarker(stem: stem, in: dir))
                 logger.info("Recovered crashed recording: \(mix.lastPathComponent)")
                 recovered += 1
             } catch {
@@ -254,6 +286,11 @@ class DualSourceRecorder: RecordingProvider {
 
         let ts = Self.timestamp()
         startTimestamp = ts
+
+        // Written before capture opens and removed in `stop()`, so a surviving
+        // one means this process died mid-recording. The app temp says the same
+        // for a recording that taps an app; this covers the ones that do not.
+        try? Data().write(to: Self.inProgressMarker(stem: ts, in: recDir))
 
         // ── AudioTapLib capture session ──
         // A source with no target opens no tap at all, so it gets neither a
@@ -332,13 +369,23 @@ class DualSourceRecorder: RecordingProvider {
         // not the device-facing recordRate/appChannels — is the expected file
         // format; a buildRecording mismatch warning then means the resampler
         // fallback wrote raw native-rate audio.
-        return try Self.buildRecording(
+        let recording = try Self.buildRecording(
             from: captureResult,
             recordingsDir: Self.recordingsDir,
             timestamp: ts,
             recordingStartDate: recordingStartDate,
             format: CaptureFormat(requestedChannels: 1, requestedRate: targetRate, targetRate: targetRate),
         )
+
+        // Dropped only once the mix exists, exactly where `buildRecording`
+        // drops the raw app temp. A stop whose mix write fails has not
+        // finished anything, and the failure (a full disk, say) usually
+        // survives to the next launch: keeping the marker lets that launch
+        // re-mix from the surviving tracks, which is what the app-audio path
+        // has always got from its temp. The mix itself is what stops a
+        // completed recording from being recovered twice.
+        try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: Self.recordingsDir))
+        return recording
     }
 
     /// Resolve the PID set to tap for a meeting-matched root PID.
