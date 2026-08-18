@@ -37,36 +37,29 @@ struct CaptureFormat {
 @MainActor
 @Observable
 class DualSourceRecorder: RecordingProvider {
-    @available(macOS 14.2, *)
-    private var captureSession: AudioCaptureSession? {
-        get { _captureSession as? AudioCaptureSession }
-        set { _captureSession = newValue }
-    }
-
-    // Type-erased storage to avoid @available on stored properties
-    private var _captureSession: AnyObject?
+    /// The session capturing right now, nil between recordings. Stored as the
+    /// `AudioCapturing` role rather than the concrete `AudioCaptureSession`,
+    /// which is what removes the `@available` gate from this property — the
+    /// reason the storage used to be a type-erased `AnyObject` plus a cast.
+    private var captureSession: (any AudioCapturing)?
     private(set) var isRecording = false
     private(set) var recordingStartDate: Date = .distantPast
     private var startTimestamp: String?
 
     var appLevelDBFS: Double {
-        guard #available(macOS 14.2, *) else { return -120 }
-        return captureSession?.appLevelDBFS ?? -120
+        captureSession?.appLevelDBFS ?? -120
     }
 
     var micLevelDBFS: Double {
-        guard #available(macOS 14.2, *) else { return -120 }
-        return captureSession?.micLevelDBFS ?? -120
+        captureSession?.micLevelDBFS ?? -120
     }
 
     var appCaptureGaveUp: Bool {
-        guard #available(macOS 14.2, *) else { return false }
-        return captureSession?.appCaptureGaveUp ?? false
+        captureSession?.appCaptureGaveUp ?? false
     }
 
     var micCaptureGaveUp: Bool {
-        guard #available(macOS 14.2, *) else { return false }
-        return captureSession?.micCaptureGaveUp ?? false
+        captureSession?.micCaptureGaveUp ?? false
     }
 
     /// Requested app-audio capture format (what the CATap aggregate device is
@@ -81,9 +74,35 @@ class DualSourceRecorder: RecordingProvider {
     private let targetRate = AudioConstants.targetSampleRate
     private let appChannels = DualSourceRecorder.defaultAppChannels
 
-    /// Recordings directory.
-    static var recordingsDir: URL {
-        AppPaths.recordingsDir
+    /// The staging directory every other consumer reads independently: the
+    /// janitor, crash recovery, the orphan scan and `AudioPersistencePolicy`
+    /// all resolve `AppPaths.recordingsDir` for themselves. Named rather than
+    /// inlined as a default argument so a test can pin the two together.
+    static let defaultRecordingsDir = AppPaths.recordingsDir
+
+    /// Where this recorder stages its tracks.
+    ///
+    /// Injectable so a test can drive a whole recording without writing into
+    /// the production staging directory. **Only a test may inject one:** the
+    /// consumers above are not part of this seam, so a production recorder
+    /// staging anywhere else would write markers and tracks that no recovery,
+    /// no janitor and no orphan scan ever looks at, and whose finished mix
+    /// `AudioPersistencePolicy` would misread as a user-picked import.
+    private let recordingsDir: URL
+
+    /// Builds the capture session each recording runs on. Same injection
+    /// `WatchingController` already makes one level up with `makeRecorder`.
+    private let makeCaptureSession: CaptureSessionFactory
+
+    /// `makeCaptureSession`'s default wraps the factory in a closure rather
+    /// than naming it: a bare reference to a static declared in another file
+    /// compiles here and then fails to link.
+    init(
+        recordingsDir: URL = DualSourceRecorder.defaultRecordingsDir,
+        makeCaptureSession: @escaping CaptureSessionFactory = { try LiveCaptureSession.make($0) },
+    ) {
+        self.recordingsDir = recordingsDir
+        self.makeCaptureSession = makeCaptureSession
     }
 
     /// Remove leftover raw app temp files (current or legacy suffix) a previous
@@ -358,12 +377,19 @@ class DualSourceRecorder: RecordingProvider {
         debugLogging: Bool = false,
     ) throws {
         guard !isRecording else { return }
+        // The compiler no longer needs this — the 14.2 floor is enforced inside
+        // the factory, the only path to a real session. It is here so that the
+        // rejection is the FIRST thing that happens: below this line the start
+        // creates a directory, writes a marker and walks the target's process
+        // tree, so without it a 14.1 user gets whichever of those fails first
+        // (a filesystem error, say) instead of the one message naming their OS,
+        // and pays a full process enumeration per detected meeting for a
+        // session that can never open.
         guard #available(macOS 14.2, *) else {
             throw RecorderError.unsupportedOS
         }
 
-        let recDir = Self.recordingsDir
-        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
 
         let ts = Self.timestamp()
         startTimestamp = ts
@@ -371,17 +397,17 @@ class DualSourceRecorder: RecordingProvider {
         // Written before capture opens and removed in `stop()`, so a surviving
         // one means this process died mid-recording. The app temp says the same
         // for a recording that taps an app; this covers the ones that do not.
-        try? Data().write(to: Self.inProgressMarker(stem: ts, in: recDir))
+        try? Data().write(to: Self.inProgressMarker(stem: ts, in: recordingsDir))
 
         // ── AudioTapLib capture session ──
         // A source with no target opens no tap at all, so it gets neither a
         // temp file nor a PID list; the session then has the mic as its only
         // channel and treats a mic failure as terminal.
         let appTempURL: URL? = source.capturesAppAudio
-            ? recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.appRaw)")
+            ? recordingsDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.appRaw)")
             : nil
         let micURL: URL? = source.capturesMicrophone
-            ? recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
+            ? recordingsDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mic)")
             : nil
 
         // Electron/WebView2 apps (Teams 2.x, Slack, Discord) render call
@@ -391,37 +417,26 @@ class DualSourceRecorder: RecordingProvider {
         // root PID alone if the bundle URL is unavailable.
         let effectivePids = source.appPID.map { Self.resolveTapPIDs(rootPID: $0) } ?? []
 
-        // Mic device-change e2e (issue #379): inject a one-shot tap fault so the
-        // app self-triggers a mid-recording restart with an invalid format and
-        // the lane can verify the installTap NSException recovery. Compiled ONLY
-        // in the e2e build (run_app.sh -DE2E_FAULT_INJECTION); the fault is
-        // physically absent from every shipped binary.
-        #if E2E_FAULT_INJECTION
-            let micDebugFault: DebugTapFault? = DebugTapFault(triggerRestartAfter: 2)
-        #else
-            let micDebugFault: DebugTapFault? = nil
-        #endif
-
-        let session = AudioCaptureSession(
-            pids: effectivePids,
-            appOutputURL: appTempURL,
-            sampleRate: recordRate,
-            channels: appChannels,
-            micOutputURL: micURL,
-            micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
-            debugLogging: debugLogging,
-            appLiveSink: appLiveSink,
-            micLiveSink: micLiveSink,
-            micDebugFault: micDebugFault,
-        )
+        let session: any AudioCapturing
         do {
+            session = try makeCaptureSession(CaptureSessionRequest(
+                pids: effectivePids,
+                appOutputURL: appTempURL,
+                sampleRate: recordRate,
+                channels: appChannels,
+                micOutputURL: micURL,
+                micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
+                debugLogging: debugLogging,
+                appLiveSink: appLiveSink,
+                micLiveSink: micLiveSink,
+            ))
             try session.start()
         } catch {
             // Nothing else would ever remove it: `stop()` is unreachable with
             // `isRecording` still false, and the cleanup pass below keys on
             // tracks this start never created. The marker means "interrupted
             // mid-recording", and a start that never opened is not that.
-            try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: recDir))
+            try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: recordingsDir))
             startTimestamp = nil
             throw error
         }
@@ -439,9 +454,6 @@ class DualSourceRecorder: RecordingProvider {
     func stop() throws -> RecordingResult {
         guard isRecording else {
             throw RecorderError.notRecording
-        }
-        guard #available(macOS 14.2, *) else {
-            throw RecorderError.unsupportedOS
         }
 
         isRecording = false
@@ -462,7 +474,7 @@ class DualSourceRecorder: RecordingProvider {
         // fallback wrote raw native-rate audio.
         let recording = try Self.buildRecording(
             from: captureResult,
-            recordingsDir: Self.recordingsDir,
+            recordingsDir: recordingsDir,
             timestamp: ts,
             recordingStartDate: recordingStartDate,
             format: CaptureFormat(requestedChannels: 1, requestedRate: targetRate, targetRate: targetRate),
@@ -475,7 +487,7 @@ class DualSourceRecorder: RecordingProvider {
         // re-mix from the surviving tracks, which is what the app-audio path
         // has always got from its temp. The mix itself is what stops a
         // completed recording from being recovered twice.
-        try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: Self.recordingsDir))
+        try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: recordingsDir))
         return recording
     }
 

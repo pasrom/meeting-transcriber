@@ -59,9 +59,13 @@ final class DualSourceRecorderTests: XCTestCase {
 
     // MARK: - Recordings Directory
 
-    func testRecordingsDirPath() {
-        let dir = DualSourceRecorder.recordingsDir
-        XCTAssertTrue(dir.path.contains("Library/Application Support/MeetingTranscriber/recordings"))
+    /// The staging directory is injectable, but the default is load-bearing:
+    /// the janitor, crash recovery, the orphan scan and the persistence policy
+    /// each resolve `AppPaths.recordingsDir` for themselves, so a recorder
+    /// defaulting anywhere else would stage where none of them ever looks and
+    /// every crashed recording would be lost with the suite still green.
+    func testTheDefaultStagingDirectoryIsTheOneRecoveryScans() {
+        XCTAssertEqual(DualSourceRecorder.defaultRecordingsDir, AppPaths.recordingsDir)
     }
 
     // MARK: - Stop Without Start

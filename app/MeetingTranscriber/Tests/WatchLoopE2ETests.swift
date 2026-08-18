@@ -15,7 +15,7 @@ final class WatchLoopE2ETests: XCTestCase { // swiftlint:disable:this balanced_x
 
         // Ensure recordingsDir exists (handleMeeting writes intermediate 16kHz files there)
         try FileManager.default.createDirectory(
-            at: DualSourceRecorder.recordingsDir,
+            at: AppPaths.recordingsDir,
             withIntermediateDirectories: true,
         )
     }

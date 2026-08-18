@@ -26,6 +26,15 @@ final class AppPathsTests: XCTestCase {
         XCTAssertTrue(AppPaths.recordingsDir.path.hasPrefix(AppPaths.dataDir.path))
     }
 
+    /// The full staging path, not just its parent. It is the default
+    /// `DualSourceRecorder` stages into and the directory crash recovery and
+    /// the orphan scan walk, so moving it silently would strand recordings.
+    func testRecordingsDirIsTheAppSupportStagingPath() {
+        XCTAssertTrue(
+            AppPaths.recordingsDir.path.contains("Library/Application Support/MeetingTranscriber/recordings"),
+        )
+    }
+
     func testProtocolsDirIsUnderDataDir() {
         XCTAssertTrue(AppPaths.protocolsDir.path.hasPrefix(AppPaths.dataDir.path))
     }
