@@ -41,7 +41,11 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
     func testMicrophoneRecordingStartsWhenTheMicrophoneIsAllowed() async {
         // Control for the refusal above: without it a method that never starts
         // anything would pass just as well.
-        let controller = WatchingControllerFactory.make(logDir: tmpDir, noMic: false)
+        // Seeded health: without it the loop runs a live TCC probe whose answer
+        // depends on the runner, and this test asserts a start *succeeds*.
+        let controller = WatchingControllerFactory.make(
+            logDir: tmpDir, noMic: false, permissionHealth: .allHealthy,
+        )
         addTeardownBlock { await controller.stopManualRecording() }
 
         controller.startMicrophoneRecording()

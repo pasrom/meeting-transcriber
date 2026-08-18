@@ -45,6 +45,8 @@
             transcribe: @escaping (URL, Double) async -> BlockingTranscribeResult = { _, _ in .noFile },
             watchStatus: @escaping () -> WatchStatusDTO = { .notWatching },
             watchControl: @escaping (WatchAction) async -> WatchControlOutcome = { _ in .failed },
+            recordStatus: @escaping () -> RecordStatusDTO = { .notRecording },
+            recordControl: @escaping (RecordAction) async -> RecordControlOutcome = { _ in .failed },
         ) async throws -> URL {
             let server = DebugRPCServer(
                 port: 0,
@@ -61,6 +63,8 @@
                 transcribe: transcribe,
                 watchStatus: watchStatus,
                 watchControl: watchControl,
+                recordStatus: recordStatus,
+                recordControl: recordControl,
             )
             self.server = server
             server.start()
@@ -1196,6 +1200,143 @@
             req.httpBody = Data(#"{"action":"pause"}"#.utf8)
             let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
             XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        // MARK: - /v1/record
+
+        func testV1RecordGETReturnsStatus() async throws {
+            let dto = RecordStatusDTO(
+                recording: true, startPending: false, state: "recording", badge: "recording",
+                otherRecordingActive: false, noMic: false, microphoneHealthy: true,
+            )
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let status: () -> RecordStatusDTO = { dto }
+            let base = try await startServer(recordStatus: status)
+
+            let (data, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/record"), headers: authHeader),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(RecordStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.recording)
+            XCTAssertEqual(decoded.state, "recording")
+            XCTAssertEqual(decoded.badge, "recording")
+            XCTAssertTrue(decoded.microphoneHealthy)
+        }
+
+        /// Same contract as `/v1/watch`: the body carries the state *after* the
+        /// action, so a controller redraws from the response instead of racing a
+        /// follow-up GET.
+        func testV1RecordPOSTStartReturnsResultingState() async throws {
+            var isRecording = false
+            let base = try await startServer(
+                recordStatus: {
+                    RecordStatusDTO(
+                        recording: isRecording, startPending: false, state: isRecording ? "recording" : nil,
+                        badge: "inactive", otherRecordingActive: false,
+                        noMic: false, microphoneHealthy: true,
+                    )
+                },
+                recordControl: { action in
+                    guard action == .start else { return .unchanged }
+                    isRecording = true
+                    return .changed
+                },
+            )
+
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let decoded = try JSONDecoder().decode(RecordStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.recording, "the response must reflect the post-action state, not the pre-action one")
+        }
+
+        func testV1RecordPOSTUnchangedReturns200() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let control: (RecordAction) -> RecordControlOutcome = { _ in .unchanged }
+            let base = try await startServer(recordControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"stop"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        }
+
+        func testV1RecordPOSTBlockedReturns409() async throws {
+            let dto = RecordStatusDTO(
+                recording: false, startPending: false, state: "recording", badge: "recording",
+                otherRecordingActive: true, noMic: false, microphoneHealthy: true,
+            )
+            let base = try await startServer(recordStatus: { dto }, recordControl: { _ in .blocked })
+
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 409)
+            let decoded = try JSONDecoder().decode(RecordStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.otherRecordingActive, "the body has to say what is holding the loop")
+        }
+
+        /// The code that distinguishes this resource from `/v1/watch`, where the
+        /// same machine state answers 200 because app audio still records. Here
+        /// nothing would, and no amount of retrying changes that — so it must be
+        /// neither a 200 nor a 503, and the body has to say which switch is off.
+        func testV1RecordPOSTRefusedReturns412() async throws {
+            let dto = RecordStatusDTO(
+                recording: false, startPending: false, state: nil, badge: "inactive",
+                otherRecordingActive: false, noMic: true, microphoneHealthy: false,
+            )
+            let base = try await startServer(recordStatus: { dto }, recordControl: { _ in .refused })
+
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 412)
+            let decoded = try JSONDecoder().decode(RecordStatusDTO.self, from: data)
+            XCTAssertTrue(decoded.noMic)
+            XCTAssertFalse(decoded.microphoneHealthy)
+        }
+
+        func testV1RecordPOSTFailedReturns503() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let control: (RecordAction) -> RecordControlOutcome = { _ in .failed }
+            let base = try await startServer(recordControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"start"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 503)
+        }
+
+        func testV1RecordPOSTUnknownActionReturns400() async throws {
+            // Typed local, not a trailing closure — see testV1WatchGETReturnsStatus.
+            let control: (RecordAction) -> RecordControlOutcome = { _ in .changed }
+            let base = try await startServer(recordControl: control)
+            var req = request("POST", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpBody = Data(#"{"action":"pause"}"#.utf8)
+            let (_, response) = try await URLSession.shared.upload(for: req, from: XCTUnwrap(req.httpBody))
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400)
+        }
+
+        /// The method arm of the control-resource table. Without it a `DELETE`
+        /// could be answered with a 200 status body, i.e. a verb the API never
+        /// defined would look implemented.
+        func testV1RecordRejectsAnUndefinedMethod() async throws {
+            let base = try await startServer()
+            var req = request("DELETE", base.appendingPathComponent("v1/record"), headers: authHeader)
+            req.httpMethod = "DELETE"
+            let (_, response) = try await URLSession.shared.data(for: req)
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 404)
+        }
+
+        func testV1RecordRequiresAuth() async throws {
+            let base = try await startServer()
+            let (_, response) = try await URLSession.shared.data(
+                for: request("GET", base.appendingPathComponent("v1/record")),
+            )
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 401)
         }
 
         func testV1WatchRequiresAuth() async throws {

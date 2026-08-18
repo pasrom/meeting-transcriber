@@ -401,22 +401,34 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             XCTAssertNil(server.boundPort)
         }
 
+        /// Boots the `AppState`-wired server on an OS-assigned port and returns
+        /// its base URL. Shared by the two socket tests below, which are separate
+        /// only because one function cannot hold both under the length cap.
+        /// `DebugRPCServerIntegrationTests.startServer` cannot stand in: it
+        /// builds a bare `DebugRPCServer`, and driving the `AppState`-built one
+        /// is the whole point here.
+        private func startWiredServer(
+            _ state: AppState, token: String,
+        ) async throws -> (server: DebugRPCServer, baseURL: URL) {
+            let server = state.buildDebugRPCServer(port: 0, token: token)
+            server.start()
+            addTeardownBlock { await server.stop() }
+            for _ in 0 ..< 50 {
+                if let p = server.boundPort, let url = URL(string: "http://127.0.0.1:\(p)") {
+                    return (server, url)
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            throw XCTestError(.timeoutWhileWaiting)
+        }
+
         /// End-to-end over a real socket: every /v1 closure buildDebugRPCServer
         /// wires (enqueueReturningIDs, jobStatus, namingStatus, confirmNaming,
         /// skipJobNaming) is exercised through the actual AppState → pipeline path.
         func testBuildDebugRPCServerServesV1OverSocket() async throws {
             let (state, _) = makeState()
             let token = "appstate-rpc-e2e-token"
-            let server = state.buildDebugRPCServer(port: 0, token: token)
-            server.start()
-            defer { server.stop() }
-
-            var base: URL?
-            for _ in 0 ..< 50 {
-                if let p = server.boundPort { base = URL(string: "http://127.0.0.1:\(p)"); break }
-                try await Task.sleep(for: .milliseconds(20))
-            }
-            let baseURL = try XCTUnwrap(base)
+            let baseURL = try await startWiredServer(state, token: token).baseURL
 
             func send(_ method: String, _ path: String, body: Data? = nil) async throws -> Int {
                 var req = URLRequest(url: baseURL.appendingPathComponent(path))
@@ -486,6 +498,37 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             let dto = try JSONDecoder().decode(WatchStatusDTO.self, from: stopData)
             XCTAssertFalse(dto.watching)
             XCTAssertFalse(dto.manualRecording)
+        }
+
+        /// The `/v1/record` half of the same job, in its own test because the one
+        /// above is at the function-length cap.
+        ///
+        /// One assertion, deliberately. `DebugRPCServer.init` defaults the record
+        /// closures, so deleting the wiring arguments at the `AppState` call site
+        /// would still compile and leave every route test green — and a `stop`
+        /// with nothing recording is the one call that tells the two apart, since
+        /// the real closure answers 200 (`unchanged`) where the default answers
+        /// `.failed`, which the route renders as 503. A `GET` would pass against
+        /// the default too, and the 400 is decided by `JSONDecoder` before any
+        /// closure is reached.
+        func testBuildDebugRPCServerServesV1RecordOverSocket() async throws {
+            let (state, _) = makeState()
+            // A verdict the default `.notRecording` projection cannot produce,
+            // so the body distinguishes the wired status closure from it just as
+            // the 200 distinguishes the wired control closure from `.failed`.
+            state.permissions.handle(HealthCheckResult(screenRecording: .healthy, microphone: .denied))
+            let token = "appstate-rpc-record-token"
+            let baseURL = try await startWiredServer(state, token: token).baseURL
+
+            var req = URLRequest(url: baseURL.appendingPathComponent("v1/record"))
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            let body = Data(#"{"action":"stop"}"#.utf8)
+            let (data, response) = try await URLSession.shared.upload(for: req, from: body)
+
+            XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+            let dto = try JSONDecoder().decode(RecordStatusDTO.self, from: data)
+            XCTAssertFalse(dto.microphoneHealthy, "the wired status closure, not the init default")
         }
     #endif
 

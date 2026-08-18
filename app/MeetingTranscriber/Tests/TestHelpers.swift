@@ -200,8 +200,20 @@ func makeSilentDetector() -> MeetingDetector {
 /// Creates a WatchLoop backed by a MockRecorder and a silent detector.
 /// Assign the returned loop to `appState.watching.watchLoop` in tests that need
 /// an active loop without calling toggleWatching() (which requires Permissions).
+/// A `MockRecorder` that can complete a stop. Without `mixPath` its `stop()`
+/// throws `noAudioData`, which is the *lost recording* path, not the happy one —
+/// a test that means to exercise a clean stop and forgets this pins the wrong
+/// behaviour as correct.
+@MainActor
+func makeMockRecorder() -> MockRecorder {
+    let recorder = MockRecorder()
+    recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+    return recorder
+}
+
 @MainActor
 func makeTestWatchLoop(
+    detector: any MeetingDetecting = makeSilentDetector(),
     pipelineQueue: PipelineQueue? = nil,
     recordOnly: @escaping () -> Bool = { false },
     recordOnlyOutputDir: @escaping () -> URL = { AppPaths.recordingsDir },
@@ -209,10 +221,9 @@ func makeTestWatchLoop(
     noMic: Bool = false,
     micDeviceUID: String? = nil,
 ) -> (WatchLoop, MockRecorder) {
-    let recorder = MockRecorder()
-    recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
+    let recorder = makeMockRecorder()
     let loop = WatchLoop(
-        detector: makeSilentDetector(),
+        detector: detector,
         recorderFactory: { recorder },
         pipelineQueue: pipelineQueue,
         pollInterval: 0.05,
@@ -223,9 +234,7 @@ func makeTestWatchLoop(
         recordOnlyDestination: { .unscoped(recordOnlyOutputDir()) },
         notifier: notifier,
     )
-    loop.permissionChecker = {
-        HealthCheckResult(screenRecording: .healthy, microphone: .healthy)
-    }
+    loop.permissionChecker = { .allHealthy }
     return (loop, recorder)
 }
 
