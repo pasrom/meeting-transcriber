@@ -27,42 +27,22 @@ protocol AudioCapturing: AnyObject {
 @available(macOS 14.2, *)
 extension AudioCaptureSession: AudioCapturing {}
 
-/// Everything `DualSourceRecorder.start()` decides before any hardware is
-/// touched: which process tree to tap, where each track is written, which
-/// microphone to open.
-///
-/// Passed to the capture-session factory rather than assembled inside it, so a
-/// test can build a session that touches nothing and still see the decisions
-/// under test — above all which tracks a `RecordingSource` opens at all, which
-/// is the difference between a microphone-only recording and one with a tap.
-/// Field order mirrors `AudioCaptureSession.init` so the two lists can be
-/// diffed by eye when a capture option is added.
-struct CaptureSessionRequest {
-    /// The process tree to tap, empty when no tap is opened.
-    let pids: [pid_t]
-    /// Where the raw app track is written, or nil to open no process tap at
-    /// all. Nil is the microphone-only shape, not a tap that captured nothing.
-    let appOutputURL: URL?
-    let sampleRate: Int
-    let channels: Int
-    /// Where the mic track is written, or nil when the microphone is not
-    /// recorded ("No Microphone").
-    let micOutputURL: URL?
-    let micDeviceUID: String?
-    let debugLogging: Bool
-    let appLiveSink: LiveAudioSink?
-    let micLiveSink: LiveAudioSink?
-}
-
 /// Builds the capture session a recording runs on. Injected into
 /// `DualSourceRecorder` so `start()` and `stop()` — which carry the in-progress
 /// marker crash recovery keys on — can be driven without audio hardware.
-typealias CaptureSessionFactory = @MainActor (CaptureSessionRequest) throws -> any AudioCapturing
+///
+/// The configuration is assembled by the recording path and passed *in* rather
+/// than built inside the factory, which is what lets a test see the decisions a
+/// start made — above all which tracks a `RecordingSource` opens at all, the
+/// difference between a microphone-only recording and one with a tap. It is the
+/// capture library's own type rather than a struct of this module's; that type
+/// documents why.
+typealias CaptureSessionFactory = @MainActor (AudioCaptureConfiguration) throws -> any AudioCapturing
 
 /// The production capture session: real taps on real hardware.
 enum LiveCaptureSession {
     @MainActor
-    static func make(_ request: CaptureSessionRequest) throws -> any AudioCapturing {
+    static func make(_ configuration: AudioCaptureConfiguration) throws -> any AudioCapturing {
         // The one place the 14.2 floor is stated, and the compiler requires it
         // here: `AudioCaptureSession` is gated and this function is not. Every
         // caller reaches a real session through here, so no copy of this check
@@ -72,25 +52,21 @@ enum LiveCaptureSession {
         // Mic device-change e2e (issue #379): inject a one-shot tap fault so the
         // app self-triggers a mid-recording restart with an invalid format and
         // the lane can verify the installTap NSException recovery. Compiled ONLY
-        // in the e2e build (run_app.sh -DE2E_FAULT_INJECTION); the fault is
-        // physically absent from every shipped binary.
+        // in the e2e build (run_app.sh -DE2E_FAULT_INJECTION).
+        //
+        // The `#else` is what keeps the fault physically absent from every
+        // shipped binary, and it is not redundant: the field is a `var` on a
+        // struct that ships, so whatever a caller set would otherwise travel
+        // straight through to a `MicCaptureHandler` whose fault machinery is
+        // always compiled. Overwriting here means no shipped build can reach
+        // the session with a fault set, whoever built the configuration.
+        var configuration = configuration
         #if E2E_FAULT_INJECTION
-            let micDebugFault: DebugTapFault? = DebugTapFault(triggerRestartAfter: 2)
+            configuration.micDebugFault = DebugTapFault(triggerRestartAfter: 2)
         #else
-            let micDebugFault: DebugTapFault? = nil
+            configuration.micDebugFault = nil
         #endif
 
-        return AudioCaptureSession(
-            pids: request.pids,
-            appOutputURL: request.appOutputURL,
-            sampleRate: request.sampleRate,
-            channels: request.channels,
-            micOutputURL: request.micOutputURL,
-            micDeviceUID: request.micDeviceUID,
-            debugLogging: request.debugLogging,
-            appLiveSink: request.appLiveSink,
-            micLiveSink: request.micLiveSink,
-            micDebugFault: micDebugFault,
-        )
+        return AudioCaptureSession(configuration)
     }
 }

@@ -23,18 +23,10 @@ public enum AudioCaptureSessionError: LocalizedError, Equatable {
 /// Replaces the CLI entry point — call `start()` and `stop()` directly from the host app.
 @available(macOS 14.2, *)
 public class AudioCaptureSession {
-    private let pids: [pid_t]
-    private let sampleRate: Int
-    private let channels: Int
-    private let appOutputURL: URL?
-    private let micOutputURL: URL?
-    private let micDeviceUID: String?
-    private let debugLogging: Bool
-    private let appLiveSink: LiveAudioSink?
-    private let micLiveSink: LiveAudioSink?
-    // Inert in production (nil); an e2e build injects one to verify the mic
-    // installTap NSException recovery (issue #379). Forwarded to MicCaptureHandler.
-    private let micDebugFault: DebugTapFault?
+    /// What this session records and how. Stored whole rather than unpacked
+    /// into ten properties: unpacking is a list to keep in sync, and the option
+    /// that gets left out of it is the one nobody notices.
+    private let config: AudioCaptureConfiguration
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -49,52 +41,19 @@ public class AudioCaptureSession {
     public private(set) var micCaptureGaveUp = false
     private var appFileHandle: FileHandle?
 
-    /// - Parameter pids: PIDs to capture audio from. For Electron/WebView2
-    ///   apps (Teams 2.x, Slack, Discord) this should include the root PID
-    ///   plus helper/renderer children; for native Cocoa apps a
-    ///   single-element array is fine. Ignored when `appOutputURL` is nil.
-    /// - Parameter appOutputURL: Where to write the app-audio track, or nil to
-    ///   open no process tap at all. Nil is the microphone-only shape: the
-    ///   session then has exactly one channel and a mic failure is terminal
-    ///   rather than a degradation (see `CaptureTrackPolicy`).
-    /// - Parameter appLiveSink: Optional real-time buffer callback for the app
-    ///   audio track (CATap output, interleaved Float32 at the tap's native
-    ///   rate, typically 48 kHz). Called from the IOProc thread — non-blocking.
-    /// - Parameter micLiveSink: Optional real-time buffer callback for the mic
-    ///   track (mono Float32 at file rate, typically 16 kHz post-resample).
-    ///   Called from the AVAudioEngine tap thread — non-blocking.
-    public init(
-        pids: [pid_t],
-        appOutputURL: URL?,
-        sampleRate: Int = 48000,
-        channels: Int = 2,
-        micOutputURL: URL? = nil,
-        micDeviceUID: String? = nil,
-        debugLogging: Bool = false,
-        appLiveSink: LiveAudioSink? = nil,
-        micLiveSink: LiveAudioSink? = nil,
-        micDebugFault: DebugTapFault? = nil,
-    ) {
-        self.pids = pids
-        self.sampleRate = sampleRate
-        self.channels = channels
-        self.appOutputURL = appOutputURL
-        self.micOutputURL = micOutputURL
-        self.micDeviceUID = micDeviceUID
-        self.debugLogging = debugLogging
-        self.appLiveSink = appLiveSink
-        self.micLiveSink = micLiveSink
-        self.micDebugFault = micDebugFault
+    /// Each option is documented on `AudioCaptureConfiguration`.
+    public init(_ configuration: AudioCaptureConfiguration) {
+        config = configuration
     }
 
     /// Start capturing app audio, mic audio, or both — whichever output URLs
     /// were supplied. At least one is required.
     public func start() throws {
-        guard appOutputURL != nil || micOutputURL != nil else {
+        guard config.appOutputURL != nil || config.micOutputURL != nil else {
             throw AudioCaptureSessionError.noTracksRequested
         }
 
-        if let appOutputURL {
+        if let appOutputURL = config.appOutputURL {
             // Create app output file and get its file descriptor
             // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
             FileManager.default.createFile(
@@ -105,12 +64,12 @@ public class AudioCaptureSession {
             let handle = try FileHandle(forWritingTo: appOutputURL)
 
             let capture = AppAudioCapture(
-                pids: pids,
+                pids: config.pids,
                 outputFileDescriptor: handle.fileDescriptor,
-                sampleRate: sampleRate,
-                channels: channels,
-                debugLogging: debugLogging,
-                liveSink: appLiveSink,
+                sampleRate: config.sampleRate,
+                channels: config.channels,
+                debugLogging: config.debugLogging,
+                liveSink: config.appLiveSink,
             )
             do {
                 try capture.start()
@@ -124,15 +83,15 @@ public class AudioCaptureSession {
         }
 
         // Start mic capture if requested
-        if let micURL = micOutputURL {
+        if let micURL = config.micOutputURL {
             let mic = MicCaptureHandler(
                 outputURL: micURL,
-                debugLogging: debugLogging,
-                liveSink: micLiveSink,
-                debugFault: micDebugFault,
+                debugLogging: config.debugLogging,
+                liveSink: config.micLiveSink,
+                debugFault: config.micDebugFault,
             )
             do {
-                try mic.start(deviceUID: micDeviceUID)
+                try mic.start(deviceUID: config.micDeviceUID)
                 mic.onGiveUp = { [weak self] in self?.micCaptureGaveUp = true }
                 micCapture = mic
             } catch {
@@ -148,7 +107,7 @@ public class AudioCaptureSession {
             }
         }
 
-        logger.info("Capture session started (PIDs \(self.pids), rate: \(self.sampleRate), channels: \(self.channels))")
+        logger.info("Capture session started (PIDs \(self.config.pids), rate: \(self.config.sampleRate), channels: \(self.config.channels))")
     }
 
     /// Instantaneous app-audio level in dBFS, decayed to -120 when no buffer has
@@ -173,9 +132,9 @@ public class AudioCaptureSession {
         // `AppAudioCapture` actually WROTE — 16 kHz mono after the in-IOProc
         // resample, not the device's raw capture format.
         let result = AudioCaptureResult.make(
-            appOutputURL: appOutputURL,
-            micOutputURL: micOutputURL,
-            configured: (sampleRate: sampleRate, channels: channels),
+            appOutputURL: config.appOutputURL,
+            micOutputURL: config.micOutputURL,
+            configured: (sampleRate: config.sampleRate, channels: config.channels),
             app: .init(
                 firstFrameTicks: appCapture?.appFirstFrameTime ?? 0,
                 sampleRate: appCapture?.outputSampleRate ?? 0,

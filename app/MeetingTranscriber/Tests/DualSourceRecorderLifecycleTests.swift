@@ -28,9 +28,9 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var micLevelDBFS: Double = -120
         var appCaptureGaveUp = false
         var micCaptureGaveUp = false
-        /// What the recorder asked the factory for, so a test can assert on the
-        /// choices and write to the URLs it picked.
-        var lastRequest: CaptureSessionRequest?
+        /// The configuration the recorder handed the factory, so a test can
+        /// assert on the choices and write to the URLs it picked.
+        var lastConfiguration: AudioCaptureConfiguration?
 
         func start() throws {
             if let startError { throw startError }
@@ -48,8 +48,8 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
 
     private func makeRecorder(dir: URL) -> (DualSourceRecorder, FakeCaptureSession) {
         let session = FakeCaptureSession()
-        let recorder = DualSourceRecorder(recordingsDir: dir) { request in
-            session.lastRequest = request
+        let recorder = DualSourceRecorder(recordingsDir: dir) { configuration in
+            session.lastConfiguration = configuration
             return session
         }
         return (recorder, session)
@@ -69,7 +69,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         session: FakeCaptureSession,
     ) throws -> URL {
         try recorder.start(source: .micOnly)
-        return try XCTUnwrap(session.lastRequest?.micOutputURL)
+        return try XCTUnwrap(session.lastConfiguration?.micOutputURL)
     }
 
     // MARK: - start
@@ -98,10 +98,10 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
 
         try recorder.start(source: .micOnly)
 
-        let request = try XCTUnwrap(session.lastRequest)
-        XCTAssertNil(request.appOutputURL, "a tap would capture a meeting that is happening in the room")
-        XCTAssertNotNil(request.micOutputURL)
-        XCTAssertTrue(request.pids.isEmpty)
+        let configuration = try XCTUnwrap(session.lastConfiguration)
+        XCTAssertNil(configuration.appOutputURL, "a tap would capture a meeting that is happening in the room")
+        XCTAssertNotNil(configuration.micOutputURL)
+        XCTAssertTrue(configuration.pids.isEmpty)
     }
 
     /// The mirror image: "No Microphone" opens the tap and no mic track.
@@ -114,10 +114,10 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         // in whatever else is running on the machine.
         try recorder.start(source: .appOnly(pid: 999_999))
 
-        let request = try XCTUnwrap(session.lastRequest)
-        XCTAssertNotNil(request.appOutputURL)
-        XCTAssertNil(request.micOutputURL)
-        XCTAssertEqual(request.pids, [999_999])
+        let configuration = try XCTUnwrap(session.lastConfiguration)
+        XCTAssertNotNil(configuration.appOutputURL)
+        XCTAssertNil(configuration.micOutputURL)
+        XCTAssertEqual(configuration.pids, [999_999])
     }
 
     /// A start that threw before capture opened is not an interrupted

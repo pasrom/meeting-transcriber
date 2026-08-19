@@ -419,12 +419,12 @@ class DualSourceRecorder: RecordingProvider {
 
         let session: any AudioCapturing
         do {
-            session = try makeCaptureSession(CaptureSessionRequest(
+            session = try makeCaptureSession(AudioCaptureConfiguration(
                 pids: effectivePids,
                 appOutputURL: appTempURL,
+                micOutputURL: micURL,
                 sampleRate: recordRate,
                 channels: appChannels,
-                micOutputURL: micURL,
                 micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
                 debugLogging: debugLogging,
                 appLiveSink: appLiveSink,
