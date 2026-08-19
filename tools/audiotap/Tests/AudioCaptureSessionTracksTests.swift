@@ -17,6 +17,37 @@ final class AudioCaptureSessionTracksTests: XCTestCase {
         }
     }
 
+    /// What the session reads back out of its configuration, pinned where it is
+    /// reachable without hardware.
+    ///
+    /// The session used to hold these as ten separate properties and now holds
+    /// the configuration whole, so every read inside it was rewritten by hand.
+    /// Three of those reads land in `stop()`'s result, and each has a same-typed
+    /// neighbour it could have been swapped with: the two track URLs are both
+    /// `URL?`, the rate and the channel count are both `Int`. Distinct values
+    /// throughout, so a swap in either direction fails.
+    ///
+    /// A `stop()` with no `start()` touches nothing: both captures are nil, so
+    /// the reported rate and channel count fall back to the configured ones and
+    /// the app track is reported straight from the configuration.
+    func testStopReportsTheTrackAndFormatItWasConfiguredWith() throws {
+        guard #available(macOS 14.2, *) else {
+            throw XCTSkip("AudioCaptureSession requires macOS 14.2")
+        }
+        let app = URL(fileURLWithPath: "/tmp/stem_app16k_raw.tmp")
+        let mic = URL(fileURLWithPath: "/tmp/stem_mic.wav")
+        let session = AudioCaptureSession(AudioCaptureConfiguration(
+            pids: [], appOutputURL: app, micOutputURL: mic, sampleRate: 44100, channels: 5,
+        ))
+
+        let result = session.stop()
+
+        XCTAssertEqual(result.appAudioFileURL, app, "the app track, not the mic file")
+        XCTAssertEqual(result.actualSampleRate, 44100, "the configured rate, not the channel count")
+        XCTAssertEqual(result.actualChannels, 5)
+        XCTAssertNil(result.micAudioFileURL, "no mic capture ran, so there is no mic track to report")
+    }
+
     func testRefusalHappensBeforeAnyFileIsCreated() throws {
         guard #available(macOS 14.2, *) else {
             throw XCTSkip("AudioCaptureSession requires macOS 14.2")
