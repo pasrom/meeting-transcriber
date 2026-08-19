@@ -596,12 +596,6 @@ extension PipelineQueue {
         // no longer see them — the duplicates would return in exactly the
         // rendering the default settings produce. Only this rendering drops
         // them; the stored segments keep the mark.
-        // Suppressed copies leave before anything gets a speaker. Left in,
-        // they would be labeled like real speech and merged into adjacent
-        // same-speaker blocks, where the trailing `transcriptText` filter can
-        // no longer see them — the duplicates would return in exactly the
-        // rendering the default settings produce. Only this rendering drops
-        // them; the stored segments keep the mark.
         let cachedSegments = cachedSegments.filter { !$0.suppressed }
         let topology: DiarizationProcess.LabelingTopology?
         if isDualSource, let appDiar = run.app, let micDiar = run.mic {
