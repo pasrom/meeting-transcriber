@@ -348,6 +348,22 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(fresh.protocolProvider, .openAICompatible)
     }
 
+    func testTranscriptOutputOptionsDefaultToEnabled() {
+        XCTAssertTrue(settings.includeFullTranscriptInProtocol)
+        XCTAssertTrue(settings.saveRawTranscriptSeparately)
+    }
+
+    func testTranscriptOutputOptionsPersist() {
+        settings.includeFullTranscriptInProtocol = false
+        settings.saveRawTranscriptSeparately = false
+        XCTAssertEqual(defaults.object(forKey: "includeFullTranscriptInProtocol") as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: "saveRawTranscriptSeparately") as? Bool, false)
+
+        let fresh = AppSettings(defaults: defaults)
+        XCTAssertFalse(fresh.includeFullTranscriptInProtocol)
+        XCTAssertFalse(fresh.saveRawTranscriptSeparately)
+    }
+
     func testOpenAIEndpointDefault() {
         XCTAssertEqual(settings.openAIEndpoint, "http://localhost:11434/v1")
     }

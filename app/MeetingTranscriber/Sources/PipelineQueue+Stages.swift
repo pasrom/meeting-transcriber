@@ -126,10 +126,14 @@ extension PipelineQueue {
     /// Best effort on purpose: a job that cannot write here will report the real
     /// problem when stage 3 tries again and does not swallow it.
     private func saveTranscriptDraft(_ transcript: String, ctx: JobContext, outputDir: URL) {
-        _ = try? ProtocolGenerator.saveTranscript(
+        guard let path = try? ProtocolGenerator.saveTranscript(
             transcript, basename: ctx.slug,
             dir: outputDir.appendingPathComponent("protocols"),
-        )
+        ) else { return }
+        if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
+            jobs[idx].transcriptPath = path
+            jobs[idx].namingSlug = ctx.slug
+        }
     }
 
     /// Thin orchestrator: take the next waiting job and run it through the
@@ -580,7 +584,10 @@ extension PipelineQueue {
         finalTranscript: String, transcription: TranscriptionOutput,
         ctx: JobContext, workDir: URL, outputDir: URL,
     ) async throws {
-        // --- Save Transcript & Audio (always) ---
+        // --- Save Transcript & Audio ---
+        // Keep the transcript until the terminal state, even when the user
+        // opted out of a separate raw file: late speaker naming still needs to
+        // rewrite it before generating the final protocol.
         let protocolsDir = outputDir.appendingPathComponent("protocols")
         let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, basename: ctx.slug, dir: protocolsDir)
         logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
@@ -678,9 +685,11 @@ extension PipelineQueue {
             let protocolMD = try await generator.generate(
                 transcript: transcript, title: title, diarized: diarized,
             )
-            let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
+            let markdown = includeFullTranscriptInProtocol
+                ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
+                : protocolMD
             let mdPath = try ProtocolGenerator.saveProtocol(
-                fullMD, basename: basename, dir: protocolsDir,
+                markdown, basename: basename, dir: protocolsDir,
             )
             logger.info("[\(shortID, privacy: .public)] protocol_saved file=\(mdPath.lastPathComponent, privacy: .private)")
             if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
