@@ -59,6 +59,12 @@ class PipelineQueue {
     let echoDedupEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
+    /// Captured when the queue is built so a running job has stable output
+    /// semantics even if the user changes Settings mid-processing.
+    let includeFullTranscriptInProtocol: Bool
+    /// See `includeFullTranscriptInProtocol`. When false, the temporary raw
+    /// transcript is removed as soon as the job reaches a terminal state.
+    let saveRawTranscriptSeparately: Bool
     let speakerMatcherFactory: () -> SpeakerMatcher
     let vadConfig: VADConfig?
     /// nil disables JSONL logging. AppState injects a real instance for production;
@@ -234,6 +240,8 @@ class PipelineQueue {
         echoDedupEnabled = true
         self.numSpeakers = 0
         self.micLabel = "Me"
+        self.includeFullTranscriptInProtocol = true
+        self.saveRawTranscriptSeparately = true
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
@@ -310,6 +318,8 @@ class PipelineQueue {
         echoDedupEnabled: Bool = true,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
+        includeFullTranscriptInProtocol: Bool = true,
+        saveRawTranscriptSeparately: Bool = true,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
@@ -341,6 +351,8 @@ class PipelineQueue {
         // of micLabel for both the tagging and the re-split, so sanitizing here
         // keeps them consistent.)
         self.micLabel = micLabel == DiarizationProcess.remoteSpeakerLabel ? "Me" : micLabel
+        self.includeFullTranscriptInProtocol = includeFullTranscriptInProtocol
+        self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
         self.speakerMatcherFactory = speakerMatcherFactory
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
@@ -483,6 +495,9 @@ class PipelineQueue {
         guard oldState != newState || error != nil else { return }
         jobs[index].state = newState
         if let error { jobs[index].error = error }
+        if (newState == .done || newState == .error), !saveRawTranscriptSeparately {
+            removeRawTranscript(for: index)
+        }
         recordStageTransition(from: oldState, to: newState, jobID: id)
         eventLog.append(jobID: id, event: "state_change", from: oldState, to: newState)
         saveSnapshot()
@@ -505,6 +520,27 @@ class PipelineQueue {
     /// it from the in-memory list. No-op when no store is wired.
     private func recordTerminalJob(_ job: PipelineJob) {
         terminalJobStore?.record(JobStatusDTO(job: job))
+    }
+
+    /// Delete the in-flight transcript once no pipeline stage needs it. The
+    /// speaker-naming flow deliberately reaches `.done` only after it has read
+    /// and rewritten the transcript, so this also covers late confirmation.
+    private func removeRawTranscript(for index: Int) {
+        guard let transcriptPath = jobs[index].transcriptPath else { return }
+        do {
+            try FileManager.default.removeItem(at: transcriptPath)
+            logger.info("Transcript removed according to output setting")
+            jobs[index].transcriptPath = nil
+        } catch CocoaError.fileNoSuchFile {
+            // A failed or interrupted write may leave only the path; the desired
+            // final state is still no raw transcript.
+            jobs[index].transcriptPath = nil
+        } catch {
+            logger.warning(
+                "Failed to remove transcript according to output setting: \(error.localizedDescription, privacy: .public)",
+            )
+            jobs[index].warnings.append("Raw transcript could not be removed")
+        }
     }
 
     func addWarning(id: UUID, _ message: String) {

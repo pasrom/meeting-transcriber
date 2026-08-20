@@ -60,7 +60,7 @@ enum ProtocolGenerator {
     - [Question 1]
     - [Question 2]
 
-    Do NOT include the full transcript in the output – it will be appended automatically.
+    Do NOT include the full transcript in the output.
 
     ---
     Transcript:
