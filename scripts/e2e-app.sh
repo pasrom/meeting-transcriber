@@ -574,6 +574,11 @@ fi
 # launch instead of after a Settings toggle.
 defaults write "$DEV_BUNDLE_ID" debugRPCEnabled -bool true
 defaults write "$DEV_BUNDLE_ID" autoWatch -bool true
+# The echo dedup ships off, so the lane has to ask for it. Set unconditionally
+# rather than only for --echo-bleed: a stale toggle from an earlier run on the
+# same host would otherwise decide it, and the lane that asserts nothing is
+# removed on a clean pair needs the feature ON to mean anything.
+defaults write "$DEV_BUNDLE_ID" echoDedupEnabled -bool true
 
 if [ "$MIC_ONLY" = true ]; then
     # Record-only so the lane needs no ASR models, and auto-watch OFF so nothing
