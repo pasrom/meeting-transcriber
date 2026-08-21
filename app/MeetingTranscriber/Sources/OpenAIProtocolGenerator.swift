@@ -55,8 +55,17 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.session = session
     }
 
-    func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-        let systemPrompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language)
+    func generate(
+        transcript: String,
+        title _: String,
+        diarized: Bool,
+        meetingStartTime: Date = Date(),
+    ) async throws -> String {
+        let systemPrompt = ProtocolGenerator.buildSystemPrompt(
+            diarized: diarized,
+            language: language,
+            meetingStartTime: meetingStartTime,
+        )
 
         let messages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],
