@@ -535,7 +535,8 @@ class PipelineQueue {
         guard oldState != newState || error != nil else { return }
         jobs[index].state = newState
         if let error { jobs[index].error = error }
-        if (newState == .done || newState == .error), !transcriptOutputOptions(forJobID: id).saveRawTranscriptSeparately {
+        if newState == .done || newState == .error,
+           !transcriptOutputOptions(forJobID: id).saveRawTranscriptSeparately {
             removeRawTranscriptArtifacts(for: index)
         }
         recordStageTransition(from: oldState, to: newState, jobID: id)
