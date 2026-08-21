@@ -769,7 +769,7 @@ extension PipelineQueue {
                 diarized: diarized,
                 meetingStartTime: meetingStartTime,
             )
-            let markdown = includeFullTranscriptInProtocol
+            let markdown = transcriptOutputOptions(forJobID: jobID).includeFullTranscriptInProtocol
                 ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
                 : protocolMD
             let mdPath = try ProtocolGenerator.saveProtocol(
