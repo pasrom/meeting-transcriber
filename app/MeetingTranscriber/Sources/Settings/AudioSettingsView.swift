@@ -110,7 +110,6 @@ private struct PerChannelIndicatorSection: View {
                         .monospacedDigit()
                         .frame(width: 40)
                 }
-                .help(SettingsHelp.asymmetricSilenceWarning)
             }
         }
         .accessibilityIdentifier(A11yID.channelIndicatorSection)

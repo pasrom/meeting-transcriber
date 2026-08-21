@@ -185,8 +185,8 @@ struct SpeakersSettingsView: View {
             TuningSliderRow(knob: .minSegmentDuration, value: $settings.minSegmentDurationSeconds)
             HStack {
                 Toggle("Exclude overlap", isOn: $settings.excludeOverlap)
-                TuningHelpIcon(
-                    tooltip: "When enabled, frames with multiple active speakers are masked out during embedding extraction.",
+                HelpBadge(
+                    text: "When enabled, frames with multiple active speakers are masked out during embedding extraction.",
                 )
                 Spacer()
             }
@@ -267,7 +267,7 @@ private struct TuningSliderRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(knob.title)
-                TuningHelpIcon(tooltip: knob.help)
+                HelpBadge(text: knob.help)
                 Spacer()
                 Text("\(String(format: knob.format, value))\(knob.suffix)")
                     .monospacedDigit()
@@ -275,15 +275,5 @@ private struct TuningSliderRow: View {
             }
             Slider(value: $value, in: knob.range, step: knob.step)
         }
-    }
-}
-
-private struct TuningHelpIcon: View {
-    let tooltip: String
-
-    var body: some View {
-        Image(systemName: "questionmark.circle")
-            .foregroundStyle(.secondary)
-            .help(tooltip)
     }
 }

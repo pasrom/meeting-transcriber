@@ -49,14 +49,45 @@ final class HelpBadgeTests: XCTestCase {
         XCTAssertTrue(try iconNames(for: HelpBadge(text: "Explains the thing")).contains("info.circle"))
     }
 
-    func testBadgeIsATappableButtonCarryingTheHelpText() throws {
-        // The badge is a real Button carrying the help string. NOTE: ViewInspector
-        // 0.10.3 cannot inspect native `.popover` content, so `find(text:)` here
-        // matches the `.help()` tooltip modifier, not the popover Text. This is a
-        // declarative check; it does not exercise tap -> popover presentation.
-        let sut = HelpBadge(text: "Explains the thing")
-        XCTAssertNoThrow(try sut.inspect().find(ViewType.Button.self))
-        XCTAssertNoThrow(try sut.inspect().find(text: "Explains the thing"))
+    /// The badge must carry its explanation on exactly ONE affordance.
+    ///
+    /// `.help()` and the hover popover both fire on hover, so a badge carrying
+    /// both renders the same paragraph twice at once: the system tooltip on top
+    /// of the popover it was meant to complement. The popover is the single
+    /// carrier of the explanation, for sighted users and for VoiceOver alike —
+    /// its `Text` is an ordinary accessible element.
+    func testBadgeCarriesTheExplanationOnlyOnce() throws {
+        let sut = try HelpBadge(text: "Explains the thing").inspect()
+        XCTAssertThrowsError(
+            try sut.find(ViewType.Button.self).help(),
+            "a tooltip plus the hover popover shows the same text twice at once",
+        )
+        // And not moved into the hint either, which would duplicate it one
+        // layer down: spoken in full on focus, then read again from the popover.
+        XCTAssertEqual(
+            try sut.find(ViewType.Button.self).accessibilityHint().string(),
+            "Shows an explanation of this setting",
+            "the hint says what the control does; the popover carries the explanation",
+        )
+        XCTAssertEqual(
+            try sut.find(HelpBadge.self).actualView().text, "Explains the thing",
+            "the explanation the popover renders is still the one it was given",
+        )
+    }
+
+    /// Mirror of the badge rule for the row that hosts it. The row carried its
+    /// own `.help`, so hovering the badge raised the row tooltip as well.
+    func testHelpfulToggleRowCarriesNoTooltipOfItsOwn() throws {
+        let row = try HelpfulToggle(title: "T", help: "h", isOn: .constant(false)).inspect()
+        // Anchor first. `XCTAssertThrowsError(row.hStack().help())` alone is
+        // vacuum-safe in the wrong direction: if the row ever stops being an
+        // HStack, `hStack()` throws and the assertion passes without a tooltip
+        // ever having been looked for.
+        XCTAssertEqual(try row.hStack().find(HelpBadge.self).actualView().text, "h")
+        XCTAssertThrowsError(
+            try row.hStack().help(),
+            "the row tooltip duplicates the badge that already explains the setting",
+        )
     }
 
     // MARK: - Behavioural (hosted)
@@ -65,6 +96,20 @@ final class HelpBadgeTests: XCTestCase {
     /// exercises the tap -> popover path and the popover's content builder;
     /// ViewInspector 0.10.3 can't reach native `.popover` content, so it hosts
     /// the view in a real NSWindow (the popover is an AppKit window).
+    ///
+    /// It asserts that a popover appeared, not what it says, and that is a
+    /// real gap rather than an oversight: after the tooltip was dropped the
+    /// popover is the only thing that shows this text to anyone. Two ways to
+    /// close it were tried and neither works here, so do not spend the time
+    /// again. ViewInspector's `popover()` exists but throws
+    /// `notSupported` for a native `.popover` unless the view adopts its
+    /// hosting pattern, which nothing in this suite uses. Walking the popover
+    /// window's `NSView` tree for accessibility strings returns an empty list,
+    /// because a SwiftUI `Text`'s accessibility lives in the `AXUIElement`
+    /// tree and not on the views — the same asymmetry `/ui/tree` exists for,
+    /// and an in-process AX walk is not populated in a bare xctest process.
+    /// What still pins the content is that `HelpBadge.text` is asserted above
+    /// and the popover renders exactly that property.
     func testClickingBadgePresentsPopover() throws {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 200, height: 60),
@@ -105,9 +150,11 @@ final class HelpBadgeTests: XCTestCase {
         let body = try HelpfulToggle(title: "My Option", help: "the help text", isOn: .constant(false)).inspect()
         XCTAssertNoThrow(try body.find(text: "My Option"))
         XCTAssertNoThrow(try body.find(ViewType.Toggle.self))
-        // The help param must reach the badge (found via its `.help()` tooltip;
-        // popover content is not inspectable), not just render some badge.
-        XCTAssertNoThrow(try body.find(text: "the help text"))
+        // The help param must reach the badge, not just render some badge.
+        XCTAssertEqual(
+            try body.find(HelpBadge.self).actualView().text,
+            "the help text",
+        )
         let names = body.findAll(ViewType.Image.self).compactMap { try? $0.actualImage().name() }
         XCTAssertTrue(names.contains("info.circle"))
     }
@@ -124,6 +171,51 @@ final class HelpBadgeTests: XCTestCase {
             try toggle.find(ViewType.Button.self),
             "the help badge must not live inside the Toggle's label",
         )
+    }
+
+    // MARK: - The rule, swept
+
+    /// No settings row offers the explanation twice.
+    ///
+    /// The fix removed three sites that each paired a `HelpBadge` with a
+    /// `.help()`, and the three were found by looking at a screenshot. This is
+    /// the same question asked of the whole tab at once, so a fourth one is
+    /// caught by a test run instead of by noticing it on screen: any view
+    /// carrying a tooltip must not have a badge anywhere beneath it, because
+    /// both fire on hover and render the same paragraph on top of each other.
+    ///
+    /// A bare `.help()` with no badge is untouched — that is the older pattern
+    /// and it is still fine.
+    ///
+    /// What it does NOT catch, measured by restoring each of the three original
+    /// sites in turn: a tooltip on `HelpBadge` itself. `findAll` matches the
+    /// modifier where it is applied, and one inside the badge's own body is not
+    /// reachable from the tab. That site is `testBadgeCarriesTheExplanationOnlyOnce`.
+    /// Of the other two this sweep catches both, and for the warn-after row it
+    /// is the only cover there is.
+    func testNoSettingsRowOffersTheExplanationTwice() throws {
+        let settings = AppSettings(defaults: defaults)
+        settings.perChannelIndicatorEnabled = true
+
+        for (name, view) in try [
+            ("Audio", AudioSettingsView(settings: settings).inspect()),
+            ("Speakers", SpeakersSettingsView(
+                settings: settings,
+                recognitionStatsLog: RecognitionStatsLog(),
+                stageTimingLog: StageTimingLog(),
+                enrollmentDiarizerFactory: nil,
+                namingDialogActive: false,
+                pipelineBusy: false,
+                matcherFactory: { SpeakerMatcher() },
+            ).inspect()),
+        ] {
+            for tooltipped in view.findAll(where: { (try? $0.help()) != nil }) {
+                XCTAssertThrowsError(
+                    try tooltipped.find(HelpBadge.self),
+                    "\(name): a row with a badge must not also carry a tooltip — both fire on hover",
+                )
+            }
+        }
     }
 
     // MARK: - Catalog
@@ -164,14 +256,14 @@ final class HelpBadgeTests: XCTestCase {
 
     /// Each option must carry ITS help string (not merely some badge), so a
     /// swapped/empty SettingsHelp constant is caught; the count checks alone
-    /// would not notice. The catalog strings are found via each badge's
-    /// `.help()` tooltip (ViewInspector can't inspect popover content).
+    /// would not notice.
     func testAudioTabWiresEachOptionsHelpText() throws {
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = true
         let body = try AudioSettingsView(settings: settings).inspect()
-        XCTAssertNoThrow(try body.find(text: SettingsHelp.vad))
-        XCTAssertNoThrow(try body.find(text: SettingsHelp.silentCaptureChannel))
-        XCTAssertNoThrow(try body.find(text: SettingsHelp.asymmetricSilenceWarning))
+        let texts = body.findAll(HelpBadge.self).compactMap { try? $0.actualView().text }
+        XCTAssertTrue(texts.contains(SettingsHelp.vad))
+        XCTAssertTrue(texts.contains(SettingsHelp.silentCaptureChannel))
+        XCTAssertTrue(texts.contains(SettingsHelp.asymmetricSilenceWarning))
     }
 }

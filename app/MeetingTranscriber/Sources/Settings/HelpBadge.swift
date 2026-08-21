@@ -4,8 +4,9 @@ import SwiftUI
 ///
 /// The bare `.help()` tooltips used elsewhere are invisible until hovered, so
 /// non-expert users never discover them (issue #505). This gives an option a
-/// visible affordance while still exposing the same text as a hover tooltip and
-/// to VoiceOver.
+/// visible affordance instead, and it is the ONE place the explanation appears:
+/// a `.help()` alongside it renders the same paragraph a second time on top of
+/// the popover, because both fire on hover.
 ///
 /// Place it as a sibling of the option's label, not inside an interactive
 /// control's label (see ``HelpfulToggle`` for why). For a plain row:
@@ -32,12 +33,15 @@ struct HelpBadge: View {
         // Show on hover (no click needed); the Button keeps click working for
         // touch / keyboard / VoiceOver, which a hover-only affordance can't reach.
         .onHover { showing = $0 }
-        // `.help` still feeds the full text to VoiceOver (AXHelp) and is the
-        // ViewInspector hook the tests match on (popover content isn't inspectable).
-        .help(text)
         .accessibilityLabel("Help")
-        // Keep the hint terse and action-describing (per HIG); the full
-        // explanation is surfaced by the popover on activation/hover.
+        // Terse and action-describing, per HIG, and deliberately NOT the whole
+        // explanation. Carrying the full text here was tried and is wrong twice
+        // over: a hint is spoken in full on every focus with no way to skim,
+        // and it is suppressible (VoiceOver Verbosity, "Speak hints"), so the
+        // explanation would be read out unasked to the people who leave hints
+        // on and be gone entirely for the people who switch them off. The
+        // popover's `Text` is an ordinary accessible element and carries the
+        // explanation for everyone.
         .accessibilityHint("Shows an explanation of this setting")
         .popover(isPresented: $showing, arrowEdge: .trailing) {
             Text(text)
@@ -58,9 +62,8 @@ struct HelpBadge: View {
 /// Nesting an interactive control in a `Toggle` label folds the button into the
 /// toggle's single accessibility element, so VoiceOver can't focus the badge
 /// separately (and on some macOS versions the toggle's label hit region can also
-/// intercept the tap). Keeping it a sibling (mirroring the existing
-/// `TuningHelpIcon` placement) keeps the badge separately focusable with its own
-/// hit target.
+/// intercept the tap). Keeping it a sibling keeps the badge separately
+/// focusable with its own hit target.
 struct HelpfulToggle: View {
     let title: String
     let help: String
@@ -78,9 +81,5 @@ struct HelpfulToggle: View {
             Toggle(title, isOn: $isOn)
                 .labelsHidden()
         }
-        // Row-wide hover tooltip preserves the pre-badge behaviour for people
-        // used to hovering the control; the badge stays the visible, clickable
-        // affordance for everyone else.
-        .help(help)
     }
 }
