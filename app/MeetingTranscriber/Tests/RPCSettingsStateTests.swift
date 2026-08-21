@@ -131,6 +131,8 @@
             // Fresh suite → no custom bookmark → effective dir is the default.
             XCTAssertFalse(s.output.hasCustomDirectory)
             XCTAssertEqual(s.output.directory, AppPaths.downloadsProtocolsDir.path)
+            XCTAssertTrue(s.output.includeFullTranscriptInProtocol)
+            XCTAssertTrue(s.output.saveRawTranscriptSeparately)
         }
 
         func test_snapshot_output_resolvesCustomBookmark() throws {
@@ -240,6 +242,7 @@
                 "protocolGeneration.openAIEndpoint", "protocolGeneration.openAIModel",
                 "protocolGeneration.claudeBin",
                 "output.directory", "output.hasCustomDirectory", "output.hasCustomPrompt",
+                "output.includeFullTranscriptInProtocol", "output.saveRawTranscriptSeparately",
                 "diagnostics.verboseDiagnostics", "diagnostics.debugRPCEnabled",
                 "updates.checkForUpdates", "updates.includePreReleases",
             ]

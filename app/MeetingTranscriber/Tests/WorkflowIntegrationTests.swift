@@ -96,6 +96,16 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
     }
 
+    private func assertNoRawTranscriptArtifacts(_ h: Harness) {
+        XCTAssertNil(h.queue.jobs.first?.transcriptPath)
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let protocolFiles = (try? FileManager.default.contentsOfDirectory(atPath: protocolsDir.path)) ?? []
+        let recordingFiles = (try? FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)) ?? []
+        XCTAssertFalse(protocolFiles.contains { $0.hasSuffix(".txt") })
+        XCTAssertFalse(recordingFiles.contains { $0.hasSuffix("_segments.json") })
+    }
+
     // swiftlint:disable:next function_default_parameter_at_end
     private func makeDualSourceJob(title: String = "Dual Meeting", audioPath: URL) throws -> PipelineJob {
         let appPath = tmpDir.appendingPathComponent("app_\(UUID().uuidString).wav")
@@ -273,6 +283,32 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertEqual(h.diarization.runCount, 1)
         XCTAssertTrue(h.protocolGen.generateCalled)
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
+    }
+
+    func testWorkflowConfirmedNamingCleansRawOutputWhenDisabled() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true, saveRawTranscriptSeparately: false)
+        h.queue.speakerNamingHandler = { _ in
+            .confirmed(["SPEAKER_00": "Alice", "SPEAKER_01": "Speaker C"])
+        }
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        assertNoRawTranscriptArtifacts(h)
+    }
+
+    func testWorkflowSkippedNamingCleansRawOutputWhenDisabled() async throws {
+        let (h, _) = try makeHarness(diarizeEnabled: true, saveRawTranscriptSeparately: false)
+        h.queue.speakerNamingHandler = { _ in .skipped }
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+        await awaitJobTerminalState(h.queue)
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        assertNoRawTranscriptArtifacts(h)
     }
 
     // MARK: - Happy Path: Dual-Source
@@ -481,6 +517,18 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertNotNil(h.queue.jobs.first?.transcriptPath)
         XCTAssertNil(h.queue.jobs.first?.protocolPath)
         XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
+    }
+
+    func testWorkflowProtocolFailureCleansRawOutputWhenDisabled() async throws {
+        let (h, _) = try makeHarness(saveRawTranscriptSeparately: false)
+        h.protocolGen.shouldThrow = true
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
+        assertNoRawTranscriptArtifacts(h)
     }
 
     // MARK: - Diarization Scenarios
