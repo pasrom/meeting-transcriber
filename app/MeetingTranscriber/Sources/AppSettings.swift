@@ -291,6 +291,21 @@ final class AppSettings {
         didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
     }
 
+    /// Leave the far end out of the transcript when the microphone only picked
+    /// it up from the loudspeaker.
+    ///
+    /// Off by default, deliberately, and not because the repair is optional:
+    /// duplicated remote speech is wrong output, so repairing it is the state
+    /// this should end up in. It ships off because the thresholds it decides by
+    /// come from a single recording, and no one has yet watched the repair work
+    /// on a real call — this same feature once passed every gate while doing
+    /// nothing in the field, which is exactly the failure a default of on would
+    /// hide. Turn it on, measure `echo.suppressedSegments` on a recording made
+    /// over loudspeakers, and the default can follow the evidence.
+    var echoDedupEnabled: Bool {
+        didSet { defaults.set(echoDedupEnabled, forKey: "echoDedupEnabled") }
+    }
+
     var diarizerMode: DiarizerMode {
         didSet { defaults.set(diarizerMode.rawValue, forKey: "diarizerMode") }
     }
@@ -483,6 +498,7 @@ final class AppSettings {
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
+        echoDedupEnabled = defaults.object(forKey: "echoDedupEnabled") as? Bool ?? false
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline
         numSpeakers = defaults.object(forKey: "numSpeakers") as? Int ?? 0

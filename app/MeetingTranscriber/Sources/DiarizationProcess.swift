@@ -43,24 +43,33 @@ enum DiarizationProcess {
     /// time. Pure timestamp math over transcript segments — lives here next to
     /// the diarization assignment that reads `remoteSpeakerLabel` back, rather
     /// than on the engine protocol (the engine doesn't care about speaker tags).
+    ///
+    /// `micEchoVerdicts`, when supplied, is one verdict per element of
+    /// `micSegments` from `EchoSegmentClassifier`. Segments it calls
+    /// `.echoOnly` are the loudspeaker coming back and are marked suppressed, so
+    /// the rendered transcript carries the far end once instead of twice. An
+    /// empty array means nobody measured, which is not the same as nothing to
+    /// remove: it leaves every segment exactly as it was before this existed.
+    /// A short array is treated the same way, because a mismatched count means
+    /// the verdicts belong to different segments than these.
     static func mergeDualSourceSegments(
         appSegments: [TimestampedSegment],
         micSegments: [TimestampedSegment],
         micDelay: TimeInterval = 0,
         micLabel: String = "Me",
+        micEchoVerdicts: [EchoSegmentVerdict] = [],
     ) -> [TimestampedSegment] {
         var app = appSegments
         var mic = micSegments
 
-        if micDelay != 0 {
-            mic = mic.map { seg in
-                TimestampedSegment(
-                    start: seg.start + micDelay,
-                    end: seg.end + micDelay,
-                    text: seg.text,
-                    speaker: seg.speaker,
-                )
+        if micEchoVerdicts.count == mic.count {
+            for i in mic.indices where micEchoVerdicts[i] == .echoOnly {
+                mic[i].suppressed = true
             }
+        }
+
+        if micDelay != 0 {
+            mic = mic.map { $0.shifted(by: micDelay) }
         }
 
         for i in app.indices {
@@ -244,12 +253,13 @@ enum DiarizationProcess {
         for seg in segments.dropFirst() {
             let silenceGap = seg.start - current.end
             if seg.speaker == current.speaker, silenceGap <= mergeGapThreshold {
-                current = TimestampedSegment(
-                    start: current.start,
-                    end: seg.end,
-                    text: "\(current.text) \(seg.text)",
-                    speaker: current.speaker,
-                )
+                // Extends the running block in place rather than rebuilding it,
+                // so fields the merge has no business changing stay what they
+                // were. Callers must drop suppressed segments before merging:
+                // once two segments are one block, no flag can separate their
+                // texts again.
+                current.end = seg.end
+                current.text = "\(current.text) \(seg.text)"
             } else {
                 merged.append(current)
                 current = seg

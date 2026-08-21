@@ -127,6 +127,26 @@ final class DiarizationMergeDualSourceTests: XCTestCase {
         XCTAssertEqual(micResult.end, 10.0, accuracy: 0.001)
     }
 
+    // MARK: - Suppression
+
+    /// A real recording always has a nonzero mic delay, so the delay shift and
+    /// the echo suppression have to compose. Losing the mark in the shift is
+    /// invisible from outside: the transcript keeps its duplicates and nothing
+    /// reports why.
+    func testSuppressionSurvivesTheMicDelayShift() throws {
+        let appSegs = [TimestampedSegment(start: 0, end: 5, text: "App")]
+        let micSegs = [TimestampedSegment(start: 0, end: 5, text: "Mic")]
+
+        let result = DiarizationProcess.mergeDualSourceSegments(
+            appSegments: appSegs, micSegments: micSegs,
+            micDelay: 0.5, micEchoVerdicts: [.echoOnly],
+        )
+
+        let micResult = try XCTUnwrap(result.first { $0.text == "Mic" })
+        XCTAssertTrue(micResult.suppressed, "the echo verdict must survive the delay shift")
+        XCTAssertEqual(micResult.start, 0.5, accuracy: 0.001, "and the shift itself must still happen")
+    }
+
     // MARK: - Empty Inputs
 
     func testEmptyAppSegmentsReturnsOnlyMicSegments() {

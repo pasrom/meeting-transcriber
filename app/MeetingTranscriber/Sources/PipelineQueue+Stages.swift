@@ -214,6 +214,71 @@ extension PipelineQueue {
 
     // MARK: - Pipeline stages
 
+    /// The dual-source half of stage 1: resample both tracks, measure the echo
+    /// between them, transcribe them separately, and merge the two transcripts
+    /// into one timeline.
+    ///
+    /// Split out of `transcribe` because the echo work pushed that function past
+    /// the body-length cap, and because this half now has a shape of its own:
+    /// everything here depends on there being two tracks to compare.
+    private func transcribeDualSource(
+        _ ctx: JobContext, engine: any TranscribingEngine, workDir: URL,
+        appAudioPath: URL, micAudioPath: URL,
+    ) async throws -> [TimestampedSegment] {
+        let app16k = workDir.appendingPathComponent("app_16k.wav")
+        let mic16k = workDir.appendingPathComponent("mic_16k.wav")
+        async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
+        async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
+        try await appResample
+        try await micResample
+
+        // Both tracks now exist at 16 kHz. Check here, before transcription,
+        // whether they carry the same speech: that means the loudspeaker output
+        // is coming back through the microphone, and every affected utterance
+        // would otherwise land in the transcript twice.
+        let echoAnalysis = await warnIfEchoBleed(
+            jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
+        )
+
+        let appSegments = try await engine.transcribeSegments(audioPath: app16k)
+        let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
+
+        // On an affected recording, work out which microphone segments are only
+        // the loudspeaker coming back, so the merge can leave them out of the
+        // transcript instead of writing the far end twice.
+        let micEchoVerdicts = await classifyMicEcho(
+            analysis: echoAnalysis, appURL: app16k, micURL: mic16k,
+            micDelay: ctx.micDelay, micSegments: micSegments,
+        )
+
+        let segments = DiarizationProcess.mergeDualSourceSegments(
+            appSegments: appSegments,
+            micSegments: micSegments,
+            micDelay: ctx.micDelay,
+            micLabel: micLabel,
+            micEchoVerdicts: micEchoVerdicts,
+        )
+        let suppressed = segments.count { $0.suppressed }
+        if suppressed > 0 {
+            recordSuppressedSegments(jobID: ctx.jobID, suppressed)
+        }
+        if !micEchoVerdicts.isEmpty {
+            // The whole distribution, not just the count that was acted on. The
+            // threshold between "copy" and "someone spoke" is the one number a
+            // field report will dispute ("it deleted my sentence"), and without
+            // seeing how the segments fell there is nothing to reason from.
+            // Numbers only: no audio, no transcript, nothing said.
+            let kept = micEchoVerdicts.count { $0 == .ownVoice }
+            let mixed = micEchoVerdicts.count { $0 == .mixed }
+            let unknown = micEchoVerdicts.count { $0 == .undecided }
+            logger
+                .info(
+                    "echo_dedup suppressed=\(suppressed, privacy: .public) mixed=\(mixed, privacy: .public) own=\(kept, privacy: .public) undecided=\(unknown, privacy: .public) of=\(micSegments.count, privacy: .public)",
+                )
+        }
+        return segments
+    }
+
     /// Stage 1 — resample source audio to 16 kHz and transcribe. Dual-source
     /// tracks are transcribed separately and merged; single-source optionally
     /// runs VAD silence-trimming with timestamp remapping. Caches segments for
@@ -230,36 +295,12 @@ extension PipelineQueue {
         var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource = ctx.appPath != nil && ctx.micPath != nil
         if let appAudioPath = ctx.appPath, let micAudioPath = ctx.micPath {
-            // Dual-source: resample both tracks to 16kHz concurrently
-            let app16k = workDir.appendingPathComponent("app_16k.wav")
-            let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-            async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
-            async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
-            try await appResample
-            try await micResample
-
-            // Both tracks now exist at 16 kHz. Check here, before transcription,
-            // whether they carry the same speech: that means the loudspeaker
-            // output is coming back through the microphone, and the merge below
-            // has no dedup, so every affected utterance lands in the transcript
-            // twice.
-            await warnIfEchoBleed(
-                jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
-            )
-
-            // Transcribe each track separately
-            let appSegments = try await engine.transcribeSegments(audioPath: app16k)
-            let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
-
-            // Merge dual-source segments
-            let segments = DiarizationProcess.mergeDualSourceSegments(
-                appSegments: appSegments,
-                micSegments: micSegments,
-                micDelay: ctx.micDelay,
-                micLabel: micLabel,
+            let segments = try await transcribeDualSource(
+                ctx, engine: engine, workDir: workDir,
+                appAudioPath: appAudioPath, micAudioPath: micAudioPath,
             )
             cachedSegments = segments
-            transcript = segments.map(\.formattedLine).joined(separator: "\n")
+            transcript = segments.transcriptText
         } else {
             // Single-source: resample mix to 16kHz
             guard let mixPath = ctx.mixPath else {
@@ -287,7 +328,7 @@ extension PipelineQueue {
             }
 
             cachedSegments = segments
-            transcript = segments.map(\.formattedLine).joined(separator: "\n")
+            transcript = segments.transcriptText
         }
 
         stopElapsedTimer()
@@ -549,6 +590,13 @@ extension PipelineQueue {
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
         isDualSource: Bool, autoNames: [String: String],
     ) -> String? {
+        // Suppressed copies leave before anything gets a speaker. Left in,
+        // they would be labeled like real speech and merged into adjacent
+        // same-speaker blocks, where the trailing `transcriptText` filter can
+        // no longer see them — the duplicates would return in exactly the
+        // rendering the default settings produce. Only this rendering drops
+        // them; the stored segments keep the mark.
+        let cachedSegments = cachedSegments.filter { !$0.suppressed }
         let topology: DiarizationProcess.LabelingTopology?
         if isDualSource, let appDiar = run.app, let micDiar = run.mic {
             topology = .dualTrack(cached: cachedSegments, micLabel: micLabel, app: appDiar, mic: micDiar)
@@ -570,7 +618,7 @@ extension PipelineQueue {
         }
         guard let topology else { return nil }
         let labeled = DiarizationProcess.labelSegments(topology, autoNames: autoNames)
-        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).map(\.formattedLine).joined(separator: "\n")
+        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).transcriptText
     }
 
     /// Stage 3 — persist the transcript + audio, run protocol generation

@@ -51,6 +51,12 @@ struct EchoDetectionDTO: Codable, Equatable {
     let affectedWindowShare: Double
     let windowsScored: Int
     let windowsAffected: Int
+    /// How many microphone segments were left out of the transcript as the
+    /// loudspeaker coming back. Reported because the app is removing content a
+    /// caller might otherwise go looking for, and because it is the only
+    /// machine-readable evidence that the dedup did anything: a transcript that
+    /// simply never had duplicates looks the same from outside.
+    var suppressedSegments: Int = 0
 
     /// The detector's own result, narrowed to what belongs on a wire and in a
     /// persisted job. The per-window series stays behind: it grows with the
@@ -60,6 +66,19 @@ struct EchoDetectionDTO: Codable, Equatable {
         affectedWindowShare = result.affectedWindowShare
         windowsScored = result.windowsScored
         windowsAffected = result.windowsAffected
+    }
+
+    /// Spelled out because a synthesized decoder demands every key. This shape
+    /// is persisted in the pipeline snapshot and in finished-job records, so a
+    /// throwing decode on a field added later would discard a user's whole job
+    /// history at the next launch.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        detected = try container.decode(Bool.self, forKey: .detected)
+        affectedWindowShare = try container.decode(Double.self, forKey: .affectedWindowShare)
+        windowsScored = try container.decode(Int.self, forKey: .windowsScored)
+        windowsAffected = try container.decode(Int.self, forKey: .windowsAffected)
+        suppressedSegments = try container.decodeIfPresent(Int.self, forKey: .suppressedSegments) ?? 0
     }
 }
 

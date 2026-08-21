@@ -55,6 +55,8 @@ class PipelineQueue {
     /// without writing into the real user directory; see `AudioPersistencePolicy`.
     let stagingDir: URL
     let diarizeEnabled: Bool
+    /// Leave loudspeaker copies out of the transcript (`AppSettings.echoDedupEnabled`).
+    let echoDedupEnabled: Bool
     let numSpeakers: Int
     let micLabel: String
     let speakerMatcherFactory: () -> SpeakerMatcher
@@ -225,6 +227,7 @@ class PipelineQueue {
         self.outputDir = nil
         stagingDir = AppPaths.recordingsDir
         self.diarizeEnabled = false
+        echoDedupEnabled = true
         self.numSpeakers = 0
         self.micLabel = "Me"
         self.speakerMatcherFactory = speakerMatcherFactory
@@ -299,6 +302,7 @@ class PipelineQueue {
         logDir: URL? = nil,
         stagingDir: URL = AppPaths.recordingsDir,
         diarizeEnabled: Bool = false,
+        echoDedupEnabled: Bool = true,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
@@ -320,6 +324,7 @@ class PipelineQueue {
         self.outputDir = outputDir
         self.stagingDir = stagingDir
         self.diarizeEnabled = diarizeEnabled
+        self.echoDedupEnabled = echoDedupEnabled
         self.numSpeakers = numSpeakers
         // "Remote" is the reserved routing tag for the app/remote track
         // (DiarizationProcess.remoteSpeakerLabel). If the user names the mic
@@ -508,6 +513,19 @@ class PipelineQueue {
     func recordEchoVerdict(jobID: UUID, _ verdict: EchoDetectionDTO) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].echo = verdict
+    }
+
+    /// Record how many microphone segments the merge left out of the transcript.
+    /// Written after the verdict rather than with it: the count only exists once
+    /// the segments are known, which is two stages later.
+    /// The optional chain doubles as the guard: segments are only ever
+    /// suppressed on an `.affected` verdict, so a nil `echo` means this count
+    /// belongs to no measurement, and dropping it is more honest than
+    /// inventing a verdict record to hang it on.
+    /// Internal (not private) because `PipelineQueue+Stages.swift` calls it.
+    func recordSuppressedSegments(jobID: UUID, _ count: Int) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].echo?.suppressedSegments = count
     }
 
     /// Reset the elapsed timer for a new pipeline stage.

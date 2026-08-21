@@ -382,7 +382,8 @@ Scope and limits:
     "detected": true,
     "affectedWindowShare": 0.62,
     "windowsScored": 34,
-    "windowsAffected": 21
+    "windowsAffected": 21,
+    "suppressedSegments": 12
   }
 }
 ```
@@ -416,6 +417,16 @@ reports it here.
 - `windowsScored` / `windowsAffected`: the counts the share is computed from. A
   verdict needs a minimum of both before it claims anything, so a share alone is
   not the whole decision.
+- `suppressedSegments`: how many microphone segments were left out of the written
+  transcript because the app track already carries them. `0` when nothing was
+  removed, which includes every recording that was never analysed.
+
+**Deduplication only runs on a recording reported as affected**, and it removes
+lines rather than audio: the segments stay in the job's stored data, so the words
+remain recoverable, and only the rendered transcript leaves them out. A caller
+that counts lines and expects the far end twice will now see it once, and
+`suppressedSegments` is how that difference is announced. A recording too short
+for a verdict keeps its duplicates and reports `0`.
 
 **An absent `echo` is not a clean verdict.** It means no measurement was made:
 the job was single-source, one track was silent, or the tracks overlapped for

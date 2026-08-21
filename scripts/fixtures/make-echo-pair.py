@@ -17,6 +17,32 @@ Two tracks come out:
 The clean control differs from the affected pair by exactly that one term, so a
 lane running both cannot pass by measuring anything other than the bleed.
 
+The bleed is not a multiplication. A loudspeaker stands in a room and the call
+app runs its own gain control, so two terms ride on top of the delayed copy:
+a decaying tail (--reverb-ms) and a slow swing of the level (--agc-depth,
+--agc-period). Both default to on, and the reason is a measurement rather than
+realism for its own sake.
+
+Measured on a real 10.8 minute Teams call over loudspeakers, then replicated
+against a pair built without those two terms:
+
+                          residual median   read as removable
+  purely linear bleed          0.114              65%
+  with room and gain drift     0.425              26%
+  the real call                0.494               5%
+
+A pair built the linear way is separable by a single fitted gain almost
+everywhere, so a classifier that fits one gain scores near zero residual and
+removes nearly everything. That is a property of the fixture. On real material
+the same classifier removes a small fraction, because the level it must predict
+drifts and the tail arrives where no single delayed copy puts it. A lane running
+the linear pair therefore cannot fail the way the field fails, which is the one
+thing a lane is for.
+
+Detection is unaffected by either term and the control stays clean, so the two
+properties the lane rests on survive: the affected pair is still detected in
+every window, the control in none.
+
 The local side is gated into short bursts rather than played end to end,
 because someone in a call is mostly listening. That is not decoration: with a
 continuous local voice at full level the microphone envelope follows the local
@@ -28,18 +54,24 @@ cleaner to reason about, and the control is gated identically.
 Standard library only: the runner has no third-party Python and this must not
 grow a dependency to keep working.
 
-Measured with the defaults below, app=two_speakers_de.wav (49.8 s),
-local=three_speakers_de.wav, against the detector's own thresholds (per-window
-correlation 0.7 over 10 s windows):
+Measured by the lane itself with the defaults below, app=two_speakers_de.wav
+(49.8 s), local=three_speakers_de.wav:
 
-  --bleed 0    per-window 0.351, -0.222, 0.264, -0.050  → 0 of 4, not detected
-  --bleed 1.0  per-window 0.787,  0.833, 0.870,  0.918  → 4 of 4, detected
+  --bleed 0    0 of 4 windows affected  → not detected, 0 segments removed
+  --bleed 1.0  4 of 4 windows affected  → detected,     4 segments removed
 
 Both margins are wide, and they are wide in opposite directions, which is the
-property the lane depends on. The bleed gain sits near unity rather than well
-below it because that is what an affected recording looks like: a microphone a
-few centimetres from the loudspeaker hears the remote side about as loudly as
-the person sitting at the machine. Below roughly 0.7 the local voice dominates
+property the lane depends on. The removal count is reported rather than
+asserted at that exact value: it is a yield, and a yield moves with the ASR.
+What the lane pins is that the affected pair loses segments and the control
+loses none. Against the linear pair the same run removed 10 and left a 15 line
+transcript, against this one it removes 4 and leaves 20 — the same classifier,
+the same source audio, and the difference is entirely the two terms above.
+
+The bleed gain sits near unity rather than well below it because that is what
+an affected recording looks like: a microphone a few centimetres from the
+loudspeaker hears the remote side about as loudly as the person sitting at the
+machine. Below roughly 0.7 the local voice dominates
 every window and the pair measures as clean, which is a fact about the fixture,
 not about the detector.
 
@@ -51,6 +83,7 @@ Usage:
 """
 import argparse
 import array
+import math
 import os
 import sys
 import wave
@@ -111,6 +144,64 @@ def gate(samples, rate, burst_seconds, gap_seconds):
     return samples
 
 
+def reverberate(samples, rate, rt60_ms, count):
+    """Adds a decaying tail to a float copy of `samples`, in place.
+
+    Why this exists: a real loudspeaker sits in a room, so what the microphone
+    picks up is not the app track scaled by one number, it is that track plus
+    its own reflections arriving over the next tens of milliseconds. Without a
+    tail the microphone envelope is a scaled copy of the app envelope at every
+    instant, and a predictor that fits one gain reproduces it essentially
+    exactly. That is a property of the fixture, not of the detector, and it is
+    the reason a pair built the old way could not fail the way a field
+    recording does.
+
+    Three feedback combs in series rather than a convolution with a measured
+    impulse response: the runner has no third-party Python, and a dense FIR over
+    a 50 s track at 16 kHz is minutes of pure-Python multiply-adds. Each comb is
+    one pass and one multiply per sample, and three of them in series already
+    produce a tail dense enough that no single delayed copy explains it. The
+    delays are mutually prime in samples so their repetitions do not line up
+    into an audible flutter, and the feedbacks are set from `rt60_ms` so the
+    tail decays by 60 dB in about that time.
+
+    The direct path keeps gain exactly 1: a comb only ever ADDS delayed copies,
+    so samples before the shortest delay are untouched. `--bleed` therefore
+    still means what it meant before, the level of the direct arrival, and the
+    tail sits on top of it the way a room puts it there.
+    """
+    if rt60_ms <= 0:
+        return samples
+    for delay_ms in (37.0, 53.0, 71.0):
+        delay = int(round(delay_ms * rate / 1000.0))
+        if delay <= 0 or delay >= count:
+            continue
+        # 60 dB of decay over rt60 for a comb of this delay.
+        feedback = 10.0 ** (-3.0 * delay_ms / rt60_ms)
+        for i in range(delay, count):
+            samples[i] += feedback * samples[i - delay]
+    return samples
+
+
+def drift_gain(bleed, depth, period_seconds, index, rate):
+    """The bleed gain at one sample, slowly modulated around `bleed`.
+
+    A call app runs its own automatic gain control on what it plays out, so the
+    level the microphone picks up from the loudspeaker is not constant across a
+    meeting. Measured on a real 10.8 minute Teams call over loudspeakers: the
+    per-window loudspeaker-to-microphone ratio spans roughly 0.67 to 1.37, a
+    factor of about 2.1 between its low and high deciles.
+
+    `depth` is half that spread, so the default reproduces the measured factor:
+    (1 + depth) / (1 - depth) with depth 0.35 is 2.08. A sine rather than steps,
+    because the thing being modelled is a control loop settling, not a switch.
+    """
+    if depth <= 0 or period_seconds <= 0:
+        return bleed
+    phase = 2.0 * math.pi * (index / float(rate)) / period_seconds
+    return bleed * (1.0 + depth * math.sin(phase))
+
+
 def clamp(value):
     return -32768 if value < -32768 else (32767 if value > 32767 else value)
 
@@ -134,6 +225,18 @@ def main():
                    help="seconds the local side speaks per turn (0 disables gating)")
     p.add_argument("--local-gap", type=float, default=7.5,
                    help="seconds the local side listens between turns")
+    # The two terms that make the bleed behave like a room instead of like a
+    # multiplication. Both default to the values measured on a real call rather
+    # than to off: a fixture whose whole job is to stand in for an affected
+    # recording should carry what an affected recording carries. Pass 0 to
+    # either one to get the previous purely linear bleed back, which is what the
+    # unit-level tests want when they need an exactly predictable pair.
+    p.add_argument("--reverb-ms", type=float, default=180.0,
+                   help="RT60 of the tail the room adds to the bleed, in ms (0 disables)")
+    p.add_argument("--agc-depth", type=float, default=0.35,
+                   help="relative swing of the bleed gain around --bleed (0 disables)")
+    p.add_argument("--agc-period", type=float, default=20.0,
+                   help="seconds for one full swing of the bleed gain")
     args = p.parse_args()
 
     app, app_rate = read_mono16(args.app)
@@ -151,9 +254,15 @@ def main():
     mic = gate(tiled(local, count), app_rate, args.local_burst, args.local_gap)
 
     if args.bleed > 0:
+        # Build the bled path in floats first, then add it in once. Reverberating
+        # in place on the 16-bit track would requantise the tail at every comb,
+        # and the tail is exactly the quiet part being modelled.
+        path = [float(sample) for sample in app]
+        reverberate(path, app_rate, args.reverb_ms, count)
         delay = int(round(args.delay_ms * app_rate / 1000.0))
         for i in range(delay, count):
-            mic[i] = clamp(int(mic[i] + args.bleed * app[i - delay]))
+            gain = drift_gain(args.bleed, args.agc_depth, args.agc_period, i, app_rate)
+            mic[i] = clamp(int(mic[i] + gain * path[i - delay]))
 
     os.makedirs(args.out, exist_ok=True)
     app_path = os.path.join(args.out, f"{args.stem}_app.wav")
@@ -162,7 +271,11 @@ def main():
     write_mono16(mic_path, mic, app_rate)
 
     seconds = count / float(app_rate)
-    kind = f"bleed gain={args.bleed} delay={args.delay_ms}ms" if args.bleed > 0 else "clean control"
+    if args.bleed > 0:
+        kind = (f"bleed gain={args.bleed} delay={args.delay_ms}ms "
+                f"reverb={args.reverb_ms}ms agc={args.agc_depth}/{args.agc_period}s")
+    else:
+        kind = "clean control"
     print(f"{app_path}\n{mic_path}\n{seconds:.1f}s @ {app_rate} Hz, {kind}")
 
 
