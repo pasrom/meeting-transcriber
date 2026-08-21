@@ -112,6 +112,12 @@ final class PipelineController {
             micLabel: settings.micName,
             includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: settings.saveRawTranscriptSeparately,
+            transcriptOutputOptionsProvider: { [settings] in
+                TranscriptOutputOptions(
+                    includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,
+                    saveRawTranscriptSeparately: settings.saveRawTranscriptSeparately,
+                )
+            },
             speakerMatcherFactory: { SpeakerMatcher() },
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(),

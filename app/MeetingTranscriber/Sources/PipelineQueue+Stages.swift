@@ -685,7 +685,7 @@ extension PipelineQueue {
             let protocolMD = try await generator.generate(
                 transcript: transcript, title: title, diarized: diarized,
             )
-            let markdown = includeFullTranscriptInProtocol
+            let markdown = transcriptOutputOptions(forJobID: jobID).includeFullTranscriptInProtocol
                 ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
                 : protocolMD
             let mdPath = try ProtocolGenerator.saveProtocol(

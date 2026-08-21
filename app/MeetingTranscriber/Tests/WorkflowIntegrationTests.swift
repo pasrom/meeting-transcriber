@@ -33,6 +33,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         stagingDir: URL? = nil,
         includeFullTranscriptInProtocol: Bool = true,
         saveRawTranscriptSeparately: Bool = true,
+        transcriptOutputOptionsProvider: (() -> TranscriptOutputOptions)? = nil,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -65,6 +66,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             micLabel: "Me",
             includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: saveRawTranscriptSeparately,
+            transcriptOutputOptionsProvider: transcriptOutputOptionsProvider,
         )
 
         queue.onJobStateChange = { [collector] _, old, new in
@@ -180,6 +182,57 @@ final class WorkflowIntegrationTests: XCTestCase {
             try FileManager.default.contentsOfDirectory(atPath: protocolsDir.path)
                 .contains { $0.hasSuffix(".txt") },
         )
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)
+                .contains { $0.hasSuffix("_segments.json") },
+        )
+    }
+
+    func testWorkflowMinutesOnlyRetainsNoTranscriptArtifacts() async throws {
+        let (h, _) = try makeHarness(
+            includeFullTranscriptInProtocol: false,
+            saveRawTranscriptSeparately: false,
+        )
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+
+        let protocolPath = try XCTUnwrap(h.queue.jobs.first?.protocolPath)
+        let markdown = try String(contentsOf: protocolPath, encoding: .utf8)
+        XCTAssertFalse(markdown.contains("## Full Transcript"))
+        XCTAssertFalse(markdown.contains("Hello world"))
+        XCTAssertNil(h.queue.jobs.first?.transcriptPath)
+
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: protocolsDir.path)
+                .contains { $0.hasSuffix(".txt") },
+        )
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        XCTAssertFalse(
+            try FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)
+                .contains { $0.hasSuffix("_segments.json") },
+        )
+    }
+
+    func testWorkflowCapturesCurrentOutputOptionsWhenJobIsEnqueued() async throws {
+        var currentOptions = TranscriptOutputOptions(
+            includeFullTranscriptInProtocol: true,
+            saveRawTranscriptSeparately: true,
+        )
+        let (h, _) = try makeHarness(transcriptOutputOptionsProvider: { currentOptions })
+        currentOptions = TranscriptOutputOptions(
+            includeFullTranscriptInProtocol: false,
+            saveRawTranscriptSeparately: false,
+        )
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+
+        let protocolPath = try XCTUnwrap(h.queue.jobs.first?.protocolPath)
+        let markdown = try String(contentsOf: protocolPath, encoding: .utf8)
+        XCTAssertFalse(markdown.contains("## Full Transcript"))
+        XCTAssertNil(h.queue.jobs.first?.transcriptPath)
     }
 
     // MARK: - Happy Path: Single-Source, Diarization + Speaker Naming

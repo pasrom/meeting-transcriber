@@ -81,6 +81,14 @@ struct SpeakerNamingStore {
         try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)_naming.json"))
     }
 
+    /// Delete only the cached transcript segments. These contain verbatim
+    /// speech, unlike the audio/naming sidecars, and must not outlive a job
+    /// when separate raw-transcript output is disabled.
+    func deleteTranscriptSegments(slug: String?) {
+        guard let slug, let recordingsDir else { return }
+        try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)_segments.json"))
+    }
+
     /// Delete the 16 kHz audio and segment sidecar files for a slug.
     func cleanupSidecarFiles(slug: String?) {
         guard let slug, let recordingsDir else { return }
