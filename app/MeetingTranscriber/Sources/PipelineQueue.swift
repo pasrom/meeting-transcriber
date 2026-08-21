@@ -26,7 +26,7 @@ struct DiarizationRun {
 
 @MainActor
 @Observable
-// swiftlint:disable:next attributes
+// swiftlint:disable:next attributes type_body_length
 class PipelineQueue {
     /// Internal setter (not `private(set)`) because the stage and recovery
     /// extension methods in sibling files (PipelineQueue+Stages.swift,
