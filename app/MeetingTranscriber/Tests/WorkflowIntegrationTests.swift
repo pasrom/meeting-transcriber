@@ -230,7 +230,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             includeFullTranscriptInProtocol: true,
             saveRawTranscriptSeparately: true,
         )
-        let (h, _) = try makeHarness(transcriptOutputOptionsProvider: { currentOptions })
+        let (h, _) = try makeHarness { currentOptions }
         currentOptions = TranscriptOutputOptions(
             includeFullTranscriptInProtocol: false,
             saveRawTranscriptSeparately: false,

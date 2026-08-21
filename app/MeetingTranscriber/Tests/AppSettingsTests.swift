@@ -2,6 +2,7 @@ import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
+// swiftlint:disable:next type_body_length
 final class AppSettingsTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var settings: AppSettings!
