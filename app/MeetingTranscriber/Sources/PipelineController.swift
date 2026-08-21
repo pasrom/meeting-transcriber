@@ -108,6 +108,7 @@ final class PipelineController {
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
             outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,
+            echoDedupEnabled: settings.echoDedupEnabled,
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,

@@ -57,14 +57,15 @@ struct VadSegmentMap {
     }
 
     /// Remap transcript segment timestamps from trimmed back to original timeline.
+    /// Copy-and-mutate rather than a memberwise rebuild, so fields the remap
+    /// does not touch survive it (the rebuild form is how the dual-source
+    /// delay shift once lost `suppressed`).
     func remapTimestamps(_ transcript: [TimestampedSegment]) -> [TimestampedSegment] {
         transcript.map { seg in
-            TimestampedSegment(
-                start: toOriginalTime(seg.start),
-                end: toOriginalTime(seg.end),
-                text: seg.text,
-                speaker: seg.speaker,
-            )
+            var out = seg
+            out.start = toOriginalTime(seg.start)
+            out.end = toOriginalTime(seg.end)
+            return out
         }
     }
 
