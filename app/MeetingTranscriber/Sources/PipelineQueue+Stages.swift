@@ -669,6 +669,9 @@ extension PipelineQueue {
         // path; the fallback just keeps generation working if the job is gone.
         let basename = jobs.first { $0.id == jobID }?.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
+        let meetingStartTime = jobs.first { $0.id == jobID }.map { job in
+            job.meetingStartTime ?? job.enqueuedAt
+        } ?? Date()
         do {
             updateJobState(id: jobID, to: .generatingProtocol)
             startElapsedTimer()
@@ -676,7 +679,10 @@ extension PipelineQueue {
                 of: #"\[\w[\w\s]*\]"#, options: .regularExpression,
             ) != nil
             let protocolMD = try await generator.generate(
-                transcript: transcript, title: title, diarized: diarized,
+                transcript: transcript,
+                title: title,
+                diarized: diarized,
+                meetingStartTime: meetingStartTime,
             )
             let fullMD = protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
             let mdPath = try ProtocolGenerator.saveProtocol(

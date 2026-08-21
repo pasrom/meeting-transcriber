@@ -5,7 +5,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Protoco
 
 /// Abstraction for protocol generation, enabling mock injection in tests.
 protocol ProtocolGenerating {
-    func generate(transcript: String, title: String, diarized: Bool) async throws -> String
+    func generate(transcript: String, title: String, diarized: Bool, meetingStartTime: Date) async throws -> String
 }
 
 /// Shared protocol utilities: prompts, file operations, and error types.
@@ -20,7 +20,8 @@ enum ProtocolGenerator {
     Use exactly this structure:
 
     # Meeting Protocol - [Meeting Title]
-    **Date:** [Date from context or today]
+    **Date:** {MEETING_DATE}
+    **Time:** {MEETING_TIME}
 
     ---
 
@@ -72,8 +73,25 @@ enum ProtocolGenerator {
 
     /// Load the protocol prompt, preferring a custom file over the built-in default.
     ///
-    /// Reads `AppPaths.customPromptFile` if it exists and is non-empty,
-    /// otherwise falls back to the hardcoded `protocolPrompt`.
+    /// Replaces supported protocol-prompt variables with meeting-specific values.
+    ///
+    /// Dates and times use stable, locale-independent formats so users can
+    /// reliably instruct their LLMs to resolve relative time expressions.
+    static func applyVariables(
+        _ prompt: String,
+        language: String,
+        meetingStartTime: Date = Date(),
+        timeZone: TimeZone = .autoupdatingCurrent,
+    ) -> String {
+        let metadata = meetingMetadata(for: meetingStartTime, timeZone: timeZone)
+        return prompt
+            .replacingOccurrences(of: "{LANGUAGE}", with: language)
+            .replacingOccurrences(of: "{MEETING_DATE}", with: metadata.date)
+            .replacingOccurrences(of: "{MEETING_TIME}", with: metadata.time)
+    }
+
+    /// Backwards-compatible language-only replacement for callers that do not
+    /// have meeting context (for example, prompt-editor previews).
     static func applyLanguage(_ prompt: String, language: String) -> String {
         prompt.replacingOccurrences(of: "{LANGUAGE}", with: language)
     }
@@ -91,18 +109,54 @@ enum ProtocolGenerator {
         return protocolPrompt
     }
 
-    /// Build the localized system prompt: `loadPrompt` + `applyLanguage`
-    /// + optional `diarizationNote`. Excludes the transcript itself —
+    /// Build the system prompt: authoritative meeting metadata + loaded prompt
+    /// with variables replaced + optional `diarizationNote`. Excludes the transcript itself —
     /// callers append or attach it as they see fit.
     ///
     /// `promptURL` is forwarded to `loadPrompt` and exists for the same reason:
     /// without it tests fall through to the shared `AppPaths.customPromptFile`,
     /// so their result depends on whether the developer has customised their own
     /// prompt through the app.
-    static func buildSystemPrompt(diarized: Bool, language: String, promptURL: URL = AppPaths.customPromptFile) -> String {
-        var prompt = applyLanguage(loadPrompt(from: promptURL), language: language)
+    static func buildSystemPrompt(
+        diarized: Bool,
+        language: String,
+        meetingStartTime: Date,
+        promptURL: URL = AppPaths.customPromptFile,
+        timeZone: TimeZone = .autoupdatingCurrent,
+    ) -> String {
+        let metadata = meetingMetadata(for: meetingStartTime, timeZone: timeZone)
+        var prompt = """
+        Meeting metadata:
+        Date: \(metadata.date)
+        Time: \(metadata.time)
+        Language: \(language)
+        The date and time above are authoritative. Interpret relative time expressions
+        in the transcript relative to this meeting date. Do not rely on the model's
+        assumed current date.
+
+        """ + applyVariables(
+            loadPrompt(from: promptURL),
+            language: language,
+            meetingStartTime: meetingStartTime,
+            timeZone: timeZone,
+        )
         if diarized { prompt += diarizationNote }
         return prompt
+    }
+
+    static func meetingMetadata(
+        for meetingStartTime: Date,
+        timeZone: TimeZone = .autoupdatingCurrent,
+    ) -> (date: String, time: String) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+
+        formatter.dateFormat = "yyyy-MM-dd"
+        let date = formatter.string(from: meetingStartTime)
+        formatter.dateFormat = "HH:mm"
+        return (date, formatter.string(from: meetingStartTime))
     }
 
     // MARK: - File Operations
