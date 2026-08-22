@@ -41,6 +41,35 @@ typealias CaptureSessionFactory = @MainActor (AudioCaptureConfiguration) throws 
 
 /// The production capture session: real taps on real hardware.
 enum LiveCaptureSession {
+    /// The configuration this build is allowed to open a session with.
+    ///
+    /// Mic device-change e2e (issue #379): the fault makes the app self-trigger
+    /// a mid-recording restart with an invalid format so the lane can verify
+    /// the installTap NSException recovery. It is compiled ONLY into the e2e
+    /// build (run_app.sh -DE2E_FAULT_INJECTION).
+    ///
+    /// The `#else` is what keeps the fault physically absent from every shipped
+    /// binary, and it is not redundant: the field is a `var` on a struct that
+    /// ships, so whatever a caller set would otherwise travel straight through
+    /// to a `MicCaptureHandler` whose fault machinery is always compiled.
+    /// Overwriting here means no shipped build can reach the session with a
+    /// fault set, whoever built the configuration.
+    ///
+    /// Separate from `make` only so that guarantee can be asserted: `make`
+    /// returns a session that keeps its configuration to itself, so a test can
+    /// see what was decided here and nothing else can.
+    static func configurationForThisBuild(
+        _ configuration: AudioCaptureConfiguration,
+    ) -> AudioCaptureConfiguration {
+        var configuration = configuration
+        #if E2E_FAULT_INJECTION
+            configuration.micDebugFault = DebugTapFault(triggerRestartAfter: 2)
+        #else
+            configuration.micDebugFault = nil
+        #endif
+        return configuration
+    }
+
     @MainActor
     static func make(_ configuration: AudioCaptureConfiguration) throws -> any AudioCapturing {
         // The one place the 14.2 floor is stated, and the compiler requires it
@@ -48,25 +77,6 @@ enum LiveCaptureSession {
         // caller reaches a real session through here, so no copy of this check
         // is needed anywhere else — and a copy elsewhere would be unenforced.
         guard #available(macOS 14.2, *) else { throw RecorderError.unsupportedOS }
-
-        // Mic device-change e2e (issue #379): inject a one-shot tap fault so the
-        // app self-triggers a mid-recording restart with an invalid format and
-        // the lane can verify the installTap NSException recovery. Compiled ONLY
-        // in the e2e build (run_app.sh -DE2E_FAULT_INJECTION).
-        //
-        // The `#else` is what keeps the fault physically absent from every
-        // shipped binary, and it is not redundant: the field is a `var` on a
-        // struct that ships, so whatever a caller set would otherwise travel
-        // straight through to a `MicCaptureHandler` whose fault machinery is
-        // always compiled. Overwriting here means no shipped build can reach
-        // the session with a fault set, whoever built the configuration.
-        var configuration = configuration
-        #if E2E_FAULT_INJECTION
-            configuration.micDebugFault = DebugTapFault(triggerRestartAfter: 2)
-        #else
-            configuration.micDebugFault = nil
-        #endif
-
-        return AudioCaptureSession(configuration)
+        return AudioCaptureSession(configurationForThisBuild(configuration))
     }
 }
