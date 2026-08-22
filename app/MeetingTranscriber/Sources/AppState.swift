@@ -468,7 +468,17 @@ final class AppState {
             activeJobState: pipeline.queue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
             permissionProblem: permissions.health?.isHealthy == false,
+            captureProblem: hasCaptureProblem,
         )
+    }
+
+    /// Whether a live recording is failing to capture one of its channels.
+    /// Drives the blinking error badge — the only failure surface Do Not
+    /// Disturb cannot suppress.
+    var hasCaptureProblem: Bool {
+        channelHealth.appSilentActive
+            || channelHealth.micSilentActive
+            || channelHealth.recordingSilentActive
     }
 
     var currentStateLabel: String {
