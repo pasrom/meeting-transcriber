@@ -209,25 +209,52 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{LANGUAGE}"))
     }
 
+    func testDefaultPromptContainsMeetingTimePlaceholders() {
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{MEETING_DATE}"))
+        XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{MEETING_TIME}"))
+    }
+
+    func testApplyVariablesReplacesAllSupportedPlaceholders() throws {
+        let startTime = try localDate(2026, 8, 21, 13, 28)
+        let result = ProtocolGenerator.applyVariables(
+            "{LANGUAGE} {MEETING_DATE} {MEETING_TIME}",
+            language: "German",
+            meetingStartTime: startTime,
+        )
+
+        XCTAssertEqual(result, "German 2026-08-21 13:28")
+    }
+
     // MARK: - System Prompt Construction
 
     func testBuildSystemPromptSubstitutesLanguage() throws {
         let url = makeTempFile(suffix: ".md")
         try "Protocol language: {LANGUAGE}.".write(to: url, atomically: true, encoding: .utf8)
 
-        let prompt = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "Polish", promptURL: url)
+        let startTime = try localDate(2026, 8, 21, 13, 28)
+        let prompt = ProtocolGenerator.buildSystemPrompt(
+            diarized: false,
+            language: "Polish",
+            meetingStartTime: startTime,
+            promptURL: url,
+        )
 
-        // Equality also pins that the injected URL is honoured: reading the shared
-        // user file or the built-in default would not produce this exact string.
-        XCTAssertEqual(prompt, "Protocol language: Polish.")
+        XCTAssertTrue(prompt.contains("Date: 2026-08-21"))
+        XCTAssertTrue(prompt.contains("Time: 13:28"))
+        XCTAssertTrue(prompt.contains("Protocol language: Polish."))
     }
 
-    func testBuildSystemPromptAppendsDiarizationNoteWhenDiarized() {
+    func testBuildSystemPromptAppendsDiarizationNoteWhenDiarized() throws {
         // Never created, so both calls fall back to the built-in default rather
         // than to whatever the developer has in their own prompt file.
         let url = makeTempFile(suffix: ".md")
-        let plain = ProtocolGenerator.buildSystemPrompt(diarized: false, language: "German", promptURL: url)
-        let diarized = ProtocolGenerator.buildSystemPrompt(diarized: true, language: "German", promptURL: url)
+        let startTime = try localDate(2026, 8, 21, 13, 28)
+        let plain = ProtocolGenerator.buildSystemPrompt(
+            diarized: false, language: "German", meetingStartTime: startTime, promptURL: url,
+        )
+        let diarized = ProtocolGenerator.buildSystemPrompt(
+            diarized: true, language: "German", meetingStartTime: startTime, promptURL: url,
+        )
         XCTAssertGreaterThan(diarized.count, plain.count)
         XCTAssertTrue(diarized.contains(ProtocolGenerator.diarizationNote))
         XCTAssertFalse(plain.contains(ProtocolGenerator.diarizationNote))

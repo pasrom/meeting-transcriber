@@ -518,7 +518,7 @@ When dual-source recording (app + mic) is available:
 - **`.openAICompatible`** — Any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.)
 - **`.none`** — Skip LLM generation; save transcript only
 
-`AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`.
+`AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. Custom prompts can also use `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`), derived from the meeting start time. Every protocol request additionally starts with an authoritative meeting-metadata block, so existing custom prompts receive temporal context without needing to add the placeholders.
 
 ### Claude CLI Invocation
 
@@ -526,7 +526,7 @@ When dual-source recording (app + mic) is available:
 /usr/bin/env claude -p - --output-format stream-json --verbose --model sonnet
 ```
 
-- **Input:** Protocol prompt (with language substituted) + transcript piped to stdin
+- **Input:** Meeting metadata + protocol prompt (with variables substituted) + transcript piped to stdin
 - **Output:** Stream-json parsed line-by-line (content_block_delta + assistant message)
 - **Environment:** `CLAUDECODE` env var stripped to allow nested invocation
 - **Timeout:** 10 minutes

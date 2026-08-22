@@ -287,6 +287,28 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         _ = try await gen.generate(transcript: "x", title: "t", diarized: false)
     }
 
+    func testGenerateRequestIncludesAuthoritativeMeetingMetadata() async throws {
+        let startTime = try localDate(2026, 8, 21, 13, 28)
+        let metadata = ProtocolGenerator.meetingMetadata(for: startTime)
+        MockURLProtocol.handler = { request in
+            let body = self.requestBody(request)
+            let response = self.mockResponse(request, body: Data(Self.okSSE.utf8))
+            guard let messages = body["messages"] as? [[String: Any]],
+                  let systemPrompt = messages.first?["content"] as? String else {
+                XCTFail("Request must contain a system prompt")
+                return response
+            }
+            XCTAssertTrue(systemPrompt.contains("Date: \(metadata.date)"))
+            XCTAssertTrue(systemPrompt.contains("Time: \(metadata.time)"))
+            return response
+        }
+
+        let gen = makeGenerator(session: makeMockSession())
+        _ = try await gen.generate(
+            transcript: "x", title: "t", diarized: false, meetingStartTime: startTime,
+        )
+    }
+
     func testGenerateTimesOutWhenStreamNeverCompletes() async {
         // Endpoint delivers a chunk then stalls forever (the struggling-LLM
         // case). request.timeoutInterval is an idle timeout and would never fire

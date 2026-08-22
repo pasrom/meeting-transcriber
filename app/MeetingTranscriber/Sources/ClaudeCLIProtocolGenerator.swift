@@ -22,8 +22,13 @@
 
         // MARK: - ProtocolGenerating
 
-        func generate(transcript: String, title _: String, diarized: Bool) async throws -> String {
-            let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language) + transcript
+        func generate(
+            transcript: String,
+            title _: String,
+            diarized: Bool,
+            meetingStartTime: Date = Date(),
+        ) async throws -> String {
+            let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
 
             let process = Process()
             let resolvedBin = Self.resolveClaudePath(claudeBin)
