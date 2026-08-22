@@ -384,6 +384,20 @@ final class AppSettings {
         didSet { defaults.set(protocolLanguage, forKey: "protocolLanguage") }
     }
 
+    /// Append the verbatim transcript to generated Markdown meeting minutes.
+    /// Defaults to `true` to preserve the output format used before this option
+    /// was introduced.
+    var includeFullTranscriptInProtocol: Bool {
+        didSet { defaults.set(includeFullTranscriptInProtocol, forKey: "includeFullTranscriptInProtocol") }
+    }
+
+    /// Keep the raw transcript as a separate `.txt` artefact after processing.
+    /// A transcript may still be retained while a job is in flight so speaker
+    /// naming and protocol generation can use it; it is removed at completion.
+    var saveRawTranscriptSeparately: Bool {
+        didSet { defaults.set(saveRawTranscriptSeparately, forKey: "saveRawTranscriptSeparately") }
+    }
+
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
@@ -516,6 +530,8 @@ final class AppSettings {
             claudeBin = defaults.object(forKey: "claudeBin") as? String ?? "claude"
         #endif
         protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
+        includeFullTranscriptInProtocol = defaults.object(forKey: "includeFullTranscriptInProtocol") as? Bool ?? true
+        saveRawTranscriptSeparately = defaults.object(forKey: "saveRawTranscriptSeparately") as? Bool ?? true
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint

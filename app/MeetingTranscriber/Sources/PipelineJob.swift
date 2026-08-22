@@ -73,6 +73,14 @@ struct PipelineJob: Identifiable, Codable {
     var transcriptPath: URL?
     var protocolPath: URL?
     var namingSlug: String?
+    // Output policy captured when this job enters the queue. Optional so
+    // snapshots saved before transcript-output options existed still decode.
+    // Nil falls back to the queue's legacy-compatible defaults.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var includeFullTranscriptInProtocol: Bool?
+    // See `includeFullTranscriptInProtocol`.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var saveRawTranscriptSeparately: Bool?
     /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
     /// entry. Set by `PipelineQueue` after diarisation completes (in the
     /// initial pipeline run and after `lateDiarization`). Used by the
@@ -104,6 +112,10 @@ struct PipelineJob: Identifiable, Codable {
         participants: [String] = [],
         meetingStartTime: Date? = nil,
         autoSkipNaming: Bool = false,
+        // swiftlint:disable:next discouraged_optional_boolean
+        includeFullTranscriptInProtocol: Bool? = nil,
+        // swiftlint:disable:next discouraged_optional_boolean
+        saveRawTranscriptSeparately: Bool? = nil,
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -122,6 +134,8 @@ struct PipelineJob: Identifiable, Codable {
         self.transcriptPath = nil
         self.protocolPath = nil
         self.namingSlug = nil
+        self.includeFullTranscriptInProtocol = includeFullTranscriptInProtocol
+        self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
         self.usedDiarizerMode = nil
         self.autoSkipNaming = autoSkipNaming
     }

@@ -2,6 +2,7 @@ import Foundation
 @testable import MeetingTranscriber
 import XCTest
 
+// swiftlint:disable:next type_body_length
 final class AppSettingsTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
     private var settings: AppSettings!
@@ -346,6 +347,22 @@ final class AppSettingsTests: XCTestCase {
         // Verify a fresh instance reads it back from the same suite.
         let fresh = AppSettings(defaults: defaults)
         XCTAssertEqual(fresh.protocolProvider, .openAICompatible)
+    }
+
+    func testTranscriptOutputOptionsDefaultToEnabled() {
+        XCTAssertTrue(settings.includeFullTranscriptInProtocol)
+        XCTAssertTrue(settings.saveRawTranscriptSeparately)
+    }
+
+    func testTranscriptOutputOptionsPersist() {
+        settings.includeFullTranscriptInProtocol = false
+        settings.saveRawTranscriptSeparately = false
+        XCTAssertEqual(defaults.object(forKey: "includeFullTranscriptInProtocol") as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: "saveRawTranscriptSeparately") as? Bool, false)
+
+        let fresh = AppSettings(defaults: defaults)
+        XCTAssertFalse(fresh.includeFullTranscriptInProtocol)
+        XCTAssertFalse(fresh.saveRawTranscriptSeparately)
     }
 
     func testOpenAIEndpointDefault() {

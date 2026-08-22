@@ -92,6 +92,8 @@
                 directory: rpcOutputDirPath(),
                 hasCustomDirectory: customOutputDirBookmark != nil,
                 hasCustomPrompt: FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path),
+                includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
+                saveRawTranscriptSeparately: saveRawTranscriptSeparately,
             )
         }
 
