@@ -92,7 +92,7 @@ flowchart TD
 - **VAD preprocessing** — Optional silence trimming via FluidAudio Silero v6 before transcription, with automatic timestamp remapping
 - **AI protocol generation** — Structured Markdown via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code), OpenAI-compatible APIs (Ollama, LM Studio, etc.), or disabled (save transcript only)
 - **Configurable protocol prompt** — Custom prompt file support (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`)
-- **Manual recording** — Record any app via app picker, not just detected meetings
+- **Manual recording** — Record any app via app picker, not just detected meetings; a separate "Record Microphone" menu item captures a room meeting with no target app at all
 - **Multi-format input** — Supports WAV, MP3, M4A, MP4, FLAC, plus the phone and messenger voice formats AMR, 3GP/3G2 and OPUS/OGG; MKV and WebM additionally need ffmpeg
 - **Update checker** — Notifies when a new version is available
 - **Background processing** — PipelineQueue runs transcription and protocol generation independently from recording
