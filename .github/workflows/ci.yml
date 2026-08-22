@@ -43,6 +43,46 @@ jobs:
           predicate-quantifier: every
           filters: .github/filters.yml
 
+  # Advisory by design: this job is NOT among the required checks and must never
+  # be the thing that stops a merge. `main` is not at stake either way, and
+  # scripts/ci/check-merge-commits.sh carries the reason. What it protects is the
+  # review of the open PR, which a merge commit makes unreadable commit by commit.
+  #
+  # Two deliberate deviations from the house pattern in the jobs below:
+  #   - No `Cancel run on failure` step. A check that blocks nothing must not take
+  #     the macOS jobs down with it: the contributor still needs to see whether
+  #     their actual change builds and passes.
+  #   - Not gated on `changes`. A merge commit is worth reporting whichever files
+  #     the PR touches, and this costs seconds on a free runner.
+  merge-commit-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Three non-default inputs, each load-bearing. `ref`: the default
+          # checkout for a pull_request event is refs/pull/N/merge, a merge commit
+          # GitHub builds itself; measured on this repo, that ref carries a
+          # `Merge <head> into <base>` commit, so the default would report every
+          # PR. `fetch-depth: 0`: the depth-1 default carries neither the base
+          # branch nor a merge base, so the commit range cannot resolve at all.
+          # `filter: blob:none`: this walks commit topology only, so fetching
+          # every historical file revision is dead weight.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          filter: blob:none
+      # The base branch comes from the event rather than a hardcoded `main`, so
+      # widening the `pull_request` trigger later cannot leave this silently
+      # measuring against the wrong base. Passed via env rather than interpolated
+      # into the command line.
+      - name: Check for merge commits
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: bash scripts/ci/check-merge-commits.sh "origin/$BASE_REF"
+
   lint:
     needs: changes
     if: needs.changes.outputs.code == 'true'
