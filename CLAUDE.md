@@ -193,7 +193,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
 - `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.
-- `AppSettings.protocolLanguage` string (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`) resolve from a captured recording start time, or to `Unknown` for imports and recovery jobs. Only a captured recording start adds the authoritative meeting-metadata preamble, so processing time is never presented as a meeting time.
+- `AppSettings.protocolLanguage` string (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`) resolve from a captured recording start time, or to `Unknown` for imports and recovery jobs, whose prompts open with guidance to use a date or time the transcript states for the meeting itself and otherwise keep `Unknown`. Only a captured recording start adds the authoritative meeting-metadata preamble, so processing time is never presented as a meeting time.
 - `ProtocolGenerator.loadPrompt()` loads custom prompt from `AppPaths.customPromptFile` (`~/Library/Application Support/MeetingTranscriber/protocol_prompt.md`), falls back to built-in default.
 - `OpenAIProtocolGenerator` supports any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.).
 

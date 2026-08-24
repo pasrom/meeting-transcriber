@@ -111,7 +111,8 @@ enum ProtocolGenerator {
     /// Build the system prompt from an optional authoritative meeting-time context,
     /// loaded prompt with variables replaced, and optional `diarizationNote`.
     /// Imports and recovery jobs have no reliable meeting start and therefore
-    /// receive no authoritative time anchor. Excludes the transcript itself —
+    /// receive no authoritative time anchor, only guidance on how to fill the
+    /// unknown date and time. Excludes the transcript itself —
     /// callers append or attach it as they see fit.
     ///
     /// `promptURL` is forwarded to `loadPrompt` and exists for the same reason:
@@ -149,8 +150,24 @@ enum ProtocolGenerator {
         )
     }
 
+    /// Prepends time context to the system prompt. With a captured start this
+    /// is the authoritative metadata block. Without one it is guidance instead
+    /// of silence, because the template header reproduces the substituted
+    /// `Unknown` literally: the model may adopt a date or time the transcript
+    /// states for this meeting itself, but must not promote a deadline or an
+    /// unrelated mentioned date, and must never fall back to the current date
+    /// or the processing time. The guidance lives here and not in the
+    /// substituted values, so placeholders stay short scalars for custom
+    /// prompts and no English instruction lands inside the reproduced header.
     private static func meetingTimeContext(metadata: MeetingPromptMetadata?) -> String {
-        guard let metadata else { return "" }
+        guard let metadata else {
+            return [
+                "No reliable meeting start time was captured for this recording.",
+                "If the transcript states when this meeting itself took place, use that",
+                "date and time; otherwise leave them as Unknown. Never substitute the",
+                "current date or the processing time.",
+            ].joined(separator: "\n") + "\n\n"
+        }
         return [
             "Meeting metadata:",
             "Date: \(metadata.date)",
