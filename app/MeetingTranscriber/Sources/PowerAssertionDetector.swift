@@ -131,7 +131,10 @@ class PowerAssertionDetector: MeetingDetecting {
         AssertionPattern(
             appName: "Webex",
             processNames: ["Webex", "Cisco Webex Meetings", "Meeting Center"],
-            keywords: ["webex"],
+            // Cisco names the call assertion "On a call", not "webex" (measured:
+            // Webex 46.7.0.35472 on macOS 26.5.2). Keyword-only like Teams, so
+            // the #475 concern does not arise; bound to processNames above.
+            keywords: ["webex", "on a call"],
         ),
         AssertionPattern(
             appName: AppMeetingPattern.simulator.appName,

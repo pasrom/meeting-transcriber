@@ -282,4 +282,92 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         _ = off.checkOnce()
         XCTAssertNil(off.checkOnce(), "browser toggle off → a Chrome WebRTC call must be ignored")
     }
+
+    // MARK: - Webex desktop client — Cisco's assertion name is not "webex"
+
+    /// Measured on macOS 26.5.2 with Webex 46.7.0.35472 during an instant
+    /// meeting: the client holds two assertions, and neither name contains
+    /// "webex".
+    ///
+    ///     pid 870(Webex): PreventUserIdleSystemSleep  named: "io avilable"
+    ///     pid 870(Webex): PreventUserIdleDisplaySleep named: "On a call"
+    ///
+    /// Same failure mode as Zoom in #562 (Apple's "Describe Activity Type"
+    /// placeholder): `processNames` passes the bound gate, then both remaining
+    /// tests fail — no "webex" in the name, and `assertionTypes` is empty. So
+    /// the desktop client can never be auto-detected, which in turn means no
+    /// auto-stop, because a hand-started recording only ends on
+    /// `.stopPidExited` / `.stopMaxDurationExceeded`.
+    func testWebexCallWithCiscoAssertionNameIsDetected() {
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Webex"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertionDict(processName: "Webex", assertName: "On a call")
+        }
+        XCTAssertEqual(
+            detector.checkOnce()?.pattern.appName, "Webex",
+            "Cisco names the call assertion \"On a call\", not \"webex\"",
+        )
+    }
+
+    /// The "on a call" keyword must stay bound to the Webex client: `matches()`
+    /// checks `processNames.contains` before testing the name, so a foreign
+    /// process holding an identically named assertion cannot fire. Amphetamine
+    /// holds both display-sleep assertion types permanently on the measured
+    /// machine.
+    ///
+    /// That gate is NOT what makes a keyword preferable to the `assertionTypes`
+    /// fallback #475 gave Zoom: it runs ahead of both arms, so it excludes
+    /// foreign processes either way. The keyword earns its keep against
+    /// assertions Webex ITSELF holds outside a call, which is the #475 concern
+    /// and what `testWebexWithUnrelatedAssertionNameIsNotDetected` pins.
+    func testWebexKeywordIsBoundToTheWebexProcess() {
+        for process in ["Amphetamine", "Google Chrome", PowerAssertionFixture.unknownBrowser] {
+            let detector = PowerAssertionDetector(
+                patterns: PowerAssertionDetector.patterns(watching: ["Webex"]),
+                confirmationCount: 1,
+            )
+            detector.windowListProvider = { [] }
+            detector.assertionProvider = {
+                PowerAssertionFixture.assertionDict(processName: process, assertName: "On a call")
+            }
+            XCTAssertNil(
+                detector.checkOnce(),
+                "\(process): the Webex keyword must not fire for a foreign process",
+            )
+        }
+    }
+
+    /// A Webex client holding an unrelated assertion must still not count as a
+    /// meeting — the keyword gate, not the process name, decides. Measured: an
+    /// idle Webex client holds no assertion at all, so this is the guard against
+    /// widening the pattern to plain display-sleep later.
+    func testWebexWithUnrelatedAssertionNameIsNotDetected() {
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Webex"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertionDict(processName: "Webex", assertName: "Playing audio")
+        }
+        XCTAssertNil(detector.checkOnce(), "an unrelated Webex assertion must not be a meeting")
+    }
+
+    /// The Webex toggle still gates the new keyword: with Webex unchecked, the
+    /// measured assertion must be ignored.
+    func testWebexCallIsIgnoredWhenWebexIsNotWatched() {
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Zoom"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertionDict(processName: "Webex", assertName: "On a call")
+        }
+        XCTAssertNil(detector.checkOnce(), "Webex off → a Webex call must not be detected")
+    }
 }
