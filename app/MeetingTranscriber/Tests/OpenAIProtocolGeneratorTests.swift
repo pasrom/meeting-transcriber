@@ -150,11 +150,11 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         XCTAssertTrue(description.contains("Connection failed"), "Expected prefix in: \(description)")
     }
 
-    // MARK: - Language Substitution
+    // MARK: - Prompt Variable Substitution
 
-    func testApplyLanguageSubstitution() {
+    func testApplyVariablesSubstitutesLanguage() {
         let template = "Write the protocol in {LANGUAGE}. Use {LANGUAGE} consistently."
-        let result = ProtocolGenerator.applyLanguage(template, language: "French")
+        let result = ProtocolGenerator.applyVariables(template, language: "French", metadata: nil)
         XCTAssertEqual(result, "Write the protocol in French. Use French consistently.")
         XCTAssertFalse(result.contains("{LANGUAGE}"))
     }
@@ -289,7 +289,6 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
 
     func testGenerateRequestIncludesAuthoritativeMeetingMetadata() async throws {
         let startTime = try localDate(2026, 8, 21, 13, 28)
-        let metadata = ProtocolGenerator.meetingMetadata(for: startTime)
         MockURLProtocol.handler = { request in
             let body = self.requestBody(request)
             let response = self.mockResponse(request, body: Data(Self.okSSE.utf8))
@@ -298,8 +297,8 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
                 XCTFail("Request must contain a system prompt")
                 return response
             }
-            XCTAssertTrue(systemPrompt.contains("Date: \(metadata.date)"))
-            XCTAssertTrue(systemPrompt.contains("Time: \(metadata.time)"))
+            XCTAssertTrue(systemPrompt.contains("Date: 2026-08-21"))
+            XCTAssertTrue(systemPrompt.contains("Time: 13:28"))
             return response
         }
 

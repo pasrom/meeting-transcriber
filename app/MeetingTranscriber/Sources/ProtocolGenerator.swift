@@ -5,11 +5,18 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Protoco
 
 /// Abstraction for protocol generation, enabling mock injection in tests.
 protocol ProtocolGenerating {
-    func generate(transcript: String, title: String, diarized: Bool, meetingStartTime: Date) async throws -> String
+    func generate(transcript: String, title: String, diarized: Bool, meetingStartTime: Date?) async throws -> String
 }
 
 /// Shared protocol utilities: prompts, file operations, and error types.
 enum ProtocolGenerator {
+    struct MeetingPromptMetadata: Equatable {
+        let date: String
+        let time: String
+    }
+
+    static let unknownMeetingMetadata = "Unknown"
+
     static let protocolPrompt = """
     You are a professional meeting minute taker.
     Create a structured meeting protocol in {LANGUAGE} from the following transcript.
@@ -71,29 +78,21 @@ enum ProtocolGenerator {
     In the Topics Discussed section, attribute key statements to speakers.
     """
 
-    /// Load the protocol prompt, preferring a custom file over the built-in default.
-    ///
     /// Replaces supported protocol-prompt variables with meeting-specific values.
     ///
     /// Dates and times use stable, locale-independent formats so users can
-    /// reliably instruct their LLMs to resolve relative time expressions.
+    /// reliably instruct their LLMs to resolve relative time expressions. When
+    /// a recording has no captured start time (for example, an import), the
+    /// date and time variables resolve to `Unknown` rather than processing time.
     static func applyVariables(
         _ prompt: String,
         language: String,
-        meetingStartTime: Date = Date(),
-        timeZone: TimeZone = .autoupdatingCurrent,
+        metadata: MeetingPromptMetadata?,
     ) -> String {
-        let metadata = meetingMetadata(for: meetingStartTime, timeZone: timeZone)
-        return prompt
+        prompt
             .replacingOccurrences(of: "{LANGUAGE}", with: language)
-            .replacingOccurrences(of: "{MEETING_DATE}", with: metadata.date)
-            .replacingOccurrences(of: "{MEETING_TIME}", with: metadata.time)
-    }
-
-    /// Backwards-compatible language-only replacement for callers that do not
-    /// have meeting context (for example, prompt-editor previews).
-    static func applyLanguage(_ prompt: String, language: String) -> String {
-        prompt.replacingOccurrences(of: "{LANGUAGE}", with: language)
+            .replacingOccurrences(of: "{MEETING_DATE}", with: metadata?.date ?? unknownMeetingMetadata)
+            .replacingOccurrences(of: "{MEETING_TIME}", with: metadata?.time ?? unknownMeetingMetadata)
     }
 
     /// Load the protocol generation prompt. Reads from `url` (default
@@ -109,8 +108,10 @@ enum ProtocolGenerator {
         return protocolPrompt
     }
 
-    /// Build the system prompt: authoritative meeting metadata + loaded prompt
-    /// with variables replaced + optional `diarizationNote`. Excludes the transcript itself —
+    /// Build the system prompt from an optional authoritative meeting-time context,
+    /// loaded prompt with variables replaced, and optional `diarizationNote`.
+    /// Imports and recovery jobs have no reliable meeting start and therefore
+    /// receive no authoritative time anchor. Excludes the transcript itself —
     /// callers append or attach it as they see fit.
     ///
     /// `promptURL` is forwarded to `loadPrompt` and exists for the same reason:
@@ -120,25 +121,15 @@ enum ProtocolGenerator {
     static func buildSystemPrompt(
         diarized: Bool,
         language: String,
-        meetingStartTime: Date,
+        meetingStartTime: Date?,
         promptURL: URL = AppPaths.customPromptFile,
         timeZone: TimeZone = .autoupdatingCurrent,
     ) -> String {
-        let metadata = meetingMetadata(for: meetingStartTime, timeZone: timeZone)
-        var prompt = """
-        Meeting metadata:
-        Date: \(metadata.date)
-        Time: \(metadata.time)
-        Language: \(language)
-        The date and time above are authoritative. Interpret relative time expressions
-        in the transcript relative to this meeting date. Do not rely on the model's
-        assumed current date.
-
-        """ + applyVariables(
+        let metadata = meetingStartTime.map { meetingMetadata(for: $0, timeZone: timeZone) }
+        var prompt = meetingTimeContext(metadata: metadata) + applyVariables(
             loadPrompt(from: promptURL),
             language: language,
-            meetingStartTime: meetingStartTime,
-            timeZone: timeZone,
+            metadata: metadata,
         )
         if diarized { prompt += diarizationNote }
         return prompt
@@ -147,16 +138,27 @@ enum ProtocolGenerator {
     static func meetingMetadata(
         for meetingStartTime: Date,
         timeZone: TimeZone = .autoupdatingCurrent,
-    ) -> (date: String, time: String) {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = timeZone
+    ) -> MeetingPromptMetadata {
+        let dateFormatter = DateFormatter.filenameStamp("yyyy-MM-dd")
+        dateFormatter.timeZone = timeZone
+        let timeFormatter = DateFormatter.filenameStamp("HH:mm")
+        timeFormatter.timeZone = timeZone
+        return MeetingPromptMetadata(
+            date: dateFormatter.string(from: meetingStartTime),
+            time: timeFormatter.string(from: meetingStartTime),
+        )
+    }
 
-        formatter.dateFormat = "yyyy-MM-dd"
-        let date = formatter.string(from: meetingStartTime)
-        formatter.dateFormat = "HH:mm"
-        return (date, formatter.string(from: meetingStartTime))
+    private static func meetingTimeContext(metadata: MeetingPromptMetadata?) -> String {
+        guard let metadata else { return "" }
+        return [
+            "Meeting metadata:",
+            "Date: \(metadata.date)",
+            "Time: \(metadata.time)",
+            "The date and time above are authoritative. Interpret relative time expressions",
+            "in the transcript relative to this meeting date. Do not rely on the model's",
+            "assumed current date.",
+        ].joined(separator: "\n") + "\n\n"
     }
 
     // MARK: - File Operations

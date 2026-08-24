@@ -191,19 +191,7 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertFalse(name.contains("/"), "Filename must not contain path separators")
     }
 
-    // MARK: - Language Substitution
-
-    func testApplyLanguageReplacesPlaceholder() {
-        let prompt = "Create protocol in {LANGUAGE} from transcript."
-        let result = ProtocolGenerator.applyLanguage(prompt, language: "English")
-        XCTAssertEqual(result, "Create protocol in English from transcript.")
-    }
-
-    func testApplyLanguageNoPlaceholderPassesThrough() {
-        let custom = "Custom prompt without placeholder."
-        let result = ProtocolGenerator.applyLanguage(custom, language: "French")
-        XCTAssertEqual(result, custom)
-    }
+    // MARK: - Prompt Variable Substitution
 
     func testDefaultPromptContainsLanguagePlaceholder() {
         XCTAssertTrue(ProtocolGenerator.protocolPrompt.contains("{LANGUAGE}"))
@@ -219,7 +207,7 @@ final class ProtocolGeneratorTests: XCTestCase {
         let result = ProtocolGenerator.applyVariables(
             "{LANGUAGE} {MEETING_DATE} {MEETING_TIME}",
             language: "German",
-            meetingStartTime: startTime,
+            metadata: ProtocolGenerator.meetingMetadata(for: startTime),
         )
 
         XCTAssertEqual(result, "German 2026-08-21 13:28")
@@ -239,9 +227,19 @@ final class ProtocolGeneratorTests: XCTestCase {
             promptURL: url,
         )
 
-        XCTAssertTrue(prompt.contains("Date: 2026-08-21"))
-        XCTAssertTrue(prompt.contains("Time: 13:28"))
-        XCTAssertTrue(prompt.contains("Protocol language: Polish."))
+        XCTAssertEqual(
+            prompt,
+            """
+            Meeting metadata:
+            Date: 2026-08-21
+            Time: 13:28
+            The date and time above are authoritative. Interpret relative time expressions
+            in the transcript relative to this meeting date. Do not rely on the model's
+            assumed current date.
+
+            Protocol language: Polish.
+            """,
+        )
     }
 
     func testBuildSystemPromptAppendsDiarizationNoteWhenDiarized() throws {

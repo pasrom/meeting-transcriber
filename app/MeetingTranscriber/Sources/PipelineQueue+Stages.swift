@@ -104,7 +104,7 @@ extension PipelineQueue {
             participants: job.participants,
             // Anchor the basename on the meeting start; reimport/orphan jobs
             // have no recorded start, so fall back to the enqueue time.
-            slug: namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.meetingStartTime ?? job.enqueuedAt),
+            slug: namingSlug(title: job.meetingTitle, jobID: job.id, startTime: job.artifactStartTime),
         )
     }
 
@@ -715,11 +715,10 @@ extension PipelineQueue {
         // namingSlug), so the .md shares the .txt/audio stem exactly. This runs
         // only after a transcript exists, so namingSlug is set on every real
         // path; the fallback just keeps generation working if the job is gone.
-        let basename = jobs.first { $0.id == jobID }?.namingSlug
+        let job = jobs.first { $0.id == jobID }
+        let basename = job?.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
-        let meetingStartTime = jobs.first { $0.id == jobID }.map { job in
-            job.meetingStartTime ?? job.enqueuedAt
-        } ?? Date()
+        let meetingStartTime = job?.meetingStartTime
         do {
             updateJobState(id: jobID, to: .generatingProtocol)
             startElapsedTimer()

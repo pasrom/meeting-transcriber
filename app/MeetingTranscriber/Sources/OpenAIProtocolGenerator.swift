@@ -59,7 +59,7 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         transcript: String,
         title _: String,
         diarized: Bool,
-        meetingStartTime: Date = Date(),
+        meetingStartTime: Date?,
     ) async throws -> String {
         let systemPrompt = ProtocolGenerator.buildSystemPrompt(
             diarized: diarized,

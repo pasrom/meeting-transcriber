@@ -26,7 +26,7 @@
             transcript: String,
             title _: String,
             diarized: Bool,
-            meetingStartTime: Date = Date(),
+            meetingStartTime: Date?,
         ) async throws -> String {
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
 

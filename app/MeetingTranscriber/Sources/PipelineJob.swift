@@ -62,8 +62,17 @@ struct PipelineJob: Identifiable, Codable {
     /// the output-file basename so the filename reflects when the meeting happened,
     /// not when the pipeline processed it. `nil` for reimport/orphan-recovery
     /// jobs (no live recording) and for legacy snapshots persisted before this
-    /// field existed — callers fall back to `enqueuedAt`.
+    /// field existed. Output artifact names fall back to `enqueuedAt`, but
+    /// protocol prompts must preserve `nil` so they never treat processing time
+    /// as authoritative meeting context.
     var meetingStartTime: Date?
+
+    /// Timestamp used only for output artifact names. Reimports and recovery
+    /// have no real meeting start, so their filenames use enqueue time.
+    var artifactStartTime: Date {
+        meetingStartTime ?? enqueuedAt
+    }
+
     var state: JobState
     var error: String?
     var warnings: [String]

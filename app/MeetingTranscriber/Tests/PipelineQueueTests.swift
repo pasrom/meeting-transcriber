@@ -1846,7 +1846,7 @@ final class PipelineQueueTests: XCTestCase {
         // the hand-off into the output dir runs. That is what pins the shared
         // stem on the moved `_mix.wav`, and it is the suite's only coverage of
         // the move branch.
-        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let (q, protocolGen) = makeStraightThroughQueue(stagingDir: tmpDir)
         let start = try localDate(2026, 3, 4, 9, 15)
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
@@ -1877,13 +1877,14 @@ final class PipelineQueueTests: XCTestCase {
             fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(stem)_16k.wav").path),
             "16k audio must share the same basename",
         )
+        XCTAssertEqual(protocolGen.capturedMeetingStartTime, start)
     }
 
     /// A job with no recorded meeting-start (reimport / orphan recovery) must
     /// fall back to the enqueue time for the stamp and still produce a valid,
     /// shortID-carrying basename — never an empty stamp or a crash.
     func testBasenameFallsBackToEnqueuedAtWhenNoMeetingStart() async throws {
-        let (q, _) = makeStraightThroughQueue()
+        let (q, protocolGen) = makeStraightThroughQueue()
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Reimport Test", appName: "Teams",
@@ -1902,6 +1903,7 @@ final class PipelineQueueTests: XCTestCase {
             FileManager.default.fileExists(atPath: txt.path),
             "reimport job must stamp with enqueuedAt and keep the shortID, got stem: \(expectedStem)",
         )
+        XCTAssertNil(protocolGen.capturedMeetingStartTime)
     }
 
     /// An engine that doesn't produce per-utterance timestamps (emitting one
