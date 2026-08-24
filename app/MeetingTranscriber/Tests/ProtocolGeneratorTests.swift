@@ -227,6 +227,10 @@ final class ProtocolGeneratorTests: XCTestCase {
             promptURL: url,
         )
 
+        // Equality also pins that the injected URL is honoured (reading the
+        // shared user file or the built-in default would not produce this
+        // exact string) and that the authoritative metadata block precedes
+        // the loaded prompt verbatim.
         XCTAssertEqual(
             prompt,
             """
