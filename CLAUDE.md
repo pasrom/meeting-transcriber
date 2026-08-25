@@ -186,6 +186,10 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - Only the opening `PipelineQueue.echoBleedAnalysisSeconds` of a recording are analysed, so the warning names the span it looked at instead of claiming the whole recording. Bleed starting later is not seen; that is a known limit, not an oversight.
 - E2E cover: `scripts/e2e-app.sh --echo-bleed` (see the `e2e-architecture` skill).
 
+**Echo cancellation seam (not wired up yet):** `EchoCancelling` / `LocalVQECanceller` sit over the vendored LocalVQE static library (`CLocalVQE`, a checksum-pinned `binaryTarget(url:)` against our own vendor release, since upstream ships no macOS artifact). Nothing in the pipeline calls it; the `.gguf` model is deliberately not bundled, so model-dependent tests skip unless `MEETINGTRANSCRIBER_LOCALVQE_MODEL` points at one. **It does not compose with `AudioMixer.suppressEcho`**, the RMS gate that already runs inside `AudioMixer.mix`: that one mutes the microphone while the app track is loud and so removes the local speaker along with the echo, this one removes the echo acoustically and leaves the speaker. A consumer has to pick, not chain them.
+- **`--localvqe-selftest` and the entry point.** `@main` is `AppLauncher`, not `MeetingTranscriberApp`, so a probe launch can divert before `AppState` (and its live-caption prewarm) is constructed. The flag is `#if !APPSTORE` like the debug RPC server, but unlike it has no second runtime gate: it is argv-only, prints and exits. `scripts/localvqe-bundle-check.sh` drives it to prove the static archive resolves its compute backends from `Contents/MacOS` of a signed bundle, which a SwiftPM test build cannot show. That script is **not** wired into any gate yet, so it is run by hand.
+
+
 **VAD preprocessing:**
 - `FluidVAD` wraps FluidAudio Silero v6 for voice activity detection. When enabled (`AppSettings.vadEnabled`), silence is trimmed before transcription and timestamps are remapped back to the original timeline via `VadSegmentMap`.
 - `PipelineQueue` holds a cached `FluidVAD` instance (reused across jobs). Pass `vadConfig: nil` to disable.
