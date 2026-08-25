@@ -361,7 +361,12 @@ enum AudioMixer {
 
     /// RMS in dBFS for a Float32 PCM sample buffer.
     /// Returns `-Float.infinity` for an empty buffer (true silence).
-    static func rmsDecibels(samples: [Float]) -> Float {
+    ///
+    /// Takes any `Collection` rather than `[Float]` so a caller measuring part
+    /// of a track can pass the slice directly. The `[Float]` form only accepted
+    /// whole arrays, which forced every windowed measurement to copy its slice
+    /// first, on buffers that reach hundreds of megabytes for a long meeting.
+    static func rmsDecibels(samples: some Collection<Float>) -> Float {
         guard !samples.isEmpty else { return -.infinity }
         let sumSq = samples.reduce(Float(0)) { $0 + $1 * $1 }
         let rms = (sumSq / Float(samples.count)).squareRoot()
