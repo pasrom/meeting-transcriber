@@ -70,7 +70,8 @@ private struct WindowAccessor: NSViewRepresentable {
     }
 }
 
-@main
+// Not @main — AppLauncher owns the entry point so a selftest launch can
+// divert before this scene (and AppState with it) is ever constructed.
 struct MeetingTranscriberApp: App {
     @State private var appState = AppState(notifier: NotificationManager.shared)
     @State private var captionsWindow: LiveCaptionsWindowController?
