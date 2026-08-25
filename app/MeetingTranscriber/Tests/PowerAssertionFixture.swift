@@ -13,19 +13,36 @@ enum PowerAssertionFixture {
     /// implementation can pass a test that uses it.
     static let unknownBrowser = "Fjordfox"
 
+    /// The two assertion types a meeting client is observed to hold. Only
+    /// patterns that set `assertionTypes` read this field, so `assertions`
+    /// pins the display-sleep one and a test spells both out when it
+    /// reproduces a measured mixture.
+    static let displaySleep = "PreventUserIdleDisplaySleep"
+    static let systemSleep = "PreventUserIdleSystemSleep"
+
     /// Assertions from one or more processes in a single poll. Variadic so a
     /// test can pin which browser a shared-keying implementation would have
     /// picked arbitrarily.
     static func assertions(
         _ entries: (pid: Int32, processName: String, assertName: String)...,
     ) -> [Int32: [[String: Any]]] {
+        typedAssertions(entries.map { (pid: $0.pid, processName: $0.processName, assertName: $0.assertName, assertType: Self.displaySleep) })
+    }
+
+    /// Same, with the assertion type spelled out per entry. Entries sharing a
+    /// pid accumulate rather than overwrite: one process holding several
+    /// assertions at once is the shape a real client produces during a call,
+    /// and it was the one shape this fixture could not express.
+    static func typedAssertions(
+        _ entries: [(pid: Int32, processName: String, assertName: String, assertType: String)],
+    ) -> [Int32: [[String: Any]]] {
         var out: [Int32: [[String: Any]]] = [:]
         for entry in entries {
-            out[entry.pid] = [[
+            out[entry.pid, default: []].append([
                 "Process Name": entry.processName,
                 "AssertName": entry.assertName,
-                "AssertType": "PreventUserIdleDisplaySleep",
-            ]]
+                "AssertType": entry.assertType,
+            ])
         }
         return out
     }

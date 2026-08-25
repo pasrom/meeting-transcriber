@@ -298,7 +298,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
     /// the desktop client can never be auto-detected, which in turn means no
     /// auto-stop, because a hand-started recording only ends on
     /// `.stopPidExited` / `.stopMaxDurationExceeded`.
-    func testWebexCallWithCiscoAssertionNameIsDetected() {
+    func testWebexCallWithCiscoAssertionNameIsDetected() throws {
         let detector = PowerAssertionDetector(
             patterns: PowerAssertionDetector.patterns(watching: ["Webex"]),
             confirmationCount: 1,
@@ -307,9 +307,42 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         detector.assertionProvider = {
             PowerAssertionFixture.assertionDict(processName: "Webex", assertName: "On a call")
         }
+        let meeting = try XCTUnwrap(
+            detector.checkOnce(),
+            "Cisco names the call assertion \"On a call\", not \"webex\"",
+        )
+        XCTAssertEqual(meeting.pattern.appName, "Webex")
+        // Auto-stop is the other half of the fix, and liveness takes a
+        // different route: `isMeetingActive` filters by `identifies` before it
+        // re-applies `matches`. Correct today because Webex is `.shared`, so
+        // both paths end in the same static `matches` — pinned here so a later
+        // split of the two routes has to fail out loud.
+        XCTAssertTrue(
+            detector.isMeetingActive(meeting),
+            "the measured assertion must also keep the meeting alive, or auto-stop fires at the end grace",
+        )
+    }
+
+    /// The measured pair, verbatim: one pid held both assertions at the same
+    /// time, and only the second one matches. The unmatched sibling must not
+    /// hide it — and the fixture has to be able to express the shape at all,
+    /// which is what the count pins.
+    func testWebexCallIsDetectedBesideTheUnmatchedSecondAssertion() {
+        let measured = PowerAssertionFixture.typedAssertions([
+            (pid: 870, processName: "Webex", assertName: "io avilable", assertType: PowerAssertionFixture.systemSleep),
+            (pid: 870, processName: "Webex", assertName: "On a call", assertType: PowerAssertionFixture.displaySleep),
+        ])
+        XCTAssertEqual(measured[870]?.count, 2, "one process holds several assertions at once; the fixture must keep both")
+
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Webex"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = { measured }
         XCTAssertEqual(
             detector.checkOnce()?.pattern.appName, "Webex",
-            "Cisco names the call assertion \"On a call\", not \"webex\"",
+            "\"io avilable\" comes first and matches nothing; \"On a call\" must still be found",
         )
     }
 
