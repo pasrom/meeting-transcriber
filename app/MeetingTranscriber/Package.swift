@@ -13,12 +13,30 @@ let package = Package(
         .package(path: "../../tools/audiotap"),
     ],
     targets: [
+        // LocalVQE echo-cancellation library (C API over a static xcframework).
+        // SwiftPM downloads the artifact from a pinned release asset and
+        // verifies it against the checksum before linking; no binary lives in
+        // this repository. The artifact is genuinely static — the linked app
+        // gains no new dynamic-library dependencies (otool -L shows system
+        // libraries only).
+        // Hosted on a release of our own vendor repository because upstream
+        // publishes no macOS artifact at all. Checksum-pinned, so a swapped
+        // asset fails the build rather than shipping silently; the exposure
+        // that remains is availability, since the asset disappearing breaks
+        // `swift build` for everyone including CI. Mirror it before relying on
+        // this for a release.
+        .binaryTarget(
+            name: "CLocalVQE",
+            url: "https://github.com/pasrom/localvqe-xcframework/releases/download/1.0.2/LocalVQE.xcframework.zip",
+            checksum: "c0b0f41245611cca194ed279096d4729f87aba1f59cf92972383bff0f8e903c1"
+        ),
         .executableTarget(
             name: "MeetingTranscriber",
             dependencies: [
                 .product(name: "WhisperKit", package: "WhisperKit"),
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "AudioTapLib", package: "audiotap"),
+                "CLocalVQE",
             ],
             path: "Sources",
             // Assets.xcassets is compiled by `actool` in scripts/build_release.sh,
@@ -42,6 +60,14 @@ let package = Package(
                     "-Xfrontend", "-warn-long-expression-type-checking=300",
                 ]),
                 .enableUpcomingFeature("ExistentialAny"),
+            ],
+            linkerSettings: [
+                // CLocalVQE is C++ inside and uses Accelerate for its FFT.
+                // A static archive carries no autolink hints, so the consumer
+                // has to name both dependencies explicitly (proven necessary
+                // in the vendoring link spike).
+                .linkedLibrary("c++"),
+                .linkedFramework("Accelerate"),
             ]
         ),
         .testTarget(
