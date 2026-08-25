@@ -105,6 +105,18 @@ func shouldSkipForE2EGate(env: [String: String]) -> Bool {
 }
 
 extension XCTestCase {
+    /// Path to a LocalVQE AEC .gguf model for the echo-cancellation seam
+    /// tests. The model is deliberately not bundled with the repository, so
+    /// model-dependent tests skip cleanly when the opt-in env var is unset
+    /// or dangling.
+    func requireLocalVQEModel() throws -> String {
+        guard let path = ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_LOCALVQE_MODEL"],
+              FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Set MEETINGTRANSCRIBER_LOCALVQE_MODEL to a LocalVQE .gguf to run")
+        }
+        return path
+    }
+
     func skipIfCIWithoutE2EOptIn(_ reason: String) throws {
         try XCTSkipIf(
             shouldSkipForE2EGate(env: ProcessInfo.processInfo.environment),
