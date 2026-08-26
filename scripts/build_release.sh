@@ -118,6 +118,23 @@ if [ -d "$ICONSET_SRC" ]; then
     echo "  App icon: $RESOURCES/AppIcon.icns"
 fi
 
+# LocalVQE acoustic echo cancellation model, plus the licence it ships under.
+# Bundled rather than downloaded on first use; the reasoning is in the header of
+# app/MeetingTranscriber/Sources/LocalVQEModel.swift. Both variants get it: the
+# model is a plain data file, so nothing here is sandbox-sensitive.
+#
+# The App Store bundle carries it ahead of any code that reads it, on purpose.
+# Today the only consumer is the selftest, which is #if !APPSTORE, so those
+# 2.9 MB are inert there until the pipeline wiring lands. Gating the install on
+# the variant would only have to be undone then, and would leave the sandboxed
+# build as the one configuration whose model resolution nothing ever exercised.
+#
+# Fatal on failure, unlike run_app.sh: a shipped bundle whose echo cancellation
+# can never load a model is worse than a build that stopped and said so.
+# shellcheck source=lib/localvqe-resources.sh
+source "$SCRIPT_DIR/lib/localvqe-resources.sh"
+install_localvqe_resources "$RESOURCES"
+
 # Inject git commit hash
 GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 /usr/libexec/PlistBuddy -c "Add :GitCommitHash string $GIT_HASH" "$CONTENTS/Info.plist" 2>/dev/null || \

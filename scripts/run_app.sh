@@ -61,6 +61,18 @@ GIT_HASH=$(git -C "$TRANSCRIBER_ROOT" rev-parse --short HEAD 2>/dev/null || echo
 
 cp "$BUILD_BINARY" "$APP_BINARY"
 
+# LocalVQE echo-cancellation model, the same resources build_release.sh bundles,
+# so the dev app (which scripts/e2e-app.sh deploys) can exercise the feature.
+# Non-fatal here and fatal there: an unreachable download must not stop someone
+# running the dev app for unrelated work. Stderr is deliberately not silenced —
+# that is where a checksum mismatch reports itself, and "model unavailable"
+# alone would hide a poisoned cache.
+# shellcheck source=lib/localvqe-resources.sh
+source "$SCRIPT_DIR/lib/localvqe-resources.sh"
+if ! install_localvqe_resources "$APP_BUNDLE/Contents/Resources"; then
+    echo "  WARNING: LocalVQE model unavailable; echo cancellation will find no model."
+fi
+
 # Code-sign so macOS keeps Screen Recording permission across rebuilds.
 # Uses SHA-1 hash to avoid "ambiguous identity" errors with duplicate names.
 SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')

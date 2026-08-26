@@ -64,8 +64,11 @@ jobs:
           fetch-tags: true
 
       # Same SPM cache key as ci.yml — release builds reuse the test
-      # matrix's resolved artifacts. ML models aren't loaded by
-      # build_release.sh, so skip the model cache + prewarm.
+      # matrix's resolved artifacts. The transcription/diarization models are
+      # neither loaded nor bundled by build_release.sh, so skip the model
+      # cache + prewarm. (It does fetch the 2.9 MB LocalVQE AEC model to bundle
+      # it, deliberately outside that cache: the fetch is checksum-pinned and
+      # small enough that a cache round-trip would save nothing.)
       - uses: ./.github/actions/setup-swift-test
         with:
           cache-key-suffix: ${{ matrix.variant }}
