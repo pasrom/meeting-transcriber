@@ -12,12 +12,12 @@
 #   --no-build   Reuse an existing .build/release/MeetingTranscriber.app
 #                  instead of rebuilding.
 #
-# Environment:
-#   MEETINGTRANSCRIBER_LOCALVQE_MODEL
-#       Optional path to a LocalVQE AEC .gguf. When set, a full streaming
-#       pass over synthetic audio runs through the model from inside the
-#       bundle. Without it only the link-level probe runs — the model is
-#       deliberately not bundled with the app.
+# MEETINGTRANSCRIBER_LOCALVQE_MODEL is unset for the probe, deliberately. It
+# takes precedence in the app's resolver, so leaving an exported one in place
+# would have the probe load THAT model while this script reported the bundled
+# one: a green check that never touched the artifact under test. To compare
+# model variants, pass a path to the binary directly; that is not a bundle
+# check and should not be reported as one.
 
 set -euo pipefail
 
@@ -46,39 +46,36 @@ echo "=== localvqe-bundle-check ==="
 codesign --verify --deep --strict "$APP_BUNDLE"
 echo "Bundle signature verified: $APP_BUNDLE"
 
-# Tier 1 — link-level probe, no model: backend registration + clean failure
-# of a bogus model load, executed from Contents/MacOS.
+# One probe, no model argument and no override, so the resolution path under
+# test is the one a user gets. Covers backend registration, clean failure of a
+# bogus model load, and a full streaming pass over synthetic audio from
+# Contents/MacOS.
 echo ""
-echo "--- link-only probe ---"
-LINK_OUT="$("$APP_BINARY" --localvqe-selftest 2>&1)" || {
-    echo "$LINK_OUT"
-    echo "FAIL: link-only selftest exited non-zero" >&2
+echo "--- bundle probe ---"
+PROBE_OUT="$(env -u MEETINGTRANSCRIBER_LOCALVQE_MODEL "$APP_BINARY" --localvqe-selftest 2>&1)" || {
+    echo "$PROBE_OUT"
+    echo "FAIL: selftest exited non-zero" >&2
     exit 1
 }
-echo "$LINK_OUT"
-grep -q "LOCALVQE_SELFTEST_OK link-only" <<< "$LINK_OUT" || {
-    echo "FAIL: link-only success marker missing" >&2
+echo "$PROBE_OUT"
+grep -q "LOCALVQE_SELFTEST_OK model" <<< "$PROBE_OUT" || {
+    echo "FAIL: no model ran. The bundle carries no resolvable model." >&2
     exit 1
 }
 
-# Tier 2 — full streaming pass through a real model, when one is available.
-if [ -n "${MEETINGTRANSCRIBER_LOCALVQE_MODEL:-}" ]; then
-    echo ""
-    echo "--- model probe ($MEETINGTRANSCRIBER_LOCALVQE_MODEL) ---"
-    MODEL_OUT="$("$APP_BINARY" --localvqe-selftest "$MEETINGTRANSCRIBER_LOCALVQE_MODEL" 2>&1)" || {
-        echo "$MODEL_OUT"
-        echo "FAIL: model selftest exited non-zero" >&2
+# Assert WHICH model ran, from the binary's own report, rather than listing the
+# directory and assuming the two agree. Listing proves a file is present; this
+# proves the file was loaded.
+LOADED="$(sed -n 's/^localvqe-selftest: model=//p' <<< "$PROBE_OUT" | head -1)"
+case "$LOADED" in
+    "$APP_BUNDLE/Contents/Resources/"*)
+        echo "Loaded from the bundle: $(basename "$LOADED")"
+        ;;
+    *)
+        echo "FAIL: the probe loaded a model from outside the bundle: ${LOADED:-<unreported>}" >&2
         exit 1
-    }
-    echo "$MODEL_OUT"
-    grep -q "LOCALVQE_SELFTEST_OK model" <<< "$MODEL_OUT" || {
-        echo "FAIL: model success marker missing" >&2
-        exit 1
-    }
-else
-    echo ""
-    echo "MEETINGTRANSCRIBER_LOCALVQE_MODEL not set — skipped the model pass."
-fi
+        ;;
+esac
 
 echo ""
 echo "localvqe-bundle-check: OK"

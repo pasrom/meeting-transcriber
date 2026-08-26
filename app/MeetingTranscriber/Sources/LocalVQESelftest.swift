@@ -90,6 +90,10 @@
         /// seam the app will use — and checks shape, finiteness, and that the
         /// echo actually drops. All audio is generated; nothing is recorded.
         private static func runModelProbe(modelPath: String) -> Int32 {
+            // Printed so a driver can assert WHICH model ran. Without it a probe
+            // that silently picked up an exported override reports success for
+            // a model that is not the one in the bundle.
+            print("localvqe-selftest: model=\(modelPath)")
             let sampleRate = AudioConstants.targetSampleRate
             let farEnd = probeFarEnd(seconds: 4)
             // Half-level echo, with a deliberate partial trailing hop.
