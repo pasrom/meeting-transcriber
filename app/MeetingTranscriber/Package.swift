@@ -25,10 +25,20 @@ let package = Package(
         // that remains is availability, since the asset disappearing breaks
         // `swift build` for everyone including CI. Mirror it before relying on
         // this for a release.
+        //
+        // Its headers sit in `Headers/CLocalVQE/`, not at the root of
+        // `Headers/`, and a rebuild must keep it that way. For a static-library
+        // slice xcodebuild stages every artifact's `Headers/*` into one shared
+        // `include/` directory, so two xcframeworks with a root-level
+        // `module.modulemap` write the same path and the build dies with
+        // "Multiple commands produce". FluidAudio started shipping a binary
+        // target in 0.15.6 and hit exactly that. `swift build` never noticed,
+        // because it passes each artifact's Headers directory as its own `-I`,
+        // which is why this can only fail in Xcode and in the analyze lane.
         .binaryTarget(
             name: "CLocalVQE",
-            url: "https://github.com/pasrom/localvqe-xcframework/releases/download/1.0.2/LocalVQE.xcframework.zip",
-            checksum: "c0b0f41245611cca194ed279096d4729f87aba1f59cf92972383bff0f8e903c1"
+            url: "https://github.com/pasrom/localvqe-xcframework/releases/download/1.0.3/LocalVQE.xcframework.zip",
+            checksum: "15a7503e7d764012ee955ba04cef78a0b24f8d51856fc85b96d9be49d38624ba"
         ),
         .executableTarget(
             name: "MeetingTranscriber",
