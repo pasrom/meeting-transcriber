@@ -15,7 +15,9 @@ enum AppLauncher {
         // server. Where present it is reachable only via this explicit argv
         // flag; it constructs no app state and exits before the GUI starts.
         #if !APPSTORE
-            if let mode = LocalVQESelftest.parse(arguments: CommandLine.arguments) {
+            if let mode = LocalVQESelftest.parse(
+                arguments: CommandLine.arguments, bundledModel: LocalVQEModel.resolve().path,
+            ) {
                 exit(LocalVQESelftest.run(mode))
             }
         #endif

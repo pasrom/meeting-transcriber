@@ -2,7 +2,8 @@
 // (CLocalVQE binary target). Owns the C context lifecycle per call
 // (localvqe_new / localvqe_free), drives the streaming frame API hop by hop
 // so a long recording stays cancellable, and surfaces the library's own
-// error messages. The .gguf model is not bundled — callers provide a path.
+// error messages. Callers provide the model path; LocalVQEModel resolves the
+// one that ships in the bundle.
 import CLocalVQE
 import Foundation
 

@@ -21,12 +21,23 @@
         }
 
         /// Returns the requested selftest mode, or nil for a normal GUI launch.
-        /// The argument after the flag is a model path unless it is another flag.
-        static func parse(arguments: [String]) -> Mode? {
+        /// The argument after the flag is a model path unless it is another
+        /// flag; with no path the bundled model is used, and only a build that
+        /// bundles none falls back to the link-only probe.
+        ///
+        /// `bundledModel` is a parameter rather than a resolver call so this
+        /// stays pure: with a default it would read ambient bundle and
+        /// environment state, and the link-only case would then pass or fail
+        /// depending on what the surrounding test run had exported. It is
+        /// autoclosed because the caller is the pre-GUI launch path and the
+        /// flag is absent on every real launch — eagerly evaluated, a bundle
+        /// scan and a stat would run before every window the user ever sees.
+        static func parse(arguments: [String], bundledModel: @autoclosure () -> String?) -> Mode? {
             guard let index = arguments.firstIndex(of: flag) else { return nil }
             if let next = arguments.dropFirst(index + 1).first, !next.hasPrefix("--") {
                 return .model(path: next)
             }
+            if let bundledModel = bundledModel() { return .model(path: bundledModel) }
             return .linkOnly
         }
 

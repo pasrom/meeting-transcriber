@@ -106,15 +106,27 @@ func shouldSkipForE2EGate(env: [String: String]) -> Bool {
 
 extension XCTestCase {
     /// Path to a LocalVQE AEC .gguf model for the echo-cancellation seam
-    /// tests. The model is deliberately not bundled with the repository, so
-    /// model-dependent tests skip cleanly when the opt-in env var is unset
-    /// or dangling.
+    /// tests. Goes through the production resolver so these tests run against
+    /// the same decision the app makes; under xctest that reduces to the
+    /// environment override, since the model ships in the release bundle and
+    /// not in the repository.
     func requireLocalVQEModel() throws -> String {
-        guard let path = ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_LOCALVQE_MODEL"],
-              FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Set MEETINGTRANSCRIBER_LOCALVQE_MODEL to a LocalVQE .gguf to run")
+        switch LocalVQEModel.resolve() {
+        case let .found(path):
+            return path
+
+        case let .overrideMissing(path):
+            // The resolver knows the difference between unset and dangling, so
+            // saying "set the variable" when it IS set would send you looking
+            // in the wrong place.
+            throw XCTSkip("\(LocalVQEModel.overrideEnvironmentKey) points at nothing: \(path)")
+
+        case .absent:
+            throw XCTSkip(
+                "Set \(LocalVQEModel.overrideEnvironmentKey) to a LocalVQE .gguf to run "
+                    + "(scripts/fetch-localvqe-model.sh prints one)",
+            )
         }
-        return path
     }
 
     func skipIfCIWithoutE2EOptIn(_ reason: String) throws {

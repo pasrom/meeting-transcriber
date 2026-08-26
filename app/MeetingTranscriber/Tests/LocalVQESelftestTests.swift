@@ -7,18 +7,33 @@
 
     final class LocalVQESelftestTests: XCTestCase {
         func testAbsentFlagMeansNormalLaunch() {
-            XCTAssertNil(LocalVQESelftest.parse(arguments: ["/path/to/app"]))
-            XCTAssertNil(LocalVQESelftest.parse(arguments: ["/path/to/app", "--auto-watch"]))
+            XCTAssertNil(LocalVQESelftest.parse(arguments: ["/path/to/app"], bundledModel: nil))
+            XCTAssertNil(LocalVQESelftest.parse(arguments: ["/path/to/app", "--auto-watch"], bundledModel: nil))
         }
 
-        func testBareFlagRunsLinkOnlyProbe() {
-            let mode = LocalVQESelftest.parse(arguments: ["/path/to/app", "--localvqe-selftest"])
+        func testBareFlagRunsLinkOnlyProbeWhenNothingIsBundled() {
+            let mode = LocalVQESelftest.parse(
+                arguments: ["/path/to/app", "--localvqe-selftest"], bundledModel: nil,
+            )
             XCTAssertEqual(mode, .linkOnly)
         }
 
-        func testFlagWithPathRunsModelProbe() {
+        // The point of bundling the model: inside a release bundle the bare
+        // flag exercises the model that actually shipped, so the bundle check
+        // asserts on the artifact rather than on whatever the environment
+        // happened to point at.
+        func testBareFlagRunsTheBundledModelWhenOneShipped() {
+            let mode = LocalVQESelftest.parse(
+                arguments: ["/path/to/app", "--localvqe-selftest"],
+                bundledModel: "/App.app/Contents/Resources/model.gguf",
+            )
+            XCTAssertEqual(mode, .model(path: "/App.app/Contents/Resources/model.gguf"))
+        }
+
+        func testExplicitPathWinsOverTheBundledModel() {
             let mode = LocalVQESelftest.parse(
                 arguments: ["/path/to/app", "--localvqe-selftest", "/tmp/model.gguf"],
+                bundledModel: "/App.app/Contents/Resources/model.gguf",
             )
             XCTAssertEqual(mode, .model(path: "/tmp/model.gguf"))
         }
@@ -26,6 +41,7 @@
         func testFollowingFlagIsNotMistakenForAModelPath() {
             let mode = LocalVQESelftest.parse(
                 arguments: ["/path/to/app", "--localvqe-selftest", "--auto-watch"],
+                bundledModel: nil,
             )
             XCTAssertEqual(mode, .linkOnly)
         }

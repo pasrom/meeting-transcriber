@@ -2,7 +2,9 @@
 // LocalVQE C API. The always-on tests exercise the linked static library
 // (context creation failure + error reporting) without any model file. Tests
 // that need a real .gguf model skip unless MEETINGTRANSCRIBER_LOCALVQE_MODEL
-// points at one — the model is not bundled with the repository.
+// points at one: the model ships in the release bundle, not in the repository,
+// so a plain `swift test` has none. `scripts/fetch-localvqe-model.sh` prints a
+// path suitable for that variable.
 @testable import MeetingTranscriber
 import XCTest
 
