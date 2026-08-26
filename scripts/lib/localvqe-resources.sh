@@ -3,15 +3,15 @@
 #
 # Two scripts assemble a bundle — build_release.sh for distribution and
 # run_app.sh for the dev app that e2e-app.sh then deploys — and both need the
-# same two files in Contents/Resources. Spelled twice they drift, which the
-# first version of this change proved by dropping the licence copy from the dev
-# path on day one. The failure policy is NOT shared, because it legitimately
-# differs: see the callers.
+# same model in Contents/Resources. Spelled twice they drift, which the first
+# version of this change proved by dropping the licence copy from the dev path
+# on day one. The failure policy is NOT shared, because it legitimately differs:
+# see the callers.
 #
 # Source this, don't execute it.
 
-# Fetches the pinned model and installs it, with its licence, into the given
-# Resources directory. Returns non-zero if ANY step fails, not just the fetch.
+# Fetches the pinned model and installs it into the given Resources directory.
+# Returns non-zero if ANY step fails, not just the fetch.
 #
 # Every step propagates its own failure explicitly rather than leaning on the
 # caller's `set -e`, because one of the callers invokes this as
@@ -20,6 +20,14 @@
 # failing `cp` would fall through to the next statement and the closing `echo`
 # would hand back status 0: the build log would announce an installed model,
 # the warning would never print, and the signed bundle would contain nothing.
+#
+# The LocalVQE licence copy lives in lib/bundle-licenses.sh now, and the
+# guarantee it used to give here got stronger in the move: the licence no
+# longer arrives as a side effect of a model download that run_app.sh is
+# allowed to fail past, but unconditionally, from a directory, before this
+# function is ever reached. A bundle carrying the weights without the licence
+# was previously prevented by the two copies sitting next to each other; it is
+# now impossible by ordering.
 install_localvqe_resources() {
     local resources_dir="$1"
     local lib_dir model_path model_name
@@ -39,10 +47,6 @@ install_localvqe_resources() {
     # belongs here where both callers inherit it.
     rm -f "$resources_dir"/localvqe-*.gguf || return 1
     cp "$model_path" "$resources_dir/$model_name" || return 1
-    # Bundling the weights is redistribution, which is what makes the licence
-    # copy mandatory rather than courteous (Apache-2.0 section 4a). The two are
-    # installed together so no bundle can carry one without the other.
-    cp "$lib_dir/../../licenses/LocalVQE-LICENSE.txt" "$resources_dir/LocalVQE-LICENSE.txt" || return 1
 
     echo "  LocalVQE model: $resources_dir/$model_name"
 }

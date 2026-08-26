@@ -61,6 +61,15 @@ GIT_HASH=$(git -C "$TRANSCRIBER_ROOT" rev-parse --short HEAD 2>/dev/null || echo
 
 cp "$BUILD_BINARY" "$APP_BINARY"
 
+# Licences for the third-party code and weights this bundle redistributes. The
+# dev app is not distributed, but scripts/e2e-app.sh deploys it, so keeping it
+# identical to a release bundle is what makes an e2e run evidence about the
+# thing users get. Fatal here, unlike the model below: a missing licence file in
+# the repo is a repo bug, not an unreachable download.
+# shellcheck source=lib/bundle-licenses.sh
+source "$SCRIPT_DIR/lib/bundle-licenses.sh"
+install_third_party_licenses "$APP_BUNDLE/Contents/Resources"
+
 # LocalVQE echo-cancellation model, the same resources build_release.sh bundles,
 # so the dev app (which scripts/e2e-app.sh deploys) can exercise the feature.
 # Non-fatal here and fatal there: an unreachable download must not stop someone
