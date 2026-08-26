@@ -32,3 +32,10 @@ separately, because upstream ships no macOS artifact; `app/MeetingTranscriber/Pa
 pins it by checksum. `scripts/fetch-localvqe-model.sh` pins the weights the same
 way, by revision and SHA-256, and `scripts/lib/localvqe-resources.sh` installs
 the model and this licence into the bundle together.
+
+The weights are also mirrored, unmodified, at
+<https://github.com/pasrom/localvqe-xcframework/releases/tag/model-v1.4-aec-200K>,
+and the build fetches that copy first so a release does not depend on a single
+external host staying up. The mirror is a convenience for availability and not a
+source of authority: the SHA-256 above is verified whichever host answers, and
+the upstream revision named above remains the provenance.

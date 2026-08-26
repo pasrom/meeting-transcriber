@@ -16,13 +16,16 @@
 # Bumping the model needs a new xcframework FIRST, not just a new URL here.
 # LocalVQE checks the GGUF against a SHA-256 allowlist compiled into the
 # library, so a model the linked binary does not know is rejected at load
-# however correctly it is pinned here. Package.swift is the other half.
+# however correctly it is pinned here. Package.swift is the other half of the
+# bump.
 #
-# Then, in one commit: change REVISION, FILE and SHA256 in
-# the same commit, update the LocalVQE entry in THIRD-PARTY-NOTICES.md (which
-# records the exact revision and filename as provenance, so it goes stale
-# here), and re-run the measurements the choice rests on. Regenerate the
-# checksum with:
+# Then, in one commit: REVISION, FILE, SHA256 and MIRROR_URL, having published
+# the new weights to the mirror release first (otherwise the fallback quietly
+# carries every build and the mirror is decoration), plus the LocalVQE entry in
+# THIRD-PARTY-NOTICES.md, which records the exact revision and filename as
+# provenance and so goes stale with this file. Then re-run the measurements the
+# choice rests on. Nothing else needs touching: the app and the build scripts
+# discover the name rather than restating it. Regenerate the checksum with:
 #
 #   shasum -a 256 <downloaded-file>
 
@@ -36,7 +39,16 @@ REVISION="29ca38495cba9d6393a92a4dd890f28dd81f758d"
 FILE="localvqe-v1.4-aec-200K-f32.gguf"
 SHA256="b6e43138588a83bfe903ab5e143b4020b91c1e1629f5a575ac5855ff0003c731"
 
-URL="https://huggingface.co/${REPO}/resolve/${REVISION}/${FILE}"
+# Two independent sources, tried in order. Neither is trusted: whichever
+# answers, its bytes have to match SHA256 or the fetch fails, so a mirror buys
+# availability, never authority.
+#
+# The mirror comes first because a release build must not stop when one
+# external host has a bad day, and every build already depends on GitHub being
+# reachable. Upstream stays as the fallback so the model survives the mirror
+# too, and it is where the bytes came from: see THIRD-PARTY-NOTICES.md.
+MIRROR_URL="https://github.com/pasrom/localvqe-xcframework/releases/download/model-v1.4-aec-200K/${FILE}"
+UPSTREAM_URL="https://huggingface.co/${REPO}/resolve/${REVISION}/${FILE}"
 
 # Shared across worktrees and preserved across `rm -rf .build`, because a
 # release build should not re-download 2.9 MB for every checkout on the
@@ -64,18 +76,33 @@ mkdir -p "$CACHE_DIR"
 TMP="$(mktemp "$CACHE_DIR/.$FILE.XXXXXX")"
 trap 'rm -f "$TMP"' EXIT
 
-echo "fetch-localvqe-model: downloading $FILE from $REPO@${REVISION:0:12}" >&2
-# Timeouts are not optional here: a network that blackholes rather than
-# refuses would otherwise hang a build indefinitely with no output, and
-# --retry would multiply the stall. 2.9 MB over any usable link fits in 60 s.
-curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 -o "$TMP" "$URL"
-
-if ! verify "$TMP"; then
-    echo "fetch-localvqe-model: CHECKSUM MISMATCH for $URL" >&2
+# A checksum mismatch does NOT fall through to the next source. A source that
+# answers with the wrong bytes is a different problem from one that does not
+# answer, and quietly trying elsewhere would turn a tampered or re-pointed
+# release into a silent retry.
+#
+# Timeouts are not optional: a network that blackholes rather than refuses
+# would otherwise hang a build indefinitely with no output, and --retry would
+# multiply the stall. 2.9 MB over any usable link fits in 60 s.
+fetch_from() {
+    local label="$1" url="$2"
+    echo "fetch-localvqe-model: downloading $FILE from $label" >&2
+    if ! curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-delay 2 -o "$TMP" "$url"; then
+        echo "fetch-localvqe-model: $label did not answer" >&2
+        return 1
+    fi
+    if verify "$TMP"; then
+        return 0
+    fi
+    echo "fetch-localvqe-model: CHECKSUM MISMATCH from $label ($url)" >&2
     echo "  expected $SHA256" >&2
     echo "  actual   $(shasum -a 256 "$TMP" | cut -d' ' -f1)" >&2
     exit 1
-fi
+}
+
+fetch_from "the mirror" "$MIRROR_URL" \
+    || fetch_from "upstream ${REPO}@${REVISION:0:12}" "$UPSTREAM_URL" \
+    || { echo "fetch-localvqe-model: no source could deliver $FILE" >&2; exit 1; }
 
 # Atomic within the cache directory, so a concurrent build either sees the old
 # file or the complete new one, never a partial write.
