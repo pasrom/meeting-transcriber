@@ -20,6 +20,11 @@ on:
     paths:
       - '.github/workflows/appstore.yml'
       - 'scripts/build_release.sh'
+      # A model-pin bump edits only these and changes what the bundle
+      # contains, so filtering on build_release.sh alone would let a
+      # broken revision or checksum reach a release untested.
+      - 'scripts/fetch-localvqe-model.sh'
+      - 'scripts/lib/localvqe-resources.sh'
   push:
     branches: [main]
     paths:
@@ -30,6 +35,11 @@ on:
       - 'app/MeetingTranscriber/Sources/Info.plist'
       - 'tools/audiotap/**'
       - 'scripts/build_release.sh'
+      # A model-pin bump edits only these and changes what the bundle
+      # contains, so filtering on build_release.sh alone would let a
+      # broken revision or checksum reach a release untested.
+      - 'scripts/fetch-localvqe-model.sh'
+      - 'scripts/lib/localvqe-resources.sh'
       - '.github/workflows/appstore.yml'
   schedule:
     # 03:30 UTC sits between quality-and-safety (03:00) and e2e-app (04:30) so

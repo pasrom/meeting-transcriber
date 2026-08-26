@@ -21,6 +21,11 @@ on:
       - '.github/workflows/e2e-ui-smoke.yml'
       - 'scripts/e2e-settings-smoke.sh'
       - 'scripts/build_release.sh'
+      # A model-pin bump edits only these and changes what the bundle
+      # contains, so filtering on build_release.sh alone would let a
+      # broken revision or checksum reach a release untested.
+      - 'scripts/fetch-localvqe-model.sh'
+      - 'scripts/lib/localvqe-resources.sh'
       # `*`, not `DebugRPCServer+*.swift`: GitHub filter patterns treat `+` as a
       # regex-style "one or more of the preceding char" quantifier, so a literal
       # `+` in a path never matches its file (`DebugRPCServer+UIPress.swift` was
@@ -59,6 +64,11 @@ on:
       - 'app/MeetingTranscriber/Sources/A11yID.swift'
       - 'scripts/e2e-settings-smoke.sh'
       - 'scripts/build_release.sh'
+      # A model-pin bump edits only these and changes what the bundle
+      # contains, so filtering on build_release.sh alone would let a
+      # broken revision or checksum reach a release untested.
+      - 'scripts/fetch-localvqe-model.sh'
+      - 'scripts/lib/localvqe-resources.sh'
       - '.github/workflows/e2e-ui-smoke.yml'
   schedule:
     # 04:00 UTC — after quality-and-safety (03:00) and appstore (03:30), before
