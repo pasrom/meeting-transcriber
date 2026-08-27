@@ -392,6 +392,92 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertNotEqual(message, ChannelHealthController.asymmetricSilenceMessage(for: .mic))
     }
 
+    func testGaveUpAfterALatchedEpisodeStillNotifiesLost() {
+        // The give-up flag is only meaningful the moment it flips, and it can
+        // flip at any point in a recording. Reading it solely while an
+        // asymmetric episode starts means a channel that gives up *after* the
+        // episode latched is never reported: the episode fired already, and the
+        // monitor cannot start a second one because recovery needs the dead
+        // channel to climb back over the speech threshold, which is exactly
+        // what a channel that gave up will never do.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(notifier.calls.count, 1, "the silent episode itself still reports once")
+
+        recorder.micCaptureGaveUp = true
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(31))
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(60))
+
+        XCTAssertEqual(
+            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
+            "giving up after the latch must still reach the user, and only once",
+        )
+    }
+
+    func testGaveUpDuringSymmetricSilenceNotifiesLost() {
+        // Second way the flag is missed today: with both channels quiet there is
+        // no asymmetry, so no episode ever starts, so nothing reads the flag.
+        // A give-up is a terminal capture failure whether or not the other
+        // channel happens to be carrying speech at that moment.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -120
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureGaveUp = true
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+
+        XCTAssertEqual(
+            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
+            "a terminal capture failure does not depend on the other channel",
+        )
+    }
+
+    func testGaveUpNotifiesWithoutWaitingForTheDebounce() {
+        // The give-up is already terminal when the flag flips; making the user
+        // wait out the asymmetry debounce for news that cannot change is the
+        // same defect as not telling them at all, only quieter.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureGaveUp = true
+
+        controller.applyTick(recorder: recorder, now: t0)
+        XCTAssertEqual(
+            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
+            "the first tick that sees the flag reports it",
+        )
+
+        for offset in stride(from: 10.0, through: 90.0, by: 10.0) {
+            _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(offset))
+        }
+
+        XCTAssertEqual(
+            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
+            "and it stays at one for the rest of the recording",
+        )
+    }
+
+    func testGaveUpNotifiesAgainOnTheNextRecording() {
+        // The latch is per recording, not per process: a restart that fails the
+        // same way in the next meeting has to say so again.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureGaveUp = true
+
+        controller.applyTick(recorder: recorder, now: t0)
+        controller.stop()
+        controller.simulateStartForTests()
+        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
+
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 2)
+    }
+
     // MARK: - Microphone-only recordings (issue #633)
 
     func testMicrophoneOnlyRecordingRaisesNoDeadAppChannelAlert() {

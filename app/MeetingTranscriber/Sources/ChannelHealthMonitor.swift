@@ -1,7 +1,7 @@
 import Foundation
 
 /// Which audio capture channel a `ChannelHealthMonitor` event refers to.
-enum AudioChannel: Equatable {
+enum AudioChannel: Hashable {
     case mic
     case app
 }

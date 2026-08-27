@@ -62,6 +62,12 @@ final class ChannelHealthController {
     /// an unopened channel and a dead one both read -120 dBFS.
     @ObservationIgnored private var channels: CapturedChannels = .micAndApp
 
+    /// Channels whose capture give-up has already been reported in this
+    /// recording. The flag is terminal, so the report is worth exactly one
+    /// notification; without the latch the per-tick check would repeat it ten
+    /// times a second.
+    @ObservationIgnored private var gaveUpNotified: Set<AudioChannel> = []
+
     /// Red tint for the menu bar's **top** half. Composed here rather than at
     /// the call site so the topology that suppresses a phantom channel is
     /// applied in exactly one place.
@@ -138,6 +144,7 @@ final class ChannelHealthController {
         micSilentActive = false
         appSilentActive = false
         recordingSilentActive = false
+        gaveUpNotified.removeAll()
         // Per-recording state like the flags above. Defensive rather than
         // load-bearing: every `start` sets the topology before its own guards,
         // so no reader can reach a stale value. Deliberately untested for that
@@ -182,6 +189,10 @@ final class ChannelHealthController {
         let mic = recorder.micLevelDBFS
         let app = recorder.appLevelDBFS
 
+        // Before the monitors, because a terminal capture failure does not
+        // depend on either monitor having something to say about it.
+        notifyCaptureGiveUps(recorder: recorder)
+
         let event = channelHealthMonitor.update(micDBFS: mic, appDBFS: app, now: now)
         switch event {
         case let .started(channel, _):
@@ -194,9 +205,14 @@ final class ChannelHealthController {
                 appSilentActive = true
                 micSilentActive = false
             }
-            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
-            let alert = Self.captureAlert(channel: channel, gaveUp: gaveUp)
-            notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
+            // A channel that gave up was reported the moment it did, with the
+            // message that fits a channel which is not coming back. Saying it
+            // fell silent afterwards would be a second, weaker notification
+            // about the same failure.
+            if !gaveUpNotified.contains(channel) {
+                let alert = Self.captureAlert(channel: channel, gaveUp: false)
+                notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
+            }
 
         case .recovered:
             micSilentActive = false
@@ -227,6 +243,26 @@ final class ChannelHealthController {
         }
 
         return event
+    }
+
+    /// Reports a channel whose capture was abandoned for good (issue #588) on
+    /// the tick the flag flips, once per channel per recording.
+    ///
+    /// This used to be read inside the asymmetric monitor's `.started` branch,
+    /// which lost the report in two ways. A channel that gave up *after* its
+    /// episode had already latched never produced a second `.started`, and one
+    /// that gave up while both channels were quiet produced no episode at all,
+    /// because there is no asymmetry to detect. In both cases the user was told
+    /// nothing, about the one failure that cannot recover on its own and whose
+    /// only remedy is restarting the app.
+    private func notifyCaptureGiveUps(recorder: any RecordingProvider) {
+        for channel in [AudioChannel.mic, .app] {
+            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
+            guard gaveUp, !gaveUpNotified.contains(channel) else { continue }
+            gaveUpNotified.insert(channel)
+            let alert = Self.captureAlert(channel: channel, gaveUp: true)
+            notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
+        }
     }
 
     /// The whole notification for an asymmetric-silence episode: title, body and
