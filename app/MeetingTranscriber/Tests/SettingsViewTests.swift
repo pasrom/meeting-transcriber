@@ -438,7 +438,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         let settings = makeSettings()
         settings.protocolProvider = .none
         let body = try makeOutput(settings: settings).inspect()
-        XCTAssertNoThrow(try body.find(text: "Only the raw transcript will be saved — no LLM summarization."))
+        XCTAssertNoThrow(try body.find(text: "No LLM summarization will be generated."))
     }
 
     func testNoneProviderHidesEndpointField() throws {
