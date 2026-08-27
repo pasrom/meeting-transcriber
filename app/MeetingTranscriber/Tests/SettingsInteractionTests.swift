@@ -127,6 +127,41 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(settings.endGrace, 6.0, accuracy: 0.0001, "stepping (step 1) must write back to endGrace")
     }
 
+    // MARK: - Live caption overlay toggle
+
+    func testShowCaptionOverlayToggleBindsToSettings() throws {
+        let settings = makeSettings()
+        settings.liveTranscriptionEnabled = true
+        XCTAssertTrue(settings.liveCaptionsOverlayEnabled, "precondition: overlay defaults on")
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+        let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
+            try toggle.labelView().text().string() == "Show caption overlay"
+        }
+        try toggle.tap()
+        XCTAssertFalse(
+            settings.liveCaptionsOverlayEnabled,
+            "tapping the overlay toggle must turn the setting off",
+        )
+    }
+
+    func testShowCaptionOverlayToggleDisabledWhenLiveTranscriptionOff() throws {
+        let settings = makeSettings()
+        settings.liveTranscriptionEnabled = false
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+        let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
+            try toggle.labelView().text().string() == "Show caption overlay"
+        }
+        XCTAssertTrue(toggle.isDisabled())
+    }
+
     // MARK: - LiveCaptionsOverlay render
 
     func testLiveCaptionsOverlayBackendIdentifierTracksActiveBackend() throws {

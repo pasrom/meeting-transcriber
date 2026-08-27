@@ -341,12 +341,14 @@
                 let micName: String
                 let perChannelIndicatorEnabled: Bool
                 let liveTranscriptionEnabled: Bool
+                let liveCaptionsOverlayEnabled: Bool
                 let asymmetricSilenceWarningSeconds: Double
 
                 static let empty = Self(
                     endGraceSeconds: 0, noMic: false, recordOnly: false,
                     micDeviceUID: "", micName: "", perChannelIndicatorEnabled: false,
-                    liveTranscriptionEnabled: false, asymmetricSilenceWarningSeconds: 0,
+                    liveTranscriptionEnabled: false, liveCaptionsOverlayEnabled: false,
+                    asymmetricSilenceWarningSeconds: 0,
                 )
             }
 

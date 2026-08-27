@@ -63,6 +63,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.perChannelIndicatorEnabled)
         XCTAssertEqual(settings.asymmetricSilenceWarningSeconds, 90.0)
         XCTAssertFalse(settings.liveTranscriptionEnabled)
+        XCTAssertTrue(settings.liveCaptionsOverlayEnabled)
     }
 
     func test_activeEngineLanguageOrNil_followsWhisperKitLanguage() {

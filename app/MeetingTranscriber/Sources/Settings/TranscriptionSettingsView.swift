@@ -147,6 +147,8 @@ struct TranscriptionSettingsView: View {
                 )
             }
 
+            captionOverlayToggle
+
             Text(captionBackendFootnote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -159,6 +161,17 @@ struct TranscriptionSettingsView: View {
         }
         .accessibilityIdentifier(A11yID.liveTranscriptionSection)
         .recordOnlyDisabled(settings.recordOnly)
+    }
+
+    /// Nested under the master live-transcription toggle. Disabled when the
+    /// parent is off so the overlay cannot be flipped independently of the
+    /// pipeline. Visibility only: the coordinator still arms when the master
+    /// toggle is on.
+    private var captionOverlayToggle: some View {
+        Toggle("Show caption overlay", isOn: $settings.liveCaptionsOverlayEnabled)
+            .disabled(!settings.liveTranscriptionEnabled)
+            .padding(.leading)
+            .accessibilityIdentifier(A11yID.liveCaptionsOverlayToggle)
     }
 
     /// True when enabling captions would trigger the first-use Nemotron download:
@@ -227,8 +240,9 @@ struct TranscriptionSettingsView: View {
         // future engine returns `supportsLiveTranscription == false`, reintroduce
         // a conditional "unsupported" message gated on that + `englishStreaming`.
         "Captions appear in a click-through overlay at the bottom of "
-            + "the screen during recording. Hold ⌥ (Option) to drag "
-            + "it; the position is remembered across sessions. "
+            + "the screen during recording. Turn off \"Show caption overlay\" "
+            + "to hide the bar; live transcription still runs. Hold ⌥ (Option) "
+            + "to drag it; the position is remembered across sessions. "
             + "Caption text is **not** logged by default — enable "
             + "\"Verbose Diagnostic Logging\" in Advanced to see "
             + "partials + finals in Console.app (subsystem "
