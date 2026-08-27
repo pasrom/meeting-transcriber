@@ -9,7 +9,20 @@ let package = Package(
         .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.3"),
         .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.19.1"),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0"),
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.13.4"),
+        // Upper bound, not a preference: 0.15.6 adds a Rust static library
+        // (NemoTextProcessing) whose `_rust_eh_personality` is a fourth
+        // exception personality routine in the linked image. Apple's compact
+        // unwind format encodes three (`UNWIND_PERSONALITY_MASK` is a two bit
+        // index, 0 means none), so the ThreadSanitizer build stops linking:
+        // C++ and Rust come from FluidAudio itself, Objective-C from our
+        // AVFAudio exception wrapper, and ThreadSanitizer injects the fourth.
+        // The regular build still links because it sits at exactly three.
+        //
+        // Measured: Apple's ld fails the same on Xcode 26.6 and the 27.0 beta,
+        // and `-Wl,-no_compact_unwind` links but then aborts on the first
+        // exception. Lift this bound once FluidAudio offers a way to link
+        // without that archive, or ships it as a dynamic library.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", "0.13.4" ..< "0.15.6"),
         .package(path: "../../tools/audiotap"),
     ],
     targets: [
