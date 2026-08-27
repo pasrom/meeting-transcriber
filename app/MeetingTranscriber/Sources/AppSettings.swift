@@ -216,6 +216,14 @@ final class AppSettings {
         didSet { defaults.set(liveTranscriptionEnabled, forKey: "liveTranscriptionEnabled") }
     }
 
+    /// Overlay-window visibility only. Live transcription still runs when the
+    /// master toggle is on; this setting only hides `LiveCaptionsOverlay`.
+    /// Default on, so existing users keep seeing the bar. Missing UserDefaults
+    /// key reads as true (`defaults.object(forKey:) as? Bool ?? true`).
+    var liveCaptionsOverlayEnabled: Bool {
+        didSet { defaults.set(liveCaptionsOverlayEnabled, forKey: "liveCaptionsOverlayEnabled") }
+    }
+
     /// Seconds of continuous asymmetric silence before the indicator + notification
     /// fire. Clamped to [30, 300] on write — short enough to surface a dead channel
     /// inside a meeting, long enough not to trigger on normal speaking pauses.
@@ -527,6 +535,7 @@ final class AppSettings {
         micName = defaults.object(forKey: "micName") as? String ?? "Me"
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
         liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
+        liveCaptionsOverlayEnabled = defaults.object(forKey: "liveCaptionsOverlayEnabled") as? Bool ?? true
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")

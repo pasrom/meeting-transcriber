@@ -6,8 +6,9 @@
 /// agree. Pure + value-typed → unit-testable as a truth table without
 /// constructing the actors.
 ///
-/// **Master toggle (`liveEnabled`) gates everything** — off means no captions,
-/// regardless of the other inputs.
+/// **Master toggle (`liveEnabled`) still gates the pipeline** — off means no
+/// captions, regardless of the other inputs. `overlayEnabled` only gates the
+/// overlay window (`overlayVisible`); it is not a strategy input.
 ///
 /// **The backend follows the active engine's EXPLICITLY configured language**
 /// (not auto-detect): `de` → German Nemotron streaming, `en` → English Parakeet
@@ -57,8 +58,8 @@ enum LiveCaptionsGate {
     }
 
     /// Whether live captions are available at all (any non-`none` strategy).
-    /// Drives the coordinator's eligibility gate + the overlay-visibility gate
-    /// (the latter ANDs in the recording-in-progress condition separately).
+    /// Drives the coordinator's eligibility gate. Overlay-window visibility is
+    /// `overlayVisible`, which ANDs this with recording + the overlay toggle.
     static func captionsAvailable(
         liveEnabled: Bool,
         engineLanguage: String?,
@@ -69,5 +70,23 @@ enum LiveCaptionsGate {
             engineLanguage: engineLanguage,
             engineSupportsLive: engineSupportsLive,
         ) != .none
+    }
+
+    /// Whether the click-through caption bar should be on screen. Calls
+    /// `captionsAvailable` (pipeline gate unchanged), then ANDs recording and
+    /// the overlay toggle. `overlayEnabled` is UI-only: it never feeds
+    /// `strategy` / coordinator arming.
+    static func overlayVisible(
+        liveEnabled: Bool,
+        engineLanguage: String?,
+        engineSupportsLive: Bool,
+        isRecording: Bool,
+        overlayEnabled: Bool,
+    ) -> Bool {
+        captionsAvailable(
+            liveEnabled: liveEnabled,
+            engineLanguage: engineLanguage,
+            engineSupportsLive: engineSupportsLive,
+        ) && isRecording && overlayEnabled
     }
 }

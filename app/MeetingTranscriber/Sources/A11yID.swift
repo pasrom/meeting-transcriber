@@ -43,6 +43,7 @@ enum A11yID {
     static let echoDedupToggle = "echoDedupToggle"
     static let diarizationSection = "diarizationSection"
     static let liveTranscriptionSection = "liveTranscriptionSection"
+    static let liveCaptionsOverlayToggle = "liveCaptionsOverlayToggle"
     static let channelIndicatorSection = "channelIndicatorSection"
     static let experimentalTuningDisclosure = "experimentalTuningDisclosure"
     static let sortformerCapHint = "sortformer-cap-hint"

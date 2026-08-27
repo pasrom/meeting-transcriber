@@ -85,4 +85,27 @@ final class LiveCaptionsGateTests: XCTestCase {
             liveEnabled: false, engineLanguage: "de", engineSupportsLive: true,
         ))
     }
+
+    // MARK: - overlayVisible
+
+    func testOverlayVisibleWhenCaptionsAvailableRecordingAndOverlayOn() {
+        XCTAssertTrue(LiveCaptionsGate.overlayVisible(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
+            isRecording: true, overlayEnabled: true,
+        ))
+    }
+
+    func testOverlayHiddenWhenOverlayDisabledEvenIfCaptionsAvailableAndRecording() {
+        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
+            isRecording: true, overlayEnabled: false,
+        ))
+    }
+
+    func testOverlayHiddenWhenNotRecording() {
+        XCTAssertFalse(LiveCaptionsGate.overlayVisible(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: true,
+            isRecording: false, overlayEnabled: true,
+        ))
+    }
 }

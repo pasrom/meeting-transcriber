@@ -48,6 +48,7 @@
                 micName: micName,
                 perChannelIndicatorEnabled: perChannelIndicatorEnabled,
                 liveTranscriptionEnabled: liveTranscriptionEnabled,
+                liveCaptionsOverlayEnabled: liveCaptionsOverlayEnabled,
                 asymmetricSilenceWarningSeconds: asymmetricSilenceWarningSeconds,
             )
         }
