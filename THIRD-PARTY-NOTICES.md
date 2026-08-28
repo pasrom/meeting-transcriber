@@ -44,7 +44,7 @@ Parakeet and Nemotron live-caption engines, statically linked into the app
 binary.
 
 - **Project:** <https://github.com/FluidInference/FluidAudio>
-- **Version:** 0.15.5, pinned in `app/MeetingTranscriber/Package.resolved`
+- **Version:** 0.15.6, pinned in `app/MeetingTranscriber/Package.resolved`
 - **Copyright:** the upstream `LICENSE` is the unmodified Apache-2.0 text with
   the boilerplate `Copyright [yyyy] [name of copyright owner]` line left as
   written, so it names no holder. The project is published by FluidInference.
@@ -79,6 +79,62 @@ records, and it is user-reachable through the Sortformer diarization mode.
 - **License:** Apache License 2.0, shipping as
   `Contents/Resources/licenses/FluidAudio-NeMo-LICENSE.txt`. NeMo publishes no
   NOTICE file, so section 4(d) adds nothing here.
+
+### NemoTextProcessing
+
+From FluidAudio 0.15.6 on, text normalization runs through a prebuilt Rust
+static library rather than Swift code, so a further set of components is
+redistributed inside the app binary. FluidAudio declares it as a `binaryTarget`,
+which means it appears in no dependency manifest of ours and its own
+dependencies appear nowhere at all; the accounting below comes from reading the
+shipped archive (`libtext_processing_rs.a`, 44 Rust crates) rather than from any
+manifest.
+
+- **Project:** <https://github.com/FluidInference/text-processing-rs>
+- **Version:** 0.3.0, pinned by checksum in FluidAudio's `Package.swift`
+- **Copyright:** 2026 FluidInference
+- **License:** Apache License 2.0, shipping as
+  `Contents/Resources/licenses/NemoTextProcessing-LICENSE.txt`. Upstream carries
+  no NOTICE file, so section 4(d) imposes nothing further.
+
+It is a Rust port of NVIDIA's NeMo text processing, which its README states.
+That is a different upstream from the NeMo entry above, which covers the
+Sortformer port, so it is attributed separately:
+
+- **Project:** <https://github.com/NVIDIA/NeMo-text-processing>
+- **Copyright:** the upstream `LICENSE` is the unmodified Apache-2.0 text with
+  the `Copyright [yyyy] [name of copyright owner]` line left as written, so it
+  names no holder. The project is published by NVIDIA Corporation.
+- **License:** Apache License 2.0, shipping as
+  `Contents/Resources/licenses/NemoTextProcessing-NVIDIA-LICENSE.txt`.
+
+#### Rust crates and standard library
+
+The archive statically links 43 further crates: the project's own dependency
+tree, together with the parts of the Rust standard library and its unwinding
+and compiler support that any Rust binary carries. Nearly all of them are
+offered under a choice of licenses. Where Apache-2.0 is among the choices this
+project elects it, so one licence text covers that whole set:
+
+- **License:** Apache License 2.0, shipping as
+  `Contents/Resources/licenses/Rust-LICENSE-APACHE.txt`. This is the elected
+  licence for the dual-licensed crates and for the Rust standard library.
+
+Five crates offer no Apache-2.0 option, so MIT is elected for them and their
+copyright notices are reproduced as that licence requires:
+
+- **generic-array** 1.4.3, **nom** 7.1.3, **ordered-float** 5.3.0,
+  **simd-adler32** 0.3.9 and **memchr** 2.8.3. Their notices and the licence
+  text ship together as `Contents/Resources/licenses/Rust-LICENSE-MIT.txt`,
+  which also carries the Rust standard library's own MIT notice.
+
+One component is not a choice but a conjunction:
+
+- **compiler-builtins** carries the compiler-rt routines that Rust code calls
+  for arithmetic the hardware does not implement directly, and is licensed
+  `MIT AND Apache-2.0 WITH LLVM-exception`. Both apply at once, so its combined
+  licence file ships verbatim as
+  `Contents/Resources/licenses/Rust-compiler-builtins-LICENSE.txt`.
 
 ## LocalVQE
 
