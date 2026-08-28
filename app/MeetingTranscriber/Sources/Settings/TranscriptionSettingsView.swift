@@ -89,6 +89,7 @@ struct TranscriptionSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Canonical terminology")
                     TextEditor(text: $settings.terminologyRulesText)

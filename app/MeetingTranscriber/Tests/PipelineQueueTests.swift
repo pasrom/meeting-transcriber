@@ -1015,6 +1015,7 @@ final class PipelineQueueTests: XCTestCase {
 
     private func makeMockProcessingQueue(
         engine: MockEngine? = nil,
+        terminologyNormalizer: @escaping () -> TerminologyNormalizer = { TerminologyNormalizer() },
         diarizationFactory: @escaping () -> any DiarizationProvider = { MockDiarization() },
         diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         diarizeEnabled: Bool = false,
@@ -1031,6 +1032,7 @@ final class PipelineQueueTests: XCTestCase {
             diarizeEnabled: diarizeEnabled,
             numSpeakers: numSpeakers,
             micLabel: "Me",
+            terminologyNormalizer: terminologyNormalizer,
         )
         return (q, engine)
     }
@@ -1053,6 +1055,27 @@ final class PipelineQueueTests: XCTestCase {
         await pQueue.processNext()
 
         XCTAssertTrue(engine.transcribeCallCount > 0)
+    }
+
+    func testProcessNextAppliesTerminologyRulesToSavedTranscript() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [
+            TimestampedSegment(start: 0, end: 5, text: "Astor reviewed northstar."),
+        ]
+        let (queue, _) = makeMockProcessingQueue(engine: engine) {
+            TerminologyNormalizer(rulesText: "Aster => Astor\nNorthstar => northstar")
+        }
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        queue.enqueue(PipelineJob(
+            meetingTitle: "Terminology Test", appName: "File",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+        ))
+
+        await queue.processNext()
+
+        let transcriptURL = try XCTUnwrap(queue.jobs.first?.transcriptPath)
+        let transcript = try String(contentsOf: transcriptURL, encoding: .utf8)
+        XCTAssertTrue(transcript.contains("Aster reviewed Northstar."), transcript)
     }
 
     // MARK: - Concurrent runs of the same job (issue #558)

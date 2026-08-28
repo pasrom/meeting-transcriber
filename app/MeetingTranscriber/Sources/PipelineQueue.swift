@@ -64,6 +64,10 @@ class PipelineQueue {
     /// nil disables JSONL logging. AppState injects a real instance for production;
     /// tests leave it nil unless they explicitly want to assert on the log.
     let recognitionStatsLog: RecognitionStatsLog?
+    /// Explicit canonical spelling rules, applied after the ASR engine returns
+    /// text. Kept separate from decoder vocabulary because decoder hints are
+    /// probabilistic while representation rules are deterministic.
+    let terminologyNormalizer: () -> TerminologyNormalizer
 
     /// nil disables per-stage timing capture. AppState injects a real instance;
     /// tests leave it nil unless asserting on the log.
@@ -234,6 +238,7 @@ class PipelineQueue {
         self.snapshotWriter = snapshotWriter
         self.vadConfig = nil
         self.recognitionStatsLog = nil
+        terminologyNormalizer = { TerminologyNormalizer() }
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.terminalJobStore = terminalJobStore
@@ -309,6 +314,7 @@ class PipelineQueue {
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         vadConfig: VADConfig? = nil,
         recognitionStatsLog: RecognitionStatsLog? = nil,
+        terminologyNormalizer: @escaping () -> TerminologyNormalizer = { TerminologyNormalizer() },
         stageTimingLog: StageTimingLog? = nil,
         completedJobLifetime: TimeInterval = 60,
         terminalJobStore: TerminalJobStore? = nil,
@@ -339,6 +345,7 @@ class PipelineQueue {
         self.snapshotWriter = snapshotWriter
         self.vadConfig = vadConfig
         self.recognitionStatsLog = recognitionStatsLog
+        self.terminologyNormalizer = terminologyNormalizer
         self.stageTimingLog = stageTimingLog
         self.completedJobLifetime = completedJobLifetime
         self.terminalJobStore = terminalJobStore

@@ -271,6 +271,15 @@ final class AppSettings {
         customVocabularyBookmark = bookmark
     }
 
+    var terminologyRulesText: String {
+        didSet {
+            defaults.set(terminologyRulesText, forKey: "terminologyRulesText")
+            terminologyRulesValidation = TerminologyNormalizer(rulesText: terminologyRulesText).diagnostics
+        }
+    }
+
+    var terminologyRulesValidation: TerminologyNormalizer.Diagnostics
+
     /// Ephemeral UI status; recalculated when the selected vocabulary changes.
     var customVocabularyValidation: CustomVocabularyValidation
 
@@ -492,6 +501,9 @@ final class AppSettings {
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
         whisperKitVocabularyPromptEnabled = defaults.object(forKey: "whisperKitVocabularyPromptEnabled") as? Bool ?? false
+        let savedTerminologyRules = defaults.string(forKey: "terminologyRulesText") ?? ""
+        terminologyRulesText = savedTerminologyRules
+        terminologyRulesValidation = TerminologyNormalizer(rulesText: savedTerminologyRules).diagnostics
         customVocabularyValidation = .notConfigured
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false

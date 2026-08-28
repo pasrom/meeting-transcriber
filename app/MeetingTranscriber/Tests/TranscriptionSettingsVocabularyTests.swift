@@ -34,6 +34,14 @@ final class TranscriptionSettingsVocabularyTests: XCTestCase {
         XCTAssertNil(settings.customVocabularyBookmark)
     }
 
+    func testTerminologyEditorHasStableAccessibilityIdentifier() throws {
+        XCTAssertNoThrow(
+            try makeView(settings: AppSettings(defaults: defaults))
+                .inspect()
+                .find(viewWithAccessibilityIdentifier: A11yID.terminologyRulesEditor),
+        )
+    }
+
     func testVocabularyControlsRemainAvailableForBothEngines() throws {
         for engine in [TranscriptionEngineSetting.parakeet, .whisperKit] {
             let settings = AppSettings(defaults: defaults)

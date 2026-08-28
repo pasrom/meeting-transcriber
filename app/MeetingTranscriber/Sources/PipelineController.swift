@@ -114,6 +114,9 @@ final class PipelineController {
             speakerMatcherFactory: { SpeakerMatcher() },
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
             recognitionStatsLog: RecognitionStatsLog(),
+            terminologyNormalizer: { [weak settings] in
+                TerminologyNormalizer(rulesText: settings?.terminologyRulesText ?? "")
+            },
             stageTimingLog: StageTimingLog(),
             terminalJobStore: terminalJobStore,
         )

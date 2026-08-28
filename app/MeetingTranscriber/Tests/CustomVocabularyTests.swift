@@ -151,6 +151,13 @@ final class CustomVocabularyTests: XCTestCase {
         XCTAssertEqual(settings.customVocabularyValidation, .termTooLong)
     }
 
+    func testTerminologyRulesPersist() {
+        settings.terminologyRulesText = "Aster => Astor"
+
+        XCTAssertEqual(defaults.string(forKey: "terminologyRulesText"), "Aster => Astor")
+        XCTAssertEqual(AppSettings(defaults: defaults).terminologyRulesText, "Aster => Astor")
+    }
+
     func testManualVocabularyPathEditClearsPreviousBookmark() throws {
         let file = FileManager.default.temporaryDirectory
             .appendingPathComponent("vocabulary-bookmark-\(UUID().uuidString).txt")

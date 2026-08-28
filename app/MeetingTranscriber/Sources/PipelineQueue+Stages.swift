@@ -35,6 +35,10 @@ extension PipelineQueue {
         /// Segments cached for diarization reuse (avoids double transcription).
         let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
+        /// The exact rules snapshot used for the initial transcription. The
+        /// defensive re-transcription fallback must not pick up Settings edits
+        /// made while this job is being processed.
+        let terminologyNormalizer: TerminologyNormalizer
     }
 
     /// Typed errors thrown by the pipeline stages.
@@ -290,6 +294,10 @@ extension PipelineQueue {
         startElapsedTimer()
         logger.info("[\(ctx.shortID, privacy: .public)] transcription_start title=\(ctx.title, privacy: .private)")
 
+        // Snapshot terminology once per job. A user edit while either track is
+        // decoding must affect the next job, not leave this dual-source result
+        // with differently normalized app and microphone segments.
+        let normalizer = terminologyNormalizer()
         let transcript: String
         // Segments cached for potential diarization reuse (avoids double transcription)
         var cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
@@ -299,8 +307,9 @@ extension PipelineQueue {
                 ctx, engine: engine, workDir: workDir,
                 appAudioPath: appAudioPath, micAudioPath: micAudioPath,
             )
-            cachedSegments = segments
-            transcript = segments.transcriptText
+            let normalizedSegments = normalize(segments, with: normalizer)
+            cachedSegments = normalizedSegments
+            transcript = normalizedSegments.transcriptText
         } else {
             // Single-source: resample mix to 16kHz
             guard let mixPath = ctx.mixPath else {
@@ -320,7 +329,8 @@ extension PipelineQueue {
             }
 
             // Use transcribeSegments to cache results for diarization
-            var segments = try await engine.transcribeSegments(audioPath: transcriptionPath)
+            let rawSegments = try await engine.transcribeSegments(audioPath: transcriptionPath)
+            var segments = normalize(rawSegments, with: normalizer)
 
             // Remap timestamps back to original timeline if VAD was used
             if let map = vadMap {
@@ -342,7 +352,27 @@ extension PipelineQueue {
             "[\(ctx.shortID, privacy: .public)] transcription_complete segments=\(segCount, privacy: .public) duration=\(totalSecs, privacy: .public)s",
         )
 
-        return TranscriptionOutput(transcript: transcript, cachedSegments: cachedSegments, isDualSource: isDualSource)
+        return TranscriptionOutput(
+            transcript: transcript,
+            cachedSegments: cachedSegments,
+            isDualSource: isDualSource,
+            terminologyNormalizer: normalizer,
+        )
+    }
+
+    private func normalize(
+        _ segments: [TimestampedSegment],
+        with normalizer: TerminologyNormalizer,
+    ) -> [TimestampedSegment] {
+        guard !normalizer.isEmpty else { return segments }
+        return segments.map { segment in
+            TimestampedSegment(
+                start: segment.start,
+                end: segment.end,
+                text: normalizer.normalize(segment.text),
+                speaker: segment.speaker,
+            )
+        }
     }
 
     /// Stage 2 — optional speaker diarization. Returns the transcript with
@@ -570,7 +600,8 @@ extension PipelineQueue {
         } else if transcription.isDualSource {
             return nil
         } else {
-            cachedSegments = try await engine.transcribeSegments(audioPath: mix16k)
+            let rawSegments = try await engine.transcribeSegments(audioPath: mix16k)
+            cachedSegments = normalize(rawSegments, with: transcription.terminologyNormalizer)
         }
         return renderLabeledTranscript(
             run: run, cachedSegments: cachedSegments,
