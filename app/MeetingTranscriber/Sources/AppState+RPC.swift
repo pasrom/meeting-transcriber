@@ -325,6 +325,12 @@
                 micSilent: channelHealth.micSilentActive,
                 appSilent: channelHealth.appSilentActive,
                 recordingSilent: channelHealth.recordingSilentActive,
+                micFault: channelHealth.micFault?.rpcName,
+                appFault: channelHealth.appFault?.rpcName,
+                micSecondsSinceLastBuffer: channelHealth.micAges.secondsSinceLastBuffer,
+                micSecondsSinceLastEnergy: channelHealth.micAges.secondsSinceLastEnergy,
+                appSecondsSinceLastBuffer: channelHealth.appAges.secondsSinceLastBuffer,
+                appSecondsSinceLastEnergy: channelHealth.appAges.secondsSinceLastEnergy,
             )
         }
 

@@ -18,6 +18,16 @@ enum ChannelFault: Equatable {
     /// Buffers keep arriving and every sample in them is zero. The transport is
     /// healthy; the device or the system muted the signal in front of it.
     case digitalSilence
+
+    /// How this fault is named in the `/state` snapshot. Spelled out rather
+    /// than derived from the case name so a rename of the Swift case cannot
+    /// silently change the automation surface.
+    var rpcName: String {
+        switch self {
+        case .noBuffers: "noBuffers"
+        case .digitalSilence: "digitalSilence"
+        }
+    }
 }
 
 /// Decides whether one capture channel has failed, from what the capture layer

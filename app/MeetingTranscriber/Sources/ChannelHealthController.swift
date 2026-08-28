@@ -68,6 +68,18 @@ final class ChannelHealthController {
     /// times a second.
     @ObservationIgnored private var gaveUpNotified: Set<AudioChannel> = []
 
+    /// The capture fault reported for each channel in this recording, if any.
+    /// The notification is gone the moment it is posted; this is what a driver
+    /// script polls and what a field diagnosis reads back.
+    private(set) var micFault: ChannelFault?
+    private(set) var appFault: ChannelFault?
+
+    /// The ages the last tick saw, kept beside the verdict so the evidence for
+    /// it is readable too: a channel called dead at ten seconds and one called
+    /// dead at ten minutes are different bugs.
+    private(set) var micAges: ChannelSignalAges = .unknown
+    private(set) var appAges: ChannelSignalAges = .unknown
+
     /// Per-channel "is this channel still delivering" decision, evaluated on
     /// every tick. Separate from `channelHealthMonitor`, which answers the
     /// louder-than-the-other question that drives the tint; see
@@ -166,6 +178,10 @@ final class ChannelHealthController {
         gaveUpNotified.removeAll()
         micFaultMonitor.reset()
         appFaultMonitor.reset()
+        micFault = nil
+        appFault = nil
+        micAges = .unknown
+        appAges = .unknown
         firstTickAt = nil
         lastSpeechAt.removeAll()
         // Per-recording state like the flags above. Defensive rather than
@@ -201,6 +217,10 @@ final class ChannelHealthController {
         silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
         micFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
         appFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        micFault = nil
+        appFault = nil
+        micAges = .unknown
+        appAges = .unknown
         firstTickAt = nil
         lastSpeechAt.removeAll()
     }
@@ -307,9 +327,17 @@ final class ChannelHealthController {
             guard channel == .mic ? channels.mic : channels.app else { continue }
             guard !gaveUpNotified.contains(channel) else { continue }
             let ages = channel == .mic ? recorder.micSignalAges : recorder.appSignalAges
+            switch channel {
+            case .mic: micAges = ages
+            case .app: appAges = ages
+            }
             guard let fault = updateFaultMonitor(
                 for: channel, ages: ages, elapsedSinceStart: elapsed, now: now,
             ) else { continue }
+            switch channel {
+            case .mic: micFault = fault
+            case .app: appFault = fault
+            }
             let alert = Self.captureAlert(channel: channel, fault: fault)
             notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
         }

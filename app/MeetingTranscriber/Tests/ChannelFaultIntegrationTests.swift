@@ -23,6 +23,37 @@ final class ChannelFaultIntegrationTests: XCTestCase {
 
     // MARK: - Channel faults (issue #614)
 
+    func testTheReportedFaultAndTheAgesBehindItStayReadable() {
+        // The notification is fire-and-forget; the state is what a driver
+        // script and a field diagnosis can actually look at, and it has to
+        // carry both the verdict and the evidence for it.
+        let (controller, recorder, _, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micSignalAges = deliveringSilence
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+
+        XCTAssertEqual(controller.micFault, .digitalSilence)
+        XCTAssertNil(controller.appFault)
+        XCTAssertEqual(controller.micAges, deliveringSilence)
+    }
+
+    func testStopClearsTheReportedFault() {
+        let (controller, recorder, _, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micSignalAges = stoppedDelivering
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(controller.micFault, .noBuffers)
+
+        controller.stop()
+        XCTAssertNil(controller.micFault)
+    }
+
     func testAMicDeliveringNothingButZeroesIsReported() {
         // The device or macOS muted it. The transport is fine and the level is
         // the same -120 a dead tap reports, so only the ages can say which.

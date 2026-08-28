@@ -158,10 +158,32 @@
             /// without screenshot OCR.
             let recordingSilent: Bool
 
+            /// The capture fault reported for each channel in this recording:
+            /// "noBuffers", "digitalSilence", or absent when the channel is
+            /// fine. Distinct from `micSilent` / `appSilent`, which say only
+            /// that one channel is quieter than the other and are true of a
+            /// muted microphone, a quiet room and a dead tap alike.
+            let micFault: String?
+            let appFault: String?
+
+            /// The evidence behind the verdict: how long each channel has gone
+            /// without a buffer, and without one carrying signal. Absent means
+            /// never, which is not the same as long ago.
+            let micSecondsSinceLastBuffer: Double?
+            let micSecondsSinceLastEnergy: Double?
+            let appSecondsSinceLastBuffer: Double?
+            let appSecondsSinceLastEnergy: Double?
+
             static let inactive = Self(
                 micSilent: false,
                 appSilent: false,
                 recordingSilent: false,
+                micFault: nil,
+                appFault: nil,
+                micSecondsSinceLastBuffer: nil,
+                micSecondsSinceLastEnergy: nil,
+                appSecondsSinceLastBuffer: nil,
+                appSecondsSinceLastEnergy: nil,
             )
         }
 
