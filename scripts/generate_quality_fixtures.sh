@@ -12,6 +12,7 @@
 # Requires: macOS `say` (voices Anna, Flo, Sandy), `sox`, `python3`.
 
 set -euo pipefail
+export LC_ALL=C
 
 command -v sox >/dev/null 2>&1 || { echo "ERROR: sox is required (brew install sox)"; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "ERROR: python3 is required"; exit 1; }
