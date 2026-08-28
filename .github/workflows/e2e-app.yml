@@ -230,7 +230,7 @@ jobs:
       # Validates the env-hook → AppState → SwiftUI scene body →
       # MenuBarIcon render → RPC observability chain. Does NOT touch
       # the real audio path (CATapDescription → LevelPublisher →
-      # polling task) — that's tracked as a follow-up live-audio e2e.
+      # polling task); the channel-fault lane below drives that end.
       - name: Run channel-health indicator E2E
         timeout-minutes: 3
         run: bash scripts/e2e-channel-health.sh --no-build --screenshot
@@ -277,6 +277,26 @@ jobs:
       - name: Run silent-recording detector E2E
         timeout-minutes: 3
         run: bash scripts/e2e-silent-recording.sh --no-build
+
+      # Capture-fault e2e (issue #614): the lane that pins the distinction
+      # the old implementation could not make. One recording, two phases:
+      # low-level noise is played into BlackHole 2ch so the microphone track
+      # carries real samples below the silence threshold, and the app must
+      # latch the menu-bar tint while reporting nothing; then the noise stops,
+      # the track becomes exact zeroes, and the same channel must be reported
+      # once as `digitalSilence`. Each phase is the other's control: an app
+      # that reports nothing passes the first and fails the second, one that
+      # reports every quiet channel fails the first. Drives the real chain
+      # (CoreAudio → DebugRMSReporter → LevelPublisher → the 10 Hz poll →
+      # ChannelFaultMonitor), which every unit test mocks somewhere.
+      # `continue-on-error` until it has been green on a few nightlies: it is
+      # the first lane to depend on a named-device player, and a leftover
+      # producer in the loopback would make phase 2 impossible rather than
+      # signal a regression.
+      - name: Run capture-fault E2E (issue #614)
+        timeout-minutes: 6
+        continue-on-error: true
+        run: bash scripts/e2e-channel-fault.sh --no-build
 
       # Live-transcription overlay e2e (PR #318): asserts on the
       # in-flight LiveCaptionsState exposed at `/state.liveCaptions.

@@ -20,7 +20,18 @@
 // touches no device.)
 //
 // Usage: play-quiet-noise.swift --device "BlackHole 2ch" [--dbfs -70] [--seconds 0]
+//                                [--verify]
 //   --seconds 0 (the default) plays until killed.
+//   --verify captures from the same device while playing and reports what came
+//   back. Exit 4: the capture was authorized and running and the device still
+//   carried nothing — a real loopback problem. Exit 3: no verdict, because
+//   this process may not capture at all (microphone TCC), which macOS signals
+//   by delivering all-zero buffers with no error; from an SSH shell that is
+//   the guaranteed outcome, so run the verify from the GUI session or CI.
+//   Without the flag a caller can only observe the player from outside, where
+//   a working player and one whose audio goes nowhere look identical: the
+//   process stays up, the render block runs, the device reads back correctly.
+//   That cost a whole round of remote debugging, so the check lives here.
 
 import AVFoundation
 import CoreAudio
@@ -41,6 +52,7 @@ guard let deviceName = argument("--device") else {
 }
 let dbfs = Double(argument("--dbfs") ?? "-70") ?? -70
 let seconds = Double(argument("--seconds") ?? "0") ?? 0
+let verify = CommandLine.arguments.contains("--verify")
 
 // MARK: - Device lookup
 
@@ -122,6 +134,28 @@ guard status == noErr else {
     exit(1)
 }
 
+// Read back rather than trust the status. A silent misbind sounds exactly like
+// a working player from the outside: the process stays up, prints that it is
+// playing, and the device that was supposed to receive the audio stays quiet.
+// That is the failure this tool exists to make impossible to mistake for a
+// product defect.
+var boundDevice = AudioDeviceID(0)
+var boundSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+let readBack = AudioUnitGetProperty(
+    engine.outputNode.audioUnit!,
+    kAudioOutputUnitProperty_CurrentDevice,
+    kAudioUnitScope_Global,
+    0,
+    &boundDevice,
+    &boundSize,
+)
+guard readBack == noErr, boundDevice == device else {
+    FileHandle.standardError.write(Data(
+        "ERROR: output bound to device \(boundDevice), expected \(device) for \"\(deviceName)\"\n".utf8,
+    ))
+    exit(1)
+}
+
 let amplitude = Float(pow(10.0, dbfs / 20.0))
 
 // The device's own rate, read from CoreAudio, not the output node's format.
@@ -173,6 +207,85 @@ do {
 print("Playing \(dbfs) dBFS noise into \"\(deviceName)\" at \(Int(deviceRate)) Hz"
     + (seconds > 0 ? " for \(seconds)s" : " until killed"))
 fflush(stdout)
+
+if verify {
+    // Capture through a raw HAL IOProc, not a second AVAudioEngine. Measured
+    // on two hosts: an AVAudioEngine input pinned to the device reads pure
+    // silence when the SAME process is also playing through an AVAudioEngine
+    // output, even while a separate process hears the loopback fine — so the
+    // engine-based listener produced a false "loopback carried nothing" on a
+    // healthy device. A plain AudioDeviceCreateIOProcID capture co-exists with
+    // the playback engine in one process and reads the real ring.
+    //
+    // TCC first, because macOS delivers all-zero input buffers to an
+    // unauthorized client with no error and a clean start: an SSH-spawned
+    // process is attributed to the sshd chain and reads zeroes from a device
+    // that is carrying signal (verified on the CI mini, where the identical
+    // capture read -12.8 dBFS once launched in the gui launchd domain). Zero
+    // samples therefore mean nothing until the authorization status says this
+    // process was allowed to see any.
+    let micAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+
+    final class VerifyState: @unchecked Sendable {
+        var peak: Float = 0
+        var callbacks = 0
+        let lock = NSLock()
+    }
+    let state = VerifyState()
+    var procID: AudioDeviceIOProcID?
+    let createStatus = AudioDeviceCreateIOProcID(device, { _, _, inInputData, _, _, _, clientData in
+        let state = Unmanaged<VerifyState>.fromOpaque(clientData!).takeUnretainedValue()
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inInputData))
+        var maximum: Float = 0
+        for buffer in buffers {
+            guard let data = buffer.mData else { continue }
+            let samples = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            let floats = data.assumingMemoryBound(to: Float.self)
+            for index in 0 ..< samples {
+                maximum = max(maximum, abs(floats[index]))
+            }
+        }
+        state.lock.lock()
+        state.peak = max(state.peak, maximum)
+        state.callbacks += 1
+        state.lock.unlock()
+        return noErr
+    }, Unmanaged.passUnretained(state).toOpaque(), &procID)
+    guard createStatus == noErr, let procID, AudioDeviceStart(device, procID) == noErr else {
+        FileHandle.standardError.write(Data("VERIFY: cannot open a capture IOProc on \"\(deviceName)\" — no verdict about the loopback from here\n".utf8))
+        exit(3)
+    }
+
+    Thread.sleep(forTimeInterval: 2)
+    AudioDeviceStop(device, procID)
+    AudioDeviceDestroyIOProcID(device, procID)
+
+    state.lock.lock()
+    let observed = state.peak
+    let callbacks = state.callbacks
+    state.lock.unlock()
+
+    if observed > 0 {
+        print(String(format: "VERIFY: loopback peak %.1f dBFS over 2 s", 20 * log10(Double(observed))))
+    } else if !micAuthorized || callbacks == 0 {
+        // Zeroes from a process that was never allowed to see samples (or a
+        // device that never called back) say nothing about the loopback.
+        // Deciding "the loopback is dead" here is the wrong-direction error
+        // this tool exists to prevent — it cost a day of blaming a healthy
+        // player. The same applies one level up: an app binary exec'd from an
+        // SSH shell inherits this unauthorized context even when the bundle
+        // itself holds a microphone grant, so a lane hand-run over SSH records
+        // digital silence from a working device.
+        let message = "VERIFY: inconclusive — this process may not capture audio "
+            + "(mic TCC: \(micAuthorized ? "authorized" : "not authorized"), input callbacks: \(callbacks)). "
+            + "Run from the GUI session or CI, not an SSH shell.\n"
+        FileHandle.standardError.write(Data(message.utf8))
+        exit(3)
+    } else {
+        FileHandle.standardError.write(Data("VERIFY: \"\(deviceName)\" carried nothing back while this process was playing into it (capture was authorized and running)\n".utf8))
+        exit(4)
+    }
+}
 
 if seconds > 0 {
     Thread.sleep(forTimeInterval: seconds)
