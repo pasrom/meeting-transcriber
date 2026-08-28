@@ -48,7 +48,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
     func test_initialSync_propagatesCustomVocabularyPathToParakeet() {
         settings.transcriptionEngine = .parakeet
-        settings.customVocabularyPath = "/tmp/init-vocab.txt"
+        settings.setCustomVocabularyPath("/tmp/init-vocab.txt")
         let engines = EngineController(settings: settings)
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/init-vocab.txt")
     }
@@ -95,7 +95,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         let engines = EngineController(settings: settings)
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "")
 
-        settings.customVocabularyPath = "/tmp/runtime-vocab.txt"
+        settings.setCustomVocabularyPath("/tmp/runtime-vocab.txt")
 
         await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/runtime-vocab.txt")
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/runtime-vocab.txt")
@@ -110,15 +110,15 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         settings.transcriptionEngine = .parakeet
         let engines = EngineController(settings: settings)
 
-        settings.customVocabularyPath = "/tmp/v1.txt"
+        settings.setCustomVocabularyPath("/tmp/v1.txt")
         await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/v1.txt")
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/v1.txt")
 
-        settings.customVocabularyPath = "/tmp/v2.txt"
+        settings.setCustomVocabularyPath("/tmp/v2.txt")
         await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/v2.txt")
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/v2.txt")
 
-        settings.customVocabularyPath = "/tmp/v3.txt"
+        settings.setCustomVocabularyPath("/tmp/v3.txt")
         await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/v3.txt")
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/v3.txt")
     }
@@ -131,7 +131,7 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
     func test_engineSwitch_syncsNewlyActiveEngine() async {
         settings.transcriptionEngine = .whisperKit
         settings.whisperLanguage = "de"
-        settings.customVocabularyPath = "/tmp/parakeet-vocab.txt"
+        settings.setCustomVocabularyPath("/tmp/parakeet-vocab.txt")
         let engines = EngineController(settings: settings)
 
         XCTAssertEqual(engines.whisperKit.language, "de")

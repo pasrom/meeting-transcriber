@@ -97,10 +97,11 @@ final class EngineController {
             whisperKit.applyModelVariant(settings.whisperKitModel)
             let next = settings.whisperLanguageOrNil
             if whisperKit.language != next { whisperKit.language = next }
-
         case .parakeet:
             let nextVocab = settings.customVocabularyPath
             if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
+            let nextBookmark = settings.customVocabularyBookmark
+            if parakeetEngine.customVocabularyBookmark != nextBookmark { parakeetEngine.customVocabularyBookmark = nextBookmark }
             let nextLang = settings.parakeetLanguageOrNil
             if parakeetEngine.language != nextLang { parakeetEngine.language = nextLang }
         }

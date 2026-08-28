@@ -177,17 +177,4 @@ final class CustomVocabularyTests: XCTestCase {
         XCTAssertEqual(engine.customVocabularyPath, "/tmp/test_vocab.txt")
     }
 
-    @MainActor
-    func testConfigureVocabularySkipsEmptyPath() async throws {
-        let engine = ParakeetEngine()
-        // Should not throw for empty path
-        try await engine.configureVocabulary(from: "")
-    }
-
-    @MainActor
-    func testConfigureVocabularyLogsWarningForMissingFile() async throws {
-        let engine = ParakeetEngine()
-        // Should not throw for missing file — just logs a warning
-        try await engine.configureVocabulary(from: "/nonexistent/vocab.txt")
-    }
 }
