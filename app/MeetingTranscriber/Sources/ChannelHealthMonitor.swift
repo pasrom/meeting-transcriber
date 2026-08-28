@@ -24,12 +24,6 @@ enum ChannelHealthEvent: Equatable {
 /// Callers feed in instantaneous per-channel dBFS levels at any cadence; the
 /// monitor returns at most one event per `update(...)` call.
 struct ChannelHealthMonitor {
-    /// The level at which a channel counts as carrying speech. Shared with
-    /// `ChannelHealthController`, which uses it to decide whether a recording
-    /// is capturing anything at all before it reports the other channel as
-    /// silent, so the two cannot drift apart.
-    static let defaultSpeechThresholdDBFS: Double = -50
-
     let silenceThresholdDBFS: Double
     let speechThresholdDBFS: Double
     let debounceSeconds: TimeInterval
@@ -49,7 +43,7 @@ struct ChannelHealthMonitor {
 
     init(
         silenceThresholdDBFS: Double = -60,
-        speechThresholdDBFS: Double = Self.defaultSpeechThresholdDBFS,
+        speechThresholdDBFS: Double = -50,
         debounceSeconds: TimeInterval = 90,
         channels: CapturedChannels = .micAndApp,
     ) {

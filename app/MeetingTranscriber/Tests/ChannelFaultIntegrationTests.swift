@@ -21,6 +21,114 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         ChannelHealthHarness.make()
     }
 
+    // MARK: - Providers that do not simulate capture
+
+    /// A recorder double that implements none of the optional reporting, i.e.
+    /// takes every `RecordingProvider` default.
+    private final class BareRecorder: RecordingProvider {
+        func start(source _: RecordingSource, micDeviceUID _: String?, debugLogging _: Bool) {}
+        func stop() -> RecordingResult {
+            RecordingResult(
+                mixPath: URL(fileURLWithPath: "/tmp/bare_mix.wav"),
+                appPath: nil, micPath: nil, micDelay: 0, recordingStartDate: Date(),
+            )
+        }
+    }
+
+    func testAProviderThatDoesNotSimulateCaptureIsNeverReportedAsBroken() {
+        // The protocol's defaults describe a healthy channel on purpose: a
+        // double that says nothing about capture must not make a test in an
+        // unrelated suite start posting capture-failure notifications. The
+        // sibling `AudioCapturing` deliberately has no such default, because
+        // there "said nothing" means "never opened".
+        let (controller, _, notifier, _) = makeController()
+        let bare = BareRecorder()
+
+        for offset in stride(from: 0.0, through: 300.0, by: 10.0) {
+            _ = controller.applyTick(recorder: bare, now: t0.addingTimeInterval(offset))
+        }
+
+        // Scoped to the capture titles on purpose. The same double also trips
+        // "Recording Appears Silent", because the level defaults are -120 and
+        // the symmetric monitor still decides from levels; that is untouched
+        // here and asserting on it would pin behaviour this change does not own.
+        let captureTitles = ["Capture Channel Silent", "Capture Channel Lost"]
+        XCTAssertFalse(
+            notifier.calls.contains { captureTitles.contains($0.title) },
+            "reported: \(notifier.calls.map(\.title))",
+        )
+    }
+
+    // MARK: - Focus / Do Not Disturb
+
+    /// The whole escalation policy, on the pure functions. The test is not "how
+    /// bad is this" but "does this have a benign reading": only the cases
+    /// without one may interrupt a meeting in progress.
+    func testOnlyCaptureFailuresWithoutABenignReadingBreakThroughFocus() {
+        let cases: [(channel: AudioChannel, fault: ChannelFault, expected: NotificationUrgency)] = [
+            // The far side does not go digitally silent while you are talking;
+            // this is the case that cost an interview 59 minutes (issue #524).
+            (.app, .digitalSilence, .timeSensitive),
+            (.app, .noBuffers, .timeSensitive),
+            // A mute switch on a headset is the likeliest cause, so this one
+            // stays suppressible.
+            (.mic, .digitalSilence, .standard),
+            (.mic, .noBuffers, .timeSensitive),
+        ]
+        for row in cases {
+            XCTAssertEqual(
+                ChannelHealthController.captureAlert(channel: row.channel, fault: row.fault).urgency,
+                row.expected,
+                "channel=\(row.channel) fault=\(row.fault)",
+            )
+        }
+    }
+
+    func testAnAbandonedRestartAlwaysBreaksThroughFocus() {
+        // The track is gone for the rest of the recording and only a restart
+        // brings it back, on either channel.
+        for channel in [AudioChannel.mic, .app] {
+            XCTAssertEqual(
+                ChannelHealthController.gaveUpAlert(channel: channel).urgency,
+                .timeSensitive,
+                "channel=\(channel)",
+            )
+            XCTAssertEqual(ChannelHealthController.gaveUpAlert(channel: channel).title, "Capture Channel Lost")
+        }
+    }
+
+    // MARK: - What each fault tells the user to check
+
+    func testTheFaultMessageDistinguishesTheChannel() {
+        let appMessage = ChannelHealthController.faultMessage(channel: .app, fault: .noBuffers)
+        let micMessage = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers)
+        XCTAssertNotEqual(appMessage, micMessage)
+        XCTAssertTrue(appMessage.lowercased().contains("app-audio"))
+        XCTAssertTrue(micMessage.lowercased().contains("microphone"))
+    }
+
+    func testTheAppFaultMessagePointsAtPermissionAndAudioTools() {
+        // A far side that delivers nothing is most often a missing Screen &
+        // System Audio Recording grant (the tap needs it) or a third-party audio
+        // utility intercepting the meeting app's output (issue #524). Name both
+        // so the notification is actionable instead of a dead end.
+        for fault in [ChannelFault.noBuffers, .digitalSilence] {
+            let message = ChannelHealthController.faultMessage(channel: .app, fault: fault)
+            XCTAssertTrue(message.contains(SystemSettingsPaths.screenRecording), "\(fault)")
+            XCTAssertTrue(message.contains("SoundSource"), "\(fault)")
+        }
+    }
+
+    func testTheTwoMicFaultsSendTheUserToDifferentPlaces() {
+        // A device that stopped answering and a device that is muted are
+        // different things to go and fix.
+        let stopped = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers)
+        let muted = ChannelHealthController.faultMessage(channel: .mic, fault: .digitalSilence)
+        XCTAssertNotEqual(stopped, muted)
+        XCTAssertTrue(muted.lowercased().contains("mute"))
+        XCTAssertTrue(stopped.lowercased().contains("connected"))
+    }
+
     // MARK: - Channel faults (issue #614)
 
     func testTheReportedFaultAndTheAgesBehindItStayReadable() {
@@ -216,7 +324,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         // say so; "check your mic" would send the user chasing the wrong thing.
         let message = ChannelHealthController.captureGaveUpMessage(for: .mic)
         XCTAssertTrue(message.lowercased().contains("restart"))
-        XCTAssertNotEqual(message, ChannelHealthController.asymmetricSilenceMessage(for: .mic))
+        XCTAssertNotEqual(message, ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers))
     }
 
     func testGaveUpAfterALatchedEpisodeStillNotifiesLost() {

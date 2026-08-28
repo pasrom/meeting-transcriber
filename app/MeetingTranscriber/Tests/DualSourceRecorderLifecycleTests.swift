@@ -28,6 +28,8 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var micLevelDBFS: Double = -120
         var appCaptureGaveUp = false
         var micCaptureGaveUp = false
+        var appSignalAges: ChannelSignalAges = .unknown
+        var micSignalAges: ChannelSignalAges = .unknown
         /// The configuration the recorder handed the factory, so a test can
         /// assert on the choices and write to the URLs it picked.
         var lastConfiguration: AudioCaptureConfiguration?
@@ -176,7 +178,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
 
     // MARK: - Channel reporting
 
-    /// The levels and the give-up flags the menu bar reads come from the live
+    /// The levels, the give-up flags and the signal ages all come from the live
     /// session. A level cannot say a channel was abandoned: one that fell
     /// silent may come back, one that gave up will not.
     func testTheRecorderReportsTheLiveSessionsChannelState() throws {
@@ -189,6 +191,8 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         session.micLevelDBFS = -30
         session.appCaptureGaveUp = true
         session.micCaptureGaveUp = false
+        session.appSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 1, secondsSinceLastEnergy: 2)
+        session.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 3, secondsSinceLastEnergy: 4)
 
         // Between recordings there is no session to ask, and silence plus "has
         // not given up" is the only safe answer: a spurious give-up would tell
@@ -197,6 +201,10 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.micLevelDBFS, -120, accuracy: 0.001)
         XCTAssertFalse(recorder.appCaptureGaveUp)
         XCTAssertFalse(recorder.micCaptureGaveUp)
+        // Never opened, not "opened and long silent": the fault monitor reads
+        // the two apart, so the no-session answer has to be the absent one.
+        XCTAssertEqual(recorder.appSignalAges, .unknown)
+        XCTAssertEqual(recorder.micSignalAges, .unknown)
 
         try recorder.start(source: .micOnly)
 
@@ -204,5 +212,9 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.micLevelDBFS, -30, accuracy: 0.001)
         XCTAssertTrue(recorder.appCaptureGaveUp)
         XCTAssertFalse(recorder.micCaptureGaveUp)
+        XCTAssertEqual(recorder.appSignalAges.secondsSinceLastBuffer, 1)
+        XCTAssertEqual(recorder.appSignalAges.secondsSinceLastEnergy, 2)
+        XCTAssertEqual(recorder.micSignalAges.secondsSinceLastBuffer, 3)
+        XCTAssertEqual(recorder.micSignalAges.secondsSinceLastEnergy, 4)
     }
 }

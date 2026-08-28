@@ -26,20 +26,12 @@ protocol AudioCapturing: AnyObject {
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. See `ChannelSignalAges` for why the levels above
     /// cannot answer that.
+    /// Required rather than defaulted: the sibling `RecordingProvider` defaults
+    /// the same property to a healthy channel, and two defaults pointing
+    /// opposite ways would hand a double "dead" or "delivering" purely by which
+    /// protocol it sits behind.
     var appSignalAges: ChannelSignalAges { get }
     var micSignalAges: ChannelSignalAges { get }
-}
-
-extension AudioCapturing {
-    /// Doubles that do not simulate capture report a channel that was never
-    /// opened, which is what they are.
-    var appSignalAges: ChannelSignalAges {
-        .unknown
-    }
-
-    var micSignalAges: ChannelSignalAges {
-        .unknown
-    }
 }
 
 @available(macOS 14.2, *)

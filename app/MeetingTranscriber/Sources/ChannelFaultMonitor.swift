@@ -1,16 +1,11 @@
 import AudioTapLib
 import Foundation
 
-extension ChannelSignalAges {
-    /// A channel that delivered a buffer carrying signal just now. The default
-    /// for anything that does not simulate capture, so a test has to say so
-    /// explicitly before it can produce a channel fault.
-    static let deliveringSignalNow = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 0)
-}
-
 /// What is wrong with one capture channel, as opposed to what it happens to be
 /// carrying.
-enum ChannelFault: Equatable {
+/// The raw values are the `/state` wire names, written out so a Swift rename
+/// cannot quietly change the automation surface.
+enum ChannelFault: String, Equatable {
     /// Nothing arrives from this channel any more, or ever did. The tap died,
     /// the device was unplugged, or the permission went away mid-recording.
     case noBuffers
@@ -18,16 +13,6 @@ enum ChannelFault: Equatable {
     /// Buffers keep arriving and every sample in them is zero. The transport is
     /// healthy; the device or the system muted the signal in front of it.
     case digitalSilence
-
-    /// How this fault is named in the `/state` snapshot. Spelled out rather
-    /// than derived from the case name so a rename of the Swift case cannot
-    /// silently change the automation surface.
-    var rpcName: String {
-        switch self {
-        case .noBuffers: "noBuffers"
-        case .digitalSilence: "digitalSilence"
-        }
-    }
 }
 
 /// Decides whether one capture channel has failed, from what the capture layer

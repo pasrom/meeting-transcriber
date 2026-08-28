@@ -63,13 +63,14 @@ final class LevelPublisher: Sendable {
     /// one carrying signal. Unlike `currentLevelDBFS` this does not decay to a
     /// floor: the reader gets the raw ages and decides what a given gap means.
     var currentSignalAges: ChannelSignalAges {
-        lock.withLock { slot in
-            signalAges(
-                lastUpdateTicks: slot.lastUpdateTicks,
-                lastEnergyTicks: slot.lastEnergyTicks,
-                nowTicks: mach_absolute_time(),
-            )
+        // Sampled and computed outside the lock, the way `publish` already
+        // does: two loads is a far shorter hold than a clock read plus four
+        // tick conversions, on a lock the render thread takes per buffer.
+        let now = mach_absolute_time()
+        let (updateTicks, energyTicks) = lock.withLock { slot in
+            (slot.lastUpdateTicks, slot.lastEnergyTicks)
         }
+        return signalAges(lastUpdateTicks: updateTicks, lastEnergyTicks: energyTicks, nowTicks: now)
     }
 
     /// Reads the most recent level, returning -120 dBFS if stale.

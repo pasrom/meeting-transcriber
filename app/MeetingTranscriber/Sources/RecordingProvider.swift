@@ -35,6 +35,14 @@ protocol RecordingProvider {
     var micSignalAges: ChannelSignalAges { get }
 }
 
+extension ChannelSignalAges {
+    /// A channel that delivered a buffer carrying signal just now. What a
+    /// provider reports when it does not simulate capture at all, so a double
+    /// has to say explicitly that a channel is broken before it can be
+    /// reported as such.
+    static let deliveringSignalNow = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 0)
+}
+
 extension RecordingProvider {
     var appLevelDBFS: Double {
         -120

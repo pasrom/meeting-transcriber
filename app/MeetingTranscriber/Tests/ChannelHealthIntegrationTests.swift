@@ -35,24 +35,6 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.recordingSilentActive)
     }
 
-    func testAsymmetricSilenceMessageDistinguishesChannel() {
-        let appMessage = ChannelHealthController.asymmetricSilenceMessage(for: .app)
-        let micMessage = ChannelHealthController.asymmetricSilenceMessage(for: .mic)
-        XCTAssertNotEqual(appMessage, micMessage)
-        XCTAssertTrue(appMessage.lowercased().contains("app-audio"))
-        XCTAssertTrue(micMessage.lowercased().contains("microphone"))
-    }
-
-    func testAppSilenceMessagePointsAtPermissionAndAudioTools() {
-        // A silent far side is most often a missing Screen & System Audio
-        // Recording grant (the tap needs it) or a third-party audio utility
-        // intercepting the meeting app's output (issue #524). Name both so the
-        // notification is actionable instead of a dead end.
-        let message = ChannelHealthController.asymmetricSilenceMessage(for: .app)
-        XCTAssertTrue(message.contains(SystemSettingsPaths.screenRecording))
-        XCTAssertTrue(message.contains("SoundSource"))
-    }
-
     // MARK: - Production scenario: user mutes their mic mid-meeting
 
     func testAQuietButLiveMicTintsWithoutNotifying() {
@@ -213,28 +195,6 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls[0].title, "Recording Appears Silent")
         // Suppressible on purpose: a waiting room looks exactly like this.
         XCTAssertEqual(notifier.calls.first?.urgency, .standard)
-    }
-
-    // MARK: - Focus / Do Not Disturb
-
-    /// The whole escalation policy, on the pure function. Rationale for each row
-    /// is in `ChannelHealthController.captureAlert`; what matters here is that
-    /// only the two cases without a benign reading break through, and that the
-    /// app + gaveUp combination no scenario test reaches is pinned too.
-    func testOnlyUnrecoverableCaptureFailuresBreakThroughFocus() {
-        let cases: [(channel: AudioChannel, gaveUp: Bool, expected: NotificationUrgency)] = [
-            (.app, false, .timeSensitive), // far side dead while you talk
-            (.mic, false, .standard), // looks like mute, or "No Microphone"
-            (.mic, true, .timeSensitive), // restart abandoned, track gone
-            (.app, true, .timeSensitive),
-        ]
-        for row in cases {
-            XCTAssertEqual(
-                ChannelHealthController.captureAlert(channel: row.channel, gaveUp: row.gaveUp).urgency,
-                row.expected,
-                "channel=\(row.channel) gaveUp=\(row.gaveUp)",
-            )
-        }
     }
 
     func testRecordingSilentRecoversWhenAnyChannelReturnsToSpeech() {

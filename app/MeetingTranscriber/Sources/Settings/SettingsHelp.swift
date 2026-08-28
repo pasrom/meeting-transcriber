@@ -25,10 +25,11 @@ enum SettingsHelp {
     static let silentCaptureChannel =
         "Turns the menu bar red when one capture channel goes silent while the other " +
         "still carries audio, for example a muted microphone or a dropped app-audio tap. " +
-        "It catches these one-sided capture failures live, during a meeting."
+        "You are notified only when a channel actually stops delivering audio, not when " +
+        "it is merely quiet, so muting yourself is not reported as a fault."
 
     static let asymmetricSilenceWarning =
-        "How long one channel must stay silent, while the other keeps producing audio, " +
-        "before the indicator and notification fire. Lower reacts faster to a dead channel; " +
-        "higher ignores natural speaking pauses."
+        "How long the condition must last before the indicator turns red and, for a channel " +
+        "that has stopped delivering, before you are notified. Lower reacts faster to a dead " +
+        "channel; higher ignores natural speaking pauses."
 }
