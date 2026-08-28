@@ -46,6 +46,15 @@ struct MeetingSimulator: ParsableCommand {
     """)
     var duration: Double?
 
+    @Flag(help: """
+    Keep replaying the fixture instead of exiting when it ends. Audible mode
+    normally exits through `audioPlayerDidFinishPlaying`, which caps a meeting
+    at the fixture's length; a lane that has to outlast a detection threshold
+    plus two assertion phases needs more than that. Implies the silent mode's
+    default --duration, since the finish callback no longer fires.
+    """)
+    var loop = false
+
     func validate() throws {
         if let duration, duration <= 0 {
             throw ValidationError("--duration must be a positive number of seconds, got \(duration).")
@@ -57,8 +66,12 @@ struct MeetingSimulator: ParsableCommand {
         let windowTitle = title
         let silentMode = silent
         let dur = duration
+        let looping = loop
         MainActor.assumeIsolated {
-            runSimulator(fixturePath: fixturePath, windowTitle: windowTitle, silent: silentMode, duration: dur)
+            runSimulator(
+                fixturePath: fixturePath, windowTitle: windowTitle,
+                silent: silentMode, loop: looping, duration: dur,
+            )
         }
     }
 
@@ -109,7 +122,9 @@ private let defaultSilentDuration: Double = 60
 /// forever once started. This runs the whole window + audio + assertion
 /// dance from inside ArgumentParser's `run()` and never returns.
 @MainActor
-func runSimulator(fixturePath: String, windowTitle: String, silent: Bool, duration: Double?) {
+func runSimulator(
+    fixturePath: String, windowTitle: String, silent: Bool, loop: Bool, duration: Double?,
+) {
     // Fail fast before any AppKit / IOKit state is created.
     guard FileManager.default.fileExists(atPath: fixturePath) else {
         FileHandle.standardError.write(Data("ERROR: Audio file not found: \(fixturePath)\n".utf8))
@@ -134,12 +149,14 @@ func runSimulator(fixturePath: String, windowTitle: String, silent: Bool, durati
     window.delegate = delegate
 
     // Non-silent mode without an explicit --duration exits via the audio
-    // player's finish callback, so its effective duration is nil.
-    let effectiveDuration = duration ?? (silent ? defaultSilentDuration : nil)
+    // player's finish callback, so its effective duration is nil. Looping
+    // removes that callback, so it needs the timed exit silent mode uses.
+    let effectiveDuration = duration ?? ((silent || loop) ? defaultSilentDuration : nil)
     startPlayback(
         fixturePath: fixturePath,
-        silent: silent,
-        silentDuration: effectiveDuration ?? defaultSilentDuration,
+        mode: PlaybackMode(
+            silent: silent, loop: loop, timedDuration: effectiveDuration ?? defaultSilentDuration,
+        ),
         label: label,
         delegate: delegate,
     )
@@ -226,11 +243,21 @@ private func createPowerAssertion() -> IOPMAssertionID {
     return assertionID
 }
 
+/// How the fixture is played. One value rather than three arguments because
+/// the three answer one question, and two of them only mean anything together:
+/// looping and silent playback both remove the finish callback, which is what
+/// makes the timed exit the only way out.
+private struct PlaybackMode {
+    let silent: Bool
+    let loop: Bool
+    /// Only consulted when there is no finish callback to exit on.
+    let timedDuration: Double
+}
+
 @MainActor
 private func startPlayback(
     fixturePath: String,
-    silent: Bool,
-    silentDuration: Double,
+    mode: PlaybackMode,
     label: NSTextField,
     delegate: AppDelegate,
 ) {
@@ -238,7 +265,7 @@ private func startPlayback(
     do {
         let player = try AVAudioPlayer(contentsOf: audioURL)
         player.delegate = delegate
-        if silent {
+        if mode.silent {
             // Volume=0 + loop forever keeps the audio device active so the
             // CATapDescription tap fires its IOProc and captures
             // zero-content buffers. Skipping playback entirely (no
@@ -247,14 +274,15 @@ private func startPlayback(
             // recording file ends up zero bytes.
             player.volume = 0
             player.numberOfLoops = -1
-            let seconds = Int(silentDuration)
+            let seconds = Int(mode.timedDuration)
             label.stringValue = "SILENT MODE\n(zero-volume playback, \(seconds)s)"
             print("Silent mode: playing fixture at volume=0 for \(seconds)s.")
         } else {
+            if mode.loop { player.numberOfLoops = -1 }
             label.stringValue = "Playing \(audioURL.lastPathComponent)\n"
-                + "(\(String(format: "%.0f", player.duration))s)"
+                + "(\(String(format: "%.0f", player.duration))s\(mode.loop ? ", looping" : ""))"
             print("Playing audio (\(String(format: "%.1f", player.duration))s)...")
-            print("Window closes automatically after playback.")
+            print(mode.loop ? "Looping until --duration elapses." : "Window closes automatically after playback.")
         }
         player.prepareToPlay()
         player.play()
