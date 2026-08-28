@@ -40,6 +40,79 @@ final class WhisperKitQualityTests: XCTestCase {
         try await runFixture(named: "four_speakers_en_ami", language: "en")
     }
 
+    /// Reports the experimental prompt's real-model trade-off without gating it.
+    /// The default unprompted path remains protected by the ordinary fixture
+    /// baselines above. This opt-in path instead records WER, added deletions,
+    /// and end-of-audio coverage so its user-facing warning can be kept honest.
+    func test_whisperKit_enabledVocabularyPrompt_reportsDenseFixtureTradeoff() async throws {
+        try skipUnlessQualityRun()
+        let truth = try GroundTruth.load(named: "four_speakers_en_ami")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: truth.audioURL.path))
+
+        let vocabularyFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quality-vocabulary-\(UUID().uuidString).txt")
+        let vocabulary = [
+            "fashionable", "lightweight", "plastic", "moulded", "produced", "territory", "individual",
+            "liaise", "fantastic", "PowerPoint", "presentation", "website", "electronics", "design",
+            "metal", "cheaper", "remote", "controls", "Telewest", "silver", "smarter",
+        ].joined(separator: "\n")
+        try vocabulary.write(
+            to: vocabularyFile, atomically: true, encoding: .utf8,
+        )
+        defer { try? FileManager.default.removeItem(at: vocabularyFile) }
+
+        let engine = WhisperKitEngine()
+        engine.modelVariant = modelVariant
+        engine.language = "en"
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .loaded, "WhisperKit model failed to load")
+
+        let baselineSegments = try await engine.transcribeSegments(audioPath: truth.audioURL)
+        let baseline = WERCalculator.werBreakdown(
+            reference: truth.text,
+            hypothesis: baselineSegments.map(\.text).joined(separator: " "),
+        )
+
+        engine.customVocabularyPath = vocabularyFile.path
+        engine.vocabularyPromptEnabled = true
+        let hintedSegments = try await engine.transcribeSegments(audioPath: truth.audioURL)
+        let hinted = WERCalculator.werBreakdown(
+            reference: truth.text,
+            hypothesis: hintedSegments.map(\.text).joined(separator: " "),
+        )
+
+        XCTAssertGreaterThan(
+            engine.vocabularyPromptTokenCount,
+            0,
+            "The enabled prompt must reach the real WhisperKit decoder as content tokens",
+        )
+        XCTAssertLessThanOrEqual(
+            engine.vocabularyPromptTokenCount,
+            WhisperVocabularyPrompt.defaultTokenBudget,
+            "Tokenizer wrapper tokens must not consume the vocabulary prompt budget",
+        )
+
+        let baselineTailCoverage = tailCoverage(of: baselineSegments, duration: truth.duration)
+        let hintedTailCoverage = tailCoverage(of: hintedSegments, duration: truth.duration)
+        print(
+            """
+            WhisperKit experimental vocabulary prompt measurement (non-gating)
+              fixture: \(truth.fixture), model: \(modelVariant)
+              content tokens: \(engine.vocabularyPromptTokenCount)/\(WhisperVocabularyPrompt.defaultTokenBudget)
+              baseline: WER \(baseline.wer), deletions \(baseline.deletions), tail coverage \(baselineTailCoverage)
+              prompted: WER \(hinted.wer), deletions \(hinted.deletions), tail coverage \(hintedTailCoverage)
+              delta: WER \(hinted.wer - baseline.wer), deletions \(hinted.deletions - baseline.deletions),
+                tail coverage \(hintedTailCoverage - baselineTailCoverage)
+            """,
+        )
+    }
+
+    private func tailCoverage(of segments: [TimestampedSegment], duration: TimeInterval) -> Double {
+        guard duration > 0 else { return 0 }
+        let lastEnd = segments.map(\.end).max() ?? 0
+        return min(max(lastEnd / duration, 0), 1)
+    }
+
     // Soft threshold of 0.5 catches catastrophic breakage (corrupted model,
     // audio not loaded, biasing prompt destroying decoding) but stays well
     // above the production baseline (~0.23-0.29 with explicit `language=de`).

@@ -29,6 +29,20 @@ final class WhisperKitEngineTests: XCTestCase {
         )
     }
 
+    func testNoVocabularyPromptPreservesExistingDecodingOptions() {
+        let options = WhisperKitEngine.decodingOptions(language: nil)
+
+        XCTAssertNil(options.promptTokens)
+        XCTAssertTrue(options.detectLanguage)
+    }
+
+    func testVocabularyPromptKeepsAutoLanguageDetectionEnabled() {
+        let options = WhisperKitEngine.decodingOptions(language: nil, promptTokens: [11, 12])
+
+        XCTAssertEqual(options.promptTokens, [11, 12])
+        XCTAssertTrue(options.detectLanguage)
+    }
+
     func testDefaultModel() {
         let engine = WhisperKitEngine()
         XCTAssertEqual(engine.modelVariant, "openai_whisper-large-v3-v20240930_turbo")

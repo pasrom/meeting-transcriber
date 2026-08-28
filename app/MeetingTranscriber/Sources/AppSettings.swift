@@ -261,6 +261,11 @@ final class AppSettings {
         didSet { defaults.set(customVocabularyBookmark, forKey: "customVocabularyBookmark") }
     }
 
+    /// Experimental opt-in: WhisperKit's prompt can reduce transcript completeness.
+    var whisperKitVocabularyPromptEnabled: Bool {
+        didSet { defaults.set(whisperKitVocabularyPromptEnabled, forKey: "whisperKitVocabularyPromptEnabled") }
+    }
+
     func updateCustomVocabularySelection(path: String, bookmark: Data?) {
         customVocabularyPath = path
         customVocabularyBookmark = bookmark
@@ -486,6 +491,7 @@ final class AppSettings {
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
+        whisperKitVocabularyPromptEnabled = defaults.object(forKey: "whisperKitVocabularyPromptEnabled") as? Bool ?? false
         customVocabularyValidation = .notConfigured
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false

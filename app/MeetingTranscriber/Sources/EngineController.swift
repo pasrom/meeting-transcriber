@@ -97,6 +97,15 @@ final class EngineController {
             whisperKit.applyModelVariant(settings.whisperKitModel)
             let next = settings.whisperLanguageOrNil
             if whisperKit.language != next { whisperKit.language = next }
+            let nextVocab = settings.customVocabularyPath
+            if whisperKit.customVocabularyPath != nextVocab { whisperKit.customVocabularyPath = nextVocab }
+            let nextBookmark = settings.customVocabularyBookmark
+            if whisperKit.customVocabularyBookmark != nextBookmark { whisperKit.customVocabularyBookmark = nextBookmark }
+            let nextVocabularyPromptEnabled = settings.whisperKitVocabularyPromptEnabled
+            if whisperKit.vocabularyPromptEnabled != nextVocabularyPromptEnabled {
+                whisperKit.vocabularyPromptEnabled = nextVocabularyPromptEnabled
+            }
+
         case .parakeet:
             let nextVocab = settings.customVocabularyPath
             if parakeetEngine.customVocabularyPath != nextVocab { parakeetEngine.customVocabularyPath = nextVocab }
@@ -116,6 +125,8 @@ final class EngineController {
             _ = settings.whisperKitModel
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
+            _ = settings.customVocabularyBookmark
+            _ = settings.whisperKitVocabularyPromptEnabled
             _ = settings.parakeetLanguage
         } onChange: { [weak self] in
             Task { @MainActor in

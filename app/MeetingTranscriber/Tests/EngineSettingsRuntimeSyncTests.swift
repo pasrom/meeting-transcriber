@@ -53,6 +53,20 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/init-vocab.txt")
     }
 
+    func test_initialSync_propagatesCustomVocabularyPathToWhisperKit() {
+        settings.transcriptionEngine = .whisperKit
+        settings.setCustomVocabularyPath("/tmp/init-vocab.txt")
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.customVocabularyPath, "/tmp/init-vocab.txt")
+    }
+
+    func test_initialSync_propagatesWhisperKitVocabularyPromptChoice() {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitVocabularyPromptEnabled = true
+
+        XCTAssertTrue(EngineController(settings: settings).whisperKit.vocabularyPromptEnabled)
+    }
+
     func test_initialSync_propagatesWhisperKitModelToEngine() {
         settings.transcriptionEngine = .whisperKit
         settings.whisperKitModel = "openai_whisper-small"
@@ -99,6 +113,28 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
 
         await waitFor(engines.parakeetEngine.customVocabularyPath == "/tmp/runtime-vocab.txt")
         XCTAssertEqual(engines.parakeetEngine.customVocabularyPath, "/tmp/runtime-vocab.txt")
+    }
+
+    func test_runtimeChange_customVocabularyPath_propagatesToWhisperKit() async {
+        settings.transcriptionEngine = .whisperKit
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.customVocabularyPath, "")
+
+        settings.setCustomVocabularyPath("/tmp/runtime-vocab.txt")
+
+        await waitFor(engines.whisperKit.customVocabularyPath == "/tmp/runtime-vocab.txt")
+        XCTAssertEqual(engines.whisperKit.customVocabularyPath, "/tmp/runtime-vocab.txt")
+    }
+
+    func test_runtimeChange_whisperKitVocabularyPromptChoice_propagatesToEngine() async {
+        settings.transcriptionEngine = .whisperKit
+        let engines = EngineController(settings: settings)
+        XCTAssertFalse(engines.whisperKit.vocabularyPromptEnabled)
+
+        settings.whisperKitVocabularyPromptEnabled = true
+
+        await waitFor(engines.whisperKit.vocabularyPromptEnabled)
+        XCTAssertTrue(engines.whisperKit.vocabularyPromptEnabled)
     }
 
     // MARK: - Re-arming

@@ -95,14 +95,57 @@ extension TimestampedSegment {
 @MainActor
 @Observable
 final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
-    var modelVariant = "openai_whisper-large-v3-v20240930_turbo"
+    var modelVariant = "openai_whisper-large-v3-v20240930_turbo" {
+        didSet {
+            guard modelVariant != oldValue else { return }
+            vocabularyPromptCache.invalidate()
+        }
+    }
+
     var language: String?
+    /// Path to the shared one-term-per-line vocabulary file. Whisper uses the
+    /// terms as a soft decoder hint; unlike Parakeet CTC rescoring, it cannot
+    /// guarantee a replacement in the resulting transcript.
+    var customVocabularyPath: String = "" {
+        didSet {
+            guard customVocabularyPath != oldValue else { return }
+            vocabularyPromptCache.invalidate()
+        }
+    }
+
+    var customVocabularyBookmark: Data? {
+        didSet {
+            guard customVocabularyBookmark != oldValue else { return }
+            vocabularyPromptCache.invalidate()
+        }
+    }
+
+    /// An explicit opt-in for WhisperKit's experimental decoder prompt. It is
+    /// off by default because a static glossary can reduce transcription
+    /// completeness; Parakeet's CTC boosting does not carry that trade-off.
+    var vocabularyPromptEnabled = false {
+        didSet {
+            if !vocabularyPromptEnabled {
+                vocabularyPromptTokenCount = 0
+            }
+        }
+    }
+
     private(set) var modelState: EngineModelState = .unloaded
     private(set) var downloadProgress: Double = 0
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
     private var pipe: WhisperKit?
+    /// Test-only override of the production decoding boundary. It never reaches
+    /// app wiring; production always resolves this to `pipe`.
+    private var decodingClientOverride: (any WhisperDecodingClient)?
+    /// Test-only loader override used to count content reads on cache hits.
+    private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
     private let modelLoad = SingleFlight()
+    private var vocabularyPromptCache = WhisperVocabularyPrompt.TokenCache()
+    /// Debug/quality diagnostic for the effective prompt budget of the most
+    /// recent decode. Zero means the decode ran without a vocabulary hint.
+    private(set) var vocabularyPromptTokenCount = 0
 
     func loadModel() async {
         await modelLoad.run { [self] in
@@ -177,7 +220,10 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 
     /// Ensure model is loaded, loading it if necessary.
     private func ensureModel() async throws {
-        if pipe != nil { return }
+        // Production state is defined by the loaded WhisperKit instance. The
+        // test decoder is only a narrow decode-boundary substitute and must not
+        // make automation report a real model as loaded.
+        if pipe != nil || decodingClientOverride != nil { return }
         logger.info("WhisperKit: model not loaded, loading \(self.modelVariant, privacy: .public)...")
         await loadModel()
         guard pipe != nil else {
@@ -185,6 +231,25 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             throw TranscriptionError.modelNotLoaded
         }
         logger.info("WhisperKit: model loaded successfully")
+    }
+
+    private var decodingClient: (any WhisperDecodingClient)? {
+        decodingClientOverride ?? pipe
+    }
+
+    /// Installs a capturing decoder for focused engine tests. Keeping this seam
+    /// at the last boundary before WhisperKit lets tests observe real engine
+    /// flow options without downloading or loading a speech model.
+    func installDecodingClientForTesting(_ client: any WhisperDecodingClient) {
+        decodingClientOverride = client
+    }
+
+    /// Installs a vocabulary-content loader for focused cache tests. Metadata
+    /// revision checks remain in the engine, so tests cannot bypass them.
+    func installVocabularyTermsLoaderForTesting(
+        _ loader: @escaping (String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult,
+    ) {
+        vocabularyTermsLoaderOverride = loader
     }
 
     /// Transcribe a WAV file. Returns lines in `[MM:SS] text` format matching Python output.
@@ -196,7 +261,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Transcribe a WAV file and return structured segments.
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
         try await ensureModel()
-        guard let pipe else {
+        guard let decodingClient else {
             throw TranscriptionError.modelNotLoaded
         }
 
@@ -205,9 +270,14 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         // Estimate total 30s windows from audio duration
         let totalWindows = max(1, Self.estimateWindowCount(audioPath: audioPath))
 
-        let options = Self.decodingOptions(language: language)
+        // Snapshot all settings-derived decoding options before the asynchronous
+        // decode starts. A later settings change only affects a subsequent run.
+        let options = Self.decodingOptions(
+            language: language,
+            promptTokens: vocabularyPromptTokens(for: decodingClient),
+        )
 
-        let results = await pipe.transcribe(
+        let results = await decodingClient.transcribeFile(
             audioPaths: [audioPath.path],
             decodeOptions: options,
         ) { [weak self] progress in
@@ -250,10 +320,15 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Hallucination-filter logic matches `transcribeSegments`.
     func transcribeSamples(_ samples: [Float]) async throws -> String {
         try await ensureModel()
-        guard let pipe else { throw TranscriptionError.modelNotLoaded }
-        let options = Self.decodingOptions(language: language)
-        let results = try await pipe.transcribe(
-            audioArray: samples,
+        guard let decodingClient else { throw TranscriptionError.modelNotLoaded }
+        // The explicit experimental prompt choice applies to both saved and
+        // live WhisperKit transcription while retaining an immutable snapshot.
+        let options = Self.decodingOptions(
+            language: language,
+            promptTokens: vocabularyPromptTokens(for: decodingClient),
+        )
+        let results = try await decodingClient.transcribeSamples(
+            samples,
             decodeOptions: options,
         )
         var lastText = ""
@@ -268,16 +343,85 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         return pieces.joined(separator: " ")
     }
 
-    /// Build the WhisperKit `DecodingOptions` for a transcription run.
-    /// `language` is `nil` for "Auto-detect" and a BCP-47 code otherwise.
-    static func decodingOptions(language: String?) -> DecodingOptions {
+    // Build the WhisperKit `DecodingOptions` for a transcription run.
+    // `language` is `nil` for "Auto-detect" and a BCP-47 code otherwise.
+    static func decodingOptions(language: String?, promptTokens: [Int]? = nil) -> DecodingOptions { // swiftlint:disable:this discouraged_optional_collection
         // WhisperKit defaults `detectLanguage` to `!usePrefillPrompt` (= false),
         // so without this it skips detection and falls back to English (#339).
         DecodingOptions(
             language: language,
             detectLanguage: language == nil,
             wordTimestamps: false,
+            promptTokens: promptTokens,
         )
+    }
+
+    // Returns tokens for the active vocabulary file, cached per path, content
+    // revision, and Whisper model variant. An absent or unreadable file produces
+    // `nil`, which leaves `DecodingOptions` in its exact no-prompt configuration
+    // instead of retaining stale cached terms.
+    private func vocabularyPromptTokens(for decodingClient: any WhisperDecodingClient) -> [Int]? { // swiftlint:disable:this discouraged_optional_collection
+        guard vocabularyPromptEnabled else {
+            vocabularyPromptTokenCount = 0
+            return nil
+        }
+        guard let vocabularyURL = VocabularyFileAccess.resolve(
+            path: customVocabularyPath, bookmark: customVocabularyBookmark,
+        ) else {
+            vocabularyPromptTokenCount = 0
+            return nil
+        }
+        let tokens = VocabularyFileAccess.withAccess(to: vocabularyURL) { url in
+            vocabularyPromptTokens(for: decodingClient, at: url.path)
+        }
+        vocabularyPromptTokenCount = tokens?.count ?? 0
+        return tokens
+    }
+
+    private func vocabularyPromptTokens(
+        for decodingClient: any WhisperDecodingClient,
+        at vocabularyPath: String,
+    ) -> [Int]? { // swiftlint:disable:this discouraged_optional_collection
+        guard let revision = WhisperVocabularyPrompt.fileRevision(at: vocabularyPath) else {
+            vocabularyPromptCache.invalidate()
+            return nil
+        }
+
+        let key = WhisperVocabularyPrompt.CacheKey(
+            vocabularyPath: vocabularyPath,
+            modelVariant: modelVariant,
+            vocabularyRevision: revision,
+        )
+        if let value = vocabularyPromptCache.value(for: key) {
+            switch value {
+            case let .prompt(tokens): return tokens.isEmpty ? nil : tokens
+            case .noPrompt: return nil
+            }
+        }
+        guard revision.fileSize <= UInt64(WhisperVocabularyPrompt.maximumFileBytes) else {
+            vocabularyPromptCache.storeNoPrompt(for: key)
+            return nil
+        }
+
+        let loadResult: WhisperVocabularyPrompt.VocabularyTermsLoadResult = if let vocabularyTermsLoaderOverride {
+            vocabularyTermsLoaderOverride(vocabularyPath, revision)
+        } else {
+            WhisperVocabularyPrompt.loadTerms(fromFileAt: vocabularyPath, revision: revision)
+        }
+        guard case let .loaded(terms) = loadResult,
+              let tokenizer = decodingClient.tokenizer
+        else {
+            vocabularyPromptCache.storeNoPrompt(for: key)
+            return nil
+        }
+
+        let tokens = WhisperVocabularyPrompt.tokens(
+            for: terms,
+            tokenize: tokenizer.encode(text:),
+            specialTokenBegin: tokenizer.specialTokens.specialTokenBegin,
+        )
+        vocabularyPromptCache.store(tokens, for: key)
+        return tokens.isEmpty ? nil : tokens
     }
 
     /// Estimate number of 30-second windows WhisperKit will process for the given audio file.

@@ -232,11 +232,11 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
     }
 
-    func testParakeetVocabularyHiddenForWhisperKit() throws {
+    func testWhisperKitShowsCustomVocabularyField() throws {
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
-        XCTAssertThrowsError(try body.find(text: "Custom vocabulary file"))
+        XCTAssertNoThrow(try body.find(text: "Custom vocabulary file"))
     }
 
     func testWhisperKitModelPickerHiddenForParakeet() throws {

@@ -36,6 +36,15 @@ final class CustomVocabularyTests: XCTestCase {
         XCTAssertEqual(settings.customVocabularyPath, "")
     }
 
+    func testWhisperKitVocabularyPromptDefaultsOffAndPersists() {
+        XCTAssertFalse(settings.whisperKitVocabularyPromptEnabled)
+
+        settings.whisperKitVocabularyPromptEnabled = true
+
+        XCTAssertTrue(defaults.bool(forKey: "whisperKitVocabularyPromptEnabled"))
+        XCTAssertTrue(AppSettings(defaults: defaults).whisperKitVocabularyPromptEnabled)
+    }
+
     // MARK: - Persistence
 
     func testCustomVocabularyPathPersists() {
@@ -176,5 +185,4 @@ final class CustomVocabularyTests: XCTestCase {
         engine.customVocabularyPath = "/tmp/test_vocab.txt"
         XCTAssertEqual(engine.customVocabularyPath, "/tmp/test_vocab.txt")
     }
-
 }

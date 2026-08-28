@@ -78,6 +78,35 @@ struct TranscriptionSettingsView: View {
                     .onChange(of: settings.customVocabularyPath) { _, _ in
                         settings.refreshCustomVocabularyValidation()
                     }
+                if settings.transcriptionEngine == .whisperKit {
+                    Toggle("Use custom vocabulary prompt (experimental)", isOn: $settings.whisperKitVocabularyPromptEnabled)
+                        .accessibilityIdentifier(A11yID.whisperKitVocabularyPromptToggle)
+                        .help(Self.whisperKitVocabularyPromptHelpText)
+                    Text("Experimental: dense audio can omit whole sentences. See help for measured results; prefer Parakeet for vocabulary boosting.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("When enabled, WhisperKit uses a 32-token hint; earlier terms have priority.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Canonical terminology")
+                    TextEditor(text: $settings.terminologyRulesText)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 72)
+                        .accessibilityIdentifier(A11yID.terminologyRulesEditor)
+                    Text(
+                        "Applied to saved transcripts after ASR. One rule per line: "
+                            + "Canonical spelling => spoken variant | another variant. "
+                            + "Rules only replace whole words or phrases.",
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Text(settings.terminologyRulesValidation.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 engineStatusView
             }
             .accessibilityIdentifier(A11yID.transcriptionSection)
@@ -155,6 +184,11 @@ struct TranscriptionSettingsView: View {
                 + "WhisperKit; language-specific live backends do not use it."
         }
     }
+
+    static let whisperKitVocabularyPromptHelpText = "Experimental. WhisperKit treats the vocabulary as a decoder hint, "
+        + "not a correction. In a dense four-speaker English evaluation, a 25-content-token prompt "
+        + "from this 32-token budget raised word error rate from 29% to 77% and deletions from 73 to 241. "
+        + "It can omit whole sentences. Results vary by audio; prefer Parakeet for vocabulary boosting."
 
     /// Whether any Nemotron multilingual model variant is already on disk.
     private var nemotronModelDownloaded: Bool {

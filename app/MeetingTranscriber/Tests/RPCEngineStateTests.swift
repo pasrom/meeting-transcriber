@@ -116,7 +116,7 @@
                 state.rpcStateSnapshot().engines.parakeet.customVocabularyPath, "",
             )
 
-            settings.customVocabularyPath = "/tmp/runtime.txt"
+            settings.setCustomVocabularyPath("/tmp/runtime.txt")
             await waitFor(
                 state.rpcStateSnapshot().engines.parakeet.customVocabularyPath
                     == "/tmp/runtime.txt",
