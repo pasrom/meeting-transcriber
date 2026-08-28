@@ -68,6 +68,23 @@ final class ChannelHealthController {
     /// times a second.
     @ObservationIgnored private var gaveUpNotified: Set<AudioChannel> = []
 
+    /// Per-channel "is this channel still delivering" decision, evaluated on
+    /// every tick. Separate from `channelHealthMonitor`, which answers the
+    /// louder-than-the-other question that drives the tint; see
+    /// `ChannelFaultMonitor` for why one cannot serve for both.
+    @ObservationIgnored private var micFaultMonitor: ChannelFaultMonitor
+    @ObservationIgnored private var appFaultMonitor: ChannelFaultMonitor
+
+    /// When this recording's first tick arrived, so a channel that has never
+    /// delivered anything is judged against the age of the recording rather
+    /// than against an absent timestamp.
+    @ObservationIgnored private var firstTickAt: Date?
+
+    /// When each channel last carried speech. A channel of digital silence is
+    /// only reported while the *other* one proves the recording is capturing
+    /// something; see `ChannelFaultMonitor.update(ages:elapsedSinceStart:corroborated:)`.
+    @ObservationIgnored private var lastSpeechAt: [AudioChannel: Date] = [:]
+
     /// Red tint for the menu bar's **top** half. Composed here rather than at
     /// the call site so the topology that suppresses a phantom channel is
     /// applied in exactly one place.
@@ -102,6 +119,8 @@ final class ChannelHealthController {
         self.indicatorEnabled = indicatorEnabled
         self.channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds())
         self.silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
+        self.micFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        self.appFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
     }
 
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
@@ -145,6 +164,10 @@ final class ChannelHealthController {
         appSilentActive = false
         recordingSilentActive = false
         gaveUpNotified.removeAll()
+        micFaultMonitor.reset()
+        appFaultMonitor.reset()
+        firstTickAt = nil
+        lastSpeechAt.removeAll()
         // Per-recording state like the flags above. Defensive rather than
         // load-bearing: every `start` sets the topology before its own guards,
         // so no reader can reach a stale value. Deliberately untested for that
@@ -176,6 +199,10 @@ final class ChannelHealthController {
     private func rebuild() {
         channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds(), channels: channels)
         silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
+        micFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        appFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        firstTickAt = nil
+        lastSpeechAt.removeAll()
     }
 
     /// Internal test seam: drives one polling tick against an arbitrary
@@ -189,9 +216,14 @@ final class ChannelHealthController {
         let mic = recorder.micLevelDBFS
         let app = recorder.appLevelDBFS
 
+        if firstTickAt == nil { firstTickAt = now }
+        if mic >= ChannelHealthMonitor.defaultSpeechThresholdDBFS { lastSpeechAt[.mic] = now }
+        if app >= ChannelHealthMonitor.defaultSpeechThresholdDBFS { lastSpeechAt[.app] = now }
+
         // Before the monitors, because a terminal capture failure does not
         // depend on either monitor having something to say about it.
         notifyCaptureGiveUps(recorder: recorder)
+        notifyChannelFaults(recorder: recorder, now: now)
 
         let event = channelHealthMonitor.update(micDBFS: mic, appDBFS: app, now: now)
         switch event {
@@ -205,14 +237,12 @@ final class ChannelHealthController {
                 appSilentActive = true
                 micSilentActive = false
             }
-            // A channel that gave up was reported the moment it did, with the
-            // message that fits a channel which is not coming back. Saying it
-            // fell silent afterwards would be a second, weaker notification
-            // about the same failure.
-            if !gaveUpNotified.contains(channel) {
-                let alert = Self.captureAlert(channel: channel, gaveUp: false)
-                notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
-            }
+            // No notification here any more. An episode says one channel is
+            // quieter than the other, which is true of a muted microphone, of
+            // a room where nobody is talking, and of a dead tap alike, and
+            // reporting all three is what issue #614 is about. Whether this
+            // channel is actually broken is decided per tick, from the buffer
+            // ages, in `notifyChannelFaults`.
 
         case .recovered:
             micSilentActive = false
@@ -265,6 +295,47 @@ final class ChannelHealthController {
         }
     }
 
+    /// Reports a channel that has stopped delivering, once per channel per
+    /// recording, from the ages the capture layer records per buffer.
+    ///
+    /// A channel that already reported a give-up is skipped: that message
+    /// describes the same failure and says the thing this one cannot, which is
+    /// that the channel is not coming back without a restart.
+    private func notifyChannelFaults(recorder: any RecordingProvider, now: Date) {
+        let elapsed = now.timeIntervalSince(firstTickAt ?? now)
+        for channel in [AudioChannel.mic, .app] {
+            guard channel == .mic ? channels.mic : channels.app else { continue }
+            guard !gaveUpNotified.contains(channel) else { continue }
+            let ages = channel == .mic ? recorder.micSignalAges : recorder.appSignalAges
+            guard let fault = updateFaultMonitor(
+                for: channel, ages: ages, elapsedSinceStart: elapsed, now: now,
+            ) else { continue }
+            let alert = Self.captureAlert(channel: channel, fault: fault)
+            notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
+        }
+    }
+
+    private func updateFaultMonitor(
+        for channel: AudioChannel,
+        ages: ChannelSignalAges,
+        elapsedSinceStart: TimeInterval,
+        now: Date,
+    ) -> ChannelFault? {
+        let otherChannel: AudioChannel = channel == .mic ? .app : .mic
+        let corroborated = lastSpeechAt[otherChannel].map { speechAt in
+            now.timeIntervalSince(speechAt) <= debounceSeconds()
+        } ?? false
+        return switch channel {
+        case .mic: micFaultMonitor.update(
+                ages: ages, elapsedSinceStart: elapsedSinceStart, corroborated: corroborated,
+            )
+
+        case .app: appFaultMonitor.update(
+                ages: ages, elapsedSinceStart: elapsedSinceStart, corroborated: corroborated,
+            )
+        }
+    }
+
     /// The whole notification for an asymmetric-silence episode: title, body and
     /// whether it may break through a Focus mode. One function because all three
     /// answer the same two questions, and three parallel branches on
@@ -309,6 +380,52 @@ final class ChannelHealthController {
     /// a noticeable share of a core until the process exits, so restarting is
     /// not a suggestion but the actual remedy. Giving up because the retry budget
     /// ran out costs no CPU, hence the hedge.
+    /// Title, body and Focus behaviour for a channel that stopped delivering.
+    ///
+    /// The urgency split follows the same test as the give-up one: does this
+    /// have a benign reading. A channel whose buffers stopped has none, on
+    /// either side. Digital silence on the microphone has an obvious one, the
+    /// mute switch on a headset or the input mute in macOS, so it stays
+    /// suppressible; on the app side it does not, because the far end of a call
+    /// does not go digitally silent while you are talking, and that is the case
+    /// that cost a 62-minute interview 59 minutes of the other participant
+    /// (issue #524).
+    nonisolated static func captureAlert(
+        channel: AudioChannel,
+        fault: ChannelFault,
+    ) -> (title: String, body: String, urgency: NotificationUrgency) {
+        let suppressible = fault == .digitalSilence && channel == .mic
+        return (
+            "Capture Channel Silent",
+            faultMessage(channel: channel, fault: fault),
+            suppressible ? .standard : .timeSensitive,
+        )
+    }
+
+    /// What the user can actually do about each failure.
+    ///
+    /// The app channel gets one message for both faults on purpose: a tap that
+    /// delivers nothing and one that delivers zeroes call for the same checks,
+    /// the Screen Recording grant and whatever else is intercepting the meeting
+    /// app's audio. The microphone gets two, because a device that has stopped
+    /// answering and a device that is muted are different things to go and fix.
+    nonisolated static func faultMessage(channel: AudioChannel, fault: ChannelFault) -> String {
+        switch (channel, fault) {
+        case (.app, _):
+            asymmetricSilenceMessage(for: .app)
+
+        case (.mic, .noBuffers):
+            "The microphone stopped delivering audio to this recording. "
+                + "Check that the input device is still connected, and that Meeting Transcriber "
+                + "still has permission to use the microphone."
+
+        case (.mic, .digitalSilence):
+            "The microphone is delivering silence, not quiet audio. "
+                + "Check the mute switch on your headset or input device, and the input mute "
+                + "in macOS. A meeting app's own mute button does not cause this."
+        }
+    }
+
     nonisolated static func captureGaveUpMessage(for channel: AudioChannel) -> String {
         let track = channel == .mic ? "Microphone" : "App-audio"
         return "\(track) capture could not recover after an audio device change and has stopped "

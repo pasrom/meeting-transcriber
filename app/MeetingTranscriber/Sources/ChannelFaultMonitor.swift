@@ -1,6 +1,13 @@
 import AudioTapLib
 import Foundation
 
+extension ChannelSignalAges {
+    /// A channel that delivered a buffer carrying signal just now. The default
+    /// for anything that does not simulate capture, so a test has to say so
+    /// explicitly before it can produce a channel fault.
+    static let deliveringSignalNow = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 0)
+}
+
 /// What is wrong with one capture channel, as opposed to what it happens to be
 /// carrying.
 enum ChannelFault: Equatable {

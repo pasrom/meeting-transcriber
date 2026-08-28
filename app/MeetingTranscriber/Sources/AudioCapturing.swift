@@ -22,6 +22,24 @@ protocol AudioCapturing: AnyObject {
     var micLevelDBFS: Double { get }
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
+
+    /// How long each channel has gone without a buffer, and without one
+    /// carrying signal. See `ChannelSignalAges` for why the levels above
+    /// cannot answer that.
+    var appSignalAges: ChannelSignalAges { get }
+    var micSignalAges: ChannelSignalAges { get }
+}
+
+extension AudioCapturing {
+    /// Doubles that do not simulate capture report a channel that was never
+    /// opened, which is what they are.
+    var appSignalAges: ChannelSignalAges {
+        .unknown
+    }
+
+    var micSignalAges: ChannelSignalAges {
+        .unknown
+    }
 }
 
 @available(macOS 14.2, *)

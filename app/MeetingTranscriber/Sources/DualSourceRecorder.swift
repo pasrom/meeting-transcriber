@@ -54,6 +54,14 @@ class DualSourceRecorder: RecordingProvider {
         captureSession?.micLevelDBFS ?? -120
     }
 
+    var appSignalAges: ChannelSignalAges {
+        captureSession?.appSignalAges ?? .unknown
+    }
+
+    var micSignalAges: ChannelSignalAges {
+        captureSession?.micSignalAges ?? .unknown
+    }
+
     var appCaptureGaveUp: Bool {
         captureSession?.appCaptureGaveUp ?? false
     }

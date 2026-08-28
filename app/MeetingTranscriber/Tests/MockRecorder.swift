@@ -1,3 +1,4 @@
+import AudioTapLib
 @testable import MeetingTranscriber
 import XCTest
 
@@ -43,6 +44,15 @@ class MockRecorder: RecordingProvider {
     /// false, matching the protocol's default, so existing tests are unaffected.
     var micCaptureGaveUp = false
     var appCaptureGaveUp = false
+
+    /// What the capture layer reports about each channel. Defaults describe a
+    /// channel delivering signal right now, so a test has to say explicitly
+    /// that a channel is broken before the controller can report it. Deriving
+    /// these from the levels above would put the very conflation this exists to
+    /// remove back into the tests: -120 dBFS is a muted device, a dead tap and
+    /// a channel that was never opened all at once.
+    var micSignalAges: ChannelSignalAges = .deliveringSignalNow
+    var appSignalAges: ChannelSignalAges = .deliveringSignalNow
 
     /// Overrides the `recordingStartDate` `stop()` reports. `nil` (default)
     /// yields `Date()` at stop time, matching a real recorder; set it to pin a

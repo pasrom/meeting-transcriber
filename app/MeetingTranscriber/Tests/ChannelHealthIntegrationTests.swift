@@ -20,25 +20,10 @@ import XCTest
 final class ChannelHealthIntegrationTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
 
-    private func makeController() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
-        let suite = "ChannelHealthIntegrationTests-\(getpid())-\(UUID().uuidString)"
-        // swiftlint:disable:next force_unwrapping
-        let defaults = UserDefaults(suiteName: suite)!
-        let settings = AppSettings(defaults: defaults)
-        settings.perChannelIndicatorEnabled = true
-        // 30 s = the minimum the production clamp allows; tests time relative to this.
-        settings.asymmetricSilenceWarningSeconds = 30
+    private let stoppedDelivering = ChannelHealthHarness.stoppedDelivering
 
-        let notifier = RecordingNotifier()
-        // Settings-backed closures mirror production: `simulateStartForTests()`
-        // rebuilds the monitors from the live `asymmetricSilenceWarningSeconds`.
-        let controller = ChannelHealthController(
-            notifier: notifier,
-            debounceSeconds: { settings.asymmetricSilenceWarningSeconds },
-            indicatorEnabled: { settings.perChannelIndicatorEnabled },
-        )
-        let recorder = MockRecorder()
-        return (controller, recorder, notifier, settings)
+    private func makeController() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
+        ChannelHealthHarness.make()
     }
 
     // MARK: - Defaults
@@ -70,7 +55,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
 
     // MARK: - Production scenario: user mutes their mic mid-meeting
 
-    func testMutedMicWithAppSpeechFiresMicSilent() {
+    func testAQuietButLiveMicTintsWithoutNotifying() {
         let (controller, recorder, notifier, _) = makeController()
         // Initialize monitor with the same debounce as production start().
         // (The test bypasses the polling task; we still need a fresh monitor.)
@@ -85,17 +70,18 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.appSilentActive)
         XCTAssertEqual(notifier.calls.count, 0)
 
-        // At debounce boundary: mic-silent fires
+        // At the debounce boundary the tint latches, and that is all. The mic
+        // is delivering real buffers at -80 dBFS: someone listening in a quiet
+        // room, or muted in the meeting app, which does not touch our own
+        // capture. Issue #614 is about this notification, which is now absent.
         let event = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
         XCTAssertEqual(event, .started(channel: .mic, quietSince: t0))
         XCTAssertTrue(controller.micSilentActive)
         XCTAssertFalse(controller.appSilentActive)
-        XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertEqual(notifier.calls[0].title, "Capture Channel Silent")
-        XCTAssertTrue(notifier.calls[0].body.lowercased().contains("microphone"))
+        XCTAssertTrue(notifier.calls.isEmpty, "reported: \(notifier.calls.map(\.title))")
     }
 
-    func testMutedAppAudioWithMicSpeechFiresAppSilent() {
+    func testAQuietButLiveAppChannelTintsWithoutNotifying() {
         let (controller, recorder, notifier, _) = makeController()
         recorder.micLevelDBFS = -25 // user speaking
         recorder.appLevelDBFS = -80 // app audio dead (e.g. dropped CATapDescription)
@@ -105,11 +91,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertEqual(event, .started(channel: .app, quietSince: t0))
         XCTAssertTrue(controller.appSilentActive)
         XCTAssertFalse(controller.micSilentActive)
-        XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertTrue(notifier.calls[0].body.lowercased().contains("app-audio"))
-        // Wiring: the policy from `captureAlert` reaches the notifier. The
-        // policy itself is table-tested above.
-        XCTAssertEqual(notifier.calls.first?.urgency, .timeSensitive)
+        XCTAssertTrue(notifier.calls.isEmpty, "reported: \(notifier.calls.map(\.title))")
     }
 
     // MARK: - Latch + recovery
@@ -120,14 +102,14 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         recorder.appLevelDBFS = -25
 
         _ = controller.applyTick(recorder: recorder, now: t0)
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30)) // .started
-        XCTAssertEqual(notifier.calls.count, 1)
+        let started = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(started, .started(channel: .mic, quietSince: t0))
 
         // Subsequent ticks while the episode is latched must not re-fire.
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(40))
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
-        XCTAssertEqual(notifier.calls.count, 1, "notifier must fire exactly once per episode")
+        XCTAssertNil(controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(40)))
+        XCTAssertNil(controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120)))
         XCTAssertTrue(controller.micSilentActive)
+        XCTAssertTrue(notifier.calls.isEmpty, "the episode drives the tint, not the notifier")
     }
 
     func testRecoveryClearsBothFlags() {
@@ -145,8 +127,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertEqual(event, .recovered(channel: .mic))
         XCTAssertFalse(controller.micSilentActive)
         XCTAssertFalse(controller.appSilentActive)
-        // Recovery doesn't fire a notification today — only .started does.
-        XCTAssertEqual(notifier.calls.count, 1)
+        XCTAssertTrue(notifier.calls.isEmpty, "a live channel going quiet and coming back is not a fault")
     }
 
     // MARK: - Channel switch mid-episode
@@ -176,8 +157,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertEqual(event, .started(channel: .app, quietSince: t0.addingTimeInterval(35)))
         XCTAssertFalse(controller.micSilentActive)
         XCTAssertTrue(controller.appSilentActive)
-        XCTAssertEqual(notifier.calls.count, 2)
-        XCTAssertTrue(notifier.calls[1].body.lowercased().contains("app-audio"))
+        XCTAssertTrue(notifier.calls.isEmpty, "both channels were delivering throughout")
     }
 
     // MARK: - Symmetric cases never fire
@@ -349,135 +329,6 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertTrue(controller.recordingSilentActive, "reset sibling monitor re-fires on a fresh silent window")
     }
 
-    // MARK: - Capture give-up (issue #588)
-
-    func testASilentChannelThatGaveUpGetsTheRestartMessage() {
-        // A channel that merely fell silent may come back. One whose restart
-        // attempt was abandoned will not, and the wedged attempt keeps burning
-        // CPU until the app restarts, so the user must be told something else.
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -20
-        recorder.micLevelDBFS = -120
-        recorder.micCaptureGaveUp = true
-
-        controller.applyTick(recorder: recorder, now: t0)
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
-
-        XCTAssertEqual(notifier.calls.count, 1)
-        XCTAssertEqual(
-            notifier.calls.first?.body,
-            ChannelHealthController.captureGaveUpMessage(for: .mic),
-        )
-    }
-
-    func testASilentChannelThatDidNotGiveUpKeepsTheSilenceMessage() {
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -20
-        recorder.micLevelDBFS = -120
-
-        controller.applyTick(recorder: recorder, now: t0)
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
-
-        XCTAssertEqual(
-            notifier.calls.first?.body,
-            ChannelHealthController.asymmetricSilenceMessage(for: .mic),
-        )
-    }
-
-    func testTheGiveUpMessageRecommendsARestart() {
-        // The leaked thread only goes away with the process, so the advice has to
-        // say so; "check your mic" would send the user chasing the wrong thing.
-        let message = ChannelHealthController.captureGaveUpMessage(for: .mic)
-        XCTAssertTrue(message.lowercased().contains("restart"))
-        XCTAssertNotEqual(message, ChannelHealthController.asymmetricSilenceMessage(for: .mic))
-    }
-
-    func testGaveUpAfterALatchedEpisodeStillNotifiesLost() {
-        // The give-up flag is only meaningful the moment it flips, and it can
-        // flip at any point in a recording. Reading it solely while an
-        // asymmetric episode starts means a channel that gives up *after* the
-        // episode latched is never reported: the episode fired already, and the
-        // monitor cannot start a second one because recovery needs the dead
-        // channel to climb back over the speech threshold, which is exactly
-        // what a channel that gave up will never do.
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -20
-        recorder.micLevelDBFS = -120
-
-        controller.applyTick(recorder: recorder, now: t0)
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
-        XCTAssertEqual(notifier.calls.count, 1, "the silent episode itself still reports once")
-
-        recorder.micCaptureGaveUp = true
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(31))
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(60))
-
-        XCTAssertEqual(
-            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
-            "giving up after the latch must still reach the user, and only once",
-        )
-    }
-
-    func testGaveUpDuringSymmetricSilenceNotifiesLost() {
-        // Second way the flag is missed today: with both channels quiet there is
-        // no asymmetry, so no episode ever starts, so nothing reads the flag.
-        // A give-up is a terminal capture failure whether or not the other
-        // channel happens to be carrying speech at that moment.
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -120
-        recorder.micLevelDBFS = -120
-        recorder.micCaptureGaveUp = true
-
-        controller.applyTick(recorder: recorder, now: t0)
-        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
-
-        XCTAssertEqual(
-            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
-            "a terminal capture failure does not depend on the other channel",
-        )
-    }
-
-    func testGaveUpNotifiesWithoutWaitingForTheDebounce() {
-        // The give-up is already terminal when the flag flips; making the user
-        // wait out the asymmetry debounce for news that cannot change is the
-        // same defect as not telling them at all, only quieter.
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -20
-        recorder.micLevelDBFS = -120
-        recorder.micCaptureGaveUp = true
-
-        controller.applyTick(recorder: recorder, now: t0)
-        XCTAssertEqual(
-            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
-            "the first tick that sees the flag reports it",
-        )
-
-        for offset in stride(from: 10.0, through: 90.0, by: 10.0) {
-            _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(offset))
-        }
-
-        XCTAssertEqual(
-            notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1,
-            "and it stays at one for the rest of the recording",
-        )
-    }
-
-    func testGaveUpNotifiesAgainOnTheNextRecording() {
-        // The latch is per recording, not per process: a restart that fails the
-        // same way in the next meeting has to say so again.
-        let (controller, recorder, notifier, _) = makeController()
-        recorder.appLevelDBFS = -20
-        recorder.micLevelDBFS = -120
-        recorder.micCaptureGaveUp = true
-
-        controller.applyTick(recorder: recorder, now: t0)
-        controller.stop()
-        controller.simulateStartForTests()
-        controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
-
-        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 2)
-    }
-
     // MARK: - Microphone-only recordings (issue #633)
 
     func testMicrophoneOnlyRecordingRaisesNoDeadAppChannelAlert() {
@@ -527,6 +378,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         defer { controller.stop() }
         recorder.micLevelDBFS = -20
         recorder.appLevelDBFS = -120
+        recorder.appSignalAges = stoppedDelivering
         controller.applyTick(recorder: recorder, now: t0)
         controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))
 
@@ -542,6 +394,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         controller.simulateStartForTests()
         recorder.micLevelDBFS = -20
         recorder.appLevelDBFS = -120
+        recorder.appSignalAges = stoppedDelivering
 
         controller.applyTick(recorder: recorder, now: t0)
         controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(600))

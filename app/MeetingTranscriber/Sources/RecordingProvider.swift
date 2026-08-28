@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 
 /// Abstraction for recording, enabling mock injection in tests.
@@ -23,6 +24,15 @@ protocol RecordingProvider {
     /// Default false so mocks that do not simulate capture failures stay quiet.
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
+
+    /// How long each channel has gone without a buffer, and without one
+    /// carrying signal. This is what says whether a channel is broken;
+    /// `appLevelDBFS` / `micLevelDBFS` only say how loud it is, and report the
+    /// same -120 for a muted device, a dead tap and a channel that was never
+    /// opened. Defaults describe a channel delivering normally, so a double
+    /// that does not simulate capture never looks broken.
+    var appSignalAges: ChannelSignalAges { get }
+    var micSignalAges: ChannelSignalAges { get }
 }
 
 extension RecordingProvider {
@@ -40,5 +50,13 @@ extension RecordingProvider {
 
     var micCaptureGaveUp: Bool {
         false
+    }
+
+    var appSignalAges: ChannelSignalAges {
+        .deliveringSignalNow
+    }
+
+    var micSignalAges: ChannelSignalAges {
+        .deliveringSignalNow
     }
 }
