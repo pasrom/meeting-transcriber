@@ -62,11 +62,11 @@ final class ChannelHealthController {
     /// an unopened channel and a dead one both read -120 dBFS.
     @ObservationIgnored private var channels: CapturedChannels = .micAndApp
 
-    /// Channels whose capture give-up has already been reported in this
-    /// recording. The flag is terminal, so the report is worth exactly one
-    /// notification; without the latch the per-tick check would repeat it ten
-    /// times a second.
-    @ObservationIgnored private var gaveUpNotified: Set<AudioChannel> = []
+    /// The window both fault monitors were built with, frozen for the
+    /// recording. Read from settings once, at `rebuild()`, so the threshold a
+    /// fault is judged against and the one its corroboration is judged against
+    /// cannot come apart if the slider moves mid-recording.
+    @ObservationIgnored private var faultWindow: TimeInterval
 
     /// The capture fault reported for each channel in this recording, if any.
     /// The notification is gone the moment it is posted; this is what a driver
@@ -137,8 +137,9 @@ final class ChannelHealthController {
         self.indicatorEnabled = indicatorEnabled
         self.channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds())
         self.silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
-        self.micFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
-        self.appFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        self.faultWindow = debounceSeconds()
+        self.micFaultMonitor = ChannelFaultMonitor(window: faultWindow)
+        self.appFaultMonitor = ChannelFaultMonitor(window: faultWindow)
     }
 
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
@@ -213,8 +214,9 @@ final class ChannelHealthController {
     private func rebuild() {
         channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds(), channels: channels)
         silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
-        micFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
-        appFaultMonitor = ChannelFaultMonitor(window: debounceSeconds())
+        faultWindow = debounceSeconds()
+        micFaultMonitor = ChannelFaultMonitor(window: faultWindow)
+        appFaultMonitor = ChannelFaultMonitor(window: faultWindow)
         resetPerRecordingState()
     }
 
@@ -223,7 +225,6 @@ final class ChannelHealthController {
     /// already drifted: only `stop()` cleared the give-up latch, so a `start()`
     /// not preceded by a `stop()` would have swallowed the next give-up report.
     private func resetPerRecordingState() {
-        gaveUpNotified.removeAll()
         micFaultMonitor.reset()
         appFaultMonitor.reset()
         micFault = nil
@@ -257,7 +258,6 @@ final class ChannelHealthController {
 
         // Before the monitors, because a terminal capture failure does not
         // depend on either monitor having something to say about it.
-        notifyCaptureGiveUps(recorder: recorder)
         notifyChannelFaults(recorder: recorder, now: now)
 
         let event = channelHealthMonitor.update(micDBFS: mic, appDBFS: app, now: now)
@@ -310,43 +310,24 @@ final class ChannelHealthController {
         return event
     }
 
-    /// Reports a channel whose capture was abandoned for good (issue #588) on
-    /// the tick the flag flips, once per channel per recording.
+    /// Reports what is wrong with each channel this recording opened, at most
+    /// once per kind per channel, from the ages the capture layer records per
+    /// buffer plus the terminal give-up flag.
     ///
-    /// This used to be read inside the asymmetric monitor's `.started` branch,
-    /// which lost the report in two ways. A channel that gave up *after* its
-    /// episode had already latched never produced a second `.started`, and one
-    /// that gave up while both channels were quiet produced no episode at all,
-    /// because there is no asymmetry to detect. In both cases the user was told
-    /// nothing, about the one failure that cannot recover on its own and whose
-    /// only remedy is restarting the app.
-    private func notifyCaptureGiveUps(recorder: any RecordingProvider) {
-        for channel in [AudioChannel.mic, .app] {
-            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
-            guard gaveUp, !gaveUpNotified.contains(channel) else { continue }
-            gaveUpNotified.insert(channel)
-            let alert = Self.gaveUpAlert(channel: channel)
-            notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
-        }
-    }
-
-    /// Reports a channel that has stopped delivering, once per channel per
-    /// recording, from the ages the capture layer records per buffer.
-    ///
-    /// A channel that already reported a give-up is skipped: that message
-    /// describes the same failure and says the thing this one cannot, which is
-    /// that the channel is not coming back without a restart.
-    private func notifyChannelFaults(recorder _: any RecordingProvider, now: Date) {
+    /// One pass over both, rather than a give-up pass and a fault pass with a
+    /// guard between them. Two passes meant the precedence lived in the call
+    /// order and in a `contains` check rather than anywhere it could be read:
+    /// a channel that gave up first never set a fault at all, so `/state`
+    /// reported no fault for the most severe failure there is, and one that
+    /// gave up second was announced twice.
+    private func notifyChannelFaults(recorder: any RecordingProvider, now: Date) {
         let elapsed = now.timeIntervalSince(firstTickAt ?? now)
-        // One window for the whole pass, so both channels are provably judged
-        // against the same threshold even if the setting changes mid-tick.
-        let window = debounceSeconds()
         for channel in [AudioChannel.mic, .app] {
             guard channel == .mic ? channels.mic : channels.app else { continue }
-            guard !gaveUpNotified.contains(channel) else { continue }
             let ages = channel == .mic ? micAges : appAges
+            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
             guard let fault = updateFaultMonitor(
-                for: channel, ages: ages, elapsedSinceStart: elapsed, window: window, now: now,
+                for: channel, ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsed, now: now,
             ) else { continue }
             switch channel {
             case .mic: micFault = fault
@@ -360,21 +341,27 @@ final class ChannelHealthController {
     private func updateFaultMonitor(
         for channel: AudioChannel,
         ages: ChannelSignalAges,
+        gaveUp: Bool,
         elapsedSinceStart: TimeInterval,
-        window: TimeInterval,
         now: Date,
     ) -> ChannelFault? {
         let otherChannel: AudioChannel = channel == .mic ? .app : .mic
+        // The window the monitors were built with, not the live setting: a
+        // change mid-recording would otherwise judge the fault against one
+        // threshold and its corroboration against another, and a corroboration
+        // that was fresh a moment ago would expire retroactively.
         let corroborated = lastSpeechAt[otherChannel].map { speechAt in
-            now.timeIntervalSince(speechAt) <= window
+            now.timeIntervalSince(speechAt) <= faultWindow
         } ?? false
         return switch channel {
         case .mic: micFaultMonitor.update(
-                ages: ages, elapsedSinceStart: elapsedSinceStart, corroborated: corroborated,
+                ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
+                corroborated: corroborated,
             )
 
         case .app: appFaultMonitor.update(
-                ages: ages, elapsedSinceStart: elapsedSinceStart, corroborated: corroborated,
+                ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
+                corroborated: corroborated,
             )
         }
     }
@@ -403,6 +390,9 @@ final class ChannelHealthController {
         channel: AudioChannel,
         fault: ChannelFault,
     ) -> (title: String, body: String, urgency: NotificationUrgency) {
+        if fault == .gaveUp {
+            return gaveUpAlert(channel: channel)
+        }
         let suppressible = fault == .digitalSilence && channel == .mic
         return (
             "Capture Channel Silent",
@@ -420,6 +410,12 @@ final class ChannelHealthController {
     /// answering and a device that is muted are different things to go and fix.
     nonisolated static func faultMessage(channel: AudioChannel, fault: ChannelFault) -> String {
         switch (channel, fault) {
+        // Before the per-channel arms: a channel that was abandoned needs the
+        // restart advice on either side, and telling someone to check a device
+        // that is no longer being read would send them after the wrong thing.
+        case (_, .gaveUp):
+            captureGaveUpMessage(for: channel)
+
         case (.app, _):
             "The app-audio channel is not delivering audio while the mic is still recording. "
                 + "Enable Meeting Transcriber under \(SystemSettingsPaths.screenRecording), "

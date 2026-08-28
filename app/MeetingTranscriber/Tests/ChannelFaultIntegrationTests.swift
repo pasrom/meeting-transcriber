@@ -148,6 +148,45 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         XCTAssertEqual(controller.micAges, deliveringSilence)
     }
 
+    func testAGiveUpIsVisibleInTheStateAsWellAsTheNotification() {
+        // It used to be neither: the give-up was announced from its own pass,
+        // which set no fault, and the fault pass then skipped the channel
+        // forever. So `/state` reported no fault at all for the one failure
+        // that cannot recover on its own, which is exactly the case a driver
+        // script or a field report most needs to read back.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureGaveUp = true
+
+        controller.applyTick(recorder: recorder, now: t0)
+
+        XCTAssertEqual(controller.micFault, .gaveUp)
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1)
+    }
+
+    func testAChannelThatFallsSilentAndThenGivesUpReportsBothExactlyOnce() {
+        // The other order. These are not the same news: the first says the
+        // channel stopped delivering, the second says only a restart brings it
+        // back. Reported once each, and the state ends on the terminal one.
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micSignalAges = stoppedDelivering
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+        XCTAssertEqual(controller.micFault, .noBuffers)
+
+        recorder.micCaptureGaveUp = true
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(40))
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
+
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Silent" }.count, 1)
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1)
+        XCTAssertEqual(controller.micFault, .gaveUp)
+    }
+
     func testStopClearsTheReportedFault() {
         let (controller, recorder, _, _) = makeController()
         recorder.appLevelDBFS = -20

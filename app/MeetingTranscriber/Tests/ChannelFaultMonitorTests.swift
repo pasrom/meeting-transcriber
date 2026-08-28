@@ -17,6 +17,61 @@ final class ChannelFaultMonitorTests: XCTestCase {
         ChannelFaultMonitor(window: window)
     }
 
+    // MARK: - Wire names
+
+    func testTheWireNamesAreTheOnesTheAutomationApiPromises() {
+        // The raw values are the case names, so a Swift rename would change
+        // `/state.channelHealth.micFault` without touching anything that looks
+        // like an API. This is what makes that a test failure instead.
+        XCTAssertEqual(ChannelFault.noBuffers.rawValue, "noBuffers")
+        XCTAssertEqual(ChannelFault.digitalSilence.rawValue, "digitalSilence")
+        XCTAssertEqual(ChannelFault.gaveUp.rawValue, "gaveUp")
+    }
+
+    // MARK: - A channel that gave up
+
+    func testAGiveUpIsReportedImmediately() {
+        // Terminal the moment the flag flips, and the remedy is a restart, so
+        // making the user wait out a window for news that cannot change is the
+        // same defect as not telling them.
+        var monitor = makeMonitor()
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 0, corroborated: false),
+            .gaveUp,
+        )
+    }
+
+    func testAGiveUpIsReportedOnlyOnce() {
+        var monitor = makeMonitor()
+        XCTAssertEqual(monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 0, corroborated: false), .gaveUp)
+        XCTAssertNil(monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 600, corroborated: true))
+    }
+
+    func testAGiveUpSuppressesAnyLaterSilenceReport() {
+        // The give-up message already describes this channel and says the one
+        // thing the silence message cannot, that it is not coming back.
+        var monitor = makeMonitor()
+        XCTAssertEqual(monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 0, corroborated: false), .gaveUp)
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
+        XCTAssertNil(monitor.update(ages: dead, gaveUp: true, elapsedSinceStart: 600, corroborated: true))
+    }
+
+    func testAGiveUpAfterASilenceReportIsStillReported() {
+        // The other order, and it is not a repetition: the channel was reported
+        // as silent, and now there is something new to say, namely that only a
+        // restart brings it back.
+        var monitor = makeMonitor()
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
+        XCTAssertEqual(
+            monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 600, corroborated: true),
+            .noBuffers,
+        )
+        XCTAssertEqual(
+            monitor.update(ages: dead, gaveUp: true, elapsedSinceStart: 601, corroborated: true),
+            .gaveUp,
+        )
+    }
+
     // MARK: - Nothing to report
 
     func testSignalInsideTheWindowIsNoFault() {
@@ -25,14 +80,14 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // buffers. Nothing here is broken.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: 10)
-        XCTAssertNil(monitor.update(ages: ages, elapsedSinceStart: 300, corroborated: true))
+        XCTAssertNil(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 300, corroborated: true))
     }
 
     func testNothingIsReportedBeforeTheWindowCanHavePassed() {
         // A recording that started ten seconds ago has not yet had time to show
         // a ninety-second outage, whatever the ages say.
         var monitor = makeMonitor()
-        XCTAssertNil(monitor.update(ages: .unknown, elapsedSinceStart: 10, corroborated: true))
+        XCTAssertNil(monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 10, corroborated: true))
     }
 
     // MARK: - No buffers at all
@@ -40,7 +95,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
     func testAChannelThatNeverDeliveredAnyBufferIsReported() {
         var monitor = makeMonitor()
         XCTAssertEqual(
-            monitor.update(ages: .unknown, elapsedSinceStart: window, corroborated: true),
+            monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: window, corroborated: true),
             .noBuffers,
         )
     }
@@ -48,7 +103,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
     func testAChannelWhoseBuffersStoppedIsReported() {
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
     }
 
     func testAStoppedTransportIsReportedWithoutCorroboration() {
@@ -57,7 +112,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // that anything was going on.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: false), .noBuffers)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: false), .noBuffers)
     }
 
     // MARK: - Buffers of digital silence
@@ -67,7 +122,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // the samples are not.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
     }
 
     func testAChannelSilentSinceTheFirstBufferIsReported() {
@@ -75,7 +130,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // the age of the recording stands in for it.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: nil)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: window, corroborated: true), .digitalSilence)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: window, corroborated: true), .digitalSilence)
     }
 
     func testDigitalSilenceWaitsForCorroboration() {
@@ -86,14 +141,14 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // monitor, not here.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: window)
-        XCTAssertNil(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: false))
+        XCTAssertNil(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: false))
     }
 
     func testCorroborationArrivingLaterStillReports() {
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: window)
-        XCTAssertNil(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: false))
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 601, corroborated: true), .digitalSilence)
+        XCTAssertNil(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: false))
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 601, corroborated: true), .digitalSilence)
     }
 
     // MARK: - One report per recording
@@ -101,9 +156,9 @@ final class ChannelFaultMonitorTests: XCTestCase {
     func testAFaultIsReportedOnlyOnce() {
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
-        XCTAssertNil(monitor.update(ages: ages, elapsedSinceStart: 601, corroborated: true))
-        XCTAssertNil(monitor.update(ages: ages, elapsedSinceStart: 900, corroborated: true))
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
+        XCTAssertNil(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 601, corroborated: true))
+        XCTAssertNil(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 900, corroborated: true))
     }
 
     func testASecondKindOfFaultDoesNotReopenTheReport() {
@@ -111,17 +166,17 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // channel failing, and the user has already been told about it.
         var monitor = makeMonitor()
         let muted = ChannelSignalAges(secondsSinceLastBuffer: 0.05, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: muted, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
+        XCTAssertEqual(monitor.update(ages: muted, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .digitalSilence)
         let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
-        XCTAssertNil(monitor.update(ages: dead, elapsedSinceStart: 700, corroborated: true))
+        XCTAssertNil(monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 700, corroborated: true))
     }
 
     func testResetLetsTheNextRecordingReportAgain() {
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
         monitor.reset()
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
     }
 
     // MARK: - Precedence
@@ -131,6 +186,6 @@ final class ChannelFaultMonitorTests: XCTestCase {
         // message has to name the failure the user can act on.
         var monitor = makeMonitor()
         let ages = ChannelSignalAges(secondsSinceLastBuffer: window + 10, secondsSinceLastEnergy: window + 10)
-        XCTAssertEqual(monitor.update(ages: ages, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        XCTAssertEqual(monitor.update(ages: ages, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
     }
 }

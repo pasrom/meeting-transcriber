@@ -3,8 +3,9 @@ import Foundation
 
 /// What is wrong with one capture channel, as opposed to what it happens to be
 /// carrying.
-/// The raw values are the `/state` wire names, written out so a Swift rename
-/// cannot quietly change the automation surface.
+/// The raw values are the `/state` wire names. They are the case names, so a
+/// Swift rename would change the automation surface silently; `ChannelFaultMonitorTests`
+/// pins them for that reason.
 enum ChannelFault: String, Equatable {
     /// Nothing arrives from this channel any more, or ever did. The tap died,
     /// the device was unplugged, or the permission went away mid-recording.
@@ -13,6 +14,11 @@ enum ChannelFault: String, Equatable {
     /// Buffers keep arriving and every sample in them is zero. The transport is
     /// healthy; the device or the system muted the signal in front of it.
     case digitalSilence
+
+    /// The capture was abandoned for good after a device change (issue #588).
+    /// Terminal in a way the other two are not: the track is gone for the rest
+    /// of the recording and only restarting the app brings it back.
+    case gaveUp
 }
 
 /// Decides whether one capture channel has failed, from what the capture layer
@@ -48,7 +54,17 @@ struct ChannelFaultMonitor {
     /// failure modes escalate into each other (a device that stops delivering
     /// was usually delivering zeroes first), and reporting each step is the
     /// repetition this whole change exists to remove.
-    private var reported = false
+    private var reportedSilence = false
+
+    /// Tracked apart from the silence report because the two are not the same
+    /// news. A give-up says the channel is not coming back without a restart,
+    /// which the silence message cannot say, so it is still worth reporting
+    /// after one; the reverse is not, so a give-up ends silence reporting for
+    /// this channel. Keeping both here is the point: as two latches in two
+    /// functions the precedence was written down nowhere, and the order the
+    /// two failures happened to arrive in decided whether the user heard about
+    /// the channel twice or the state showed no fault at all.
+    private var reportedGiveUp = false
 
     init(window: TimeInterval) {
         self.window = window
@@ -66,26 +82,39 @@ struct ChannelFaultMonitor {
     ///     also what a healthy channel carries when its source is silent, and
     ///     a recording where nothing at all is happening belongs to
     ///     `SilentRecordingMonitor`.
+    ///   - gaveUp: whether this channel's capture was abandoned for good. Not
+    ///     derivable from the ages: a channel that gave up may have delivered a
+    ///     buffer a moment ago, and no age can say it will never deliver
+    ///     another.
     mutating func update(
         ages: ChannelSignalAges,
+        gaveUp: Bool,
         elapsedSinceStart: TimeInterval,
         corroborated: Bool,
     ) -> ChannelFault? {
-        guard !reported, elapsedSinceStart >= window else { return nil }
+        // First, and without waiting for the window: this is already terminal
+        // when the flag flips, and the window exists to rule out states that
+        // recover on their own.
+        if gaveUp, !reportedGiveUp {
+            reportedGiveUp = true
+            return .gaveUp
+        }
+        guard !reportedSilence, !reportedGiveUp, elapsedSinceStart >= window else { return nil }
 
         let bufferAge = ages.secondsSinceLastBuffer ?? elapsedSinceStart
         if bufferAge >= window {
-            reported = true
+            reportedSilence = true
             return .noBuffers
         }
 
         let energyAge = ages.secondsSinceLastEnergy ?? elapsedSinceStart
         guard energyAge >= window, corroborated else { return nil }
-        reported = true
+        reportedSilence = true
         return .digitalSilence
     }
 
     mutating func reset() {
-        reported = false
+        reportedSilence = false
+        reportedGiveUp = false
     }
 }
