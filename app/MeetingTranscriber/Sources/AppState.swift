@@ -200,6 +200,7 @@ final class AppState {
         // during view updates, and repairing there would write observed state
         // mid-`body`.
         settings.repairStaleCustomOutputDirBookmark()
+        settings.repairStaleCustomVocabularyBookmark()
         return settings
     }
 

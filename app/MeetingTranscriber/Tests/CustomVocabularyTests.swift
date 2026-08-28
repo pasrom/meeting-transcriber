@@ -39,7 +39,7 @@ final class CustomVocabularyTests: XCTestCase {
     // MARK: - Persistence
 
     func testCustomVocabularyPathPersists() {
-        settings.customVocabularyPath = "/tmp/vocab.txt"
+        settings.setCustomVocabularyPath("/tmp/vocab.txt")
         XCTAssertEqual(settings.customVocabularyPath, "/tmp/vocab.txt")
 
         // Verify it persists to the injected store.
@@ -47,9 +47,119 @@ final class CustomVocabularyTests: XCTestCase {
     }
 
     func testCustomVocabularyPathClear() {
-        settings.customVocabularyPath = "/tmp/vocab.txt"
-        settings.customVocabularyPath = ""
+        settings.setCustomVocabularyPath("/tmp/vocab.txt")
+        settings.clearCustomVocabularyFile()
         XCTAssertEqual(settings.customVocabularyPath, "")
+    }
+
+    func testSelectedVocabularyFilePersistsBookmarkAndResolvesAfterReload() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-bookmark-\(UUID().uuidString).txt")
+        try "Northstar\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        settings.setCustomVocabularyFile(file)
+
+        let bookmark = try XCTUnwrap(settings.customVocabularyBookmark)
+        XCTAssertEqual(settings.customVocabularyPath, file.path)
+        XCTAssertEqual(defaults.data(forKey: "customVocabularyBookmark"), bookmark)
+
+        let reloaded = AppSettings(defaults: defaults)
+        XCTAssertEqual(
+            reloaded.customVocabularyFile?.resolvingSymlinksInPath().path,
+            file.resolvingSymlinksInPath().path,
+        )
+    }
+
+    func testClearingVocabularyFileClearsPathAndBookmark() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-bookmark-\(UUID().uuidString).txt")
+        try "Northstar\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        settings.setCustomVocabularyFile(file)
+
+        settings.clearCustomVocabularyFile()
+
+        XCTAssertEqual(settings.customVocabularyPath, "")
+        XCTAssertNil(settings.customVocabularyBookmark)
+    }
+
+    func testVocabularyValidationReportsUsableTermCount() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-validation-\(UUID().uuidString).txt")
+        try "Northstar\nNorthstar\nAster\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        settings.setCustomVocabularyFile(file)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .ready(termCount: 2))
+    }
+
+    func testVocabularyValidationRejectsAnEmptyFile() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-empty-\(UUID().uuidString).txt")
+        try "\n  \n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        settings.setCustomVocabularyFile(file)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .empty)
+    }
+
+    func testVocabularyValidationAccepts256TermsAndRejects257() throws {
+        let acceptedTerms = (0 ..< 256).map { "Term\($0)" }
+        let acceptedFile = try makeVocabularyFile(contents: acceptedTerms.joined(separator: "\n"))
+        defer { try? FileManager.default.removeItem(at: acceptedFile) }
+
+        settings.setCustomVocabularyFile(acceptedFile)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .ready(termCount: 256))
+
+        let rejectedTerms = (0 ... 256).map { "Term\($0)" }
+        let rejectedFile = try makeVocabularyFile(contents: rejectedTerms.joined(separator: "\n"))
+        defer { try? FileManager.default.removeItem(at: rejectedFile) }
+
+        settings.setCustomVocabularyFile(rejectedFile)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .tooManyTerms)
+    }
+
+    func testVocabularyValidationAccepts512ByteTermAndRejects513ByteTerm() throws {
+        let acceptedTerm = String(repeating: "x", count: 512)
+        let acceptedFile = try makeVocabularyFile(contents: acceptedTerm)
+        defer { try? FileManager.default.removeItem(at: acceptedFile) }
+
+        settings.setCustomVocabularyFile(acceptedFile)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .ready(termCount: 1))
+
+        let rejectedTerm = String(repeating: "x", count: 513)
+        let rejectedFile = try makeVocabularyFile(contents: rejectedTerm)
+        defer { try? FileManager.default.removeItem(at: rejectedFile) }
+
+        settings.setCustomVocabularyFile(rejectedFile)
+
+        XCTAssertEqual(settings.customVocabularyValidation, .termTooLong)
+    }
+
+    func testManualVocabularyPathEditClearsPreviousBookmark() throws {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-bookmark-\(UUID().uuidString).txt")
+        try "Northstar\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        settings.setCustomVocabularyFile(file)
+
+        settings.setCustomVocabularyPath("/tmp/manual-vocabulary.txt")
+
+        XCTAssertEqual(settings.customVocabularyPath, "/tmp/manual-vocabulary.txt")
+        XCTAssertNil(settings.customVocabularyBookmark)
+    }
+
+    private func makeVocabularyFile(contents: String) throws -> URL {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vocabulary-validation-\(UUID().uuidString).txt")
+        try contents.write(to: file, atomically: true, encoding: .utf8)
+        return file
     }
 
     // MARK: - ParakeetEngine vocabulary configuration

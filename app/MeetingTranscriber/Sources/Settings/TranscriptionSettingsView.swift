@@ -51,22 +51,33 @@ struct TranscriptionSettingsView: View {
                             Text(lang.label).tag(lang.code)
                         }
                     }
-
-                    HStack {
-                        TextField("Custom vocabulary file", text: $settings.customVocabularyPath)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Choose\u{2026}") {
-                            let panel = NSOpenPanel()
-                            panel.allowedContentTypes = [.plainText]
-                            panel.allowsMultipleSelection = false
-                            if panel.runModal() == .OK, let url = panel.url {
-                                settings.customVocabularyPath = url.path
-                            }
-                        }
-                    }
-                    .help("Text file with one term per line (e.g. company names, product names)")
                 }
 
+                HStack {
+                    TextField("Custom vocabulary file", text: Binding(
+                        get: { settings.customVocabularyPath },
+                        set: { settings.setCustomVocabularyPath($0) },
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier(A11yID.customVocabularyPathField)
+                    Button("Choose\u{2026}") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.plainText]
+                        panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let url = panel.url {
+                            settings.setCustomVocabularyFile(url)
+                        }
+                    }
+                }
+                .help(Self.vocabularyHelpText(for: settings.transcriptionEngine))
+
+                Text(settings.customVocabularyValidation.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .onAppear { settings.refreshCustomVocabularyValidation() }
+                    .onChange(of: settings.customVocabularyPath) { _, _ in
+                        settings.refreshCustomVocabularyValidation()
+                    }
                 engineStatusView
             }
             .accessibilityIdentifier(A11yID.transcriptionSection)
@@ -126,6 +137,23 @@ struct TranscriptionSettingsView: View {
     private var needsCaptionModelConsent: Bool {
         guard let language = settings.activeEngineLanguageOrNil, language != "en" else { return false }
         return !nemotronModelDownloaded
+    }
+
+    /// Engine-specific terminology behaviour is deliberately explained next to
+    /// the shared file picker: the two engines consume the same file but provide
+    /// different levels of influence over recognition.
+    static func vocabularyHelpText(for engine: TranscriptionEngineSetting) -> String {
+        switch engine {
+        case .parakeet:
+            "Text file with one term per line. Parakeet uses CTC rescoring for saved transcription. "
+                + "Live captions do not use CTC vocabulary rescoring."
+
+        case .whisperKit:
+            "Text file with one term per line. Enable the experimental custom vocabulary prompt to pass a "
+                + "soft 32-token decoder hint to WhisperKit; it is not a guaranteed correction. "
+                + "It applies to live captions only when they use "
+                + "WhisperKit; language-specific live backends do not use it."
+        }
     }
 
     /// Whether any Nemotron multilingual model variant is already on disk.

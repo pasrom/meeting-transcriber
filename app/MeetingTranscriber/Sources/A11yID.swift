@@ -48,6 +48,9 @@ enum A11yID {
     /// only entry: a plain, non-secret text field whose write-back is readable in
     /// `/state`, which is what makes it a usable text-entry probe.
     static let micNameField = "micNameField"
+    static let customVocabularyPathField = "customVocabularyPathField"
+    static let whisperKitVocabularyPromptToggle = "whisperKitVocabularyPromptToggle"
+    static let terminologyRulesEditor = "terminologyRulesEditor"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail
     /// pane renders only the selected tab, so a control in another tab is absent

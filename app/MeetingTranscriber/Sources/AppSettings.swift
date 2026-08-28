@@ -243,11 +243,6 @@ final class AppSettings {
         didSet { defaults.set(whisperLanguage, forKey: "whisperLanguage") }
     }
 
-    /// Language as Optional for WhisperKit. Empty string → nil (auto-detect).
-    var whisperLanguageOrNil: String? {
-        whisperLanguage.isEmpty ? nil : whisperLanguage
-    }
-
     /// Parakeet language hint (ISO 639-1 code). Empty string = auto-detect.
     /// FluidAudio's v3 TDT decoder uses this for script-aware token filtering;
     /// auto-detect can drift Cyrillic ↔ Latin on multi-script audio.
@@ -258,26 +253,21 @@ final class AppSettings {
         didSet { defaults.set(parakeetLanguage, forKey: "parakeetLanguage") }
     }
 
-    /// Language as Optional for Parakeet. Empty string → nil (auto-detect).
-    var parakeetLanguageOrNil: String? {
-        parakeetLanguage.isEmpty ? nil : parakeetLanguage
-    }
-
-    /// The active transcription engine's EXPLICITLY configured language
-    /// (ISO 639-1), or nil for auto-detect. Drives the live-caption streaming
-    /// backend (`LiveCaptionsGate`): `de` → Nemotron German streaming, `en` →
-    /// Parakeet EOU streaming, else → engine-driven re-transcribe.
-    var activeEngineLanguageOrNil: String? {
-        switch transcriptionEngine {
-        case .whisperKit: whisperLanguageOrNil
-        case .parakeet: parakeetLanguageOrNil
-        }
-    }
-
-    /// Path to a custom vocabulary file for Parakeet CTC boosting (one term per line).
-    var customVocabularyPath: String {
+    private(set) var customVocabularyPath: String {
         didSet { defaults.set(customVocabularyPath, forKey: "customVocabularyPath") }
     }
+
+    private(set) var customVocabularyBookmark: Data? {
+        didSet { defaults.set(customVocabularyBookmark, forKey: "customVocabularyBookmark") }
+    }
+
+    func updateCustomVocabularySelection(path: String, bookmark: Data?) {
+        customVocabularyPath = path
+        customVocabularyBookmark = bookmark
+    }
+
+    /// Ephemeral UI status; recalculated when the selected vocabulary changes.
+    var customVocabularyValidation: CustomVocabularyValidation
 
     var diarize: Bool {
         didSet { defaults.set(diarize, forKey: "diarize") }
@@ -495,6 +485,8 @@ final class AppSettings {
         whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
+        customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")
+        customVocabularyValidation = .notConfigured
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
@@ -543,6 +535,7 @@ final class AppSettings {
         #endif
         checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
         includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
+        refreshCustomVocabularyValidation()
     }
 
     /// Bag of values used during init to read all 5 tuning knobs in one go.
