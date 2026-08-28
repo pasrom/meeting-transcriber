@@ -122,6 +122,19 @@ public class AudioCaptureSession {
         micCapture?.currentLevelDBFS ?? -120
     }
 
+    /// How long ago the app-audio channel last delivered a buffer, and last
+    /// delivered one carrying signal. `.unknown` when the channel was never
+    /// opened, which the level cannot express (it reports -120 for that, for a
+    /// muted device and for a dead tap alike).
+    public var appSignalAges: ChannelSignalAges {
+        appCapture?.currentSignalAges ?? .unknown
+    }
+
+    /// The microphone counterpart of `appSignalAges`.
+    public var micSignalAges: ChannelSignalAges {
+        micCapture?.currentSignalAges ?? .unknown
+    }
+
     /// Stop all capture and return the result.
     public func stop() -> AudioCaptureResult {
         appCapture?.stop()

@@ -13,6 +13,13 @@ struct DebugRMSReporter {
     var accumulator: Double = 0
     var sampleCount: Int = 0
     private(set) var lastLevelDBFS: Double = -120
+
+    /// Whether the most recent `add(...)` carried any signal at all, taken from
+    /// the sum of squares rather than from `lastLevelDBFS`. The decibel value
+    /// cannot answer it: an all-zero buffer and a buffer whose energy is below
+    /// the floor both read as silence there, and one of the two means the ADC
+    /// is still delivering.
+    private(set) var lastBufferHadEnergy: Bool = false
     private var nextReportTicks: UInt64 = 0
 
     mutating func add(sumSq: Double, samples: Int) {
@@ -22,6 +29,7 @@ struct DebugRMSReporter {
         let meanSq = sumSq / Double(samples)
         let rms = meanSq > 0 ? sqrt(meanSq) : 0
         lastLevelDBFS = rms > 0 ? 20 * log10(rms) : -120
+        lastBufferHadEnergy = rms > 0
     }
 
     /// Returns (dBFS, samples) when at least `intervalSeconds` have elapsed since the

@@ -75,6 +75,12 @@ public class AppAudioCapture: @unchecked Sendable {
         levelPublisher.currentLevelDBFS
     }
 
+    /// See `ChannelSignalAges`: the level alone folds "no buffers", "buffers of
+    /// zeroes" and "a real but very quiet buffer" into one number.
+    public var currentSignalAges: ChannelSignalAges {
+        levelPublisher.currentSignalAges
+    }
+
     /// CoreAudio property address for default output device changes.
     var defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,

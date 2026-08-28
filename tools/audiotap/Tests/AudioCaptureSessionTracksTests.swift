@@ -6,6 +6,21 @@ import XCTest
 /// the new optional-app-track shape that is reachable without a CATap or an
 /// input device: the guard runs before either track's hardware is touched.
 final class AudioCaptureSessionTracksTests: XCTestCase {
+    func testAnUnopenedChannelReportsNoSignalAges() throws {
+        // "Never opened" and "opened, then went quiet" are different faults and
+        // must not collapse into one value. The levels cannot keep them apart,
+        // both being -120; the ages can, by being absent rather than large.
+        guard #available(macOS 14.2, *) else {
+            throw XCTSkip("AudioCaptureSession requires macOS 14.2")
+        }
+        let session = AudioCaptureSession(AudioCaptureConfiguration(
+            pids: [], appOutputURL: nil, micOutputURL: nil, sampleRate: 48000, channels: 2,
+        ))
+
+        XCTAssertEqual(session.micSignalAges, .unknown)
+        XCTAssertEqual(session.appSignalAges, .unknown)
+    }
+
     func testStartRefusesASessionWithNeitherTrack() throws {
         guard #available(macOS 14.2, *) else {
             throw XCTSkip("AudioCaptureSession requires macOS 14.2")

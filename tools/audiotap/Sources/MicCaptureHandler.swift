@@ -123,6 +123,12 @@ public class MicCaptureHandler: @unchecked Sendable {
         levelPublisher.currentLevelDBFS
     }
 
+    /// See `ChannelSignalAges`: the level alone folds "no buffers", "buffers of
+    /// zeroes" and "a real but very quiet buffer" into one number.
+    public var currentSignalAges: ChannelSignalAges {
+        levelPublisher.currentSignalAges
+    }
+
     private var defaultInputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultInputDevice,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -421,7 +427,7 @@ extension MicCaptureHandler {
     /// (menu bar level indicator) can poll it. Called from the
     /// AVAudioEngine tap callback after `accumulateDebugRMS`.
     func publishCurrentLevel() {
-        levelPublisher.publish(level: debugRMS.lastLevelDBFS)
+        levelPublisher.publish(level: debugRMS.lastLevelDBFS, hasEnergy: debugRMS.lastBufferHadEnergy)
     }
 
     /// Sum squares across all channels of an AVAudioPCMBuffer into the shared

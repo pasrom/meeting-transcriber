@@ -43,6 +43,46 @@ final class DebugRMSReporterTests: XCTestCase {
         XCTAssertEqual(reporter.lastLevelDBFS, -40, accuracy: 0.02)
     }
 
+    // MARK: - lastBufferHadEnergy (did the ADC deliver anything at all)
+
+    func testNoBufferYetCountsAsNoEnergy() {
+        let reporter = DebugRMSReporter()
+        XCTAssertFalse(reporter.lastBufferHadEnergy)
+    }
+
+    func testAnAllZeroBufferHasNoEnergy() {
+        var reporter = DebugRMSReporter()
+        reporter.add(sumSq: 0, samples: 100)
+        XCTAssertFalse(reporter.lastBufferHadEnergy)
+    }
+
+    func testATinyNonZeroBufferStillCountsAsEnergy() {
+        // One int16 LSB set across a 4800-frame buffer. The dBFS value lands
+        // BELOW the -120 floor that an all-zero buffer reports, so a level
+        // comparison would call this dead while the ADC is plainly alive.
+        // The flag is taken from the sum of squares, not from the decibels.
+        var reporter = DebugRMSReporter()
+        let lsb = 1.0 / 32768.0
+        reporter.add(sumSq: lsb * lsb, samples: 4800)
+        XCTAssertTrue(reporter.lastBufferHadEnergy)
+        XCTAssertLessThan(reporter.lastLevelDBFS, -120)
+    }
+
+    func testEnergyFlagFollowsTheMostRecentBuffer() {
+        var reporter = DebugRMSReporter()
+        reporter.add(sumSq: 100 * 0.5 * 0.5, samples: 100)
+        XCTAssertTrue(reporter.lastBufferHadEnergy)
+        reporter.add(sumSq: 0, samples: 100)
+        XCTAssertFalse(reporter.lastBufferHadEnergy)
+    }
+
+    func testAnEmptyAddLeavesTheEnergyFlagAlone() {
+        var reporter = DebugRMSReporter()
+        reporter.add(sumSq: 100 * 0.5 * 0.5, samples: 100)
+        reporter.add(sumSq: 0, samples: 0)
+        XCTAssertTrue(reporter.lastBufferHadEnergy)
+    }
+
     // MARK: - lastLevelDBFS independent of tick() throttling
 
     func testLastLevelIndependentOfTick() {

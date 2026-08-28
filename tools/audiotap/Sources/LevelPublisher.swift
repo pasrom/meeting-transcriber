@@ -7,6 +7,12 @@ import os
 struct LevelSlot {
     var levelDBFS: Double = -120
     var lastUpdateTicks: UInt64 = 0
+
+    /// Stamp of the last buffer that carried any signal. Advanced by a subset
+    /// of the writes that advance `lastUpdateTicks`, so the gap between the two
+    /// is exactly "how long this channel has been delivering nothing but
+    /// zeroes".
+    var lastEnergyTicks: UInt64 = 0
 }
 
 /// Owns the cross-thread coordination for "audio callback writes the latest
@@ -39,12 +45,30 @@ final class LevelPublisher: Sendable {
         self.stalenessSec = stalenessSec
     }
 
-    /// Called from the audio callback after each buffer.
-    func publish(level: Double) {
+    /// Called from the audio callback after each buffer. `hasEnergy` says
+    /// whether this buffer carried any signal, which the level alone cannot
+    /// convey (see `ChannelSignalAges`).
+    func publish(level: Double, hasEnergy: Bool) {
         let now = mach_absolute_time()
         lock.withLock { slot in
             slot.levelDBFS = level
             slot.lastUpdateTicks = now
+            if hasEnergy {
+                slot.lastEnergyTicks = now
+            }
+        }
+    }
+
+    /// How long ago this channel last delivered a buffer, and last delivered
+    /// one carrying signal. Unlike `currentLevelDBFS` this does not decay to a
+    /// floor: the reader gets the raw ages and decides what a given gap means.
+    var currentSignalAges: ChannelSignalAges {
+        lock.withLock { slot in
+            signalAges(
+                lastUpdateTicks: slot.lastUpdateTicks,
+                lastEnergyTicks: slot.lastEnergyTicks,
+                nowTicks: mach_absolute_time(),
+            )
         }
     }
 

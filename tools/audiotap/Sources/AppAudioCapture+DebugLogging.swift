@@ -14,7 +14,7 @@ extension AppAudioCapture {
     /// (menu bar level indicator) can poll it. Called from the IOProc
     /// after `accumulateDebugRMS`.
     func publishCurrentLevel() {
-        levelPublisher.publish(level: debugRMS.lastLevelDBFS)
+        levelPublisher.publish(level: debugRMS.lastLevelDBFS, hasEnergy: debugRMS.lastBufferHadEnergy)
     }
 
     /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
