@@ -104,7 +104,7 @@ the stable-tag ruleset gate → see the `distribution` skill (`.claude/skills/di
 
 Use the `/git-workflow` skill. Commit proactively after every logical unit of work — don't wait for user permission.
 
-- **Conventional Commits:** `<type>(<scope>): <description>` — types: feat, fix, docs, refactor, test, perf, chore, build
+- **Conventional Commits:** `<type>(<scope>): <description>` — types: feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert. CI enforces this on the PR title too (`conventional-title` check); the type list there and here must stay in step.
 - **Scopes:** app, test, build, ci, docs
 - **Atomic commits:** one logical change per commit. If you need "and" in the message, split it.
 - **Stage explicitly:** `git add <file1> <file2>` — never `git add -A` or `git add .`
