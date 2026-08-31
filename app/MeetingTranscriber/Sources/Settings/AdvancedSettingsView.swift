@@ -124,23 +124,6 @@ struct AdvancedSettingsView: View {
                     .foregroundStyle(.secondary)
                 #endif
             }
-
-            Section("About") {
-                LabeledContent("Version", value: Self.versionString)
-                    .textSelection(.enabled)
-                LabeledContent("Identifier", value: Bundle.main.bundleID)
-                    .textSelection(.enabled)
-                LabeledContent("Build Date", value: Self.buildDate)
-                    .textSelection(.enabled)
-                LabeledContent("ffmpeg") {
-                    Label(
-                        FFmpegHelper.isAvailable ? "Available" : "Not installed",
-                        systemImage: FFmpegHelper.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill",
-                    )
-                    .foregroundStyle(FFmpegHelper.isAvailable ? .green : .secondary)
-                    .font(.caption)
-                }
-            }
         }
         .formStyle(.grouped)
         .onAppear { refreshPermissions() }
@@ -151,27 +134,6 @@ struct AdvancedSettingsView: View {
     #else
         private static let screenRecordingDetail = "Required for meeting detection and app audio capture"
     #endif
-
-    private static let versionString: String = {
-        let version = Bundle.main.appVersion
-        let commit = Bundle.main.gitCommitHash
-        #if APPSTORE
-            let variant = "App Store"
-        #else
-            let variant = "Homebrew"
-        #endif
-        return "\(version) (\(commit)) · \(variant)"
-    }()
-
-    private static let buildDate: String = {
-        let fmt = DateFormatter()
-        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        guard let url = Bundle.main.executableURL,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let date = attrs[.modificationDate] as? Date
-        else { return "unknown" }
-        return fmt.string(from: date)
-    }()
 
     private func refreshPermissions() {
         micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
