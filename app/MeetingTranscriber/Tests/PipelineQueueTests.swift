@@ -100,6 +100,27 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(rec?.error, "Empty transcript")
     }
 
+    func testErrorAfterProtocolWriteRetainsRawTranscript() throws {
+        let transcriptPath = tmpDir.appendingPathComponent("meeting.txt")
+        let protocolPath = tmpDir.appendingPathComponent("meeting.md")
+        try Data("verbatim meeting content".utf8).write(to: transcriptPath)
+        try Data("# Minutes".utf8).write(to: protocolPath)
+        var job = makeJob()
+        job.state = .generatingProtocol
+        job.transcriptPath = transcriptPath
+        job.protocolPath = protocolPath
+        job.saveRawTranscriptSeparately = false
+        queue.insertJobForTesting(job)
+
+        queue.updateJobState(id: job.id, to: .error, error: "Post-write failure")
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: transcriptPath.path))
+        XCTAssertEqual(queue.jobs.first?.transcriptPath, transcriptPath)
+        XCTAssertTrue(
+            queue.jobs.first?.warnings.contains("Raw transcript retained because the job did not complete") ?? false,
+        )
+    }
+
     func testNoTerminalRecordForNonTerminalState() {
         let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
         let q = PipelineQueue(logDir: tmpDir, terminalJobStore: store)
@@ -795,6 +816,34 @@ final class PipelineQueueTests: XCTestCase {
             freshQueue.jobs[0].mixPath?.standardizedFileURL,
             mixFile.standardizedFileURL,
         )
+    }
+
+    func testRecoveredJobCapturesCurrentTranscriptOutputOptions() async throws {
+        let recDir = tmpDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recDir, withIntermediateDirectories: true)
+        let mixFile = recDir.appendingPathComponent("20260311_100000_mix.wav")
+        try Data(repeating: 0xFF, count: 100).write(to: mixFile)
+        let engine = MockEngine()
+        let freshQueue = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { MockProtocolGen() },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            // swiftlint:disable:next trailing_closure
+            transcriptOutputOptionsProvider: {
+                TranscriptOutputOptions(
+                    includeFullTranscriptInProtocol: false,
+                    saveRawTranscriptSeparately: false,
+                )
+            },
+        )
+
+        await freshQueue.recoverOrphanedRecordings(recordingsDir: recDir)
+
+        let recovered = try XCTUnwrap(freshQueue.jobs.first)
+        XCTAssertFalse(try XCTUnwrap(recovered.includeFullTranscriptInProtocol))
+        XCTAssertFalse(try XCTUnwrap(recovered.saveRawTranscriptSeparately))
     }
 
     func testRecoverSkipsTrackedFiles() async throws {
@@ -3926,6 +3975,68 @@ final class PipelineQueueTests: XCTestCase {
         // so it remains in the list as .done
         let finalJob = freshQueue.jobs.first
         XCTAssertEqual(finalJob?.state, .done)
+    }
+
+    func testLoadSnapshotMissingNamingUsesTerminalTransitionAndRetainsRawTranscript() throws {
+        let transcriptPath = tmpDir.appendingPathComponent("missing-naming.txt")
+        try Data("recoverable transcript".utf8).write(to: transcriptPath)
+        var job = PipelineJob(
+            meetingTitle: "Missing Naming Data",
+            appName: "App",
+            mixPath: nil,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+            saveRawTranscriptSeparately: false,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "missing_naming_data"
+        job.transcriptPath = transcriptPath
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
+        let freshQueue = PipelineQueue(logDir: tmpDir, terminalJobStore: store)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.first?.state, .done)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: transcriptPath.path))
+        XCTAssertTrue(
+            freshQueue.jobs.first?.warnings.contains("Raw transcript retained because no protocol was saved") ?? false,
+        )
+        XCTAssertEqual(store.lookup(jobID: job.id)?.state, .done)
+    }
+
+    func testLoadSnapshotWithoutOutputOptionFieldsUsesLegacyDefaults() throws {
+        let mixPath = tmpDir.appendingPathComponent("legacy-options.wav")
+        try Data("fake audio".utf8).write(to: mixPath)
+        let job = PipelineJob(
+            meetingTitle: "Legacy Options",
+            appName: "App",
+            mixPath: mixPath,
+            appPath: nil,
+            micPath: nil,
+            micDelay: 0,
+        )
+        let encoded = try JSONEncoder().encode([job])
+        guard var jobs = try JSONSerialization.jsonObject(with: encoded) as? [[String: Any]] else {
+            XCTFail("expected encoded jobs to be JSON objects")
+            return
+        }
+        jobs[0].removeValue(forKey: "includeFullTranscriptInProtocol")
+        jobs[0].removeValue(forKey: "saveRawTranscriptSeparately")
+        let legacyData = try JSONSerialization.data(withJSONObject: jobs)
+        try legacyData.write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let freshQueue = PipelineQueue(logDir: tmpDir)
+        freshQueue.loadSnapshot()
+
+        let restored = try XCTUnwrap(freshQueue.jobs.first)
+        XCTAssertNil(restored.includeFullTranscriptInProtocol)
+        XCTAssertNil(restored.saveRawTranscriptSeparately)
+        let options = freshQueue.transcriptOutputOptions(forJobID: restored.id)
+        XCTAssertTrue(options.includeFullTranscriptInProtocol)
+        XCTAssertTrue(options.saveRawTranscriptSeparately)
     }
 
     // MARK: - Stale Pending Cleanup

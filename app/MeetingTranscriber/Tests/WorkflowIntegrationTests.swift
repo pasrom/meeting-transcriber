@@ -34,6 +34,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         echoDedupEnabled: Bool = true,
         includeFullTranscriptInProtocol: Bool = true,
         saveRawTranscriptSeparately: Bool = true,
+        protocolGeneratorEnabled: Bool = true,
         transcriptOutputOptionsProvider: (() -> TranscriptOutputOptions)? = nil,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
@@ -59,7 +60,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         let queue = PipelineQueue(
             engine: engine,
             diarizationFactory: { diarization },
-            protocolGeneratorFactory: { protocolGen },
+            protocolGeneratorFactory: { protocolGeneratorEnabled ? protocolGen : nil },
             outputDir: tmpDir,
             logDir: tmpDir,
             stagingDir: stagingDir ?? AppPaths.recordingsDir,
@@ -201,6 +202,21 @@ final class WorkflowIntegrationTests: XCTestCase {
         )
     }
 
+    func testWorkflowRawTranscriptCleanupPreservesRecording() async throws {
+        let stagingDir = tmpDir.appendingPathComponent("staging")
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        let stagedAudioPath = try createTestAudioFile(in: stagingDir)
+        let (h, _) = try makeHarness(stagingDir: stagingDir, saveRawTranscriptSeparately: false)
+
+        h.queue.enqueue(makeJob(audioPath: stagedAudioPath))
+        await h.queue.processNext()
+
+        assertNoRawTranscriptArtifacts(h)
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let recordingFiles = try FileManager.default.contentsOfDirectory(atPath: recordingsDir.path)
+        XCTAssertTrue(recordingFiles.contains { $0.hasSuffix(".wav") })
+    }
+
     func testWorkflowMinutesOnlyRetainsNoTranscriptArtifacts() async throws {
         let (h, _) = try makeHarness(
             includeFullTranscriptInProtocol: false,
@@ -233,18 +249,17 @@ final class WorkflowIntegrationTests: XCTestCase {
             saveRawTranscriptSeparately: true,
         )
         let (h, _) = try makeHarness { currentOptions }
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
         currentOptions = TranscriptOutputOptions(
             includeFullTranscriptInProtocol: false,
             saveRawTranscriptSeparately: false,
         )
-
-        h.queue.enqueue(makeJob(audioPath: h.audioPath))
         await h.queue.processNext()
 
         let protocolPath = try XCTUnwrap(h.queue.jobs.first?.protocolPath)
         let markdown = try String(contentsOf: protocolPath, encoding: .utf8)
-        XCTAssertFalse(markdown.contains("## Full Transcript"))
-        XCTAssertNil(h.queue.jobs.first?.transcriptPath)
+        XCTAssertTrue(markdown.contains("## Full Transcript"))
+        XCTAssertNotNil(h.queue.jobs.first?.transcriptPath)
     }
 
     // MARK: - Happy Path: Single-Source, Diarization + Speaker Naming
@@ -519,7 +534,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
     }
 
-    func testWorkflowProtocolFailureCleansRawOutputWhenDisabled() async throws {
+    func testWorkflowProtocolFailureRetainsRawOutputWhenDisabled() async throws {
         let (h, _) = try makeHarness(saveRawTranscriptSeparately: false)
         h.protocolGen.shouldThrow = true
 
@@ -527,8 +542,23 @@ final class WorkflowIntegrationTests: XCTestCase {
         await h.queue.processNext()
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)
-        XCTAssertFalse(h.queue.jobs.first?.warnings.isEmpty ?? true)
-        assertNoRawTranscriptArtifacts(h)
+        XCTAssertNotNil(h.queue.jobs.first?.transcriptPath)
+        XCTAssertTrue(h.queue.jobs.first?.warnings.contains("Raw transcript retained because no protocol was saved") ?? false)
+    }
+
+    func testWorkflowWithoutProtocolGeneratorRetainsRawOutputWhenDisabled() async throws {
+        let (h, _) = try makeHarness(
+            saveRawTranscriptSeparately: false,
+            protocolGeneratorEnabled: false,
+        )
+
+        h.queue.enqueue(makeJob(audioPath: h.audioPath))
+        await h.queue.processNext()
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done)
+        XCTAssertNil(h.queue.jobs.first?.protocolPath)
+        XCTAssertNotNil(h.queue.jobs.first?.transcriptPath)
+        XCTAssertTrue(h.queue.jobs.first?.warnings.contains("Raw transcript retained because no protocol was saved") ?? false)
     }
 
     // MARK: - Diarization Scenarios

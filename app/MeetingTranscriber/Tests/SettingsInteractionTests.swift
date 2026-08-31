@@ -70,6 +70,34 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(settings.protocolProvider, .openAICompatible)
     }
 
+    // MARK: - Transcript output toggles
+
+    func testIncludeFullTranscriptToggleWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.includeFullTranscriptInProtocol = true
+        let view = OutputSettingsView(settings: settings)
+
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.includeFullTranscriptToggle)
+            .find(ViewType.Toggle.self)
+        try toggle.tap()
+
+        XCTAssertFalse(settings.includeFullTranscriptInProtocol)
+    }
+
+    func testSaveRawTranscriptToggleWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.saveRawTranscriptSeparately = true
+        let view = OutputSettingsView(settings: settings)
+
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.saveRawTranscriptToggle)
+            .find(ViewType.Toggle.self)
+        try toggle.tap()
+
+        XCTAssertFalse(settings.saveRawTranscriptSeparately)
+    }
+
     // MARK: - Stepper write-back
 
     func testPollIntervalStepperIncrementsSetting() throws {
