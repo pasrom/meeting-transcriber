@@ -32,9 +32,8 @@ struct AboutSettingsView: View {
         .formStyle(.grouped)
     }
 
-    private static let githubURL = URL(
-        string: "https://github.com/\(GitHubReleaseProvider.owner)/\(GitHubReleaseProvider.repo)",
-    )!
+    // swiftlint:disable:next force_unwrapping
+    private static let githubURL = URL(string: "https://github.com/\(GitHubReleaseProvider.owner)/\(GitHubReleaseProvider.repo)")!
 
     private static let versionString: String = {
         let version = Bundle.main.appVersion
