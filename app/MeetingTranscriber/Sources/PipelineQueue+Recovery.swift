@@ -72,15 +72,19 @@ extension PipelineQueue {
 
         // Rebuild the session's naming cache from disk for
         // .speakerNamingPending jobs.
-        for job in jobs where job.state == .speakerNamingPending {
+        let missingNamingDataJobIDs = jobs.compactMap { job -> UUID? in
+            guard job.state == .speakerNamingPending else { return nil }
             if let slug = job.namingSlug, naming.restore(jobID: job.id, slug: slug) {
-                continue
+                return nil
             }
-            // Naming data lost — transition to done
             logger.warning("Naming data not found for job \(job.id), marking as done")
-            if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
-                jobs[idx].state = .done
-            }
+            return job.id
+        }
+        // Naming data lost — use the normal transition so terminal handling,
+        // artifact retention, callbacks, and the durable job record stay in
+        // sync with every other completion path.
+        for jobID in missingNamingDataJobIDs {
+            updateJobState(id: jobID, to: .done)
         }
 
         saveSnapshot()
@@ -158,7 +162,7 @@ extension PipelineQueue {
 
         for group in candidates {
             guard let mixURL = group.mix else { continue }
-            let job = PipelineJob(
+            var job = PipelineJob(
                 meetingTitle: "Recovered Recording (\(group.stem))",
                 appName: "Unknown",
                 mixPath: mixURL,
@@ -166,6 +170,7 @@ extension PipelineQueue {
                 micPath: group.mic,
                 micDelay: 0,
             )
+            stampTranscriptOutputOptions(on: &job)
             jobs.append(job)
             eventLog.append(jobID: job.id, event: "recovered", from: nil, to: .waiting)
         }

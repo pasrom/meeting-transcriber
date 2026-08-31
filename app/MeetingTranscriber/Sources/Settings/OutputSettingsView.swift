@@ -79,7 +79,9 @@ struct OutputSettingsView: View {
 
             Section("Protocol Generation") {
                 Toggle("Include full transcript in protocol", isOn: $settings.includeFullTranscriptInProtocol)
+                    .accessibilityIdentifier(A11yID.includeFullTranscriptToggle)
                 Toggle("Save raw transcript separately", isOn: $settings.saveRawTranscriptSeparately)
+                    .accessibilityIdentifier(A11yID.saveRawTranscriptToggle)
 
                 Picker("LLM Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in
@@ -128,7 +130,7 @@ struct OutputSettingsView: View {
             openAIConfigView
 
         case .none:
-            Text("No LLM summarization will be generated.")
+            Text("No LLM summarization will be generated. Raw transcripts are retained if no protocol is saved.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

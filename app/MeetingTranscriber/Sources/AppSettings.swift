@@ -396,8 +396,7 @@ final class AppSettings {
     }
 
     /// Keep the raw transcript as a separate `.txt` artefact after processing.
-    /// A transcript may still be retained while a job is in flight so speaker
-    /// naming and protocol generation can use it; it is removed at completion.
+    /// It remains while needed and is removed only after success with a saved protocol.
     var saveRawTranscriptSeparately: Bool {
         didSet { defaults.set(saveRawTranscriptSeparately, forKey: "saveRawTranscriptSeparately") }
     }

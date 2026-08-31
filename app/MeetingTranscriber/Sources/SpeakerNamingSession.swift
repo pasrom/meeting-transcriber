@@ -394,8 +394,8 @@ final class SpeakerNamingSession {
     /// Removes only the transcript-bearing segment sidecar. The queue uses this
     /// when the user opts out of permanent raw transcript output; audio remains
     /// governed by the normal recording-retention policy.
-    func removeTranscriptSegments(slug: String?) {
-        namingStore.deleteTranscriptSegments(slug: slug)
+    func removeTranscriptSegments(slug: String?) throws {
+        try namingStore.deleteTranscriptSegments(slug: slug)
     }
 
     /// Rebuild the RAM naming cache for a restored `.speakerNamingPending` job
