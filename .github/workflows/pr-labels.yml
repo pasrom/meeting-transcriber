@@ -43,24 +43,47 @@ jobs:
         with:
           script: |
             const title = context.payload.pull_request.title;
-            const labels = [];
 
-            if (/^feat[\s(:|!]/.test(title)) labels.push('enhancement');
-            else if (/^fix[\s(:|!]/.test(title)) labels.push('bug');
-            else if (/^docs[\s(:|!]/.test(title)) labels.push('documentation');
-            else if (/^(ci|build|chore)[\s(:|!]/.test(title)) labels.push('chore');
-            else if (/^(refactor|perf|test)[\s(:|!]/.test(title)) labels.push('chore');
+            // One pattern decides both questions: whether the title is
+            // acceptable, and which label it earns. The previous per-type
+            // regexes only anchored the type word, so `[\s(:|!]` let
+            // "fix the flaky test" through as a bug and "feat:" through with
+            // no description, while the failure message promised
+            // "<type>(<scope>): <description>". Gate and message now state the
+            // same contract.
+            const CONVENTIONAL_TITLE =
+              /^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-z0-9-]+\))?!?: .+/;
 
-            // No label means no recognised type, which is the same condition
-            // the repo's commit convention rejects. Fail with the expected
-            // shape spelled out: an outside contributor cannot be expected to
-            // infer it from a red check alone. Re-editing the title re-runs
-            // this workflow, so the fix is immediate.
-            if (labels.length === 0) {
+            // GitHub's own Revert button writes `Revert "<original subject>"`,
+            // which no conventional type matches. Rejecting it would fail the
+            // one title a maintainer cannot edit before the PR exists.
+            const REVERT_BUTTON_TITLE = /^Revert ".+"$/;
+
+            const LABEL_BY_TYPE = {
+              feat: 'enhancement',
+              fix: 'bug',
+              docs: 'documentation',
+            };
+
+            let type = null;
+            if (REVERT_BUTTON_TITLE.test(title)) {
+              type = 'revert';
+            } else {
+              const match = CONVENTIONAL_TITLE.exec(title);
+              if (match) type = match[1];
+            }
+
+            // No type means the title states none, which is the same condition
+            // the commit convention rejects. Fail with the expected shape
+            // spelled out: an outside contributor cannot infer it from a red
+            // check alone. Re-editing the title re-runs this workflow, so the
+            // fix is immediate.
+            if (type === null) {
               core.setFailed(
                 `PR title does not follow Conventional Commits: "${title}"\n` +
                 'Expected "<type>(<scope>): <description>", where type is one of ' +
-                'feat, fix, docs, refactor, test, perf, chore, build, ci.\n' +
+                'feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert. ' +
+                'The scope is optional and an exclamation mark may mark a breaking change.\n' +
                 'Example: feat(app): add transcript output privacy options',
               );
               return;
@@ -70,5 +93,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              labels
+              labels: [LABEL_BY_TYPE[type] ?? 'chore'],
             });
