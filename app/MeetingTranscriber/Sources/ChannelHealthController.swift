@@ -86,6 +86,16 @@ final class ChannelHealthController {
     @ObservationIgnored private(set) var micAges: ChannelSignalAges = .unknown
     @ObservationIgnored private(set) var appAges: ChannelSignalAges = .unknown
 
+    /// The levels the last tick read. Not what decides a fault any more, but
+    /// still what decides the menu-bar tint, and the only way to tell a channel
+    /// sitting just under the silence threshold from one sitting just over it.
+    /// Nothing exposed them before, so diagnosing why an episode did or did not
+    /// latch meant inferring the level from the flag it produced.
+    /// `@ObservationIgnored` for the same reason as the ages: written every
+    /// tick, read only by the RPC snapshot.
+    @ObservationIgnored private(set) var micLevelDBFS: Double?
+    @ObservationIgnored private(set) var appLevelDBFS: Double?
+
     /// Per-channel "is this channel still delivering" decision, evaluated on
     /// every tick. Separate from `channelHealthMonitor`, which answers the
     /// louder-than-the-other question that drives the tint; see
@@ -231,6 +241,8 @@ final class ChannelHealthController {
         appFault = nil
         micAges = .unknown
         appAges = .unknown
+        micLevelDBFS = nil
+        appLevelDBFS = nil
         firstTickAt = nil
         lastSpeechAt.removeAll()
     }
@@ -249,6 +261,8 @@ final class ChannelHealthController {
         if firstTickAt == nil { firstTickAt = now }
         micAges = recorder.micSignalAges
         appAges = recorder.appSignalAges
+        micLevelDBFS = mic
+        appLevelDBFS = app
         // The monitor's own threshold, not a copy of its default: the init
         // allows a different one, and a second constant could then disagree
         // with the episode the tint is drawn from.

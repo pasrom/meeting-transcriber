@@ -169,6 +169,11 @@
             /// The evidence behind the verdict: how long each channel has gone
             /// without a buffer, and without one carrying signal. Absent means
             /// never, which is not the same as long ago.
+            /// The levels the last poll read, in dBFS. What the tint is
+            /// decided from, and absent before the first tick of a recording.
+            let micLevelDBFS: Double?
+            let appLevelDBFS: Double?
+
             let micSecondsSinceLastBuffer: Double?
             let micSecondsSinceLastEnergy: Double?
             let appSecondsSinceLastBuffer: Double?
@@ -180,6 +185,8 @@
                 recordingSilent: false,
                 micFault: nil,
                 appFault: nil,
+                micLevelDBFS: nil,
+                appLevelDBFS: nil,
                 micSecondsSinceLastBuffer: nil,
                 micSecondsSinceLastEnergy: nil,
                 appSecondsSinceLastBuffer: nil,

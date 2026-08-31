@@ -55,6 +55,33 @@
             XCTAssertEqual(state.rpcStateSnapshot().channelHealth.micFault, "digitalSilence")
         }
 
+        func testTheSnapshotCarriesTheLevelsTheVerdictWasReadFrom() throws {
+            // The two thresholds that decide the menu-bar tint are levels, and
+            // nothing exposed them. Diagnosing why a channel did or did not
+            // latch meant inferring the level from the flag it produced, which
+            // is backwards and took three runs to settle on real hardware.
+            // Distinct values per channel, so a snapshot wired to the wrong one
+            // fails instead of coinciding.
+            let state = makeRPCTestState()
+            let recorder = MockRecorder()
+            recorder.micLevelDBFS = -72
+            recorder.appLevelDBFS = -18
+            state.channelHealth.simulateStartForTests()
+
+            state.channelHealth.applyTick(recorder: recorder, now: t0)
+
+            let health = state.rpcStateSnapshot().channelHealth
+            XCTAssertEqual(try XCTUnwrap(health.micLevelDBFS), -72, accuracy: 0.001)
+            XCTAssertEqual(try XCTUnwrap(health.appLevelDBFS), -18, accuracy: 0.001)
+        }
+
+        func testTheLevelsAreAbsentBeforeAnyTick() {
+            let state = makeRPCTestState()
+            let health = state.rpcStateSnapshot().channelHealth
+            XCTAssertNil(health.micLevelDBFS)
+            XCTAssertNil(health.appLevelDBFS)
+        }
+
         func testTheInactiveSnapshotCarriesNoFault() {
             let inactive = RPCStateSnapshot.ChannelHealth.inactive
             XCTAssertNil(inactive.micFault)

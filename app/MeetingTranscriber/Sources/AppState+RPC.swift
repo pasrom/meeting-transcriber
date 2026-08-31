@@ -327,6 +327,8 @@
                 recordingSilent: channelHealth.recordingSilentActive,
                 micFault: channelHealth.micFault?.rawValue,
                 appFault: channelHealth.appFault?.rawValue,
+                micLevelDBFS: channelHealth.micLevelDBFS,
+                appLevelDBFS: channelHealth.appLevelDBFS,
                 micSecondsSinceLastBuffer: channelHealth.micAges.secondsSinceLastBuffer,
                 micSecondsSinceLastEnergy: channelHealth.micAges.secondsSinceLastEnergy,
                 appSecondsSinceLastBuffer: channelHealth.appAges.secondsSinceLastBuffer,
