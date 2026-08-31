@@ -61,6 +61,21 @@
             XCTAssertEqual(target.pressCallCount, 0, "click must not also fire the AX press")
         }
 
+        /// The About tab row is allowlisted the same way Speakers is — pressing it
+        /// must find and fire, same as any other sidebar row.
+        @MainActor
+        func testAboutTabRowCanBePressed() {
+            let target = FakePressTarget(identifier: A11yID.settingsTabAbout)
+            let root = FakePressTarget(identifier: "settings", children: [target])
+
+            let outcome = DebugRPCServer.performPress(
+                identifier: A11yID.settingsTabAbout, in: root, maxDepth: 10, via: .click,
+            )
+
+            XCTAssertEqual(outcome, .pressed(true))
+            XCTAssertEqual(target.clickCallCount, 1)
+        }
+
         /// Omitting `via` keeps the pre-existing AX behaviour.
         @MainActor
         func testOmittedViaDefaultsToTheAXPress() {

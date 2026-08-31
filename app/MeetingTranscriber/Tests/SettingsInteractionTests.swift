@@ -103,7 +103,7 @@ final class SettingsInteractionTests: XCTestCase {
     func testPollIntervalStepperIncrementsSetting() throws {
         let settings = makeSettings()
         settings.pollInterval = 5.0
-        let view = GeneralSettingsView(settings: settings, updateChecker: nil)
+        let view = GeneralSettingsView(settings: settings)
 
         // Poll-interval + grace each have a Stepper; poll-interval is first in
         // document order (both have empty, hidden labels so can't be found by text).
@@ -117,7 +117,7 @@ final class SettingsInteractionTests: XCTestCase {
     func testGracePeriodStepperIncrementsSetting() throws {
         let settings = makeSettings()
         settings.endGrace = 5.0
-        let view = GeneralSettingsView(settings: settings, updateChecker: nil)
+        let view = GeneralSettingsView(settings: settings)
 
         // Grace is the second stepper in document order (step 1).
         let steppers = try view.inspect().findAll(ViewType.Stepper.self)

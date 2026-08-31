@@ -52,9 +52,8 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
 
     private func makeGeneral(
         settings: AppSettings? = nil,
-        updateChecker: UpdateChecker? = nil,
     ) -> GeneralSettingsView {
-        GeneralSettingsView(settings: settings ?? makeSettings(), updateChecker: updateChecker)
+        GeneralSettingsView(settings: settings ?? makeSettings())
     }
 
     private func makeAudio(settings: AppSettings? = nil) -> AudioSettingsView {
@@ -136,32 +135,9 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         XCTAssertNoThrow(try body.find(text: "Grace Period"))
     }
 
-    func testUpdatesSectionShownWhenCheckerProvided() throws {
-        let checker = UpdateChecker(provider: MockUpdateProvider())
-        let body = try makeGeneral(updateChecker: checker).inspect()
-        XCTAssertNoThrow(try body.find(text: "Check for Updates"))
-        XCTAssertNoThrow(try body.find(text: "Check Now"))
-    }
-
-    func testUpdatesSectionHiddenWhenNoChecker() throws {
+    func testUpdatesSectionNoLongerInGeneral() throws {
         let body = try makeGeneral().inspect()
-        XCTAssertThrowsError(try body.find(text: "Check Now"))
-    }
-
-    func testPreReleaseToggleShownWhenCheckEnabled() throws {
-        let settings = makeSettings()
-        settings.checkForUpdates = true
-        let checker = UpdateChecker(provider: MockUpdateProvider())
-        let body = try makeGeneral(settings: settings, updateChecker: checker).inspect()
-        XCTAssertNoThrow(try body.find(text: "Include Pre-Releases"))
-    }
-
-    func testPreReleaseToggleHiddenWhenCheckDisabled() throws {
-        let settings = makeSettings()
-        settings.checkForUpdates = false
-        let checker = UpdateChecker(provider: MockUpdateProvider())
-        let body = try makeGeneral(settings: settings, updateChecker: checker).inspect()
-        XCTAssertThrowsError(try body.find(text: "Include Pre-Releases"))
+        XCTAssertThrowsError(try body.find(text: "Check for Updates"))
     }
 
     // MARK: - Audio tab
