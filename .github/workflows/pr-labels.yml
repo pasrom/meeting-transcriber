@@ -6,10 +6,18 @@ name: Auto-label PRs
 # with 403 "Resource not accessible by integration". pull_request_target runs
 # in the base-repo context with a token that honors the declared permissions.
 #
+# The job also GATES the title: a title matching no conventional-commit type
+# fails the check instead of passing silently. Before that, an unconventional
+# title simply produced no label and the job still reported success, so nothing
+# ever surfaced it (observed on PR #642, whose title was fixed only because a
+# human noticed it at merge time).
+#
 # SAFETY: this is only safe because the job never checks out or executes the
 # PR's code. It reads the PR title from the event payload as data (via
 # context.payload, not a `${{ }}` interpolation) and applies a label from a
-# fixed allowlist. Do NOT add an `actions/checkout` of the PR head followed by
+# fixed allowlist. The failure message embeds the title through
+# `core.setFailed`, which escapes workflow-command characters, so it stays
+# data there too. Do NOT add an `actions/checkout` of the PR head followed by
 # build/run steps here, and do NOT interpolate PR-controlled fields (title,
 # body, branch name) via `${{ }}` into a script/run block — either would expose
 # the writable token to untrusted fork input.
@@ -23,7 +31,7 @@ jobs:
     permissions:
       pull-requests: write
     steps:
-      - name: Label PR from conventional commit title
+      - name: Check conventional commit title and label PR
         uses: actions/github-script@v9
         with:
           script: |
@@ -36,11 +44,24 @@ jobs:
             else if (/^(ci|build|chore)[\s(:|!]/.test(title)) labels.push('chore');
             else if (/^(refactor|perf|test)[\s(:|!]/.test(title)) labels.push('chore');
 
-            if (labels.length > 0) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                labels
-              });
+            // No label means no recognised type, which is the same condition
+            // the repo's commit convention rejects. Fail with the expected
+            // shape spelled out: an outside contributor cannot be expected to
+            // infer it from a red check alone. Re-editing the title re-runs
+            // this workflow, so the fix is immediate.
+            if (labels.length === 0) {
+              core.setFailed(
+                `PR title does not follow Conventional Commits: "${title}"\n` +
+                'Expected "<type>(<scope>): <description>", where type is one of ' +
+                'feat, fix, docs, refactor, test, perf, chore, build, ci.\n' +
+                'Example: feat(app): add transcript output privacy options',
+              );
+              return;
             }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels
+            });
