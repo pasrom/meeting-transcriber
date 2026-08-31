@@ -46,7 +46,6 @@ final class GeneralSettingsBrowserWarningTests: XCTestCase {
     ) throws -> String? {
         let view = try GeneralSettingsView(
             settings: makeSettings(browserMeetings: browserMeetings),
-            updateChecker: nil,
             notificationVisibility: visibility,
         )
         let found = try? view.inspect().find(viewWithAccessibilityIdentifier: A11yID.browserConsentWarning)

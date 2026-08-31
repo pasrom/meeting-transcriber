@@ -190,6 +190,16 @@ out=$("$MT_CLI_BIN" ui-press recordOnlyToggle --window speaker-naming 2>&1 || tr
 echo "$out" | grep -q "403" || fail "ui-press disallowed window: expected 403, got: $out"
 ok "ui-press speaker-naming → 403"
 
+# Press the About tab and confirm its detail pane actually opened. "GitHub" is
+# the marker (not "About") because the sidebar row's own label is always in
+# the tree regardless of which pane is selected — "GitHub" only exists inside
+# the About detail content, so it only appears once that pane is showing.
+"$MT_CLI_BIN" ui-press settings-tab-about --window settings >/dev/null \
+    || fail "ui-press settings-tab-about failed"
+tree=$("$MT_CLI_BIN" ui-tree --window settings)
+echo "$tree" | grep -q "GitHub" || fail "About pane not shown after pressing settings-tab-about"
+ok "ui-press settings-tab-about → About pane shown"
+
 "$MT_CLI_BIN" close-settings >/dev/null
 sleep 1
 

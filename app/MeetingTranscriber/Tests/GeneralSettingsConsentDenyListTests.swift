@@ -21,7 +21,6 @@ final class GeneralSettingsConsentDenyListTests: XCTestCase {
     private func view(browserMeetings: Bool, denied: [String]) throws -> GeneralSettingsView {
         try GeneralSettingsView(
             settings: makeSettings(browserMeetings: browserMeetings, denied: denied),
-            updateChecker: nil,
             notificationVisibility: nil,
         )
     }
@@ -78,7 +77,6 @@ final class GeneralSettingsConsentDenyListTests: XCTestCase {
         let settings = try makeSettings(browserMeetings: true, denied: ["Fjordfox", "Slack"])
         let view = GeneralSettingsView(
             settings: settings,
-            updateChecker: nil,
             notificationVisibility: nil,
         )
         try view.inspect()
