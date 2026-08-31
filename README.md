@@ -249,7 +249,7 @@ Open Settings via the menu bar item or ⌘,.
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
-| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), protocol language, output folder, custom prompt |
+| **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, protocol language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
 
 ---
@@ -260,10 +260,17 @@ Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`
 
 | File | Content |
 |------|---------|
-| `20260225_1400_meeting.txt` | Raw transcript |
-| `20260225_1400_meeting.md` | Structured protocol |
+| `20260225_1400_meeting.txt` | Raw transcript (when enabled) |
+| `20260225_1400_meeting.md` | Structured protocol (when an LLM provider is configured) |
 
-**Protocol structure:** Summary, Participants, Topics Discussed, Decisions, Tasks (with responsible person, deadline, priority), Open Questions, Full Transcript.
+In **Settings → Output**, both transcript options default to enabled for backward compatibility:
+
+- **Include full transcript in protocol** appends the verbatim transcript to generated Markdown.
+- **Save raw transcript separately** retains the standalone `.txt` file.
+
+Disable both to retain only the generated meeting minutes. The recording follows its own retention policy and is not deleted by either setting. To avoid data loss, a raw transcript is retained if protocol generation is disabled, fails, or the job ends with an error.
+
+**Protocol structure:** Summary, Participants, Topics Discussed, Decisions, Tasks (with responsible person, deadline, priority), Open Questions, and optionally the Full Transcript.
 
 ---
 

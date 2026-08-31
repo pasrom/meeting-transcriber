@@ -519,6 +519,15 @@ When dual-source recording (app + mic) is available:
 - **`.openAICompatible`** — Any OpenAI-compatible HTTP API (Ollama, LM Studio, llama.cpp, etc.)
 - **`.none`** — Skip LLM generation; save transcript only
 
+`AppSettings.includeFullTranscriptInProtocol` and
+`AppSettings.saveRawTranscriptSeparately` default to `true` to preserve the
+legacy output. Their values are captured when a job enters the queue, so a
+later settings change affects only subsequent recordings. The raw `.txt` and
+verbatim segment sidecar are deleted only after a job completes successfully
+with a saved protocol. If protocol generation is disabled, fails, or the job
+ends in an error, the raw transcript is retained with a warning; recordings are
+governed by their separate retention policy.
+
 `AppSettings.protocolLanguage` (default `"German"`) is substituted into the prompt as `{LANGUAGE}`. Custom prompts can also use `{MEETING_DATE}` (`YYYY-MM-DD`) and `{MEETING_TIME}` (`HH:mm`), derived from the captured recording start time. Imports and recovery jobs resolve those time placeholders to `Unknown` rather than their enqueue or processing time. Only recordings with a captured start receive the authoritative meeting-metadata block, so existing custom prompts receive reliable temporal context without needing to add the placeholders.
 
 ### Claude CLI Invocation
@@ -546,7 +555,7 @@ When dual-source recording (app + mic) is available:
 ---
 
 ## Full Transcript
-[appended automatically]
+[appended when enabled]
 ```
 
 ---
