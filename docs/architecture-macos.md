@@ -95,13 +95,14 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `AppPickerView.swift` | App picker sheet for manual recording of any running app |
 | `AudioImportTypes.swift` | File types offered by the batch-import and voice-enrollment `NSOpenPanel`s — single source of truth so the ffmpeg-gated vs. natively-decoded format lists stay pinned and testable |
 | `A11yID.swift` | Shared accessibility-identifier namespace — one constant per control, referenced by the view modifier, ViewInspector tests, and the `/ui/press` allowlist |
-| `SettingsView.swift` | Settings window — `TabView` shell hosting six topic-grouped sub-views in `Sources/Settings/` |
-| `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp) · Detection (Poll Interval, Grace Period) · Updates |
+| `SettingsView.swift` | Settings window — `TabView` shell hosting seven topic-grouped sub-views in `Sources/Settings/` |
+| `Settings/GeneralSettingsView.swift` | Mode (Record-only) · Apps to Watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp) · Detection (Poll Interval, Grace Period) |
 | `Settings/AudioSettingsView.swift` | Microphone device · VAD (enabled + threshold) · Per-Channel Indicator |
 | `Settings/TranscriptionSettingsView.swift` | ASR engine picker · engine-specific options · model status · Live transcription (PoC) toggle |
 | `Settings/SpeakersSettingsView.swift` | Diarization · Mic Speaker Name · Known Voices · Recognition Stats · Experimental Diarization Tuning |
 | `Settings/OutputSettingsView.swift` | LLM provider · protocol language · output folder · custom prompt |
-| `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics · About |
+| `Settings/AdvancedSettingsView.swift` | Permissions · Diagnostics |
+| `Settings/AboutSettingsView.swift` | Version · bundle identifier · build date · ffmpeg status · project link · Updates |
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
@@ -698,12 +699,13 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 
 | Tab | Sections | Bindings | Local state |
 |---|---|---|---|
-| **General** | Apps to Watch · Detection · Updates | `settings`, `updateChecker?` | — |
+| **General** | Apps to Watch · Detection | `settings` | — |
 | **Audio** | Microphone · VAD | `settings` | `audioDevices` |
 | **Transcription** | Engine + per-engine options + status | `settings`, three engines | — |
 | **Speakers** | Diarization · Speaker Identity · Known Voices · Recognition Stats · Experimental Diarization Tuning | `settings`, `recognitionStatsLog`, `enrollmentDiarizerFactory` | `knownVoicesSheet` |
 | **Output** | LLM Provider · Protocol Language · Output Folder · Prompt | `settings` | `claudeBinaries` (#if !APPSTORE), connection-test state, `availableModels`, `hasCustomPrompt` |
-| **Advanced** | Permissions · Diagnostics · About | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
+| **Advanced** | Permissions · Diagnostics | — | `micPermission`, `screenRecordingOK`, `accessibilityOK` |
+| **About** | Build identity · Dependencies · Updates | `settings`, `updateChecker?` | — |
 
 **Conditional rendering rules:**
 - `noMic` hides the mic-device picker (Audio) and the Speaker Identity section (Speakers)
@@ -712,11 +714,12 @@ The overlay lives over the *currently active* animation (idle, recording, transc
 - `transcriptionEngine` switches between WhisperKit / Parakeet option panels
 - `protocolProvider` switches between Claude CLI / OpenAI-compatible / None panels
 - `#if APPSTORE` removes the Claude CLI provider option entirely
-- `updateChecker == nil` hides the entire Updates section
+- `updateChecker == nil` hides the entire Updates section in About
 
 **Cross-cutting concerns owned by sub-views:**
 - `OutputSettingsView` owns OpenAI-endpoint connection testing (`testConnection()`) and custom-prompt I/O (`openCustomPrompt`, `importCustomPrompt`, reset confirmation)
-- `AdvancedSettingsView` owns permission live-probing (`refreshPermissions()`) and version/build/ffmpeg status
+- `AdvancedSettingsView` owns permission live-probing (`refreshPermissions()`)
+- `AboutSettingsView` owns version/build/ffmpeg status and update-check controls
 
 ---
 

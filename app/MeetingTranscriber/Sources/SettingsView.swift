@@ -60,7 +60,6 @@ struct SettingsView: View {
         case .general:
             GeneralSettingsView(
                 settings: settings,
-                updateChecker: updateChecker,
                 notificationVisibility: notificationVisibility,
             )
 
@@ -90,12 +89,15 @@ struct SettingsView: View {
 
         case .advanced:
             AdvancedSettingsView(settings: settings)
+
+        case .about:
+            AboutSettingsView(settings: settings, updateChecker: updateChecker)
         }
     }
 }
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, audio, transcription, speakers, output, advanced
+    case general, audio, transcription, speakers, output, advanced, about
 
     var id: String {
         rawValue
@@ -109,6 +111,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .speakers: "Speakers"
         case .output: "Output"
         case .advanced: "Advanced"
+        case .about: "About"
         }
     }
 
@@ -120,6 +123,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .speakers: "person.2"
         case .output: "doc.text"
         case .advanced: "wrench.and.screwdriver"
+        case .about: "info.circle"
         }
     }
 }
