@@ -34,6 +34,10 @@ on:
 
 jobs:
   label:
+    # The check context is this job's id unless it carries a name, and a
+    # contributor reading "label - failing" concludes the labeling is broken
+    # rather than that their title is. Name it after what it verifies.
+    name: conventional-title
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
