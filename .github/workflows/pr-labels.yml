@@ -23,7 +23,14 @@ name: Auto-label PRs
 # the writable token to untrusted fork input.
 on:
   pull_request_target:
-    types: [opened, edited]
+    # `synchronize` and `reopened` matter now that the job can fail. A check
+    # run attaches to the PR head at event time, so without them a push leaves
+    # the new head with no verdict at all: not red, not green, absent. Branch
+    # protection has `strict: true`, so nearly every PR is updated from main
+    # right before merging, which is exactly such a push. The gate would then
+    # be missing at the one moment it is supposed to bind. `ready_for_review`
+    # covers a draft opened before its title was settled.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 jobs:
   label:
