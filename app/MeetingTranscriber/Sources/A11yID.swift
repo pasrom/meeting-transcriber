@@ -62,7 +62,7 @@ enum A11yID {
         "settings-tab-\(rawValue)"
     }
 
-    /// The one tab row the `/ui/press` allowlist admits. A named constant rather
+    /// A tab row the `/ui/press` allowlist admits. A named constant rather
     /// than a literal at the allowlist, so the identifier has a single home.
     static let settingsTabSpeakers = settingsTab("speakers")
 

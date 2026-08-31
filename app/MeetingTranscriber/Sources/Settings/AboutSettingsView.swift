@@ -32,7 +32,9 @@ struct AboutSettingsView: View {
         .formStyle(.grouped)
     }
 
-    private static let githubURL = URL(string: "https://github.com/pasrom/meeting-transcriber")!
+    private static let githubURL = URL(
+        string: "https://github.com/\(GitHubReleaseProvider.owner)/\(GitHubReleaseProvider.repo)",
+    )!
 
     private static let versionString: String = {
         let version = Bundle.main.appVersion
