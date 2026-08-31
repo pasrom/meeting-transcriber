@@ -66,6 +66,9 @@ enum A11yID {
     /// than a literal at the allowlist, so the identifier has a single home.
     static let settingsTabSpeakers = settingsTab("speakers")
 
+    /// Same single-home pattern for the About tab.
+    static let settingsTabAbout = settingsTab("about")
+
     // Speaker-naming dialog.
     static let confirmButton = "confirm-button"
     static let skipButton = "skip-button"
