@@ -1,0 +1,80 @@
+name: E2E (Capture Fault)
+
+# Live capture-fault E2E (issue #614). Plays low-level noise into a loopback
+# device so the microphone track sits under the silence threshold while still
+# carrying samples, asserts nothing is reported, then stops the noise so the
+# same channel delivers exact zeroes and asserts it is reported once.
+# Driver: scripts/e2e-channel-fault.sh.
+#
+# Its own workflow rather than a step in e2e-app.yml, which is where it started.
+# There it ran last, after five other lanes, and an environment problem in any
+# of them skipped it: over four attempts it was reached exactly once. A lane
+# that can only be observed when everything else is healthy cannot be used to
+# find out whether it works.
+#
+# NON-GATING: not referenced by any required check and not in
+# .github/tag-ruleset.json, so red is reported and blocks nothing. It runs on
+# labelled pull requests as well as nightly, because `workflow_dispatch` only
+# works for workflows that already exist on the default branch, and a lane that
+# cannot run before it is merged cannot be shown to work before it is merged.
+#
+# Runner prerequisites: the self-hosted Mac mini as for e2e-app.yml (signing
+# identity, Microphone grant on the deployed bundle) plus BlackHole 2ch as the
+# default input, which that runner already has.
+
+on:
+  workflow_dispatch:
+  # Same policy as the sibling audio workflows: same-repo branches carrying
+  # `run-e2e` only, so fork PRs never reach the self-hosted runner.
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    # 05:45 UTC — after e2e-app (04:30) and e2e-browser (05:15), since all
+    # three share the single `audio` runner and would otherwise queue.
+    - cron: '45 5 * * *'
+
+# Same reasoning as the sibling audio workflows: the dev app is launched
+# detached, so a cancelled run cannot clean it up and would hold port 9876.
+concurrency:
+  group: e2e-channel-fault-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  e2e-channel-fault:
+    if: |
+      github.event_name != 'pull_request' ||
+      (
+        contains(github.event.pull_request.labels.*.name, 'run-e2e') &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (github.event.action != 'labeled' || github.event.label.name == 'run-e2e')
+      )
+    runs-on: [self-hosted, macOS, ARM64, audio]
+    # Build + deploy + re-sign, then one recording carrying both phases: the
+    # window is pushed to its 30 s floor and each phase needs it, plus detection
+    # latency and teardown. Observed shape is under 6 min; 15 gives margin
+    # without letting a hang sit for an hour.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/verify-xcode
+
+      - name: Install Developer ID certificate
+        id: dev-id
+        uses: ./.github/actions/install-developer-id
+        with:
+          cert: ${{ secrets.DEVELOPER_ID_CERT }}
+          cert-password: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          keychain-name: e2e-signing.keychain-db
+          extra-partition-roles: "codesign:"
+
+      - name: Export keychain path for the driver
+        if: steps.dev-id.outputs.keychain-path != ''
+        run: echo "E2E_SIGNING_KEYCHAIN=${{ steps.dev-id.outputs.keychain-path }}" >> "$GITHUB_ENV"
+
+      - name: Run capture-fault E2E driver
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        timeout-minutes: 12
+        run: bash scripts/e2e-channel-fault.sh

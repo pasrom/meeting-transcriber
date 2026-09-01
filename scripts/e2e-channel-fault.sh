@@ -88,7 +88,6 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/e2e-helpers.sh
 source "$ROOT/scripts/lib/e2e-helpers.sh"
-DEV_BUNDLE_BUILD="$ROOT/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app"
 # Stable deploy path so the runner's manual TCC grants survive rebuilds; see
 # scripts/e2e-silent-recording.sh for the full reasoning.
 DEV_BUNDLE_DEPLOY="$HOME/Applications/MeetingTranscriber-Dev.app"
@@ -181,67 +180,21 @@ trap cleanup EXIT
 
 # --- 1. Build + deploy ------------------------------------------------------
 
+# Delegated to e2e-app.sh, the way e2e-browser.sh does it: that script owns the
+# deploy path and the re-signing that keeps the runner's TCC grant applicable,
+# and a second copy of it here would drift from the original the first time
+# either changed.
 if [ "$NO_BUILD" = false ]; then
-    echo "▸ Building dev .app…"
-    "$ROOT/scripts/run_app.sh" --build-only >/dev/null
-    # meeting-simulator and mt-cli live under separate `.build/` dirs and
-    # share no targets, so they can compile in parallel. Cuts ~5–15 s off
-    # the cold-cache path. meeting-simulator is built in release to match
-    # scripts/e2e-app.sh's `SIMULATOR_BIN` path — re-using its
-    # pre-existing build under `--no-build` instead of producing a second
-    # debug copy.
-    echo "▸ Building meeting-simulator + mt-cli (parallel)…"
-    (cd "$ROOT/tools/meeting-simulator" && swift build -c release >/dev/null) &
-    SIM_BUILD_PID=$!
-    (cd "$ROOT/tools/mt-cli" && swift build >/dev/null) &
-    CLI_BUILD_PID=$!
-    # `wait $PID1 $PID2` only returns the exit code of the LAST PID — an
-    # earlier failure would be silently dropped and surface ~60 lines down
-    # as the confusing "required binary missing" guard. Wait individually so
-    # whichever build failed is the failure that actually halts the script.
-    wait "$SIM_BUILD_PID" || die "meeting-simulator build failed"
-    wait "$CLI_BUILD_PID" || die "mt-cli build failed"
-
-    # Deploy to the stable path and re-sign with the runner's dev cert so
-    # the manual TCC grant (keyed on the cert SHA) keeps Microphone + Screen
-    # Recording granted. Same pattern as scripts/e2e-app.sh — without this the
-    # recorder runs but emits zero-byte WAVs because TCC denies the capture stack.
-    echo "▸ Deploying to ${DEV_BUNDLE_DEPLOY} ..."
-    mkdir -p "$(dirname "$DEV_BUNDLE_DEPLOY")"
-    if [ -d "$DEV_BUNDLE_DEPLOY" ]; then
-        rsync -a --delete "$DEV_BUNDLE_BUILD/" "$DEV_BUNDLE_DEPLOY/"
-    else
-        cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
-    fi
-    if [ -n "${DEVELOPER_ID:-}" ]; then
-        echo "▸ Re-signing with Developer ID '$DEVELOPER_ID'…"
-        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
-            || die "Developer ID re-sign failed"
-    else
-        # Local-dev path: self-signed cert from setup-self-hosted-runner.sh,
-        # resolved from the keychain by dev_signing_identity.
-        if [ -f "$DEV_KEYCHAIN" ]; then
-            DEV_CERT_HASH="$(dev_signing_identity)"
-            if [ -n "$DEV_CERT_HASH" ]; then
-                echo "▸ Re-signing with self-signed dev cert (SHA1=${DEV_CERT_HASH})..."
-                # codesign honours `--keychain` for the signing identity but
-                # still consults the user-domain search list for trust-chain
-                # resolution. Prepending the dev keychain matches scripts/e2e-app.sh.
-                "$ROOT/scripts/keychain-prepend.sh" "$DEV_KEYCHAIN" 2>/dev/null || true
-                resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
-                    || die "dev-cert re-sign failed"
-            else
-                echo "  Run scripts/setup-self-hosted-runner.sh to (re-)create it" >&2
-                die "dev keychain present but no '$DEV_CERT_NAME' identity inside"
-            fi
-        else
-            echo "▸ WARNING: no DEVELOPER_ID and no $DEV_KEYCHAIN — TCC may deny capture" >&2
-            echo "  (run scripts/setup-self-hosted-runner.sh to fix)"
-        fi
-    fi
+    echo "▸ Building + deploying the dev bundle…"
+    "$ROOT/scripts/e2e-app.sh" --redeploy-only || die "build/deploy failed"
+    echo "▸ Building mt-cli…"
+    (cd "$ROOT/tools/mt-cli" && swift build > /dev/null) || die "mt-cli build failed"
+    echo "▸ Building meeting-simulator…"
+    (cd "$ROOT/tools/meeting-simulator" && swift build -c release > /dev/null) \
+        || die "meeting-simulator build failed"
 fi
 
-for path in "$BIN" "$MTCLI" "$SIM"; do
+for path in "$BIN" "$MTCLI" "$SIM" "$NOISE"; do
     [ -x "$path" ] || die "required binary missing: $path — run without --no-build first"
 done
 
