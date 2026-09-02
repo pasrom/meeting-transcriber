@@ -203,10 +203,21 @@ ok "ui-press speaker-naming → 403"
 # the marker (not "About") because the sidebar row's own label is always in
 # the tree regardless of which pane is selected — "GitHub" only exists inside
 # the About detail content, so it only appears once that pane is showing.
-"$MT_CLI_BIN" ui-press settings-tab-about --window settings >/dev/null \
+# --via click: a sidebar row is a List(selection:) row, which accepts a plain
+# ax press and reports it ran without actually selecting itself (see
+# DebugRPCServer+UIPress.swift's uiPressAllowedIdentifiers comment).
+"$MT_CLI_BIN" ui-press settings-tab-about --window settings --via click >/dev/null \
     || fail "ui-press settings-tab-about failed"
-tree=$("$MT_CLI_BIN" ui-tree --window settings)
-echo "$tree" | grep -q "GitHub" || fail "About pane not shown after pressing settings-tab-about"
+about_visible=false
+for _ in $(seq 1 8); do
+    tree=$("$MT_CLI_BIN" ui-tree --window settings)
+    if echo "$tree" | grep -q "GitHub"; then
+        about_visible=true
+        break
+    fi
+    sleep 1
+done
+[ "$about_visible" = true ] || fail "About pane not shown after pressing settings-tab-about"
 ok "ui-press settings-tab-about → About pane shown"
 
 "$MT_CLI_BIN" close-settings >/dev/null
