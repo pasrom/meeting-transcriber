@@ -159,7 +159,17 @@ growth_summary() {
         }'
 }
 
-_rpc_ready() { [ -n "$(rpc /healthz)" ]; }
+# See the shared note in e2e-app.sh: `rpc` ends in `|| true`, so probing
+# through it reports success for a refused connection and leaves the token
+# file, which outlives every run on the host, as the only real condition.
+# Ask curl directly and let its exit status decide.
+_rpc_ready() {
+    [ -f "$RPC_TOKEN_FILE" ] || return 1
+    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
+    curl --silent --fail --max-time 5 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/healthz" >/dev/null 2>&1
+}
 
 # --- preflight ------------------------------------------------------------
 
@@ -175,18 +185,26 @@ case "$SAMPLE_EVERY_MIN" in ''|*[!0-9]*) fail "--sample-every must be a positive
 [ $((SOAK_MINUTES / SAMPLE_EVERY_MIN)) -ge 2 ] \
     || fail "--minutes/--sample-every must yield at least 2 samples (got $((SOAK_MINUTES / SAMPLE_EVERY_MIN)))"
 
-SAVED_DEBUG_RPC=$(snapshot_default "$BUNDLE_ID" debugRPCEnabled)
-SAVED_AUTO_WATCH=$(snapshot_default "$BUNDLE_ID" autoWatch)
-SAVED_RECORD_ONLY=$(snapshot_default "$BUNDLE_ID" recordOnly)
+# Address the standard-domain plist directly, and write through
+# `write_dev_default`. `defaults <bundle-id>` is redirected into the app's
+# container once containermanagerd has registered one, while the dev .app is not
+# sandboxed and
+# resolves the standard domain, so the two disagree and a lane can configure
+# nothing at all without any error. See write_dev_default in
+# scripts/lib/e2e-helpers.sh.
+_STANDARD_PLIST="$(dev_standard_plist "$BUNDLE_ID")"
+SAVED_DEBUG_RPC=$(snapshot_default "$_STANDARD_PLIST" debugRPCEnabled)
+SAVED_AUTO_WATCH=$(snapshot_default "$_STANDARD_PLIST" autoWatch)
+SAVED_RECORD_ONLY=$(snapshot_default "$_STANDARD_PLIST" recordOnly)
 
 RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-soak-start.XXXXXX")"
 SIM_PID=""
 
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-    restore_bool_default "$BUNDLE_ID" debugRPCEnabled "$SAVED_DEBUG_RPC"
-    restore_bool_default "$BUNDLE_ID" autoWatch       "$SAVED_AUTO_WATCH"
-    restore_bool_default "$BUNDLE_ID" recordOnly      "$SAVED_RECORD_ONLY"
+    restore_bool_default "$_STANDARD_PLIST" debugRPCEnabled "$SAVED_DEBUG_RPC"
+    restore_bool_default "$_STANDARD_PLIST" autoWatch       "$SAVED_AUTO_WATCH"
+    restore_bool_default "$_STANDARD_PLIST" recordOnly      "$SAVED_RECORD_ONLY"
     if [ "$APP_AFTER" = quit ]; then
         quit_running_app || true
         sweep_run_artifacts "$REC_DIR" "$RUN_START_MARKER"
@@ -213,9 +231,9 @@ fi
 # Record-only: the soak is about the resident process over an hour, and running
 # transcription on every loop of the fixture would measure the ASR engine
 # instead. The pipeline assertion at the end re-enables the full path.
-defaults write "$BUNDLE_ID" debugRPCEnabled -bool true
-defaults write "$BUNDLE_ID" autoWatch       -bool true
-defaults write "$BUNDLE_ID" recordOnly      -bool true
+write_dev_default "$BUNDLE_ID" debugRPCEnabled true bool
+write_dev_default "$BUNDLE_ID" autoWatch true bool
+write_dev_default "$BUNDLE_ID" recordOnly true bool
 
 mkdir -p "$REC_DIR"
 quit_running_app || true

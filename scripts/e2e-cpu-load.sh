@@ -162,11 +162,19 @@ if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | gr
     fail "no default audio input device — install BlackHole 2ch and set it as the default Input"
 fi
 
-SAVED_LIVE_TRANS=$(snapshot_default "$BUNDLE_ID" liveTranscriptionEnabled)
-SAVED_TRANS_ENGINE=$(snapshot_default "$BUNDLE_ID" transcriptionEngine)
-SAVED_DEBUG_RPC=$(snapshot_default "$BUNDLE_ID" debugRPCEnabled)
-SAVED_AUTO_WATCH=$(snapshot_default "$BUNDLE_ID" autoWatch)
-SAVED_RECORD_ONLY=$(snapshot_default "$BUNDLE_ID" recordOnly)
+# Address the standard-domain plist directly, and write through
+# `write_dev_default`. `defaults <bundle-id>` is redirected into the app's
+# container once containermanagerd has registered one, while the dev .app is not
+# sandboxed and
+# resolves the standard domain, so the two disagree and a lane can configure
+# nothing at all without any error. See write_dev_default in
+# scripts/lib/e2e-helpers.sh.
+_STANDARD_PLIST="$(dev_standard_plist "$BUNDLE_ID")"
+SAVED_LIVE_TRANS=$(snapshot_default "$_STANDARD_PLIST" liveTranscriptionEnabled)
+SAVED_TRANS_ENGINE=$(snapshot_default "$_STANDARD_PLIST" transcriptionEngine)
+SAVED_DEBUG_RPC=$(snapshot_default "$_STANDARD_PLIST" debugRPCEnabled)
+SAVED_AUTO_WATCH=$(snapshot_default "$_STANDARD_PLIST" autoWatch)
+SAVED_RECORD_ONLY=$(snapshot_default "$_STANDARD_PLIST" recordOnly)
 
 quit_running_app
 
@@ -227,7 +235,17 @@ if [ "$fg_user" != "$my_user" ]; then
     fail "Aqua foreground user is '$fg_user', not '$my_user' — Fast User Switching is active."
 fi
 
-_rpc_ready() { [ -f "$RPC_TOKEN_FILE" ] && RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null 2>&1; }
+# See the shared note in e2e-app.sh: `rpc` ends in `|| true`, so probing
+# through it reports success for a refused connection and leaves the token
+# file, which outlives every run on the host, as the only real condition.
+# Ask curl directly and let its exit status decide.
+_rpc_ready() {
+    [ -f "$RPC_TOKEN_FILE" ] || return 1
+    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
+    curl --silent --fail --max-time 5 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/healthz" >/dev/null 2>&1
+}
 
 launch_app_and_wait() {
     log "Launching $DEV_BUNDLE_DEPLOY"
@@ -245,15 +263,15 @@ RUN_START_MARKER="$(mktemp "${TMPDIR:-/tmp}/e2e-cpu-load-start.XXXXXX")"
 SIM_PID=""
 on_exit() {
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
-    restore_bool_default "$BUNDLE_ID" liveTranscriptionEnabled "$SAVED_LIVE_TRANS"
+    restore_bool_default "$_STANDARD_PLIST" liveTranscriptionEnabled "$SAVED_LIVE_TRANS"
     if [ -n "$SAVED_TRANS_ENGINE" ]; then
-        defaults write "$BUNDLE_ID" transcriptionEngine -string "$SAVED_TRANS_ENGINE"
+        write_dev_default "$BUNDLE_ID" transcriptionEngine "$SAVED_TRANS_ENGINE" string
     else
-        defaults delete "$BUNDLE_ID" transcriptionEngine 2>/dev/null || true
+        delete_dev_default "$BUNDLE_ID" transcriptionEngine
     fi
-    restore_bool_default "$BUNDLE_ID" debugRPCEnabled "$SAVED_DEBUG_RPC"
-    restore_bool_default "$BUNDLE_ID" autoWatch       "$SAVED_AUTO_WATCH"
-    restore_bool_default "$BUNDLE_ID" recordOnly      "$SAVED_RECORD_ONLY"
+    restore_bool_default "$_STANDARD_PLIST" debugRPCEnabled "$SAVED_DEBUG_RPC"
+    restore_bool_default "$_STANDARD_PLIST" autoWatch       "$SAVED_AUTO_WATCH"
+    restore_bool_default "$_STANDARD_PLIST" recordOnly      "$SAVED_RECORD_ONLY"
     if [ "$APP_AFTER" = quit ]; then
         # `|| true`: under set -e a wedged app (quit ladder exhausted) must not
         # abort the trap before the artifact sweep below runs.
@@ -328,11 +346,11 @@ contamination_flag() {
 # (file move instead of batch transcription) so session B starts quiet; the
 # recording path itself is byte-identical to a normal meeting while it runs.
 
-defaults write "$BUNDLE_ID" liveTranscriptionEnabled -bool false
-defaults write "$BUNDLE_ID" recordOnly -bool true
-defaults write "$BUNDLE_ID" transcriptionEngine -string parakeet
-defaults write "$BUNDLE_ID" debugRPCEnabled -bool true
-defaults write "$BUNDLE_ID" autoWatch -bool true
+write_dev_default "$BUNDLE_ID" liveTranscriptionEnabled false bool
+write_dev_default "$BUNDLE_ID" recordOnly true bool
+write_dev_default "$BUNDLE_ID" transcriptionEngine parakeet string
+write_dev_default "$BUNDLE_ID" debugRPCEnabled true bool
+write_dev_default "$BUNDLE_ID" autoWatch true bool
 
 launch_app_and_wait
 
@@ -372,8 +390,8 @@ quit_running_app
 # a user with the feature enabled — and so session A's idle window stayed
 # free of preload memory/CPU.
 
-defaults write "$BUNDLE_ID" liveTranscriptionEnabled -bool true
-defaults write "$BUNDLE_ID" recordOnly -bool false
+write_dev_default "$BUNDLE_ID" liveTranscriptionEnabled true bool
+write_dev_default "$BUNDLE_ID" recordOnly false bool
 
 launch_app_and_wait
 
