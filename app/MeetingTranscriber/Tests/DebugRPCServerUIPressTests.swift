@@ -234,6 +234,7 @@
 
         func testIsIdentifierAllowedForUIPress() {
             XCTAssertTrue(DebugRPCServer.isIdentifierAllowedForUIPress("recordOnlyToggle"))
+            XCTAssertTrue(DebugRPCServer.isIdentifierAllowedForUIPress(A11yID.settingsTabAbout))
             XCTAssertFalse(DebugRPCServer.isIdentifierAllowedForUIPress("someOtherControl"))
             XCTAssertFalse(DebugRPCServer.isIdentifierAllowedForUIPress(""))
         }
