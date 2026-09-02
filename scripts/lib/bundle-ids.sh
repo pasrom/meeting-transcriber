@@ -31,3 +31,13 @@ dev_container_plist() {
     local bundle_id="${1:-$DEV_BUNDLE_ID}"
     printf '%s' "$HOME/Library/Containers/$bundle_id/Data/Library/Preferences/$bundle_id.plist"
 }
+
+# Where a NON-SANDBOXED app resolves its UserDefaults, which the dev .app is.
+# This is the domain that decides what the running app sees, and the one
+# `defaults write <id>` stops reaching as soon as a container exists for the
+# identifier. The redirect keys on a container that containermanagerd has
+# registered, whatever created it, not on the directory merely existing.
+dev_standard_plist() {
+    local bundle_id="${1:-$DEV_BUNDLE_ID}"
+    printf '%s' "$HOME/Library/Preferences/$bundle_id.plist"
+}

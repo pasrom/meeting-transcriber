@@ -109,6 +109,7 @@ CHROME_PROFILE="$(mktemp -d /tmp/e2e-browser-chrome.XXXXXX)"
 source "$ROOT/scripts/lib/bundle-ids.sh"
 BUNDLE_ID="$DEV_BUNDLE_ID"
 _CONTAINER_PLIST="$(dev_container_plist)"
+_STANDARD_PLIST="$(dev_standard_plist)"
 
 # --- timing budgets -------------------------------------------------------
 
@@ -144,14 +145,13 @@ rpc() {
 # never the user's own Chrome windows.
 quit_chrome() { pkill -f "$CHROME_PROFILE" 2>/dev/null || true; }
 
-# Write a dev default to BOTH the standard domain and the app's container
-# plist (if present) — macOS routes the dev .app's reads to the container when
-# it exists, so a standard-domain-only write is silently a no-op there. Mirrors
-# e2e-app.sh's `_set_dev_default`.
+# Bind the bundle id for the shared both-domain writer. Which domains a dev
+# default has to be written to, and why a bare `defaults write <bundle-id>`
+# reaches one the app does not read, is documented on `write_dev_default` in
+# scripts/lib/e2e-helpers.sh.
 _set_dev_bool() {
     local key="$1" value="$2"
-    defaults write "$BUNDLE_ID" "$key" -bool "$value" 2>/dev/null || true
-    [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
+    write_dev_default "$BUNDLE_ID" "$key" "$value" bool
 }
 
 # Per-domain snapshots of the behaviour toggles this lane flips, so cleanup
@@ -222,9 +222,9 @@ fi
 # --- settings -------------------------------------------------------------
 
 # Snapshot the behaviour toggles per domain before flipping them.
-_PRE_BROWSER_STD="$(snapshot_default "$BUNDLE_ID" watchBrowserMeetings)"
-_PRE_RECORDONLY_STD="$(snapshot_default "$BUNDLE_ID" recordOnly)"
-_PRE_NOMIC_STD="$(snapshot_default "$BUNDLE_ID" noMic)"
+_PRE_BROWSER_STD="$(snapshot_default "$_STANDARD_PLIST" watchBrowserMeetings)"
+_PRE_RECORDONLY_STD="$(snapshot_default "$_STANDARD_PLIST" recordOnly)"
+_PRE_NOMIC_STD="$(snapshot_default "$_STANDARD_PLIST" noMic)"
 if [ -f "$_CONTAINER_PLIST" ]; then
     _PRE_BROWSER_CTR="$(snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
     _PRE_RECORDONLY_CTR="$(snapshot_default "$_CONTAINER_PLIST" recordOnly)"
@@ -232,8 +232,8 @@ if [ -f "$_CONTAINER_PLIST" ]; then
 fi
 
 # debugRPCEnabled + autoWatch are set-and-leave (like e2e-app.sh — harmless on).
-defaults write "$BUNDLE_ID" debugRPCEnabled -bool true
-defaults write "$BUNDLE_ID" autoWatch -bool true
+_set_dev_bool debugRPCEnabled true
+_set_dev_bool autoWatch true
 _set_dev_bool watchBrowserMeetings true   # append the browser category to watchApps
 _set_dev_bool recordOnly true             # sidecar + WAVs, skip transcription/protocol
 _set_dev_bool noMic true                  # app-track only; no mic needed for the proof
@@ -259,9 +259,9 @@ on_exit() {
     [ "$KEEP_CHROME" = false ] && quit_chrome
     [ "$KEEP_APP" = false ] && quit_running_app || true
     # Restore the behaviour toggles per domain (empty snapshot → delete).
-    restore_bool_default "$BUNDLE_ID" watchBrowserMeetings "$_PRE_BROWSER_STD"
-    restore_bool_default "$BUNDLE_ID" recordOnly "$_PRE_RECORDONLY_STD"
-    restore_bool_default "$BUNDLE_ID" noMic "$_PRE_NOMIC_STD"
+    restore_bool_default "$_STANDARD_PLIST" watchBrowserMeetings "$_PRE_BROWSER_STD"
+    restore_bool_default "$_STANDARD_PLIST" recordOnly "$_PRE_RECORDONLY_STD"
+    restore_bool_default "$_STANDARD_PLIST" noMic "$_PRE_NOMIC_STD"
     if [ -f "$_CONTAINER_PLIST" ]; then
         restore_bool_default "$_CONTAINER_PLIST" watchBrowserMeetings "$_PRE_BROWSER_CTR"
         restore_bool_default "$_CONTAINER_PLIST" recordOnly "$_PRE_RECORDONLY_CTR"
@@ -278,9 +278,37 @@ trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
-_rpc_ready() { [ -f "$RPC_TOKEN_FILE" ] && RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null 2>&1; }
+# See e2e-app.sh: `rpc` ends in `|| true`, so probing through it reports success
+# even for a refused connection, leaving the token file (which outlives every
+# run on the host) as the only real condition. Ask curl directly instead.
+_rpc_ready() {
+    [ -f "$RPC_TOKEN_FILE" ] || return 1
+    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
+    curl --silent --fail --max-time 5 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/healthz" >/dev/null 2>&1
+}
 poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
+
+# Same reasoning as in e2e-app.sh: a preference write that misses the domain the
+# app resolves is silent, and this lane's whole proof rests on record-only being
+# on. Assert the app's own resolved view instead of discovering it as a missing
+# sidecar several minutes later.
+# `rpc` has no --fail, so a bare emptiness test would accept an error body and
+# then read the setting as null, which would be reported as the wrong
+# preference domain. Require the field itself before believing its value.
+_state_snapshot() {
+    _SNAP="$(rpc /state)"
+    [ -n "$_SNAP" ] && jq -e '.settings.recording | has("recordOnly")' <<<"$_SNAP" >/dev/null 2>&1
+}
+_SNAP=""
+poll_until 20 1 _state_snapshot \
+    || fail "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876."
+_RESOLVED_RECORD_ONLY="$(jq -r '.settings.recording.recordOnly' <<<"$_SNAP")"
+[ "$_RESOLVED_RECORD_ONLY" = "true" ] \
+    || fail "the app resolved settings.recording.recordOnly=$_RESOLVED_RECORD_ONLY, this lane needs true. Most likely the preference write did not reach the domain the app reads (see write_dev_default in scripts/lib/e2e-helpers.sh); the other possibility is that a different MeetingTranscriber instance is answering on 127.0.0.1:9876."
+log "app resolved recordOnly=true (as configured)"
 
 # The lane answers the consent prompt over RPC, which resolves the parked
 # continuation whether or not a notification was ever posted, authorised or
@@ -357,8 +385,8 @@ _watch_state() { rpc /state | jq -r '.watchState // ""'; }
 _dump_detection_diag() {
     log "DIAG: watchState=$(_watch_state)"
     log "DIAG: /state.settings.detection = $(rpc /state | jq -c '.settings.detection // {}' 2>/dev/null)"
-    log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$BUNDLE_ID" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
-    log "DIAG: effective autoWatch std=$(snapshot_default "$BUNDLE_ID" autoWatch)"
+    log "DIAG: effective watchBrowserMeetings std=$(snapshot_default "$_STANDARD_PLIST" watchBrowserMeetings) ctr=$([ -f "$_CONTAINER_PLIST" ] && snapshot_default "$_CONTAINER_PLIST" watchBrowserMeetings)"
+    log "DIAG: effective autoWatch std=$(snapshot_default "$_STANDARD_PLIST" autoWatch)"
     log "DIAG: pmset WebRTC assertions:"
     pmset -g assertions 2>/dev/null | grep -iE "webrtc|peerconnection|$BROWSER_LABEL" || log "DIAG:   (none)"
 }

@@ -572,32 +572,32 @@ fi
 # explicit "Start Watching" menu click would — necessary because that
 # menu isn't reachable over SSH. `debugRPCEnabled` brings the RPC up at
 # launch instead of after a Settings toggle.
-defaults write "$DEV_BUNDLE_ID" debugRPCEnabled -bool true
-defaults write "$DEV_BUNDLE_ID" autoWatch -bool true
+write_dev_default "$DEV_BUNDLE_ID" debugRPCEnabled true bool
+write_dev_default "$DEV_BUNDLE_ID" autoWatch true bool
 # The echo dedup ships off, so the lane has to ask for it. Set unconditionally
 # rather than only for --echo-bleed: a stale toggle from an earlier run on the
 # same host would otherwise decide it, and the lane that asserts nothing is
 # removed on a clean pair needs the feature ON to mean anything.
-defaults write "$DEV_BUNDLE_ID" echoDedupEnabled -bool true
+write_dev_default "$DEV_BUNDLE_ID" echoDedupEnabled true bool
 
 if [ "$MIC_ONLY" = true ]; then
     # Record-only so the lane needs no ASR models, and auto-watch OFF so nothing
     # detects a meeting and starts a second recording next to the manual one.
     log "Enabling record-only mode and disabling auto-watch for the mic-only lane"
-    defaults write "$DEV_BUNDLE_ID" recordOnly -bool true
-    defaults write "$DEV_BUNDLE_ID" autoWatch -bool false
+    write_dev_default "$DEV_BUNDLE_ID" recordOnly true bool
+    write_dev_default "$DEV_BUNDLE_ID" autoWatch false bool
     mkdir -p "$RECORDINGS_DIR"
     touch "$RECORD_ONLY_MARKER"
     RECORD_ONLY=true   # reuse the record-only cleanup + marker-bounded sweep
 elif [ "$RECORD_ONLY" = true ]; then
     log "Enabling record-only mode (no transcript/protocol generation)"
-    defaults write "$DEV_BUNDLE_ID" recordOnly -bool true
+    write_dev_default "$DEV_BUNDLE_ID" recordOnly true bool
     mkdir -p "$RECORDINGS_DIR"
     touch "$RECORD_ONLY_MARKER"
 else
     # Reset stale toggle from a previous --record-only run on the same host
     # so a plain `--two-meetings` invocation isn't silently still in record-only.
-    defaults delete "$DEV_BUNDLE_ID" recordOnly 2>/dev/null || true
+    delete_dev_default "$DEV_BUNDLE_ID" recordOnly
 fi
 
 # Optional diarizer-mode override. `MTT_DIARIZER_MODE=sortformer` flips the
@@ -606,41 +606,24 @@ fi
 # actually lights up the naming dialog in production-chain. Always cleared
 # on exit so subsequent runs return to the default `.offline` mode.
 #
-# `defaults write $DEV_BUNDLE_ID` from outside writes to the
-# *standard* preferences domain. The dev .app's bundle has a pre-existing
-# container at `~/Library/Containers/$DEV_BUNDLE_ID/...` —
-# from a prior App Store-variant build or interactive use — and macOS
-# routes the app's UserDefaults reads to that container regardless of
-# whether the current binary is sandboxed. A naïve `defaults write` is
-# silently a no-op there. Write to both: container if it exists (covers
-# this runner) AND standard domain (covers a clean runner where the
-# container hasn't been created yet).
+# Domain handling lives in `write_dev_default` / `delete_dev_default` (see
+# scripts/lib/e2e-helpers.sh for why a bare `defaults write <bundle-id>` reaches
+# a domain the app does not read). These two wrappers only bind the bundle id
+# and keep the call sites below short.
 _CONTAINER_PLIST="$(dev_container_plist)"
+_STANDARD_PLIST="$(dev_standard_plist)"
 _set_dev_default() {
     local key="$1" value="$2" type="${3:-string}"
     # `numSpeakers` is read as `defaults.object(forKey:) as? Int`, so it must be
     # written with `-int`; a string-typed write would fail the `as? Int` cast
     # and silently fall back to the auto-detect sentinel (0).
-    case "$type" in
-        bool)
-            defaults write "$DEV_BUNDLE_ID" "$key" -bool "$value" 2>/dev/null || true
-            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -bool "$value" 2>/dev/null || true
-            ;;
-        int)
-            defaults write "$DEV_BUNDLE_ID" "$key" -int "$value" 2>/dev/null || true
-            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" -int "$value" 2>/dev/null || true
-            ;;
-        *)
-            defaults write "$DEV_BUNDLE_ID" "$key" "$value" 2>/dev/null || true
-            [ -f "$_CONTAINER_PLIST" ] && defaults write "$_CONTAINER_PLIST" "$key" "$value" 2>/dev/null || true
-            ;;
-    esac
+    write_dev_default "$DEV_BUNDLE_ID" "$key" "$value" "$type"
 }
 _delete_dev_default() {
     local key="$1"
-    defaults delete "$DEV_BUNDLE_ID" "$key" 2>/dev/null || true
-    [ -f "$_CONTAINER_PLIST" ] && defaults delete "$_CONTAINER_PLIST" "$key" 2>/dev/null || true
+    delete_dev_default "$DEV_BUNDLE_ID" "$key"
 }
+
 if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
     log "Overriding diarizerMode=$MTT_DIARIZER_MODE for this run"
     _set_dev_default diarizerMode "$MTT_DIARIZER_MODE"
@@ -782,8 +765,8 @@ _naming_confirm_cleanup() {
     # Restore each domain to exactly its own snapshot. The shared restore_*_default
     # helpers translate `defaults read`'s 1/0 into the -bool true/false tokens and
     # write -int for numSpeakers (a raw 1/0 into `-bool` errors; see the helpers).
-    restore_bool_default "$DEV_BUNDLE_ID" diarize "$_NC_PRE_DIARIZE_STD"
-    restore_int_default "$DEV_BUNDLE_ID" numSpeakers "$_NC_PRE_NUMSPK_STD"
+    restore_bool_default "$_STANDARD_PLIST" diarize "$_NC_PRE_DIARIZE_STD"
+    restore_int_default "$_STANDARD_PLIST" numSpeakers "$_NC_PRE_NUMSPK_STD"
     if [ -f "$_CONTAINER_PLIST" ]; then
         restore_bool_default "$_CONTAINER_PLIST" diarize "$_NC_PRE_DIARIZE_CTR"
         restore_int_default "$_CONTAINER_PLIST" numSpeakers "$_NC_PRE_NUMSPK_CTR"
@@ -800,8 +783,8 @@ if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
     log "Enabling naming lane (diarize on, expected speakers = 2)"
     # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
     # restores each domain to exactly its own pre-lane state.
-    _NC_PRE_DIARIZE_STD="$(snapshot_default "$DEV_BUNDLE_ID" diarize)"
-    _NC_PRE_NUMSPK_STD="$(snapshot_default "$DEV_BUNDLE_ID" numSpeakers)"
+    _NC_PRE_DIARIZE_STD="$(snapshot_default "$_STANDARD_PLIST" diarize)"
+    _NC_PRE_NUMSPK_STD="$(snapshot_default "$_STANDARD_PLIST" numSpeakers)"
     if [ -f "$_CONTAINER_PLIST" ]; then
         _NC_PRE_DIARIZE_CTR="$(snapshot_default "$_CONTAINER_PLIST" diarize)"
         _NC_PRE_NUMSPK_CTR="$(snapshot_default "$_CONTAINER_PLIST" numSpeakers)"
@@ -862,10 +845,22 @@ open "$DEV_BUNDLE_DEPLOY"
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
 # Assigns RPC_TOKEN in caller scope on success so subsequent `rpc` calls
 # carry the bearer token.
-_rpc_ready() { [ -f "$RPC_TOKEN_FILE" ] && RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")" && rpc /healthz >/dev/null 2>&1; }
+# `rpc` ends in `|| true` so its callers can read a body without tripping
+# `set -e`, which also means it reports success for a refused connection. That
+# made this check "the token file exists", and the token file survives every
+# previous run on the host, so "RPC up" could be logged 70 ms after launch with
+# nothing listening yet. Ask curl directly and let its exit status decide.
+_rpc_ready() {
+    [ -f "$RPC_TOKEN_FILE" ] || return 1
+    RPC_TOKEN="$(cat "$RPC_TOKEN_FILE")"
+    curl --silent --fail --max-time 5 \
+        --header "Authorization: Bearer $RPC_TOKEN" \
+        "$RPC_BASE/healthz" >/dev/null 2>&1
+}
 poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
     || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
+
 
 # Single trap covers the simulator process + record-only side-effects for
 # any exit path (success, fail, signal). Set before the first `&` line so
@@ -883,10 +878,10 @@ on_exit() {
         # The lane turns auto-watch off; nothing else here would turn it back
         # on, and a human using the dev app on this host would find detection
         # silently disabled.
-        defaults write "$DEV_BUNDLE_ID" autoWatch -bool true 2>/dev/null || true
+        write_dev_default "$DEV_BUNDLE_ID" autoWatch true bool
     fi
     if [ "$RECORD_ONLY" = true ]; then
-        defaults delete "$DEV_BUNDLE_ID" recordOnly 2>/dev/null || true
+        delete_dev_default "$DEV_BUNDLE_ID" recordOnly
         # Marker-bounded cleanup: only files created since `touch $MARKER`
         # at launch — never touches pre-existing user data. See feedback
         # memory `no_destructive_fs_on_real_dirs`. Skipped under
@@ -936,6 +931,37 @@ on_exit() {
 trap on_exit EXIT
 trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
+
+# The lane configures the app by writing preferences from the shell, and a write
+# that misses the domain the app resolves is completely silent: the app runs on
+# its own defaults, and the lane fails minutes later with a missing artifact
+# that says nothing about why. `/state.settings` is the running process's own
+# resolved view, so assert it here, where the answer is still cheap and points
+# at the cause. recordOnly is the setting under test because it decides which
+# pipeline runs at all.
+#
+# Placed AFTER the exit trap is armed, not next to the readiness poll where it
+# logically belongs: this assertion can fail, and failing ahead of the trap
+# would leave the app running with this lane's recordOnly and autoWatch
+# unrestored.
+if [ "$RECORD_ONLY" = true ]; then _EXPECTED_RECORD_ONLY=true; else _EXPECTED_RECORD_ONLY=false; fi
+# A 200 from /healthz is not proof the app under test is the one answering, and
+# neither is a non-empty /state: `rpc` has no --fail, so an error body would
+# satisfy a bare emptiness test and then read as a null setting, which would get
+# reported as the wrong preference domain. Require the field itself to be
+# present before believing anything about its value.
+_state_snapshot() {
+    _SNAP="$(rpc /state)"
+    [ -n "$_SNAP" ] && jq -e '.settings.recording | has("recordOnly")' <<<"$_SNAP" >/dev/null 2>&1
+}
+_SNAP=""
+poll_until 20 1 _state_snapshot \
+    || fail "/healthz answered but no /state carrying settings.recording.recordOnly arrived within 20s. Either the app came up without serving a state snapshot, or something other than the dev app is holding 127.0.0.1:9876."
+_RESOLVED_RECORD_ONLY="$(jq -r '.settings.recording.recordOnly' <<<"$_SNAP")"
+[ "$_RESOLVED_RECORD_ONLY" = "$_EXPECTED_RECORD_ONLY" ] \
+    || fail "the app resolved settings.recording.recordOnly=$_RESOLVED_RECORD_ONLY but this lane needs $_EXPECTED_RECORD_ONLY. Most likely the preference write did not reach the domain the app reads (see write_dev_default in scripts/lib/e2e-helpers.sh); the other possibility is that a different MeetingTranscriber instance is answering on 127.0.0.1:9876."
+log "app resolved recordOnly=$_RESOLVED_RECORD_ONLY (as configured)"
+
 
 
 # Trigger one meeting, poll until a new pipeline job reaches a terminal

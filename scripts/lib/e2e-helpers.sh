@@ -223,22 +223,102 @@ restore_int_default() {
     fi
 }
 
+# Write a dev-bundle default so the RUNNING APP actually sees it.
+#
+# Say once per run that this host redirects `defaults <bundle-id>` into a
+# container, so the next time one appears it carries a timestamp in a log
+# instead of surfacing days later as a lane that configures nothing.
+_CONTAINER_WARNED=""
+_warn_once_about_container() {
+    local bundle="$1"
+    [ -n "$_CONTAINER_WARNED" ] && return 0
+    if [ -d "$HOME/Library/Containers/$bundle" ]; then
+        _CONTAINER_WARNED=1
+        echo "note: $HOME/Library/Containers/$bundle exists, so \`defaults <bundle-id>\` is redirected there." >&2
+        echo "note: lane settings are written to $(dev_standard_plist "$bundle") instead. Remove the container to clear the redirect." >&2
+    fi
+    return 0
+}
+
+# The write that matters is the FIRST one: the standard-domain plist, because a
+# non-sandboxed app resolves its UserDefaults there and the dev .app is not
+# sandboxed. Writing it by absolute path was measured coherent with cfprefsd on
+# macOS 26.6.2 in every configuration tried: cold and warm daemon cache, file
+# absent or present, container present or absent, and a live client that does
+# its own set plus synchronize after an external write. No failure window, so
+# this is not a race the lanes keep winning by luck.
+#
+# `defaults write <bundle-id>` is deliberately NOT used. cfprefsd redirects it
+# into the app's container, and the trigger is a container that
+# containermanagerd has REGISTERED for the identifier, not the directory merely
+# existing: creating the path by hand does not redirect, and `rm -rf` of a
+# registered container stops the redirect without the directory coming back.
+# That removal is the operational cure on a host that has one. What created the
+# container on the runner is NOT established, and it was not this repo:
+# build_release.sh signs even the App Store variant with the release
+# identifier, and that workflow runs on a GitHub-hosted image.
+#
+# The container plist is written only when it already exists, so a lane never
+# creates one. Feeding a domain nothing reads would leave a future sandboxed
+# build under this identifier starting up with a test lane's settings.
+#
+# Measured on the self-hosted runner: with only the redirected write, every
+# setting a lane wrote was invisible to the app, which is how e2e-app and
+# e2e-browser came to fail with no record-only sidecar and no error anywhere.
+#
+# `type` is one of bool / int / float / string (default string).
+write_dev_default() {
+    local bundle="$1" key="$2" value="$3" type="${4:-string}"
+    local -a args
+    case "$type" in
+        bool) args=(-bool "$value") ;;
+        int) args=(-int "$value") ;;
+        float) args=(-float "$value") ;;
+        *) args=("$value") ;;
+    esac
+    /usr/bin/defaults write "$(dev_standard_plist "$bundle")" "$key" "${args[@]}" 2>/dev/null || true
+    _warn_once_about_container "$bundle"
+    local container
+    container="$(dev_container_plist "$bundle")"
+    if [ -f "$container" ]; then
+        /usr/bin/defaults write "$container" "$key" "${args[@]}" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# Delete a dev-bundle default from every domain `write_dev_default` writes.
+# Deleting only some of them leaves the app reading a stale value from the one
+# that was missed, which looks exactly like the delete having had no effect.
+delete_dev_default() {
+    local bundle="$1" key="$2"
+    /usr/bin/defaults delete "$(dev_standard_plist "$bundle")" "$key" 2>/dev/null || true
+    local container
+    container="$(dev_container_plist "$bundle")"
+    if [ -f "$container" ]; then
+        /usr/bin/defaults delete "$container" "$key" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Read the EFFECTIVE value of a dev-bundle default the way the app resolves it.
-# The dev `.app` has a pre-existing container at
-# `~/Library/Containers/<bundle>/…`, and macOS routes the app's UserDefaults
-# reads there regardless of whether the current binary is sandboxed, so a plain
-# `defaults read <bundle> <key>` (standard domain) can disagree with what the
-# app actually sees. When the container plist exists it wins; else fall back to
-# the standard domain. Empty when unset. Shared so e2e-app.sh / e2e-live-captions.sh
-# / e2e-cpu-load.sh read their blind `defaults write`s back consistently instead
-# of each re-deriving the container redirect. NOTE: mutating a dev default still
-# needs BOTH domains written (see the per-domain snapshot/restore in e2e-app.sh);
-# this reader is for verification/readback only.
+# The dev .app is NOT sandboxed, so it resolves its UserDefaults from the
+# standard domain, and that is what this returns when the file exists. The
+# container copy is only a fallback for a host where the standard plist has not
+# been created yet; a plain `defaults read <bundle> <key>` cannot stand in for
+# either, because cfprefsd redirects it into the container whenever one exists.
+# Empty when unset. Only e2e-app.sh calls this, for a diagnostic log line rather
+# than an assertion; it exists so a reader does not re-derive the container
+# redirect by hand. Mutating a dev default needs `write_dev_default`; this is
+# for verification and readback only.
 read_dev_default_effective() {
     local bundle="$1"
     local container_plist="$2"
     local key="$3"
-    if [ -f "$container_plist" ]; then
+    local standard_plist
+    standard_plist="$(dev_standard_plist "$bundle")"
+    if [ -f "$standard_plist" ]; then
+        /usr/bin/defaults read "$standard_plist" "$key" 2>/dev/null || true
+    elif [ -f "$container_plist" ]; then
         /usr/bin/defaults read "$container_plist" "$key" 2>/dev/null || true
     else
         /usr/bin/defaults read "$bundle" "$key" 2>/dev/null || true
