@@ -341,6 +341,15 @@ struct UITree: AsyncParsableCommand {
     }
 }
 
+/// Mirrors the server's `UIPressVia` (`DebugRPCServer+UIPress.swift`): `ax` (the
+/// default) performs `kAXPressAction` directly; `click` posts a real mouse click,
+/// needed for a `List(selection:)` row (e.g. a Settings sidebar tab) that accepts
+/// an AX press and reports success without actually selecting itself.
+enum PressVia: String, ExpressibleByArgument {
+    case ax
+    case click
+}
+
 struct UIPress: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ui-press",
@@ -355,8 +364,16 @@ struct UIPress: AsyncParsableCommand {
     @Option(name: .long, help: "Window identifier the control lives in. Defaults to settings.")
     var window: String = "settings"
 
+    @Option(
+        name: .long,
+        help: "How to actuate the control: ax (default) or click. Use click for a sidebar tab row, which an ax press reports as pressed without selecting.",
+    )
+    var via: PressVia?
+
     func run() async throws {
-        try await postAction("/ui/press", ["window": window, "identifier": identifier])
+        var payload = ["window": window, "identifier": identifier]
+        if let via { payload["via"] = via.rawValue }
+        try await postAction("/ui/press", payload)
     }
 }
 
