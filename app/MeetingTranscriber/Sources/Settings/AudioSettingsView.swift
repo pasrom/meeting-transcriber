@@ -76,11 +76,24 @@ private struct EchoSection: View {
     var body: some View {
         Section("Echo") {
             HelpfulToggle(
+                title: "Remove echoed remote speech before transcribing",
+                help: SettingsHelp.echoCancellation,
+                isOn: $settings.echoCancellationEnabled,
+            )
+            .accessibilityIdentifier(A11yID.echoCancellationToggle)
+
+            HelpfulToggle(
                 title: "Remove echoed remote speech from the transcript",
                 help: SettingsHelp.echoDedup,
                 isOn: $settings.echoDedupEnabled,
             )
             .accessibilityIdentifier(A11yID.echoDedupToggle)
+            // Disabled rather than hidden while cancellation is on. The two
+            // remedies do not compose, so this one would not run; a switch
+            // that is on and does nothing is worse than one that is visibly
+            // unavailable, and hiding it would leave a stored setting nobody
+            // can see or change.
+            .disabled(settings.echoCancellationEnabled)
         }
         .recordOnlyDisabled(settings.recordOnly)
     }

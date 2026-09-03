@@ -65,6 +65,32 @@ class PipelineQueue {
     let diarizeEnabled: Bool
     /// Leave loudspeaker copies out of the transcript (`AppSettings.echoDedupEnabled`).
     let echoDedupEnabled: Bool
+
+    /// Take the far end out of the microphone audio (`AppSettings.echoCancellationEnabled`).
+    /// Wins over `echoDedupEnabled`; `EchoRemedy` holds that precedence.
+    ///
+    /// Read through a closure rather than copied at construction. The queue is
+    /// built once when watching starts, so a copied value meant turning the
+    /// feature on mid-session did nothing at all until watching was restarted:
+    /// the switch said yes and the next recording was processed by a queue
+    /// still holding no. Its neighbours here are still copies, which is the
+    /// same latent problem; widening that is not this change's to make, and
+    /// `transcriptOutputOptionsProvider` below shows the shape it would take.
+    private let isEchoCancellationEnabled: () -> Bool
+
+    var echoCancellationEnabled: Bool {
+        isEchoCancellationEnabled()
+    }
+
+    /// Produces the canceller for a run, or nil when no model can be resolved.
+    ///
+    /// Stored non-optional with the production resolution as its default, so
+    /// there is one thing to call rather than a factory and a fallback path
+    /// that only one of them is ever tested. Returning an optional is what
+    /// makes "no model available" injectable at all: with a factory that
+    /// always produced a canceller, the branch that reports a missing model
+    /// could only be reached by removing the file from the machine.
+    let echoCancellerFactory: () -> (any EchoCancelling)?
     let numSpeakers: Int
     let micLabel: String
     /// Compatibility policy for snapshots created before a job carried its own
@@ -234,6 +260,8 @@ class PipelineQueue {
         completedJobLifetime: TimeInterval = 60,
         terminalJobStore: TerminalJobStore? = nil,
         inFlightRuns: InFlightRunRegistry? = nil,
+        echoCancellationEnabled: @escaping () -> Bool = { false },
+        echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -246,6 +274,8 @@ class PipelineQueue {
         stagingDir = AppPaths.recordingsDir
         self.diarizeEnabled = false
         echoDedupEnabled = true
+        isEchoCancellationEnabled = echoCancellationEnabled
+        self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
         self.numSpeakers = 0
         self.micLabel = "Me"
         let outputOptions = TranscriptOutputOptions(
@@ -328,6 +358,8 @@ class PipelineQueue {
         stagingDir: URL = AppPaths.recordingsDir,
         diarizeEnabled: Bool = false,
         echoDedupEnabled: Bool = true,
+        echoCancellationEnabled: @escaping () -> Bool = { false },
+        echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
         numSpeakers: Int = 0,
         micLabel: String = "Me",
         includeFullTranscriptInProtocol: Bool = true,
@@ -354,6 +386,8 @@ class PipelineQueue {
         self.stagingDir = stagingDir
         self.diarizeEnabled = diarizeEnabled
         self.echoDedupEnabled = echoDedupEnabled
+        isEchoCancellationEnabled = echoCancellationEnabled
+        self.echoCancellerFactory = echoCancellerFactory ?? { Self.bundledEchoCanceller() }
         self.numSpeakers = numSpeakers
         // "Remote" is the reserved routing tag for the app/remote track
         // (DiarizationProcess.remoteSpeakerLabel). If the user names the mic

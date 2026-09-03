@@ -1,3 +1,11 @@
+// swiftlint:disable file_length
+//
+// A settings registry grows by one documented property per feature, so the
+// 600-line cap measures how many features the app has rather than whether this
+// file does too much. Suppressed rather than split because the honest split is
+// to move the three enums below into their own file, and two open pull requests
+// are editing this one; that move is worth doing on a quiet tree, not folded
+// into a feature branch.
 import SwiftUI
 
 // SwiftFormat strips redundant raw values matching their case name, which then
@@ -296,6 +304,14 @@ final class AppSettings {
         didSet { defaults.set(vadThreshold, forKey: "vadThreshold") }
     }
 
+    /// Remove the far end from the microphone audio before transcription
+    /// (`EchoRemedy.cancellation`). Off by default: it has been measured on an
+    /// archive with synthetic loudspeaker echo, never in the field, and it wins
+    /// over the transcript dedup wherever both are on.
+    var echoCancellationEnabled: Bool {
+        didSet { defaults.set(echoCancellationEnabled, forKey: "echoCancellationEnabled") }
+    }
+
     /// Leave the far end out of the transcript when the microphone only picked
     /// it up from the loudspeaker.
     ///
@@ -522,6 +538,7 @@ final class AppSettings {
         diarize = defaults.object(forKey: "diarize") as? Bool ?? true
         vadEnabled = defaults.object(forKey: "vadEnabled") as? Bool ?? false
         vadThreshold = defaults.object(forKey: "vadThreshold") as? Float ?? 0.5
+        echoCancellationEnabled = defaults.object(forKey: "echoCancellationEnabled") as? Bool ?? false
         echoDedupEnabled = defaults.object(forKey: "echoDedupEnabled") as? Bool ?? false
         diarizerMode = (defaults.string(forKey: "diarizerMode")
             .flatMap(DiarizerMode.init(rawValue:))) ?? .offline

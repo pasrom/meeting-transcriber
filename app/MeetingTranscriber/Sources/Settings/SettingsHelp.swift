@@ -6,6 +6,19 @@ import Foundation
 /// (no inline string literals inflating SwiftUI expression type-checking), and
 /// so the help copy is auditable in one place.
 enum SettingsHelp {
+    static let echoCancellation =
+        """
+        Removes the remote voices from the microphone audio with an on-device \
+        model before it is transcribed. Because it works on the audio rather \
+        than on the text, the cleaned track is also what speaker detection \
+        sees.
+
+        The saved recording is not changed: what is kept on disk stays the \
+        audio your devices captured. Only runs on recordings already reported \
+        as affected, and replaces the transcript option below wherever both \
+        are on.
+        """
+
     static let echoDedup =
         """
         When a meeting is held on loudspeakers, the microphone picks the remote \
