@@ -115,7 +115,10 @@ final class ChannelHealthController {
 
     /// Red tint for the menu bar's **top** half. Composed here rather than at
     /// the call site so the topology that suppresses a phantom channel is
-    /// applied in exactly one place.
+    /// applied in exactly one place, and so is the user's preference about the
+    /// tint: the flags above stay the monitors' own truth, which is what
+    /// `/state` reports and what the notifications are decided from, while this
+    /// is the only place the icon setting can change anything.
     ///
     /// The observable flags are read into a local first, deliberately. Written
     /// as `channels.mic && (...)` the `&&` short-circuits, so on a recording
@@ -123,14 +126,14 @@ final class ChannelHealthController {
     /// dependency on them for that render pass.
     var micSilentOverlay: Bool {
         let silent = micSilentActive || recordingSilentActive
-        return channels.mic && silent
+        return indicatorEnabled() && channels.mic && silent
     }
 
     /// Red tint for the menu bar's **bottom** half. See `micSilentOverlay` for
     /// why the flags are read before the topology is consulted.
     var appSilentOverlay: Bool {
         let silent = appSilentActive || recordingSilentActive
-        return channels.app && silent
+        return indicatorEnabled() && channels.app && silent
     }
 
     private let notifier: any AppNotifying
@@ -168,7 +171,13 @@ final class ChannelHealthController {
         // channels this recording has, so a stale topology from the previous
         // one cannot decide what the icon paints.
         channels = source.capturedChannels
-        guard indicatorEnabled() else { return }
+        // NOT gated on `indicatorEnabled()`. That setting is named for the
+        // menu-bar tint and its help text describes an indicator, but gating
+        // the task here also silenced every capture-failure notification,
+        // including the one failure that cannot recover on its own and whose
+        // only remedy is restarting the app. Someone who finds a red icon
+        // distracting was opting out of being told their microphone died. The
+        // setting is applied where it belongs instead, in the two overlays.
         guard levelMonitorTask == nil else { return }
         rebuild()
         levelMonitorTask = Task { @MainActor [weak self] in

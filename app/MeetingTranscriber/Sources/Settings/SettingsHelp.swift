@@ -26,7 +26,9 @@ enum SettingsHelp {
         "Turns the menu bar red when one capture channel goes silent while the other " +
         "still carries audio, for example a muted microphone or a dropped app-audio tap. " +
         "You are notified only when a channel actually stops delivering audio, not when " +
-        "it is merely quiet, so muting yourself is not reported as a fault."
+        "it is merely quiet, so muting yourself is not reported as a fault. Turning this " +
+        "off removes the colour, not the warnings: a channel that stops delivering is " +
+        "still reported."
 
     static let asymmetricSilenceWarning =
         "How long the condition must last before the indicator turns red and, for a channel " +

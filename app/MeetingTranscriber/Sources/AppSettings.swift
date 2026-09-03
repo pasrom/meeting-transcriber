@@ -191,9 +191,10 @@ final class AppSettings {
         didSet { defaults.set(micDeviceUID, forKey: "micDeviceUID") }
     }
 
-    /// Master switch for the per-channel signal indicator. When on, AppState runs a
-    /// ~10 Hz level poller while recording and flips the menu-bar red when one
-    /// channel goes silent while the other carries audio. Default: on.
+    /// Switch for the per-channel menu-bar tint, and for nothing else. The
+    /// ~10 Hz poller runs while recording either way, because the capture-failure
+    /// notifications it feeds must not depend on a preference about an icon.
+    /// Default: on.
     var perChannelIndicatorEnabled: Bool {
         didSet { defaults.set(perChannelIndicatorEnabled, forKey: "perChannelIndicatorEnabled") }
     }

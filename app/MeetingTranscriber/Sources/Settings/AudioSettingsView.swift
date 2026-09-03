@@ -97,19 +97,22 @@ private struct PerChannelIndicatorSection: View {
                 isOn: $settings.perChannelIndicatorEnabled,
             )
 
-            if settings.perChannelIndicatorEnabled {
-                HStack {
-                    Text("Warn after:")
-                    HelpBadge(text: SettingsHelp.asymmetricSilenceWarning)
-                    Slider(
-                        value: $settings.asymmetricSilenceWarningSeconds,
-                        in: 30 ... 300,
-                        step: 10,
-                    )
-                    Text("\(Int(settings.asymmetricSilenceWarningSeconds))s")
-                        .monospacedDigit()
-                        .frame(width: 40)
-                }
+            // Shown whether or not the toggle above is on. The toggle decides
+            // whether the menu bar turns red; this number decides how long a
+            // channel must be failing before you are told about it, and that
+            // reporting happens either way. Hiding it with the toggle left a
+            // setting that still applied and could no longer be seen or changed.
+            HStack {
+                Text("Warn after:")
+                HelpBadge(text: SettingsHelp.asymmetricSilenceWarning)
+                Slider(
+                    value: $settings.asymmetricSilenceWarningSeconds,
+                    in: 30 ... 300,
+                    step: 10,
+                )
+                Text("\(Int(settings.asymmetricSilenceWarningSeconds))s")
+                    .monospacedDigit()
+                    .frame(width: 40)
             }
         }
         .accessibilityIdentifier(A11yID.channelIndicatorSection)
