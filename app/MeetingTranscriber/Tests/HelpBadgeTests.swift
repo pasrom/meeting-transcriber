@@ -239,19 +239,25 @@ final class HelpBadgeTests: XCTestCase {
         XCTAssertEqual(try infoBadgeCount(in: AudioSettingsView(settings: settings)), 4)
     }
 
-    /// The warn-after badge lives on the conditional slider row, so it drops
-    /// out with the row when per-channel detection is off.
+    /// The warn-after row stays whatever the per-channel toggle says.
     ///
-    /// Asserted as a difference of exactly one rather than an absolute count:
-    /// the claim is about that row disappearing, and pinning the total made
-    /// this test fail for the unrelated reason that the tab gained an option.
-    func testWarnAfterHelpBadgeHiddenWhenDetectionOff() throws {
+    /// This test changed meaning. The row used to be conditional, which was
+    /// right while that toggle decided whether anything was watched at all.
+    /// It no longer does: the toggle now decides only whether the menu bar
+    /// turns red, while the number on this row still decides how long a
+    /// channel must be failing before the user is notified. Hiding it left a
+    /// setting that applied and could neither be seen nor changed.
+    ///
+    /// Asserted as an equal count rather than an absolute one, for the same
+    /// reason the difference was: pinning the total made this test fail
+    /// whenever the tab gained an unrelated option.
+    func testWarnAfterHelpBadgeStaysWhenTheIndicatorIsOff() throws {
         let settings = AppSettings(defaults: defaults)
         settings.perChannelIndicatorEnabled = true
         let shown = try infoBadgeCount(in: AudioSettingsView(settings: settings))
         settings.perChannelIndicatorEnabled = false
         let hidden = try infoBadgeCount(in: AudioSettingsView(settings: settings))
-        XCTAssertEqual(hidden, shown - 1)
+        XCTAssertEqual(hidden, shown)
     }
 
     /// Each option must carry ITS help string (not merely some badge), so a

@@ -326,6 +326,55 @@ final class ChannelHealthIntegrationTests: XCTestCase {
         XCTAssertFalse(controller.appSilentOverlay)
     }
 
+    func testTheIndicatorSettingDoesNotDecideWhetherTheAppWatchesAtAll() async throws {
+        // Driven through the real polling task rather than the `applyTick`
+        // seam, because that is the only layer where this could go wrong: the
+        // guard sat in `start()`, so with the indicator off no tick ever
+        // happened and every capture failure went unreported while the setting
+        // read as being about an icon. Every existing test calls `applyTick`
+        // directly, which is exactly why none of them caught it.
+        //
+        // A give-up is used because it reports without waiting for the window,
+        // and the wait is a poll rather than a fixed sleep so a loaded machine
+        // cannot fail it while the normal path still costs one tick.
+        let (controller, recorder, notifier, settings) = makeController()
+        settings.perChannelIndicatorEnabled = false
+        recorder.micCaptureGaveUp = true
+        controller.start(source: .micOnly) { recorder }
+        defer { controller.stop() }
+
+        let deadline = Date().addingTimeInterval(5)
+        while notifier.calls.isEmpty, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        XCTAssertEqual(
+            notifier.calls.map(\.title), ["Capture Channel Lost"],
+            "the watch must run whatever the menu-bar setting says",
+        )
+    }
+
+    func testTurningTheIndicatorOffClearsTheTintButNotTheState() {
+        // The flags stay the monitors' truth, which is what /state reports and
+        // what the faults are decided from. Only the icon follows the setting,
+        // so a mid-recording toggle takes effect immediately instead of waiting
+        // for a fresh episode that a latched one will never produce.
+        let (controller, recorder, _, settings) = makeController()
+        recorder.micLevelDBFS = -80
+        recorder.appLevelDBFS = -20
+        _ = controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(31))
+        XCTAssertTrue(controller.micSilentActive)
+        XCTAssertTrue(controller.micSilentOverlay)
+
+        settings.perChannelIndicatorEnabled = false
+        XCTAssertFalse(controller.micSilentOverlay, "the icon follows the setting")
+        XCTAssertTrue(controller.micSilentActive, "the episode is still latched underneath")
+
+        settings.perChannelIndicatorEnabled = true
+        XCTAssertTrue(controller.micSilentOverlay, "and comes straight back, without a new episode")
+    }
+
     func testAMicrophoneOnlyRecordingDoesNotSuppressTheNextDualSourceOne() {
         // The topology is per-recording, and the one that matters is the one
         // the *current* start declared. Asserted through the production entry

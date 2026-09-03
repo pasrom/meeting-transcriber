@@ -223,7 +223,9 @@ When one capture channel goes silent while the other is still carrying audio for
 - **Top half red** — mic channel is dead (the meeting is audible but your voice isn't being captured — wrong input device, mic muted at system level)
 - **Both halves red** — both channels are silent while in recording state
 
-A "Capture Channel Silent" notification fires once per episode at the moment the tint kicks in. Configurable in **Settings → Audio → Per-Channel Indicator** (default: on, 90 s debounce, range 30–300 s). Designed to surface real routing failures without false-positiving during normal speech pauses: the detector uses dual dBFS thresholds with hysteresis so transient dips between syllables don't reset the debounce timer.
+The tint follows the levels, and **Settings → Audio → Per-Channel Indicator** is what turns it on or off (default: on). Dual dBFS thresholds with hysteresis keep transient dips between syllables from resetting the debounce timer.
+
+Notifications do not follow the tint. A single channel is reported only once it stops delivering, either no buffers at all or buffers carrying nothing but digital zeroes, measured from what the capture layer records per buffer rather than from a level: a microphone whose owner is listening rather than talking is quiet, not broken, and is not reported. The separate "Recording Appears Silent" warning, for the case where *both* channels are quiet, is still decided from levels and can therefore still fire on a call in which nobody is speaking. How long the condition must last first is the **Warn after** slider (30–300 s, default 90 s), which applies whether or not the tint is switched on.
 
 If a permission problem coexists, the red exclamation badge takes precedence over the channel-silent tint.
 
