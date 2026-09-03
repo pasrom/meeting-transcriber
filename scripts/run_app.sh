@@ -44,6 +44,20 @@ if [ -n "${MTT_FAULT_INJECTION:-}" ]; then
 fi
 swift build "${SWIFT_BUILD_FLAGS[@]}"
 
+# Which certificate the previous build signed this bundle with, read BEFORE the
+# bundle is touched. It lives in the main executable's embedded signature, and
+# the `cp "$BUILD_BINARY"` below replaces that executable with a freshly linked,
+# ad-hoc signed one, after which there is no certificate left to read. Measured:
+# intact bundle yields the hash, the same bundle after the copy yields nothing,
+# so a read placed after the copy is dead code that silently always falls
+# through. Used by the identity choice further down.
+# shellcheck source=lib/signing.sh
+source "$SCRIPT_DIR/lib/signing.sh"
+PREV_SIGNING_CERT=""
+if [ -d "$APP_BUNDLE" ]; then
+    PREV_SIGNING_CERT="$(bundle_signing_cert_sha1 "$APP_BUNDLE" 2>/dev/null || true)"
+fi
+
 # Assemble .app bundle
 mkdir -p "$APP_MACOS"
 # Use the dev bundle identifier to keep permissions separate from release.
@@ -82,15 +96,65 @@ if ! install_localvqe_resources "$APP_BUNDLE/Contents/Resources"; then
     echo "  WARNING: LocalVQE model unavailable; echo cancellation will find no model."
 fi
 
-# Code-sign so macOS keeps Screen Recording permission across rebuilds.
+# Code-sign so macOS keeps its permission grants across rebuilds.
 # Uses SHA-1 hash to avoid "ambiguous identity" errors with duplicate names.
-SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
-# Sign WITH the Homebrew entitlements, the same set build_release.sh uses.
-# Without them the dev build carries no entitlements at all, so anything gated on
-# one behaves differently here than in a release build — notably the
+#
+# Signing happens WITH the Homebrew entitlements, the same set build_release.sh
+# uses: without them the dev build carries no entitlements at all, so anything
+# gated on one behaves differently here than in a release build, notably the
 # time-sensitive consent prompt (issue #543).
-# shellcheck source=lib/signing.sh
-source "$SCRIPT_DIR/lib/signing.sh"
+#
+# Prefer Developer ID, do not take whatever the keychain lists first. TCC binds
+# a grant to the signing certificate's leaf SHA-1, so the identity chosen here
+# decides whether the dev app keeps its microphone and screen-recording grants
+# or silently loses all of them. `head -1` made that depend on keychain
+# ordering, and it changed under us the day an Apple Development certificate
+# was added: the rebuilt app then records nothing, with no error anywhere and
+# no prompt, because from TCC's point of view it is a different application.
+# The same preference is applied in lib/signing.sh for the profile case.
+#
+# Ahead of even that: if the deployed bundle is already signed with a
+# certificate that is still in the keychain, keep it. Two valid Developer ID
+# Application certificates (the overlap around a renewal) would otherwise put
+# us back to "whichever is listed first", and switching between them voids the
+# grants just as thoroughly as switching issuer would.
+_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+_DEVID="$(grep "Developer ID Application" <<<"$_IDENTITIES" | head -1 | awk '{print $2}')" || true
+
+SIGN_HASH=""
+SIGN_REASON=""
+# Keep the certificate the previous build used, but only while it is still in
+# the keychain AND it is either a Developer ID one or there is no Developer ID
+# to move to. The second half matters: a bundle left over from before this fix
+# is signed with Apple Development, and "keep what is there" alone would pin it
+# to the wrong certificate forever, with the only escape being to delete the
+# bundle by hand. With the check, such a bundle moves to Developer ID by itself
+# and the renewal case still keeps the certificate actually in use.
+if [ -n "$PREV_SIGNING_CERT" ] && grep -q "$PREV_SIGNING_CERT" <<<"$_IDENTITIES"; then
+    if [ -z "$_DEVID" ] || [ "$PREV_SIGNING_CERT" = "$_DEVID" ] \
+        || grep "$PREV_SIGNING_CERT" <<<"$_IDENTITIES" | grep -q "Developer ID Application"; then
+        SIGN_HASH="$PREV_SIGNING_CERT"
+        SIGN_REASON="kept the certificate this bundle already carried"
+    fi
+fi
+if [ -z "$SIGN_HASH" ] && [ -n "$_DEVID" ]; then
+    SIGN_HASH="$_DEVID"
+    SIGN_REASON="chose the Developer ID Application certificate"
+fi
+if [ -z "$SIGN_HASH" ]; then
+    SIGN_HASH=$(head -1 <<<"$_IDENTITIES" | awk '{print $2}') || true
+    if [ -n "$SIGN_HASH" ]; then
+        SIGN_REASON="no Developer ID Application certificate exists, took the first identity"
+        echo "  NOTE: TCC grants made against a different certificate will not apply to this build."
+    fi
+fi
+# Say which rule chose and which certificate it is. Without this the build log
+# shows only a hash, and the whole reason this block exists is that the wrong
+# certificate is invisible until the app silently records nothing.
+if [ -n "$SIGN_HASH" ]; then
+    echo "  Signing identity: $SIGN_REASON"
+    grep "$SIGN_HASH" <<<"$_IDENTITIES" | sed 's/^ */    /'
+fi
 # $DEV_ENTITLEMENTS is that same path, named once in the library so this build
 # and any later re-sign of the deployed bundle cannot drift apart (issue #609).
 prepare_signing "$APP_BUNDLE" "$DEV_ENTITLEMENTS" "$DEV_BUNDLE_ID" "$SIGN_HASH"
