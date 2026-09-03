@@ -196,6 +196,16 @@ jobs:
         with:
           cache-key-suffix: ${{ matrix.variant }}
           swift-flags: ${{ matrix.swift-flags }}
+      # Without this the echo-cancellation tests skip, which is how this
+      # feature reached a review with single-digit patch coverage on the two
+      # files that do the work. The gap is worse than the number: the library
+      # checks a model against a SHA-256 list compiled into it, so a model the
+      # linked library rejects fails only at load time — compiling stays green,
+      # the tests skip, and both builds merely copy the file. `appstore.yml`
+      # already downloads the same model through `build_release.sh`, so this
+      # adds no network dependency that CI did not have.
+      - name: Fetch the echo-cancellation model
+        run: echo "MEETINGTRANSCRIBER_LOCALVQE_MODEL=$(./scripts/fetch-localvqe-model.sh)" >> "$GITHUB_ENV"
       # 18 min step-timeout on the actual tests: typical hot-cache run is
       # 5–7 min, so this is ~3× margin while still failing fast as
       # `timed_out` (not `cancelled`) when a single test hangs.
