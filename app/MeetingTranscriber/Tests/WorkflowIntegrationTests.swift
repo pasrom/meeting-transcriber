@@ -1,5 +1,6 @@
 // swiftlint:disable file_length
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 @MainActor
@@ -36,6 +37,8 @@ final class WorkflowIntegrationTests: XCTestCase {
         saveRawTranscriptSeparately: Bool = true,
         protocolGeneratorEnabled: Bool = true,
         transcriptOutputOptionsProvider: (() -> TranscriptOutputOptions)? = nil,
+        echoCancellationEnabled: Bool = false,
+        echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
     ) throws -> (Harness, TransitionCollector) {
         let engine = MockEngine()
         engine.segmentsToReturn = [
@@ -66,6 +69,8 @@ final class WorkflowIntegrationTests: XCTestCase {
             stagingDir: stagingDir ?? AppPaths.recordingsDir,
             diarizeEnabled: diarizeEnabled,
             echoDedupEnabled: echoDedupEnabled,
+            echoCancellationEnabled: { echoCancellationEnabled },
+            echoCancellerFactory: echoCancellerFactory,
             micLabel: "Me",
             includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: saveRawTranscriptSeparately,
@@ -905,7 +910,7 @@ final class WorkflowIntegrationTests: XCTestCase {
         try writeTrack(speechLike(seconds: 40, seed: 31), to: appURL)
 
         let id = UUID()
-        let analysis = await h.queue.warnIfEchoBleed(
+        let analysis = await h.queue.measureEchoBleed(
             jobID: id,
             appURL: appURL,
             micURL: dir.appendingPathComponent("never-written.wav"),
@@ -937,7 +942,7 @@ final class WorkflowIntegrationTests: XCTestCase {
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: appURL, micPath: micURL, micDelay: 0,
         ))
-        let analysis = await h.queue.warnIfEchoBleed(
+        let analysis = await h.queue.measureEchoBleed(
             jobID: id, appURL: appURL, micURL: micURL, micDelay: 0,
         )
         XCTAssertEqual(analysis.verdict, .notMeasured)
@@ -1025,6 +1030,99 @@ final class WorkflowIntegrationTests: XCTestCase {
                 TimestampedSegment(start: 29, end: 58, text: "local sentence"),
             ],
         ]
+    }
+
+    /// Counts calls so a test can tell "the canceller ran" from "the audio
+    /// happened to come out the same", which no assertion on the transcript
+    /// can distinguish when the engine is a mock that ignores its input.
+    private final class CountingCanceller: EchoCancelling, @unchecked Sendable {
+        let calls = OSAllocatedUnfairLock<Int>(initialState: 0)
+        let medianReduction: Float
+
+        init(medianReduction: Float) {
+            self.medianReduction = medianReduction
+        }
+
+        func cancelEcho(
+            micURL: URL, referenceURL _: URL, outputURL: URL, referenceLead _: TimeInterval,
+        ) throws -> EchoCancellationReport {
+            calls.withLock { $0 += 1 }
+            let samples = try AudioMixer.loadAudioFileAsFloat32(url: micURL)
+            try AudioMixer.saveWAV(
+                samples: [Float](repeating: 0, count: samples.count),
+                sampleRate: AudioConstants.targetSampleRate, url: outputURL,
+            )
+            // Both populations: the self-check is a difference between the
+            // windows carrying echo and the ones carrying none.
+            return EchoCancellationReport(windows: (0 ..< 30).map { _ in
+                EchoCancellationWindow(referenceDBFS: -20, reductionDb: medianReduction)
+            } + (0 ..< 20).map { _ in
+                EchoCancellationWindow(referenceDBFS: -80, reductionDb: 0.2)
+            })
+        }
+    }
+
+    /// The whole chain in one run, which the unit tests only cover in pieces:
+    /// the recording is measured, the remedy is resolved to cancellation, the
+    /// microphone track is replaced, the transcript dedup does not run on top
+    /// of it, and the warning says what actually happened.
+    ///
+    /// The transcript is deliberately not asserted on. The engine is a mock
+    /// that returns segments by path suffix and never reads the audio, so it
+    /// cannot notice that the far end is gone; asserting on its output would
+    /// be asserting on the mock. What is checkable here is the decision, and
+    /// the decision is the thing that had no end-to-end cover.
+    @MainActor
+    func testCancellationRunsAndTheDedupStandsDown() async throws {
+        let canceller = CountingCanceller(medianReduction: 30)
+        let (h, _) = try makeHarness(
+            echoDedupEnabled: true,
+            echoCancellationEnabled: true,
+        ) { canceller }
+        configureDedupTracks(h.engine)
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("cancel-e2e"), bleed: true)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        XCTAssertEqual(canceller.calls.withLock { $0 }, 1, "the canceller has to have run")
+        let job = try XCTUnwrap(h.queue.jobs.first)
+        XCTAssertEqual(job.echo?.detected, true, "measured before the repair, not after it")
+        // The discriminating assertion, not a tautology: this is the same
+        // fixture and the same mock segments that make the dedup suppress
+        // exactly one line two tests up. Under cancellation nothing may be
+        // taken out of the transcript, because the far end was taken out of
+        // the audio instead and the dedup's measure no longer means what it
+        // was calibrated to mean.
+        XCTAssertEqual(job.echo?.suppressedSegments ?? 0, 0)
+        let transcript = try String(
+            contentsOf: XCTUnwrap(job.transcriptPath), encoding: .utf8,
+        )
+        XCTAssertEqual(
+            micLines(transcript).count, 2,
+            "no microphone line may be dropped, got:\n\(transcript)",
+        )
+        XCTAssertTrue(
+            job.warnings.contains { $0.contains("removed from the microphone track") },
+            "the warning must not still be recommending headphones for a fixed recording, got: \(job.warnings)",
+        )
+    }
+
+    /// The same run on a recording nobody called affected. The canceller costs
+    /// time and can only take something away, so it must not fire on the large
+    /// majority of recordings that have no echo at all.
+    @MainActor
+    func testCancellationStaysOffACleanRecording() async throws {
+        let canceller = CountingCanceller(medianReduction: 30)
+        let (h, _) = try makeHarness(
+            echoCancellationEnabled: true,
+        ) { canceller }
+        configureDedupTracks(h.engine)
+        let pair = try writeDedupPair(tmpDir.appendingPathComponent("cancel-clean"), bleed: false)
+
+        await runDualSource(h, app: pair.app, mic: pair.mic)
+
+        XCTAssertEqual(canceller.calls.withLock { $0 }, 0)
+        XCTAssertEqual(h.queue.jobs.first?.echo?.detected, false)
     }
 
     /// The same acceptance criterion with diarization on, which is the default.
@@ -1144,10 +1242,13 @@ final class WorkflowIntegrationTests: XCTestCase {
         try writeTrack(speechLike(seconds: 40, seed: 81), to: appURL)
 
         let verdicts = await h.queue.classifyMicEcho(
+            remedy: .transcriptDedup,
             analysis: EchoBleedAnalysis(verdict: .affected),
-            appURL: appURL,
-            micURL: dir.appendingPathComponent("never-written.wav"),
-            micDelay: 0,
+            tracks: (
+                app: appURL,
+                mic: dir.appendingPathComponent("never-written.wav"),
+                micDelay: 0,
+            ),
             micSegments: [TimestampedSegment(start: 0, end: 10, text: "x")],
         )
         XCTAssertTrue(verdicts.isEmpty)
@@ -1170,14 +1271,16 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         for verdict in [EchoVerdict.clean, .notMeasured] {
             let out = await h.queue.classifyMicEcho(
+                remedy: .transcriptDedup,
                 analysis: EchoBleedAnalysis(verdict: verdict),
-                appURL: appURL, micURL: micURL, micDelay: 0, micSegments: segments,
+                tracks: (app: appURL, mic: micURL, micDelay: 0), micSegments: segments,
             )
             XCTAssertTrue(out.isEmpty, "\(verdict) must not classify anything, even on audio that would light up")
         }
         let noSegments = await h.queue.classifyMicEcho(
+            remedy: .transcriptDedup,
             analysis: EchoBleedAnalysis(verdict: .affected),
-            appURL: appURL, micURL: micURL, micDelay: 0, micSegments: [],
+            tracks: (app: appURL, mic: micURL, micDelay: 0), micSegments: [],
         )
         XCTAssertTrue(noSegments.isEmpty)
     }

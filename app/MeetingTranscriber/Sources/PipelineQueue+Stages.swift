@@ -204,6 +204,12 @@ extension PipelineQueue {
             )
         } catch is CancellationError {
             stopElapsedTimer()
+            // Cleared here too, not only in the branch below. The set is what
+            // tells a later generic error apart from a cancellation, so an ID
+            // left in it outlives the job it described for the rest of the
+            // session. Nothing threw this out of a stage until the echo
+            // cancellation did, which is what made the leak reachable.
+            cancelledJobIDs.remove(ctx.jobID)
             logger.info("Job \(ctx.jobID) cancelled")
             // Job already removed by cancelJob()
         } catch {
@@ -240,13 +246,37 @@ extension PipelineQueue {
         try await appResample
         try await micResample
 
-        // Both tracks now exist at 16 kHz. Check here, before transcription,
-        // whether they carry the same speech: that means the loudspeaker output
-        // is coming back through the microphone, and every affected utterance
-        // would otherwise land in the transcript twice.
-        let echoAnalysis = await warnIfEchoBleed(
+        // Both tracks now exist at 16 kHz. Measure here, before transcription
+        // and before any remedy touches the audio, whether they carry the same
+        // speech: that means the loudspeaker output is coming back through the
+        // microphone. Measuring first is not an ordering detail — a cancelled
+        // track no longer correlates with the app track, so a detector run
+        // after the remedy would report every repaired recording as clean and
+        // take the quarantine off the audio that needed it.
+        let echoAnalysis = await measureEchoBleed(
             jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
         )
+        let intended = EchoRemedy.intended(
+            cancellationEnabled: echoCancellationEnabled, dedupEnabled: echoDedupEnabled,
+        )
+        // Both remedies are tied to a verdict the user was told about rather
+        // than applied wherever two tracks happen to correlate. For the
+        // canceller that also keeps it off the large majority of recordings
+        // that have no echo at all, where it could only cost time and take
+        // something away.
+        var echoRemoved = false
+        if intended == .cancellation, echoAnalysis.verdict == .affected {
+            echoRemoved = try await cancelEchoOnMicTrack(
+                jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
+            )
+        }
+        // From the outcome, not the setting: a cancellation that did not happen
+        // leaves the microphone track exactly as recorded, and the dedup's
+        // reason for standing down goes with it.
+        let remedy = EchoRemedy.applied(
+            cancellationSucceeded: echoRemoved, dedupEnabled: echoDedupEnabled,
+        )
+        announceEchoBleed(echoAnalysis, jobID: ctx.jobID, echoRemoved: echoRemoved)
 
         let appSegments = try await engine.transcribeSegments(audioPath: app16k)
         let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
@@ -255,8 +285,9 @@ extension PipelineQueue {
         // the loudspeaker coming back, so the merge can leave them out of the
         // transcript instead of writing the far end twice.
         let micEchoVerdicts = await classifyMicEcho(
-            analysis: echoAnalysis, appURL: app16k, micURL: mic16k,
-            micDelay: ctx.micDelay, micSegments: micSegments,
+            remedy: remedy, analysis: echoAnalysis,
+            tracks: (app: app16k, mic: mic16k, micDelay: ctx.micDelay),
+            micSegments: micSegments,
         )
 
         let segments = DiarizationProcess.mergeDualSourceSegments(

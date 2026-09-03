@@ -21,10 +21,22 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 struct EchoBleedAnalysis {
     let verdict: EchoVerdict
     let windowScores: [EchoBleedDetector.WindowScore]
+    /// Share of scored windows that carried bleed, and how many were scored.
+    /// Only meaningful on an `.affected` analysis, which is the only one the
+    /// announcement says anything about.
+    let affectedPercent: Int
+    let windowsScored: Int
 
-    init(verdict: EchoVerdict, windowScores: [EchoBleedDetector.WindowScore] = []) {
+    init(
+        verdict: EchoVerdict,
+        windowScores: [EchoBleedDetector.WindowScore] = [],
+        affectedPercent: Int = 0,
+        windowsScored: Int = 0,
+    ) {
         self.verdict = verdict
         self.windowScores = windowScores
+        self.affectedPercent = affectedPercent
+        self.windowsScored = windowsScored
     }
 }
 
@@ -49,8 +61,7 @@ extension PipelineQueue {
     /// caller that need not re-read the job, plus the per-window scores the
     /// segment classification aligns with; those exist only here, since the
     /// recorded DTO deliberately drops the series.
-    @discardableResult
-    func warnIfEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoBleedAnalysis {
+    func measureEchoBleed(jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval) async -> EchoBleedAnalysis {
         // Clamped exactly as `AudioMixer.mix` clamps it, and for the same
         // reason: a device switch mid-recording can reset the first-frame
         // timestamp on one source only (issue #99), and an absurd delay here
@@ -93,24 +104,44 @@ extension PipelineQueue {
         let detail = Self.windowDetail(result.windowScores)
         logger.info("echo_bleed windows=\(detail, privacy: .public)")
         guard result.isAffected else { return EchoBleedAnalysis(verdict: .clean, windowScores: result.windowScores) }
+        return EchoBleedAnalysis(
+            verdict: .affected, windowScores: result.windowScores,
+            // Carried rather than recomputed later: the announcement says what
+            // was measured, and the two numbers it says it by have to be the
+            // ones the verdict came from.
+            affectedPercent: Int((result.affectedWindowShare * 100).rounded()),
+            windowsScored: scored,
+        )
+    }
 
+    /// Tells the user what the measurement found, once the remedy has had its
+    /// turn. Split from the measurement because the sentence in the middle
+    /// depends on what actually happened afterwards: promising that the far end
+    /// was removed, before the run that removes it, would be a claim the app
+    /// cannot keep when the model is missing or the canceller throws.
+    func announceEchoBleed(_ analysis: EchoBleedAnalysis, jobID: UUID, echoRemoved: Bool) {
+        guard analysis.verdict == .affected else { return }
         // Says what was measured, not more: the share is over the windows that
         // were scored inside the analysed span, which for a long meeting is a
         // fraction of it.
-        let analysedSeconds = Double(scored) * EchoBleedDetector.windowSeconds
+        let analysedSeconds = Double(analysis.windowsScored) * EchoBleedDetector.windowSeconds
         let minutes = Int((analysedSeconds / 60).rounded())
         // "1 minutes" is reachable: the minimum firing configuration is three
         // ten-second windows, and the E2E fixture produces four.
         let span = minutes == 1 ? "minute" : "minutes"
-        let head = "Speaker output was picked up by the microphone in \(percent)% of the \(minutes) \(span) analysed."
-        let tail = "Remote speech may appear twice in the transcript. Using headphones avoids it."
+        let head = "Speaker output was picked up by the microphone in \(analysis.affectedPercent)% of the \(minutes) \(span) analysed."
+        let tail = echoRemoved
+            ? "It was removed from the microphone track before transcription. Headphones still give the cleaner recording."
+            : "Remote speech may appear twice in the transcript. Using headphones avoids it."
         // Third sentence because the consequence is otherwise invisible: naming
         // speakers on this recording will look like it worked and teach the app
         // nothing. Saying so here is honest — the quarantine follows from this
         // same verdict, so it is a statement of fact rather than a prediction.
+        // Unchanged by cancellation on purpose: the quarantine is a safety
+        // measure, and lifting it on a repair that has never been watched in
+        // the field is exactly the trade this project keeps refusing.
         let db = "Voices from this recording are not added to the speaker database."
         addWarning(id: jobID, "\(head) \(tail) \(db)")
-        return EchoBleedAnalysis(verdict: .affected, windowScores: result.windowScores)
     }
 
     /// Per microphone segment: is it the loudspeaker coming back?
@@ -127,19 +158,26 @@ extension PipelineQueue {
     /// detached task through the actor to keep them alive would cost more than
     /// it saves.
     func classifyMicEcho(
+        remedy: EchoRemedy,
         analysis: EchoBleedAnalysis,
-        appURL: URL,
-        micURL: URL,
-        micDelay: TimeInterval,
+        // One argument, the way the neighbouring dual-track diarization call
+        // already spells the same three: they are never meaningful apart, and
+        // apart they were the fifth, sixth and seventh things a reader had to
+        // keep in order at the call site.
+        tracks: (app: URL, mic: URL, micDelay: TimeInterval),
         micSegments: [TimestampedSegment],
     ) async -> [EchoSegmentVerdict] {
-        guard echoDedupEnabled, analysis.verdict == .affected, !micSegments.isEmpty else { return [] }
-        let delay = AudioMixer.clampMicDelay(micDelay)
+        // The remedy, not the setting: with cancellation on there is nothing
+        // here to find, because the far end is already out of the audio these
+        // segments were transcribed from, and this measure was calibrated on
+        // audio that still had it.
+        guard remedy == .transcriptDedup, analysis.verdict == .affected, !micSegments.isEmpty else { return [] }
+        let delay = AudioMixer.clampMicDelay(tracks.micDelay)
         let windowScores = analysis.windowScores
         return await Task.detached(priority: .utility) { () -> [EchoSegmentVerdict] in
             let analysed = Self.echoBleedAnalysisSeconds
-            guard let (app, appRate) = Self.loadBounded(appURL, maxSeconds: analysed),
-                  let (mic, micRate) = Self.loadBounded(micURL, maxSeconds: analysed),
+            guard let (app, appRate) = Self.loadBounded(tracks.app, maxSeconds: analysed),
+                  let (mic, micRate) = Self.loadBounded(tracks.mic, maxSeconds: analysed),
                   appRate == micRate
             else {
                 logger.warning("echo_dedup skipped: tracks unreadable or at different rates")

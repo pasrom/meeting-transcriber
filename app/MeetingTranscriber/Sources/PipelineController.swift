@@ -109,6 +109,7 @@ final class PipelineController {
             outputDir: settings.effectiveOutputDir,
             diarizeEnabled: settings.diarize,
             echoDedupEnabled: settings.echoDedupEnabled,
+            echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
             numSpeakers: settings.numSpeakers,
             micLabel: settings.micName,
             includeFullTranscriptInProtocol: settings.includeFullTranscriptInProtocol,

@@ -39,6 +39,7 @@ enum A11yID {
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
     static let outputFolderSection = "outputFolderSection"
     static let vadSection = "vadSection"
+    static let echoCancellationToggle = "echoCancellationToggle"
     static let echoDedupToggle = "echoDedupToggle"
     static let diarizationSection = "diarizationSection"
     static let liveTranscriptionSection = "liveTranscriptionSection"
