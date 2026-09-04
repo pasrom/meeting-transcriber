@@ -383,7 +383,8 @@ Scope and limits:
     "affectedWindowShare": 0.62,
     "windowsScored": 34,
     "windowsAffected": 21,
-    "suppressedSegments": 12
+    "suppressedSegments": 12,
+    "removed": false
   }
 }
 ```
@@ -420,6 +421,31 @@ reports it here.
 - `suppressedSegments`: how many microphone segments were left out of the written
   transcript because the app track already carries them. `0` when nothing was
   removed, which includes every recording that was never analysed.
+- `removed`: whether the far end was taken out of the microphone **audio** before
+  transcription. Three states, and the absent one carries weight: absent means the
+  cancellation stage was never reached (the feature is off, or the recording was
+  not judged affected), `false` means it was reached and the far end is still in
+  the microphone track, `true` means the track was rewritten without it. Nothing
+  else in this shape distinguishes the three — a cancelled recording and one that
+  never had an echo both end up with the far end written once, and
+  `suppressedSegments` reads `0` for a run that cancelled, a run with the
+  transcript dedup switched off, and a run that did nothing at all.
+
+  `false` does not say why, and there are four whys: no model could be resolved,
+  the run failed, its self-check would not confirm it, or the confirmed output
+  could not be put in place. The job's `warnings` carry which one in prose. A
+  caller counting how often the feature fails to deliver wants the field; a
+  caller diagnosing one recording wants the warning.
+
+**The two remedies do not compose, and cancellation wins.** Cancellation removes
+the far end from the microphone audio; the dedup drops microphone transcript
+lines that duplicate it. Run together, the dedup would be judging audio the far
+end has already been taken out of, where its own measure no longer means what it
+was calibrated to mean. So `"removed": true` implies `"suppressedSegments": 0`
+even with both switches on, and that zero is the dedup standing down rather than
+an absence of duplicates. When cancellation is not confirmed the microphone track
+is exactly as recorded and the dedup applies again, so `"removed": false` can be
+accompanied by a non-zero count.
 
 **Deduplication only runs on a recording reported as affected**, and it removes
 lines rather than audio: the segments stay in the job's stored data, so the words

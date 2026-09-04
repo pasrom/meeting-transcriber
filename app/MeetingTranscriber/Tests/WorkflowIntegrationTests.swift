@@ -1105,6 +1105,9 @@ final class WorkflowIntegrationTests: XCTestCase {
             job.warnings.contains { $0.contains("removed from the microphone track") },
             "the warning must not still be recommending headphones for a fixed recording, got: \(job.warnings)",
         )
+        // The same fact on the channel a driver reads. The warning is prose and
+        // free to be reworded; this is what a caller can assert on.
+        XCTAssertTrue(try XCTUnwrap(job.echo?.removed))
     }
 
     /// The same run on a recording nobody called affected. The canceller costs
@@ -1123,6 +1126,10 @@ final class WorkflowIntegrationTests: XCTestCase {
 
         XCTAssertEqual(canceller.calls.withLock { $0 }, 0)
         XCTAssertEqual(h.queue.jobs.first?.echo?.detected, false)
+        // Absent, not false: false is reserved for a run that happened and could
+        // not be confirmed, and a clean recording nobody attempted must not be
+        // counted among those.
+        XCTAssertNil(h.queue.jobs.first?.echo?.removed)
     }
 
     /// The same acceptance criterion with diarization on, which is the default.

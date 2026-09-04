@@ -691,6 +691,20 @@ class PipelineQueue {
         jobs[index].echo?.suppressedSegments = count
     }
 
+    /// Record whether the far end was taken out of the microphone audio.
+    /// Written only once the stage has decided, so a job that never reached it
+    /// keeps the field absent — and absent means nobody tried, which is not
+    /// what false means.
+    /// Guarded by the same optional chain as the suppressed count, for the same
+    /// reason: cancellation only ever runs on an `.affected` verdict, so a nil
+    /// `echo` means this answer belongs to no measurement.
+    /// Internal (not private) because `PipelineQueue+EchoCancellation.swift`
+    /// calls it.
+    func recordEchoRemoved(jobID: UUID, _ removed: Bool) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].echo?.removed = removed
+    }
+
     /// Reset the elapsed timer for a new pipeline stage.
     /// Internal (not private) because the stage methods in PipelineQueue+Stages.swift call it.
     func startElapsedTimer() {
