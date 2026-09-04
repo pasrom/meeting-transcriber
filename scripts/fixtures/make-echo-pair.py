@@ -51,6 +51,17 @@ measures as clean at every plausible bleed gain. Room tone would sit under the
 gaps in a real recording; leaving them empty only makes the affected case
 cleaner to reason about, and the control is gated identically.
 
+The far end can be gated the same way, with --app-burst and --app-gap, and that
+one is off by default. It exists for the cancellation lane rather than the
+detection lane: the canceller's self-check is a difference between the windows
+where the far end was playing and the windows where it was not, so a fixture
+whose far end never stops offers no control group and the check refuses to
+confirm the run. Measured on the ungated pair below: 42 of 50 one-second windows
+carry far-end audio and only 8 do not, which is under the ten the check needs on
+each side, and the run comes back unjudgeable however well it worked. At
+--app-burst 2.5 --app-gap 2.5 the same pair splits 25 to 25, and the natural
+pauses inside the source add to the gate's rather than fighting it.
+
 Standard library only: the runner has no third-party Python and this must not
 grow a dependency to keep working.
 
@@ -75,9 +86,22 @@ machine. Below roughly 0.7 the local voice dominates
 every window and the pair measures as clean, which is a fact about the fixture,
 not about the detector.
 
+With the far end gated 2.5 s on / 2.5 s off, same two sources, measured through
+the production detector and the production canceller:
+
+  --bleed 1.0  4 of 4 windows affected, window correlations 0.72 to 0.83
+               canceller: 66.5 dB median where the far end plays, -0.0 dB where
+               it does not, self-check says removed
+  --bleed 0    0 of 4 windows affected, hottest window 0.31 against a 0.7 bar
+
+The correlations sit closer to the 0.7 bar than the ungated pair's do, which
+costs nothing: what the verdict rests on is the share of affected windows, and
+at 4 of 4 it would survive losing two of them.
+
 Usage:
   make-echo-pair.py --app A.wav --local B.wav --out DIR [--stem NAME]
                     [--bleed GAIN] [--delay-ms MS]
+                    [--app-burst S --app-gap S]
 
 --bleed 0 produces the clean control.
 """
@@ -225,6 +249,16 @@ def main():
                    help="seconds the local side speaks per turn (0 disables gating)")
     p.add_argument("--local-gap", type=float, default=7.5,
                    help="seconds the local side listens between turns")
+    # Why the far end pauses at all is in the module docstring. Off by default
+    # for a reason local to these two numbers: gating costs per-window envelope
+    # correlation, 0.72 to 0.83 against a 0.7 bar where the ungated pair sits
+    # higher, and the detection lane quotes its own calibration in its failure
+    # messages. Moving that lane onto thinner margin to save one flag is a worse
+    # trade than carrying two parameter sets.
+    p.add_argument("--app-burst", type=float, default=0.0,
+                   help="seconds the far end speaks per turn (0 disables gating)")
+    p.add_argument("--app-gap", type=float, default=0.0,
+                   help="seconds the far end pauses between turns")
     # The two terms that make the bleed behave like a room instead of like a
     # multiplication. Both default to the values measured on a real call rather
     # than to off: a fixture whose whole job is to stand in for an affected
@@ -249,6 +283,11 @@ def main():
         # Mirrors the check above: without it the tiling divides by zero and the
         # lane reports a Python traceback instead of which file was empty.
         sys.exit(f"{args.local}: no samples")
+
+    # Gated before anything derives from it, so the written far-end track and the
+    # bleed built out of it carry the same pauses: a loudspeaker is silent while
+    # the far end is.
+    app = gate(app, app_rate, args.app_burst, args.app_gap)
 
     count = len(app)
     mic = gate(tiled(local, count), app_rate, args.local_burst, args.local_gap)
@@ -276,6 +315,8 @@ def main():
                 f"reverb={args.reverb_ms}ms agc={args.agc_depth}/{args.agc_period}s")
     else:
         kind = "clean control"
+    if args.app_burst > 0 and args.app_gap > 0:
+        kind += f", far end gated {args.app_burst}s on / {args.app_gap}s off"
     print(f"{app_path}\n{mic_path}\n{seconds:.1f}s @ {app_rate} Hz, {kind}")
 
 

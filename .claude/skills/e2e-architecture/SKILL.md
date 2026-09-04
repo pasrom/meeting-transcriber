@@ -100,6 +100,32 @@ PRs are excluded from the self-hosted runner.
   `recognition_log.jsonl` and leaves two terminal-job records. It does not
   enroll voices — skipping never writes an embedding — so unlike
   `--naming-confirm` there is nothing to snapshot around `speakers.json`.
+- The `--echo-cancel` lane is that lane's other half, and the two cannot share a
+  run: one needs echo cancellation off to measure the transcript dedup, the
+  other needs it on, and under cancellation the dedup stands down by design. So
+  the driver rejects the combination rather than resolving it by dispatch order,
+  which would run one lane under the other's settings and still report a pass.
+  It writes `echoCancellationEnabled` on **every** invocation, not just its own:
+  left `true` by an earlier run it would take precedence over the dedup, and the
+  `--echo-bleed` lane would fail with the dedup standing down correctly.
+  Its pairs carry one term the other lane's do not — a far end that pauses
+  (`--app-burst` / `--app-gap`). That is not cosmetic. The canceller's
+  self-check is a *difference* between the windows where the far end was playing
+  and the windows where it was not, so a fixture whose far end never stops
+  offers no control group; the other lane's pair splits its windows 42 to 8
+  against a floor of ten on each side, and the run comes back unjudgeable however
+  well it went. Gated 2.5 s on / 2.5 s off the same sources split 25 to 25. The
+  other lane's pair is left byte-identical, so its calibrated numbers still hold.
+  What it asserts: the far end was removed from the microphone audio
+  (`echo.removed == true`, read off the FINISHED job so a build that loses the
+  flag on the way to the terminal store fails), nothing was *also* stripped from
+  the transcript with both switches on, the clean control was never even
+  attempted (`removed` absent, which is not `false`), and the local speaker
+  survived — measured against the control's own transcript, because a canceller
+  that emptied the microphone track passes every other assertion. It also
+  asserts the bundled model is in the deployed bundle up front: without it the
+  stage correctly reports a missing model and leaves the track as recorded,
+  which would read as a broken canceller.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
