@@ -175,12 +175,18 @@ final class PipelineEchoCancellationTests: XCTestCase {
         let tracks = try makeTracks()
         let before = try AudioMixer.loadAudioFileAsFloat32(url: tracks.mic)
         let (queue, jobID) = makeQueue(StubCanceller(medianReduction: 30, writesOutput: false))
+        seedVerdict(queue, jobID)
 
         let removed = try await queue.cancelEchoOnMicTrack(
             jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
         )
 
         XCTAssertFalse(removed)
+        // The sharpest of the four declines: the self-check confirmed this run
+        // and the rename failed after it. The recording is still as it was, so
+        // it counts as one the feature did not deliver on — a field meaning
+        // "the self-check would not confirm it" would say the opposite here.
+        XCTAssertEqual(queue.jobs.first?.echo?.removed, false)
         XCTAssertEqual(
             try AudioMixer.loadAudioFileAsFloat32(url: tracks.mic), before,
             "the recording has to survive its own recovery path",
@@ -283,5 +289,73 @@ final class PipelineEchoCancellationTests: XCTestCase {
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: dir.appendingPathComponent("mic_16k_cancelled.wav").path),
         )
+    }
+
+    // MARK: - What the outside can read
+
+    /// A verdict to hang the outcome on. Every real call site has one: the
+    /// stage only reaches cancellation on an `.affected` verdict, which is
+    /// recorded before it runs.
+    private func seedVerdict(_ queue: PipelineQueue, _ jobID: UUID) {
+        queue.recordEchoVerdict(jobID: jobID, EchoDetectionDTO(EchoBleedDetector.Result(
+            windowScores: [EchoBleedDetector.WindowScore(correlation: 0.9, lagSeconds: 0.015)],
+        )))
+    }
+
+    /// A confirmed run says so on the job. Why the field exists at all, and why
+    /// its three states are not two, is on `EchoDetectionDTO.removed`.
+    func testAConfirmedRunIsVisibleOnTheJob() async throws {
+        let tracks = try makeTracks()
+        let (queue, jobID) = makeQueue(StubCanceller(medianReduction: 30))
+        seedVerdict(queue, jobID)
+
+        _ = try await queue.cancelEchoOnMicTrack(
+            jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
+        )
+
+        XCTAssertEqual(queue.jobs.first?.echo?.removed, true)
+    }
+
+    /// A run the self-check would not confirm reads as a decline, not as a
+    /// recording nobody tried to repair. This is the state the field is shaped
+    /// around, so it is the one worth a test of its own.
+    func testADeclinedRunIsVisibleAndDistinctFromNeverHavingRun() async throws {
+        let tracks = try makeTracks()
+        let (queue, jobID) = makeQueue(StubCanceller(medianReduction: 0.2))
+        seedVerdict(queue, jobID)
+
+        _ = try await queue.cancelEchoOnMicTrack(
+            jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
+        )
+
+        XCTAssertEqual(queue.jobs.first?.echo?.removed, false)
+    }
+
+    /// The other three ways the stage can end without the far end gone. All of
+    /// them are `false`, and the reason to pin them here is that the field is
+    /// documented as a count of "the feature was on and did not deliver": a
+    /// version of this that only recorded the self-check's refusal would leave
+    /// the other three absent, i.e. indistinguishable from a recording nobody
+    /// tried to repair, which is the population the count exists to exclude.
+    ///
+    /// The fourth way, a confirmed run whose output could not be moved into
+    /// place, is pinned where that path is already exercised.
+    func testEveryWayTheStageDeclinesIsRecordedAsADecline() async throws {
+        let cases: [(String, StubCanceller?)] = [
+            ("no resolvable model", nil),
+            ("the run threw", StubCanceller(medianReduction: 30, failure: EchoCancellationError.modelLoadFailed("x"))),
+            ("the self-check refused", StubCanceller(medianReduction: 0.2)),
+        ]
+        for (name, canceller) in cases {
+            let tracks = try makeTracks()
+            let (queue, jobID) = makeQueue(canceller)
+            seedVerdict(queue, jobID)
+
+            _ = try await queue.cancelEchoOnMicTrack(
+                jobID: jobID, appURL: tracks.app, micURL: tracks.mic, micDelay: 0,
+            )
+
+            XCTAssertEqual(queue.jobs.first?.echo?.removed, false, "\(name) has to read as a decline")
+        }
     }
 }

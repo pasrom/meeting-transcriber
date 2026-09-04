@@ -29,6 +29,20 @@ extension PipelineQueue {
     func cancelEchoOnMicTrack(
         jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval,
     ) async throws -> Bool {
+        let removed = try await attemptEchoCancellation(
+            jobID: jobID, appURL: appURL, micURL: micURL, micDelay: micDelay,
+        )
+        // Recorded here rather than at each of the five ways this can end, and
+        // deliberately not on the throwing path: a run the user cancelled is
+        // not a run that declined, and writing false for it would count it
+        // among the failures the field exists to measure.
+        recordEchoRemoved(jobID: jobID, removed)
+        return removed
+    }
+
+    private func attemptEchoCancellation(
+        jobID: UUID, appURL: URL, micURL: URL, micDelay: TimeInterval,
+    ) async throws -> Bool {
         guard let canceller = echoCancellerFactory() else {
             logger.warning("echo_cancel skipped: no model available")
             addWarning(

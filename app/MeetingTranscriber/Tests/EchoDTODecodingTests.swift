@@ -38,6 +38,46 @@ final class EchoDTODecodingTests: XCTestCase {
         XCTAssertEqual(dto.suppressedSegments, 6)
     }
 
+    /// A verdict from before cancellation existed. Absent is not false: false
+    /// means the canceller ran on this recording and could not be confirmed,
+    /// which is the number a field soak counts. A decoder substituting false
+    /// would report every recording made before the feature shipped as one the
+    /// canceller had failed on.
+    func testVerdictWithoutTheRemovedFlagReadsAsNeverAttempted() throws {
+        let dto = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":0.62,"windowsScored":34,"windowsAffected":21}
+        """)
+        XCTAssertNil(dto.removed, "no cancellation was attempted, which is not the same as one that failed")
+    }
+
+    func testVerdictKeepsADeclinedCancellationApart() throws {
+        let declined = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":1,"windowsScored":4,"windowsAffected":4,"removed":false}
+        """)
+        XCTAssertFalse(try XCTUnwrap(declined.removed))
+        let confirmed = try decode(EchoDetectionDTO.self, """
+        {"detected":true,"affectedWindowShare":1,"windowsScored":4,"windowsAffected":4,"removed":true}
+        """)
+        XCTAssertTrue(try XCTUnwrap(confirmed.removed))
+    }
+
+    /// The wire contract the three-state design rests on, which no other test
+    /// covers: a nil `removed` must be OMITTED, not encoded as `null`.
+    ///
+    /// It holds today only because a synthesized encoder emits `encodeIfPresent`
+    /// for an Optional. Someone writing an explicit `encode(to:)` later — to fix
+    /// key order, or to add a field — would reach for `encode(_:forKey:)`, every
+    /// verdict would grow `"removed": null`, and every consumer that tells
+    /// absent from false by asking whether the key is there would flip. The e2e
+    /// lane asserts it, but that lane does not run on a pull request.
+    func testANilRemovedIsAbsentFromTheEncodedShapeRatherThanNull() throws {
+        let dto = try decode(EchoDetectionDTO.self, #"""
+        {"detected":false,"affectedWindowShare":0,"windowsScored":4,"windowsAffected":0}
+        """#)
+        let json = try XCTUnwrap(String(data: JSONEncoder().encode(dto), encoding: .utf8))
+        XCTAssertFalse(json.contains("removed"), "got: \(json)")
+    }
+
     /// The fields that were always there stay required: a record missing one of
     /// those is genuinely broken, and quietly substituting a zero would report a
     /// recording as measured over no windows at all.
