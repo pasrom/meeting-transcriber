@@ -246,6 +246,17 @@ PRs are excluded from the self-hosted runner.
    tolerance is narrow — only the preflight's two missing-grant arms return
    early; anything failing after them still fails the lane.
 
+**Launch the app with `open`, never by executing the binary.** TCC answers for
+the process launchd knows, so a bundle started as `"$APP/Contents/MacOS/..." &`
+is asked about an identity the grants were never made against. Measured on the
+granted runner, same bundle and the same CDHash, three reads each so it is not a
+startup race: executed directly it reports `microphone=notDetermined
+screenRecording=denied`, opened it reports both `healthy`. That is what kept
+`e2e-permission-health.sh` red while every recording lane on the same host
+recorded happily, and it is the shape to suspect first when a permission reading
+contradicts what the lanes actually do. `open --env NAME=VALUE` carries the debug
+environment variables through; a leading `env` does not.
+
 After setup, every CI run rebuilds + re-signs the `.app`; the cdhash differs
 per build but the cert leaf SHA-1 doesn't, so TCC keeps the manual grant across
 rebuilds. The grant keys on the cert of whatever bundle you Allowed — CI

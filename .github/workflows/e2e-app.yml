@@ -251,7 +251,12 @@ jobs:
       # and BlackHole (the default input) delivers silent buffers the old
       # amplitude probe reported broken. `continue-on-error` while the mic
       # assertion is validated against the runner's idle BlackHole input;
-      # flip to a hard gate once it has been green on a few nightlies.
+      # flip to a hard gate once it has been green on a few nightlies. It has
+      # never been green here, and the one change that made it green had
+      # nothing to do with the probes: the script executed the binary instead
+      # of opening the bundle, and TCC then answered for an identity the grants
+      # were never made against. Fixed in the script; the hard-gate flip still
+      # wants those few green nightlies first, so this stays non-gating.
       # `--no-build` reuses the dev bundle the first e2e-app.sh lane built and
       # signed; it shares the bundle-ID + signing cert with the granted bundle,
       # so the runner's TCC grant applies (continue-on-error hedges a mismatch).

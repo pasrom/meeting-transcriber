@@ -50,9 +50,16 @@ BIN="$APP/Contents/MacOS/MeetingTranscriber"
 MTCLI="$ROOT/tools/mt-cli/.build/debug/mt-cli"
 
 cleanup() {
-    if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
-        kill -9 "$APP_PID" 2>/dev/null || true
-    fi
+    # By bundle id rather than by pid: `open` hands the launch to launchd, so
+    # this script is not the parent of the app it started.
+    #
+    # `|| true` is load-bearing under `set -e`, and its absence was a
+    # regression the pid form did not have: this helper returns non-zero when
+    # the app outlives SIGKILL, and a non-zero command in an EXIT trap both
+    # abandons the rest of the trap — leaving the stale launchctl entries the
+    # next line exists to clear — and overrides a successful run's exit status.
+    # Same guard the soak and cpu-load lanes already put on this call.
+    quit_running_app || true
     bootout_stale_launchctl
 }
 trap cleanup EXIT
@@ -78,15 +85,50 @@ bootout_stale_launchctl
 
 # --- 3. Launch (suppress auto-watch so the app stays idle) ---------------
 
-env MEETINGTRANSCRIBER_DEBUG_RPC=1 \
-    MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
-    "$BIN" &
-APP_PID=$!
+# `open` routes to the WindowServer of the FOREGROUND Aqua session, so with a
+# second user signed in via Fast User Switching it fails with the misleading
+# `procNotFound (-600)`. Executing the binary was immune to this, so the check
+# arrives with the launch that needs it; e2e-app.sh carries the same one for
+# the same reason.
+fg_user=$(stat -f "%Su" /dev/console)
+my_user=$(id -un)
+if [ "$fg_user" != "$my_user" ]; then
+    die "Aqua foreground user is '$fg_user', not '$my_user' — Fast User Switching is active, and \`open\` would fail with a bare -600. Log '$fg_user' out completely, then re-run."
+fi
+
+# Through `open`, the way e2e-app.sh launches the app and the way a user does,
+# NOT by executing the binary. That distinction decides what this script
+# measures, which is the whole point of it. (Same method, different copy: that
+# lane opens the deployed bundle, this one the freshly built workspace copy.)
+#
+# Measured on the granted runner, same bundle, same CDHash, three reads each at
+# 8, 20 and 35 seconds so it is not a startup race:
+#
+#   "$BIN" &     ->  microphone=notDetermined  screenRecording=denied
+#   open "$APP"  ->  microphone=healthy        screenRecording=healthy
+#
+# Executed directly the process is not the app launchd knows, so TCC answers for
+# something the grants were never made against. This lane then reported the
+# runner as ungranted while every recording lane on the same host was recording
+# happily, and its own failure text sent the reader off to re-grant a permission
+# that was never missing.
+#
+# `--env` rather than a leading `env`, which `open` does not carry through, and
+# rather than writing the two as UserDefaults, which would need a restore path
+# and would leave the host altered if this exits badly.
+open --env MEETINGTRANSCRIBER_DEBUG_RPC=1 \
+    --env MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
+    "$APP"
 
 # --- 4. Wait for RPC server to come up (max 30 s) ------------------------
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
 wait_for_rpc "$MTCLI" 30 || die "RPC server did not start within 30 s"
+# The answering process has to be the bundle this script named. Port 9876 is
+# not exclusive to it: a release build with the automation API on would answer
+# the same poll, and the assertions below would then describe someone else's
+# permissions. The full workspace path is unique to the copy just built.
+assert_app_alive "$BIN"
 echo "  RPC up"
 
 # --- 5. Wait for the async permission check to populate (max 20 s) -------
@@ -115,11 +157,45 @@ done
 
 echo "▸ permissionHealth: screenRecording=$SR microphone=$MIC accessibility=$AX"
 
+# The launch environment actually arrived. Without this the lane cannot tell a
+# working `open --env` from a silently ignored one: `debugRPCEnabled` is left
+# true in this host's defaults by the e2e-app lanes, so the RPC server comes up
+# either way and the lane would pass while measuring an app launched with none
+# of the environment it asked for. Auto-watch is the observable half —
+# suppressed, no watch loop exists and the field stays absent; unsuppressed on a
+# host whose `autoWatch` default is true, it reads "watching".
+#
+# Its own wait, and that is the point of it being here rather than folded into
+# the poll above. Written that way first, it could not fail: the permission loop
+# returns as soon as the microphone field is populated, about two seconds in,
+# and the watch loop needs longer to say anything. Measured on the runner with
+# the environment deliberately dropped: absent at 2 s, "watching" by 7 s, steady
+# after. Twelve seconds is that with room, and it is spent only on runs that go
+# on to pass.
+echo "▸ Confirming the launch environment reached the app…"
+for _ in $(seq 1 24); do
+    if "$MTCLI" state 2>/dev/null | jq -e '.watchState == "watching"' >/dev/null 2>&1; then
+        die "the app is watching, so MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH did not reach it — open --env is not delivering the launch environment, and what this lane measured is not what it configured"
+    fi
+    sleep 0.5
+done
+
+
 # --- 6. Assert the #446-fixed probes report healthy ----------------------
 
 # A "broken" verdict here is a #446 regression (probe false-flagged a granted
-# permission). A "denied" verdict means the grant lapsed on the runner (re-grant
-# in the GUI session — see CLAUDE.md). Either way the probe is not healthy.
+# permission). "denied" or "notDetermined" means either the app is being asked
+# about an identity the grants were not made against, or a grant really did
+# lapse.
+#
+# The recording lanes are evidence about which, not proof. A microphone stuck at
+# notDetermined blocks `ensureMicrophoneAccess()` on the prompt and times the
+# first recording lane out; a DENIED one returns immediately and the lane fails
+# later, on the mic track carrying no signal. Screen Recording is weaker still:
+# the audio tap accepts either that grant or the separate audio-capture one, so
+# a host holding both could lose Screen Recording with every recording lane
+# staying green. Lanes green therefore says "suspect attribution first", not
+# "attribution, certainly".
 fail=false
 [ "$SR" = "healthy" ] || {
     echo "  ✗ screenRecording expected 'healthy', got '$SR'" >&2
@@ -134,7 +210,7 @@ echo "  (accessibility=$AX — informational, not asserted)"
 if [ "$fail" = true ]; then
     echo "Full permissionHealth JSON:" >&2
     echo "$STATE_JSON" | jq .permissionHealth >&2 || true
-    die "permission probe not healthy: 'broken' = #446 regression, 'denied' = grant lapsed on runner"
+    die "permission probe not healthy: 'broken' = #446 regression; 'denied'/'notDetermined' = either the app was launched in a way TCC attributes elsewhere, or the grant lapsed on the runner (re-grant in the GUI session, see CLAUDE.md). Recording lanes green in the same run points at the first, but does not settle it for Screen Recording, which the audio tap can do without"
 fi
 
 echo "OK — Screen Recording + Microphone probes report healthy on the granted runner"
