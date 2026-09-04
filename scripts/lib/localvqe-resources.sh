@@ -10,6 +10,14 @@
 #
 # Source this, don't execute it.
 
+# How a model file is recognised inside a bundle. The Swift resolver matches on
+# the same prefix and extension (LocalVQEModel.resourcePrefix), and everything
+# else discovers the concrete name rather than restating it, so a model bump
+# stays one edit in fetch-localvqe-model.sh. Exported as a variable because the
+# cleanup below and the e2e lane that checks a deployed bundle both need it, and
+# two hand-typed globs are two things to keep in step.
+LOCALVQE_RESOURCE_GLOB="localvqe-*.gguf"
+
 # Fetches the pinned model and installs it into the given Resources directory.
 # Returns non-zero if ANY step fails, not just the fetch.
 #
@@ -45,7 +53,12 @@ install_localvqe_resources() {
     # would win from then on with nothing reporting it. build_release.sh
     # rebuilds its bundle from scratch and run_app.sh does not, so the cleanup
     # belongs here where both callers inherit it.
-    rm -f "$resources_dir"/localvqe-*.gguf || return 1
+    # Unquoted on purpose: the point is that the shell expands the pattern.
+    # Quoting it, which is what a passing lint cleanup would do, makes this
+    # match nothing, leaves the superseded model in place, and the resolver's
+    # deterministic pick then returns the OLD one for good.
+    # shellcheck disable=SC2086
+    rm -f "$resources_dir"/$LOCALVQE_RESOURCE_GLOB || return 1
     cp "$model_path" "$resources_dir/$model_name" || return 1
 
     echo "  LocalVQE model: $resources_dir/$model_name"

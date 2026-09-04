@@ -40,6 +40,7 @@ NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via 
 NAMING_ESCAPE=false      # press a real Escape on the naming dialog + assert it dismisses without resolving (issue #577)
 TITLE_SOURCE=false       # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
 ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
+ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -60,11 +61,12 @@ while [ $# -gt 0 ]; do
         --naming-escape)    NAMING_ESCAPE=true ;;
         --title-source)     TITLE_SOURCE=true ;;
         --echo-bleed)       ECHO_BLEED=true ;;
+        --echo-cancel)      ECHO_CANCEL=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
-                  [--naming-escape] [--echo-bleed]
+                  [--naming-escape] [--echo-bleed] [--echo-cancel]
                   [--naming-confirm] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
@@ -151,6 +153,18 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        Leaves two finished jobs and a recognition-log row behind
                        (it skips their naming so nothing stays parked); it never
                        enrolls a voice, so speakers.json is untouched.
+  --echo-cancel        The other half of --echo-bleed: run the same two pairs with
+                       echo cancellation ON and assert the far end is taken out of
+                       the microphone AUDIO rather than out of the transcript after
+                       the fact. Asserts removed=true on the affected pair, absent
+                       on the control (nobody tried, which is not the same as
+                       tried and failed), and zero suppressed segments on the
+                       affected pair with the dedup still switched on — that last
+                       one is the precedence, not a coincidence. Its pairs carry a
+                       far end that pauses, because the canceller's self-check is a
+                       difference between the windows where the far end played and
+                       the windows where it did not. Standalone lane. Needs python3
+                       and the bundled model.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
 HELP
             exit 0
@@ -197,17 +211,33 @@ fi
 if [ "$MIC_ONLY" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$NAMING_CONFIRM" = true ] \
     || [ "$NAMING_ESCAPE" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
     || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
-    || [ "$TWO_MEETINGS" = true ] || [ "$ECHO_BLEED" = true ] || [ "$TITLE_SOURCE" = true ]; }; then
+    || [ "$TWO_MEETINGS" = true ] || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ] \
+    || [ "$TITLE_SOURCE" = true ]; }; then
     echo "Error: --mic-only is a standalone lane; incompatible with the other lane flags" >&2
     exit 2
 fi
 # --echo-bleed builds its own audio from the shipped fixtures and never records,
-# so it shares nothing with the meeting lanes and would only mask a typo.
+# so it shares nothing with the meeting lanes and would only mask a typo. The
+# --echo-cancel term below is where the two echo lanes are kept apart: they are
+# the same audio under opposite settings, one needing cancellation off to
+# measure the dedup and the other needing it on, so a shared run could only
+# measure one of them and would still report a pass.
 if [ "$ECHO_BLEED" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
     || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
     || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
-    || [ "$TWO_MEETINGS" = true ] || [ "$TITLE_SOURCE" = true ] || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    || [ "$TWO_MEETINGS" = true ] || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_CANCEL" = true ] \
+    || [ -n "$SIMULATOR_FIXTURE" ]; }; then
     echo "Error: --echo-bleed is a standalone lane; incompatible with the other lane flags and --fixture" >&2
+    exit 2
+fi
+# Same reasoning as --echo-bleed above, which is also where their mutual
+# exclusion is enforced.
+if [ "$ECHO_CANCEL" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
+    || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
+    || [ "$TWO_MEETINGS" = true ] || [ "$TITLE_SOURCE" = true ] \
+    || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --echo-cancel is a standalone lane; incompatible with the other lane flags and --fixture" >&2
     exit 2
 fi
 
@@ -324,6 +354,10 @@ fail() { printf '[e2e-app] FAIL: %s\n' "$*" >&2; exit 1; }
 
 # shellcheck source=lib/e2e-helpers.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/e2e-helpers.sh"
+# For LOCALVQE_RESOURCE_GLOB, so the echo-cancellation lane's bundle check and
+# the install it checks for agree on what a model file looks like.
+# shellcheck source=lib/localvqe-resources.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/localvqe-resources.sh"
 
 require_command() {
     command -v "$1" >/dev/null || fail "missing command: $1"
@@ -579,6 +613,21 @@ write_dev_default "$DEV_BUNDLE_ID" autoWatch true bool
 # same host would otherwise decide it, and the lane that asserts nothing is
 # removed on a clean pair needs the feature ON to mean anything.
 write_dev_default "$DEV_BUNDLE_ID" echoDedupEnabled true bool
+# Cancellation ships off and only one lane wants it. Written on every run, not
+# just that one: left over from an earlier --echo-cancel run on the same host it
+# would take precedence over the dedup, and the lane that asserts segments were
+# removed would fail with the dedup standing down correctly.
+#
+# It has to be here, before the launch further down, which is also what bounds
+# the restore in `on_exit`: the EXIT trap is installed after that launch, so a
+# failure between this line and the trap leaves the key set. Tried moving the
+# write below the trap to close that, and it moves the bug rather than fixing
+# it — the app is already running by then and would never see the setting.
+# Accepted, with the blast radius written down: the next invocation of this
+# script writes the key again for whichever lane it is, so a runner self-heals,
+# and what is exposed is a developer host keeping a default-off feature on until
+# then.
+write_dev_default "$DEV_BUNDLE_ID" echoCancellationEnabled "$ECHO_CANCEL" bool
 
 if [ "$MIC_ONLY" = true ]; then
     # Record-only so the lane needs no ASR models, and auto-watch OFF so nothing
@@ -671,7 +720,7 @@ _NC_FIXTURE_DIR=""
 
 # Temp dir holding the echo lane's synthesised dual-source pairs. Its own mktemp
 # dir, removed by on_exit; the shipped fixtures it is built from are read-only.
-_EB_FIXTURE_DIR=""
+_ECHO_FIXTURE_DIR=""
 
 # True when any durable backup / absent marker exists on disk.
 _naming_confirm_backup_present() {
@@ -880,6 +929,15 @@ on_exit() {
         # silently disabled.
         write_dev_default "$DEV_BUNDLE_ID" autoWatch true bool
     fi
+    if [ "$ECHO_CANCEL" = true ]; then
+        # Back to the shipped default rather than to whatever was there before:
+        # the write at launch already clobbered the old value on every run, so
+        # there is nothing to restore, and false is what a user of this bundle
+        # should find. Without this the lane leaves echo cancellation ON for
+        # every later run_app.sh session and every e2e-browser.sh run, neither
+        # of which writes the key.
+        write_dev_default "$DEV_BUNDLE_ID" echoCancellationEnabled false bool
+    fi
     if [ "$RECORD_ONLY" = true ]; then
         delete_dev_default "$DEV_BUNDLE_ID" recordOnly
         # Marker-bounded cleanup: only files created since `touch $MARKER`
@@ -918,9 +976,9 @@ on_exit() {
     _mic_only_restore_output
     # Echo lane: drop the synthesised pairs (our own mktemp dir, never a real
     # recordings directory).
-    if [ -n "${_EB_FIXTURE_DIR:-}" ] && [ -d "$_EB_FIXTURE_DIR" ]; then
-        rm -rf "$_EB_FIXTURE_DIR"
-        _EB_FIXTURE_DIR=""
+    if [ -n "${_ECHO_FIXTURE_DIR:-}" ] && [ -d "$_ECHO_FIXTURE_DIR" ]; then
+        rm -rf "$_ECHO_FIXTURE_DIR"
+        _ECHO_FIXTURE_DIR=""
     fi
 }
 # Single cleanup hook, but the signal paths must EXIT after cleaning up: a
@@ -929,6 +987,7 @@ on_exit() {
 # EXIT trap runs cleanup-without-exit (the shell is already leaving). 130 = 128+SIGINT,
 # 143 = 128+SIGTERM, the conventional shell exit codes for those signals.
 trap on_exit EXIT
+
 trap 'on_exit; exit 130' INT
 trap 'on_exit; exit 143' TERM
 
@@ -2037,11 +2096,38 @@ run_title_source() {
 # No settings are touched. The verdict does not depend on any of them, so a lane
 # that mutates the runner's defaults would add a restore path and a way to leave
 # the host dirty for nothing.
+# The parts of the two echo lanes' fixture setup that are the same lane to lane:
+# where the generator and its two source recordings live, and a fresh directory
+# to put the output in. What the generator is ASKED for stays at each lane's own
+# call site, because that is the one thing they differ in and hiding it behind a
+# passthrough would cost more than the two lines it saves.
+#
+# Shared rather than copied for a reason this change learned the hard way: the
+# two functions held these lines verbatim, and an edit anchored on text that
+# appears in both landed in the wrong one and broke a lane that had been green
+# for weeks.
+# Separate directories per pair. The resolver groups on directory AND stem, so
+# this keeps the two pairs apart no matter what stem names are chosen.
+_echo_fixture_setup() {
+    local label="$1"
+    _ECHO_GENERATOR="$ROOT/scripts/fixtures/make-echo-pair.py"
+    _ECHO_APP_SOURCE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
+    _ECHO_LOCAL_SOURCE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/three_speakers_de.wav"
+    [ -f "$_ECHO_GENERATOR" ]    || fail "$label: fixture generator missing: $_ECHO_GENERATOR"
+    [ -f "$_ECHO_APP_SOURCE" ]   || fail "$label: fixture missing: $_ECHO_APP_SOURCE"
+    [ -f "$_ECHO_LOCAL_SOURCE" ] || fail "$label: fixture missing: $_ECHO_LOCAL_SOURCE"
+
+    _ECHO_FIXTURE_DIR="$(mktemp -d /tmp/e2e-echo.XXXXXX)"
+    _ECHO_AFFECTED_DIR="$_ECHO_FIXTURE_DIR/affected"
+    _ECHO_CLEAN_DIR="$_ECHO_FIXTURE_DIR/clean"
+    log "$label: synthesising pairs under $_ECHO_FIXTURE_DIR"
+}
+
 # Enqueue one synthesised pair; echoes its job id. Asserts the two files came
 # back as ONE job: PairedRecordingResolver has to recognise the _app/_mic stem
 # pair, and if it does not the pipeline silently runs two single-source jobs
 # that can never be compared against each other, so nothing is ever measured.
-_eb_enqueue() {
+_echo_enqueue() {
     local label="$1" dir="$2" stem="$3"
     local enq ids
     enq="$(curl --silent --show-error --max-time 15 -X POST \
@@ -2059,24 +2145,24 @@ _eb_enqueue() {
 # without one is a failure, but it has to be READ as one: polling only for the
 # verdict would turn a job that errored in its first second into a timeout, and
 # report a two-minute wait instead of the error that caused it.
-_eb_settled() {
+_echo_settled() {
     assert_app_alive
-    # Writes the caller's `_EB_STATUS`: bash locals are dynamically scoped, so
+    # Writes the caller's `_ECHO_STATUS`: bash locals are dynamically scoped, so
     # the lane declares it and this stashes the last response for the
     # post-loop assertions. Same shape the naming lanes use.
-    _EB_STATUS="$(rpc "/v1/jobs/$1")"
-    jq -e '.echo != null or .state == "done" or .state == "error"' <<<"$_EB_STATUS" >/dev/null 2>&1
+    _ECHO_STATUS="$(rpc "/v1/jobs/$1")"
+    jq -e '.echo != null or .state == "done" or .state == "error"' <<<"$_ECHO_STATUS" >/dev/null 2>&1
 }
 
-# Waits for the verdict on $1 and leaves it in $_EB_STATUS.
-_eb_await_verdict() {
+# Waits for the verdict on $1 and leaves it in $_ECHO_STATUS.
+_echo_await_verdict() {
     local label="$1" job="$2"
-    _EB_STATUS=""
-    poll_until "$PIPELINE_TIMEOUT_S" 3 _eb_settled "$job" \
-        || fail "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s (last: $_EB_STATUS)"
-    jq -e '.echo != null' <<<"$_EB_STATUS" >/dev/null \
-        || fail "$label: job $job reached state=$(jq -r '.state // "?"' <<<"$_EB_STATUS") with NO echo verdict. Every dual-source job is measured, so a missing verdict means the tracks never reached the detector. error=$(jq -r '.error // "<none>"' <<<"$_EB_STATUS")"
-    log "$label: verdict $(jq -c '.echo' <<<"$_EB_STATUS")"
+    _ECHO_STATUS=""
+    poll_until "$PIPELINE_TIMEOUT_S" 3 _echo_settled "$job" \
+        || fail "$label: job $job produced neither an echo verdict nor a terminal state within ${PIPELINE_TIMEOUT_S}s (last: $_ECHO_STATUS)"
+    jq -e '.echo != null' <<<"$_ECHO_STATUS" >/dev/null \
+        || fail "$label: job $job reached state=$(jq -r '.state // "?"' <<<"$_ECHO_STATUS") with NO echo verdict. Every dual-source job is measured, so a missing verdict means the tracks never reached the detector. error=$(jq -r '.error // "<none>"' <<<"$_ECHO_STATUS")"
+    log "$label: verdict $(jq -c '.echo' <<<"$_ECHO_STATUS")"
 }
 
 # Let a job finish rather than leaving it parked at speaker naming. Diarization
@@ -2084,7 +2170,7 @@ _eb_await_verdict() {
 # the lane in the persisted job store, where a later run reads it as its own.
 # Best effort: this is teardown, and a job that will not settle is not this
 # lane's failure to report.
-_eb_settled_or_skipped() {
+_echo_settled_or_skipped() {
     local state
     state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
     case "$state" in
@@ -2100,15 +2186,29 @@ _eb_settled_or_skipped() {
     esac
     return 1
 }
-_eb_release() {
-    poll_until "$PIPELINE_TIMEOUT_S" 2 _eb_settled_or_skipped "$1" || true
+_echo_release() {
+    poll_until "$PIPELINE_TIMEOUT_S" 2 _echo_settled_or_skipped "$1" || true
+}
+
+# Fetches a finished job and requires it to have settled as done. Both echo
+# lanes read two jobs back after releasing them, and all four reads want the
+# same sentence when a job errored instead. Leaves the response in
+# `_ECHO_STATUS`, the same dynamic-scoping idiom the polling helpers use,
+# because `fail` is an `exit` and an exit inside a command substitution leaves
+# only the subshell.
+_echo_read_done() {
+    local label="$1" which="$2" job="$3" state
+    _ECHO_STATUS="$(rpc "/v1/jobs/$job")"
+    state="$(jq -r '.state // empty' <<<"$_ECHO_STATUS")"
+    [ "$state" = "done" ] \
+        || fail "$label: $which settled as '$state', expected done. error=$(jq -r '.error // "<none>"' <<<"$_ECHO_STATUS")"
 }
 
 # Asserts a verdict was computed over enough windows to mean anything. Shared
 # by both pairs: on the affected one it guards against a verdict resting on a
 # single lucky window, and on the control it is what stops "not affected" from
 # meaning "not enough evidence to say".
-_eb_assert_scored() {
+_echo_assert_scored() {
     local label="$1" which="$2" status="$3"
     jq -e '.echo.windowsScored >= 3' <<<"$status" >/dev/null \
         || fail "$label: $which scored only $(jq -r '.echo.windowsScored' <<<"$status") window(s); a verdict needs at least 3"
@@ -2116,40 +2216,31 @@ _eb_assert_scored() {
 
 run_echo_bleed() {
     local label="[echo-bleed]"
-    # Stashed by _eb_settled through bash's dynamic scoping (see there).
-    local _EB_STATUS=""
+    # Stashed by _echo_settled through bash's dynamic scoping (see there).
+    local _ECHO_STATUS=""
     require_command python3
 
-    local gen="$ROOT/scripts/fixtures/make-echo-pair.py"
-    local app_src="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
-    local local_src="$ROOT/app/MeetingTranscriber/Tests/Fixtures/three_speakers_de.wav"
-    [ -f "$gen" ]       || fail "$label: fixture generator missing: $gen"
-    [ -f "$app_src" ]   || fail "$label: fixture missing: $app_src"
-    [ -f "$local_src" ] || fail "$label: fixture missing: $local_src"
 
-    # Separate directories per pair. The resolver groups on directory AND stem,
-    # so this keeps the two pairs apart no matter what stem names are chosen.
-    _EB_FIXTURE_DIR="$(mktemp -d /tmp/e2e-echo-bleed.XXXXXX)"
-    local affected_dir="$_EB_FIXTURE_DIR/affected" clean_dir="$_EB_FIXTURE_DIR/clean"
-    log "$label: synthesising pairs under $_EB_FIXTURE_DIR"
-    python3 "$gen" --app "$app_src" --local "$local_src" --out "$affected_dir" --stem meeting --bleed 1.0 \
+    _echo_fixture_setup "$label"
+    local affected_dir="$_ECHO_AFFECTED_DIR" clean_dir="$_ECHO_CLEAN_DIR"
+    python3 "$_ECHO_GENERATOR" --app "$_ECHO_APP_SOURCE" --local "$_ECHO_LOCAL_SOURCE" --out "$affected_dir" --stem meeting --bleed 1.0 \
         | sed 's/^/    /' || fail "$label: could not synthesise the affected pair"
-    python3 "$gen" --app "$app_src" --local "$local_src" --out "$clean_dir" --stem meeting --bleed 0 \
+    python3 "$_ECHO_GENERATOR" --app "$_ECHO_APP_SOURCE" --local "$_ECHO_LOCAL_SOURCE" --out "$clean_dir" --stem meeting --bleed 0 \
         | sed 's/^/    /' || fail "$label: could not synthesise the clean control"
 
     # --- affected pair ----------------------------------------------------
     local affected_job
-    affected_job="$(_eb_enqueue "$label" "$affected_dir" meeting)"
+    affected_job="$(_echo_enqueue "$label" "$affected_dir" meeting)"
     log "$label: affected pair enqueued as $affected_job"
-    _eb_await_verdict "$label" "$affected_job"
-    local affected_status="$_EB_STATUS"
+    _echo_await_verdict "$label" "$affected_job"
+    local affected_status="$_ECHO_STATUS"
 
     jq -e '.echo.detected == true' <<<"$affected_status" >/dev/null \
         || fail "$label: affected pair NOT detected. The microphone track is the app track delayed 15 ms at unit gain, which is the condition itself: $(jq -c '.echo' <<<"$affected_status")"
     # Measured 4 of 4 windows on this fixture. Asserting a floor well under that
     # keeps the lane from re-litigating the threshold, while still failing if the
     # verdict decays to a single lucky window.
-    _eb_assert_scored "$label" "affected pair" "$affected_status"
+    _echo_assert_scored "$label" "affected pair" "$affected_status"
     jq -e '.echo.affectedWindowShare >= 0.5' <<<"$affected_status" >/dev/null \
         || fail "$label: affected share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") below 0.5 (measured 1.0 on this fixture)"
     # The structured verdict and the sentence the user actually sees are separate
@@ -2160,14 +2251,14 @@ run_echo_bleed() {
 
     # --- clean control ----------------------------------------------------
     local clean_job
-    clean_job="$(_eb_enqueue "$label" "$clean_dir" meeting)"
+    clean_job="$(_echo_enqueue "$label" "$clean_dir" meeting)"
     log "$label: clean control enqueued as $clean_job"
-    _eb_await_verdict "$label" "$clean_job"
-    local clean_status="$_EB_STATUS"
+    _echo_await_verdict "$label" "$clean_job"
+    local clean_status="$_ECHO_STATUS"
 
     jq -e '.echo.detected == false' <<<"$clean_status" >/dev/null \
         || fail "$label: clean control reported as affected. Its microphone track is the same gated local speech as the affected pair with the bleed term removed, so this is a false positive: $(jq -c '.echo' <<<"$clean_status")"
-    _eb_assert_scored "$label" "clean control" "$clean_status"
+    _echo_assert_scored "$label" "clean control" "$clean_status"
     jq -e '.echo.windowsAffected == 0' <<<"$clean_status" >/dev/null \
         || fail "$label: clean control has $(jq -r '.echo.windowsAffected' <<<"$clean_status") affected window(s); measured 0, with its hottest window at 0.35 against a 0.7 threshold"
     log "$label: clean control measured over $(jq -r '.echo.windowsScored' <<<"$clean_status") windows and found nothing ✅"
@@ -2176,14 +2267,10 @@ run_echo_bleed() {
     # Finished jobs are reaped from the queue and read back out of the terminal
     # store. A verdict that only exists on the live job is invisible to exactly
     # the caller most likely to look: one polling after the fact.
-    _eb_release "$affected_job"
-    _eb_release "$clean_job"
-    local final
-    final="$(rpc "/v1/jobs/$affected_job")"
-    local final_state
-    final_state="$(jq -r '.state // empty' <<<"$final")"
-    [ "$final_state" = "done" ] \
-        || fail "$label: affected job settled as '$final_state', expected done. error=$(jq -r '.error // "<none>"' <<<"$final")"
+    _echo_release "$affected_job"
+    _echo_release "$clean_job"
+    _echo_read_done "$label" "affected job" "$affected_job"
+    local final="$_ECHO_STATUS"
     jq -e '.echo.detected == true' <<<"$final" >/dev/null \
         || fail "$label: the verdict did not survive the job finishing: $(jq -c '.echo' <<<"$final")"
     log "$label: verdict intact on the finished job ✅"
@@ -2205,8 +2292,12 @@ run_echo_bleed() {
     # The control that stops this from being "drop the microphone track". Without
     # it the lane passes against a build that removes the user's own words from
     # every recording and still leaves a plausible transcript behind.
-    local clean_final
-    clean_final="$(rpc "/v1/jobs/$clean_job")"
+    # Read with the same required state as the affected job. Left as a bare
+    # fetch this passed for a control that had errored: the assertion below
+    # tolerates a missing count, so the check that stops the lane from being
+    # "drop the microphone track" evaporated exactly when the control failed.
+    _echo_read_done "$label" "clean control" "$clean_job"
+    local clean_final="$_ECHO_STATUS"
     jq -e '(.echo.suppressedSegments // 0) == 0' <<<"$clean_final" >/dev/null \
         || fail "$label: clean control had $(jq -r '.echo.suppressedSegments' <<<"$clean_final") segment(s) removed. Nothing may be dropped from a recording without bleed: $(jq -c '.echo' <<<"$clean_final")"
     log "$label: clean control kept every microphone segment ✅"
@@ -2226,6 +2317,232 @@ run_echo_bleed() {
     [ "${lines:-0}" -ge 2 ] \
         || fail "$label: transcript is down to $lines line(s) after dedup — the local speaker has to survive the far end, not be removed with it"
     log "$label: transcript still carries $lines lines after dedup ✅"
+    log "$label: PASS"
+}
+
+# --- echo-cancellation lane -------------------------------------------------
+#
+# The other half of --echo-bleed. That lane proves the far end is left out of
+# the TRANSCRIPT after the fact; this one proves it is taken out of the
+# microphone AUDIO before anything reads it, which is what also keeps it out of
+# the mic track's diarization and out of the speaker embeddings taken from it.
+#
+# Its pairs differ from that lane's in one term: the far end pauses. That is not
+# a convenience. The canceller's self-check is a DIFFERENCE between the windows
+# where the far end was playing and the windows where it was not, so a fixture
+# whose far end never stops offers no control group and the shipped check
+# refuses to confirm the run — measured on the other lane's pair, which splits
+# 42 windows to 8 against a floor of 10 on each side and comes back unjudgeable
+# however well the run went. Gated 2.5 s on / 2.5 s off it splits 25 to 25.
+#
+# The dedup stays ON for this lane, deliberately. Both remedies asked for at
+# once is the configuration where precedence is a decision rather than a
+# formality, and zero suppressed segments on a pair the other lane strips four
+# from is what proves cancellation took it.
+
+# Asserts the deployed bundle carries the model before anything is enqueued.
+# Without it the stage reports "the model is missing" and leaves the track as
+# recorded, which is correct behaviour and a failure of this lane, but one that
+# reads as a broken canceller unless it is named here.
+#
+# The pattern comes from the library that installs it, so the convention has one
+# owner; the concrete filename is nobody's business here, which is what keeps a
+# model bump to a single edit.
+#
+# NOT the app's own `--localvqe-selftest`, which would be the deeper check: it
+# goes through the production resolver and would also catch a model that is
+# present and does not load. Tried, and it hangs in exactly the situation this
+# precondition exists for. A bundle old enough to lack the model is usually old
+# enough to lack the flag, and an unrecognised argument does not fail, it starts
+# the menu-bar app, which never exits. Measured against a deployed bundle from a
+# fortnight earlier: no output, no exit, killed after two minutes. A precondition
+# that can hold the runner for a whole step budget is worse than one that
+# under-checks, and the case it would add is caught by the lane's own assertion,
+# where the job's warnings name it.
+_echo_require_model() {
+    local label="$1" resources="$DEV_BUNDLE_DEPLOY/Contents/Resources" found
+    # The override wins outright in LocalVQEModel.resolve and does NOT fall back
+    # to the bundle, so one naming a file that is gone yields no canceller at
+    # all. That is the state a measurement session leaves behind, and the bundle
+    # below would still look fine.
+    local override="${MEETINGTRANSCRIBER_LOCALVQE_MODEL:-}"
+    if [ -n "$override" ]; then
+        [ -f "$override" ] \
+            || fail "$label: MEETINGTRANSCRIBER_LOCALVQE_MODEL points at $override, which does not exist. The override takes precedence over the bundled model and does not fall back to it, so cancellation could only decline. Unset it or point it at a model."
+        log "$label: using the model override at $override"
+        return 0
+    fi
+    # `-print -quit` rather than piping into `grep -q`: grep closing the pipe on
+    # its first match sends find a SIGPIPE, and under `set -o pipefail` that
+    # makes the whole pipeline fail on exactly the runs where the model IS
+    # there. The check would have reported every bundle as missing it.
+    found="$(find "$resources" -maxdepth 1 -name "$LOCALVQE_RESOURCE_GLOB" -type f -print -quit 2>/dev/null)"
+    [ -n "$found" ] \
+        || fail "$label: no $LOCALVQE_RESOURCE_GLOB in $resources. The build installs it (scripts/lib/localvqe-resources.sh); a --no-build run against an older bundle will not have it, and the lane would fail as a canceller that removed nothing."
+}
+
+# Counts transcript lines spoken into the microphone.
+#
+# awk rather than `wc -l` for the same reason the whole-file count used it:
+# saveTranscript writes no trailing newline, so wc misses the final line.
+_echo_mic_lines() {
+    awk '/^\[[0-9:]+\] (M_|Me:)/ { n++ } END { print n + 0 }' "$1"
+}
+
+# Prints "true", "false", "absent" or "no-verdict" for a job's cancellation
+# outcome. The last one is its own answer: a record that lost its whole echo
+# object is a persistence problem, and reporting it as "absent" would send the
+# reader to the cancellation stage instead.
+#
+# A helper rather than `.echo.removed // "absent"`, which is how this was first
+# written and is wrong in the one case the message exists to explain: jq's `//`
+# takes the alternative for false as well as for null, so a run that was
+# attempted and declined printed as one that was never attempted — inverting the
+# distinction in the sentence drawing it.
+_echo_removed_state() {
+    jq -r 'if .echo == null then "no-verdict"
+           elif .echo | has("removed") then (.echo.removed | tostring)
+           else "absent" end' <<<"$1"
+}
+
+run_echo_cancel() {
+    local label="[echo-cancel]"
+    # Stashed by _echo_settled through bash's dynamic scoping (see there).
+    local _ECHO_STATUS=""
+    require_command python3
+    _echo_require_model "$label"
+
+
+    _echo_fixture_setup "$label"
+    local affected_dir="$_ECHO_AFFECTED_DIR" clean_dir="$_ECHO_CLEAN_DIR"
+    python3 "$_ECHO_GENERATOR" --app "$_ECHO_APP_SOURCE" --local "$_ECHO_LOCAL_SOURCE" --out "$affected_dir" --stem meeting \
+        --bleed 1.0 --app-burst 2.5 --app-gap 2.5 \
+        | sed 's/^/    /' || fail "$label: could not synthesise the affected pair"
+    python3 "$_ECHO_GENERATOR" --app "$_ECHO_APP_SOURCE" --local "$_ECHO_LOCAL_SOURCE" --out "$clean_dir" --stem meeting \
+        --bleed 0 --app-burst 2.5 --app-gap 2.5 \
+        | sed 's/^/    /' || fail "$label: could not synthesise the clean control"
+
+    # --- affected pair ----------------------------------------------------
+    local affected_job
+    affected_job="$(_echo_enqueue "$label" "$affected_dir" meeting)"
+    log "$label: affected pair enqueued as $affected_job"
+    _echo_await_verdict "$label" "$affected_job"
+    local affected_status="$_ECHO_STATUS"
+
+    # Cancellation only runs on a recording the detector called affected, so a
+    # missed detection would make every assertion below vacuously unreachable
+    # rather than false.
+    jq -e '.echo.detected == true' <<<"$affected_status" >/dev/null \
+        || fail "$label: affected pair NOT detected, so cancellation was never reached: $(jq -c '.echo' <<<"$affected_status")"
+    _echo_assert_scored "$label" "affected pair" "$affected_status"
+    # Logged and floored rather than left to `detected`, so the margin is
+    # visible before it becomes a failure: the gated pair's per-window
+    # correlations sit at 0.72 to 0.83 against a 0.7 bar, and the verdict needs
+    # only two affected windows, so erosion would show up here as a falling
+    # share long before the lane went red with "NOT detected".
+    jq -e '.echo.affectedWindowShare >= 0.5' <<<"$affected_status" >/dev/null \
+        || fail "$label: affected share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status") below 0.5 (measured 1.0 on this fixture)"
+    log "$label: detected over $(jq -r '.echo.windowsScored' <<<"$affected_status") windows, share $(jq -r '.echo.affectedWindowShare' <<<"$affected_status")"
+
+    # --- clean control ----------------------------------------------------
+    local clean_job
+    clean_job="$(_echo_enqueue "$label" "$clean_dir" meeting)"
+    log "$label: clean control enqueued as $clean_job"
+    _echo_await_verdict "$label" "$clean_job"
+    local clean_status="$_ECHO_STATUS"
+
+    jq -e '.echo.detected == false' <<<"$clean_status" >/dev/null \
+        || fail "$label: clean control reported as affected; its microphone track is the same local speech with the bleed term removed: $(jq -c '.echo' <<<"$clean_status")"
+    _echo_assert_scored "$label" "clean control" "$clean_status"
+
+    _echo_release "$affected_job"
+    _echo_release "$clean_job"
+
+    _echo_read_done "$label" "affected job" "$affected_job"
+    local final="$_ECHO_STATUS"
+    # The control is required to have finished too, and not just because it is a
+    # job: every assertion below reads it as the measure the affected pair is
+    # compared against, so a control that errored would be diagnosed as a
+    # transcript missing from disk rather than as the run that failed.
+    _echo_read_done "$label" "clean control" "$clean_job"
+    local clean_final="$_ECHO_STATUS"
+
+    # --- the assertion the lane exists for --------------------------------
+    # Read off the FINISHED job rather than the live one: the flag is written
+    # two stages before the job settles, and a driver polling after the fact
+    # reads it out of the terminal store. Asserting it only where it is first
+    # written would pass against a build that loses it on the way there.
+    jq -e '.echo.removed == true' <<<"$final" >/dev/null \
+        || fail "$label: the far end was NOT taken out of the microphone track (removed=$(_echo_removed_state "$final")). Absent means the stage never ran; false means it ran and its self-check would not confirm it — the warnings say which: $(jq -c '.warnings' <<<"$final")"
+    log "$label: the far end was removed from the microphone audio ✅"
+
+    # Precedence, with both switches on. The other lane strips four segments off
+    # this same source audio, so zero here is the dedup standing down under
+    # cancellation and not an absence of duplicates to find.
+    jq -e '.echo.suppressedSegments == 0' <<<"$final" >/dev/null \
+        || fail "$label: $(jq -r '.echo.suppressedSegments' <<<"$final") segment(s) were also dropped from the transcript. Under cancellation the dedup has to stand down: it judges how closely a microphone segment tracks the app track, which no longer means what it was calibrated to mean once the far end has been taken out of that microphone track."
+    log "$label: the transcript dedup stood down ✅"
+
+    # Nothing may be attempted on a recording with no echo. Absent, not false:
+    # false would say the canceller ran here and could not be confirmed, which
+    # is the population a field soak counts.
+    # `has`, not `== null`: jq reads a field off a null as null, so asking
+    # `.echo.removed == null` on a record that lost its whole echo object
+    # answers yes. That is the one way this assertion could pass while the
+    # thing it checks is gone.
+    jq -e '.echo != null and (.echo | has("removed") | not)' <<<"$clean_final" >/dev/null \
+        || fail "$label: the clean control carries removed=$(_echo_removed_state "$clean_final") (echo object: $(jq -c '.echo' <<<"$clean_final")); cancellation must not be attempted on a recording the detector called clean, and the verdict has to survive the job finishing"
+    jq -e '(.echo.suppressedSegments // 0) == 0' <<<"$clean_final" >/dev/null \
+        || fail "$label: clean control had $(jq -r '.echo.suppressedSegments' <<<"$clean_final") segment(s) removed. Nothing may be dropped from a recording without bleed."
+    log "$label: the clean control was left alone ✅"
+
+    # The acceptance criterion. Every assertion above is equally satisfied by a
+    # canceller that emptied the microphone track: the far end would be gone,
+    # nothing would be suppressed, and the transcript would still carry the app
+    # track. What that would cost is the local speaker.
+    #
+    # MICROPHONE lines only, not the whole transcript, which is what this first
+    # counted and why it could not fail. Most of the transcript comes from the
+    # app track, which cancellation never touches: on this fixture the far end
+    # speaks about 25 s and the local side about 8 s, so a run that wrote pure
+    # silence to the microphone track still returns roughly three quarters of
+    # the control's lines and sails past any halving floor.
+    #
+    # Matched by speaker prefix: dual-track diarization labels mic speakers
+    # `M_<id>`, and a job whose mic diarization failed keeps the raw `Me`
+    # instead. Both are accepted, because either is a microphone line and the
+    # lane is not here to pin which of the two the run took.
+    #
+    # Known limit, and the reason the control's count is asserted separately
+    # below: a speaker the stored database RECOGNISES is renamed to that entry
+    # before the transcript is rendered, prefix and all, so a host whose
+    # speakers.json has learned these fixture voices makes both counts zero. CI
+    # restores that database around the lane that enrols from these fixtures, so
+    # it does not arise there; a local run after enrolling can. It fails loudly
+    # rather than quietly, and the message prints the speaker labels it did see.
+    local transcript clean_transcript lines clean_lines
+    transcript="$(jq -r '.transcriptPath // empty' <<<"$final")"
+    clean_transcript="$(jq -r '.transcriptPath // empty' <<<"$clean_final")"
+    # Checked here and not inside a helper: `fail` is an `exit`, and an exit
+    # inside a command substitution leaves the subshell, not the script, so the
+    # run would carry on with an empty count and report the wrong thing.
+    [ -n "$transcript" ] && [ -f "$transcript" ] \
+        || fail "$label: the finished affected job has no transcript on disk (transcriptPath=$transcript)"
+    [ -n "$clean_transcript" ] && [ -f "$clean_transcript" ] \
+        || fail "$label: the finished clean control has no transcript on disk (transcriptPath=$clean_transcript)"
+    lines="$(_echo_mic_lines "$transcript")"
+    clean_lines="$(_echo_mic_lines "$clean_transcript")"
+    # The control has to carry the local speaker for this to mean anything. It
+    # also fails loudly if the label convention above ever stops matching, which
+    # is the one way this assertion could go quietly vacuous.
+    [ "${clean_lines:-0}" -ge 2 ] \
+        || fail "$label: the clean control transcript has only $clean_lines microphone line(s), so it cannot serve as the measure for the affected one. If the speakers below carry real names rather than an M_ prefix, this host's speaker database recognised the fixture voice and renamed it, which is a stale database and not a broken canceller. Speakers seen: $(sed -n 's/^\[[0-9:]*\] \([^:]*\):.*/\1/p' "$clean_transcript" | sort -u | tr '\n' ' ')"
+    # Half, not parity: the two transcripts come from separate ASR passes over
+    # audio that differs, and the yield moves. Half still fails the case this
+    # guards, where the local speaker is removed along with the echo.
+    [ "$((lines * 2))" -ge "$clean_lines" ] \
+        || fail "$label: the affected transcript is down to $lines microphone lines against the control's $clean_lines. Cancellation took the local speaker with the far end."
+    log "$label: $lines microphone lines against the control's $clean_lines ✅"
     log "$label: PASS"
 }
 
@@ -2302,6 +2619,8 @@ elif [ "$TITLE_SOURCE" = true ]; then
     run_title_source
 elif [ "$ECHO_BLEED" = true ]; then
     run_echo_bleed
+elif [ "$ECHO_CANCEL" = true ]; then
+    run_echo_cancel
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
