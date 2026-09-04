@@ -93,6 +93,12 @@ bootout_stale_launchctl
 fg_user=$(stat -f "%Su" /dev/console)
 my_user=$(id -un)
 if [ "$fg_user" != "$my_user" ]; then
+    # `root` means the login window is up and nobody is signed in, which is a
+    # different fix from another user holding the foreground; naming the wrong
+    # one sends the reader to log out a user who is not logged in.
+    if [ "$fg_user" = "root" ]; then
+        die "no user is signed in at the console (loginwindow), so \`open\` has no Aqua session to route to. Sign '$my_user' in and re-run."
+    fi
     die "Aqua foreground user is '$fg_user', not '$my_user' — Fast User Switching is active, and \`open\` would fail with a bare -600. Log '$fg_user' out completely, then re-run."
 fi
 
@@ -116,19 +122,36 @@ fi
 # `--env` rather than a leading `env`, which `open` does not carry through, and
 # rather than writing the two as UserDefaults, which would need a restore path
 # and would leave the host altered if this exits badly.
+#
+# `--args --auto-watch` asks for the very thing the environment then suppresses,
+# and that is deliberate: it is what makes the check after the permission read
+# able to fail at all. `autoWatch` defaults to FALSE when the key is unset, so on
+# a fresh runner or any developer machine the app would not watch even with the
+# suppression dropped, and a check for "not watching" would pass while proving
+# nothing. The flag establishes the precondition per launch instead of leaning on
+# whatever a previous lane left in this host's defaults, and it leaves nothing
+# behind. Suppression wins over it in the app, which is exactly the ordering
+# being tested.
 open --env MEETINGTRANSCRIBER_DEBUG_RPC=1 \
     --env MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH=1 \
-    "$APP"
+    "$APP" --args --auto-watch
 
 # --- 4. Wait for RPC server to come up (max 30 s) ------------------------
 
 echo "▸ Waiting for RPC on 127.0.0.1:9876…"
 wait_for_rpc "$MTCLI" 30 || die "RPC server did not start within 30 s"
-# The answering process has to be the bundle this script named. Port 9876 is
-# not exclusive to it: a release build with the automation API on would answer
-# the same poll, and the assertions below would then describe someone else's
-# permissions. The full workspace path is unique to the copy just built.
-assert_app_alive "$BIN"
+# The process ANSWERING has to be the bundle this script named, and existence is
+# not enough to show that. `DebugRPCServer.start()` logs a failed bind and leaves
+# the app running, so a release build with the automation API on — plausible on a
+# developer machine, where it sits in the menu bar — keeps port 9876, the
+# workspace copy comes up beside it without a server, and every permission
+# verdict read below would describe the release build's TCC identity. That is the
+# misattribution this whole lane exists to catch, so it is asked about the port
+# rather than about the process table.
+rpc_pid="$(/usr/sbin/lsof -ti :9876 -sTCP:LISTEN 2>/dev/null | head -1)"
+[ -n "$rpc_pid" ] || die "nothing is listening on 9876 although the RPC poll succeeded"
+ps -p "$rpc_pid" -o command= 2>/dev/null | grep -qF "$BIN" \
+    || die "port 9876 is held by pid $rpc_pid ($(ps -p "$rpc_pid" -o comm= 2>/dev/null)), not by $BIN — the permission verdicts below would describe that process, not the bundle this lane built. Quit the other MeetingTranscriber and re-run."
 echo "  RPC up"
 
 # --- 5. Wait for the async permission check to populate (max 20 s) -------
@@ -179,6 +202,11 @@ for _ in $(seq 1 24); do
     fi
     sleep 0.5
 done
+# A negative check cannot tell "it never happened" from "nobody was there to make
+# it happen". Without this, an app that died at second three of the window would
+# be reported as one that stayed politely idle, and the lane would go green on
+# the snapshot taken before the crash.
+assert_app_alive "$BIN"
 
 
 # --- 6. Assert the #446-fixed probes report healthy ----------------------
