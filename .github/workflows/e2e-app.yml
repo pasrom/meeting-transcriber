@@ -70,9 +70,12 @@ jobs:
     # ~4–6 min each → ~14 min observed. Plus Sortformer naming-dialog
     # (~30 s), channel-health (~30 s), silent-recording (~45 s), live-captions
     # (~2 min), naming-confirm (~4 min typical, up to ~10 min worst case: two
-    # 240 s polls + RPC-ready + baseline), echo-bleed (~8 min: two file-driven
-    # transcribe + diarize cycles), crash-recovery (~5 min: record →
-    # kill → relaunch → recover → transcribe) → ~34 min wall. The level-sensitive
+    # 240 s polls + RPC-ready + baseline), echo-bleed and echo-cancel (two
+    # file-driven transcribe + diarize cycles each), crash-recovery (record →
+    # kill → relaunch → recover → transcribe). The per-lane figures above are
+    # estimates and several are stale; the whole job measured 13 m 55 s on the
+    # mini when the cancellation lane was added, so the budget below is a
+    # backstop with roughly four times the margin, not a forecast. The level-sensitive
     # lanes (channel-health, silent-recording, live-captions) run before
     # naming-confirm so its transcribe/diarize load stays off their tight
     # timing windows; crash-recovery stays last. 58 min job budget gives
@@ -407,6 +410,34 @@ jobs:
         # typical. 14 min leaves margin without hiding a hang.
         timeout-minutes: 14
         run: bash scripts/e2e-app.sh --no-build --echo-bleed
+
+      # The other half of the lane above: that one proves the far end is left
+      # out of the TRANSCRIPT, this one turns echo cancellation on and proves it
+      # is taken out of the microphone AUDIO. What it asserts and why the two
+      # cannot share a run is written once, at `run_echo_cancel` in
+      # scripts/e2e-app.sh; repeating it here would be a fourth copy and the one
+      # least likely to be opened while editing the assertions.
+      # PLACEMENT: same reasoning as the lane above, and directly after it so
+      # the two halves fail next to each other.
+      - name: "Run echo-cancellation E2E (issue #581)"
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # Measured at 17 s on the mini, against 19 s for the lane above. The
+        # ceiling is not set from that, though: it is set from what the script
+        # can spend before it says something useful, so its own sentence
+        # survives instead of being replaced by an opaque Actions timeout.
+        #
+        # The arithmetic, stated because the first attempt at this number got it
+        # wrong. Four polls can each run to PIPELINE_TIMEOUT_S = 240 s: two for
+        # a verdict, which fail loudly, and two teardown releases, which swallow
+        # their own timeout before the terminal-state check reports. Full cover
+        # would therefore be sixteen minutes on a single shared runner, which is
+        # not worth it. Ten covers the verdict poll and both releases, i.e.
+        # every failure this lane has a written diagnosis for. A run still stuck
+        # past that is a hang rather than a slow lane, and an Actions timeout is
+        # the right answer to it.
+        timeout-minutes: 10
+        run: bash scripts/e2e-app.sh --no-build --echo-cancel
 
       # Crash-recovery lane (issue #379 part 3, PR #385/#386): start a meeting,
       # SIGKILL the app mid-recording (no stop() → orphaned _app16k_raw.tmp +
