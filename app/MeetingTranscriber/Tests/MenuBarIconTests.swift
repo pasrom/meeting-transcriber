@@ -33,8 +33,7 @@ final class MenuBarIconTests: XCTestCase { // swiftlint:disable:this type_body_l
     /// record-only overlay, it must NOT pick up the live `animationFrame` — otherwise the
     /// idle waveform bounces as if recording. See MenuBarIcon.image(...) frame-clamp logic.
     func testRecordOnlyOverlayDoesNotAnimateStaticBadges() {
-        let staticBadges: [BadgeKind] = [.inactive, .userAction, .done, .error, .updateAvailable]
-        for badge in staticBadges {
+        for badge in BadgeKind.allCases where !badge.isAnimated {
             let frame0 = MenuBarIcon.image(badge: badge, animationFrame: 0, recordOnlyOverlay: true)
             let frame3 = MenuBarIcon.image(badge: badge, animationFrame: 3, recordOnlyOverlay: true)
             XCTAssertEqual(
@@ -166,9 +165,19 @@ final class MenuBarIconTests: XCTestCase { // swiftlint:disable:this type_body_l
     }
 
     func testLargeAnimationFrameDoesNotCrash() {
+        // The guarantee is that an unbounded frame counter wraps — NOT that the
+        // result is a template image. `.error` renders a non-template red
+        // exclamation, so asserting template-ness here silently tested the
+        // wrong thing once `.error` became animated.
         for badge in BadgeKind.allCases where badge.isAnimated {
-            let image = MenuBarIcon.image(badge: badge, animationFrame: 999)
-            XCTAssertTrue(image.isTemplate, "Large frame index should wrap safely for \(badge)")
+            let wrapped = MenuBarIcon.image(
+                badge: badge, animationFrame: 999 % MenuBarIcon.frameCount,
+            )
+            let large = MenuBarIcon.image(badge: badge, animationFrame: 999)
+            XCTAssertEqual(
+                large.tiffRepresentation, wrapped.tiffRepresentation,
+                "Large frame index should wrap safely for \(badge)",
+            )
         }
     }
 

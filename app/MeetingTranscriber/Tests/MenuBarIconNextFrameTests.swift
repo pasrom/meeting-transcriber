@@ -3,7 +3,11 @@ import XCTest
 
 final class MenuBarIconNextFrameTests: XCTestCase {
     func testStaticBadgesDoNotAdvance() {
-        for badge in [BadgeKind.inactive, .userAction, .done, .error, .updateAvailable] {
+        // Derived, not hardcoded: `.error` and `.userAction` moved into the
+        // animated set so their exclamation blinks (a static failure badge is
+        // one a user scrolls past). Deriving keeps this honest if the set
+        // changes again.
+        for badge in BadgeKind.allCases where !badge.isAnimated {
             XCTAssertEqual(
                 MenuBarIcon.nextFrame(0, badge: badge), 0,
                 "\(badge) is not animated; frame must not change",
