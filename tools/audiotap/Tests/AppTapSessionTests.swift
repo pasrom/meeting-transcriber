@@ -120,4 +120,25 @@ final class AppTapSessionTests: XCTestCase {
         XCTAssertEqual(session.resolvedSampleRate, 48000)
         XCTAssertNil(session.procID, "a session only has a registration once one was attached")
     }
+
+    // MARK: - What the tap was built from (issue #672)
+
+    func testTheSessionCarriesTheProcessesItsTapWasBuiltFrom() {
+        // Stored rather than re-translated: a fresh PID translation can answer
+        // about a different audio object after a PID is reused, and the
+        // diagnostic's question is about the objects this tap is attached to.
+        let processes = [
+            TappedProcess(pid: 3497, audioObjectID: 91),
+            TappedProcess(pid: 3498, audioObjectID: 92),
+        ]
+        let session = AppTapSession(tapID: 11, tappedProcesses: processes) {}
+        XCTAssertEqual(session.tappedProcesses, processes)
+    }
+
+    func testASessionBuiltWithoutProcessesSaysSoRatherThanGuessing() {
+        // The default keeps every existing construction site compiling, and a
+        // caller that forgets the processes gets an empty list and a log line
+        // that says "no tapped processes", which is visible rather than silent.
+        XCTAssertTrue(AppTapSession(tapID: 11) {}.tappedProcesses.isEmpty)
+    }
 }

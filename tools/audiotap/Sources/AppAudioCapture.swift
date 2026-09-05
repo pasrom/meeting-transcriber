@@ -64,6 +64,9 @@ public class AppAudioCapture: @unchecked Sendable {
 
     /// `internal` (not `private`) so the cross-file `+DebugLogging` extension
     /// can drive the per-buffer RMS accumulator + dBFS report cadence.
+    /// Issue #672; see `AppAudioCapture+SilentTrackDiagnostics`.
+    let silentTrackDiagnostics = SilentTrackDiagnostics(sink: AppAudioCapture.logSilentTrackProbe)
+
     var debugRMS = DebugRMSReporter()
     var debugTotalBytes: UInt64 = 0
     let levelPublisher = LevelPublisher()
@@ -202,6 +205,7 @@ public class AppAudioCapture: @unchecked Sendable {
     /// something" a fact the type system carries rather than a convention.
     func install(_ session: AppTapSession) {
         tapSession = session
+        silentTrackDiagnostics.remember(session.tappedProcesses)
         actualSampleRate = session.resolvedSampleRate
     }
 
@@ -405,7 +409,9 @@ public class AppAudioCapture: @unchecked Sendable {
         // would silently skip the barrier once self is gone, which is exactly the
         // write-after-close bug the barrier exists to prevent, and a strong self
         // would make the session keep its owner alive.
-        let session = AppTapSession(tapID: newTapID) { [writeQueue] in writeQueue.sync {} }
+        let session = AppTapSession(tapID: newTapID, tappedProcesses: translated) { [writeQueue] in
+            writeQueue.sync {}
+        }
         let tapRate = Self.queryTapSampleRate(tapID: newTapID)
         logger.info("Created process tap: \(newTapID) rate=\(tapRate, privacy: .public) Hz")
 
@@ -505,7 +511,7 @@ public class AppAudioCapture: @unchecked Sendable {
 
             self.accumulateDebugRMS(data: data, byteCount: byteCount)
             self.publishCurrentLevel()
-            self.maybeReportDebugRMS()
+            self.maybeReportDebugRMS(processes: session.tappedProcesses)
         }
 
         guard ioProcStatus == noErr, let validProcID = newProcID else {
@@ -539,6 +545,7 @@ public class AppAudioCapture: @unchecked Sendable {
         logger.info(
             "Audio capture started (PIDs \(self.pids), rate: \(session.resolvedSampleRate) Hz)",
         )
+        silentTrackDiagnostics.probeAsync(session.tappedProcesses, reason: "start")
         return session
     }
 
@@ -560,6 +567,8 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     public func stop() {
+        // Not in stopCapture, which a restart also calls. See the extension.
+        logSilentTrackSummary()
         // Ask first: an attempt may be stuck inside the same coreaudiod, and every
         // HAL call below would block behind it. Safe to skip in that case because
         // an attempt is only ever launched after the coordinator already ran

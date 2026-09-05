@@ -43,6 +43,12 @@ struct AppTapSessionHAL {
 @available(macOS 14.2, *)
 final class AppTapSession: @unchecked Sendable {
     let tapID: AudioObjectID
+    /// The processes this tap was built from, kept so a diagnostic can ask them
+    /// what their output is doing (issue #672). Stored rather than re-translated
+    /// because a fresh translation can answer about a different object after a
+    /// PID is reused, and because re-translating is another HAL call. Defaults
+    /// to empty so a session built by a test seam is honest about having none.
+    let tappedProcesses: [TappedProcess]
     /// Filled in as the attempt gets further. A session that never got past the
     /// tap still cleans up correctly, which is the point: every failure path
     /// hands back one object instead of remembering which of three ids it owns.
@@ -61,10 +67,12 @@ final class AppTapSession: @unchecked Sendable {
 
     init(
         tapID: AudioObjectID,
+        tappedProcesses: [TappedProcess] = [],
         hal: AppTapSessionHAL = .real,
         drain: @escaping () -> Void,
     ) {
         self.tapID = tapID
+        self.tappedProcesses = tappedProcesses
         self.hal = hal
         self.drain = drain
     }
