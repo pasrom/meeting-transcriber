@@ -16,6 +16,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_700_000_000)
     private let stoppedDelivering = ChannelHealthHarness.stoppedDelivering
     private let deliveringSilence = ChannelHealthHarness.deliveringSilence
+    private let silentSinceStart = ChannelHealthHarness.silentSinceStart
 
     private func makeController() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
         ChannelHealthHarness.make()
@@ -77,7 +78,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         ]
         for row in cases {
             XCTAssertEqual(
-                ChannelHealthController.captureAlert(channel: row.channel, fault: row.fault).urgency,
+                ChannelHealthController.captureAlert(channel: row.channel, fault: row.fault, everCarriedSignal: true).urgency,
                 row.expected,
                 "channel=\(row.channel) fault=\(row.fault)",
             )
@@ -100,30 +101,89 @@ final class ChannelFaultIntegrationTests: XCTestCase {
     // MARK: - What each fault tells the user to check
 
     func testTheFaultMessageDistinguishesTheChannel() {
-        let appMessage = ChannelHealthController.faultMessage(channel: .app, fault: .noBuffers)
-        let micMessage = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers)
+        let appMessage = ChannelHealthController.faultMessage(
+            channel: .app, fault: .noBuffers, everCarriedSignal: true,
+        )
+        let micMessage = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true)
         XCTAssertNotEqual(appMessage, micMessage)
         XCTAssertTrue(appMessage.lowercased().contains("app-audio"))
         XCTAssertTrue(micMessage.lowercased().contains("microphone"))
     }
 
-    func testTheAppFaultMessagePointsAtPermissionAndAudioTools() {
-        // A far side that delivers nothing is most often a missing Screen &
-        // System Audio Recording grant (the tap needs it) or a third-party audio
-        // utility intercepting the meeting app's output (issue #524). Name both
-        // so the notification is actionable instead of a dead end.
+    func testAnAppChannelSilentSinceTheStartStillPointsAtPermissionAndAudioTools() {
+        // A tap that never carried a single non-zero sample is the signature of
+        // a missing Screen & System Audio Recording grant (issue #524) or of a
+        // third-party audio utility intercepting the meeting app's output. Both
+        // stay named, because for this case they are the answer.
+        let message = ChannelHealthController.faultMessage(
+            channel: .app, fault: .digitalSilence, everCarriedSignal: false,
+        )
+        XCTAssertTrue(message.contains(SystemSettingsPaths.screenRecording))
+        XCTAssertTrue(message.contains("SoundSource"))
+    }
+
+    func testAnAppTapThatCarriedAudioIsNotSentToThePermissionPane() {
+        // The discriminator, and the whole point of the flag: a tap that is not
+        // allowed to hear the app delivers zeroes from its first buffer and
+        // never anything else. So a channel that carried audio and then went to
+        // zeroes cannot be a permission problem, and sending the user to that
+        // pane costs them the time it takes to find nothing wrong there.
+        let message = ChannelHealthController.faultMessage(
+            channel: .app, fault: .digitalSilence, everCarriedSignal: true,
+        )
+        XCTAssertFalse(
+            message.contains(SystemSettingsPaths.screenRecording),
+            "a tap that already worked is not missing a grant",
+        )
+        XCTAssertFalse(message.contains("SoundSource"))
+        XCTAssertTrue(
+            message.lowercased().contains("not a permission problem"),
+            "and it says so, because the pane is where the user would look first",
+        )
+    }
+
+    func testAStoppedAppTapIsNotBlamedOnAPermission() {
+        // Buffers stopping entirely is a dead tap, not a denied one: a denied
+        // tap still delivers, it delivers zeroes.
+        let message = ChannelHealthController.faultMessage(
+            channel: .app, fault: .noBuffers, everCarriedSignal: true,
+        )
+        XCTAssertFalse(message.contains(SystemSettingsPaths.screenRecording))
+    }
+
+    func testTheRecoverableAppFaultsNameTheOutputDeviceLever() {
+        // A default-output device change is the only thing that rebuilds the
+        // tap today, and it is the only remedy a user can apply mid-meeting
+        // without splitting the recording in two.
+        for carried in [true, false] {
+            let stopped = ChannelHealthController.faultMessage(
+                channel: .app, fault: .noBuffers, everCarriedSignal: carried,
+            )
+            XCTAssertTrue(stopped.lowercased().contains("output device"), "noBuffers/\(carried)")
+        }
+        let wentSilent = ChannelHealthController.faultMessage(
+            channel: .app, fault: .digitalSilence, everCarriedSignal: true,
+        )
+        XCTAssertTrue(wentSilent.lowercased().contains("output device"))
+    }
+
+    func testTheMicMessagesDoNotDependOnWhetherTheChannelCarriedAudio() {
+        // The flag answers an app-tap question. The microphone's two faults
+        // already send the user to the right place and must not start varying.
         for fault in [ChannelFault.noBuffers, .digitalSilence] {
-            let message = ChannelHealthController.faultMessage(channel: .app, fault: fault)
-            XCTAssertTrue(message.contains(SystemSettingsPaths.screenRecording), "\(fault)")
-            XCTAssertTrue(message.contains("SoundSource"), "\(fault)")
+            XCTAssertEqual(
+                ChannelHealthController.faultMessage(channel: .mic, fault: fault, everCarriedSignal: true),
+                ChannelHealthController.faultMessage(channel: .mic, fault: fault, everCarriedSignal: false),
+                "\(fault)",
+            )
         }
     }
 
     func testTheTwoMicFaultsSendTheUserToDifferentPlaces() {
         // A device that stopped answering and a device that is muted are
         // different things to go and fix.
-        let stopped = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers)
-        let muted = ChannelHealthController.faultMessage(channel: .mic, fault: .digitalSilence)
+        let stopped = ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true)
+        let muted = ChannelHealthController.faultMessage(channel: .mic, fault: .digitalSilence, everCarriedSignal: true)
         XCTAssertNotEqual(stopped, muted)
         XCTAssertTrue(muted.lowercased().contains("mute"))
         XCTAssertTrue(stopped.lowercased().contains("connected"))
@@ -216,7 +276,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls.first?.title, "Capture Channel Silent")
         XCTAssertEqual(
             notifier.calls.first?.body,
-            ChannelHealthController.faultMessage(channel: .mic, fault: .digitalSilence),
+            ChannelHealthController.faultMessage(channel: .mic, fault: .digitalSilence, everCarriedSignal: true),
         )
         // A mute switch is the likeliest cause, so this one stays suppressible.
         XCTAssertEqual(notifier.calls.first?.urgency, .standard)
@@ -233,7 +293,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
 
         XCTAssertEqual(
             notifier.calls.first?.body,
-            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers),
+            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true),
         )
         // Buffers stopping has no benign reading on either channel.
         XCTAssertEqual(notifier.calls.first?.urgency, .timeSensitive)
@@ -263,7 +323,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls.count, 1)
         XCTAssertEqual(
             notifier.calls.first?.body,
-            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers),
+            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true),
         )
     }
 
@@ -322,6 +382,30 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls.last?.urgency, .timeSensitive)
     }
 
+    func testTheAppMessageFollowsWhetherTheChannelEverCarriedAudioOnTheRealPath() {
+        // The message arms themselves are pinned above, against faultMessage
+        // directly. This pins the wiring: that notifyChannelFaults derives the
+        // flag from the same ages the verdict came from, rather than passing a
+        // constant. Hardcoding it in the controller leaves every other test in
+        // this file green, which is the whole reason this one exists.
+        for (ages, isPermissionCandidate) in [(deliveringSilence, false), (silentSinceStart, true)] {
+            let (controller, recorder, notifier, _) = makeController()
+            recorder.micLevelDBFS = -20
+            recorder.appLevelDBFS = -120
+            recorder.appSignalAges = ages
+
+            controller.applyTick(recorder: recorder, now: t0)
+            _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(30))
+
+            let body = notifier.calls.first { $0.title == "Capture Channel Silent" }?.body
+            XCTAssertNotNil(body, "\(ages)")
+            XCTAssertEqual(
+                body?.contains(SystemSettingsPaths.screenRecording), isPermissionCandidate,
+                "a tap that already carried audio must not be sent to the permission pane: \(ages)",
+            )
+        }
+    }
+
     // MARK: - Capture give-up (issue #588)
 
     func testASilentChannelThatGaveUpGetsTheRestartMessage() {
@@ -354,7 +438,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
 
         XCTAssertEqual(
             notifier.calls.first?.body,
-            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers),
+            ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true),
         )
     }
 
@@ -363,7 +447,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         // say so; "check your mic" would send the user chasing the wrong thing.
         let message = ChannelHealthController.captureGaveUpMessage(for: .mic)
         XCTAssertTrue(message.lowercased().contains("restart"))
-        XCTAssertNotEqual(message, ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers))
+        XCTAssertNotEqual(message, ChannelHealthController.faultMessage(channel: .mic, fault: .noBuffers, everCarriedSignal: true))
     }
 
     func testGaveUpAfterALatchedEpisodeStillNotifiesLost() {

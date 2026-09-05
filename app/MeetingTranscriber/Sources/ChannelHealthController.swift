@@ -356,7 +356,12 @@ final class ChannelHealthController {
             case .mic: micFault = fault
             case .app: appFault = fault
             }
-            let alert = Self.captureAlert(channel: channel, fault: fault)
+            // "Never carried a non-zero sample in this recording" is what
+            // separates a denied tap from one that died; see `faultMessage`.
+            let alert = Self.captureAlert(
+                channel: channel, fault: fault,
+                everCarriedSignal: ages.secondsSinceLastEnergy != nil,
+            )
             notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
         }
     }
@@ -412,6 +417,7 @@ final class ChannelHealthController {
     nonisolated static func captureAlert(
         channel: AudioChannel,
         fault: ChannelFault,
+        everCarriedSignal: Bool,
     ) -> (title: String, body: String, urgency: NotificationUrgency) {
         if fault == .gaveUp {
             return gaveUpAlert(channel: channel)
@@ -419,38 +425,74 @@ final class ChannelHealthController {
         let suppressible = fault == .digitalSilence && channel == .mic
         return (
             "Capture Channel Silent",
-            faultMessage(channel: channel, fault: fault),
+            faultMessage(channel: channel, fault: fault, everCarriedSignal: everCarriedSignal),
             suppressible ? .standard : .timeSensitive,
         )
     }
 
     /// What the user can actually do about each failure.
     ///
-    /// The app channel gets one message for both faults on purpose: a tap that
-    /// delivers nothing and one that delivers zeroes call for the same checks,
-    /// the Screen Recording grant and whatever else is intercepting the meeting
-    /// app's audio. The microphone gets two, because a device that has stopped
-    /// answering and a device that is muted are different things to go and fix.
-    nonisolated static func faultMessage(channel: AudioChannel, fault: ChannelFault) -> String {
-        switch (channel, fault) {
+    /// The app channel used to get one message for both of its faults, on the
+    /// reasoning that a tap delivering nothing and a tap delivering zeroes call
+    /// for the same checks. That reasoning was wrong in the case it matters
+    /// most, and `everCarriedSignal` is what tells the cases apart.
+    ///
+    /// The asymmetry it rests on: a tap that is not allowed to hear the app
+    /// returns `noErr` and then delivers zeroes from its very first buffer and
+    /// never anything else (issue #524, and there is no preflight API for that
+    /// grant, so nothing else can rule it in or out). It follows that a channel
+    /// which carried real audio and *then* went to zeroes cannot be a
+    /// permission problem, and sending that user to the Screen Recording pane
+    /// costs them the time it takes to find nothing wrong there. It also
+    /// follows that a channel silent since the first buffer very well might be,
+    /// so that message keeps the pane and the interception check.
+    ///
+    /// Buffers stopping altogether is a third thing again: a denied tap still
+    /// delivers, it delivers zeroes, so a stopped IOProc is never a grant.
+    ///
+    /// The microphone's two messages ignore the flag. A device that stopped
+    /// answering and a device that is muted are different things to go and fix,
+    /// and neither depends on what the channel carried earlier.
+    nonisolated static func faultMessage(
+        channel: AudioChannel,
+        fault: ChannelFault,
+        everCarriedSignal: Bool,
+    ) -> String {
+        switch (channel, fault, everCarriedSignal) {
         // Before the per-channel arms: a channel that was abandoned needs the
         // restart advice on either side, and telling someone to check a device
         // that is no longer being read would send them after the wrong thing.
-        case (_, .gaveUp):
+        case (_, .gaveUp, _):
             captureGaveUpMessage(for: channel)
 
-        case (.app, _):
-            "The app-audio channel is not delivering audio while the mic is still recording. "
-                + "Enable Meeting Transcriber under \(SystemSettingsPaths.screenRecording), "
-                + "and check whether a third-party audio tool "
-                + "(SoundSource, Audio Hijack, Loopback, Krisp) is intercepting the meeting app's audio."
+        case (.app, .noBuffers, _):
+            "The app-audio channel stopped delivering buffers while the microphone is still "
+                + "recording. The audio tap on the meeting app has died, which a permission "
+                + "setting does not cause. Switching the system output device to another one and "
+                + "back makes Meeting Transcriber rebuild the tap."
 
-        case (.mic, .noBuffers):
+        case (.app, .digitalSilence, true):
+            "The app-audio channel carried audio earlier in this recording and now delivers only "
+                + "silence, while the microphone still carries audio. This is not a permission "
+                + "problem: a tap that is not allowed to hear the app never delivers audio at "
+                + "all. Either the meeting app moved its output to a path the tap does not "
+                + "follow, or the tap's data path died. Switching the system output device to "
+                + "another one and back makes Meeting Transcriber rebuild the tap; if audio still "
+                + "does not return, the meeting app's output route is the cause."
+
+        case (.app, .digitalSilence, false):
+            "The app-audio channel has delivered only silence since this recording started, "
+                + "while the microphone carries audio. Check that Meeting Transcriber is enabled "
+                + "under \(SystemSettingsPaths.screenRecording), and whether a third-party audio "
+                + "tool (SoundSource, Audio Hijack, Loopback, Krisp) is intercepting the meeting "
+                + "app's audio."
+
+        case (.mic, .noBuffers, _):
             "The microphone stopped delivering audio to this recording. "
                 + "Check that the input device is still connected, and that Meeting Transcriber "
                 + "still has permission to use the microphone."
 
-        case (.mic, .digitalSilence):
+        case (.mic, .digitalSilence, _):
             "The microphone is delivering silence, not quiet audio. "
                 + "Check the mute switch on your headset or input device, and the input mute "
                 + "in macOS. A meeting app's own mute button does not cause this."
