@@ -16,6 +16,10 @@ enum ChannelHealthHarness {
     /// A channel still delivering buffers, every sample in them zero: muted by
     /// the device or by macOS, as opposed to merely quiet.
     static let deliveringSilence = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 600)
+    /// Buffers arriving, and not one of them has ever carried a non-zero
+    /// sample. `nil` is "never", which is what separates a tap that was never
+    /// allowed to hear the app from one that worked and then died.
+    static let silentSinceStart = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: nil)
 
     /// A bare controller (not a full `AppState`), settings-backed closures and a
     /// notifier spy. The debounce is pinned to 30 s, the minimum the production
