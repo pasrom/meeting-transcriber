@@ -106,7 +106,7 @@ final class AppAudioCaptureDebugLoggingTests: XCTestCase {
         // side-effects, no crash). The 5-s elapsed-time path is exercised
         // only by the live-recording E2E.
         let capture = makeCapture(debugLogging: true)
-        capture.maybeReportDebugRMS()
+        capture.maybeReportDebugRMS(processes: [])
         XCTAssertEqual(capture.debugRMS.sampleCount, 0)
     }
 
@@ -117,7 +117,7 @@ final class AppAudioCaptureDebugLoggingTests: XCTestCase {
         // documents the contract by exercising the early-return path
         // and ensuring it stays crash-free with `debugLogging=false`.
         let capture = makeCapture(debugLogging: false)
-        capture.maybeReportDebugRMS()
+        capture.maybeReportDebugRMS(processes: [])
         XCTAssertEqual(capture.debugRMS.sampleCount, 0)
     }
 }
