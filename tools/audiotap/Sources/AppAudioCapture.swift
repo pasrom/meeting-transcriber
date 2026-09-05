@@ -40,6 +40,10 @@ public class AppAudioCapture: @unchecked Sendable {
     /// #379 follow-up — see `writeCapturedBuffer` in `+Resampling`). `internal`
     /// for that cross-file extension; touched only on `writeQueue`.
     var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
+    /// Measures the rate the tap is actually delivering, so a device that
+    /// renegotiates in place is followed (issue #673). Touched only on
+    /// `writeQueue`, like the anchor above.
+    var deliveredRateTracker = DeliveredRateTracker()
     /// What the currently installed attempt built, or nil while nothing is
     /// installed. Main-queue confined: only `start()`, the restart adoption and
     /// `stopCapture` touch it, and all three run there. An attempt in flight
@@ -205,6 +209,35 @@ public class AppAudioCapture: @unchecked Sendable {
         actualSampleRate = session.resolvedSampleRate
     }
 
+    /// Follow a device that renegotiated its sample rate without the default
+    /// output device changing, which is the one case nothing else notices
+    /// (issue #673). Called for every buffer from `writeCapturedBuffer`, on the
+    /// write queue, which is also the only thread that touches the tracker.
+    ///
+    /// It lives here rather than in the resampling extension because the
+    /// `actualSampleRate` setter is deliberately confined to this file. Its
+    /// writers are `start()`, the restart adoption, the first-callback
+    /// correction and this one, and keeping that list short and in one place is
+    /// what makes "who changed the rate, and when" answerable from the log.
+    /// Returns the rate this buffer should be resampled at: the newly measured
+    /// one when this buffer is the one that confirmed it, otherwise the rate
+    /// already published. Handing it back rather than making the caller re-read
+    /// keeps the lock-backed property to one read per buffer, and makes "follow
+    /// the change from the buffer that proves it" a fact of the signature.
+    func adoptDeliveredRate(frames: Int, hostTicks: UInt64) -> Int {
+        let published = actualSampleRate
+        guard let rate = deliveredRateTracker.observe(
+            frames: frames,
+            hostSeconds: machTicksToSeconds(hostTicks),
+            current: published,
+        ) else { return published }
+        logger.warning(
+            "App audio: delivering \(rate, privacy: .public) Hz, not the published \(published, privacy: .public) Hz - following the device",
+        )
+        actualSampleRate = rate
+        return rate
+    }
+
     public func start() throws {
         // Only the test seam returns nothing: production startCapture either
         // hands back a session or throws.
@@ -215,120 +248,6 @@ public class AppAudioCapture: @unchecked Sendable {
         isRunning = true
         _ = restartArbiter.withLock { $0.handle(.startSucceeded) }
         installOutputDeviceChangeListener()
-    }
-
-    /// Query nominal sample rate from a CoreAudio device.
-    private static func queryNominalSampleRate(deviceID: AudioObjectID) -> Int {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var rate: Float64 = 0
-        var size = UInt32(MemoryLayout<Float64>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
-        if status != noErr {
-            logger.warning("queryNominalSampleRate failed (status: \(status))")
-            return 0
-        }
-        return Int(rate)
-    }
-
-    /// Query physical stream format sample rate from a CoreAudio device.
-    private static func queryStreamSampleRate(deviceID: AudioObjectID) -> Int {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioStreamPropertyPhysicalFormat,
-            mScope: kAudioObjectPropertyScopeOutput,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var asbd = AudioStreamBasicDescription()
-        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &asbd)
-        if status != noErr {
-            // Not all devices support this query — non-fatal
-            return 0
-        }
-        return Int(asbd.mSampleRate)
-    }
-
-    /// Query the tap's own format — most authoritative source for tap data rate.
-    /// Uses kAudioTapPropertyFormat which returns the ASBD the tap delivers.
-    private static func queryTapSampleRate(tapID: AudioObjectID) -> Int {
-        guard tapID != kAudioObjectUnknown else { return 0 }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioTapPropertyFormat,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var asbd = AudioStreamBasicDescription()
-        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
-        if status != noErr {
-            logger.warning("queryTapSampleRate failed (status: \(status))")
-            return 0
-        }
-        return Int(asbd.mSampleRate)
-    }
-
-    /// Query the actual measured sample rate from a running device.
-    /// Only valid after AudioDeviceStart — returns the hardware-measured rate.
-    private static func queryActualSampleRate(deviceID: AudioObjectID) -> Int {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyActualSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var rate: Float64 = 0
-        var size = UInt32(MemoryLayout<Float64>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
-        if status != noErr { return 0 }
-        return Int(rate)
-    }
-
-    /// Query, cross-validate, and return the best available sample rate for a device.
-    /// Priority: tap format > nominal rate > stream format > requested rate.
-    private static func resolveActualSampleRate(
-        deviceID: AudioObjectID,
-        tapID: AudioObjectID,
-        requestedRate: Int,
-    ) -> Int {
-        // Query the tap directly first — most authoritative. Only cross-validate
-        // nominal + stream when the tap has no rate, preserving the original
-        // short-circuit (no extra hardware queries when the tap answers).
-        let tapRate = queryTapSampleRate(tapID: tapID)
-        let nominalRate = tapRate > 0 ? 0 : queryNominalSampleRate(deviceID: deviceID)
-        let streamRate = tapRate > 0 ? 0 : queryStreamSampleRate(deviceID: deviceID)
-
-        let decision = SampleRateQuery.chooseRate(
-            tapRate: tapRate, nominalRate: nominalRate, streamRate: streamRate, requestedRate: requestedRate,
-        )
-
-        switch decision.source {
-        case .tap:
-            if decision.differsFromRequested {
-                logger.warning("Tap rate \(tapRate) Hz differs from requested \(requestedRate) Hz")
-            }
-            logger.info("Using tap format rate: \(tapRate) Hz")
-            return decision.rate
-
-        case .requestedFallback:
-            logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
-            return decision.rate
-
-        case .mismatchPreferNominal:
-            // Prefer nominal over stream — stream on output scope can return BT HFP rate
-            logger.warning("Rate mismatch: nominal=\(nominalRate), stream=\(streamRate) — using nominal rate (stream scope may reflect BT HFP)")
-
-        case .consistent, .onlyNominal, .onlyStream:
-            break
-        }
-
-        // Cross-validated rungs (consistent / mismatch / onlyNominal / onlyStream):
-        // flag when the queried rate the ladder picked differs from requested.
-        if decision.differsFromRequested {
-            logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
-        }
-        return decision.rate
     }
 
     // swiftlint:disable:next function_body_length

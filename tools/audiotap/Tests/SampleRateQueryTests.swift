@@ -174,4 +174,46 @@ final class SampleRateQueryTests: XCTestCase {
         )
         XCTAssertNil(result)
     }
+
+    // MARK: - confirmedRateChange (issue #673)
+
+    /// The published rate is only replaced when the measurement is both
+    /// materially different and lands on a standard rate. Everything else is
+    /// jitter, drift, or a window that straddles the change.
+
+    func testAMeasurementMatchingThePublishedRateIsNotAChange() {
+        XCTAssertNil(SampleRateQuery.confirmedRateChange(measured: 48000.2, current: 48000))
+        XCTAssertNil(SampleRateQuery.confirmedRateChange(measured: 47999.0, current: 48000))
+        XCTAssertNil(
+            SampleRateQuery.confirmedRateChange(measured: 47800.0, current: 48000),
+            "0.4 % is inside tolerance: truncating this to 47800 would churn the converter",
+        )
+    }
+
+    func testAHalvedOrDoubledRateIsAChange() {
+        XCTAssertEqual(SampleRateQuery.confirmedRateChange(measured: 24000.6, current: 48000), 24000)
+        XCTAssertEqual(SampleRateQuery.confirmedRateChange(measured: 47997.0, current: 24000), 48000)
+        XCTAssertEqual(SampleRateQuery.confirmedRateChange(measured: 16000.0, current: 48000), 16000)
+    }
+
+    func testAMeasurementBetweenStandardRatesIsRejected() {
+        XCTAssertNil(
+            SampleRateQuery.confirmedRateChange(measured: 36000.0, current: 48000),
+            "a transitional window snaps to 32000 but is 12 % away from it",
+        )
+        XCTAssertNil(
+            SampleRateQuery.confirmedRateChange(measured: 50000.0, current: 48000),
+            "a non-standard device rate is not adopted today and must not start being",
+        )
+    }
+
+    func testAnUnknownPublishedRateAcceptsAnyStandardMeasurement() {
+        XCTAssertEqual(SampleRateQuery.confirmedRateChange(measured: 48000.0, current: 0), 48000)
+    }
+
+    func testImplausibleMeasurementsAreRejected() {
+        XCTAssertNil(SampleRateQuery.confirmedRateChange(measured: 0, current: 48000))
+        XCTAssertNil(SampleRateQuery.confirmedRateChange(measured: -48000, current: 48000))
+        XCTAssertNil(SampleRateQuery.confirmedRateChange(measured: 500_000, current: 48000))
+    }
 }

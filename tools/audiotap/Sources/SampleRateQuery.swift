@@ -156,6 +156,40 @@ public enum SampleRateQuery {
         standardRates.min { abs($0 - raw) < abs($1 - raw) } ?? raw
     }
 
+    /// How far a measurement may sit from a rate before it counts as a different
+    /// rate. CoreAudio's own clock drift is parts per million (+/-50 ppm is
+    /// 0.005 %); one dropped 10 ms buffer inside a 0.5 s window is 2 %. 0.5 %
+    /// separates the two with room on both sides.
+    static let rateTolerance = 0.005
+
+    /// Decide whether a measured delivered rate means the published rate is
+    /// wrong, and if so what to publish instead (issue #673).
+    ///
+    /// Two guards, both load bearing. The first is against churn: a measurement
+    /// within tolerance of what is already published returns nil, so ordinary
+    /// jitter never rebuilds the converter and `Int()` truncation cannot flip a
+    /// rate between 47999 and 48000 forever. The second is against transitional
+    /// windows: a window that straddles a 48 to 24 kHz switch measures something
+    /// in between, and merely snapping it to the nearest standard rate would
+    /// adopt a rate nothing is delivering (44160 is within 0.14 % of 44100).
+    /// Requiring the measurement to be *close to* the rate it snapped onto
+    /// rejects that, and the caller's confirmation requirement rejects the rest.
+    ///
+    /// `current <= 0` means nothing has been resolved yet, so any plausible
+    /// standard measurement is accepted.
+    public static func confirmedRateChange(measured: Double, current: Int) -> Int? {
+        guard measured.isFinite, measured > 0, measured <= Double(maxPlausibleRate) else {
+            return nil
+        }
+        if current > 0, abs(measured - Double(current)) <= Double(current) * rateTolerance {
+            return nil
+        }
+        let snapped = snapToStandardRate(Int(measured.rounded()))
+        guard snapped != current, snapped > 0 else { return nil }
+        guard abs(measured - Double(snapped)) <= Double(snapped) * rateTolerance else { return nil }
+        return snapped
+    }
+
     /// Infer sample rate from raw PCM file size and known recording duration.
     /// Returns nil if data is insufficient or result is implausible.
     public static func inferRateFromDuration(
