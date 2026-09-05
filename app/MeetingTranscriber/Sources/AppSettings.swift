@@ -321,8 +321,15 @@ final class AppSettings {
     /// come from a single recording, and no one has yet watched the repair work
     /// on a real call — this same feature once passed every gate while doing
     /// nothing in the field, which is exactly the failure a default of on would
-    /// hide. Turn it on, measure `echo.suppressedSegments` on a recording made
-    /// over loudspeakers, and the default can follow the evidence.
+    /// hide.
+    ///
+    /// Since measured, and the answer was not the one that was hoped for: under
+    /// the alignment production actually uses, a local speaker who only ever
+    /// speaks while the far end does is taken for the echo and dropped
+    /// (`EchoSegmentClassifierTests` pins it as an expected failure). The
+    /// default is therefore no longer waiting on a measurement, it is waiting
+    /// on a repair, and the repair the project took is the acoustic
+    /// cancellation a layer up rather than a better threshold here.
     var echoDedupEnabled: Bool {
         didSet { defaults.set(echoDedupEnabled, forKey: "echoDedupEnabled") }
     }

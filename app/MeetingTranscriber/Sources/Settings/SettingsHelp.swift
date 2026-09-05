@@ -26,8 +26,11 @@ enum SettingsHelp {
         second copy is left out of the transcript.
 
         Only applies to recordings already reported as affected, and only the \
-        written transcript is shortened: nothing is removed from the recording, \
-        and a line is kept whenever anyone spoke over the far end.
+        written transcript is shortened: nothing is removed from the recording.
+
+        It is not exact, which is why it is off: a quiet remark you make while \
+        the far end is talking can be taken for part of the echo and left out \
+        of the transcript.
         """
 
     static let vad =

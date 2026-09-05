@@ -452,7 +452,11 @@ lines rather than audio: the segments stay in the job's stored data, so the word
 remain recoverable, and only the rendered transcript leaves them out. A caller
 that counts lines and expects the far end twice will now see it once, and
 `suppressedSegments` is how that difference is announced. A recording too short
-for a verdict keeps its duplicates and reports `0`.
+for a verdict keeps its duplicates and reports `0`. A suppressed line is not
+guaranteed to be remote speech: a quiet local remark made while the far end was
+talking can be classified as echo and left out of the rendered transcript. The
+words stay in the job's stored data either way, which is what makes that
+recoverable.
 
 **An absent `echo` is not a clean verdict.** It means no measurement was made:
 the job was single-source, one track was silent, or the tracks overlapped for
