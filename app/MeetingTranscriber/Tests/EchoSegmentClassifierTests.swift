@@ -18,6 +18,34 @@ final class EchoSegmentClassifierTests: XCTestCase {
         TimestampedSegment(start: start, end: end, text: "x")
     }
 
+    /// The interjector fixture the two soft-speaker guards share, so they are
+    /// demonstrably the same audio decided two ways rather than two fixtures
+    /// that merely look alike: a loud far end, and a local speaker at 0.6 of the
+    /// bleed, masked out wherever the bleed is exactly silent.
+    ///
+    /// Exactly silent, which is not the same as "wherever the far end is
+    /// quiet": the mask compares against zero, so the local speaker does carry
+    /// through the envelope ramps where the far end is barely audible. The
+    /// guards below are about double talk, and the ramps are the part of the
+    /// fixture that is easy for any gain estimate.
+    ///
+    /// Forty seconds where thirty would do, because thirty produces exactly
+    /// `EchoBleedDetector.minScoredWindows` windows: at that length, raising
+    /// either detector constant breaks these guards on their precondition
+    /// rather than on their subject, and the failure would name the detector.
+    private func softInterjector() -> (app: [Float], mic: [Float]) {
+        let app = EchoTestAudio.speechLike(seconds: 40, seed: 12)
+        let echo = EchoTestAudio.bleed(app, delayMs: 15, gain: 0.5)
+        var own = EchoTestAudio.speechLike(seconds: 40, seed: 77)
+        // Bounded by both rather than by `own.indices`: the two are the same
+        // length only by construction, and an edit to one literal would index
+        // the other out of range instead of misbehaving visibly.
+        for i in 0 ..< min(own.count, echo.count) where echo[i] == 0 {
+            own[i] = 0
+        }
+        return (app, zip(echo, own).map { $0 + 0.3 * $1 })
+    }
+
     /// Far end talking, microphone carrying nothing but its loudspeaker copy.
     func testPureLoudspeakerCopyIsEchoOnly() {
         let app = EchoTestAudio.speechLike(seconds: 30, seed: 1)
@@ -83,20 +111,93 @@ final class EchoSegmentClassifierTests: XCTestCase {
     /// talks into the far end's pauses leaves unexplainable energy there and
     /// is safe under any gain estimate. Only pure double talk exposes the
     /// bias.
-    func testSoftLocalSpeakerOverTheFarEndIsNeverRemovable() {
-        let app = EchoTestAudio.speechLike(seconds: 30, seed: 12)
-        let echo = EchoTestAudio.bleed(app, delayMs: 15, gain: 0.5)
-        var own = EchoTestAudio.speechLike(seconds: 30, seed: 77)
-        for i in own.indices where echo[i] == 0 {
-            own[i] = 0
-        }
-        let mic = zip(echo, own).map { $0 + 0.3 * $1 }
+    ///
+    /// Decided at offset 0, which production only reaches when nobody measured,
+    /// so this covers less than the pair of them does. The guard below runs the
+    /// same audio the way production aligns it, and gets the other answer.
+    func testSoftLocalSpeakerSurvivesWithoutTheMeasuredAlignment() {
+        let (app, mic) = softInterjector()
 
         let out = EchoSegmentClassifier.classify(
             app: app, mic: mic, sampleRate: rate, micDelay: 0,
             micSegments: [seg(5, 25)],
         )
         XCTAssertNotEqual(out, [.echoOnly], "a soft local speaker is still a speaker, not part of the room path")
+    }
+
+    /// The same fixture as the guard above, decided the way production decides
+    /// it. It comes out the other way, and that is the defect this pins:
+    /// **expected to fail on purpose.**
+    ///
+    /// `classifyMicEcho` never calls `classify` bare. It runs only on an
+    /// `.affected` verdict, and an affected verdict means the detector scored
+    /// enough hot windows that `alignment()` takes the measured lag and never
+    /// the `micDelay` fallback. Every test in this file that puts a local
+    /// speaker in the microphone omits `windowScores` and therefore decides at
+    /// offset 0, an alignment production cannot reach: there the prediction is
+    /// misaligned by the bleed's own delay, the residual stays high, and the
+    /// soft local speaker survives by accident. Aligned the way production
+    /// aligns, the prediction fits well enough to explain a local speaker at
+    /// 0.6 of the bleed, and the segment is dropped from the transcript with
+    /// that person's words in it.
+    ///
+    /// The one test that does thread the measurement through, the Bluetooth
+    /// path-delay case, carries no local speech at all: it pins the same
+    /// mechanism working in the direction it should, a pure copy recognised
+    /// once the alignment is right. Nothing above this level covers the case
+    /// either: the pipeline-level dedup tests put their local speaker in the
+    /// half where the far end is silent, which is the one arrangement this
+    /// decider cannot get wrong.
+    ///
+    /// **Why this is pinned and not fixed.** Not for want of a better
+    /// threshold. A true loudspeaker copy that arrives through anything a real
+    /// room adds (a second reflection, a slow volume ride, a stepped gain
+    /// control) leaves MORE unexplained energy behind than a soft interjector
+    /// does, because the decider models the path as one gain and one delay. The
+    /// ceiling that still removes real copies therefore sits above the ceiling
+    /// that protects a soft speaker: the model error is larger than the signal
+    /// being measured, and no setting of it is both safe and useful. A ceiling
+    /// picked to pass this test would leave the feature removing nothing.
+    ///
+    /// The answer sits a layer up and has landed: `EchoCancelling` takes the far
+    /// end out of the microphone audio before anything transcribes it, and
+    /// `EchoRemedy` gives it precedence whenever both are on. This decider backs
+    /// the transcript dedup, which ships off (`echoDedupEnabled` defaults to
+    /// false), so none of the above is reachable without an explicit opt-in, and
+    /// it is expected to go when the dedup goes.
+    ///
+    /// If this ever stops failing, something changed the decider. Find out what
+    /// before deleting the marker.
+    func testSoftLocalSpeakerIsDeletedUnderProductionAlignment() throws {
+        let (app, mic) = softInterjector()
+
+        let detected = try XCTUnwrap(
+            EchoBleedDetector.analyse(app: app, mic: mic, sampleRate: rate, micDelay: 0),
+            "the fixture has to be detectable, or this test proves nothing",
+        )
+        XCTAssertTrue(detected.isAffected, "production classifies only on an affected verdict")
+        // The mechanism, not only the outcome. Without this the test still
+        // passes if `alignment()` starts returning something else entirely,
+        // and the explanation above quietly stops being what happened.
+        // Negative by the mirrored convention, within one detector step of the
+        // fixture's 15 ms bleed, and far enough from zero to tell a measured
+        // lag from the `micDelay` fallback every other guard here decides on.
+        XCTAssertEqual(
+            EchoSegmentClassifier.alignment(micDelay: 0, windowScores: detected.windowScores),
+            -0.015, accuracy: 0.010,
+            "the verdict below has to rest on the measured lag, not on the fallback",
+        )
+
+        let out = EchoSegmentClassifier.classify(
+            app: app, mic: mic, sampleRate: rate, micDelay: 0,
+            micSegments: [seg(5, 25)],
+            windowScores: detected.windowScores,
+        )
+        // Strict by default: the run fails if the deletion stops happening, so
+        // the marker cannot outlive the defect quietly.
+        XCTExpectFailure("the decider deletes a soft local speaker under production alignment") {
+            XCTAssertNotEqual(out, [.echoOnly], "a soft local speaker is still a speaker, not part of the room path")
+        }
     }
 
     /// Per segment, not per recording: one call has to tell the two apart in the
