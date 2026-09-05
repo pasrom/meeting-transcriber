@@ -49,12 +49,16 @@ public extension AppAudioCapture {
             return
         }
         let floatCount = byteCount / MemoryLayout<Float>.size
+        let channels = max(actualChannels, 1)
+        // A rate change is followed from the buffer that confirms it, not from
+        // the next one, which is why this hands back the rate to use here.
+        let inputRate = adoptDeliveredRate(frames: floatCount / channels, hostTicks: hostTicks)
         let interleaved = Array(UnsafeBufferPointer(
             start: data.assumingMemoryBound(to: Float.self), count: floatCount,
         ))
         resampleForwardAndWrite(
             fd: fd, interleaved: interleaved,
-            inputRate: actualSampleRate, inputChannels: max(actualChannels, 1),
+            inputRate: inputRate, inputChannels: channels,
             hostTicks: hostTicks,
         )
     }

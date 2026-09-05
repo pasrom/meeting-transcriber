@@ -40,6 +40,10 @@ public class AppAudioCapture: @unchecked Sendable {
     /// #379 follow-up — see `writeCapturedBuffer` in `+Resampling`). `internal`
     /// for that cross-file extension; touched only on `writeQueue`.
     var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
+    /// Measures the rate the tap is actually delivering, so a device that
+    /// renegotiates in place is followed (issue #673). Touched only on
+    /// `writeQueue`, like the anchor above.
+    var deliveredRateTracker = DeliveredRateTracker()
     /// What the currently installed attempt built, or nil while nothing is
     /// installed. Main-queue confined: only `start()`, the restart adoption and
     /// `stopCapture` touch it, and all three run there. An attempt in flight
@@ -203,6 +207,35 @@ public class AppAudioCapture: @unchecked Sendable {
     func install(_ session: AppTapSession) {
         tapSession = session
         actualSampleRate = session.resolvedSampleRate
+    }
+
+    /// Follow a device that renegotiated its sample rate without the default
+    /// output device changing, which is the one case nothing else notices
+    /// (issue #673). Called for every buffer from `writeCapturedBuffer`, on the
+    /// write queue, which is also the only thread that touches the tracker.
+    ///
+    /// It lives here rather than in the resampling extension because the
+    /// `actualSampleRate` setter is deliberately confined to this file. Its
+    /// writers are `start()`, the restart adoption, the first-callback
+    /// correction and this one, and keeping that list short and in one place is
+    /// what makes "who changed the rate, and when" answerable from the log.
+    /// Returns the rate this buffer should be resampled at: the newly measured
+    /// one when this buffer is the one that confirmed it, otherwise the rate
+    /// already published. Handing it back rather than making the caller re-read
+    /// keeps the lock-backed property to one read per buffer, and makes "follow
+    /// the change from the buffer that proves it" a fact of the signature.
+    func adoptDeliveredRate(frames: Int, hostTicks: UInt64) -> Int {
+        let published = actualSampleRate
+        guard let rate = deliveredRateTracker.observe(
+            frames: frames,
+            hostSeconds: machTicksToSeconds(hostTicks),
+            current: published,
+        ) else { return published }
+        logger.warning(
+            "App audio: delivering \(rate, privacy: .public) Hz, not the published \(published, privacy: .public) Hz - following the device",
+        )
+        actualSampleRate = rate
+        return rate
     }
 
     public func start() throws {
