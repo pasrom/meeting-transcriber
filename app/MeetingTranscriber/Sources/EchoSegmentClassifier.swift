@@ -35,6 +35,25 @@ enum EchoSegmentVerdict: Equatable {
 /// *while* the far end does. The residual is what separates those, and that
 /// separation is the entire point, because dropping a segment that contains
 /// local speech is the one mistake this must never make.
+///
+/// **And it does make it, under the alignment production uses.** That "must
+/// never" is the intent, not the measured behaviour. Threading the detector's
+/// own measured lag in, which is the only way production ever calls this, fits
+/// the prediction well enough to explain a local speaker at 0.6 of the bleed,
+/// and the segment is removed with that person's words in it. Pinned by
+/// `EchoSegmentClassifierTests.testSoftLocalSpeakerIsDeletedUnderProductionAlignment`,
+/// marked as an expected failure so the suite turns red the day it stops being
+/// true.
+///
+/// Tightening `echoResidualCeiling` does not repair it. A true copy arriving
+/// through anything a real room adds (a reflection, a volume ride, a stepped
+/// gain control) leaves more unexplained energy behind than a soft interjector
+/// does, so lowering the ceiling stops removing real copies before it starts
+/// protecting a soft speaker. The remedy the project took is a layer up,
+/// `EchoRemedy` giving `.cancellation` precedence. That protects only someone
+/// who turned cancellation on, which is off by default as well: with the dedup
+/// alone nothing here defends the local speaker, and that is the standing
+/// reason `AppSettings.echoDedupEnabled` stays off.
 enum EchoSegmentClassifier {
     /// One envelope frame. Long enough to be cheap, short enough that a syllable
     /// of local speech inside an otherwise-echo segment still shows up.
