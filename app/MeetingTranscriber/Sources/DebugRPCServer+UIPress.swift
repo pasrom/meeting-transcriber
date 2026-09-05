@@ -109,6 +109,7 @@
         nonisolated static let uiPressAllowedIdentifiers: Set<String> = [
             A11yID.recordOnlyToggle,
             A11yID.settingsTabSpeakers,
+            A11yID.settingsTabAbout,
         ]
 
         nonisolated static func isIdentifierAllowedForUIPress(_ identifier: String) -> Bool {

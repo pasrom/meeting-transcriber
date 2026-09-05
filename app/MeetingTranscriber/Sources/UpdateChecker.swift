@@ -25,8 +25,10 @@ protocol UpdateProviding: Sendable {
 // MARK: - GitHub Release Provider
 
 struct GitHubReleaseProvider: UpdateProviding {
-    private let owner = "pasrom"
-    private let repo = "meeting-transcriber"
+    /// Not `private` — `AboutSettingsView`'s GitHub link is built from the same
+    /// two constants, so the repo identity has a single home.
+    static let owner = "pasrom"
+    static let repo = "meeting-transcriber"
 
     private struct GitHubRelease: Codable {
         let tagName: String
@@ -66,7 +68,7 @@ struct GitHubReleaseProvider: UpdateProviding {
 
     private func fetchJSON<T: Decodable>(path: String) async throws -> T {
         // swiftlint:disable:next force_unwrapping
-        let url = URL(string: "https://api.github.com/repos/\(owner)/\(repo)/\(path)")!
+        let url = URL(string: "https://api.github.com/repos/\(Self.owner)/\(Self.repo)/\(path)")!
         let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw UpdateCheckerError.networkError(
