@@ -13,11 +13,12 @@ extension AppAudioCapture {
     ///
     /// Returns pairs (not parallel arrays) so callers can log per-PID
     /// without re-zipping against `pids` — `compactMap` would otherwise
-    /// silently mis-align the two sequences.
-    func translatePIDs() throws -> [(pid: pid_t, audioObjectID: AudioObjectID)] {
-        let translated: [(pid: pid_t, audioObjectID: AudioObjectID)] = pids.compactMap { pid in
+    /// silently mis-align the two sequences. `TappedProcess` is that pair
+    /// named, and it is what the tap session stores (issue #672).
+    func translatePIDs() throws -> [TappedProcess] {
+        let translated: [TappedProcess] = pids.compactMap { pid in
             guard let objectID = Self.translatePID(pid) else { return nil }
-            return (pid: pid, audioObjectID: objectID)
+            return TappedProcess(pid: pid, audioObjectID: objectID)
         }
         guard !translated.isEmpty else {
             throw NSError(
