@@ -339,7 +339,7 @@ the naming-confirm lane, or runner configuration.
 
 ## Diagnostics
 
-`AppSettings.audioDebugLogging` (Settings → Diagnostics → "Verbose Audio Logging") enables forensic logging in the audio-capture path:
+`AppSettings.verboseDiagnostics` (Settings → Diagnostics → "Verbose Audio Logging"; renamed from the legacy `audioDebugLogging` key, which is migrated on read) enables forensic logging in the audio-capture path:
 
 - `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` at start
 - `[debug] Default output device: name=… uid=… transport=… rate=…` at start and on device change
@@ -349,6 +349,16 @@ the naming-confirm lane, or runner configuration.
 - `[debug] App audio capture stopping: totalBytes=…` at stop
 - `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` at mic capture start
 - `[debug] Mic RMS (5s): … dBFS, samples=…` every 5 s during mic capture
+
+**Unconditional** (not behind the toggle), because a silent-track report cannot be triaged by asking the user to have enabled logging beforehand, and because these are bounded rather than per-buffer (issue #672):
+
+- `App audio tap: N PID(s) [names]` at start
+- `System output device: … transport=…` at start
+- `App audio process state (start|zero run started|stop): exe=… pid=… object=… isRunningOutput=… outputDevices=…` — one line per tapped process. `isRunningOutput` separates a dead tap from a process that rendered nothing; it does **not** separate a silent far end from a dead tap, because a stream rendering zeroes still reports true. `outputDevices` says whether the process's output went to the output device or into some other device (a voice-processing aggregate, say) that the tap does not follow.
+- `App audio: track has been at exact zeros for … s while buffers keep arriving` on entering a zero run, and the matching `signal returned after … s` on leaving. Capped at `SilentTrackObserver.maxEdgesPerRecording` edges per recording; the counters keep going past the cap so the stop line stays honest.
+- `App audio at stop: bytes=… lastBufferAge=… lastEnergyAge=… zeroRuns=… longestZeroRun=…`. `lastEnergyAge=never` means the channel carried no non-zero sample at all, which is the signature of a tap that was never allowed to hear the app (issue #524), not of one that died.
+
+The process-state reads run on their own queue (`com.meetingtranscriber.audiotap.diagnostics`), never on the write queue: that is the IOProc's delivery queue and `AppTapSession.destroy()` drains it with a `sync`, so a HAL read wedged there would wedge every teardown behind it (issue #588). One read at a time, so a wedged one costs a single parked thread rather than a pile.
 
 View via Console.app, subsystem `com.meetingtranscriber.audiotap`. Off by default; turn on when investigating silent recordings or unusual routing.
 
