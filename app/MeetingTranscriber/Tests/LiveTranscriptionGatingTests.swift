@@ -5,8 +5,8 @@ import XCTest
 ///   * `TranscriptionEngineSetting.supportsLiveTranscription` — which engines
 ///     should expose the live toggle (Parakeet + WhisperKit yes).
 ///   * `AppState.shouldShowLiveCaptions` — covers the no-watchLoop branches
-///     of the AND-gate. Cases where `watchLoop?.state == .recording` would
-///     need a real driven WatchLoop and are deferred to live-E2E.
+///     of the AND-gate, plus the recording + overlay path via a driven
+///     `WatchLoop` (`ManualRecordingTests.makeLoop` / `makeTestWatchLoop`).
 @MainActor
 final class LiveTranscriptionGatingTests: XCTestCase {
     // swiftlint:disable:next implicitly_unwrapped_optional
@@ -69,5 +69,39 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         let state = AppState(settings: settings)
         XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
+    }
+
+    // MARK: - shouldShowLiveCaptions (recording + overlay)
+
+    /// Pins `AppState.shouldShowLiveCaptions` reading `settings.liveCaptionsOverlayEnabled`
+    /// through a driven watch loop. Hardcoding `overlayEnabled: true` in
+    /// `shouldShowLiveCaptions` must turn the overlay-off assertion red.
+    func testShouldShowFollowsOverlayToggleWhileRecording() async throws {
+        settings.transcriptionEngine = .parakeet
+        settings.parakeetLanguage = "en"
+        settings.liveTranscriptionEnabled = true
+        settings.liveCaptionsOverlayEnabled = true
+        let state = AppState(settings: settings)
+        let (loop, _) = makeTestWatchLoop()
+        state.watching.watchLoop = loop
+        try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
+        defer { loop.stop() }
+        XCTAssertEqual(loop.state, .recording)
+        XCTAssertTrue(
+            state.shouldShowLiveCaptions,
+            "overlay on + recording + live on → captions bar should show",
+        )
+
+        settings.liveCaptionsOverlayEnabled = false
+        XCTAssertFalse(
+            state.shouldShowLiveCaptions,
+            "overlay off must hide the captions bar while transcription still runs",
+        )
+
+        settings.liveCaptionsOverlayEnabled = true
+        XCTAssertTrue(
+            state.shouldShowLiveCaptions,
+            "turning the overlay back on must show the captions bar again",
+        )
     }
 }

@@ -138,9 +138,9 @@ final class SettingsInteractionTests: XCTestCase {
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
         )
-        let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
-            try toggle.labelView().text().string() == "Show caption overlay"
-        }
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsOverlayToggle)
+            .find(ViewType.Toggle.self)
         try toggle.tap()
         XCTAssertFalse(
             settings.liveCaptionsOverlayEnabled,
@@ -156,9 +156,8 @@ final class SettingsInteractionTests: XCTestCase {
             whisperKitEngine: WhisperKitEngine(),
             parakeetEngine: ParakeetEngine(),
         )
-        let toggle = try view.inspect().find(ViewType.Toggle.self) { toggle in
-            try toggle.labelView().text().string() == "Show caption overlay"
-        }
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsOverlayToggle)
         XCTAssertTrue(toggle.isDisabled())
     }
 

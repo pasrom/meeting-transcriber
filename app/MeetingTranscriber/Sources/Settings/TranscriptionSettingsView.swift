@@ -127,7 +127,7 @@ struct TranscriptionSettingsView: View {
             // backends route captions through an engine-independent session.
             // Enabling it for a Nemotron language whose model isn't downloaded
             // yet defers to a consent alert (the ~0.6 GB first-use download).
-            Toggle("Show partial transcripts during recording", isOn: Binding(
+            Toggle("Enable live transcription during recording", isOn: Binding(
                 get: { settings.liveTranscriptionEnabled },
                 set: { enabled in
                     if enabled, needsCaptionModelConsent {
@@ -170,7 +170,6 @@ struct TranscriptionSettingsView: View {
     private var captionOverlayToggle: some View {
         Toggle("Show caption overlay", isOn: $settings.liveCaptionsOverlayEnabled)
             .disabled(!settings.liveTranscriptionEnabled)
-            .padding(.leading)
             .accessibilityIdentifier(A11yID.liveCaptionsOverlayToggle)
     }
 
@@ -239,9 +238,10 @@ struct TranscriptionSettingsView: View {
         // captions are always available; this just explains the overlay. If a
         // future engine returns `supportsLiveTranscription == false`, reintroduce
         // a conditional "unsupported" message gated on that + `englishStreaming`.
-        "Captions appear in a click-through overlay at the bottom of "
-            + "the screen during recording. Turn off \"Show caption overlay\" "
-            + "to hide the bar; live transcription still runs. Hold ⌥ (Option) "
+        "Live transcription runs during recording whether or not the overlay "
+            + "is visible. With \"Show caption overlay\" on, captions appear in a "
+            + "click-through bar at the bottom of the screen; turn it off to hide "
+            + "the bar without stopping transcription. Hold ⌥ (Option) "
             + "to drag it; the position is remembered across sessions. "
             + "Caption text is **not** logged by default — enable "
             + "\"Verbose Diagnostic Logging\" in Advanced to see "
