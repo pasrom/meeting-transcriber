@@ -298,7 +298,6 @@ If a recording's `_app.wav` is silent or unexpectedly quiet, enable verbose audi
 3. Open **Console.app**, filter by subsystem `com.meetingtranscriber.audiotap`, and look for `[debug]` lines:
    - `[debug] Tap target: pid=… exe=… bundle=… audioObjectID=…` — which process the tap targeted
    - `[debug] Default output device: name=… uid=… transport=… rate=…` — output device at start
-   - `[debug] Tap format: rate=… Hz, tapID=…` — sample rate and tap ID after the tap is configured
    - `[debug] App audio RMS (5s): …dBFS, samples=…, totalBytes=…` — every 5 seconds; **tells you live whether the tap is delivering real audio (-40 dBFS or higher) or near-silence (≤ -90 dBFS)**
    - `[debug] Output device change → name=… uid=…` — emitted when the system output device changes mid-recording
    - `[debug] Mic input device: name=… uid=… hwRate=… hwChannels=…` — mic hardware device at capture start
