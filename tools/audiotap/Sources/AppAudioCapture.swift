@@ -331,14 +331,7 @@ public class AppAudioCapture: @unchecked Sendable {
         let session = AppTapSession(tapID: newTapID, tappedProcesses: translated) { [writeQueue] in
             writeQueue.sync {}
         }
-        let tapRate = Self.queryTapSampleRate(tapID: newTapID)
-        logger.info("Created process tap: \(newTapID) rate=\(tapRate, privacy: .public) Hz")
-
-        if debugLogging {
-            logger.info(
-                "[debug] Tap format: rate=\(tapRate, privacy: .public) Hz, tapID=\(newTapID, privacy: .public)",
-            )
-        }
+        logger.info("Created process tap: \(newTapID)")
 
         let desc = Self.aggregateDescription(
             nameTag: pids.first.map(String.init) ?? "0",
@@ -361,17 +354,18 @@ public class AppAudioCapture: @unchecked Sendable {
             )
         }
         // Resolving the rate here rather than after the IOProc is value ordering,
-        // not race-safety: it reads only the tap format and the device's
-        // nominal/stream-format properties, so it is valid before the device
-        // starts, and doing it now lets the session carry it. The IOProc's
-        // first-callback measured correction layers on top of the published copy.
-        session.attach(
-            aggregateID: newAggregateID,
-            resolvedSampleRate: Self.resolveActualSampleRate(
-                deviceID: newAggregateID, tapID: newTapID, requestedRate: sampleRate,
-            ),
+        // not race-safety: it reads only the device's nominal and stream-format
+        // properties, so it is valid before the device starts, and doing it now
+        // lets the session carry it. The IOProc's first-callback measured
+        // correction layers on top of the published copy.
+        let resolved = Self.resolveActualSampleRate(
+            requestedRate: sampleRate, queries: .real(deviceID: newAggregateID),
         )
-        logger.info("Created aggregate device: \(newAggregateID)")
+        session.attach(aggregateID: newAggregateID, resolvedSampleRate: resolved.rate)
+        let rung = resolved.source.logLabel
+        logger.info(
+            "Created aggregate device: \(newAggregateID), rate \(resolved.rate) Hz (\(rung, privacy: .public)), default \(self.sampleRate) Hz",
+        )
 
         // Set up IOProc to read audio data and write to file descriptor
         let fd = outputFileDescriptor

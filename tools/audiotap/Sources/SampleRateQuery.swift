@@ -1,21 +1,5 @@
 import Foundation
 
-/// Validated sample rate result.
-public struct ValidatedSampleRate: Equatable, Sendable {
-    public let rate: Int
-    public let source: SampleRateSource
-}
-
-/// How the sample rate was determined.
-public enum SampleRateSource: Equatable, Sendable {
-    /// Queried rate matches requested rate — ideal case.
-    case queriedMatchesRequested
-    /// Queried rate is valid but differs from requested — USB device negotiated different rate.
-    case queriedDiffersFromRequested
-    /// Query returned invalid rate, using requested rate as fallback.
-    case fallbackToRequested
-}
-
 /// Cross-validation result between nominal and stream rates.
 public enum CrossValidationResult: Equatable, Sendable {
     case consistent(rate: Int)
@@ -28,22 +12,33 @@ public enum CrossValidationResult: Equatable, Sendable {
 /// Which rung of the sample-rate priority ladder produced the resolved rate.
 /// Lets the caller emit the same diagnostics after delegating the decision.
 public enum RateSource: Equatable, Sendable {
-    case tap // authoritative tap format rate
     case consistent // nominal == stream
     case mismatchPreferNominal // nominal != stream, nominal chosen (BT HFP guard, #379)
     case onlyNominal
-    case onlyStream
+    /// Only the output-scope stream format answered, and the ladder did not
+    /// take it. See `chooseRate` for why that property is never the answer on
+    /// its own; the rate returned is the requested one.
+    case streamOnlyDistrusted
     case requestedFallback // nothing queryable, requested rate used verbatim
+
+    /// What the capture log prints for this rung. Spelled out rather than
+    /// reflected off the case name, because the log line's shape is documented
+    /// and a Swift rename would otherwise change it without touching the docs.
+    public var logLabel: String {
+        switch self {
+        case .consistent: "nominal and stream agree"
+        case .mismatchPreferNominal: "nominal, stream disagreed"
+        case .onlyNominal: "nominal only"
+        case .streamOnlyDistrusted: "stream only, not trusted"
+        case .requestedFallback: "nothing queryable"
+        }
+    }
 }
 
 /// Outcome of the sample-rate priority ladder.
 public struct ResolvedRate: Equatable, Sendable {
     public let rate: Int
     public let source: RateSource
-    /// The queried rate the ladder picked was valid but differed from the
-    /// requested rate (drives the "differs from requested" warnings). Always
-    /// false for `.requestedFallback`.
-    public let differsFromRequested: Bool
 }
 
 /// Pure functions for sample rate detection and validation.
@@ -52,18 +47,15 @@ public enum SampleRateQuery {
     /// Maximum plausible audio sample rate (384kHz is the highest standard rate).
     static let maxPlausibleRate = 384_000
 
-    /// Validate a queried sample rate against the requested rate.
-    public static func validateSampleRate(
-        queriedRate: Int,
-        requestedRate: Int,
-    ) -> ValidatedSampleRate {
-        guard queriedRate > 0, queriedRate <= maxPlausibleRate else {
-            return ValidatedSampleRate(rate: requestedRate, source: .fallbackToRequested)
-        }
-        let source: SampleRateSource = queriedRate == requestedRate
-            ? .queriedMatchesRequested
-            : .queriedDiffersFromRequested
-        return ValidatedSampleRate(rate: queriedRate, source: source)
+    /// A queried rate if it is plausible, the requested rate otherwise. Zero is
+    /// the callers' "could not be queried" signal, so it falls back like any
+    /// other implausible value.
+    ///
+    /// It used to also report *how* the rate was arrived at, which nothing read:
+    /// the rung is what the caller wants, and `chooseRate` already returns that.
+    public static func validateSampleRate(queriedRate: Int, requestedRate: Int) -> Int {
+        guard queriedRate > 0, queriedRate <= maxPlausibleRate else { return requestedRate }
+        return queriedRate
     }
 
     /// Cross-validate nominal device rate against stream physical format rate.
@@ -93,55 +85,63 @@ public enum SampleRateQuery {
         }
     }
 
-    /// Sample-rate priority ladder: tap > nominal > stream > requested. The
-    /// mismatch rung prefers nominal over stream because an output-scope stream
-    /// can report a Bluetooth HFP rate (#379 family). Composes `validateSampleRate`
+    /// Sample-rate priority ladder: nominal > requested, with the stream format
+    /// as corroboration only.
+    ///
+    /// The output-scope stream format never decides on its own. It is the
+    /// property issue #82 was filed over: on a Bluetooth headset in call mode it
+    /// reports the HFP link rate (24 kHz measured) rather than the rate the tap
+    /// delivers at, and the commit that fixed #82 called this selector "wrong
+    /// scope" for that reason. The mismatch rung has always distrusted it and
+    /// taken nominal. Trusting it completely the moment nominal falls silent was
+    /// the same property treated two opposite ways, and it only became reachable
+    /// when the tap rung above it was removed, so it is closed here rather than
+    /// shipped. What it still buys is the disagreement warning, which needs both
+    /// reads, so both are still made every time. Composes `validateSampleRate`
     /// + `crossValidateRate`; the returned `source` mirrors the rung taken so the
     /// CoreAudio caller can emit the same diagnostics. Pass 0 for any rate that
     /// could not be queried.
+    ///
+    /// There is deliberately no rung for the process tap's own format
+    /// (`kAudioTapPropertyFormat`). A stereo-mixdown tap is not attached to any
+    /// device's stream and reports a fixed 48 kHz whatever rate the aggregate
+    /// delivers at (issue #683: measured 48000 with the device at 44.1, 48 and
+    /// 96 kHz), so it carries no information about the buffers and, placed on
+    /// top, it made the two rungs below unreachable.
     public static func chooseRate(
-        tapRate: Int,
         nominalRate: Int,
         streamRate: Int,
         requestedRate: Int,
     ) -> ResolvedRate {
-        // 1. Tap rate is most authoritative.
-        if tapRate > 0 {
-            let validated = validateSampleRate(queriedRate: tapRate, requestedRate: requestedRate)
-            return ResolvedRate(
-                rate: validated.rate, source: .tap,
-                differsFromRequested: validated.source == .queriedDiffersFromRequested,
-            )
+        // The nominal rate is the only one this ever adopts, which is easier to
+        // see stated than reconstructed: every rung that resolves to a rate
+        // resolves to that one, and every rung that does not leaves nominal at
+        // zero, which `validateSampleRate` turns into the requested rate. The
+        // stream read is a classifier for the diagnostics, never an answer, so a
+        // lone stream answer leaves nominal at zero and the requested rate comes
+        // out.
+        //
+        // What corrects it from there, and the limit of that, stated because it
+        // is tempting to claim more: the first-callback `ActualSampleRate` read
+        // fixes the rate before the first buffer is resampled, but only if it
+        // answers. A zero from it is not retried, and then the delivered-rate
+        // tracker is what corrects the rate, about a second in. So a device
+        // whose nominal read fails, whose actual read also fails, and which is
+        // not at the requested rate spends that second resampled wrongly. Both
+        // reads failing on an aggregate we just created is not a case anyone has
+        // observed; adopting a property known to misreport on Bluetooth is.
+        let source: RateSource = switch crossValidateRate(
+            nominalRate: nominalRate, streamRate: streamRate,
+        ) {
+        case .consistent: .consistent
+        case .mismatch: .mismatchPreferNominal
+        case .onlyNominal: .onlyNominal
+        case .onlyStream: .streamOnlyDistrusted
+        case .neitherAvailable: .requestedFallback
         }
-
-        // 2. Fall back to nominal + stream cross-validation.
-        let bestRate: Int
-        let source: RateSource
-        switch crossValidateRate(nominalRate: nominalRate, streamRate: streamRate) {
-        case let .consistent(rate):
-            bestRate = rate
-            source = .consistent
-
-        case let .mismatch(nominal, _):
-            bestRate = nominal
-            source = .mismatchPreferNominal
-
-        case let .onlyNominal(rate):
-            bestRate = rate
-            source = .onlyNominal
-
-        case let .onlyStream(rate):
-            bestRate = rate
-            source = .onlyStream
-
-        case .neitherAvailable:
-            return ResolvedRate(rate: requestedRate, source: .requestedFallback, differsFromRequested: false)
-        }
-
-        let validated = validateSampleRate(queriedRate: bestRate, requestedRate: requestedRate)
         return ResolvedRate(
-            rate: validated.rate, source: source,
-            differsFromRequested: validated.source == .queriedDiffersFromRequested,
+            rate: validateSampleRate(queriedRate: nominalRate, requestedRate: requestedRate),
+            source: source,
         )
     }
 

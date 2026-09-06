@@ -78,7 +78,7 @@ final class AppTapSession: @unchecked Sendable {
     }
 
     /// The aggregate wraps the tap, so it can only exist once the tap does. The
-    /// resolved rate arrives with it because resolving reads both ids.
+    /// resolved rate arrives with it because resolving reads the aggregate.
     func attach(aggregateID: AudioObjectID, resolvedSampleRate: Int) {
         self.aggregateID = aggregateID
         self.resolvedSampleRate = resolvedSampleRate

@@ -9,8 +9,7 @@ final class SampleRateQueryTests: XCTestCase {
             queriedRate: 48000,
             requestedRate: 48000,
         )
-        XCTAssertEqual(result.rate, 48000)
-        XCTAssertEqual(result.source, .queriedMatchesRequested)
+        XCTAssertEqual(result, 48000)
     }
 
     func testValidRateDiffersFromRequested() {
@@ -18,8 +17,7 @@ final class SampleRateQueryTests: XCTestCase {
             queriedRate: 44100,
             requestedRate: 48000,
         )
-        XCTAssertEqual(result.rate, 44100)
-        XCTAssertEqual(result.source, .queriedDiffersFromRequested)
+        XCTAssertEqual(result, 44100)
     }
 
     func testZeroRateFallsBackToRequested() {
@@ -27,8 +25,7 @@ final class SampleRateQueryTests: XCTestCase {
             queriedRate: 0,
             requestedRate: 48000,
         )
-        XCTAssertEqual(result.rate, 48000)
-        XCTAssertEqual(result.source, .fallbackToRequested)
+        XCTAssertEqual(result, 48000)
     }
 
     func testNegativeRateFallsBackToRequested() {
@@ -36,8 +33,7 @@ final class SampleRateQueryTests: XCTestCase {
             queriedRate: -1,
             requestedRate: 48000,
         )
-        XCTAssertEqual(result.rate, 48000)
-        XCTAssertEqual(result.source, .fallbackToRequested)
+        XCTAssertEqual(result, 48000)
     }
 
     func testCommonUSBRatesAccepted() {
@@ -46,8 +42,11 @@ final class SampleRateQueryTests: XCTestCase {
                 queriedRate: rate,
                 requestedRate: 48000,
             )
-            XCTAssertEqual(result.rate, rate, "Rate \(rate) should be accepted")
-            XCTAssertNotEqual(result.source, .fallbackToRequested)
+            // Whether a plausible rate was "accepted" or "fell back" is no
+            // longer observable, and for the 48000 row it never mattered: both
+            // answers are 48000. That indistinguishability is why the reporting
+            // was dropped rather than kept for its own sake.
+            XCTAssertEqual(result, rate, "Rate \(rate) should be accepted")
         }
     }
 
@@ -56,8 +55,7 @@ final class SampleRateQueryTests: XCTestCase {
             queriedRate: 1_000_000,
             requestedRate: 48000,
         )
-        XCTAssertEqual(result.rate, 48000)
-        XCTAssertEqual(result.source, .fallbackToRequested)
+        XCTAssertEqual(result, 48000)
     }
 
     // MARK: - crossValidateRate

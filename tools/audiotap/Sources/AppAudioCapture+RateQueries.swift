@@ -13,8 +13,10 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// These answer "what rate does this device say it runs at". What the tap is
 /// actually delivering is a different question, measured per buffer by
 /// `DeliveredRateTracker`, because a device can renegotiate in place without
-/// telling anyone (issue #673) and, on some hardware, present one rate while
-/// something below resamples to another (issue #82).
+/// telling anyone (issue #673) and, on some hardware, one of its properties
+/// describes a link the buffers do not travel (issue #82: the output-scope
+/// stream format reported the Bluetooth HFP rate while the IOProc delivered
+/// the nominal one).
 @available(macOS 14.2, *)
 extension AppAudioCapture {
     /// Query nominal sample rate from a CoreAudio device.
@@ -51,25 +53,6 @@ extension AppAudioCapture {
         return Int(asbd.mSampleRate)
     }
 
-    /// Query the tap's own format — most authoritative source for tap data rate.
-    /// Uses kAudioTapPropertyFormat which returns the ASBD the tap delivers.
-    static func queryTapSampleRate(tapID: AudioObjectID) -> Int {
-        guard tapID != kAudioObjectUnknown else { return 0 }
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioTapPropertyFormat,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var asbd = AudioStreamBasicDescription()
-        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-        let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &asbd)
-        if status != noErr {
-            logger.warning("queryTapSampleRate failed (status: \(status))")
-            return 0
-        }
-        return Int(asbd.mSampleRate)
-    }
-
     /// Query the actual measured sample rate from a running device.
     /// Only valid after AudioDeviceStart — returns the hardware-measured rate.
     static func queryActualSampleRate(deviceID: AudioObjectID) -> Int {
@@ -85,49 +68,64 @@ extension AppAudioCapture {
         return Int(rate)
     }
 
-    /// Query, cross-validate, and return the best available sample rate for a device.
-    /// Priority: tap format > nominal rate > stream format > requested rate.
+    /// Query, cross-validate, and return the best available sample rate for a
+    /// device. The rate is the nominal one when it can be read and the requested
+    /// default otherwise; the stream format only corroborates it, never decides.
+    /// Returns the whole decision so the caller can say which rung it came from.
+    ///
+    /// Both device properties are read every time. The tap's own format is not
+    /// consulted: a stereo-mixdown tap reports a fixed 48 kHz whatever the
+    /// aggregate runs at (issue #683), and letting that answer skip the device
+    /// reads is exactly how a constant passed for a measurement.
     static func resolveActualSampleRate(
-        deviceID: AudioObjectID,
-        tapID: AudioObjectID,
         requestedRate: Int,
-    ) -> Int {
-        // Query the tap directly first — most authoritative. Only cross-validate
-        // nominal + stream when the tap has no rate, preserving the original
-        // short-circuit (no extra hardware queries when the tap answers).
-        let tapRate = queryTapSampleRate(tapID: tapID)
-        let nominalRate = tapRate > 0 ? 0 : queryNominalSampleRate(deviceID: deviceID)
-        let streamRate = tapRate > 0 ? 0 : queryStreamSampleRate(deviceID: deviceID)
+        queries: DeviceRateQueries,
+    ) -> ResolvedRate {
+        let nominalRate = queries.nominal()
+        let streamRate = queries.stream()
 
         let decision = SampleRateQuery.chooseRate(
-            tapRate: tapRate, nominalRate: nominalRate, streamRate: streamRate, requestedRate: requestedRate,
+            nominalRate: nominalRate, streamRate: streamRate, requestedRate: requestedRate,
         )
 
+        // A device rate that differs from the requested one is not warned
+        // about here: nothing asks the aggregate for a rate, so "requested" is
+        // the fallback default, and a 44.1 or 96 kHz output device is a normal
+        // configuration rather than a fault. The caller logs the resolved rate
+        // and its rung at info. Two properties disagreeing is still a warning.
         switch decision.source {
-        case .tap:
-            if decision.differsFromRequested {
-                logger.warning("Tap rate \(tapRate) Hz differs from requested \(requestedRate) Hz")
-            }
-            logger.info("Using tap format rate: \(tapRate) Hz")
-            return decision.rate
-
         case .requestedFallback:
             logger.warning("Cannot query sample rate, using requested \(requestedRate) Hz")
-            return decision.rate
 
         case .mismatchPreferNominal:
-            // Prefer nominal over stream — stream on output scope can return BT HFP rate
-            logger.warning("Rate mismatch: nominal=\(nominalRate), stream=\(streamRate) — using nominal rate (stream scope may reflect BT HFP)")
+            // Prefer nominal over stream: an output-scope stream can report the BT HFP rate.
+            logger.warning("Rate mismatch: nominal=\(nominalRate), stream=\(streamRate), using nominal rate (stream scope may reflect BT HFP)")
 
-        case .consistent, .onlyNominal, .onlyStream:
+        case .streamOnlyDistrusted:
+            logger.warning(
+                "Only the stream format answered (\(streamRate) Hz); not trusted alone (BT HFP), using requested \(requestedRate) Hz",
+            )
+
+        case .consistent, .onlyNominal:
             break
         }
+        return decision
+    }
+}
 
-        // Cross-validated rungs (consistent / mismatch / onlyNominal / onlyStream):
-        // flag when the queried rate the ladder picked differs from requested.
-        if decision.differsFromRequested {
-            logger.warning("Aggregate device rate \(decision.rate) Hz differs from requested \(requestedRate) Hz")
-        }
-        return decision.rate
+/// The property reads the rate ladder composes, bound to the objects they are
+/// asked of and injectable so the composition can be asserted without a
+/// device. `.real` is the only one that ships; a test hands the ladder the
+/// answers a device would have given and checks which of them it believed.
+@available(macOS 14.2, *)
+struct DeviceRateQueries {
+    var nominal: () -> Int
+    var stream: () -> Int
+
+    static func real(deviceID: AudioObjectID) -> Self {
+        Self(
+            nominal: { AppAudioCapture.queryNominalSampleRate(deviceID: deviceID) },
+            stream: { AppAudioCapture.queryStreamSampleRate(deviceID: deviceID) },
+        )
     }
 }

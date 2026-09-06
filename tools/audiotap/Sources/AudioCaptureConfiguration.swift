@@ -33,9 +33,11 @@ public struct AudioCaptureConfiguration: Sendable {
     /// Where to write the mic track, or nil not to record the microphone.
     public let micOutputURL: URL?
 
-    /// What the CATap aggregate device is asked for. The device may renegotiate
-    /// mid-session; `AppAudioCapture` resamples every buffer to the speech rate
-    /// in the IOProc regardless.
+    /// The fallback when the CATap aggregate device's rate cannot be read.
+    /// Nothing asks the aggregate for a rate: it takes its main sub-device's,
+    /// and `AppAudioCapture` reads that back at creation. The device may also
+    /// renegotiate mid-session; every buffer is resampled to the speech rate in
+    /// the IOProc regardless.
     public let sampleRate: Int
     public let channels: Int
 
