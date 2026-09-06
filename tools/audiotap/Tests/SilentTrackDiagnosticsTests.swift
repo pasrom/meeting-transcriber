@@ -49,23 +49,36 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
     }
 
     func testAProbeCanRunAgainOnceTheFirstReturned() {
+        // The sink is the only word a caller gets that a read has returned, so
+        // the guard must already be open when it fires: whoever the sink wakes
+        // starts the next probe straight away, with no waiting and no retry.
+        // The sink is held open while the test asks, so what is asserted is the
+        // guard's state at the moment the sink fires, not who wins a race
+        // against the block returning. Waking from the sink and then asking
+        // won that race every time even with the clear after the sink, so that
+        // shape pins nothing; this one is refused every time under that order.
         let spy = ProbeSpy()
-        let done = expectation(description: "both probes reported")
-        done.expectedFulfillmentCount = 2
-        let diagnostics = SilentTrackDiagnostics(probe: spy.probe(hold: false)) { _, _ in
-            done.fulfill()
+        let firstReported = DispatchSemaphore(value: 0)
+        let secondRequested = DispatchSemaphore(value: 0)
+        let secondReported = DispatchSemaphore(value: 0)
+        let diagnostics = SilentTrackDiagnostics(probe: spy.probe(hold: false)) { reason, outcome in
+            guard case .read = outcome else { return }
+            if reason == "first" {
+                firstReported.signal()
+                secondRequested.wait()
+            } else {
+                secondReported.signal()
+            }
         }
 
         XCTAssertTrue(diagnostics.probeAsync(processes, reason: "first"))
-        XCTAssertEqual(spy.entered.wait(timeout: .now() + 2), .success)
-        // Wait for the in-flight flag to clear, which happens after the sink.
-        var restarted = false
-        for _ in 0 ..< 100 where !restarted {
-            restarted = diagnostics.probeAsync(processes, reason: "second")
-            if !restarted { usleep(20000) }
-        }
-        XCTAssertTrue(restarted, "the guard must clear when the probe returns")
-        wait(for: [done], timeout: 5)
+        XCTAssertEqual(firstReported.wait(timeout: .now() + 5), .success, "the first read reached the sink")
+        let restarted = diagnostics.probeAsync(processes, reason: "second")
+        secondRequested.signal()
+        XCTAssertTrue(restarted, "the guard must be open by the time the sink reports the read")
+        guard restarted else { return }
+        XCTAssertEqual(secondReported.wait(timeout: .now() + 5), .success, "the second read reached the sink")
+        XCTAssertEqual(spy.calls, 2)
     }
 
     func testTheReasonReachesTheSink() {

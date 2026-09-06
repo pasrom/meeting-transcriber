@@ -110,10 +110,16 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         // time. Holding self here costs a queue, two closures and a lock until
         // the read returns, which is the same lifetime a wedged read already has.
         queue.async {
-            self.sink(reason, .read(self.probe(processes)))
-            // After the sink, so a caller waiting for the flag to clear cannot
-            // observe it clear before the result was reported.
+            let states = self.probe(processes)
+            // Cleared as soon as the read is back, before the sink hears of it,
+            // so the guard means exactly what `Outcome.skipped` says: a read
+            // still inside coreaudiod, never a line still being written. A
+            // caller the sink wakes can therefore start the next probe straight
+            // away. Reads still never overlap, since the queue is serial; the
+            // flag only ever bounds how many blocks a wedged read can collect
+            // behind it, and a clear the read must return to reach keeps that.
             self.state.withLock { $0.probeInFlight = false }
+            self.sink(reason, .read(states))
         }
         return true
     }
