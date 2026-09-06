@@ -21,12 +21,17 @@ import Foundation
 /// where no HAL resource may be touched at all. (The one-shot read on the first
 /// callback is a different bargain: it runs once per session, and this corrects
 /// it if it was wrong.) More decisive, it is not established that our private
-/// aggregate propagates a sub-device's in-place rate change, and issue #82
-/// recorded a headset presenting 48 kHz nominal over a 24 kHz physical link with
-/// the tap still delivering 48 kHz. Under that shape a listener on the nominal
-/// rate would introduce the very defect it was meant to fix. Delivered frames
-/// per second of the clock the anchor pads against is the quantity the resampler
-/// needs, by definition, whichever way the HAL routed the change.
+/// aggregate propagates a sub-device's in-place rate change, and a device
+/// property can describe a link the buffers do not travel: issue #82 recorded
+/// a Bluetooth headset whose output-scope stream format reported the 24 kHz
+/// HFP rate against a 48 kHz nominal rate, and the fix commit recorded the
+/// IOProc as delivering 48 kHz. That indicts the stream property, not the
+/// nominal one (it is why the creation-time ladder prefers nominal on a
+/// mismatch), so a nominal-rate listener would have been right on that
+/// hardware; what it shows is that a property and the buffers can disagree,
+/// and a listener has to commit to one property in advance. Delivered frames
+/// per second of the clock the anchor pads against is the quantity the
+/// resampler needs, by definition, whichever way the HAL routed the change.
 ///
 /// It is also the only rate source attached to the buffers being converted. The
 /// creation-time ladder and the first-callback read both describe a device; an
