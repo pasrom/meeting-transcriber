@@ -1,0 +1,72 @@
+name: "Sanitizer tests"
+description: >
+  Runs the app package's and AudioTapLib's test suites under one sanitizer
+  on a self-hosted Mini. Shared by the `test (asan)` and `test (tsan)` jobs
+  of quality-and-safety.yml: the two legs are separate jobs because a
+  job-level `if:` applies to a whole matrix and ASan runs on every same-repo
+  PR while TSan is gated (issue #688), and one composite keeps them from
+  drifting apart in anything but the flag. The caller runs actions/checkout
+  and verify-xcode first, so DEVELOPER_DIR is already exported here.
+
+inputs:
+  sanitizer-flag:
+    description: "The swift test flag: --sanitize=address or --sanitize=thread."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # `mt-ci.keychain-db` is pre-staged by setup-self-hosted-runner.sh, but
+    # macOS occasionally drops it from the per-user search list (seen after
+    # a second runner's `config.sh` ran as the same OS user). When that
+    # happens `SecItemAdd` writes to the default keychain while
+    # `SecItemCopyMatching` searches login.keychain only, and the
+    # KeychainHelper tests silent-fail. Re-assert per job; safe when both
+    # legs run at once because every job writes the same value.
+    #
+    # `set-keychain-settings -lut 36000` raises the auto-lock-on-idle
+    # timeout to 10 h. The default ~5 min fired mid-run on the Mini
+    # (sanitizer compile ~4 min + slower tests pushed read calls past
+    # the threshold), causing `SecItemCopyMatching` to silent-fail with
+    # `errSecAuthFailed` between two consecutive reads in
+    # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
+    # also doesn't lock on system sleep, irrelevant inside a CI job
+    # but defensive.
+    - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
+      shell: bash
+      run: |
+        MT_CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
+        security default-keychain -s "$MT_CI_KEYCHAIN"
+        "$GITHUB_WORKSPACE/scripts/keychain-prepend.sh" "$MT_CI_KEYCHAIN"
+        security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
+        security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
+    - name: Swift tests
+      shell: bash
+      env:
+        SANITIZER_FLAG: ${{ inputs.sanitizer-flag }}
+      run: |
+        cd "$GITHUB_WORKSPACE/app/MeetingTranscriber" || exit 1
+        swift test --parallel --skip ModelPreloadTests "$SANITIZER_FLAG"
+    # AudioTapLib is a separate SPM package, so the app's test run never
+    # compiles its test target and the sanitizers never saw it. That is the
+    # wrong way round: it holds the capture-restart machinery, which is the
+    # most lock- and queue-dense code in the repo (an unfair lock behind every
+    # arbiter decision, a serial restart queue, a real-time IOProc block and a
+    # render-thread tap block), and it is the code the ASan job comment names
+    # as the reason ASan is run at all.
+    #
+    # Worth being honest about the cost, because it is not the build. The
+    # package compiles quickly next to the app, but its wedge tests wait out
+    # real `RestartArbiter.attemptTimeout` deadlines (5 s, a static let, not
+    # injectable), and within a class XCTest runs serially. Budget roughly
+    # 1.5 to 2.5 min per sanitizer leg, which still sits well inside the
+    # jobs' timeout. What that buys: those same tests drive real queues and
+    # semaphores, so TSan gets genuine interleavings rather than a
+    # single-threaded walk.
+    - name: Swift tests (AudioTapLib)
+      shell: bash
+      env:
+        SANITIZER_FLAG: ${{ inputs.sanitizer-flag }}
+      run: |
+        cd "$GITHUB_WORKSPACE/tools/audiotap" || exit 1
+        swift test --parallel "$SANITIZER_FLAG"

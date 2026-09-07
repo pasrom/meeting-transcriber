@@ -1,28 +1,47 @@
 name: Quality & Safety
 
-# Background QA workflow — runs the expensive Swift checks that don't
-# block PRs:
-#   - TSan/ASan sanitizer sweeps (catches races/UB the static checker
-#     can't see; ~10–15 min per leg).
+# Background QA workflow for the expensive Swift checks:
+#   - TSan/ASan sanitizer sweeps (catch the races and memory errors the
+#     static checker cannot see; on the Mini ASan takes about 3 min, TSan
+#     about 15).
 #   - WER/DER quality regression (downloads ~1 GB of model weights and
 #     runs real ASR, then diffs the result against the committed baseline
 #     in Tests/Fixtures/quality/quality-baseline.json; fails on regression).
 #
-# Triggers: push to main, nightly cron, explicit manual dispatch, and
-# label-gated PR runs for SAME-REPO branches only. Fork PR code never runs
-# here: the sanitizer leg executes on the self-hosted Mini right next to an
-# unlocked CI keychain, and fork `pull_request` tokens are read-only, which
-# would also break the cancel-on-failure step. Unlabeled PRs skip every job,
-# so day-to-day review iteration stays fast; applying the `run-quality`
-# label runs the same job set a push to main runs (both the sanitizer
-# matrix and the quality gate), giving pre-merge feedback on demand.
+# Triggers: push to main, nightly cron, explicit manual dispatch, and PR
+# runs for SAME-REPO branches only. Fork PR code never runs here: the
+# sanitizer legs execute on the self-hosted Mini right next to an unlocked
+# CI keychain, and fork `pull_request` tokens are read-only, which would
+# also break the cancel-on-failure step.
+#
+# What a PR gets (issue #688). ASan runs on every same-repo PR: at about
+# three minutes for both packages it is cheaper than the required
+# GitHub-hosted test jobs, so it needs no gate. TSan runs on the
+# `run-quality` label, or when the PR's changed source lines add, remove or
+# move a concurrency primitive, or when the PR changes a package manifest
+# of either sanitized package or this workflow file (the `changes` job
+# decides). `quality-baseline` stays label-only. `sanitizer-gate` reports
+# on every run and is the check to require: it fails when a leg failed or
+# was cancelled, or when `changes` did not succeed, and its summary says
+# which legs ran and which were not asked, so a green gate reads as what it
+# is. Applying `run-quality` runs the same job set a push to main runs.
+# None of this makes the TSan gate complete: ASan finds memory errors, not
+# data races, and TSan is asked only when the heuristics fire; the defect
+# behind #688 passed the sanitizers twice on `main` before it aborted, so
+# even a green TSan leg is evidence, not proof.
 on:
   push:
     branches: [main]
-  # Label-gated PR runs: opening/updating a PR triggers the workflow, but the
-  # jobs below gate on the `run-quality` label so nothing heavy runs until a
-  # maintainer opts the PR in. `labeled` lets the label start the run on an
-  # already-open PR.
+  # PR runs: opening or updating a PR triggers the workflow. ASan runs on
+  # every same-repo PR; TSan and the quality gate wait for the `run-quality`
+  # label (TSan also for what the PR's diff contains). `labeled` lets the
+  # label start the run on an already-open PR; a `labeled` event for any
+  # other label produces a run in which the legs are skipped and the gate
+  # reports, under a different check name, that nothing was evaluated (see
+  # `changes`). Deliberately
+  # NOT a `paths:` filter here: that would gate the whole workflow on a path
+  # list and take the label path away from every PR that touches anything
+  # else.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   schedule:
@@ -30,7 +49,7 @@ on:
   workflow_dispatch:
     inputs:
       run-sanitizer:
-        description: "Run TSan/ASan matrix"
+        description: "Run TSan/ASan legs"
         type: boolean
         default: true
       run-quality:
@@ -56,112 +75,541 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
-  test-sanitizer:
-    # PR leg: same-repo branches with the `run-quality` label only (see the
-    # trigger comment); the label-name check keeps `labeled` events for any
-    # OTHER label from starting a duplicate run.
+  # Two facts for the sanitizer jobs, computed once, because an `if:`
+  # expression cannot see a diff and a condition repeated across four jobs
+  # drifts. Issue #688: the label is off by default because TSan is slow,
+  # but its absence was invisible at review time, so a PR reported green
+  # whether the sanitizers passed or were never asked. `main` was the first
+  # machine to run them and went red from a change whose PR had thirteen
+  # green checks.
+  #
+  # The job runs on every event, unconditionally, because a needed job that
+  # is skipped skips its dependants too, which would take the push, schedule
+  # and dispatch runs down with it. The diff steps skip off PR events, the
+  # outputs fall back to their defaults, and the sanitizer jobs' `if:` never
+  # consult the diff outputs there.
+  #
+  # Fact 1: is this run a verdict for its commit? Every `pull_request` event
+  # starts a run on the PR's head SHA, and the auto-labeler (pr-labels.yml)
+  # adds a label to each new PR, so an `opened` run is followed within
+  # seconds by a `labeled` run on the same SHA (over the last 300 PR runs of
+  # this workflow, 30 SHAs carried more than one run, median gap 9 s; eight
+  # gaps were longer than ten minutes, from labels added later, `run-e2e`
+  # among them). The sanitizer legs skip on a `labeled` event for any label
+  # but `run-quality`, since the run they would start already happened. The
+  # gate must not follow them: a skipped job reports success, GitHub lists
+  # same-named check runs from both runs side by side in the PR's rollup,
+  # and `sanitizer-gate` is meant to be a required check, so a skipped gate
+  # named `sanitizer-gate` on the second run could stand in for a red one on
+  # the first. On such a run `verdict` is false and `gate-name` carries a
+  # "[no verdict: label event]" suffix; the gate still runs, under that
+  # name, and says that nothing was evaluated. It has to run rather than
+  # skip because a skipped job's `name` expression is never evaluated
+  # (actions/runner issue 1215): the check would carry the raw expression
+  # text, which happens not to collide with `sanitizer-gate` today and would
+  # start colliding the day that is fixed. The legs keep static names for
+  # the same reason, so a TSan leg that was not asked shows as a skipped
+  # `test (tsan)` and not as an expression; on a label-event run their
+  # skipped rows sit next to the verdict run's rows in the rollup, which is
+  # clutter but not a verdict. Re-running the legs on every label event
+  # instead would close the same hole at twice the Mini's sanitizer load on
+  # every PR opening.
+  #
+  # Fact 2: is TSan warranted without the label? Two arms, either suffices.
+  #
+  # The keyword arm asks `git diff -G` whether the added or removed lines of
+  # any source file contain a concurrency primitive. Why the diff and not a
+  # path list: measured over the five PRs of the session that produced #688
+  # (#680, #681, #682, #684, #687), a `tools/audiotap/**` path filter would
+  # have run TSan four times, twice for changes with no concurrency in them,
+  # and never for the app package, which holds the larger share of the
+  # repo's `@unchecked Sendable` types, locks and detached tasks. The
+  # keyword arm runs it three times, on the two PRs that touched locks and
+  # queues and on the one whose tests added raw buffer pointers, and it
+  # reaches both packages.
+  #
+  # That five-PR window flatters the arm, so here is the cost it actually
+  # carries, over the forty PRs merged before that session (#605 to #613 by
+  # merge time; 33 from same-repo branches, 7 from forks, where no PR run
+  # happens at all). The `tools/audiotap/**` path filter would have fired 4
+  # times; the keyword arm 11 (9 of them same-repo); the manifest arm below
+  # 5, all same-repo, 4 of them not also keyword hits. Together TSan would
+  # have run on 13 of the 33 same-repo PRs, and ASan on all 33. That is not
+  # a saving: where the label ran the matrix on none, TSan now runs on about
+  # two same-repo PRs in five and ASan on every one. What it buys is that
+  # the TSan runs are about concurrency or about the link. Every one of the
+  # eleven keyword hits carries a real construct, including the four that
+  # match on a single line: an `@unchecked Sendable` struct (#651), a
+  # `nonisolated(unsafe)` static (#637), an `actor` declaration (#635) and a
+  # `Task.detached` (#632). Ten of the eleven match a lock, queue, actor or
+  # continuation keyword and only one (#634) matches on pointers alone, so
+  # the ASan entries are not what drives the count. Counted twice, from
+  # `gh pr diff` and from `git diff -G` over each PR's rebased commit range
+  # on main; the two methods agree on every PR.
+  #
+  # What the keyword arm matches: added and removed lines only, never
+  # context. A reorder that moves a keyword line shows up as one removed and
+  # one added line and counts. It is a heuristic with false negatives: #687
+  # itself moved a `withLock` call by reordering the two statements around
+  # it, and neither of those carried a keyword, so the `withLock` line
+  # stayed context; that PR is caught only because its test added
+  # semaphores. A change that never touches a keyword line goes unseen. The
+  # `run-quality` label stays the manual override and the nightly and
+  # post-merge runs stay the backstop; do not read a skipped TSan job as
+  # "nothing to check".
+  #
+  # The manifest arm covers what no source line can show. #657 bumped
+  # FluidAudio 0.15.5 to 0.15.6 in Package.resolved and touched nothing
+  # else; the new version linked a Rust archive whose exception personality
+  # was a fourth in the image where Apple's compact unwind format encodes
+  # three, and ThreadSanitizer injects one of the three, so the TSan link
+  # failed while the regular and ASan builds kept working (#659 has the
+  # count). `main` stayed red from 2026-08-26T21:32 until #659 landed on
+  # 2026-08-27T18:32, the push run and the nightly both cancelled by the
+  # failing leg, and no keyword can see a version number. So TSan also runs
+  # when the PR touches the manifest or lock file of either sanitized
+  # package, or this workflow file. The workflow is on the list because a
+  # change to the TSan job can be exercised before merge only by running
+  # it: proving the keyword arm actually started the legs took a throwaway
+  # commit with a keyword line. Left out on purpose, so as not to pad the
+  # list: `.github/actions/sanitizer-tests` and `verify-xcode`, which the
+  # unconditional ASan leg executes on every same-repo PR and which carry
+  # nothing TSan-specific; `cancel-on-failure`, which never runs on a
+  # passing test; and the manifests of mt-cli and meeting-simulator, which
+  # the legs do not build. tools/audiotap has no Package.resolved today; the
+  # entry covers its first dependency. In the forty-PR sample the four
+  # manifest-only hits are the 0.15.6 bump (#657) and its three repairs
+  # (#658, #659, #662); nothing in the sample touched this workflow.
+  #
+  # Which ref it diffs. For `pull_request` events the checkout is
+  # `refs/pull/N/merge`, GitHub's synthetic merge of the PR head into the
+  # base branch (`GITHUB_SHA` is documented as the last merge commit on that
+  # ref), so `HEAD^1` is the base tip that merge was computed against and
+  # `HEAD^2` the PR head. `git diff HEAD^1 HEAD` is exactly what the PR would
+  # add to the base as it stands, and unlike a two-dot diff against
+  # `pull_request.base.sha` it cannot report commits that landed on main
+  # after the branch forked as lines the PR removes. `fetch-depth: 2` is what
+  # that needs and no more: a diff compares two trees, so only the merge
+  # commit and its parents must exist locally, never the merge base or the
+  # history behind it. A PR with a merge conflict never triggers
+  # `pull_request` runs at all, so the merge ref exists whenever this runs.
+  #
+  # `git diff -G` does the matching (a POSIX extended regex applied to the
+  # added and removed lines of each file's patch) and exits 0 whether or not
+  # anything matched, so an empty result is a plain `false`, never a failed
+  # job. The pathspec keeps it to source files: a doc that mentions `NSLock`
+  # is no reason to run TSan, and neither is editing the keyword list in
+  # this file (that is the manifest arm's job). The checkout puts PR code on
+  # a GitHub-hosted runner but executes none of it, `git diff` reads trees
+  # and nothing more; the fork exclusion lives in the sanitizer jobs' `if:`,
+  # not here.
+  #
+  # The keyword list lives in the step, one line each, and is a guess that
+  # will drift; when a sanitizer finding on `main` shows a construct it
+  # missed, add the construct and say why here. Each entry names something
+  # the Swift 6 static checker cannot verify and the sanitizers can:
+  #   - `@unchecked Sendable`, `nonisolated(unsafe)`: the two promises that
+  #     take a type or a global out of the compiler's hands, which is TSan's
+  #     whole remit.
+  #   - `NSLock`, `OSAllocatedUnfairLock`, `Mutex`, `withLock`,
+  #     `.lock()`/`.unlock()`: manual synchronisation, declaration and use
+  #     site alike, since a new critical section rarely touches the line that
+  #     declares the lock.
+  #   - `DispatchQueue`, `DispatchSemaphore`, `DispatchGroup`/`WorkItem`/
+  #     `Source`, `...Queue.async`/`.sync`: GCD, again declaration and use
+  #     site. The repo names its queues `restartQueue`, `writeQueue` and so
+  #     on, so the use-site match is on the `Queue.` suffix in either case; a
+  #     literal `queue.async` has one hit in the whole repo.
+  #   - `Task.detached`, `AsyncStream`: work that leaves the calling actor
+  #     with no structured parent, and continuations resumed from foreign
+  #     threads.
+  #   - an `actor` declaration (`actor Name`), not the bare word: the bare
+  #     word matched "main actor" in doc comments and "refactor" in prose and
+  #     no code at all in the forty-PR sample.
+  #   - `Unsafe...Pointer`, `withUnsafe...`, `Unmanaged`: the ASan half.
+  #     ASan now runs on every same-repo PR, so these no longer decide
+  #     whether it runs, but a PR that reaches for raw pointers is also one
+  #     whose threads share them, which is a TSan question.
+  #   - `installTap(`: the AVAudioEngine tap block, which AVFAudio calls on
+  #     its render thread. Anchored to the call or declaration site because
+  #     the bare word sits in sixteen comment lines about the installTap
+  #     NSException recovery and, bare, matched two PRs in the forty-PR
+  #     sample on prose alone (#639, #645); anchored it matches only #634,
+  #     which the pointer entries already caught.
+  #   - `AudioDeviceCreateIOProcIDWithBlock`,
+  #     `AudioObjectAddPropertyListenerBlock`: the CoreAudio IOProc block,
+  #     which runs on the real-time I/O thread, and the property listeners
+  #     that start capture restarts from a CoreAudio thread (issue #588). One
+  #     and two call sites in the repo, no comment mentions either.
+  #   - `CheckedContinuation`, spelled `Checked(Throwing)?Continuation`
+  #     because the repo writes `withCheckedThrowingContinuation` too: a
+  #     continuation resumed from one of those foreign threads is the
+  #     hand-off TSan watches, and a double resume is a crash.
+  #   The last three entries added no PR to either sample: the capture-path
+  #   PRs in it already matched on locks or pointers. They are there for the
+  #   PR that rewires a tap, an IOProc or a listener without touching a lock
+  #   line, which is the shape of the #687 near miss.
+  # Considered and left out: `Task {` (a hundred hits in the app sources, it
+  # would fire on most feature PRs), `@MainActor` and `@Sendable` (the
+  # compiler already checks those), `Thread` (doc comments only in the
+  # sources), `os_unfair_lock`, `pthread_` and `OperationQueue` (unused).
+  changes:
+    runs-on: ubuntu-latest
+    # Seconds of work, but a timeout here fails the job and that skips both
+    # sanitizer legs on the PR through `needs` and turns the gate red, so
+    # leave the checkout some slack.
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    outputs:
+      verdict: ${{ steps.kind.outputs.verdict }}
+      gate-name: ${{ steps.kind.outputs.gate-name }}
+      tsan-relevant: ${{ steps.diff.outputs.tsan-relevant || 'false' }}
+      tsan-reason: ${{ steps.diff.outputs.tsan-reason }}
+    steps:
+      - id: kind
+        name: Decide whether this run is a verdict for its commit
+        env:
+          NON_VERDICT: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name != 'run-quality' }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          if [ "$NON_VERDICT" = "true" ]; then
+            echo "verdict=false" >> "$GITHUB_OUTPUT"
+            echo "gate-name=sanitizer-gate [no verdict: label event]" >> "$GITHUB_OUTPUT"
+            printf 'Started by the "%s" label, which is not run-quality: nothing is evaluated in this run. The sanitizer legs and the gate for this commit belong to the run for its opened, synchronize or reopened event; the gate of this run reports under the name "sanitizer-gate [no verdict: label event]" so it cannot stand in for that one.\n' "$LABEL" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "verdict=true" >> "$GITHUB_OUTPUT"
+            echo "gate-name=sanitizer-gate" >> "$GITHUB_OUTPUT"
+          fi
+      - if: github.event_name == 'pull_request' && steps.kind.outputs.verdict == 'true'
+        uses: actions/checkout@v7
+        with:
+          # The merge commit and its two parents; see the job comment.
+          fetch-depth: 2
+      - if: github.event_name == 'pull_request' && steps.kind.outputs.verdict == 'true'
+        id: diff
+        name: Look for concurrency primitives and manifest changes in the diff
+        run: |
+          # One POSIX ERE alternative per line; the job comment says why each
+          # is here and what was left out. Keep them anchored to code, not
+          # prose.
+          keywords=(
+            '@unchecked Sendable'
+            'nonisolated\(unsafe\)'
+            'NSLock'
+            'OSAllocatedUnfairLock'
+            'Mutex'
+            'withLock'
+            '\.(lock|unlock)\(\)'
+            'DispatchQueue'
+            'DispatchSemaphore'
+            'Dispatch(Group|WorkItem|Source)'
+            '[Qq]ueue\.(async|sync)'
+            'Task\.detached'
+            'AsyncStream'
+            '(^|[^[:alnum:]_])actor [A-Z]'
+            'Unsafe[A-Za-z]*Pointer'
+            'withUnsafe'
+            'Unmanaged'
+            '[iI]nstallTap\('
+            'AudioDeviceCreateIOProcIDWithBlock'
+            'AudioObjectAddPropertyListenerBlock'
+            'Checked(Throwing)?Continuation'
+          )
+          pattern=$(IFS='|'; printf '%s' "${keywords[*]}")
+          keyword_files=$(git diff --name-only -G"$pattern" HEAD^1 HEAD -- \
+            '*.swift' '*.m' '*.mm' '*.c' '*.cpp' '*.h')
+          # The manifest arm; the job comment says what is on this list and
+          # what was left off it. Paths, not globs, so a reader can grep them.
+          manifest_files=$(git diff --name-only HEAD^1 HEAD -- \
+            app/MeetingTranscriber/Package.swift \
+            app/MeetingTranscriber/Package.resolved \
+            tools/audiotap/Package.swift \
+            tools/audiotap/Package.resolved \
+            .github/workflows/quality-and-safety.yml)
+          reason=""
+          if [ -n "$keyword_files" ]; then
+            reason="concurrency primitives on changed lines in $(printf '%s' "$keyword_files" | paste -sd ' ' -)"
+          fi
+          if [ -n "$manifest_files" ]; then
+            reason="${reason:+$reason; }package manifest or sanitizer workflow changed: $(printf '%s' "$manifest_files" | paste -sd ' ' -)"
+          fi
+          if [ -n "$reason" ]; then
+            echo "tsan-relevant=true" >> "$GITHUB_OUTPUT"
+            echo "tsan-reason=$reason" >> "$GITHUB_OUTPUT"
+            printf 'TSan requested: %s\n' "$reason" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "tsan-relevant=false" >> "$GITHUB_OUTPUT"
+            echo "tsan-reason=" >> "$GITHUB_OUTPUT"
+            echo "No concurrency primitives on the changed source lines and no manifest or workflow change; TSan waits for the run-quality label. ASan runs regardless."
+          fi
+
+  # The two sanitizer legs are separate jobs, not a matrix: a job-level
+  # `if:` applies to every matrix entry, and ASan is unconditional on
+  # same-repo PRs while TSan is gated. A matrix computed in `changes` and
+  # consumed through `fromJson` was the alternative; it is worse because a
+  # static `include` entry whose `variant` is missing from the computed list
+  # is appended as a new combination (documented include semantics), so the
+  # flag mapping would have to be emitted as JSON from a shell step, the
+  # label arm would have to be duplicated into that step, and the gate would
+  # see one aggregate result for the matrix and could not say which leg
+  # failed. With two jobs each `if:` is readable in place and the gate reads
+  # each leg's own result. The steps live in one composite action so the
+  # legs cannot drift apart in anything but the flag. Both legs keep static
+  # check names, `test (asan)` and `test (tsan)`: a skipped job's `name`
+  # expression is never evaluated, so a dynamic name would show as raw text
+  # on exactly the skipped TSan leg most PRs have.
+  #
+  # Self-hosted Mini absorbs sanitizer instrumentation about four times
+  # better than macos-26 GH-hosted (TSan ~6:41 vs ~25 min when measured) and
+  # avoids the CoreML model-load assertion race that flaked
+  # WhisperKitEngineTests on macos-26. The legs don't need the `audio`
+  # label, so either Mini runner picks up.
+  test-asan:
+    name: test (asan)
+    needs: changes
+    # AddressSanitizer covers the pointer-heavy code paths Swift's ARC can't
+    # help with: AudioTapLib's CATapDescription / IOProc, the
+    # `withUnsafePointer` slabs in audio mixing, and any C-imported framework
+    # boundary. Every same-repo PR, no label and no diff arm: 3m12s for both
+    # packages when measured, cheaper than the required GitHub-hosted test
+    # jobs. Fork PRs are excluded for the reason in the trigger comment, and
+    # a run that is no verdict for its commit skips (see `changes`).
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer) ||
       (
         github.event_name == 'pull_request' &&
-        contains(github.event.pull_request.labels.*.name, 'run-quality') &&
         github.event.pull_request.head.repo.full_name == github.repository &&
-        (github.event.action != 'labeled' || github.event.label.name == 'run-quality')
+        needs.changes.outputs.verdict == 'true'
       )
-    # Self-hosted Mini absorbs sanitizer instrumentation 4× better than
-    # macos-26 GH-hosted (TSan ~6:41 vs ~25 min) and avoids the CoreML
-    # model-load assertion race that flaked WhisperKitEngineTests on
-    # macos-26. Sanitizer doesn't need the `audio` label, so either Mini
-    # runner picks up.
     runs-on: [self-hosted, macOS, ARM64]
-    # ~7 min wall-clock observed for the app package alone; the AudioTapLib
-    # step below adds roughly 1.5 to 2.5 min, most of it waiting out real
-    # restart deadlines rather than compiling. 20 min still leaves room for
-    # cold-build variance while surfacing runaways before they cost an hour.
+    # Generous next to the 3 min observed, but the same budget as TSan keeps
+    # a cold-cache build from being the thing that turns the gate red.
     timeout-minutes: 20
     permissions:
       contents: read
       actions: write
-    strategy:
-      # TSan and ASan find different classes of bugs. fail-fast: false NOT to
-      # keep the sibling running on failure — the `Cancel run on failure` step
-      # below cancels the whole run on any failure — but so the failing leg runs
-      # that step and names itself the culprit in the run summary, instead of
-      # being silently auto-cancelled by the matrix before it can.
-      fail-fast: false
-      matrix:
-        variant: [tsan, asan]
-        include:
-          # ThreadSanitizer catches races the static @Sendable checker can't
-          # see — C-pointer shared state, GCD-callback closures over class
-          # properties.
-          - variant: tsan
-            sanitizer-flag: "--sanitize=thread"
-          # AddressSanitizer covers the Pointer-heavy code paths Swift's ARC
-          # can't help with — AudioTapLib's CATapDescription / IOProc, the
-          # `withUnsafePointer` slabs in audio mixing, and any C-imported
-          # framework boundary.
-          - variant: asan
-            sanitizer-flag: "--sanitize=address"
-    name: test (${{ matrix.variant }})
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/verify-xcode
-      # `mt-ci.keychain-db` is pre-staged by setup-self-hosted-runner.sh, but
-      # macOS occasionally drops it from the per-user search list (seen after
-      # a second runner's `config.sh` ran as the same OS user). When that
-      # happens `SecItemAdd` writes to the default keychain while
-      # `SecItemCopyMatching` searches login.keychain only — KeychainHelper
-      # tests silent-fail. Re-assert per job; safe under matrix parallelism
-      # because every job writes the same value.
-      #
-      # `set-keychain-settings -lut 36000` raises the auto-lock-on-idle
-      # timeout to 10 h. The default ~5 min fired mid-run on the Mini
-      # (sanitizer compile ~4 min + slower tests pushed read calls past
-      # the threshold), causing `SecItemCopyMatching` to silent-fail with
-      # `errSecAuthFailed` between two consecutive reads in
-      # `testOpenAIAPIKeyViaKeychainHelper`. Without `-l` the keychain
-      # also doesn't lock on system sleep — irrelevant inside a CI job
-      # but defensive.
-      - name: Ensure CI keychain is default + in search list + unlocked + no-autolock
-        run: |
-          MT_CI_KEYCHAIN="$HOME/Library/Keychains/mt-ci.keychain-db"
-          security default-keychain -s "$MT_CI_KEYCHAIN"
-          ./scripts/keychain-prepend.sh "$MT_CI_KEYCHAIN"
-          security unlock-keychain -p "" "$MT_CI_KEYCHAIN"
-          security set-keychain-settings -lut 36000 "$MT_CI_KEYCHAIN"
-      - name: Swift tests
-        run: cd app/MeetingTranscriber && swift test --parallel --skip ModelPreloadTests ${{ matrix.sanitizer-flag }}
-      # AudioTapLib is a separate SPM package, so the app's test run never
-      # compiles its test target and the sanitizers never saw it. That is the
-      # wrong way round: it holds the capture-restart machinery, which is the
-      # most lock- and queue-dense code in the repo (an unfair lock behind every
-      # arbiter decision, a serial restart queue, a real-time IOProc block and a
-      # render-thread tap block), and it is the code the ASan comment above
-      # already names as the reason ASan is in this matrix at all.
-      #
-      # Worth being honest about the cost, because it is not the build. The
-      # package compiles quickly next to the app, but its wedge tests wait out
-      # real `RestartArbiter.attemptTimeout` deadlines (5 s, a static let, not
-      # injectable), and within a class XCTest runs serially. Budget roughly
-      # 1.5 to 2.5 min per sanitizer leg, which still sits well inside this
-      # job's timeout. What that buys: those same tests drive real queues and
-      # semaphores, so TSan gets genuine interleavings rather than a
-      # single-threaded walk.
-      - name: Swift tests (AudioTapLib)
-        run: cd tools/audiotap && swift test --parallel ${{ matrix.sanitizer-flag }}
+      - uses: ./.github/actions/sanitizer-tests
+        with:
+          sanitizer-flag: "--sanitize=address"
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
         with:
-          job-name: sanitizers (${{ matrix.variant }})
+          job-name: sanitizers (asan)
+
+  test-tsan:
+    name: test (tsan)
+    needs: changes
+    # ThreadSanitizer catches races the static @Sendable checker can't see:
+    # C-pointer shared state, GCD-callback closures over class properties.
+    # PR leg: same-repo branches only (see the trigger comment), on a run
+    # that is a verdict for its commit, and then either the `run-quality`
+    # label or one of the two arms `changes` computes. The repo check sits
+    # outside the arms on purpose: a diff or manifest match must never widen
+    # the audience to fork PRs, whatever the lists grow into. The label-arm
+    # deduplication for `labeled` events lives in `verdict`, which is false
+    # for any label but `run-quality`.
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run-sanitizer) ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        needs.changes.outputs.verdict == 'true' &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'run-quality') ||
+          needs.changes.outputs.tsan-relevant == 'true'
+        )
+      )
+    runs-on: [self-hosted, macOS, ARM64]
+    # ~7 min wall-clock observed for the app package alone; the AudioTapLib
+    # step adds roughly 1.5 to 2.5 min, most of it waiting out real restart
+    # deadlines rather than compiling, and the most recent full leg took
+    # 15m13s. 20 min still leaves room for cold-build variance while
+    # surfacing runaways before they cost an hour.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/verify-xcode
+      - uses: ./.github/actions/sanitizer-tests
+        with:
+          sanitizer-flag: "--sanitize=thread"
+      - name: Cancel run on failure
+        if: failure()
+        uses: ./.github/actions/cancel-on-failure
+        with:
+          job-name: sanitizers (tsan)
+
+  # The check to require. A skipped job reports success and satisfies a
+  # required check, so neither leg can be required directly: TSan is skipped
+  # by design on most PRs, and a skipped job also reports under its
+  # unexpanded name. This job always runs, needs both legs and `changes`,
+  # and fails when the sanitizer work did not actually pass: a leg that
+  # reports `failure` or `cancelled`, `changes` not succeeding (the legs are
+  # then skipped through `needs` and nothing was checked), or a leg that
+  # this event should have run reporting `skipped`, which means the leg's
+  # `if:` and this job disagree and the workflow is misconfigured.
+  #
+  # `cancelled` counts as failure on purpose. The cancel-on-failure step
+  # cancels the whole run when a leg fails, and the run-level cancellation
+  # races the failing job's own conclusion, so the culprit usually ends up
+  # marked `cancelled` like its victims (the push run for #684 on 2026-09-06
+  # is one: `test (tsan)` cancelled, `test (asan)` success). A gate that
+  # excused `cancelled` would excuse most sanitizer failures. A run a person
+  # cancelled is red too, correctly: the sanitizers did not pass on it.
+  #
+  # `always()` and not `!cancelled()`: after the cancel-on-failure step
+  # cancels the run, only `always()` still starts this job. With
+  # `!cancelled()` it would be skipped, a skipped job reports success, and
+  # the required check would turn green on exactly the runs it exists for.
+  #
+  # The summary is the other half of #688. It names each leg's result and,
+  # for a leg that did not run, why, so a green gate on a PR where TSan was
+  # not asked reads as "ASan passed, TSan not asked" and never as "the
+  # sanitizers passed". On a run that is no verdict for its commit the job
+  # still runs, under the suffixed name `changes` computed, and reports that
+  # nothing was evaluated; it must not skip there, because a skipped job's
+  # name expression is never evaluated (see `changes`). The name falls back
+  # to `sanitizer-gate` when `changes` produced no output, which is the case
+  # the gate then fails on.
+  sanitizer-gate:
+    name: ${{ needs.changes.outputs.gate-name || 'sanitizer-gate' }}
+    needs: [changes, test-asan, test-tsan]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Report which legs ran and fail unless the ones that ran passed
+        env:
+          VERDICT: ${{ needs.changes.outputs.verdict }}
+          EVENT: ${{ github.event_name }}
+          SAME_REPO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'run-quality') }}
+          DISPATCH_SANITIZER: ${{ inputs.run-sanitizer }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          ASAN_RESULT: ${{ needs.test-asan.result }}
+          TSAN_RESULT: ${{ needs.test-tsan.result }}
+          TSAN_RELEVANT: ${{ needs.changes.outputs.tsan-relevant }}
+          TSAN_REASON: ${{ needs.changes.outputs.tsan-reason }}
+        run: |
+          if [ "$VERDICT" = "false" ]; then
+            {
+              echo "## Sanitizer gate: not a verdict"
+              echo
+              echo "This run was started by a label other than run-quality. The sanitizer legs were skipped because the run for this commit's opened, synchronize or reopened event already evaluated them; this job runs under a different check name so that it cannot stand in for that run's sanitizer-gate."
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # Which legs this event should have run; mirrors the legs' `if:`.
+          expect_asan=false
+          expect_tsan=false
+          not_run_reason=""
+          case "$EVENT" in
+            push|schedule)
+              expect_asan=true
+              expect_tsan=true
+              ;;
+            workflow_dispatch)
+              if [ "$DISPATCH_SANITIZER" = "true" ]; then
+                expect_asan=true
+                expect_tsan=true
+              else
+                not_run_reason="workflow_dispatch with run-sanitizer=false"
+              fi
+              ;;
+            pull_request)
+              if [ "$SAME_REPO" = "true" ]; then
+                expect_asan=true
+                if [ "$LABELLED" = "true" ] || [ "$TSAN_RELEVANT" = "true" ]; then
+                  expect_tsan=true
+                fi
+              else
+                not_run_reason="fork PR: sanitizer legs never run fork code (self-hosted runner, unlocked CI keychain)"
+              fi
+              ;;
+          esac
+          if [ "$LABELLED" = "true" ]; then
+            tsan_why="run-quality label"
+          elif [ -n "$TSAN_REASON" ]; then
+            tsan_why="$TSAN_REASON"
+          else
+            tsan_why="not asked: no run-quality label, no concurrency primitive on the changed source lines, no package manifest or sanitizer workflow change"
+          fi
+
+          failed=0
+          # describe <leg> <result> <expected> <why> -> appends one table row
+          # and records a failure where the row is not a pass or a legitimate
+          # skip.
+          describe() {
+            local leg="$1" result="$2" expected="$3" why="$4" cell
+            case "$result" in
+              success)
+                cell="passed ($why)"
+                ;;
+              failure)
+                cell="FAILED"
+                failed=1
+                ;;
+              cancelled)
+                cell="CANCELLED: a sanitizer failure cancels the run, so this counts as a failure, not as a cancel by a person"
+                failed=1
+                ;;
+              skipped)
+                if [ "$expected" = "true" ]; then
+                  cell="SKIPPED although this event should have run it: the leg's if: and this gate disagree, fix the workflow"
+                  failed=1
+                else
+                  cell="not run: ${not_run_reason:-$why}"
+                fi
+                ;;
+              *)
+                cell="result '$result' not understood"
+                failed=1
+                ;;
+            esac
+            printf '| %s | %s |\n' "$leg" "$cell" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+
+          {
+            echo "## Sanitizer gate"
+            echo
+            echo "| leg | result |"
+            echo "|---|---|"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            printf '| changes | %s: the legs were skipped through needs, nothing was checked |\n' "$CHANGES_RESULT" | tee -a "$GITHUB_STEP_SUMMARY"
+            failed=1
+          fi
+          describe "ASan" "$ASAN_RESULT" "$expect_asan" "runs on every same-repo PR and on push, schedule and dispatch"
+          describe "TSan" "$TSAN_RESULT" "$expect_tsan" "$tsan_why"
+          {
+            echo
+            echo "A leg listed as not run is absent evidence, not passing evidence. ASan finds memory errors, not data races; only TSan does, and TSan is asked on the run-quality label, on concurrency primitives in the changed source lines, and on package manifest or workflow changes (issue #688)."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$failed" -ne 0 ]; then
+            echo "::error title=Sanitizer gate failed::A sanitizer leg failed or was cancelled, or the legs could not run; see the job summary."
+            exit 1
+          fi
 
   quality-baseline:
-    # Same PR gate as test-sanitizer: this job is GH-hosted, but the fork
-    # token would be read-only (403 on cancel-on-failure), and one label
-    # driving both jobs must mean one consistent audience.
+    # The label arm of test-tsan's PR gate, without its diff arms. Same
+    # audience: this job is GH-hosted, but the fork token would be read-only
+    # (403 on cancel-on-failure), and one label driving both jobs must mean
+    # one consistent audience. No diff arm: this job downloads ~1 GB of model
+    # weights to measure WER/DER against committed fixtures, which a new lock
+    # or queue cannot move, so a concurrency change is no reason to pay for
+    # it.
     if: |
       github.event_name == 'push' ||
       github.event_name == 'schedule' ||
