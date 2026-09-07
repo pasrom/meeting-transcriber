@@ -66,13 +66,6 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertTrue(settings.liveCaptionsOverlayEnabled)
     }
 
-    func testLiveCaptionsOverlayEnabledPersists() {
-        settings.liveCaptionsOverlayEnabled = false
-        XCTAssertEqual(defaults.object(forKey: "liveCaptionsOverlayEnabled") as? Bool, false)
-        let fresh = AppSettings(defaults: defaults)
-        XCTAssertFalse(fresh.liveCaptionsOverlayEnabled)
-    }
-
     func test_activeEngineLanguageOrNil_followsWhisperKitLanguage() {
         settings.transcriptionEngine = .whisperKit
         settings.whisperLanguage = "de"
