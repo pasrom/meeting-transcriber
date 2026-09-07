@@ -512,39 +512,70 @@ jobs:
             exit 0
           fi
           # Which legs this event should have run; mirrors the legs' `if:`.
+          # Whether a leg was expected and why are decided together, in one
+          # arm per event. They used to be decided in two switches over the
+          # same variable, and the two disagreed: the why-chain knew only the
+          # pull_request case, so a push or nightly run, where TSan is asked
+          # unconditionally and the diff step never runs, fell through to the
+          # "not asked" wording and printed the self-contradicting row
+          # "passed (not asked: ...)". One arm per event is what keeps the
+          # verdict and its explanation from drifting apart again.
           expect_asan=false
           expect_tsan=false
           not_run_reason=""
+          tsan_why=""
           case "$EVENT" in
             push|schedule)
               expect_asan=true
               expect_tsan=true
+              tsan_why="asked unconditionally on $EVENT"
               ;;
             workflow_dispatch)
+              tsan_why="workflow_dispatch with run-sanitizer=$DISPATCH_SANITIZER"
               if [ "$DISPATCH_SANITIZER" = "true" ]; then
                 expect_asan=true
                 expect_tsan=true
               else
-                not_run_reason="workflow_dispatch with run-sanitizer=false"
+                not_run_reason="$tsan_why"
               fi
               ;;
             pull_request)
               if [ "$SAME_REPO" = "true" ]; then
                 expect_asan=true
+                # Both branches read tsan-relevant, never the reason text as a
+                # stand-in for it. Reading `-n "$TSAN_REASON"` here would be
+                # the same defect once more: the `changes` job writes the two
+                # outputs from one variable today, so they cannot disagree,
+                # but a future arm that sets the flag without a sentence would
+                # bring "passed (not asked: ...)" straight back.
                 if [ "$LABELLED" = "true" ] || [ "$TSAN_RELEVANT" = "true" ]; then
                   expect_tsan=true
                 fi
+                if [ "$LABELLED" = "true" ] && [ "$TSAN_RELEVANT" = "true" ]; then
+                  tsan_why="run-quality label; $TSAN_REASON"
+                elif [ "$LABELLED" = "true" ]; then
+                  tsan_why="run-quality label"
+                elif [ "$TSAN_RELEVANT" = "true" ]; then
+                  tsan_why="$TSAN_REASON"
+                else
+                  tsan_why="not asked: no run-quality label, no concurrency primitive on the changed source lines, no package manifest or sanitizer workflow change"
+                fi
               else
                 not_run_reason="fork PR: sanitizer legs never run fork code (self-hosted runner, unlocked CI keychain)"
+                tsan_why="$not_run_reason"
               fi
               ;;
+            *)
+              tsan_why="event '$EVENT' not understood"
+              ;;
           esac
-          if [ "$LABELLED" = "true" ]; then
-            tsan_why="run-quality label"
-          elif [ -n "$TSAN_REASON" ]; then
-            tsan_why="$TSAN_REASON"
-          else
-            tsan_why="not asked: no run-quality label, no concurrency primitive on the changed source lines, no package manifest or sanitizer workflow change"
+          # Every arm above leaves a sentence behind. A leg reporting success
+          # with no reason would print an empty "passed ()", which reads like a
+          # bug in the gate rather than an answer, and the arms that cannot run
+          # a leg today are exactly the ones a later change to the fork guard
+          # or the trigger list would make reachable.
+          if [ -z "$tsan_why" ]; then
+            tsan_why="no reason recorded, which is a bug in this job"
           fi
 
           failed=0
