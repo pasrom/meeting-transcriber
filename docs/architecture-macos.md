@@ -495,7 +495,7 @@ Full design rationale (why the two remedies can't compose, the model provisionin
 
 ## Live Captions (PoC)
 
-Optional in-meeting caption overlay, "Show partial transcripts during recording" in Settings →
+Optional in-meeting caption overlay, "Enable live transcription during recording" in Settings →
 Transcribe (`AppSettings.liveTranscriptionEnabled`, off by default; enabling downloads a ~0.6 GB
 model on first use behind a consent alert). Nested "Show caption overlay"
 (`AppSettings.liveCaptionsOverlayEnabled`, default on) hides `LiveCaptionsOverlay` without
