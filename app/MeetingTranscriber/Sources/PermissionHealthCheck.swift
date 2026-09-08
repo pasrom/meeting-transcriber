@@ -427,22 +427,83 @@ enum PermissionHealthCheck {
 
     // MARK: - Accessibility (pure, testable)
 
+    /// What the AX probe actually learned. Three cases and not a `Bool`, because
+    /// the probe reaches ACROSS PROCESSES and its failures are therefore not all
+    /// about us: only one of them is evidence about our own grant.
+    enum AccessibilityProbe: Equatable {
+        /// The API answered. Says our grant works.
+        case responded
+        /// The AX API is disabled for us (`kAXErrorAPIDisabled`). The only
+        /// outcome that is evidence our own grant is not working.
+        case apiDisabled
+        /// The call failed for a reason that has not been shown to be about our
+        /// permission. Carries the raw code for the log, so the next occurrence
+        /// can be attributed instead of guessed.
+        case inconclusive(AXError)
+
+        /// Compact, PII-free token for the diagnostic log. The raw `AXError`
+        /// value is spelled out because the name alone ("inconclusive") is what
+        /// the old `Bool` already told us; the number is the part that says
+        /// which failure it was.
+        var logToken: String {
+            switch self {
+            case .responded: "responded"
+            case .apiDisabled: "apiDisabled"
+            case let .inconclusive(err): "inconclusive(AXError \(err.rawValue))"
+            }
+        }
+    }
+
     /// Pure decision function for Accessibility permission state.
     ///
     /// - `trusted`: whether `AXIsProcessTrusted()` returns true.
-    /// - `probeSucceeds`: whether a concrete AX API call (e.g. reading the focused app of
-    ///   `AXUIElementCreateSystemWide`) returns `.success`.
+    /// - `probe`: what a concrete AX API call learned.
+    ///
+    /// **An inconclusive probe reports `.healthy`, not `.broken`.** This used to
+    /// be a `Bool` where every non-success collapsed to "broken", and the
+    /// reported consequence was a false alarm telling users to toggle a
+    /// permission that was fine: one process, no user action, and the verdict
+    /// flipping healthy -> broken -> healthy inside 70 seconds. A revoked grant
+    /// does not repair itself in a minute.
+    ///
+    /// `.broken` exists for exactly one situation, TCC saying yes while the API
+    /// says no, and `AXIsProcessTrusted()` is already the system's own answer
+    /// about our grant. So the probe only has to catch that contradiction, which
+    /// is `.apiDisabled`.
     static func checkAccessibility(
         trusted: Bool,
-        probeSucceeds: Bool,
+        probe: AccessibilityProbe,
     ) -> PermissionStatus {
         if !trusted { return .denied }
-        return probeSucceeds ? .healthy : .broken
+        switch probe {
+        case .responded, .inconclusive: return .healthy
+        case .apiDisabled: return .broken
+        }
+    }
+
+    /// What one `AXError` says about *our* Accessibility access. Kept apart from
+    /// the call that produces it because this mapping is the decision the fix
+    /// turns on, and welding it to an I/O call would leave it untestable.
+    ///
+    /// `.notImplemented` takes the default branch deliberately: Apple documents
+    /// it as "can be returned if a PROCESS does not support the accessibility
+    /// API" — the process being asked, not us.
+    static func classify(_ err: AXError) -> AccessibilityProbe {
+        switch err {
+        // .noValue: nothing focused right now, but the API answered.
+        case .success, .noValue: .responded
+        case .apiDisabled: .apiDisabled
+        default: .inconclusive(err)
+        }
     }
 
     /// Probes the Accessibility API with a lightweight system-wide call.
-    /// Returns true if the call succeeds (and we either get a valid attribute or `noValue`).
-    static func probeAccessibility() -> Bool {
+    ///
+    /// `kAXFocusedApplicationAttribute` on the system-wide element is a question
+    /// put to whichever app currently has focus, so its failure modes belong to
+    /// that app as much as to us — which is what `AccessibilityProbe` separates.
+    /// Everything except the call itself lives in `classify`.
+    static func probeAccessibility() -> AccessibilityProbe {
         let systemWide = AXUIElementCreateSystemWide()
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(
@@ -450,9 +511,7 @@ enum PermissionHealthCheck {
             kAXFocusedApplicationAttribute as CFString,
             &value,
         )
-        // .success: got the focused app. .noValue: no focused app right now, but the API worked.
-        // Any other error (e.g. .cannotComplete, .apiDisabled) indicates AX isn't actually granted.
-        return err == .success || err == .noValue
+        return classify(err)
     }
 
     static func checkAccessibilityLive() -> PermissionStatus {
@@ -462,8 +521,11 @@ enum PermissionHealthCheck {
             return .denied
         }
         let probe = probeAccessibility()
-        let r = checkAccessibility(trusted: trusted, probeSucceeds: probe)
-        debugLog("checkAccessibilityLive: trusted=true probe=\(probe) → \(r)")
+        let r = checkAccessibility(trusted: trusted, probe: probe)
+        // The raw AXError is logged, not just the verdict. Without it the false
+        // alarm above could only be diagnosed by noticing the timing, because a
+        // `Bool` had already thrown away the one fact that explains it.
+        debugLog("checkAccessibilityLive: trusted=true probe=\(probe.logToken) → \(r)")
         return r
     }
 

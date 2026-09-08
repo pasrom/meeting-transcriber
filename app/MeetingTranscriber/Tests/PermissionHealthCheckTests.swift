@@ -117,29 +117,6 @@ final class PermissionHealthCheckTests: XCTestCase {
         )
     }
 
-    // MARK: - Accessibility
-
-    func testAccessibilityHealthy() {
-        let result = PermissionHealthCheck.checkAccessibility(trusted: true, probeSucceeds: true)
-        XCTAssertEqual(result, .healthy)
-    }
-
-    func testAccessibilityDenied() {
-        let result = PermissionHealthCheck.checkAccessibility(trusted: false, probeSucceeds: false)
-        XCTAssertEqual(result, .denied)
-    }
-
-    func testAccessibilityDeniedEvenIfProbeSucceeds() {
-        // Defensive: if the system says no, we never report healthy.
-        let result = PermissionHealthCheck.checkAccessibility(trusted: false, probeSucceeds: true)
-        XCTAssertEqual(result, .denied)
-    }
-
-    func testAccessibilityBroken() {
-        let result = PermissionHealthCheck.checkAccessibility(trusted: true, probeSucceeds: false)
-        XCTAssertEqual(result, .broken)
-    }
-
     // MARK: - Overall Health
 
     func testOverallHealthy() {

@@ -220,7 +220,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `UpdateChecker` checks GitHub releases for newer versions, shows badge on menu bar icon.
 
 **Permission health check:**
-- `PermissionHealthCheck` verifies each TCC permission by combining the system verdict with a live probe. Each resolves to `PermissionStatus` (`.healthy | .denied | .broken | .notDetermined`). `.broken` means TCC says allowed but the probe disagrees — fix is to toggle the permission off and on in System Settings.
+- `PermissionHealthCheck` verifies each TCC permission by combining the system verdict with a live probe. Each resolves to `PermissionStatus` (`.healthy | .denied | .broken | .notDetermined`). `.broken` means TCC says allowed but the probe disagrees — fix is to toggle the permission off and on in System Settings. The Accessibility probe is a cross-process call, so only `kAXErrorAPIDisabled` counts as `.broken`; `.success` and `.noValue` are `AccessibilityProbe.responded`, and every other AXError is `.inconclusive` and reports healthy. Treating those as broken produced a notification telling users to toggle a permission that was working. `kAXErrorNotImplemented` stays inconclusive on purpose: Apple documents it as the asked process lacking AX support. The raw code is appended to `/tmp/mt-permission.log`, which `debugLog` truncates per process.
 - `WatchLoop` runs the check on startup; `AppState` re-runs on app activation.
 - When unhealthy: `MenuBarIcon` composites a red "!" badge over the current icon (non-template, stays red in dark mode). `BadgeKind.compute()` returns `.error` when idle with a problem. A deduped notification is posted via `NotificationManager`.
 
