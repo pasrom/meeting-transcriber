@@ -532,10 +532,13 @@ else
         cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
     fi
 
-    # Re-sign with our stable identity. run_app.sh signs with whatever
-    # `find-identity -v | head -1` returns (often ad-hoc on CI hosts), so
-    # without re-signing TCC would see a different cert SHA on every
-    # rebuild and lose the grant. CI path uses the imported Developer ID;
+    # Re-sign with our stable identity. run_app.sh signs with what
+    # choose_signing_identity picks from the build host's keychain: the
+    # certificate the bundle already carried, else a Developer ID, else the
+    # first identity listed, and nothing at all on an empty keychain. That
+    # choice follows the host's keychain while this lane's grants follow one
+    # certificate, so the deployed copy is put on that certificate here
+    # whatever the build chose. CI path uses the imported Developer ID;
     # local-dev path falls back to the self-signed cert from
     # setup-self-hosted-runner.sh. resign_deployed_bundle carries the dev
     # entitlements through that re-sign, and skips it entirely when the build
