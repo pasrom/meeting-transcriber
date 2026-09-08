@@ -184,6 +184,102 @@ bundle_signing_cert_sha1() {
     printf '%s' "$hash"
 }
 
+# choose_signing_identity <app-bundle>
+#
+# Which certificate to sign a dev bundle with so TCC keeps the grants it has
+# already made against that bundle. Sets three globals:
+#   CHOSEN_IDENTITY          SHA-1 of the certificate to sign with; empty when
+#                            the keychain holds no codesigning identity. What
+#                            that means for the bundle is each caller's call
+#   CHOSEN_IDENTITY_REASON   the rule that chose it, one phrase for the log
+#   CHOSEN_IDENTITY_LISTING  its `security find-identity` line(s), leading
+#                            whitespace removed, so the log can name the
+#                            certificate instead of only hashing it
+#
+# Globals rather than stdout, as with prepare_signing: three values, and one
+# keychain query behind all of them.
+#
+# Call it BEFORE the bundle is touched. The certificate of the previous build
+# lives in the main executable's embedded signature, and copying a freshly
+# linked binary over that executable leaves an ad-hoc signature with no
+# certificate in it. Measured: the intact bundle yields the hash, the same
+# bundle after the copy yields nothing. Called after the copy this function is
+# not wrong, only blind: it can never take rule 1 and falls through to rules 2
+# and 3, which costs the renewal case described at rule 1 and, on a keychain
+# without a Developer ID, moves a bundle whose certificate was fine to
+# whatever happens to be listed first.
+#
+# TCC binds a grant to the signing certificate's leaf SHA-1, so the choice made
+# here decides whether the dev app keeps its microphone and screen-recording
+# grants or silently loses all of them: the rebuilt app then records nothing,
+# with no error anywhere and no prompt, because from TCC's point of view it is
+# a different application. `head -1` over the keychain made that depend on
+# listing order, and the order changed under us the day an Apple Development
+# certificate was added. Hence, in order:
+#
+#   1. Keep the certificate the bundle already carries, while it is still in
+#      the keychain AND it is either a Developer ID one or there is no
+#      Developer ID to move to. Two valid Developer ID Application
+#      certificates (the overlap around a renewal) would otherwise put us back
+#      to "whichever is listed first", and switching between them voids the
+#      grants just as thoroughly as switching issuer would. The second half of
+#      the condition matters: a bundle signed with Apple Development before
+#      this rule existed would be pinned to the wrong certificate forever by
+#      "keep what is there" alone, with the only escape being to delete the
+#      bundle by hand. With it, such a bundle moves to Developer ID by itself.
+#   2. Otherwise the Developer ID Application certificate, the one the grants
+#      on a maintainer's machine were made against.
+#   3. Otherwise the first identity listed, with a note that grants made
+#      against a different certificate will not apply. A self-hosted runner
+#      holding only its self-signed certificate lands here; its lanes re-sign
+#      the deployed copy with dev_signing_identity anyway, so this choice
+#      decides nothing there.
+#
+# Only lines of the form `N) <sha1> "<name>"` count as identities. An empty
+# keychain answers `0 valid identities found`, and `head -1 | awk '{print $2}'`
+# over that used to hand the word `valid` to codesign as the identity.
+#
+# shellcheck disable=SC2034  # CHOSEN_IDENTITY* are read by callers
+choose_signing_identity() {
+    local bundle="$1" previous identities devid
+    CHOSEN_IDENTITY=""
+    CHOSEN_IDENTITY_REASON=""
+    CHOSEN_IDENTITY_LISTING=""
+
+    previous="$(bundle_signing_cert_sha1 "$bundle")"
+    # `|| true`: a keychain that cannot be read is a normal answer (empty), not
+    # a failure, the trap documented at profile_for. The awk keeps only real
+    # identity lines, so the trailer cannot be mistaken for one; `length` rather
+    # than a `{40}` interval because the system awk does not promise the latter.
+    identities="$(security find-identity -v -p codesigning 2>/dev/null \
+        | awk '$1 ~ /^[0-9]+\)$/ && length($2) == 40 && $2 ~ /^[0-9A-Fa-f]+$/ { sub(/^[ \t]+/, ""); print }' \
+        || true)"
+    devid="$(printf '%s\n' "$identities" | grep 'Developer ID Application' | head -1 | awk '{print $2}' || true)"
+
+    if [ -n "$previous" ] && printf '%s\n' "$identities" | grep -q "$previous"; then
+        if [ -z "$devid" ] \
+            || printf '%s\n' "$identities" | grep "$previous" | grep -q 'Developer ID Application'; then
+            CHOSEN_IDENTITY="$previous"
+            CHOSEN_IDENTITY_REASON="kept the certificate this bundle already carried"
+        fi
+    fi
+    if [ -z "$CHOSEN_IDENTITY" ] && [ -n "$devid" ]; then
+        CHOSEN_IDENTITY="$devid"
+        CHOSEN_IDENTITY_REASON="chose the Developer ID Application certificate"
+    fi
+    if [ -z "$CHOSEN_IDENTITY" ]; then
+        CHOSEN_IDENTITY="$(printf '%s\n' "$identities" | head -1 | awk '{print $2}' || true)"
+        if [ -n "$CHOSEN_IDENTITY" ]; then
+            CHOSEN_IDENTITY_REASON="no Developer ID Application certificate exists, took the first identity"
+            echo "  NOTE: TCC grants made against a different certificate will not apply to this build."
+        fi
+    fi
+    if [ -n "$CHOSEN_IDENTITY" ]; then
+        CHOSEN_IDENTITY_LISTING="$(printf '%s\n' "$identities" | grep "$CHOSEN_IDENTITY" || true)"
+    fi
+    return 0
+}
+
 # identity_sha1 <identity> [keychain]
 #
 # The same hash for an identity held as either a 40-hex SHA-1 (what the lanes
