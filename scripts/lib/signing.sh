@@ -411,10 +411,17 @@ dev_signing_identity() {
 # key is what makes e2e-browser.sh's pairing check fail while pointing at
 # prepare_signing, which did its job correctly.
 #
-# Validity is part of the question, not a detail: test_rpc.sh copies a fresh
-# binary into an already-signed bundle, so the certificate still matches while the
-# signature no longer does. Keeping that signature would launch a bundle macOS
-# refuses to run.
+# Validity is part of the question, not a detail. The certificate is read from
+# the executable's own signature and says who signed it, not that the bundle
+# still matches what was signed: anything changed under the seal afterwards, a
+# resource or the plist, leaves the certificate readable and the signature
+# invalid, and keeping it would launch a bundle macOS refuses to run.
+# (test_rpc.sh's copy of a fresh binary into the signed bundle is NOT that
+# case: the copy replaces the very executable the certificate is read from,
+# so bundle_signing_cert_sha1 answers nothing and the hash comparison alone
+# sends it to the re-sign. Measured: after the copy `codesign -d` reports an
+# ad-hoc signature and extracts no certificate, and `--verify` fails with
+# "code has no resources but signature indicates they must be present".)
 #
 # The keychain is a parameter rather than pass-through codesign flags, so no
 # caller has to expand a possibly-empty array under `set -u`.

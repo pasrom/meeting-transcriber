@@ -200,9 +200,13 @@ test_resign_keeps_a_signature_by_the_same_certificate() {
     return "$rc"
 }
 
-# scripts/test_rpc.sh copies a fresh binary into an already-signed bundle, so the
-# certificate still matches while the signature no longer does. Keeping it would
-# launch a bundle macOS refuses to run, so validity is part of the skip question.
+# A bundle can still name the requested certificate while its signature no longer
+# holds: the certificate sits in the executable's own signature, and the seal over
+# the resources and the plist breaks when anything under it changes after signing.
+# Keeping such a signature would launch a bundle macOS refuses to run, so validity
+# is part of the skip question. (test_rpc.sh's fresh-binary copy is not this case:
+# it replaces the executable the certificate is read from, and the hash comparison
+# already sends that to the re-sign; see resign_deployed_bundle.)
 test_resign_replaces_a_stale_signature_by_the_same_certificate() {
     local workdir bundle status hash rc=0
     workdir="$(mktemp -d)"
