@@ -79,6 +79,40 @@ final class AppSettingsOutputDirectoryTests: XCTestCase {
         XCTAssertNotNil(settings.customOutputDirBookmark)
     }
 
+    /// A pick whose bookmark cannot be made leaves the previous choice in place.
+    /// Reachable: `bookmarkData(.withSecurityScope)` throws for a path that no
+    /// longer exists, and the folder can go between the panel closing and the
+    /// write, or a caller can hand over a stale URL. What has to hold is that
+    /// the failure does not read as "no folder chosen": a caller that assigned
+    /// `try? makeBookmark(...)` would clear the bookmark and route the next
+    /// recording to the default folder as if that were the user's choice, which
+    /// the resolver would then, correctly, not report.
+    ///
+    /// Honest about what this does not do: the behaviour it pins predates this
+    /// branch, since the previous shape returned early from a `guard let` and
+    /// so kept the choice too. This test therefore stays green against the code
+    /// before the change, and guards a future regression rather than proving
+    /// the change. The change's own delta is the log line, which is not
+    /// asserted: reading it back needs an `OSLogStore` query whose delivery is
+    /// asynchronous, which would buy a flaky test for a diagnostic.
+    func testAChoiceThatCannotBeBookmarkedLeavesThePreviousChoiceInPlace() throws {
+        let previous = try makeTempDirectory(prefix: "ChosenOutputDir")
+        settings.setCustomOutputDir(previous)
+        let bookmarkBefore = try XCTUnwrap(settings.customOutputDirBookmark)
+        let gone = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ChosenOutputDir-never-created-\(UUID().uuidString)", isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path), "precondition")
+
+        settings.setCustomOutputDir(gone)
+
+        XCTAssertEqual(settings.customOutputDirBookmark, bookmarkBefore, "the previous choice survives a failed pick")
+        XCTAssertEqual(
+            settings.customOutputDir?.resolvingSymlinksInPath().path,
+            previous.resolvingSymlinksInPath().path,
+            "and still resolves",
+        )
+    }
+
     /// The temp directory is `/var/folders/...`, a symlink into `/private`;
     /// bookmark bytes record the canonical form.
     private static func withoutPrivatePrefix(_ path: String) -> String {
