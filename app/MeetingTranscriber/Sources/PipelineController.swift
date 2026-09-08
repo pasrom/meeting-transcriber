@@ -193,7 +193,11 @@ final class PipelineController {
         switch settings.protocolProvider {
         #if !APPSTORE
             case .claudeCLI:
-                ClaudeCLIProtocolGenerator(claudeBin: settings.claudeBin, language: settings.protocolLanguage)
+                ClaudeCLIProtocolGenerator(
+                    claudeBin: settings.claudeBin,
+                    language: settings.protocolLanguage,
+                    anthropicAPIKey: settings.claudeAPIKey.isEmpty ? nil : settings.claudeAPIKey,
+                )
         #endif
 
         case .openAICompatible:

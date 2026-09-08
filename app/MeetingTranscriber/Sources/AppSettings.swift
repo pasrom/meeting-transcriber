@@ -114,6 +114,13 @@ final class AppSettings {
     /// prompt that blocks the run.
     @ObservationIgnored private let apiKeyAccount: String
 
+    /// Keychain account backing `claudeAPIKey`, same injection reasoning as
+    /// `apiKeyAccount` above. Deliberately its own account name, distinct
+    /// from any Keychain item an external tool on the same machine might
+    /// use for its own Anthropic key — the user opts a key into this app
+    /// specifically, rather than reusing a credential another tool manages.
+    @ObservationIgnored private let claudeAPIKeyAccount: String
+
     // MARK: - Apps to Watch
 
     var watchTeams: Bool {
@@ -471,6 +478,22 @@ final class AppSettings {
         }
     }
 
+    #if !APPSTORE
+        /// API key for the Claude CLI protocol generator, entered by the user
+        /// in Settings → Protocol Generation. Empty means use the CLI's own
+        /// `claude login` session; this is never populated automatically.
+        var claudeAPIKey: String {
+            get { KeychainHelper.read(key: claudeAPIKeyAccount) ?? "" }
+            set {
+                if newValue.isEmpty {
+                    KeychainHelper.delete(key: claudeAPIKeyAccount)
+                } else {
+                    KeychainHelper.save(key: claudeAPIKeyAccount, value: newValue)
+                }
+            }
+        }
+    #endif
+
     // MARK: - Output Directory
 
     /// Security-scoped output-dir bookmark. Stored so `@Observable` can track it.
@@ -521,10 +544,12 @@ final class AppSettings {
     init(
         defaults: UserDefaults = .standard,
         apiKeyAccount: String = "openAIAPIKey",
+        claudeAPIKeyAccount: String = "claudeAPIKey",
         defaultOutputDir: URL = AppPaths.downloadsProtocolsDir,
     ) {
         self.defaults = defaults
         self.apiKeyAccount = apiKeyAccount
+        self.claudeAPIKeyAccount = claudeAPIKeyAccount
         self.defaultOutputDir = defaultOutputDir
 
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
