@@ -122,6 +122,16 @@ if [ -n "$SIGNING_IDENTITY" ]; then
     codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$SIGNING_ENTITLEMENTS" "$APP_BUNDLE" \
         || { echo "codesign failed for $APP_BUNDLE (identity $SIGNING_IDENTITY, entitlements $SIGNING_ENTITLEMENTS)" >&2; exit 1; }
     echo "  Signed with: $SIGNING_IDENTITY (+ entitlements)"
+else
+    # Not fatal: a contributor without any certificate can still run the app.
+    # But not silent either. This used to die inside codesign by accident (the
+    # keychain's `0 valid identities found` trailer handed the word `valid`
+    # over as the identity), and an honest empty answer would otherwise pass
+    # without a word, leaving a bundle that loses every TCC grant at the next
+    # rebuild.
+    echo "  WARNING: no codesigning identity in the keychain; this bundle is not signed"
+    echo "  with a certificate. TCC binds its grants to that certificate, so without one"
+    echo "  no grant made to this build survives the next rebuild."
 fi
 verify_signing "$APP_BUNDLE"
 
