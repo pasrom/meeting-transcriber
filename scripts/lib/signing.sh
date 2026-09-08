@@ -94,8 +94,7 @@ prepare_signing() {
     # profiles list the Developer ID Application certificate, so prefer that
     # over whatever `security find-identity` happens to return first.
     local devid
-    devid="$(security find-identity -v -p codesigning 2>/dev/null \
-        | grep "Developer ID Application" | head -1 | awk '{print $2}')" || true
+    devid="$(codesigning_identities | identity_fields | first_developer_id)"
     if [ -n "$devid" ]; then
         SIGNING_IDENTITY="$devid"
     else
@@ -235,30 +234,28 @@ bundle_signing_cert_sha1() {
 #      the deployed copy with dev_signing_identity anyway, so this choice
 #      decides nothing there.
 #
-# Only lines of the form `N) <sha1> "<name>"` count as identities. An empty
-# keychain answers `0 valid identities found`, and `head -1 | awk '{print $2}'`
-# over that used to hand the word `valid` to codesign as the identity.
+# The identities are read through codesigning_identities, identity_fields and
+# first_developer_id below, so this and prepare_signing answer "which one is
+# the Developer ID" the same way.
 #
 # shellcheck disable=SC2034  # CHOSEN_IDENTITY* are read by callers
 choose_signing_identity() {
-    local bundle="$1" previous identities devid
+    local bundle="$1" previous listing fields devid carried
     CHOSEN_IDENTITY=""
     CHOSEN_IDENTITY_REASON=""
     CHOSEN_IDENTITY_LISTING=""
 
     previous="$(bundle_signing_cert_sha1 "$bundle")"
-    # `|| true`: a keychain that cannot be read is a normal answer (empty), not
-    # a failure, the trap documented at profile_for. The awk keeps only real
-    # identity lines, so the trailer cannot be mistaken for one; `length` rather
-    # than a `{40}` interval because the system awk does not promise the latter.
-    identities="$(security find-identity -v -p codesigning 2>/dev/null \
-        | awk '$1 ~ /^[0-9]+\)$/ && length($2) == 40 && $2 ~ /^[0-9A-Fa-f]+$/ { sub(/^[ \t]+/, ""); print }' \
-        || true)"
-    devid="$(printf '%s\n' "$identities" | grep 'Developer ID Application' | head -1 | awk '{print $2}' || true)"
+    listing="$(codesigning_identities)"
+    fields="$(printf '%s\n' "$listing" | identity_fields)"
+    devid="$(printf '%s\n' "$fields" | first_developer_id)"
+    # The carried certificate's record: empty when the bundle is unsigned or
+    # the certificate has left the keychain, and either way there is nothing
+    # to keep.
+    carried="$(printf '%s\n' "$fields" | awk -v h="$previous" 'h != "" && $1 == h')"
 
-    if [ -n "$previous" ] && printf '%s\n' "$identities" | grep -q "$previous"; then
-        if [ -z "$devid" ] \
-            || printf '%s\n' "$identities" | grep "$previous" | grep -q 'Developer ID Application'; then
+    if [ -n "$carried" ]; then
+        if [ -z "$devid" ] || [ -n "$(printf '%s\n' "$carried" | first_developer_id)" ]; then
             CHOSEN_IDENTITY="$previous"
             CHOSEN_IDENTITY_REASON="kept the certificate this bundle already carried"
         fi
@@ -268,16 +265,63 @@ choose_signing_identity() {
         CHOSEN_IDENTITY_REASON="chose the Developer ID Application certificate"
     fi
     if [ -z "$CHOSEN_IDENTITY" ]; then
-        CHOSEN_IDENTITY="$(printf '%s\n' "$identities" | head -1 | awk '{print $2}' || true)"
+        CHOSEN_IDENTITY="$(printf '%s\n' "$fields" | awk 'NF { print $1; exit }')"
         if [ -n "$CHOSEN_IDENTITY" ]; then
             CHOSEN_IDENTITY_REASON="no Developer ID Application certificate exists, took the first identity"
             echo "  NOTE: TCC grants made against a different certificate will not apply to this build."
         fi
     fi
     if [ -n "$CHOSEN_IDENTITY" ]; then
-        CHOSEN_IDENTITY_LISTING="$(printf '%s\n' "$identities" | grep "$CHOSEN_IDENTITY" || true)"
+        CHOSEN_IDENTITY_LISTING="$(printf '%s\n' "$listing" | awk -v h="$CHOSEN_IDENTITY" 'toupper($2) == h')"
     fi
     return 0
+}
+
+# codesigning_identities → what `security find-identity -v -p codesigning`
+# lists, one record per line, leading whitespace removed.
+#
+# Only records of the form `N) <sha1> "<name>"` count. An empty keychain
+# answers `0 valid identities found`, and `head -1 | awk '{print $2}'` over
+# that used to hand the word `valid` to codesign as the identity. The name is
+# required along with the hash, not merely described: the rules classify an
+# identity by its name and the log prints it, so a record without one could
+# only ever reach the last-resort rule with nothing to say for itself. The
+# real tool never prints such a record, so the check costs nothing there and
+# keeps the shape stated here true in one place.
+#
+# `length` rather than a `{40}` interval because the system awk does not
+# promise the latter. `|| true`: a keychain that cannot be read is a normal
+# answer (empty), not a failure, the trap documented at profile_for.
+codesigning_identities() {
+    security find-identity -v -p codesigning 2>/dev/null \
+        | awk '$1 ~ /^[0-9]+\)$/ && length($2) == 40 && $2 ~ /^[0-9A-Fa-f]+$/ &&
+               $3 ~ /^"/ && $NF ~ /"$/ { sub(/^[ \t]+/, ""); print }' \
+        || true
+}
+
+# identity_fields: those records on stdin → `<SHA1> <name>` per line, the hash
+# upper-cased, the name without its quotes (everything between the first and
+# the last, so a name with spaces, parentheses or a quote inside survives).
+# The hash is then a whole field and the name starts at a fixed column, so a
+# rule compares the one exactly and anchors on the other, instead of grepping
+# the line, where a name that merely CONTAINS a phrase, or a hash that happens
+# to occur inside a name, would match as well.
+identity_fields() {
+    awk 'NF { name = $0; sub(/^[^"]*"/, "", name); sub(/"[^"]*$/, "", name)
+              print toupper($2) " " name }'
+}
+
+# first_developer_id: identity_fields records on stdin → SHA-1 of the first
+# whose name IS a Developer ID Application certificate's, i.e. begins with
+# `Developer ID Application: `, the form Apple issues (`Developer ID
+# Application: <holder> (<team>)`). Anchored on purpose, where identity_sha1
+# below is deliberately a substring: that one resolves a name the way codesign
+# does, this one decides which certificate the grants belong to, and a
+# self-signed certificate is named by whoever makes it (see
+# setup-self-hosted-runner.sh), so `Archive of Developer ID Application: ...`
+# listed first must not win. Column 42: forty hex digits and one space.
+first_developer_id() {
+    awk 'substr($0, 42) ~ /^Developer ID Application: / { print $1; exit }'
 }
 
 # identity_sha1 <identity> [keychain]

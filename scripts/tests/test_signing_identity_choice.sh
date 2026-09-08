@@ -19,6 +19,8 @@
 # the build, the keychain and codesign stubbed out, because the one thing the
 # function cannot check for itself is that a caller asks it BEFORE the copy
 # that destroys the answer.
+#
+# shellcheck disable=SC2329  # every test function is dispatched by name via run_test
 
 set -uo pipefail   # NOT -e: harness keeps running on test failure
 
@@ -79,6 +81,8 @@ _make_bundle() {
 # Anything but find-identity is refused, as no test expects it.
 #
 # Each identity is given as `<sha1> "<name>"`; the stub numbers them.
+#
+# shellcheck disable=SC2016  # the single-quoted strings ARE the stub's source; its $ must not expand here
 _write_security_stub() {
     local workdir="$1" line
     shift
@@ -425,12 +429,12 @@ test_an_empty_keychain_yields_no_identity_and_does_not_abort() {
 # copy, the script would sign with the Developer ID listed first and the
 # grants would go with the certificate it left.
 test_run_app_decides_before_it_replaces_the_executable() {
-    local workdir root carried status signed rc=0
+    local workdir carried status signed rc=0
     workdir="$(mktemp -d)"
-    root="$(_stage_dev_bundle_scripts "$workdir")" && carried="$(_make_leaf_cert "$workdir")" || {
+    if ! _stage_dev_bundle_scripts "$workdir" >/dev/null || ! carried="$(_make_leaf_cert "$workdir")"; then
         echo "  fixture failed: could not stage the scripts or create a test certificate" >&2
         rm -rf "$workdir"; return 1
-    }
+    fi
     _write_security_stub "$workdir" \
         "$DEVID_B \"Developer ID Application: Someone (TEAM)\"" \
         "$carried \"Developer ID Application: Someone (TEAM)\""
@@ -450,7 +454,108 @@ test_run_app_decides_before_it_replaces_the_executable() {
         echo "  certificate it carried was no longer there to be kept" >&2
         rc=1
     fi
-    [ -d "$root" ] && rm -rf "$workdir"
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+# A name that merely CONTAINS the phrase is not a Developer ID. A self-signed
+# certificate is named by whoever makes it (setup-self-hosted-runner.sh names
+# the runner's), so `Archive of Developer ID Application: ...` listed first
+# must lose to the real one listed second. Matched anywhere in the line, it won.
+test_a_name_that_only_contains_developer_id_application_does_not_win() {
+    local workdir bundle report status rc=0
+    workdir="$(mktemp -d)"
+    bundle="$(_make_bundle "$workdir")"
+    _write_security_stub "$workdir" \
+        "$SELF_SIGNED \"Archive of Developer ID Application: Someone (TEAM)\"" \
+        "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
+
+    report="$(_choose "$workdir" "$bundle")"
+    status=$?
+
+    [ "$status" -eq 0 ] || { echo "  choose_signing_identity exited $status" >&2; rc=1; }
+    _expect "$report" identity "$DEVID_A" || rc=1
+    _expect "$report" reason "chose the Developer ID Application certificate" || rc=1
+    _expect "$report" listing "2) $DEVID_A \"Developer ID Application: Someone (TEAM)\"" || rc=1
+    _expect "$report" stdout "" || rc=1
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+# The same phrase-in-a-name on the carried side: a bundle carrying such a
+# certificate is not already on a Developer ID, so with a real one in the
+# keychain it moves there rather than being kept.
+test_a_carried_certificate_only_named_after_developer_id_is_not_kept() {
+    local workdir bundle carried report status rc=0
+    workdir="$(mktemp -d)"
+    bundle="$(_make_bundle "$workdir")"
+    carried="$(_make_carried_cert "$workdir")" || {
+        echo "  fixture failed: could not create a test certificate" >&2
+        rm -rf "$workdir"; return 1
+    }
+    _write_security_stub "$workdir" \
+        "$carried \"Archive of Developer ID Application: Someone (TEAM)\"" \
+        "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
+
+    report="$(_choose "$workdir" "$bundle")"
+    status=$?
+
+    [ "$status" -eq 0 ] || { echo "  choose_signing_identity exited $status" >&2; rc=1; }
+    _expect "$report" identity "$DEVID_A" || rc=1
+    _expect "$report" reason "chose the Developer ID Application certificate" || rc=1
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+# A record with a hash but no name is not an identity. The real tool never
+# prints one; the rules classify by name, so accepting it could only hand the
+# last-resort rule something it cannot describe.
+test_a_record_without_a_name_is_not_an_identity() {
+    local workdir bundle report status rc=0
+    workdir="$(mktemp -d)"
+    bundle="$(_make_bundle "$workdir")"
+    _write_security_stub "$workdir" "$DEVID_A"
+
+    report="$(_choose "$workdir" "$bundle")"
+    status=$?
+
+    [ "$status" -eq 0 ] || { echo "  choose_signing_identity exited $status" >&2; rc=1; }
+    _expect "$report" identity "" || rc=1
+    _expect "$report" reason "" || rc=1
+    _expect "$report" stdout "" || rc=1
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+# prepare_signing resolves the certificate a profile covers through the same
+# lookup, so the two places that ask "which one is the Developer ID" cannot
+# answer differently. Real plutil on a real entitlements file; only the
+# keychain is a transcript.
+test_prepare_signing_resolves_the_same_developer_id() {
+    local workdir bundle identity rc=0
+    workdir="$(mktemp -d)"
+    bundle="$(_make_bundle "$workdir")"
+    mkdir -p "$workdir/profiles"
+    printf 'stand-in for a provisioning profile' > "$workdir/profiles/com.example.test.provisionprofile"
+    cp "$REPO_ROOT/app/MeetingTranscriber/Entitlements/Homebrew.entitlements" "$workdir/base.entitlements"
+    _write_security_stub "$workdir" \
+        "$SELF_SIGNED \"Archive of Developer ID Application: Someone (TEAM)\"" \
+        "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
+
+    identity="$(PATH="$workdir/bin:$PATH" \
+        PROFILE_DIR="$workdir/profiles" \
+        SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" \
+        bash -c 'set -euo pipefail
+                 # shellcheck source=../lib/signing.sh
+                 source "$SIGNING_LIB"
+                 prepare_signing "$1" "$2" com.example.test "" >/dev/null
+                 printf "%s" "$SIGNING_IDENTITY"' bash "$bundle" "$workdir/base.entitlements" 2>&1)"
+
+    if [ "$identity" != "$DEVID_A" ]; then
+        echo "  prepare_signing resolved '${identity:-<empty>}' instead of $DEVID_A" >&2
+        rc=1
+    fi
+    rm -rf "$workdir"
     return "$rc"
 }
 
@@ -472,6 +577,14 @@ run_test "an empty keychain yields no identity and does not abort the caller" \
     test_an_empty_keychain_yields_no_identity_and_does_not_abort
 run_test "run_app.sh decides before it replaces the executable" \
     test_run_app_decides_before_it_replaces_the_executable
+run_test "a name that merely contains 'Developer ID Application' does not win" \
+    test_a_name_that_only_contains_developer_id_application_does_not_win
+run_test "a carried certificate only named after Developer ID is not kept" \
+    test_a_carried_certificate_only_named_after_developer_id_is_not_kept
+run_test "a record without a name is not an identity" \
+    test_a_record_without_a_name_is_not_an_identity
+run_test "prepare_signing resolves the same Developer ID" \
+    test_prepare_signing_resolves_the_same_developer_id
 echo
 
 if [ "$FAILED" -eq 0 ]; then
