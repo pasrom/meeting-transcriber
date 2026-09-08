@@ -39,14 +39,23 @@ ok "app built"
 ok "mt-cli built"
 
 # --- Assemble + sign bundle. ---
-cp "$SPM_DIR/.build/release/MeetingTranscriber" "$APP_BINARY"
-SIGN_HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
-# Through the shared helper: signing bare would strip the entitlements the
-# bundle was built with, and this lane launches the bundle it signs (issue #609).
+# Which certificate keeps this bundle's TCC grants (Screen Recording, which
+# /screenshot below stands or falls with), decided BEFORE the cp: the copy
+# replaces the executable whose signature carries half of the answer. Taking
+# whatever the keychain listed first used to pick an Apple Development
+# certificate on a machine that also holds the Developer ID the grants were
+# made against, and the run died at /screenshot with "no window".
 # shellcheck source=lib/signing.sh
 source "$REPO_ROOT/scripts/lib/signing.sh"
-resign_deployed_bundle "$APP_BUNDLE" "$SIGN_HASH" \
-    || fail "codesign failed for $APP_BUNDLE (identity $SIGN_HASH)"
+choose_signing_identity "$APP_BUNDLE"
+[ -n "$CHOSEN_IDENTITY" ] || fail "no codesigning identity in the keychain"
+ok "signing identity: $CHOSEN_IDENTITY_REASON"
+printf '%s\n' "$CHOSEN_IDENTITY_LISTING" | sed 's/^/      /'
+cp "$SPM_DIR/.build/release/MeetingTranscriber" "$APP_BINARY"
+# Through the shared helper: signing bare would strip the entitlements the
+# bundle was built with, and this lane launches the bundle it signs (issue #609).
+resign_deployed_bundle "$APP_BUNDLE" "$CHOSEN_IDENTITY" \
+    || fail "codesign failed for $APP_BUNDLE (identity $CHOSEN_IDENTITY)"
 ok "signed"
 
 # --- Launch with env var. ---
