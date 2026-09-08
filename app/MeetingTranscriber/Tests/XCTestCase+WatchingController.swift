@@ -113,7 +113,15 @@ extension XCTestCase {
         // survive, since it snapshots at init, but do not build two and expect
         // both to persist.
         UserDefaults().removePersistentDomain(forName: suite)
-        let settings = AppSettings(defaults: UserDefaults(suiteName: suite) ?? .standard)
+        let settings = AppSettings(
+            defaults: UserDefaults(suiteName: suite) ?? .standard,
+            // The default output folder is the one path from this factory into a
+            // real user folder that the suite above does not close: output goes
+            // to `~/Downloads/MeetingTranscriber` whenever no folder is chosen
+            // or the chosen one cannot be reached. Point it into the test's own
+            // directory so a record-only stop can never land there.
+            defaultOutputDir: logDir.appendingPathComponent("output", isDirectory: true),
+        )
         settings.watchTeams = watchTeams
         settings.noMic = noMic
         let pipeline = PipelineController(settings: settings, notifier: notifier)
