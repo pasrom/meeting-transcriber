@@ -479,6 +479,12 @@ final class AppSettings {
         didSet { defaults.set(customOutputDirBookmark, forKey: "customOutputDirBookmark") }
     }
 
+    /// Where output goes when no folder is chosen or the chosen one cannot be
+    /// reached: `~/Downloads/MeetingTranscriber` in production. Injected, like
+    /// `defaults`, so a test can exercise the fallback without resolving to the
+    /// user's real Downloads folder, which is one step from writing into it.
+    let defaultOutputDir: URL
+
     // MARK: - Diagnostics
 
     /// Enables verbose diagnostic logging across **all** pipelines: audio
@@ -512,9 +518,14 @@ final class AppSettings {
     // MARK: - Init
 
     // swiftlint:disable:next function_body_length
-    init(defaults: UserDefaults = .standard, apiKeyAccount: String = "openAIAPIKey") {
+    init(
+        defaults: UserDefaults = .standard,
+        apiKeyAccount: String = "openAIAPIKey",
+        defaultOutputDir: URL = AppPaths.downloadsProtocolsDir,
+    ) {
         self.defaults = defaults
         self.apiKeyAccount = apiKeyAccount
+        self.defaultOutputDir = defaultOutputDir
 
         watchTeams = defaults.object(forKey: "watchTeams") as? Bool ?? true
         watchZoom = defaults.object(forKey: "watchZoom") as? Bool ?? true

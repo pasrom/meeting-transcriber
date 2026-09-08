@@ -34,6 +34,14 @@ final class PipelineController {
     private let settings: AppSettings
     private let notifier: any AppNotifying
 
+    /// Decides the folder a new queue writes into, and tells the user when it is
+    /// not the one they chose (see `OutputDirectoryResolver`). Built from the
+    /// settings and notifier this controller already holds. Not private:
+    /// `WatchingController`'s record-only path writes into the same folder
+    /// without a queue and goes through this same instance, so an
+    /// unavailability episode is reported once, whichever seam meets it first.
+    let outputDirectory: OutputDirectoryResolver
+
     /// Durable finished-job record store, shared across queue rebuilds and read
     /// by `jobStatus(forID:)` for the automation API. Test-injectable.
     let terminalJobStore: TerminalJobStore
@@ -47,6 +55,7 @@ final class PipelineController {
     init(settings: AppSettings, notifier: any AppNotifying, terminalJobStore: TerminalJobStore? = nil) {
         self.settings = settings
         self.notifier = notifier
+        self.outputDirectory = OutputDirectoryResolver(settings: settings, notifier: notifier)
         self.terminalJobStore = terminalJobStore
             ?? TerminalJobStore(path: AppPaths.ipcDir.appendingPathComponent("terminal_jobs.json"))
         self.queue = PipelineQueue()
@@ -106,7 +115,10 @@ final class PipelineController {
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },
-            outputDir: settings.effectiveOutputDir,
+            // Captured by value: this is the moment the destination of every job
+            // this queue will run is decided, so a fallback is reported here and
+            // not from `effectiveOutputDir`, which `body` reads on every render.
+            outputDir: outputDirectory.resolve(),
             diarizeEnabled: settings.diarize,
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
