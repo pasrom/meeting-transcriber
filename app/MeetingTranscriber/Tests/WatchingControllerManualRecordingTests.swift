@@ -104,6 +104,52 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
         XCTAssertFalse(controller.isManualRecording, "a start that failed is not a recording")
     }
 
+    /// The folder the user chose can stop resolving between sessions: an
+    /// unplugged drive, an unmounted share, a deleted folder. The recording
+    /// must still be kept, and the user must be told it went elsewhere. Before
+    /// this it landed in the default folder with no notification and no log.
+    ///
+    /// Record-only is the seam here because it decides the destination per
+    /// write, on the production closure `WatchingController` hands the loop.
+    /// The pipeline seam (`PipelineController.makeQueue`) decides it the same
+    /// way, but a unit test cannot call that with an engine wired: it runs
+    /// crash recovery and the orphan scan against the production staging
+    /// directory.
+    func testARecordingWhoseFolderIsGoneIsKeptInTheDefaultFolderAndTheUserIsTold() async throws {
+        let notifier = RecordingNotifier()
+        let recorder = makeMockRecorder()
+        // A real file, so the record-only move succeeds and the test can say
+        // where the recording ended up, not only that a notification fired.
+        let mix = tmpDir.appendingPathComponent("20260908_090000_mix.wav")
+        try Data().write(to: mix)
+        recorder.mixPath = mix
+        let controller = makeWatchingController(
+            // swiftlint:disable:next trailing_closure
+            logDir: tmpDir, notifier: notifier, permissionHealth: .allHealthy, makeRecorder: { recorder },
+        )
+        let chosen = try makeTempDirectory(prefix: "ChosenOutputDir")
+        controller.settings.recordOnly = true
+        controller.settings.setCustomOutputDir(chosen)
+        try FileManager.default.removeItem(at: chosen)
+
+        // The start's own task, not `isManualRecording`: that flag is true from
+        // the moment the task is registered, before any loop exists to stop.
+        let start = try XCTUnwrap(controller.beginManualRecording(.microphone))
+        let started = await start.value
+        XCTAssertEqual(started, .started, "precondition")
+        controller.stopManualRecording()
+
+        let titles = notifier.calls.map(\.title)
+        XCTAssertTrue(titles.contains(OutputDirectoryResolver.unavailableTitle), "user was told: \(titles)")
+        XCTAssertFalse(titles.contains("Record-only output failed"), "the recording was kept: \(titles)")
+        // The factory points the default folder at `<logDir>/output`, standing in
+        // for `~/Downloads/MeetingTranscriber`.
+        let recordings = tmpDir.appendingPathComponent("output/recordings")
+        let written = try FileManager.default.contentsOfDirectory(atPath: recordings.path)
+        XCTAssertTrue(written.contains("20260908_090000_mix.wav"), "\(written)")
+        XCTAssertTrue(written.contains { $0.hasSuffix(RecordingSidecar.filenameSuffix) }, "\(written)")
+    }
+
     /// A manual start takes over from meeting watching. The auto loop has to be
     /// stopped, not merely dropped: the controller's reference is what stops
     /// it, so overwriting it would leave a detector polling forever with no
