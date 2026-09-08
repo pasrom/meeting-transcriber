@@ -26,6 +26,13 @@ set -uo pipefail   # NOT -e: harness keeps running on test failure
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# One set of stand-ins for the whole run; see _write_stubs for why.
+STUB_ROOT="$(mktemp -d)"
+trap 'rm -rf "$STUB_ROOT"' EXIT
+STUB_SECURITY="$STUB_ROOT/security"
+STUB_CODESIGN="$STUB_ROOT/codesign"
+STUB_HARNESS="$STUB_ROOT/harness"
+
 FAILED=0
 
 run_test() {
@@ -46,7 +53,7 @@ DEVID_B="BBBB2222BBBB2222BBBB2222BBBB2222BBBB2222"
 APPLE_DEV="CCCC3333CCCC3333CCCC3333CCCC3333CCCC3333"
 SELF_SIGNED="DDDD4444DDDD4444DDDD4444DDDD4444DDDD4444"
 # What the `security` stand-in adds when it is asked the wrong question; see
-# _write_security_stub.
+# _write_stubs.
 REVOKED="EEEE5555EEEE5555EEEE5555EEEE5555EEEE5555"
 NOT_FOR_CODE="FFFF6666FFFF6666FFFF6666FFFF6666FFFF6666"
 NOTE="  NOTE: TCC grants made against a different certificate will not apply to this build."
@@ -54,12 +61,12 @@ NOTE="  NOTE: TCC grants made against a different certificate will not apply to 
 # A genuinely unsigned throwaway .app in $1; echoes its path. Its executable is
 # a shell script: real codesign answers "code object is not signed at all" and
 # hands out no certificate, which makes this the honest "no previous signature"
-# fixture, so those cases need no codesign stub. A copy of /bin/echo would not
-# do: the copy keeps Apple's signature, and real codesign reads Apple's
-# certificate out of it (measured), so such a bundle "carries" a certificate
-# that merely never appears in any transcript, and the rule that a carried
-# certificate must still be in the keychain is then exercised by accident
-# rather than by the case written for it.
+# fixture, so those cases run real codesign and need no stand-in. A copy of
+# /bin/echo would not do: the copy keeps Apple's signature, and real codesign
+# reads Apple's certificate out of it (measured), so such a bundle "carries" a
+# certificate that merely never appears in any transcript, and the rule that a
+# carried certificate must still be in the keychain is then exercised by
+# accident rather than by the case written for it.
 _make_bundle() {
     local bundle="$1/Some.app"
     mkdir -p "$bundle/Contents/MacOS"
@@ -68,56 +75,107 @@ _make_bundle() {
     printf '%s' "$bundle"
 }
 
-# A `security` stand-in whose find-identity answer depends on its arguments
-# the way the real tool's does. Asked the right question, `-v -p codesigning`,
-# it lists the given identities in the given order, then the trailer the real
-# tool prints; order is part of the fixture, the bug was "whichever is listed
+# The stand-ins, written ONCE per run. macOS assesses an executable the first
+# time it is launched, and for a freshly written script that costs about 0.4 s
+# (measured: first run 0.40 s, second 0.015 s), so stand-ins written per case
+# made this suite take ten seconds for two seconds of work. Each case
+# parameterises them instead: the keychain transcript in $SECURITY_IDENTITIES,
+# the leaf certificate in $STUB_LEAF_DER, the executable that certificate is
+# bound to in $STUB_EXECUTABLE, the call log in $CODESIGN_CALLS. Three
+# directories, so a case can put `security` on PATH without `codesign`: the
+# unsigned-bundle cases run real codesign on purpose.
+#
+# `security` answers find-identity the way the real tool does, given its
+# arguments. Asked the right question, `-v -p codesigning`, it lists the
+# transcript's identities in their order, then the trailer the real tool
+# prints; order is part of every fixture, the bug was "whichever is listed
 # first". Asked without `-p codesigning` it adds, first, an identity the
 # default policy admits although it cannot sign code. Asked without -v it
 # answers in the real tool's two-section form: every matching identity, a
-# revoked Developer ID first and marked as such, then the valid ones once
-# more. Either way a lookup that drops a flag reads a different keychain than
-# the one the case describes and fails it, instead of passing them all.
-# Anything but find-identity is refused, as no test expects it.
+# revoked Developer ID first and marked as such, then the valid ones once more.
+# Either way a lookup that drops a flag reads a different keychain than the one
+# the case describes and fails it, instead of passing them all. Anything but
+# find-identity is refused, as no test expects it.
 #
-# Each identity is given as `<sha1> "<name>"`; the stub numbers them.
+# `codesign` hands out the leaf certificate on --extract-certificates, so
+# bundle_signing_cert_sha1 computes a real hash for a certificate nobody can be
+# assumed to hold. When $STUB_EXECUTABLE is set it does so only while that file
+# is still the previous build's: that is what real codesign does (measured: the
+# intact bundle yields the certificate, the same bundle with a fresh binary
+# copied in reports an ad-hoc signature and yields none), so a script that
+# decides after its copy sees no carried certificate here exactly as it would
+# in production. It fails --verify, reports an entitlement on
+# `--entitlements :-`, and logs every call when asked to.
 #
-# shellcheck disable=SC2016  # the single-quoted strings ARE the stub's source; its $ must not expand here
-_write_security_stub() {
-    local workdir="$1" line
+# The harness stand-ins: `swift` builds nothing, `pgrep` finds no running app,
+# `open` exits 42 so a script that reaches its launch stops there with a
+# status no earlier failure produces, and the model fetch names a dummy file.
+_write_stubs() {
+    mkdir -p "$STUB_SECURITY" "$STUB_CODESIGN" "$STUB_HARNESS" "$STUB_ROOT/model"
+    cat > "$STUB_SECURITY/security" <<STUB
+#!/usr/bin/env bash
+[ "\${1:-}" = find-identity ] || { echo "security stub: unexpected: \$*" >&2; exit 2; }
+shift
+valid=false
+policy=basic
+while [ \$# -gt 0 ]; do
+    case "\$1" in -v) valid=true ;; -p) policy="\$2"; shift ;; esac
     shift
-    mkdir -p "$workdir/bin"
-    {
-        printf '#!/usr/bin/env bash\n'
-        printf '[ "${1:-}" = find-identity ] || { echo "security stub: unexpected: $*" >&2; exit 2; }\n'
-        printf 'shift\nvalid=false\npolicy=basic\n'
-        printf 'while [ $# -gt 0 ]; do\n'
-        printf '    case "$1" in -v) valid=true ;; -p) policy="$2"; shift ;; esac\n'
-        printf '    shift\ndone\n'
-        printf 'matching=()\n'
-        printf '[ "$policy" = codesigning ] || matching+=(%q)\n' \
-            "$NOT_FOR_CODE \"Email Encryption: Someone\""
-        for line in "$@"; do printf 'matching+=(%q)\n' "$line"; done
-        printf 'list() { local n=0 line; for line in "$@"; do n=$((n + 1)); printf "  %%d) %%s\\n" "$n" "$line"; done; }\n'
-        printf 'if [ "$valid" = true ]; then\n'
-        printf '    list "${matching[@]}"\n'
-        printf '    printf "     %%d valid identities found\\n" "${#matching[@]}"\n'
-        printf 'else\n'
-        printf '    printf "\\nPolicy: %%s\\n  Matching identities\\n" "$policy"\n'
-        printf '    list %q "${matching[@]}"\n' \
-            "$REVOKED \"Developer ID Application: Revoked (TEAM)\" (CSSMERR_TP_CERT_REVOKED)"
-        printf '    printf "     %%d identities found\\n\\n  Valid identities only\\n" $(( ${#matching[@]} + 1 ))\n'
-        printf '    list "${matching[@]}"\n'
-        printf '    printf "     %%d valid identities found\\n" "${#matching[@]}"\n'
-        printf 'fi\n'
-    } > "$workdir/bin/security"
-    chmod +x "$workdir/bin/security"
+done
+matching=()
+[ "\$policy" = codesigning ] || matching+=('$NOT_FOR_CODE "Email Encryption: Someone"')
+while IFS= read -r line; do [ -n "\$line" ] && matching+=("\$line"); done < "\${SECURITY_IDENTITIES:?}"
+list() { local n=0 line; for line in "\$@"; do n=\$((n + 1)); printf '  %d) %s\n' "\$n" "\$line"; done; }
+if [ "\$valid" = true ]; then
+    list "\${matching[@]}"
+    printf '     %d valid identities found\n' "\${#matching[@]}"
+else
+    printf '\nPolicy: %s\n  Matching identities\n' "\$policy"
+    list '$REVOKED "Developer ID Application: Revoked (TEAM)" (CSSMERR_TP_CERT_REVOKED)' "\${matching[@]}"
+    printf '     %d identities found\n\n  Valid identities only\n' \$(( \${#matching[@]} + 1 ))
+    list "\${matching[@]}"
+    printf '     %d valid identities found\n' "\${#matching[@]}"
+fi
+STUB
+    cat > "$STUB_CODESIGN/codesign" <<'STUB'
+#!/usr/bin/env bash
+[ -n "${CODESIGN_CALLS:-}" ] && printf '%s\n' "$*" >> "$CODESIGN_CALLS"
+case "$*" in
+    *--extract-certificates*)
+        if [ -f "${STUB_LEAF_DER:-}" ] \
+            && { [ -z "${STUB_EXECUTABLE:-}" ] || grep -q 'previous build' "$STUB_EXECUTABLE" 2>/dev/null; }; then
+            cp "$STUB_LEAF_DER" ./codesign0
+        fi ;;
+    *--verify*) exit 1 ;;
+    *"--entitlements :-"*) printf '<key>stand-in</key>' ;;
+esac
+exit 0
+STUB
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$STUB_HARNESS/swift"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB_HARNESS/pgrep"
+    printf '#!/usr/bin/env bash\nexit 42\n' > "$STUB_HARNESS/open"
+    printf 'stand-in model\n' > "$STUB_ROOT/model/localvqe-test.gguf"
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$STUB_ROOT/model/localvqe-test.gguf" \
+        > "$STUB_HARNESS/fetch-localvqe-model.sh"
+    chmod +x "$STUB_SECURITY/security" "$STUB_CODESIGN/codesign" "$STUB_HARNESS"/*
+}
+
+# The keychain a case runs against: one identity per argument, each given as
+# `<sha1> "<name>"`, in that order; none for an empty keychain.
+_keychain_lists() {
+    local workdir="$1"
+    shift
+    : > "$workdir/identities.txt"
+    [ $# -eq 0 ] || printf '%s\n' "$@" > "$workdir/identities.txt"
 }
 
 # A real certificate nobody can be assumed to hold, as DER in $1/leaf.der;
-# echoes its SHA-1. Non-zero when it cannot be made, because an empty hash
-# would silently turn "carries X" into "unsigned" and let a case pass without
-# ever exercising the rule it pins.
+# echoes its SHA-1. Its presence is what makes a case's bundle "carry" it:
+# _choose and _run_dev_bundle_script put the codesign stand-in on PATH when the
+# file exists, and the transcript is then written around the hash. Non-zero
+# when it cannot be made, because an empty hash would silently turn
+# "carries X" into "unsigned" and let a case pass without ever exercising the
+# rule it pins.
 _make_leaf_cert() {
     local workdir="$1" hash
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
@@ -129,33 +187,17 @@ _make_leaf_cert() {
     printf '%s' "$hash"
 }
 
-# Makes the bundle "carry" that certificate: a codesign stand-in hands the
-# library the leaf on --extract-certificates, so bundle_signing_cert_sha1
-# computes a real hash, and the transcript is then written around that hash.
-# Echoes the hash; non-zero as _make_leaf_cert.
-_make_carried_cert() {
-    local workdir="$1" hash
-    hash="$(_make_leaf_cert "$workdir")" || return 1
-    mkdir -p "$workdir/bin"
-    cat > "$workdir/bin/codesign" <<STUB
-#!/usr/bin/env bash
-case "\$*" in
-    *--extract-certificates*) cp "$workdir/leaf.der" ./codesign0 ;;
-esac
-exit 0
-STUB
-    chmod +x "$workdir/bin/codesign"
-    printf '%s' "$hash"
-}
-
 # Runs the function the way a caller does: a separate bash PROCESS under
 # `set -euo pipefail` (a subshell would inherit run_test's errexit suppression,
-# see test_signing_resign.sh), stubs first on PATH, the library sourced. Prints
-# a `field=value` report: the three globals plus the function's own stdout,
-# because the note it prints is part of the contract.
+# see test_signing_resign.sh), stand-ins first on PATH, the library sourced.
+# Prints a `field=value` report: the three globals plus the function's own
+# stdout, because the note it prints is part of the contract.
 _choose() {
-    local workdir="$1" bundle="$2"
-    PATH="$workdir/bin:$PATH" \
+    local workdir="$1" bundle="$2" path="$STUB_SECURITY:$PATH"
+    [ -f "$workdir/leaf.der" ] && path="$STUB_CODESIGN:$path"
+    PATH="$path" \
+    SECURITY_IDENTITIES="$workdir/identities.txt" \
+    STUB_LEAF_DER="$workdir/leaf.der" \
     SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" \
         bash -c 'set -euo pipefail
                  # shellcheck source=../lib/signing.sh
@@ -177,66 +219,39 @@ _expect() {
 }
 
 # Stages, in $1/repo, the slice of the repository the dev-bundle scripts need
-# to run up to and including their signing step, and echoes that root. Around
-# it, stand-ins for everything that is not the decision under test: `swift`
-# builds nothing, `pgrep` finds no running app, the model fetch answers with
-# a dummy file, and `open` exits 42 so a script that reaches its launch stops
-# there with a status no earlier failure produces. The previous build's
-# executable and the freshly built binary carry markers, and the codesign
-# stand-in hands out the leaf certificate only while the previous executable
-# is still in place. That is what real codesign does (measured: the intact
-# bundle yields the certificate, the same bundle with a fresh binary copied in
-# reports an ad-hoc signature and yields none), so a script that decides after
-# its copy sees no carried certificate here exactly as it would in production.
-# Every codesign call is logged to $1/codesign.log.
+# to run up to and including their signing step. The previous build's
+# executable and the freshly built binary carry the markers the codesign
+# stand-in reads. Echoes nothing; non-zero when the fixture cannot be built.
 _stage_dev_bundle_scripts() {
     local workdir="$1" root="$1/repo" spm bundle
     spm="$root/app/MeetingTranscriber"
     bundle="$spm/.build/MeetingTranscriber-Dev.app"
-    mkdir -p "$root/scripts/lib" "$root/licenses" "$root/model" "$root/tools/mt-cli" \
-        "$spm/Sources" "$spm/Entitlements" "$spm/.build/release" "$bundle/Contents/MacOS" \
-        "$workdir/bin" || return 1
+    mkdir -p "$root/scripts/lib" "$root/licenses" "$root/tools/mt-cli" \
+        "$spm/Sources" "$spm/Entitlements" "$spm/.build/release" "$bundle/Contents/MacOS" || return 1
     cp "$REPO_ROOT/scripts/run_app.sh" "$REPO_ROOT/scripts/test_rpc.sh" "$root/scripts/" || return 1
     cp "$REPO_ROOT"/scripts/lib/*.sh "$root/scripts/lib/" || return 1
     cp "$REPO_ROOT/app/MeetingTranscriber/Sources/Info.plist" "$spm/Sources/" || return 1
     cp "$REPO_ROOT/app/MeetingTranscriber/Entitlements/Homebrew.entitlements" "$spm/Entitlements/" || return 1
+    ln -s "$STUB_HARNESS/fetch-localvqe-model.sh" "$root/scripts/fetch-localvqe-model.sh" || return 1
     printf '0.0.0\n' > "$root/VERSION"
     printf 'stand-in licence\n' > "$root/licenses/Test-LICENSE.txt"
-    printf 'stand-in model\n' > "$root/model/localvqe-test.gguf"
-    printf '#!/usr/bin/env bash\nprintf "%%s\\n" %q\n' "$root/model/localvqe-test.gguf" \
-        > "$root/scripts/fetch-localvqe-model.sh"
     printf 'previous build\n' > "$bundle/Contents/MacOS/MeetingTranscriber"
     printf 'fresh build\n' > "$spm/.build/release/MeetingTranscriber"
-    chmod +x "$root/scripts/fetch-localvqe-model.sh" "$bundle/Contents/MacOS/MeetingTranscriber" \
-        "$spm/.build/release/MeetingTranscriber" || return 1
-
-    printf '#!/usr/bin/env bash\nexit 0\n' > "$workdir/bin/swift"
-    printf '#!/usr/bin/env bash\nexit 1\n' > "$workdir/bin/pgrep"
-    printf '#!/usr/bin/env bash\nexit 42\n' > "$workdir/bin/open"
-    cat > "$workdir/bin/codesign" <<STUB
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$workdir/codesign.log"
-case "\$*" in
-    *--extract-certificates*)
-        if [ -f "$workdir/leaf.der" ] \\
-            && grep -q 'previous build' "$bundle/Contents/MacOS/MeetingTranscriber" 2>/dev/null; then
-            cp "$workdir/leaf.der" ./codesign0
-        fi ;;
-    *--verify*) exit 1 ;;
-    *"--entitlements :-"*) printf '<key>stand-in</key>' ;;
-esac
-exit 0
-STUB
-    chmod +x "$workdir/bin/"* || return 1
-    printf '%s' "$root"
+    chmod +x "$bundle/Contents/MacOS/MeetingTranscriber" "$spm/.build/release/MeetingTranscriber"
 }
 
 # Runs one of the staged scripts with the stand-ins first on PATH; its output
-# goes to $1/run.log, its status is returned.
+# goes to $1/run.log, every codesign call to $1/codesign.log, and its status
+# is returned.
 _run_dev_bundle_script() {
-    local workdir="$1" script="$2"
+    local workdir="$1" script="$2" root="$1/repo"
     shift 2
-    PATH="$workdir/bin:$PATH" bash "$workdir/repo/scripts/$script" "$@" > "$workdir/run.log" 2>&1
+    PATH="$STUB_HARNESS:$STUB_CODESIGN:$STUB_SECURITY:$PATH" \
+    SECURITY_IDENTITIES="$workdir/identities.txt" \
+    STUB_LEAF_DER="$workdir/leaf.der" \
+    STUB_EXECUTABLE="$root/app/MeetingTranscriber/.build/MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" \
+    CODESIGN_CALLS="$workdir/codesign.log" \
+        bash "$root/scripts/$script" "$@" > "$workdir/run.log" 2>&1
 }
 
 # The identity a staged script signed with, from the codesign log.
@@ -254,11 +269,11 @@ test_keeps_a_developer_id_the_bundle_already_carries() {
     local workdir bundle carried report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    carried="$(_make_carried_cert "$workdir")" || {
+    carried="$(_make_leaf_cert "$workdir")" || {
         echo "  fixture failed: could not create a test certificate" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$DEVID_B \"Developer ID Application: Someone (TEAM)\"" \
         "$carried \"Developer ID Application: Someone (TEAM)\""
 
@@ -283,11 +298,11 @@ test_moves_an_apple_development_bundle_to_developer_id() {
     local workdir bundle carried report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    carried="$(_make_carried_cert "$workdir")" || {
+    carried="$(_make_leaf_cert "$workdir")" || {
         echo "  fixture failed: could not create a test certificate" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$carried \"Apple Development: Someone (ABCDE12345)\"" \
         "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
 
@@ -309,7 +324,7 @@ test_prefers_developer_id_over_the_first_listed_identity() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$APPLE_DEV \"Apple Development: Someone (ABCDE12345)\"" \
         "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
 
@@ -331,7 +346,7 @@ test_takes_the_first_identity_when_no_developer_id_exists() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$SELF_SIGNED \"MeetingTranscriberDevSelfHosted\"" \
         "$APPLE_DEV \"Apple Development: Someone (ABCDE12345)\""
 
@@ -354,11 +369,11 @@ test_keeps_a_non_developer_id_certificate_when_there_is_none_to_move_to() {
     local workdir bundle carried report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    carried="$(_make_carried_cert "$workdir")" || {
+    carried="$(_make_leaf_cert "$workdir")" || {
         echo "  fixture failed: could not create a test certificate" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$APPLE_DEV \"Apple Development: Other (ABCDE12345)\"" \
         "$carried \"Apple Development: Someone (ABCDE12345)\""
 
@@ -384,11 +399,11 @@ test_does_not_keep_a_carried_certificate_that_left_the_keychain() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _make_carried_cert "$workdir" >/dev/null || {
+    _make_leaf_cert "$workdir" >/dev/null || {
         echo "  fixture failed: could not create a test certificate" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$APPLE_DEV \"Apple Development: Someone (ABCDE12345)\""
 
     report="$(_choose "$workdir" "$bundle")"
@@ -409,7 +424,7 @@ test_an_empty_keychain_yields_no_identity_and_does_not_abort() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _write_security_stub "$workdir"
+    _keychain_lists "$workdir"
 
     report="$(_choose "$workdir" "$bundle")"
     status=$?
@@ -435,7 +450,7 @@ test_run_app_decides_before_it_replaces_the_executable() {
         echo "  fixture failed: could not stage the scripts or create a test certificate" >&2
         rm -rf "$workdir"; return 1
     fi
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$DEVID_B \"Developer ID Application: Someone (TEAM)\"" \
         "$carried \"Developer ID Application: Someone (TEAM)\""
 
@@ -466,7 +481,7 @@ test_a_name_that_only_contains_developer_id_application_does_not_win() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$SELF_SIGNED \"Archive of Developer ID Application: Someone (TEAM)\"" \
         "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
 
@@ -489,11 +504,11 @@ test_a_carried_certificate_only_named_after_developer_id_is_not_kept() {
     local workdir bundle carried report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    carried="$(_make_carried_cert "$workdir")" || {
+    carried="$(_make_leaf_cert "$workdir")" || {
         echo "  fixture failed: could not create a test certificate" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$carried \"Archive of Developer ID Application: Someone (TEAM)\"" \
         "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
 
@@ -514,7 +529,7 @@ test_a_record_without_a_name_is_not_an_identity() {
     local workdir bundle report status rc=0
     workdir="$(mktemp -d)"
     bundle="$(_make_bundle "$workdir")"
-    _write_security_stub "$workdir" "$DEVID_A"
+    _keychain_lists "$workdir" "$DEVID_A"
 
     report="$(_choose "$workdir" "$bundle")"
     status=$?
@@ -538,11 +553,12 @@ test_prepare_signing_resolves_the_same_developer_id() {
     mkdir -p "$workdir/profiles"
     printf 'stand-in for a provisioning profile' > "$workdir/profiles/com.example.test.provisionprofile"
     cp "$REPO_ROOT/app/MeetingTranscriber/Entitlements/Homebrew.entitlements" "$workdir/base.entitlements"
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$SELF_SIGNED \"Archive of Developer ID Application: Someone (TEAM)\"" \
         "$DEVID_A \"Developer ID Application: Someone (TEAM)\""
 
-    identity="$(PATH="$workdir/bin:$PATH" \
+    identity="$(PATH="$STUB_SECURITY:$PATH" \
+        SECURITY_IDENTITIES="$workdir/identities.txt" \
         PROFILE_DIR="$workdir/profiles" \
         SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" \
         bash -c 'set -euo pipefail
@@ -571,7 +587,7 @@ test_test_rpc_decides_before_it_replaces_the_executable() {
         echo "  fixture failed: could not stage the scripts or create a test certificate" >&2
         rm -rf "$workdir"; return 1
     fi
-    _write_security_stub "$workdir" \
+    _keychain_lists "$workdir" \
         "$DEVID_B \"Developer ID Application: Someone (TEAM)\"" \
         "$carried \"Developer ID Application: Someone (TEAM)\""
 
@@ -606,7 +622,7 @@ test_run_app_says_so_when_it_leaves_the_bundle_unsigned() {
         echo "  fixture failed: could not stage the scripts" >&2
         rm -rf "$workdir"; return 1
     }
-    _write_security_stub "$workdir"
+    _keychain_lists "$workdir"
 
     _run_dev_bundle_script "$workdir" run_app.sh --build-only
     status=$?
@@ -653,6 +669,7 @@ test_no_dev_bundle_script_queries_the_keychain_itself() {
     fi
 }
 
+_write_stubs
 echo "Testing choose_signing_identity in scripts/lib/signing.sh"
 echo
 run_test "a Developer ID the bundle already carries is kept over a newer one" \
