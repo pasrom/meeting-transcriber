@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "AppSettings")
 
 /// Where output goes right now, and why. `effectiveOutputDir` answers only the
 /// first question, and the second is what tells a fallback apart from a choice:
@@ -65,9 +68,21 @@ extension AppSettings {
     }
 
     /// Store a user-selected directory as a security-scoped bookmark.
+    ///
+    /// A failure keeps the previous choice and says so in the log, where it used
+    /// to vanish without a trace. The only caller hands over an `NSOpenPanel`
+    /// URL, for which `bookmarkData` has not been seen to throw in either build
+    /// variant, so this guards against the unexplained rather than a case with
+    /// a known cause and a UI of its own.
     func setCustomOutputDir(_ url: URL) {
-        guard let data = makeBookmark(for: url) else { return }
-        customOutputDirBookmark = data
+        do {
+            customOutputDirBookmark = try makeBookmark(for: url)
+        } catch {
+            // No path in the line: os_log output can leave the machine.
+            logger.error(
+                "Could not bookmark the chosen output folder, keeping the previous choice: \(error.localizedDescription, privacy: .public)",
+            )
+        }
     }
 
     /// Clear the custom output directory, reverting to the default.
@@ -81,7 +96,7 @@ extension AppSettings {
     func repairStaleCustomOutputDirBookmark() {
         var isStale = false
         guard let url = resolveCustomOutputDir(isStale: &isStale), isStale,
-              let refreshed = makeBookmark(for: url)
+              let refreshed = try? makeBookmark(for: url)
         else { return }
         customOutputDirBookmark = refreshed
     }
@@ -105,8 +120,8 @@ extension AppSettings {
         URL.resourceValues(forKeys: [.pathKey], fromBookmarkData: bookmark)?.path
     }
 
-    private func makeBookmark(for url: URL) -> Data? {
-        try? url.bookmarkData(
+    private func makeBookmark(for url: URL) throws -> Data {
+        try url.bookmarkData(
             options: .withSecurityScope,
             includingResourceValuesForKeys: nil,
             relativeTo: nil,
