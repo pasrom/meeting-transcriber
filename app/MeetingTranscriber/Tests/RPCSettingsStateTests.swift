@@ -164,7 +164,8 @@
             XCTAssertTrue(s.output.hasCustomDirectory)
             XCTAssertNil(s.output.directory, "unresolvable custom dir must report null, not a wrong fallback")
             // Read-only guarantee: the snapshot must never rewrite the persisted
-            // bookmark (unlike `effectiveOutputDir`'s stale-repair path).
+            // bookmark. The only writer is `repairStaleCustomOutputDirBookmark()`
+            // at launch; `effectiveOutputDir` is a pure read.
             XCTAssertEqual(settings.customOutputDirBookmark, garbage)
         }
 

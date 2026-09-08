@@ -102,12 +102,13 @@
         /// snapshot. Deliberately NOT `effectiveOutputDir`: that resolves the
         /// bookmark with `.withSecurityScope`, which can block the main actor
         /// while a detached network volume is contacted (the RPC snapshot runs
-        /// MainActor-isolated on every `GET /state` poll), and on a stale
-        /// bookmark it WRITES a re-created bookmark back to UserDefaults, a
-        /// persisted mutation from a read-only debug GET. Here we resolve with
+        /// MainActor-isolated on every `GET /state` poll). Here we resolve with
         /// `.withoutUI`/`.withoutMounting` (fails fast instead of mounting),
         /// ignore staleness, and report nil when the custom dir is currently
-        /// unresolvable.
+        /// unresolvable. `effectiveOutputDir` is otherwise a pure read: the
+        /// stale-bookmark repair it once performed inline moved to
+        /// `repairStaleCustomOutputDirBookmark()` at launch, so a persisted
+        /// mutation from a debug GET is no longer among the reasons.
         private func rpcOutputDirPath() -> String? {
             guard let data = customOutputDirBookmark else {
                 return AppPaths.downloadsProtocolsDir.path
