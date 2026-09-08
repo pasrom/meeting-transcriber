@@ -559,6 +559,64 @@ test_prepare_signing_resolves_the_same_developer_id() {
     return "$rc"
 }
 
+# test_rpc.sh, the caller that had none of the rule: it too asks before the
+# cp that puts the fresh binary over the previous executable. The script runs
+# up to its launch, where the `open` stand-in stops it with 42; any other
+# status means it failed somewhere on the way, its own "no codesigning
+# identity" check included.
+test_test_rpc_decides_before_it_replaces_the_executable() {
+    local workdir carried status signed rc=0
+    workdir="$(mktemp -d)"
+    if ! _stage_dev_bundle_scripts "$workdir" >/dev/null || ! carried="$(_make_leaf_cert "$workdir")"; then
+        echo "  fixture failed: could not stage the scripts or create a test certificate" >&2
+        rm -rf "$workdir"; return 1
+    fi
+    _write_security_stub "$workdir" \
+        "$DEVID_B \"Developer ID Application: Someone (TEAM)\"" \
+        "$carried \"Developer ID Application: Someone (TEAM)\""
+
+    _run_dev_bundle_script "$workdir" test_rpc.sh
+    status=$?
+    signed="$(_signed_with "$workdir")"
+
+    if [ "$status" -ne 42 ]; then
+        echo "  test_rpc.sh exited $status before reaching its launch; its last lines:" >&2
+        tail -5 "$workdir/run.log" | sed 's/^/    /' >&2
+        rc=1
+    fi
+    if [ "$signed" != "$carried" ]; then
+        echo "  signed with '${signed:-<nothing>}' instead of the carried $carried:" >&2
+        echo "  the identity was chosen after the copy replaced the executable, so the" >&2
+        echo "  certificate it carried was no longer there to be kept" >&2
+        rc=1
+    fi
+    rm -rf "$workdir"
+    return "$rc"
+}
+
+# The defect was a caller asking the keychain for itself. Only the library
+# may, so that the choice has one definition: a dev-bundle script that runs
+# `security find-identity` has, whatever it does with the answer, stopped
+# asking choose_signing_identity. Two scripts are exempt because they are
+# not dev-bundle scripts: build_release.sh signs the release bundle, which
+# nobody grants TCC to and rebuilds every day, and setup-self-hosted-runner.sh
+# creates the runner's keychain and only checks what it holds. A grep can
+# catch the query, on one line or spread over several, but not what a script
+# does with the answer nor where the call sits; the two cases above pin the
+# decision itself.
+test_no_dev_bundle_script_queries_the_keychain_itself() {
+    local offenders
+    # Non-comment lines only, so documenting the rule cannot fail the job.
+    offenders="$(grep -nE '^[^#]*security find-identity' "$REPO_ROOT"/scripts/*.sh 2>/dev/null \
+        | grep -vE '/(build_release|setup-self-hosted-runner)\.sh:' || true)"
+    if [ -n "$offenders" ]; then
+        echo "  these scripts read the keychain themselves instead of asking" >&2
+        echo "  choose_signing_identity, which is how TCC lost the grants:" >&2
+        printf '  %s\n' "$offenders" >&2
+        return 1
+    fi
+}
+
 echo "Testing choose_signing_identity in scripts/lib/signing.sh"
 echo
 run_test "a Developer ID the bundle already carries is kept over a newer one" \
@@ -585,6 +643,10 @@ run_test "a record without a name is not an identity" \
     test_a_record_without_a_name_is_not_an_identity
 run_test "prepare_signing resolves the same Developer ID" \
     test_prepare_signing_resolves_the_same_developer_id
+run_test "test_rpc.sh decides before it replaces the executable" \
+    test_test_rpc_decides_before_it_replaces_the_executable
+run_test "no dev-bundle script queries the keychain itself" \
+    test_no_dev_bundle_script_queries_the_keychain_itself
 echo
 
 if [ "$FAILED" -eq 0 ]; then
