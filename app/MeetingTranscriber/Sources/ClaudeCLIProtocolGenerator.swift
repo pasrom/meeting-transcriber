@@ -10,6 +10,20 @@
         let claudeBin: String
         let language: String
 
+        /// User-supplied key from Settings → Protocol Generation (`AppSettings.claudeAPIKey`),
+        /// injected only when the user has explicitly typed one in. Not
+        /// auto-discovered: an implicit switch away from the CLI's own OAuth
+        /// login would silently move a healthy subscription session onto
+        /// metered billing, and a stale/wrong key would silently break a
+        /// previously-working install (both measured — see PR #692 review).
+        let anthropicAPIKey: String?
+
+        init(claudeBin: String, language: String, anthropicAPIKey: String? = nil) {
+            self.claudeBin = claudeBin
+            self.language = language
+            self.anthropicAPIKey = anthropicAPIKey
+        }
+
         static let timeoutSeconds: TimeInterval = 600
 
         /// Search paths for Claude CLI binaries.
@@ -37,6 +51,7 @@
             process.environment = Self.buildEnvironment(
                 baseEnvironment: ProcessInfo.processInfo.environment,
                 searchPaths: Self.searchPaths,
+                anthropicAPIKey: anthropicAPIKey,
             )
 
             let stdinPipe = Pipe()
@@ -279,15 +294,27 @@
 
         /// Strip `CLAUDECODE` (avoid nested-session detection by the child
         /// CLI) and prepend `searchPaths` to `PATH` (app bundles inherit
-        /// a minimal `PATH`).
+        /// a minimal `PATH`). `anthropicAPIKey`, when non-empty and not
+        /// already set in `baseEnvironment`, is injected so the subprocess
+        /// can authenticate via API key instead of the CLI's own OAuth
+        /// session. The key is never auto-discovered — it only arrives here
+        /// when the user has explicitly typed one into Settings → Protocol
+        /// Generation (`AppSettings.claudeAPIKey`), so a healthy OAuth
+        /// session is never silently switched to metered billing and a bad
+        /// key can never silently break a previously-working install.
         static func buildEnvironment(
             baseEnvironment: [String: String],
             searchPaths: [String],
+            anthropicAPIKey: String? = nil,
         ) -> [String: String] {
             var env = baseEnvironment
             env.removeValue(forKey: "CLAUDECODE")
             let extraPaths = searchPaths.joined(separator: ":")
             env["PATH"] = "\(extraPaths):\(env["PATH"] ?? "/usr/bin:/bin")"
+            if env["ANTHROPIC_API_KEY"]?.isEmpty ?? true,
+               let anthropicAPIKey, !anthropicAPIKey.isEmpty {
+                env["ANTHROPIC_API_KEY"] = anthropicAPIKey
+            }
             return env
         }
     }

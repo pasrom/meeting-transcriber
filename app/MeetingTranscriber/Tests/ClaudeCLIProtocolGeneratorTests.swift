@@ -176,6 +176,42 @@
             XCTAssertEqual(env["USER"], "x")
         }
 
+        func testBuildEnvironmentInjectsAnthropicAPIKeyWhenMissing() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["PATH": "/usr/bin"],
+                searchPaths: [],
+                anthropicAPIKey: "sk-ant-test-key",
+            )
+            XCTAssertEqual(env["ANTHROPIC_API_KEY"], "sk-ant-test-key")
+        }
+
+        func testBuildEnvironmentDoesNotOverrideExistingAnthropicAPIKey() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-already-set"],
+                searchPaths: [],
+                anthropicAPIKey: "sk-ant-test-key",
+            )
+            XCTAssertEqual(env["ANTHROPIC_API_KEY"], "sk-ant-already-set")
+        }
+
+        func testBuildEnvironmentLeavesAnthropicAPIKeyUnsetWhenLookupIsNil() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["PATH": "/usr/bin"],
+                searchPaths: [],
+                anthropicAPIKey: nil,
+            )
+            XCTAssertNil(env["ANTHROPIC_API_KEY"])
+        }
+
+        func testBuildEnvironmentLeavesAnthropicAPIKeyUnsetWhenLookupIsEmpty() {
+            let env = ClaudeCLIProtocolGenerator.buildEnvironment(
+                baseEnvironment: ["PATH": "/usr/bin"],
+                searchPaths: [],
+                anthropicAPIKey: "",
+            )
+            XCTAssertNil(env["ANTHROPIC_API_KEY"])
+        }
+
         // MARK: - drainStreamJSONLines
 
         func testDrainStreamJSONLinesEmptyBufferReturnsNothing() {
@@ -359,6 +395,52 @@
                 transcript: "Speaker 1: hello", title: "Sync", diarized: false,
             )
             XCTAssertEqual(result, "Protocol body")
+        }
+
+        /// Proves `anthropicAPIKey` actually reaches the subprocess
+        /// environment, not just `buildEnvironment`'s pure-function output —
+        /// the fake binary echoes `$ANTHROPIC_API_KEY` back as its
+        /// stream-json reply, so the assertion is on the real subprocess
+        /// launch path in `generate()`.
+        func testGeneratePassesAnthropicAPIKeyToSubprocessEnvironment() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}\\n' "$ANTHROPIC_API_KEY"
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(
+                claudeBin: script, language: "German", anthropicAPIKey: "sk-ant-test-key",
+            )
+            let result = try await generator.generate(
+                transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+            )
+            XCTAssertEqual(result, "sk-ant-test-key")
+        }
+
+        /// A generator with no `anthropicAPIKey` must not inject anything —
+        /// the fake binary reports "unset" only when the variable is
+        /// entirely absent from its environment, not merely empty.
+        func testGenerateWithNoAnthropicAPIKeyLeavesEnvironmentUnset() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                if [ -z "${ANTHROPIC_API_KEY+x}" ]; then
+                    printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"unset"}}\\n'
+                else
+                    printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"set"}}\\n'
+                fi
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let result = try await generator.generate(
+                transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+            )
+            XCTAssertEqual(result, "unset")
         }
 
         /// Writes a temporary executable `#!/bin/sh` script wrapping `body` and

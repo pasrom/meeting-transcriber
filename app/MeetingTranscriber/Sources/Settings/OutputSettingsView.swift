@@ -124,6 +124,19 @@ struct OutputSettingsView: View {
                 Text("Binary used for protocol generation")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                HStack {
+                    Text("API Key")
+                    Spacer()
+                    SecureField("", text: $settings.claudeAPIKey)
+                        .frame(width: 200)
+                }
+                Text("Optional. Leave empty to use your \"claude login\" session.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Only set this if that session can't stay signed in. An explicit key here is billed separately from your subscription.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
         #endif
 
         case .openAICompatible:
