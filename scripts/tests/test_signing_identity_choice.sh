@@ -594,6 +594,42 @@ test_test_rpc_decides_before_it_replaces_the_executable() {
     return "$rc"
 }
 
+# An empty keychain: run_app.sh builds on, since a contributor without any
+# certificate can still run the app, but it says so. It used to die inside
+# codesign by accident (the trailer's word `valid` taken as the identity);
+# with the chooser's honest empty answer it would otherwise pass in silence,
+# the bundle unsigned and every TCC grant gone at the next rebuild.
+test_run_app_says_so_when_it_leaves_the_bundle_unsigned() {
+    local workdir status signed rc=0
+    workdir="$(mktemp -d)"
+    _stage_dev_bundle_scripts "$workdir" >/dev/null || {
+        echo "  fixture failed: could not stage the scripts" >&2
+        rm -rf "$workdir"; return 1
+    }
+    _write_security_stub "$workdir"
+
+    _run_dev_bundle_script "$workdir" run_app.sh --build-only
+    status=$?
+    signed="$(_signed_with "$workdir")"
+
+    if [ "$status" -ne 0 ]; then
+        echo "  run_app.sh exited $status on an empty keychain; its last lines:" >&2
+        tail -5 "$workdir/run.log" | sed 's/^/    /' >&2
+        rc=1
+    fi
+    if [ -n "$signed" ]; then
+        echo "  signed with '$signed' although the keychain holds no identity" >&2
+        rc=1
+    fi
+    if ! grep -q 'WARNING: no codesigning identity' "$workdir/run.log"; then
+        echo "  left the bundle unsigned without saying so; the build log ends:" >&2
+        tail -5 "$workdir/run.log" | sed 's/^/    /' >&2
+        rc=1
+    fi
+    rm -rf "$workdir"
+    return "$rc"
+}
+
 # The defect was a caller asking the keychain for itself. Only the library
 # may, so that the choice has one definition: a dev-bundle script that runs
 # `security find-identity` has, whatever it does with the answer, stopped
@@ -645,6 +681,8 @@ run_test "prepare_signing resolves the same Developer ID" \
     test_prepare_signing_resolves_the_same_developer_id
 run_test "test_rpc.sh decides before it replaces the executable" \
     test_test_rpc_decides_before_it_replaces_the_executable
+run_test "run_app.sh says so when it leaves the bundle unsigned" \
+    test_run_app_says_so_when_it_leaves_the_bundle_unsigned
 run_test "no dev-bundle script queries the keychain itself" \
     test_no_dev_bundle_script_queries_the_keychain_itself
 echo
