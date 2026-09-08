@@ -111,7 +111,7 @@
         /// mutation from a debug GET is no longer among the reasons.
         private func rpcOutputDirPath() -> String? {
             guard let data = customOutputDirBookmark else {
-                return AppPaths.downloadsProtocolsDir.path
+                return defaultOutputDir.path
             }
             var isStale = false
             guard let url = try? URL(
