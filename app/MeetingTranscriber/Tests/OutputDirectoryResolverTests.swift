@@ -100,6 +100,33 @@ final class OutputDirectoryResolverTests: XCTestCase {
         XCTAssertEqual(notifier.calls.count, 2, "a new episode is")
     }
 
+    /// Bookmark bytes that cannot be read at all. The path the notification
+    /// names comes from the bookmark data, not from the folder, so unreadable
+    /// data is the one case that leaves it nil (the same bytes
+    /// `RPCSettingsStateTests` uses for the snapshot's null). The user still has
+    /// to hear about it, and in a sentence: a body that opens with the missing
+    /// path's empty string reads as " cannot be reached right now", which names
+    /// nothing and looks like a bug of its own.
+    func testABookmarkWhosePathCannotBeReadIsStillReportedInWords() throws {
+        settings.customOutputDirBookmark = Data([0xDE, 0xAD, 0xBE, 0xEF])
+        XCTAssertEqual(
+            settings.outputDirectoryResolution,
+            .fallback(fallbackDir, configuredPath: nil),
+            "precondition: this is the arm with no path to name",
+        )
+
+        XCTAssertEqual(resolver.resolve(), fallbackDir)
+
+        XCTAssertEqual(notifier.calls.count, 1, "\(notifier.calls.map(\.title))")
+        let call = try XCTUnwrap(notifier.calls.first)
+        XCTAssertEqual(call.title, OutputDirectoryResolver.unavailableTitle)
+        XCTAssertTrue(
+            call.body.hasPrefix("The chosen output folder cannot be reached"),
+            "with no path to name, the phrase stands in for it: \(call.body)",
+        )
+        XCTAssertTrue(call.body.contains(fallbackDir.path), "and where output goes instead: \(call.body)")
+    }
+
     /// Choosing a different folder starts a new episode too: the dedup is per
     /// bookmark, so a second unreachable choice is not hidden behind the first.
     func testChoosingAnotherFolderThatIsAlsoGoneIsReportedAgain() throws {
