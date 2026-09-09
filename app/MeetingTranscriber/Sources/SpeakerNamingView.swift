@@ -4,67 +4,6 @@
 @preconcurrency import AVFoundation
 import SwiftUI
 
-/// NSTextField subclass that forwards accessibility `set value` (AppleScript)
-/// to the delegate so the SwiftUI Binding stays in sync.
-private final class AutomationTextField: NSTextField {
-    override func setAccessibilityValue(_ value: Any?) {
-        guard let str = value as? String else { return }
-        stringValue = str
-        NotificationCenter.default.post(
-            name: NSControl.textDidChangeNotification, object: self,
-        )
-    }
-}
-
-/// NSTextField wrapper that syncs accessibility `set value` to the Binding.
-/// Standard SwiftUI TextField ignores programmatic accessibility value changes
-/// (e.g. from AppleScript `set value of text field`), which breaks UI automation.
-struct AccessibleTextField: NSViewRepresentable {
-    @Binding var text: String
-    var placeholder: String
-    var identifier: String
-
-    func makeNSView(context: Context) -> NSTextField {
-        let field = AutomationTextField()
-        field.placeholderString = placeholder
-        field.setAccessibilityIdentifier(identifier)
-        field.bezelStyle = .roundedBezel
-        field.delegate = context.coordinator
-        return field
-    }
-
-    func updateNSView(_ nsView: NSTextField, context: Context) {
-        // Re-arm the coordinator: it is created once and kept for the row's
-        // whole life, so without this it writes through the binding from the
-        // row's first render forever (issue #700).
-        context.coordinator.text = $text
-        if nsView.stringValue != text {
-            nsView.stringValue = text
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
-    }
-
-    final class Coordinator: NSObject, NSTextFieldDelegate {
-        /// Refreshed by `updateNSView`. Left captured at creation it goes stale
-        /// the moment the caller's key moves: a row that survived a data switch
-        /// at a new position kept writing to the old one, and trapped once the
-        /// array had shrunk below it (issue #700).
-        var text: Binding<String>
-
-        init(text: Binding<String>) {
-            self.text = text
-        }
-
-        func controlTextDidChange(_ notification: Notification) {
-            guard let field = notification.object as? NSTextField else { return }
-            text.wrappedValue = field.stringValue
-        }
-    }
-}
-
 /// Format seconds as "Xs" or "M:SS".
 func formattedTime(_ seconds: Double) -> String {
     let m = Int(seconds) / 60
@@ -160,9 +99,8 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
 
     @State private var keyboardGracePeriodActive: Bool = true
     /// Field contents keyed by speaker label, not by row position. The rows
-    /// are identified by label, and each row's text field keeps the binding
-    /// it was created with, so the key has to be the one thing that cannot
-    /// move under a row: its label. See `AccessibleTextField.Coordinator`.
+    /// are identified by label, so the key has to be the one thing that cannot
+    /// move under a row: its label (issue #700).
     @State private var names: [String: String] = [:]
     /// Job-ID for which this view has already fired `onComplete`. Tracked
     /// per-job (not just a Bool) so that when the window switches to a
@@ -460,17 +398,21 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         }
     }
 
+    /// A plain `TextField`, on purpose: it takes a fresh binding on every
+    /// update, so nothing parked on the field can outlive the row's position.
+    /// The `NSViewRepresentable` it replaced kept its coordinator's binding for
+    /// the row's whole life, which is what trapped in issue #700, and it existed
+    /// only so an accessibility set-value could drive the field, a path the
+    /// automation API (`/v1/jobs/<id>/naming`) has since taken over (issue #702).
     private func nameField(for label: String) -> some View {
-        AccessibleTextField(
-            text: nameBinding(for: label),
-            placeholder: "Name",
-            identifier: A11yID.speakerName(label),
-        )
+        TextField("Name", text: nameBinding(for: label))
+            .textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier(A11yID.speakerName(label))
     }
 
-    /// Captures the `names` binding rather than `self`, because the field's
-    /// coordinator parks this binding for the row's whole life and capturing
-    /// the view would keep that job's segments and embeddings alive with it.
+    /// Captures the `names` binding rather than `self`: SwiftUI keeps the
+    /// binding it handed the field until the next update, and capturing the
+    /// view would keep that job's segments and embeddings alive with it.
     private func nameBinding(for label: String) -> Binding<String> {
         let store = $names
         return Binding(

@@ -1,7 +1,5 @@
 // swiftlint:disable file_length
-import AppKit
 @testable import MeetingTranscriber
-import SwiftUI
 import ViewInspector
 import XCTest
 
@@ -602,46 +600,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             (try? btn.labelView().text().string()) == "Dave"
         }
         XCTAssertEqual(daveButtons.count, 1)
-    }
-
-    // MARK: - AccessibleTextField NSViewRepresentable bridge
-
-    func testAccessibleTextFieldCoordinatorWritesBackToBinding() {
-        var current = ""
-        let binding = Binding<String>(get: { current }, set: { current = $0 })
-        let coord = AccessibleTextField.Coordinator(text: binding)
-        let field = NSTextField()
-        field.stringValue = "Frank"
-        let notif = Notification(name: NSControl.textDidChangeNotification, object: field)
-        coord.controlTextDidChange(notif)
-        XCTAssertEqual(current, "Frank")
-    }
-
-    func testAccessibleTextFieldCoordinatorIgnoresNonTextFieldNotification() {
-        var current = "unchanged"
-        let binding = Binding<String>(get: { current }, set: { current = $0 })
-        let coord = AccessibleTextField.Coordinator(text: binding)
-        // Notification.object is not an NSTextField → guard fires, binding stays.
-        let notif = Notification(name: NSControl.textDidChangeNotification, object: NSObject())
-        coord.controlTextDidChange(notif)
-        XCTAssertEqual(current, "unchanged")
-    }
-
-    func testAccessibleTextFieldMakeCoordinatorReturnsCoordinatorBoundToText() {
-        var captured = ""
-        let field = AccessibleTextField(
-            text: Binding(get: { captured }, set: { captured = $0 }),
-            placeholder: "Name",
-            identifier: A11yID.speakerName("test"),
-        )
-        let coord = field.makeCoordinator()
-        // Drive the coordinator to verify the binding is wired through.
-        let nsField = NSTextField()
-        nsField.stringValue = "Grace"
-        coord.controlTextDidChange(
-            Notification(name: NSControl.textDidChangeNotification, object: nsField),
-        )
-        XCTAssertEqual(captured, "Grace")
     }
 
     // MARK: - longestSegment (pure)
