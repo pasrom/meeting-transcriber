@@ -1,4 +1,5 @@
 @testable import AudioTapLib
+import CoreAudio
 import XCTest
 
 /// `SilentTrackDiagnostics` owns the queue the process-state reads run on, the
@@ -155,6 +156,56 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         }
         XCTAssertTrue(diagnostics.probeAsync([], aggregateID: 0, reason: "start"))
         wait(for: [reported], timeout: 5)
+    }
+
+    // MARK: - The device half of the snapshot
+
+    func testTheShippingProbeAsksAboutTheAggregateWhenThereIsOne() {
+        // The decision in `readAll`: a probe taken while a tap is installed has
+        // an aggregate to report on, and the line that says whether it ever
+        // started is the reason this snapshot carries a device at all. The
+        // readings themselves fail against an id no device owns, which is fine
+        // and is the point: a failed reading is still a reading.
+        let reported = expectation(description: "reported")
+        let diagnostics = SilentTrackDiagnostics(probe: SilentTrackDiagnostics.readAll) { _, outcome in
+            guard case let .read(snapshot) = outcome else { return XCTFail("expected a reading") }
+            XCTAssertNotNil(snapshot.device, "a probe with an aggregate must report on it")
+            reported.fulfill()
+        }
+        XCTAssertTrue(diagnostics.probeAsync([], aggregateID: 1, reason: "start"))
+        wait(for: [reported], timeout: 5)
+    }
+
+    func testTheShippingProbeAsksNothingWhenNoTapIsInstalled() {
+        // The other side, and the reason the field is optional: between a
+        // give-up and the next adoption there is no aggregate, and inventing a
+        // reading for object 0 would put a line in the log about a device that
+        // was never part of this recording.
+        let reported = expectation(description: "reported")
+        let diagnostics = SilentTrackDiagnostics(probe: SilentTrackDiagnostics.readAll) { _, outcome in
+            guard case let .read(snapshot) = outcome else { return XCTFail("expected a reading") }
+            XCTAssertNil(snapshot.device)
+            reported.fulfill()
+        }
+        XCTAssertTrue(
+            diagnostics.probeAsync([], aggregateID: AudioObjectID(kAudioObjectUnknown), reason: "stop"),
+        )
+        wait(for: [reported], timeout: 5)
+    }
+
+    @available(macOS 14.2, *)
+    func testTheSinkRendersADeviceReadingWithoutTappedProcesses() {
+        // A tap with no processes still has an aggregate, and the device line
+        // has to survive the empty-process early return that follows it.
+        // Exercises the branch; the log text itself is not observable here, for
+        // the same reason the process lines beside it are not.
+        AppAudioCapture.logSilentTrackProbe("start", .read(.init(
+            processes: [],
+            device: AggregateRunState(
+                aggregateID: 211, isRunning: .value(false),
+                defaultOutputDeviceID: .value(145), defaultOutputRate: .value(24000),
+            ),
+        )))
     }
 
     // MARK: - The observer behind it
