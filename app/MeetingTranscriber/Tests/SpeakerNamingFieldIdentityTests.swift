@@ -20,7 +20,8 @@ import XCTest
 /// soon as the new job had fewer speakers than the captured index. The
 /// representable is gone (issue #702) and the plain `TextField` in its place
 /// takes a fresh binding on every update; this test is what says so for a
-/// hosted, reused field, which ViewInspector never instantiates.
+/// hosted, reused field, which ViewInspector never instantiates. The full
+/// history of why the representable existed and was removed is in CLAUDE.md.
 ///
 /// The measured mechanism is the shift, not a dropped row: a field whose label
 /// disappears leaves the window and loses first-responder status, so nothing
@@ -28,12 +29,9 @@ import XCTest
 @MainActor
 final class SpeakerNamingFieldIdentityTests: XCTestCase {
     /// Stand-in for the naming window host: republishing `data` re-renders the
-    /// same view slot with the next job, exactly as the scene does, and
-    /// republishing `pendingJobCount` re-renders it with the same job, as
-    /// another job reaching naming does.
+    /// same view slot with the next job, exactly as the scene does.
     private final class Host: ObservableObject {
         @Published var data: PipelineQueue.SpeakerNamingData
-        @Published var pendingJobCount = 1
         init(data: PipelineQueue.SpeakerNamingData) {
             self.data = data
         }
@@ -42,7 +40,7 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
     private struct Root: View {
         @ObservedObject var host: Host
         var body: some View {
-            SpeakerNamingView(data: host.data, pendingJobCount: host.pendingJobCount, gracePeriod: 0) { _ in }
+            SpeakerNamingView(data: host.data, gracePeriod: 0) { _ in }
         }
     }
 
@@ -148,27 +146,26 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(fieldAfter))
         try type("Bob", into: window)
         pump { fieldAfter.stringValue == "Bob" }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
 
-        XCTAssertEqual(fieldAfter.stringValue, "Bob", "typing must stay in the row it was typed into")
+        // The field editor shows "Bob" whether or not the binding observed the
+        // keystroke, so reading it now proves nothing about which key the write
+        // reached. Committing the edit does: resigning first responder re-reads
+        // every field from its binding. Measured on this view — a write that
+        // reached R_SPEAKER_00's binding keeps "Bob"; a swallowed or misrouted
+        // one reverts the field to its seed, synchronously, in the same runloop
+        // turn. (A re-render would not re-sync a field whose binding value is
+        // unchanged: SwiftUI diffs against its own cached value, so a re-render
+        // is not an observable signal here — the commit is.)
+        XCTAssertTrue(window.makeFirstResponder(nil), "the edit must commit")
+        pump { !(window.firstResponder is NSTextView) }
+
         XCTAssertEqual(
-            field("M_SPEAKER_01", in: hosting)?.stringValue, Self.seed("M_SPEAKER_01"),
-            "the row that took over the old index must not receive the typing",
+            fieldAfter.stringValue, "Bob",
+            "the typed name must have reached R_SPEAKER_00's binding, not just its field editor",
         )
-
-        // What the field shows is not what the view holds: a field editor updates
-        // the NSTextField whether or not the binding behind it saw the keystroke.
-        // The next render writes the view's state back into every field, so end
-        // editing and re-render (another job reaching naming does exactly this):
-        // a swallowed write comes back as the seed, a misrouted one shows up in
-        // the other row. Measured both ways before this was relied on.
-        window.makeFirstResponder(nil)
-        host.pendingJobCount = 2
-        pump(timeout: 0.3) { false }
-        XCTAssertEqual(fieldAfter.stringValue, "Bob", "the binding must hold the typed name: a re-render pushed something else into the field")
         XCTAssertEqual(
             shownValues(in: hosting), [Self.seed("M_SPEAKER_00"), Self.seed("M_SPEAKER_01"), "Bob"].sorted(),
-            "after a re-render every row must show what the view holds for its own label",
+            "only R_SPEAKER_00's binding may hold the typed name; every other row must still hold its seed",
         )
     }
 }
