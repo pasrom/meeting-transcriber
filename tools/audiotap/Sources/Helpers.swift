@@ -161,8 +161,15 @@ func stringFromNullTerminated(_ buffer: [CChar]) -> String {
     }
 }
 
-/// Resolve the AudioObjectID of the system default input or output device.
-private func resolveDefaultDevice(selector: AudioObjectPropertySelector) -> AudioObjectID? {
+/// Resolve the AudioObjectID of the system default input or output device,
+/// keeping "the system could not answer" apart from "there is no default".
+///
+/// The distinction only matters to the diagnostics (`AggregateRunProbe`), which
+/// has to render the two differently or a reader draws the first conclusion
+/// from the second. Everything else wants one optional and gets it below.
+func defaultDeviceReading(
+    selector: AudioObjectPropertySelector,
+) -> ProcessOutputState.Reading<AudioObjectID> {
     var address = AudioObjectPropertyAddress(
         mSelector: selector,
         mScope: kAudioObjectPropertyScopeGlobal,
@@ -170,9 +177,40 @@ private func resolveDefaultDevice(selector: AudioObjectPropertySelector) -> Audi
     )
     var deviceID = AudioObjectID(kAudioObjectUnknown)
     var size = UInt32(MemoryLayout<AudioObjectID>.size)
-    guard AudioObjectGetPropertyData(
+    let status = AudioObjectGetPropertyData(
         AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID,
-    ) == noErr, deviceID != kAudioObjectUnknown else { return nil }
+    )
+    guard status == noErr else { return .failed(status) }
+    return .value(deviceID)
+}
+
+/// The default output device as a reading. Named separately because it is the
+/// one the aggregate binds against, and every caller of it means that one.
+func defaultOutputDeviceReading() -> ProcessOutputState.Reading<AudioObjectID> {
+    defaultDeviceReading(selector: kAudioHardwarePropertyDefaultOutputDevice)
+}
+
+/// Nominal sample rate as a reading, for the same reason as above: a device
+/// reporting 0 and a property that could not be read are different findings.
+func nominalSampleRateReading(deviceID: AudioObjectID) -> ProcessOutputState.Reading<Int> {
+    var address = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyNominalSampleRate,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    )
+    var rate: Float64 = 0
+    var size = UInt32(MemoryLayout<Float64>.size)
+    let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
+    guard status == noErr else { return .failed(status) }
+    return .value(Int(rate))
+}
+
+/// Resolve the AudioObjectID of the system default input or output device.
+/// Folds both "could not ask" and "no default device" into nil, which is what
+/// every caller here wants; `defaultDeviceReading` keeps them apart.
+private func resolveDefaultDevice(selector: AudioObjectPropertySelector) -> AudioObjectID? {
+    guard case let .value(deviceID) = defaultDeviceReading(selector: selector),
+          deviceID != kAudioObjectUnknown else { return nil }
     return deviceID
 }
 

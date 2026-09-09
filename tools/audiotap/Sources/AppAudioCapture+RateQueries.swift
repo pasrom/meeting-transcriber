@@ -19,21 +19,19 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// the nominal one).
 @available(macOS 14.2, *)
 extension AppAudioCapture {
-    /// Query nominal sample rate from a CoreAudio device.
+    /// Query nominal sample rate from a CoreAudio device. Zero is the ladder's
+    /// "could not be queried" signal, so the reading is folded to it here; the
+    /// diagnostics keep the status, which is why the read itself lives in
+    /// `nominalSampleRateReading` and this is a thin adapter over it.
     static func queryNominalSampleRate(deviceID: AudioObjectID) -> Int {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain,
-        )
-        var rate: Float64 = 0
-        var size = UInt32(MemoryLayout<Float64>.size)
-        let status = AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &rate)
-        if status != noErr {
+        switch nominalSampleRateReading(deviceID: deviceID) {
+        case let .value(rate):
+            return rate
+
+        case let .failed(status):
             logger.warning("queryNominalSampleRate failed (status: \(status))")
             return 0
         }
-        return Int(rate)
     }
 
     /// Query physical stream format sample rate from a CoreAudio device.
