@@ -72,7 +72,7 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
 
     private func nameFields(in view: NSView) -> [NSTextField] {
         var found: [NSTextField] = []
-        if let field = view as? NSTextField, field.accessibilityIdentifier().hasPrefix("speaker-name-") {
+        if let field = view as? NSTextField, field.accessibilityIdentifier().hasPrefix(A11yID.speakerNamePrefix) {
             found.append(field)
         }
         for sub in view.subviews {
@@ -82,7 +82,7 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
     }
 
     private func field(_ label: String, in view: NSView) -> NSTextField? {
-        nameFields(in: view).first { $0.accessibilityIdentifier() == "speaker-name-\(label)" }
+        nameFields(in: view).first { $0.accessibilityIdentifier() == A11yID.speakerName(label) }
     }
 
     private func makeWindow(host: Host) -> (NSWindow, NSHostingView<Root>) {
