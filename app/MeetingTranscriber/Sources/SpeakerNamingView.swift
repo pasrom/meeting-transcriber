@@ -33,7 +33,11 @@ struct AccessibleTextField: NSViewRepresentable {
         return field
     }
 
-    func updateNSView(_ nsView: NSTextField, context _: Context) {
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        // Re-arm the coordinator: it is created once and kept for the row's
+        // whole life, so without this it writes through the binding from the
+        // row's first render forever (issue #700).
+        context.coordinator.text = $text
         if nsView.stringValue != text {
             nsView.stringValue = text
         }
@@ -44,14 +48,10 @@ struct AccessibleTextField: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
-        /// Captured once: SwiftUI creates the coordinator when the row first
-        /// appears and keeps it for as long as the row's identity lives, so
-        /// this is the binding from that first render, whatever `updateNSView`
-        /// has seen since. A caller must therefore bind through something as
-        /// stable as the row identity itself. Binding by array position broke
-        /// that: a row that survived a data switch at a new position kept
-        /// writing to the old one, and trapped once the array had shrunk
-        /// below it (issue #700).
+        /// Refreshed by `updateNSView`. Left captured at creation it goes stale
+        /// the moment the caller's key moves: a row that survived a data switch
+        /// at a new position kept writing to the old one, and trapped once the
+        /// array had shrunk below it (issue #700).
         var text: Binding<String>
 
         init(text: Binding<String>) {
@@ -468,15 +468,14 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         )
     }
 
-    /// Never a position: the field's coordinator keeps the first binding it
-    /// is given for the row's whole life, and a row keeps its identity (the
-    /// label) across a job switch or Re-run even when its sorted position
-    /// changes. A position captured there wrote into another speaker's row
-    /// and trapped when `names` shrank below it (issue #700).
+    /// Captures the `names` binding rather than `self`, because the field's
+    /// coordinator parks this binding for the row's whole life and capturing
+    /// the view would keep that job's segments and embeddings alive with it.
     private func nameBinding(for label: String) -> Binding<String> {
-        Binding(
-            get: { names[label] ?? "" },
-            set: { names[label] = $0 },
+        let store = $names
+        return Binding(
+            get: { store.wrappedValue[label] ?? "" },
+            set: { store.wrappedValue[label] = $0 },
         )
     }
 
