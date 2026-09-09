@@ -41,6 +41,7 @@ NAMING_ESCAPE=false      # press a real Escape on the naming dialog + assert it 
 NAMING_SWITCH=false      # type into the naming dialog after it moves on to a same-title job with fewer speakers (issue #700, see run_naming_switch)
 TITLE_SOURCE=false      # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
 ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
+QUIT_FOREIGN_APP=false   # hand-runs: quit a dev app this driver did not start instead of refusing (see the app-provenance guard)
 ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
 
 while [ $# -gt 0 ]; do
@@ -64,6 +65,7 @@ while [ $# -gt 0 ]; do
         --title-source)     TITLE_SOURCE=true ;;
         --echo-bleed)       ECHO_BLEED=true ;;
         --echo-cancel)      ECHO_CANCEL=true ;;
+        --quit-foreign-app) QUIT_FOREIGN_APP=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -187,6 +189,9 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        the windows where it did not. Standalone lane. Needs python3
                        and the bundled model.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
+  --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
+                       not launch is running (someone may be using it). Pass this
+                       to quit and relaunch it instead, when you know it is yours.
 HELP
             exit 0
             ;;
@@ -542,6 +547,93 @@ require_command codesign
 # (observed on Mac mini hosts). Surface the misconfiguration up-front.
 if ! system_profiler SPAudioDataType 2>/dev/null | grep -A4 "Default Input" | grep -q "Input Channels"; then
     fail "no default audio input device — install BlackHole 2ch (brew install blackhole-2ch + reboot/coreaudiod restart) and set it as the default Input in System Settings → Sound"
+fi
+
+# Refuse to run alongside another driver. Two e2e-app.sh runs on one host share
+# the deployed bundle, the RPC port and the audio device, and each one quits the
+# other's app at launch (the line below), so BOTH results are meaningless and the
+# host can be left with a bundle, settings or a speaker DB that neither run
+# expects. Observed 2026-09-09: a hand-started `--two-meetings` run overlapped a
+# second driver started over SSH, and the CI-worker check the SSH side relied on
+# cannot see a hand-started lane. Matched on the script name, excluding this
+# process and its ancestors (the shell that invoked it carries the same words on
+# its command line). Other e2e-*.sh drivers are not matched: they never run
+# concurrently with this one in the workflow.
+_e2e_other_drivers() {
+    local ancestors=" $$ " pid="$$" ppid p related
+    while [ "$pid" -gt 1 ]; do
+        ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+        [ -n "$ppid" ] || break
+        ancestors="$ancestors$ppid "
+        pid="$ppid"
+    done
+    # The name must stand as a path component or a word (`bash scripts/e2e-app.sh`,
+    # `./scripts/e2e-app.sh`): a quoted mention inside some other command line,
+    # such as a monitoring `pgrep -f "e2e-app.sh"`, is not a driver and must not
+    # block one. `|| true`: pgrep exits 1 when nothing matches, and under
+    # pipefail that would abort the script instead of reporting "no other driver".
+    { pgrep -f '(^|[ /])e2e-app\.sh( |$)' 2>/dev/null || true; } | while read -r p; do
+        case "$ancestors" in *" $p "*) continue ;; esac
+        # A driver runs under bash (its shebang), so a process whose executable
+        # is not a shell only mentions the script: `scp scripts/e2e-app.sh ...`,
+        # an editor holding it open, a `zsh -c` wrapper around a copy. Measured:
+        # such an scp blocked a run on another machine for the copy's duration.
+        case "$(basename "$(ps -o comm= -p "$p" 2>/dev/null)")" in bash|sh) ;; *) continue ;; esac
+        # Descendants of this script carry its command line too: the subshell
+        # running this very check is one (measured: it reported itself as a
+        # second driver). Walk up from the candidate and skip it if the chain
+        # reaches this process.
+        pid="$p"; related=""
+        while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+            if [ "$pid" = "$$" ]; then related=yes; break; fi
+            pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+        done
+        [ -n "$related" ] || printf '%s ' "$p"
+    done
+}
+_other_drivers="$(_e2e_other_drivers)"
+[ -z "$_other_drivers" ] \
+    || fail "another e2e-app.sh is already running on this host (pid(s): ${_other_drivers}). Two drivers would share the deployed bundle, the RPC port and the audio device and quit each other's app, so neither result could be trusted. Wait for it to finish (ps -p ${_other_drivers% } -o pid,command)."
+
+# Second half of the guard: a dev app that is running when this driver starts.
+# The line below quits it, as this driver always has, so the question is whose
+# it is. A launch marker this driver owns answers it for apps a driver started:
+# it is written once the app it opened is up (`<pid> launched`), rewritten at
+# exit as `kept` (--keep-app) or `abandoned` (an exit that never reached the
+# quit, i.e. a failed lane), and removed when the driver quit the app itself.
+#
+#   marker matches, kept       a developer left it on purpose: say so, quit it
+#   marker matches, abandoned  a previous run failed and left it: warn, quit it
+#   no match                   not started by any e2e-app.sh run. Outside CI
+#                              that may be someone's session (run_app.sh, a hand
+#                              launch): REFUSE unless --quit-foreign-app. In CI
+#                              warn and quit it: the sibling e2e-*.sh drivers in
+#                              the workflow open the same app without writing
+#                              the marker, one of them is continue-on-error, and
+#                              a refusal here would cascade its leftover into
+#                              every later e2e-app.sh step going red.
+#
+# What this cannot tell apart: a foreign app from a sibling driver's leftover
+# on a hand-run host, and a stale marker pid reused by an unrelated process
+# (both rare, both reported with the pid and command so a person can decide).
+_DEV_APP_PATTERN="MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber"
+_E2E_APP_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-app-launched"
+_running_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
+if [ -n "$_running_app" ]; then
+    _marker="$(cat "$_E2E_APP_MARKER" 2>/dev/null || true)"
+    _marker_pid="${_marker%% *}"
+    _marker_state="${_marker#* }"
+    _running_cmd="$(ps -o command= -p "$_running_app" 2>/dev/null | cut -c1-120)"
+    if [ -n "$_marker_pid" ] && [ "$_marker_pid" = "$_running_app" ]; then
+        case "$_marker_state" in
+            kept) log "the dev app (pid $_running_app) was left running on purpose by a previous e2e-app.sh run (--keep-app); quitting it to relaunch with this lane's settings" ;;
+            *)    log "WARNING: the dev app (pid $_running_app) is left over from a previous e2e-app.sh run that exited without quitting it; quitting it" ;;
+        esac
+    elif [ "$QUIT_FOREIGN_APP" = true ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+        log "WARNING: the dev app (pid $_running_app) is running and was not started by an e2e-app.sh run; quitting it$( [ "$QUIT_FOREIGN_APP" = true ] && echo " (--quit-foreign-app)" || echo " (CI: a sibling e2e-*.sh driver may have left it)"). Command: $_running_cmd"
+    else
+        fail "the dev app is running (pid $_running_app) and was not started by an e2e-app.sh run, so it may be in use (a run_app.sh session, a hand launch, another driver between its phases). Refusing rather than quitting someone's session. Quit it yourself, or pass --quit-foreign-app if you know it is yours. Command: $_running_cmd"
+    fi
 fi
 
 # Always — even with --no-build, since UserDefaults below take effect
@@ -951,6 +1043,12 @@ _rpc_ready() {
 poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready \
     || fail "RPC /healthz did not respond within ${RPC_READY_TIMEOUT_S}s"
 log "RPC up"
+# Record which app this driver started, for the provenance guard above.
+_launched_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
+if [ -n "$_launched_app" ]; then
+    mkdir -p "$(dirname "$_E2E_APP_MARKER")"
+    printf '%s launched' "$_launched_app" >"$_E2E_APP_MARKER"
+fi
 
 
 # Single trap covers the simulator process + record-only side-effects for
@@ -964,6 +1062,19 @@ on_exit() {
     # twice on a signal (harmless because every step is idempotent, but noisy).
     [ -n "$_ON_EXIT_RAN" ] && return 0
     _ON_EXIT_RAN=1
+    # Leave the app's provenance for the next driver: still running means this
+    # run kept it (--keep-app) or failed before the quit; gone means we quit it.
+    if [ -n "${_launched_app:-}" ]; then
+        if pgrep -f "$_DEV_APP_PATTERN" >/dev/null 2>&1; then
+            if [ "$APP_AFTER" = leave ]; then
+                printf '%s kept' "$_launched_app" >"$_E2E_APP_MARKER"
+            else
+                printf '%s abandoned' "$_launched_app" >"$_E2E_APP_MARKER"
+            fi
+        else
+            rm -f "$_E2E_APP_MARKER"
+        fi
+    fi
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
     if [ "$MIC_ONLY" = true ]; then
         # The lane turns auto-watch off; nothing else here would turn it back
