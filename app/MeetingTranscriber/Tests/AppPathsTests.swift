@@ -62,4 +62,17 @@ final class AppPathsTests: XCTestCase {
         try? fm.createDirectory(at: AppPaths.ipcDir, withIntermediateDirectories: true)
         XCTAssertTrue(fm.fileExists(atPath: AppPaths.ipcDir.path))
     }
+
+    /// The liveness marker (issue #703) sits beside the other state in the
+    /// data directory and never in the recordings directory, which is scanned
+    /// for crash signatures by filename. It is named per bundle identifier
+    /// because the dev and release builds share the directory and each must
+    /// judge only its own previous run.
+    func testLivenessMarkerIsNamedPerBundleInTheDataDirectory() {
+        let marker = AppPaths.livenessMarker
+
+        XCTAssertEqual(marker.deletingLastPathComponent(), AppPaths.dataDir)
+        XCTAssertNotEqual(marker.deletingLastPathComponent(), AppPaths.recordingsDir)
+        XCTAssertEqual(marker.lastPathComponent, "\(Bundle.main.bundleIdentifier ?? "MeetingTranscriber").running")
+    }
 }

@@ -1,5 +1,8 @@
 import Combine
+import os.log
 import SwiftUI
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Launch")
 
 extension Notification.Name {
     static let autoWatchStart = Notification.Name("autoWatchStart")
@@ -81,6 +84,10 @@ struct MeetingTranscriberApp: App {
     init() {
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
+        // The verdict was taken in `AppLauncher.main()`, before `AppState` was
+        // built. It is reported here because this is the first point at which
+        // the notification centre is set up (issue #703).
+        Self.reportPreviousExit(AppLauncher.previousExit, to: NotificationManager.shared)
         // Temp-file cleanup moved into the queue-build recovery flow
         // (`PipelineController.makeQueue`): a crashed `_app_raw.tmp` must be
         // re-mixed by `recoverCrashedRecordings` BEFORE it's cleaned up, so the
@@ -396,6 +403,27 @@ struct MeetingTranscriberApp: App {
     }
 
     // MARK: - Pure Helpers (testable without @main)
+
+    /// Tell the user when the previous run ended without a quit (issue #703),
+    /// the one outcome they cannot see for themselves: a menu bar app that is
+    /// gone looks exactly like one that is idle. A clean quit is the normal
+    /// launch and stays silent; so does a second instance, which is not a
+    /// crash, though it is logged because two instances share one marker and
+    /// only the later one is covered from here on.
+    static func reportPreviousExit(_ exit: PreviousExit, to notifier: any AppNotifying, now: Date = Date()) {
+        switch exit {
+        case .clean:
+            break
+
+        case let .stillRunning(pid):
+            logger.warning("another_instance_running pid=\(pid, privacy: .public)")
+
+        case let .unclean(lastAlive):
+            logger.warning("previous_run_ended_without_quit lastAlive=\(lastAlive.description, privacy: .public)")
+            let notice = PreviousExitNotice(lastAlive: lastAlive, now: now)
+            notifier.notify(title: PreviousExitNotice.title, body: notice.body)
+        }
+    }
 
     /// Whether auto-watch should be enabled based on CLI flags or user settings.
     static func shouldAutoWatch(
