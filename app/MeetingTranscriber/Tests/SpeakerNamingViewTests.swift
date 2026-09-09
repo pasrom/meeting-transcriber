@@ -263,7 +263,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
             (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
         ]
-        let names = ["Alice", "Speaker C"]
+        let names = ["SPEAKER_00": "Alice", "SPEAKER_01": "Speaker C"]
         let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
         XCTAssertEqual(mapping, ["SPEAKER_00": "Alice", "SPEAKER_01": "Speaker C"])
     }
@@ -273,7 +273,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
             (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
         ]
-        let names = ["Alice", ""]
+        let names = ["SPEAKER_00": "Alice", "SPEAKER_01": ""]
         let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
         XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
     }
@@ -282,18 +282,30 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
             (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
         ]
-        let names = ["   "]
+        let names = ["SPEAKER_00": "   "]
         let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
         XCTAssertTrue(mapping.isEmpty)
     }
 
-    func testBuildMappingFewerNamesThanSpeakers() {
+    func testBuildMappingSkipsSpeakersWithoutAnEntry() {
         let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
             (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
             (label: "SPEAKER_01", autoName: nil, speakingTime: 30),
             (label: "SPEAKER_02", autoName: nil, speakingTime: 20),
         ]
-        let names = ["Alice"]
+        let names = ["SPEAKER_00": "Alice"]
+        let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
+        XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
+    }
+
+    /// An entry for a label that is not among the speakers must not leak into
+    /// the mapping: the dictionary can outlive a row (a Re-run that dropped a
+    /// speaker) and only the current speakers may be named.
+    func testBuildMappingIgnoresEntriesForAbsentSpeakers() {
+        let speakers: [(label: String, autoName: String?, speakingTime: Double)] = [
+            (label: "SPEAKER_00", autoName: nil, speakingTime: 60),
+        ]
+        let names = ["SPEAKER_00": "Alice", "SPEAKER_01": "Bob"]
         let mapping = SpeakerNamingView.buildSpeakerMapping(speakers: speakers, names: names)
         XCTAssertEqual(mapping, ["SPEAKER_00": "Alice"])
     }
@@ -380,7 +392,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             (label: "SPEAKER_02", autoName: "Speaker B", speakingTime: 45),
         ]
         let names = SpeakerNamingView.computeInitialNames(speakers: speakers)
-        XCTAssertEqual(names, ["Speaker A", "", "Speaker B"])
+        XCTAssertEqual(names, ["SPEAKER_00": "Speaker A", "SPEAKER_01": "", "SPEAKER_02": "Speaker B"])
     }
 
     // MARK: - formattedTime pure function
