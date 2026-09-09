@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 import os
 
@@ -18,7 +19,29 @@ import os
 /// `restartQueue`, which is bounded by `RestartArbiter` for work that owns HAL
 /// resources; a diagnostic sharing it could delay a restart that matters.
 final class SilentTrackDiagnostics: @unchecked Sendable {
-    typealias Probe = @Sendable ([TappedProcess]) -> [ProcessOutputState]
+    /// One probe's worth of readings. Grouped rather than returned separately
+    /// so both travel the same queue, the same in-flight guard and the same
+    /// reason: the device state is only ever interesting next to the process
+    /// state, and a second mechanism for it would have to re-earn the wedge
+    /// protection this one already has (issue #693).
+    struct ProbeSnapshot: Sendable, Equatable {
+        let processes: [ProcessOutputState]
+        /// Nil when there is no aggregate to ask about, which is every probe
+        /// taken while no tap is installed.
+        let device: AggregateRunState?
+    }
+
+    typealias Probe = @Sendable ([TappedProcess], AudioObjectID) -> ProbeSnapshot
+
+    /// The reading that ships. Both halves are synchronous HAL round trips, so
+    /// this must only ever be called on the queue below.
+    static let readAll: Probe = { processes, aggregateID in
+        ProbeSnapshot(
+            processes: ProcessOutputProbe.readAll(processes),
+            device: aggregateID == kAudioObjectUnknown
+                ? nil : AggregateRunProbe.read(aggregateID: aggregateID),
+        )
+    }
 
     /// What a probe request came to. `skipped` is reported rather than swallowed
     /// because the reason it happens is a read still inside coreaudiod, which is
@@ -26,7 +49,7 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
     /// wedged first probe would silence every later one for the whole recording
     /// and the log would simply be missing, with nothing saying why.
     enum Outcome: Equatable {
-        case read([ProcessOutputState])
+        case read(ProbeSnapshot)
         case skipped
     }
 
@@ -57,11 +80,14 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         /// every give-up and mid-restart stop the session is nil. That is
         /// exactly the recording whose process state is worth having.
         var lastInstalledProcesses: [TappedProcess] = []
+        /// The aggregate of the most recently installed tap, for the same
+        /// reason as the processes above: at stop the session is often gone.
+        var lastInstalledAggregateID = AudioObjectID(kAudioObjectUnknown)
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(probe: @escaping Probe = ProcessOutputProbe.readAll, sink: @escaping Sink) {
+    init(probe: @escaping Probe = SilentTrackDiagnostics.readAll, sink: @escaping Sink) {
         self.probe = probe
         self.sink = sink
     }
@@ -83,16 +109,27 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         state.withLock { $0.lastInstalledProcesses }
     }
 
+    /// The aggregate of the most recently installed tap. See
+    /// `State.lastInstalledAggregateID`.
+    var lastInstalledAggregateID: AudioObjectID {
+        state.withLock { $0.lastInstalledAggregateID }
+    }
+
     /// Called from the tap adoption, on the main queue.
-    func remember(_ processes: [TappedProcess]) {
-        state.withLock { $0.lastInstalledProcesses = processes }
+    func remember(_ processes: [TappedProcess], aggregateID: AudioObjectID) {
+        state.withLock { state in
+            state.lastInstalledProcesses = processes
+            state.lastInstalledAggregateID = aggregateID
+        }
     }
 
     /// Take a process-state reading off every hot queue, unless one is already
     /// running. Returns whether this call started one, which is what makes the
     /// guard assertable.
     @discardableResult
-    func probeAsync(_ processes: [TappedProcess], reason: String) -> Bool {
+    func probeAsync(
+        _ processes: [TappedProcess], aggregateID: AudioObjectID, reason: String,
+    ) -> Bool {
         let started = state.withLock { state -> Bool in
             guard !state.probeInFlight else { return false }
             state.probeInFlight = true
@@ -110,7 +147,7 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         // time. Holding self here costs a queue, two closures and a lock until
         // the read returns, which is the same lifetime a wedged read already has.
         queue.async {
-            let states = self.probe(processes)
+            let snapshot = self.probe(processes, aggregateID)
             // Cleared as soon as the read is back, before the sink hears of it,
             // so the guard means exactly what `Outcome.skipped` says: a read
             // still inside coreaudiod, never a line still being written. A
@@ -119,7 +156,7 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
             // flag only ever bounds how many blocks a wedged read can collect
             // behind it, and a clear the read must return to reach keeps that.
             self.state.withLock { $0.probeInFlight = false }
-            self.sink(reason, .read(states))
+            self.sink(reason, .read(snapshot))
         }
         return true
     }

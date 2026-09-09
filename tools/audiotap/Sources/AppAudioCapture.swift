@@ -209,7 +209,7 @@ public class AppAudioCapture: @unchecked Sendable {
     /// something" a fact the type system carries rather than a convention.
     func install(_ session: AppTapSession) {
         tapSession = session
-        silentTrackDiagnostics.remember(session.tappedProcesses)
+        silentTrackDiagnostics.remember(session.tappedProcesses, aggregateID: session.aggregateID)
         actualSampleRate = session.resolvedSampleRate
     }
 
@@ -458,7 +458,9 @@ public class AppAudioCapture: @unchecked Sendable {
         logger.info(
             "Audio capture started (PIDs \(self.pids), rate: \(session.resolvedSampleRate) Hz)",
         )
-        silentTrackDiagnostics.probeAsync(session.tappedProcesses, reason: "start")
+        silentTrackDiagnostics.probeAsync(
+            session.tappedProcesses, aggregateID: session.aggregateID, reason: "start",
+        )
         return session
     }
 

@@ -21,11 +21,11 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         }
 
         func probe(hold: Bool) -> SilentTrackDiagnostics.Probe {
-            { [self] _ in
+            { [self] _, _ in
                 lock.lock(); _calls += 1; lock.unlock()
                 entered.signal()
                 if hold { release.wait() }
-                return []
+                return SilentTrackDiagnostics.ProbeSnapshot(processes: [], device: nil)
             }
         }
     }
@@ -36,13 +36,13 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         let spy = ProbeSpy()
         let diagnostics = SilentTrackDiagnostics(probe: spy.probe(hold: true)) { _, _ in }
 
-        XCTAssertTrue(diagnostics.probeAsync(processes, reason: "first"))
+        XCTAssertTrue(diagnostics.probeAsync(processes, aggregateID: 0, reason: "first"))
         XCTAssertEqual(spy.entered.wait(timeout: .now() + 2), .success, "the first probe started")
 
         // A HAL read that never comes back must cost one parked thread, not a
         // growing queue of them. This is the whole reason the guard exists.
-        XCTAssertFalse(diagnostics.probeAsync(processes, reason: "second"))
-        XCTAssertFalse(diagnostics.probeAsync(processes, reason: "third"))
+        XCTAssertFalse(diagnostics.probeAsync(processes, aggregateID: 0, reason: "second"))
+        XCTAssertFalse(diagnostics.probeAsync(processes, aggregateID: 0, reason: "third"))
 
         spy.release.signal()
         XCTAssertEqual(spy.calls, 1)
@@ -71,9 +71,9 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
             }
         }
 
-        XCTAssertTrue(diagnostics.probeAsync(processes, reason: "first"))
+        XCTAssertTrue(diagnostics.probeAsync(processes, aggregateID: 0, reason: "first"))
         XCTAssertEqual(firstReported.wait(timeout: .now() + 5), .success, "the first read reached the sink")
-        let restarted = diagnostics.probeAsync(processes, reason: "second")
+        let restarted = diagnostics.probeAsync(processes, aggregateID: 0, reason: "second")
         secondRequested.signal()
         XCTAssertTrue(restarted, "the guard must be open by the time the sink reports the read")
         guard restarted else { return }
@@ -86,11 +86,11 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         // `@Sendable`, so anything it writes back out would need its own lock
         // for one string.
         let reported = expectation(description: "reported")
-        let diagnostics = SilentTrackDiagnostics(probe: { _ in [] }, sink: { reason, _ in
+        let diagnostics = SilentTrackDiagnostics(probe: { _, _ in .init(processes: [], device: nil) }, sink: { reason, _ in
             XCTAssertEqual(reason, "stop")
             reported.fulfill()
         })
-        diagnostics.probeAsync(processes, reason: "stop")
+        diagnostics.probeAsync(processes, aggregateID: 0, reason: "stop")
         wait(for: [reported], timeout: 5)
     }
 
@@ -106,9 +106,9 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
             XCTAssertEqual(reason, "second")
             skipped.fulfill()
         }
-        XCTAssertTrue(diagnostics.probeAsync(processes, reason: "first"))
+        XCTAssertTrue(diagnostics.probeAsync(processes, aggregateID: 0, reason: "first"))
         XCTAssertEqual(spy.entered.wait(timeout: .now() + 2), .success)
-        XCTAssertFalse(diagnostics.probeAsync(processes, reason: "second"))
+        XCTAssertFalse(diagnostics.probeAsync(processes, aggregateID: 0, reason: "second"))
         wait(for: [skipped], timeout: 5)
         spy.release.signal()
     }
@@ -125,9 +125,9 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         // so under the defect this times out rather than flaking green.
         let reported = expectation(description: "reported after release")
         var diagnostics: SilentTrackDiagnostics? = SilentTrackDiagnostics(
-            probe: { _ in [] }, sink: { _, _ in reported.fulfill() },
+            probe: { _, _ in .init(processes: [], device: nil) }, sink: { _, _ in reported.fulfill() },
         )
-        diagnostics?.probeAsync(processes, reason: "stop")
+        diagnostics?.probeAsync(processes, aggregateID: 0, reason: "stop")
         diagnostics = nil
         wait(for: [reported], timeout: 5)
     }
@@ -139,9 +139,9 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         // launches, and only adoption puts one back. So on every give-up and
         // mid-restart stop the session is nil, which is exactly the recording
         // whose process state is worth having.
-        let diagnostics = SilentTrackDiagnostics(probe: { _ in [] }, sink: { _, _ in })
+        let diagnostics = SilentTrackDiagnostics(probe: { _, _ in .init(processes: [], device: nil) }, sink: { _, _ in })
         XCTAssertTrue(diagnostics.lastInstalledProcesses.isEmpty)
-        diagnostics.remember(processes)
+        diagnostics.remember(processes, aggregateID: 0)
         XCTAssertEqual(diagnostics.lastInstalledProcesses, processes)
     }
 
@@ -149,18 +149,18 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         // A session built by a test seam has no tapped processes. The stop line
         // must still be written, saying so, rather than vanishing.
         let reported = expectation(description: "reported")
-        let diagnostics = SilentTrackDiagnostics(probe: ProcessOutputProbe.readAll) { _, outcome in
-            XCTAssertEqual(outcome, .read([]))
+        let diagnostics = SilentTrackDiagnostics(probe: SilentTrackDiagnostics.readAll) { _, outcome in
+            XCTAssertEqual(outcome, .read(.init(processes: [], device: nil)))
             reported.fulfill()
         }
-        XCTAssertTrue(diagnostics.probeAsync([], reason: "start"))
+        XCTAssertTrue(diagnostics.probeAsync([], aggregateID: 0, reason: "start"))
         wait(for: [reported], timeout: 5)
     }
 
     // MARK: - The observer behind it
 
     func testTheEdgeIsHandedBackToTheCaller() {
-        let diagnostics = SilentTrackDiagnostics(probe: { _ in [] }, sink: { _, _ in })
+        let diagnostics = SilentTrackDiagnostics(probe: { _, _ in .init(processes: [], device: nil) }, sink: { _, _ in })
         XCTAssertNil(diagnostics.observe(ages(energy: 0.5)))
         XCTAssertEqual(
             diagnostics.observe(ages(energy: 11.0)),
@@ -169,7 +169,7 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
     }
 
     func testTheCountersSurviveForTheStopSummary() {
-        let diagnostics = SilentTrackDiagnostics(probe: { _ in [] }, sink: { _, _ in })
+        let diagnostics = SilentTrackDiagnostics(probe: { _, _ in .init(processes: [], device: nil) }, sink: { _, _ in })
         _ = diagnostics.observe(ages(energy: 30.0))
         _ = diagnostics.observe(ages(energy: 0.02))
         _ = diagnostics.observe(ages(energy: 12.0))
