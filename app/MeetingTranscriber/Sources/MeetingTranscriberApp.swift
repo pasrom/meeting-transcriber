@@ -53,10 +53,9 @@ private struct AnimatedMenuBarIcon: View {
 /// window-level AppKit properties can be configured. macOS 14 (our deployment
 /// target) has no scene-level `.windowLevel` / collection-behavior modifiers
 /// (those are macOS 15+), so a zero-size representable placed in the content's
-/// `.background` is the idiomatic way to reach the window. Mirrors the
-/// `AccessibleTextField` `NSViewRepresentable` idiom already used in the naming
-/// UI. `configure` runs once the view is attached and on subsequent updates;
-/// the window properties it sets are sticky and idempotent.
+/// `.background` is the idiomatic way to reach the window. `configure` runs
+/// once the view is attached and on subsequent updates; the window properties
+/// it sets are sticky and idempotent.
 private struct WindowAccessor: NSViewRepresentable {
     let configure: (NSWindow) -> Void
 

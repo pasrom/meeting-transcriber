@@ -578,7 +578,7 @@ extension XCTestCase {
 
 extension NSView {
     /// Every descendant of the given type, the receiver included.
-    func descendants<T: NSView>(of type: T.Type = T.self) -> [T] {
+    func descendants<T: NSView>(of type: T.Type) -> [T] {
         var found: [T] = []
         if let match = self as? T { found.append(match) }
         for sub in subviews {
