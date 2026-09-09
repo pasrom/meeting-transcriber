@@ -174,9 +174,10 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     @State private var playingLabel: String?
     @State private var rerunMode: DiarizerMode = .offline
     @State private var rerunCount: Int = 2
-    /// Indices of speaker rows where the user clicked "More…" to reveal the full
-    /// known-names list instead of the top-N ranked subset.
-    @State private var knownExpanded: Set<Int> = []
+    /// Labels of speaker rows where the user clicked "More…" to reveal the full
+    /// known-names list instead of the top-N ranked subset. Keyed by label for
+    /// the same reason `names` is: a row's position is not its identity.
+    @State private var knownExpanded: Set<String> = []
     /// Number of "Known:" chips shown by default before "More…" appears.
     private static let knownChipsCollapsedLimit = 8
 
@@ -279,8 +280,8 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
 
             ScrollView {
                 VStack(spacing: 16) {
-                    ForEach(Array(speakers.enumerated()), id: \.element.label) { index, speaker in
-                        speakerRow(index: index, speaker: speaker)
+                    ForEach(speakers, id: \.label) { speaker in
+                        speakerRow(speaker: speaker)
                     }
                 }
             }
@@ -407,13 +408,12 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         let mode = currentDiarizerMode ?? rerunMode
         rerunMode = mode
         rerunCount = Self.clampCount(max(2, speakers.count + 1), for: mode)
-        // Indices are speaker-position based; a different speaker count would
-        // leave stale entries pointing at no-longer-rendered rows.
+        // Collapse every "More…" row again: the next job's known-names list is
+        // a different list, so carrying the expansion over would be arbitrary.
         knownExpanded.removeAll()
     }
 
     private func speakerRow(
-        index: Int,
         speaker: (label: String, autoName: String?, speakingTime: Double),
     ) -> some View {
         // swiftlint:disable:next closure_body_length
@@ -454,7 +454,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 }
 
                 nameField(for: speaker.label)
-                suggestionChips(for: index, speaker: speaker)
+                suggestionChips(for: speaker)
             }
             .padding(4)
         }
@@ -485,12 +485,11 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// M_ and R_ pick up the same speaker).
     @ViewBuilder
     private func suggestionChips(
-        for index: Int,
-        speaker: (label: String, autoName: String?, speakingTime: Double),
+        for speaker: (label: String, autoName: String?, speakingTime: Double),
     ) -> some View {
         let query = names[speaker.label] ?? ""
         participantChips(for: speaker.label, query: query)
-        knownChips(for: index, speaker: speaker, query: query)
+        knownChips(for: speaker, query: query)
     }
 
     @ViewBuilder
@@ -501,11 +500,9 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// `index` only keys `knownExpanded`; every write to `names` goes by label.
     @ViewBuilder
     private func knownChips(
-        for index: Int,
-        speaker: (label: String, autoName: String?, speakingTime: Double),
+        for speaker: (label: String, autoName: String?, speakingTime: Double),
         query: String,
     ) -> some View {
         let known = Self.filterByQuery(names: knownNamesNotInParticipants, query: query)
@@ -513,13 +510,12 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             let ranked = Self.rankedKnownNames(
                 known: known, autoName: speaker.autoName, participants: data.participants,
             )
-            let expanded = knownExpanded.contains(index)
+            let expanded = knownExpanded.contains(speaker.label)
             // Don't bother with the Top-N cap once the user has typed — they're
             // already looking at a filtered short list.
             let limit = query.isEmpty ? Self.knownChipsCollapsedLimit : ranked.count
             let visible = expanded ? ranked : Array(ranked.prefix(limit))
             let hidden = ranked.count - visible.count
-            let speakerLabel = speaker.label
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Known:")
@@ -534,13 +530,13 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                     if hidden > 0 {
                         chipMoreButton(
                             label: "More (\(hidden))…",
-                            identifier: A11yID.knownMore(speakerLabel),
-                        ) { knownExpanded.insert(index) }
+                            identifier: A11yID.knownMore(speaker.label),
+                        ) { knownExpanded.insert(speaker.label) }
                     } else if expanded, ranked.count > Self.knownChipsCollapsedLimit {
                         chipMoreButton(
                             label: "Less",
-                            identifier: A11yID.knownLess(speakerLabel),
-                        ) { knownExpanded.remove(index) }
+                            identifier: A11yID.knownLess(speaker.label),
+                        ) { knownExpanded.remove(speaker.label) }
                     }
                 }
             }
