@@ -38,7 +38,8 @@ CRASH_RECOVERY=false     # kill mid-recording + assert the orphan is recovered i
 REDEPLOY_ONLY=false      # rebuild + redeploy the canonical (non-fault) bundle and exit — restores a clean bundle after --mic-device-change
 NAMING_CONFIRM=false     # drive the speaker-naming CONFIRM path end-to-end via POST /v1/jobs/<id>/naming (see run_naming_confirm)
 NAMING_ESCAPE=false      # press a real Escape on the naming dialog + assert it dismisses without resolving (issue #577)
-TITLE_SOURCE=false       # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
+NAMING_SWITCH=false      # type into the naming dialog after it moves on to a same-title job with fewer speakers (issue #700, see run_naming_switch)
+TITLE_SOURCE=false      # drive the window-title lookup with a no-usable-title case + assert the clean placeholder (issue #501 title source)
 ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
 ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
 
@@ -59,6 +60,7 @@ while [ $# -gt 0 ]; do
         --redeploy-only)    REDEPLOY_ONLY=true ;;
         --naming-confirm)   NAMING_CONFIRM=true ;;
         --naming-escape)    NAMING_ESCAPE=true ;;
+        --naming-switch)    NAMING_SWITCH=true ;;
         --title-source)     TITLE_SOURCE=true ;;
         --echo-bleed)       ECHO_BLEED=true ;;
         --echo-cancel)      ECHO_CANCEL=true ;;
@@ -66,7 +68,7 @@ while [ $# -gt 0 ]; do
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
-                  [--naming-escape] [--echo-bleed] [--echo-cancel]
+                  [--naming-escape] [--naming-switch] [--echo-bleed] [--echo-cancel]
                   [--naming-confirm] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
@@ -135,6 +137,25 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        pollutes the persistent speaker DB; that snapshot/restore
                        is $GITHUB_ACTIONS-gated, so a LOCAL run enrolls voices
                        into your real speaker DB (a warning is printed).
+  --naming-switch      Issue #700: type into the naming dialog after it switches
+                       to the next pending job of the same meeting title. Two
+                       dual-source pairs are imported with one stem (so both jobs
+                       are dual-source and share a title); expected speakers is
+                       pinned to 1 so the app track yields exactly one remote (R_)
+                       cluster, while the mic tracks cluster into several speakers
+                       on the first job and one on the second, which moves the
+                       surviving R_ label to a lower row. The lane asserts that
+                       geometry, then (with BOTH jobs still pending) switches the
+                       dialog's segmented job picker to the second job so the same
+                       view is reused, posts real keystrokes into the surviving R_
+                       field from outside the process, and asserts the app is
+                       still alive, the text landed in that row and nowhere else,
+                       and a Confirm enrolls that name into the speaker DB (read
+                       over RPC). Pre-fix the first keystroke trapped
+                       Array._checkSubscript_mutating and killed the app. Needs
+                       the Accessibility grant (see the e2e-architecture skill);
+                       without it the lane skips loudly and passes. Standalone
+                       lane; ignores --fixture (rejected). Needs python3 + swiftc.
   --title-source       Issue #501: run meeting-simulator with a window title equal
                        to the app name (no usable meeting-window title), then assert
                        the detected meeting title is the clean "MeetingSimulator Call"
@@ -195,6 +216,18 @@ if [ "$NAMING_CONFIRM" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_R
     || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
     || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ]; }; then
     echo "Error: --naming-confirm is a standalone lane; incompatible with the other lane flags" >&2
+    exit 2
+fi
+# --naming-switch imports its own pairs and drives the dialog from outside the
+# process; nothing it does can share a run with a meeting lane, and the pinned
+# expected-speakers setting it needs would silently change what the other
+# naming lanes measure.
+if [ "$NAMING_SWITCH" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] || [ "$REIMPORT_LATEST" = true ] \
+    || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] || [ "$REDEPLOY_ONLY" = true ] \
+    || [ "$TWO_MEETINGS" = true ] || [ "$MIC_ONLY" = true ] || [ "$TITLE_SOURCE" = true ] \
+    || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ] || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --naming-switch is a standalone lane; incompatible with the other lane flags and --fixture" >&2
     exit 2
 fi
 # --naming-confirm always enqueues the known 2-speaker fixture, so a custom
@@ -831,8 +864,14 @@ _naming_confirm_cleanup() {
 
 # Self-heal a dead prior run's DB before anything touches it (CI-gated, all lanes).
 _naming_confirm_self_heal_db
-if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
-    log "Enabling naming lane (diarize on, expected speakers = 2)"
+if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] || [ "$NAMING_SWITCH" = true ]; then
+    # The switch lane pins the app track to ONE remote cluster: the setting
+    # applies to the app track only (the mic track always auto-detects), and
+    # with a single remote speaker the mic clusters alone decide where
+    # R_SPEAKER_00 sits, which is the position the lane needs to move.
+    _NAMING_NUM_SPEAKERS=2
+    [ "$NAMING_SWITCH" = true ] && _NAMING_NUM_SPEAKERS=1
+    log "Enabling naming lane (diarize on, expected speakers = $_NAMING_NUM_SPEAKERS)"
     # Snapshot BOTH domains (standard + container) BEFORE overriding so cleanup
     # restores each domain to exactly its own pre-lane state.
     _NC_PRE_DIARIZE_STD="$(snapshot_default "$_STANDARD_PLIST" diarize)"
@@ -843,7 +882,7 @@ if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
     fi
     log "[naming-confirm] pre-lane diarize(std='$_NC_PRE_DIARIZE_STD' ctr='$_NC_PRE_DIARIZE_CTR') numSpeakers(std='$_NC_PRE_NUMSPK_STD' ctr='$_NC_PRE_NUMSPK_CTR')"
     _set_dev_default diarize true bool
-    _set_dev_default numSpeakers 2 int
+    _set_dev_default numSpeakers "$_NAMING_NUM_SPEAKERS" int
     if [ "${GITHUB_ACTIONS:-}" != "true" ] && [ "$NAMING_ESCAPE" != true ]; then
         # Escape-lane runs never confirm — they dismiss — so nothing reaches
         # updateSpeakerDB and the warning would be a false alarm on the one run
@@ -970,8 +1009,14 @@ on_exit() {
     # Naming-confirm: restore the runner's real speaker DB (CI-gated, no-op
     # locally) and the lane's diarize/numSpeakers overrides so a later run on
     # this host starts from the AppSettings defaults.
-    if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ]; then
+    if [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] || [ "$NAMING_SWITCH" = true ]; then
         _naming_confirm_cleanup
+    fi
+    # Naming-switch: drop its compiled driver and synthesised pairs (our own
+    # mktemp dir, never a real recordings directory).
+    if [ -n "${_NS_DIR:-}" ] && [ -d "$_NS_DIR" ]; then
+        rm -rf "$_NS_DIR"
+        _NS_DIR=""
     fi
     # Mic-only: hand the machine's audio output back before anything else runs
     # on this host. Unconditional, not gated on $MIC_ONLY, so a marker left by a
@@ -2053,6 +2098,328 @@ run_naming_confirm() {
     log "$label: shared fixture intact after the lane ✅"
 }
 
+# --- Speaker-naming switch lane (issue #700) -------------------------------
+#
+# Types into the naming dialog AFTER it has switched to the next pending job of
+# the same meeting title. That is the geometry behind the crash in issue #700:
+# rows are identified by speaker label, the window keeps one view for both jobs
+# because its identity is the title, and the mic track's cluster count differs
+# between the jobs, so a remote label that survives the switch sits at a lower
+# row than before. The field it kept wrote through a binding captured at the
+# old row; once that row lay past the new job's speaker count, the first
+# keystroke trapped in `Array._checkSubscript_mutating` and the app died.
+#
+# The switch is done via the dialog's segmented job picker while BOTH jobs are
+# still pending ("while the second dialog is showing", in the reporter's words),
+# NOT by resolving the first job. This matters and was measured: resolving the
+# first drops the picker (count 2 -> 1), which shifts the SpeakerNamingView's
+# structural slot in its VStack and makes SwiftUI rebuild it with FRESH
+# coordinators, so the stale binding never comes into play and the unfixed build
+# does NOT crash. Keeping both jobs pending keeps the picker present, the view
+# reused, and the coordinator retained, which is what reproduces the crash.
+#
+# Two dual-source pairs are enqueued through the same paired import a fleet
+# consumer uses, so both jobs are genuinely dual-source (`M_`/`R_` labels) and
+# both carry the stem as their title. The app side is pinned to exactly one
+# remote cluster through the "expected speakers" setting (it applies to the app
+# track only; the mic track always auto-detects), and the mic tracks are chosen
+# so the first job clusters into several `M_` speakers and the second into one.
+# The resulting positions are ASSERTED before anything is typed: the lane fails
+# as "geometry not staged" rather than passing vacuously if the diarizer ever
+# hears the fixtures differently.
+#
+# Why a paired import and not two live recordings. The defect lives in the
+# dialog, not in the recorder, and every other lane here covers the recorder. A
+# live recording starts only once the meeting is detected, so the mic fixture's
+# opening seconds are lost, and how much is lost varies run to run; that is
+# exactly the part that decides how many clusters the diarizer hears. The import
+# feeds the diarizer the same samples every time.
+#
+# The keystroke is a real WindowServer key event from outside the process,
+# because the naming window is off the in-process /ui/type allowlist (PII). It
+# goes through scripts/drive-naming-field.swift, which needs only the
+# Accessibility grant the --naming-escape lane already requires; that file says
+# why System Events (which would also need Automation) is not used.
+# RUNNER PREREQUISITE: the Accessibility grant from the e2e-architecture skill's
+# runner setup. Missing, the lane skips loudly and passes, like --naming-escape.
+_NS_DIR=""
+run_naming_switch() {
+    local label="[naming-switch]"
+    require_command python3
+    require_command swiftc
+    [ -f "$DEFAULT_FIXTURE" ] || fail "$label: 2-speaker fixture not found: $DEFAULT_FIXTURE"
+
+    _NS_DIR="$(mktemp -d /tmp/e2e-naming-switch.XXXXXX)"
+    local driver="$_NS_DIR/drive-naming-field"
+    log "$label: compiling the dialog driver"
+    swiftc -O -o "$driver" "$ROOT/scripts/drive-naming-field.swift" 2>&1 | sed 's/^/    /' \
+        || fail "$label: could not compile scripts/drive-naming-field.swift"
+
+    # Preflight the one grant this lane needs. SKIP rather than FAIL, for the
+    # reason the Escape lane gives: only a person at the GUI can grant it, so a
+    # red here would blame every PR for a host prerequisite. Only this arm
+    # returns early; anything failing after it fails the lane.
+    if ! "$driver" trusted 2>/dev/null | grep -q 'trusted=true'; then
+        log "$label: SKIP — this process may not use Accessibility, so no keystroke can reach the dialog."
+        log "$label: fix: System Settings → Privacy & Security → Accessibility; it is the same grant the --naming-escape lane needs (see the e2e-architecture skill for which entry works for CI)."
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            {
+                echo "### naming-switch lane skipped"
+                echo
+                echo "This host is missing the **Accessibility** grant for the runner, so the typing-after-switch assertion did not run."
+                echo "Grant it once in the GUI session (System Settings → Privacy & Security → Accessibility), then this lane gates normally."
+            } >> "$GITHUB_STEP_SUMMARY"
+        fi
+        return 0
+    fi
+
+    # The settings the lane depends on, read back from the running process (a
+    # blind `defaults read` is unreliable for the dev bundle's container redirect).
+    local snap diarize num_speakers record_only
+    snap="$(rpc /state)"
+    [ -n "$snap" ] || fail "$label: /state returned empty (RPC down?)"
+    diarize="$(jq -r '.settings.diarization.diarize' <<<"$snap")"
+    num_speakers="$(jq -r '.settings.diarization.numSpeakers' <<<"$snap")"
+    record_only="$(jq -r '.settings.recording.recordOnly' <<<"$snap")"
+    log "$label: resolved settings diarize=$diarize numSpeakers=$num_speakers recordOnly=$record_only"
+    [ "$diarize" = "true" ] || fail "$label: settings.diarization.diarize is '$diarize', expected true"
+    [ "$num_speakers" = "1" ] || fail "$label: settings.diarization.numSpeakers is '$num_speakers', expected 1 (the app track must yield exactly one remote cluster)"
+    [ "$record_only" = "false" ] || fail "$label: settings.recording.recordOnly is '$record_only', expected false"
+
+    # Both pairs carry this stem, and the stem is the meeting title of a paired
+    # import with no sidecar; the shared title is what keeps one view alive
+    # across the job switch.
+    local stem="naming-switch"
+    log "$label: building the two pairs under $_NS_DIR/pairs"
+    python3 "$ROOT/scripts/fixtures/make-naming-switch-pairs.py" \
+        --app "$DEFAULT_FIXTURE" \
+        --mic-first "$ROOT/app/MeetingTranscriber/Tests/Fixtures/three_speakers_de.wav" \
+        --voice-source "$ROOT/app/MeetingTranscriber/Tests/Fixtures/quality/two_speakers_de.wav" \
+        --voice-truth "$ROOT/app/MeetingTranscriber/Tests/Fixtures/quality/two_speakers_de_truth.json" \
+        --voice-speaker B --out "$_NS_DIR/pairs" --stem "$stem" 2>&1 | sed 's/^/    /' \
+        || fail "$label: could not build the pairs"
+
+    # Wait for a job to park at speaker naming and stash its naming DTO in the
+    # caller's `_NS_NAMING` (bash dynamic scoping, as the echo lanes do). An
+    # errored job is reported as such instead of being waited out.
+    _ns_parked() {
+        assert_app_alive
+        local state
+        state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
+        case "$state" in
+            error) fail "$label: job $1 errored before reaching speaker naming: $(rpc "/v1/jobs/$1" | jq -r '.error // "<none>"')" ;;
+            done) fail "$label: job $1 finished without parking at speaker naming (diarization produced no dialog?)" ;;
+        esac
+        _NS_NAMING="$(rpc "/v1/jobs/$1/naming")"
+        jq -e '(.speakers | length) > 0' <<<"$_NS_NAMING" >/dev/null 2>&1
+    }
+    local _NS_NAMING=""
+
+    # First job: several mic speakers. Enqueued alone and parked before the
+    # second is enqueued, so the window opens on this one.
+    local first second first_naming second_naming
+    first="$(_echo_enqueue "$label" "$_NS_DIR/pairs/first" "$stem")"
+    log "$label: first pair enqueued as $first; waiting for it to park at naming (timeout ${PIPELINE_TIMEOUT_S}s)"
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_parked "$first" \
+        || fail "$label: first job $first never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s"
+    first_naming="$_NS_NAMING"
+
+    second="$(_echo_enqueue "$label" "$_NS_DIR/pairs/second" "$stem")"
+    log "$label: second pair enqueued as $second; waiting for it to park at naming"
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_parked "$second" \
+        || fail "$label: second job $second never parked at speaker naming within ${PIPELINE_TIMEOUT_S}s"
+    second_naming="$_NS_NAMING"
+
+    # --- the geometry, asserted rather than assumed ------------------------
+    # Sorted labels are the dialog's row order (the view sorts `data.mapping`'s
+    # keys). Dual-track prefixes the app/remote track `R_` and the mic/local
+    # track `M_`, so with the app track pinned to one remote cluster the SURVIVOR
+    # is the single `R_` label, and the trap needs its row in the first job to
+    # lie at or past the second job's row count.
+    local first_labels second_labels first_count second_count first_index survivor other_label
+    first_labels="$(jq -c '[.speakers[].label] | sort' <<<"$first_naming")"
+    second_labels="$(jq -c '[.speakers[].label] | sort' <<<"$second_naming")"
+    first_count="$(jq -r 'length' <<<"$first_labels")"
+    second_count="$(jq -r 'length' <<<"$second_labels")"
+    # The remote label of the second job: derived, because the diarizer's id
+    # scheme (R_S1, R_SPEAKER_00, ...) is not something the lane should hardcode.
+    # Exactly one, since the app track is pinned to one cluster on both jobs.
+    local second_remote_count
+    second_remote_count="$(jq -r '[.[] | select(startswith("R_"))] | length' <<<"$second_labels")"
+    [ "$second_remote_count" = "1" ] \
+        || fail "$label: the second job has $second_remote_count remote (R_) speaker(s), expected exactly 1 ($second_labels). Both tracks must diarize for the R_/M_ prefixes to appear; a single-track fallback drops them and there is no survivor to move."
+    survivor="$(jq -r 'map(select(startswith("R_"))) | .[0]' <<<"$second_labels")"
+    # A non-survivor label present in the second job, for the misroute check.
+    other_label="$(jq -r --arg s "$survivor" 'map(select(. != $s)) | .[0] // ""' <<<"$second_labels")"
+    first_index="$(jq -r --arg s "$survivor" 'index($s) // -1' <<<"$first_labels")"
+    log "$label: first job rows  $first_labels ($survivor at row $first_index)"
+    log "$label: second job rows $second_labels ($second_count rows, survivor $survivor, other $other_label)"
+    [ "$(jq -r '.meetingTitle' <<<"$first_naming")" = "$(jq -r '.meetingTitle' <<<"$second_naming")" ] \
+        || fail "$label: the two jobs do not share a meeting title ($(jq -r '.meetingTitle' <<<"$first_naming") vs $(jq -r '.meetingTitle' <<<"$second_naming")); the window would give the second job fresh fields and the retained coordinator would never be exercised"
+    [ -n "$other_label" ] \
+        || fail "$label: the second job has only the survivor row ($second_labels); the misroute check needs another row to prove the write did not land there"
+    [ "$first_index" -ge 0 ] \
+        || fail "$label: geometry not staged: $survivor is absent from the first job ($first_labels)"
+    [ "$first_index" -ge "$second_count" ] \
+        || fail "$label: geometry not staged: $survivor sits at row $first_index of the first job but the second job has $second_count rows, so the stale binding would stay in bounds and the defect could only misroute, not trap. The mic track of the first pair must cluster into more speakers than the whole second job has; the diarizer heard first=$first_labels second=$second_labels."
+    log "$label: geometry staged: row $first_index >= $second_count rows, so a stale binding trips the bounds check ✅"
+
+    # The window must be showing the FIRST job, or the switch below is no
+    # switch. Its fields are enumerated from outside through AX.
+    _naming_window_visible() {
+        [ "$(rpc /state | jq -r '[.windows[] | select(.id == "speaker-naming") | .isVisible] | first // false')" = "true" ]
+    }
+    poll_until 30 2 _naming_window_visible \
+        || fail "$label: naming window never became visible"
+    # Labels whose name field is currently in the window, sorted, as a JSON array.
+    _ns_shown_labels() {
+        "$driver" windows 2>/dev/null \
+            | sed -n 's/^identifier=speaker-name-\(.*\) role=.*/\1/p' \
+            | jq -R . | jq -sc 'sort'
+    }
+    local shown=""
+    _ns_shows() { shown="$(_ns_shown_labels)"; [ "$shown" = "$1" ]; }
+
+    # The picker is driven BY IDENTITY, never by a fixed ordinal. This lane does
+    # not own the queue: the app recovers orphaned recordings a beat after
+    # launch, and with nothing here auto-skipping naming such a job parks and
+    # takes a picker segment of its own. In its first CI run one did exactly
+    # that and landed BETWEEN this lane's two jobs (under the pinned expected
+    # speaker count a single-source recording diarizes to a lone "S1"), so a
+    # hard-coded "segment 1" selected a foreign job. A job's segment is its
+    # position in /state.pendingNamingJobs: that array is built from the very
+    # `pendingSpeakerNamingJobs` the picker's ForEach iterates, so the two
+    # orders agree by construction. The order is re-read right before every
+    # press, the picker's segment count is required to equal the pending count
+    # read, and the press is verified by the labels that appear; a bounded
+    # retry absorbs a job parking between the read and the press. Foreign jobs
+    # are left alone, they belong to whichever lane produced them.
+    local _ns_order=""
+    _ns_select_job() {
+        local job="$1" labels="$2" which="$3" attempt idx count segments out
+        for attempt in 1 2 3; do
+            _ns_order="$(rpc /state | jq -c '[.pendingNamingJobs[].jobID]')"
+            idx="$(jq -r --arg id "$job" 'index($id) // -1' <<<"$_ns_order")"
+            count="$(jq -r 'length' <<<"$_ns_order")"
+            [ "$idx" -ge 0 ] \
+                || fail "$label: the $which job $job is no longer pending (pending order: $_ns_order)"
+            [ "$count" -ge 2 ] \
+                || fail "$label: only $count pending naming job(s), so the dialog shows no job picker; both of this lane's jobs must be pending (pending order: $_ns_order)"
+            out="$("$driver" select-segment --index "$idx" 2>&1)" \
+                || fail "$label: could not select picker segment $idx for the $which job: $out"
+            segments="$(sed -n 's/^selected-segment=[0-9]* of=\([0-9]*\)$/\1/p' <<<"$out")"
+            if [ "$segments" = "$count" ] && poll_until 10 1 _ns_shows "$labels"; then
+                log "$label: $which job selected at picker segment $idx of $count (pending order: $_ns_order)"
+                return 0
+            fi
+            log "$label: attempt $attempt: picker has ${segments:-?} segment(s) vs $count pending job(s), window shows $shown; a job may have parked meanwhile, re-reading the order"
+            sleep 2
+        done
+        fail "$label: could not bring the $which job ($job) into the window: the picker has ${segments:-?} segment(s) but /state lists $count pending naming job(s), and the window shows $shown where $labels was expected (pending order: $_ns_order)"
+    }
+
+    local pending_now pending_count
+    pending_now="$(rpc /state | jq -c '[.pendingNamingJobs[] | {jobID, meetingTitle}]')"
+    pending_count="$(jq -r 'length' <<<"$pending_now")"
+    log "$label: pending naming jobs now: $pending_now"
+    [ "$pending_count" -eq 2 ] \
+        || log "$label: note: $((pending_count - 2)) pending job(s) are not this lane's (a launch-recovered recording, or one another lane left parked); selecting by identity"
+
+    # Show the first job explicitly rather than trusting what opened: the window
+    # opens on the first PENDING job, which may be a foreign one. The survivor's
+    # field is created here, at its higher row.
+    _ns_select_job "$first" "$first_labels" first
+    log "$label: window shows the first job ($first_count fields)"
+
+    # Switch to the second job the way the reporter did: with BOTH jobs still
+    # pending, pick the other one in the dialog's segmented job picker ("while
+    # the second dialog is showing"). This is what keeps one view alive across
+    # the switch and so keeps the retained coordinator in play. Resolving the
+    # first job instead would drop the picker (count 2 -> 1), which shifts the
+    # SpeakerNamingView's structural slot and makes SwiftUI rebuild it with
+    # FRESH coordinators, and the defect then cannot show. Measured on the
+    # unfixed build: the resolve-first path did not crash; the picker-switch
+    # path does.
+    _ns_select_job "$second" "$second_labels" second
+    log "$label: picker switched to the second job ($second_count fields) in the same view; first job still pending"
+
+    # --- type into the survivor -----------------------------------------------
+    local field="speaker-name-$survivor" other_field="speaker-name-$other_label" typed="Speaker Z"
+    local other_before other_after
+    other_before="$("$driver" read --identifier "$other_field" 2>/dev/null | sed -n 's/^value=//p')"
+    "$driver" focus --identifier "$field" 2>&1 | sed 's/^/    /' \
+        || fail "$label: could not focus $field (see driver output above)"
+
+    local out rc=0
+    set +e
+    out="$("$driver" type --identifier "$field" --text "$typed" 2>&1)"
+    rc=$?
+    set -e
+    printf '%s\n' "$out" | sed 's/^/    /'
+    # The regression itself: pre-fix, the first keystroke wrote names[$first_index]
+    # into a $second_count-element array and the app died. Check the process
+    # directly so the report names the defect rather than a generic dead app.
+    if ! pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" >/dev/null 2>&1; then
+        fail "$label: the app DIED on the first keystrokes into $survivor after the dialog switched from a $first_count-speaker job to a $second_count-speaker job with the same title (issue #700: the field kept a binding to row $first_index, past the new job's $second_count rows). Driver output: $out"
+    fi
+    assert_app_alive
+    [ "$rc" -eq 0 ] || fail "$label: the dialog driver failed (exit $rc); see its output above"
+
+    local value
+    value="$(sed -n 's/^value=//p' <<<"$out" | tail -1)"
+    [ "$value" = "$typed" ] \
+        || fail "$label: typed '$typed' into $survivor but that field reads '$value' (the keystrokes went elsewhere)"
+    other_after="$("$driver" read --identifier "$other_field" 2>/dev/null | sed -n 's/^value=//p')"
+    [ "$other_after" = "$other_before" ] \
+        || fail "$label: typing into $survivor changed M_SPEAKER_00 from '$other_before' to '$other_after' (misrouted write)"
+    log "$label: '$typed' landed in $survivor and nowhere else ✅"
+
+    # --- the confirmed name has to reach persistent state ----------------------
+    # Confirm from the dialog (AXPress on its button), not over RPC: an RPC
+    # confirm carries its own mapping and would say nothing about what the
+    # dialog holds. `confirm-button` is A11yID.confirmButton.
+    "$driver" press --identifier "confirm-button" 2>&1 | sed 's/^/    /' \
+        || fail "$label: could not press the Confirm button"
+    local state=""
+    _ns_terminal() {
+        assert_app_alive
+        state="$(rpc "/v1/jobs/$1" | jq -r '.state // empty')"
+        [ "$state" = "done" ] || [ "$state" = "error" ]
+    }
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_terminal "$second" \
+        || fail "$label: second job $second did not reach a terminal state within ${PIPELINE_TIMEOUT_S}s after Confirm (state=$state)"
+    local final
+    final="$(rpc "/v1/jobs/$second")"
+    [ "$state" = "done" ] || fail "$label: second job state=$state after Confirm, expected done. Error: $(jq -r '.error // "<none>"' <<<"$final")"
+
+    # Assert the confirmed name reached the speaker DB, read over RPC
+    # (`/state.speakerDB`). This is the confirm going through end to end: the
+    # dialog held '$typed' in $survivor (verified above), and confirming
+    # enrolled that voice under that name. Deliberately NOT the transcript file:
+    # that lives under ~/Downloads, which is TCC-protected, so reading it needs
+    # the fragile per-runner Downloads grant that the naming-confirm lane already
+    # depends on; `/state.speakerDB` is served by the app itself and needs no
+    # such grant, which is also what lets this lane be hand-run over SSH. The
+    # transcript relabel is already covered end to end by the naming-confirm lane.
+    _ns_db_has_typed() {
+        assert_app_alive
+        rpc /state | jq -e --arg n "$typed" \
+            '((.speakerDB.recentNames // []) + (.speakerDB.knownSpeakerNames // [])) | index($n) != null' >/dev/null 2>&1
+    }
+    poll_until 30 2 _ns_db_has_typed \
+        || fail "$label: '$typed' never appeared in /state.speakerDB after Confirm (recent=$(rpc /state | jq -c '.speakerDB.recentNames') known=$(rpc /state | jq -c '.speakerDB.knownSpeakerNames')). The confirmed dialog contents did not enroll the voice."
+    log "$label: '$typed' enrolled into the speaker DB after Confirm ✅"
+
+    # Leave nothing parked: the first job was never resolved (the lane switched
+    # away from it via the picker rather than resolving it). Skip it over RPC so
+    # the dialog does not reopen on the next launch, then let it settle.
+    curl --silent --show-error --max-time 10 -X POST \
+        --header "Authorization: Bearer $RPC_TOKEN" --header "Content-Length: 0" \
+        "$RPC_BASE/v1/jobs/$first/naming/skip" >/dev/null 2>&1 || true
+    poll_until "$PIPELINE_TIMEOUT_S" 5 _ns_terminal "$first" || true
+    log "$label: PASS"
+}
+
 # Title-source lane (issue #501): drive the app's window-title lookup with a
 # title that is NOT usable — the window title equals the app name, which the
 # lookup skips — so PowerAssertionDetector finds no meeting-window title and
@@ -2618,6 +2985,8 @@ elif [ "$NAMING_ESCAPE" = true ]; then
     run_naming_escape
 elif [ "$NAMING_CONFIRM" = true ]; then
     run_naming_confirm
+elif [ "$NAMING_SWITCH" = true ]; then
+    run_naming_switch
 elif [ "$TITLE_SOURCE" = true ]; then
     run_title_source
 elif [ "$ECHO_BLEED" = true ]; then
