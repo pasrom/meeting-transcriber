@@ -46,6 +46,14 @@ enum AppPaths {
     /// Custom protocol prompt file.
     static let customPromptFile = dataDir.appendingPathComponent("protocol_prompt.md")
 
+    /// Exists exactly while a run of this bundle is alive; see `LivenessMarker`.
+    /// Named per bundle identifier because the dev and release builds share
+    /// `dataDir`, and each must judge only its own previous run: one build's
+    /// leftover must not read as the other's crash. Kept out of
+    /// `recordingsDir`, which is scanned for crash signatures by filename.
+    static let livenessMarker = dataDir
+        .appendingPathComponent("\(Bundle.main.bundleIdentifier ?? "MeetingTranscriber").running")
+
     /// Legacy IPC directory (`~/.meeting-transcriber/`) used before sandbox migration.
     private static let legacyIpcDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".meeting-transcriber")
