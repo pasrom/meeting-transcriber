@@ -398,12 +398,9 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// A plain `TextField`, on purpose: it takes a fresh binding on every
-    /// update, so nothing parked on the field can outlive the row's position.
-    /// The `NSViewRepresentable` it replaced kept its coordinator's binding for
-    /// the row's whole life, which is what trapped in issue #700, and it existed
-    /// only so an accessibility set-value could drive the field, a path the
-    /// automation API (`/v1/jobs/<id>/naming`) has since taken over (issue #702).
+    /// A plain `TextField`, on purpose: it takes a fresh binding on every update,
+    /// so nothing parked on the field can outlive the row's position (issue #700).
+    /// Why it is no longer the `NSViewRepresentable` it once was: see CLAUDE.md (#702).
     private func nameField(for label: String) -> some View {
         TextField("Name", text: nameBinding(for: label))
             .textFieldStyle(.roundedBorder)
