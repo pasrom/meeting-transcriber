@@ -62,6 +62,44 @@ PRs are excluded from the self-hosted runner.
   the speaker DB learns the voices); it snapshots + restores the runner's real
   `speakers.json`/`recognition_log.jsonl` (`$GITHUB_ACTIONS`-gated) so the
   confirm never pollutes the persistent speaker DB.
+- The `--naming-switch` lane covers issue #700: the dialog switches to the next
+  pending job of the same meeting title, a speaker label survives the switch at
+  a lower row, and typing into it wrote through a binding captured at the old
+  row; past the new job's row count that trapped (`Array._checkSubscript_mutating`)
+  and killed the app. The lane imports two dual-source pairs under one stem (a
+  paired import takes the stem as its title, and one title keeps one view alive
+  across the switch), pins expected speakers to 1 so the app track yields exactly
+  one remote (`R_`) cluster and the mic tracks (three speakers, then one voice cut
+  from a ground-truth fixture) alone decide its row, and asserts that geometry
+  before touching the dialog, so a diarizer that hears the fixtures differently
+  fails the lane as "geometry not staged" rather than passing vacuously. It then
+  switches the dialog's segmented job picker to the second job **while both jobs
+  are still pending** — resolving the first instead drops the picker, shifts the
+  view's structural slot, and SwiftUI rebuilds it with fresh coordinators so the
+  defect cannot show (measured on the unfixed build: resolve-first did not crash,
+  picker-switch did) — posts real keystrokes into the surviving `R_` field from
+  outside the process, and asserts the app survived, the text is in that row and
+  nowhere else, and a Confirm enrolls that name into the speaker DB. The picker
+  is driven by job identity, never by a fixed ordinal: the lane does not own the
+  queue (the app recovers orphaned recordings a beat after launch, and with
+  nothing in this lane auto-skipping naming such a job parks and takes a segment;
+  in the lane's first CI run one landed *between* its two jobs as a lone `S1`),
+  so a job's segment is its position in `/state.pendingNamingJobs`, the very
+  array the picker iterates, re-read before each press, checked against the
+  picker's segment count, and verified by the labels that appear. It reads the
+  DB over RPC (`/state.speakerDB`), not the transcript file: the transcript lives
+  under `~/Downloads`, which is TCC-protected and needs the fragile per-runner
+  Downloads grant the naming-confirm lane already leans on, whereas `/state` is
+  served by the app and needs no grant — which is also what lets this lane be
+  hand-run over SSH. It does not record live (the recorder is covered elsewhere,
+  and a live capture loses a variable opening stretch of the mic fixture, which
+  is exactly what decides the cluster count). Keystrokes go through
+  `scripts/drive-naming-field.swift` (AX focus by identifier + `CGEventPost` +
+  `AXPress`), which needs the Accessibility grant only, where System Events would
+  also need Automation; over SSH the shell has Accessibility but not Automation,
+  so an AX driver is what makes the mini hand-run possible at all, and in CI node
+  is the responsible process for both grants. Shares the Escape lane's
+  Accessibility prerequisite and its loud-skip policy.
 - The `--mic-only` lane (issue #633) records the microphone with no app audio,
   driving `POST /v1/record` instead of a detected meeting, and asserts the
   record-only sidecar carries a mic track, `trigger` is `manual`, and there is
@@ -126,6 +164,23 @@ PRs are excluded from the self-hosted runner.
   asserts the bundled model is in the deployed bundle up front: without it the
   stage correctly reports a missing model and leaves the track as recorded,
   which would read as a broken canceller.
+- **One driver at a time.** `e2e-app.sh` refuses to start while another
+  `e2e-app.sh` is live (they share the deployed bundle, the RPC port and the
+  audio device, and each quits the other's app at launch, so neither result
+  could be trusted; a hand-started run on the mini is invisible to the CI-worker
+  check, which is how this was found). It also looks at a dev app that is
+  already running: a launch marker the driver owns
+  (`~/Library/Application Support/MeetingTranscriber/.e2e-app-launched`,
+  `<pid> launched|kept|abandoned`) says whether a previous driver run left it
+  (`--keep-app`, or a failed exit), in which case it is quit and relaunched as
+  always, with a line saying so. An app no driver marked is treated as possibly
+  someone's session: outside CI the driver refuses (pass `--quit-foreign-app`
+  when you know it is yours), in CI it warns and quits it, because the sibling
+  `e2e-*.sh` drivers in the workflow open the same app without the marker and
+  one of them is `continue-on-error`, so a refusal there would cascade a
+  sibling's leftover into every later step. Hand-run rule on the mini, all three
+  before touching it: no `Runner.Worker`, no `e2e-app.sh`, no
+  `MeetingTranscriber-Dev` process.
 - Limitations: needs one-time runner setup (see below); can't run on
   GitHub-hosted runners — only on a self-hosted Mac with an interactive
   GUI session and a stable code-signing identity.
