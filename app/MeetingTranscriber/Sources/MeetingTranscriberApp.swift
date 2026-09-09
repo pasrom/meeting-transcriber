@@ -421,7 +421,20 @@ struct MeetingTranscriberApp: App {
         case let .unclean(lastAlive):
             logger.warning("previous_run_ended_without_quit lastAlive=\(lastAlive.description, privacy: .public)")
             let notice = PreviousExitNotice(lastAlive: lastAlive, now: now)
-            notifier.notify(title: PreviousExitNotice.title, body: notice.body)
+            // `.standard` on purpose, decided rather than defaulted. This is
+            // posted at launch, which after a reboot or a login-item start is
+            // when nobody is looking, and a banner is gone in seconds; but
+            // macOS keeps it in Notification Center until it is dismissed, and
+            // that list is where the user finds it when they next look.
+            // `.timeSensitive` is reserved for a failure the user can still act
+            // on while it is happening (see `NotificationUrgency`), and this
+            // one is over: the app is back by the time it is posted, and
+            // nothing the user does now recovers the window. Breaking through
+            // Focus for a report about the past would spend that entitlement
+            // on the wrong notification. It is the only surface carrying the
+            // information; a second one (a menu item, a `/state` field) is the
+            // follow-up if this proves too easy to miss.
+            notifier.notify(title: PreviousExitNotice.title, body: notice.body, urgency: .standard)
         }
     }
 
