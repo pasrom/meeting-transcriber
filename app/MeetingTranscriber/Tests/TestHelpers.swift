@@ -1,3 +1,4 @@
+import AppKit
 @preconcurrency import AVFoundation
 import Foundation
 @testable import MeetingTranscriber
@@ -557,5 +558,32 @@ extension XCTestCase {
         }
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
         return AppState(settings: AppSettings(defaults: defaults))
+    }
+}
+
+// MARK: - Run-Loop / View-Tree Helpers
+
+extension XCTestCase {
+    /// Pump the run loop until `condition` holds or the deadline passes, so a
+    /// test waits on the state it needs instead of a fixed sleep. This turns the
+    /// run loop, which is what an `NSHostingView` needs in order to lay out;
+    /// `waitFor` only yields the task and so never drives AppKit.
+    func pump(timeout: TimeInterval = 5, until condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+    }
+}
+
+extension NSView {
+    /// Every descendant of the given type, the receiver included.
+    func descendants<T: NSView>(of type: T.Type = T.self) -> [T] {
+        var found: [T] = []
+        if let match = self as? T { found.append(match) }
+        for sub in subviews {
+            found += sub.descendants(of: type)
+        }
+        return found
     }
 }
