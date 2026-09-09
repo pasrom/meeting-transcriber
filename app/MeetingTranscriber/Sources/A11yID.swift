@@ -84,6 +84,13 @@ enum A11yID {
     /// the name is appended at the call site.
     static let participantNamePrefix = "participant-name-"
 
+    /// Prefix for the per-speaker name fields (`speaker-name-<label>`).
+    static let speakerNamePrefix = "speaker-name-"
+
+    static func speakerName(_ speakerLabel: String) -> String {
+        "\(speakerNamePrefix)\(speakerLabel)"
+    }
+
     static func knownName(_ name: String) -> String {
         "known-name-\(name)"
     }

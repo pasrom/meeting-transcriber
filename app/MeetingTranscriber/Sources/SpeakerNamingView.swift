@@ -464,7 +464,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         AccessibleTextField(
             text: nameBinding(for: label),
             placeholder: "Name",
-            identifier: "speaker-name-\(label)",
+            identifier: A11yID.speakerName(label),
         )
     }
 

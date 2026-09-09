@@ -632,7 +632,7 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         let field = AccessibleTextField(
             text: Binding(get: { captured }, set: { captured = $0 }),
             placeholder: "Name",
-            identifier: "speaker-name-test",
+            identifier: A11yID.speakerName("test"),
         )
         let coord = field.makeCoordinator()
         // Drive the coordinator to verify the binding is wired through.
