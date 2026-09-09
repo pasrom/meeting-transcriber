@@ -100,91 +100,117 @@ struct MeetingTranscriberApp: App {
         }
     }
 
+    // One scene per declaration, not one `body` holding the whole tree. The
+    // analyze build passes `-warn-long-function-bodies=300` with warnings as
+    // errors, so a getter that type-checks slowly is a build failure, and the
+    // whole tree as a single expression shared one budget and crossed it on a
+    // GitHub-hosted runner. Each declaration below is type-checked on its own
+    // budget. Nothing leaves `body`'s evaluation: the properties are read from
+    // the same closures at the same moment, so `@Observable` records the same
+    // reads, and the scene order, window ids and modifiers are unchanged.
     var body: some Scene {
         MenuBarExtra {
-            MenuBarView(
-                status: appState.currentStatus,
-                isWatching: appState.isWatching,
-                pipelineQueue: appState.pipelineQueue,
-                updateChecker: appState.updateChecker,
-                onStartStop: { appState.watching.toggleWatching() },
-                onRecordApp: { bringWindowToFront(id: "record-app") },
-                onRecordMicrophone: { appState.watching.startMicrophoneRecording() },
-                noMic: appState.settings.noMic,
-                manualRecordingPendingOrActive: appState.watching.isManualRecording,
-                onStopManualRecording: appState.isManualRecording ? {
-                    appState.watching.stopManualRecording()
-                } : nil,
-                onOpenLastProtocol: openLastProtocol,
-                onOpenProtocol: { url in NSWorkspace.shared.open(url) },
-                onOpenProtocolsFolder: openProtocolsFolder,
-                onOpenSettings: {
-                    bringWindowToFront(id: "settings")
-                },
-                onNameSpeakers: appState.hasPendingSpeakerNamingJobs ? {
-                    bringWindowToFront(id: "speaker-naming")
-                } : nil,
-                onProcessFiles: processAudioFiles,
-                onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
-                onQuit: quit,
-            )
-        } label: { // swiftlint:disable:this closure_body_length
-            Label {
-                Text(appState.currentStateLabel)
-            } icon: {
-                AnimatedMenuBarIcon(
-                    badge: appState.currentBadge,
-                    permissionOverlay: appState.hasPermissionProblem,
-                    recordOnlyOverlay: appState.settings.recordOnly,
-                    // `recordingSilentActive` paints both halves; folded into the
-                    // hoisted overlay props so MenuBarIcon only needs the two
-                    // per-channel overlay inputs.
-                    micSilentOverlay: appState.micSilentOverlay,
-                    appSilentOverlay: appState.appSilentOverlay,
-                )
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
-                if !appState.isWatching {
-                    appState.watching.toggleWatching(userInitiated: false)
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
-                bringWindowToFront(id: "speaker-naming")
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in
-                bringWindowToFront(id: "settings")
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .closeSettings)) { _ in
-                closeWindow(id: "settings")
-            }
-            .task {
-                await appState.engines.preloadActiveModel()
-            }
-            .task {
-                appState.updateChecker.startPeriodicChecks(settings: appState.settings)
-            }
-            .task {
-                await appState.permissions.check()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                // Re-check permissions when the user returns to the app (e.g. from System
-                // Settings after toggling a permission). Debounced so rapid Cmd-Tab cycles
-                // don't repeatedly churn the mic HAL via the 500 ms probe.
-                Task { @MainActor in
-                    await appState.permissions.check(minimumInterval: 3)
-                }
-            }
-            .onChange(of: appState.shouldShowLiveCaptions, initial: true) { _, visible in
-                let controller = captionsWindow ?? LiveCaptionsWindowController(state: appState.liveCaptions)
-                captionsWindow = controller
-                if visible {
-                    controller.show()
-                } else {
-                    controller.hide()
-                }
-            }
+            menuBarContent
+        } label: {
+            menuBarLabel
         }
 
+        speakerNamingWindow
+        settingsWindow
+        recordAppWindow
+    }
+
+    // MARK: - Menu Bar
+
+    private var menuBarContent: some View {
+        MenuBarView(
+            status: appState.currentStatus,
+            isWatching: appState.isWatching,
+            pipelineQueue: appState.pipelineQueue,
+            updateChecker: appState.updateChecker,
+            onStartStop: { appState.watching.toggleWatching() },
+            onRecordApp: { bringWindowToFront(id: "record-app") },
+            onRecordMicrophone: { appState.watching.startMicrophoneRecording() },
+            noMic: appState.settings.noMic,
+            manualRecordingPendingOrActive: appState.watching.isManualRecording,
+            onStopManualRecording: appState.isManualRecording ? {
+                appState.watching.stopManualRecording()
+            } : nil,
+            onOpenLastProtocol: openLastProtocol,
+            onOpenProtocol: { url in NSWorkspace.shared.open(url) },
+            onOpenProtocolsFolder: openProtocolsFolder,
+            onOpenSettings: {
+                bringWindowToFront(id: "settings")
+            },
+            onNameSpeakers: appState.hasPendingSpeakerNamingJobs ? {
+                bringWindowToFront(id: "speaker-naming")
+            } : nil,
+            onProcessFiles: processAudioFiles,
+            onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
+            onQuit: quit,
+        )
+    }
+
+    private var menuBarLabel: some View {
+        Label {
+            Text(appState.currentStateLabel)
+        } icon: {
+            AnimatedMenuBarIcon(
+                badge: appState.currentBadge,
+                permissionOverlay: appState.hasPermissionProblem,
+                recordOnlyOverlay: appState.settings.recordOnly,
+                // `recordingSilentActive` paints both halves; folded into the
+                // hoisted overlay props so MenuBarIcon only needs the two
+                // per-channel overlay inputs.
+                micSilentOverlay: appState.micSilentOverlay,
+                appSilentOverlay: appState.appSilentOverlay,
+            )
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .autoWatchStart)) { _ in
+            if !appState.isWatching {
+                appState.watching.toggleWatching(userInitiated: false)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showSpeakerNaming)) { _ in
+            bringWindowToFront(id: "speaker-naming")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showSettings)) { _ in
+            bringWindowToFront(id: "settings")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .closeSettings)) { _ in
+            closeWindow(id: "settings")
+        }
+        .task {
+            await appState.engines.preloadActiveModel()
+        }
+        .task {
+            appState.updateChecker.startPeriodicChecks(settings: appState.settings)
+        }
+        .task {
+            await appState.permissions.check()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // Re-check permissions when the user returns to the app (e.g. from System
+            // Settings after toggling a permission). Debounced so rapid Cmd-Tab cycles
+            // don't repeatedly churn the mic HAL via the 500 ms probe.
+            Task { @MainActor in
+                await appState.permissions.check(minimumInterval: 3)
+            }
+        }
+        .onChange(of: appState.shouldShowLiveCaptions, initial: true) { _, visible in
+            let controller = captionsWindow ?? LiveCaptionsWindowController(state: appState.liveCaptions)
+            captionsWindow = controller
+            if visible {
+                controller.show()
+            } else {
+                controller.hide()
+            }
+        }
+    }
+
+    // MARK: - Windows
+
+    private var speakerNamingWindow: some Scene {
         Window("Name Speakers", id: "speaker-naming") {
             speakerNamingContent
                 // Pin the naming window so it stays visible + on top while the
@@ -208,7 +234,9 @@ struct MeetingTranscriberApp: App {
                 }
         }
         .windowResizability(.contentSize)
+    }
 
+    private var settingsWindow: some Scene {
         Window("Settings", id: "settings") {
             SettingsView(
                 settings: appState.settings,
@@ -231,7 +259,9 @@ struct MeetingTranscriberApp: App {
             )
         }
         .windowResizability(.contentSize)
+    }
 
+    private var recordAppWindow: some Scene {
         Window("Record App", id: "record-app") {
             AppPickerView(
                 appsProvider: SystemRunningAppsProvider(),
