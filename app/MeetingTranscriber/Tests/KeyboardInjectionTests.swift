@@ -28,25 +28,8 @@
             }
         }
 
-        /// Pump the run loop until `condition` holds or the deadline passes, so
-        /// the test waits on the state it actually needs instead of a fixed sleep.
-        private func pump(timeout: TimeInterval = 5, until condition: () -> Bool) {
-            let deadline = Date().addingTimeInterval(timeout)
-            while !condition(), Date() < deadline {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-            }
-        }
-
         private func firstTextInput(in view: NSView) -> NSView? {
-            if view is NSTextField || view is NSTextView {
-                return view
-            }
-            for sub in view.subviews {
-                if let found = firstTextInput(in: sub) {
-                    return found
-                }
-            }
-            return nil
+            view.descendants(of: NSView.self).first { $0 is NSTextField || $0 is NSTextView }
         }
 
         /// Host the probe field in a key window and focus it, mirroring what

@@ -62,23 +62,8 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
         )
     }
 
-    /// Pump the run loop until `condition` holds or the deadline passes.
-    private func pump(timeout: TimeInterval = 5, until condition: () -> Bool) {
-        let deadline = Date().addingTimeInterval(timeout)
-        while !condition(), Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-        }
-    }
-
     private func nameFields(in view: NSView) -> [NSTextField] {
-        var found: [NSTextField] = []
-        if let field = view as? NSTextField, field.accessibilityIdentifier().hasPrefix(A11yID.speakerNamePrefix) {
-            found.append(field)
-        }
-        for sub in view.subviews {
-            found += nameFields(in: sub)
-        }
-        return found
+        view.descendants().filter { $0.accessibilityIdentifier().hasPrefix(A11yID.speakerNamePrefix) }
     }
 
     private func field(_ label: String, in view: NSView) -> NSTextField? {
