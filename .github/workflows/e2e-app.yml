@@ -380,6 +380,36 @@ jobs:
         timeout-minutes: 8
         run: bash scripts/e2e-app.sh --no-build --naming-escape
 
+      # Typing-after-switch lane (issue #700): the naming dialog switches to the
+      # next pending job of the same meeting title, a speaker label survives the
+      # switch at a lower row, and the user types into it. Pre-fix that field
+      # wrote through a binding captured at its old row and the first keystroke
+      # trapped in Array._checkSubscript_mutating, taking the app down. The lane
+      # imports two dual-source pairs under one stem (shared title, real M_/R_
+      # labels), pins expected speakers to 1 so only the mic clusters decide
+      # where the surviving R_ label sits, asserts that geometry, then (with both
+      # jobs still pending, so the picker stays and the view is reused) switches
+      # the dialog's segmented job picker to the second job, posts real keystrokes
+      # into the surviving R_ field from outside the process, and asserts the app
+      # survived, the text landed in that row only, and a Confirm enrolls that
+      # name into the speaker DB (read over RPC, no ~/Downloads dependency).
+      # Keystrokes go through scripts/drive-naming-field.swift (AX + CGEvent),
+      # which needs the Accessibility grant only, not Automation; the driver
+      # preflights it and skips loudly when it is missing. Switching via the
+      # picker (not resolving the first job) is load-bearing: resolving it drops
+      # the picker, shifts the view's slot, and SwiftUI rebuilds it with fresh
+      # coordinators so the defect cannot show. Measured on the unfixed build.
+      # PLACEMENT: file-driven and not level-sensitive, so next to the other two
+      # naming lanes and ahead of crash-recovery.
+      - name: Run live-recording E2E driver (speaker-naming switch)
+        env:
+          DEVELOPER_ID: ${{ secrets.DEVELOPER_ID }}
+        # Two transcribe + diarize cycles to park both jobs, a third short
+        # cycle after Confirm, and the driver compile; ~3 min typical. 12 min
+        # leaves room for the two 240 s parking polls without hiding a hang.
+        timeout-minutes: 12
+        run: bash scripts/e2e-app.sh --no-build --naming-switch
+
       # Title-source lane (issue #501): run the simulator with a window title
       # equal to the app name (no usable meeting-window title), then assert the
       # detected meeting title is the clean "MeetingSimulator Call" placeholder,
