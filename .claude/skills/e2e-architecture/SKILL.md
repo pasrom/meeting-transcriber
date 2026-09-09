@@ -64,9 +64,9 @@ PRs are excluded from the self-hosted runner.
   confirm never pollutes the persistent speaker DB.
 - The `--naming-switch` lane covers issue #700: the dialog switches to the next
   pending job of the same meeting title, a speaker label survives the switch at
-  a lower row, and typing into it wrote through a binding captured at the old
-  row; past the new job's row count that trapped (`Array._checkSubscript_mutating`)
-  and killed the app. The lane imports two dual-source pairs under one stem (a
+  a lower row, and typing into it must reach that label's binding and no other
+  (see issue #700 for the defect this guards). The lane imports two dual-source
+  pairs under one stem (a
   paired import takes the stem as its title, and one title keeps one view alive
   across the switch), pins expected speakers to 1 so the app track yields exactly
   one remote (`R_`) cluster and the mic tracks (three speakers, then one voice cut
@@ -75,7 +75,7 @@ PRs are excluded from the self-hosted runner.
   fails the lane as "geometry not staged" rather than passing vacuously. It then
   switches the dialog's segmented job picker to the second job **while both jobs
   are still pending** — resolving the first instead drops the picker, shifts the
-  view's structural slot, and SwiftUI rebuilds it with fresh coordinators so the
+  view's structural slot, and SwiftUI rebuilds it with fresh fields so the
   defect cannot show (measured on the unfixed build: resolve-first did not crash,
   picker-switch did) — posts real keystrokes into the surviving `R_` field from
   outside the process, and asserts the app survived, the text is in that row and

@@ -2212,22 +2212,20 @@ run_naming_confirm() {
 # --- Speaker-naming switch lane (issue #700) -------------------------------
 #
 # Types into the naming dialog AFTER it has switched to the next pending job of
-# the same meeting title. That is the geometry behind the crash in issue #700:
-# rows are identified by speaker label, the window keeps one view for both jobs
-# because its identity is the title, and the mic track's cluster count differs
-# between the jobs, so a remote label that survives the switch sits at a lower
-# row than before. The field it kept wrote through a binding captured at the
-# old row; once that row lay past the new job's speaker count, the first
-# keystroke trapped in `Array._checkSubscript_mutating` and the app died.
+# the same meeting title. The window keeps one view for both jobs because its
+# identity is the title, and the mic track's cluster count differs between the
+# jobs, so a remote label that survives the switch sits at a lower row than
+# before. That is the geometry that reproduced the issue #700 crash: the field
+# a surviving label keeps must carry the user's typing to that label and no
+# other. See issue #700 for the defect this guards against.
 #
 # The switch is done via the dialog's segmented job picker while BOTH jobs are
 # still pending ("while the second dialog is showing", in the reporter's words),
 # NOT by resolving the first job. This matters and was measured: resolving the
 # first drops the picker (count 2 -> 1), which shifts the SpeakerNamingView's
-# structural slot in its VStack and makes SwiftUI rebuild it with FRESH
-# coordinators, so the stale binding never comes into play and the unfixed build
-# does NOT crash. Keeping both jobs pending keeps the picker present, the view
-# reused, and the coordinator retained, which is what reproduces the crash.
+# structural slot in its VStack and makes SwiftUI rebuild it with FRESH fields,
+# so the reused view under test is never exercised. Keeping both jobs pending
+# keeps the picker present and the view reused, which is what the lane needs.
 #
 # Two dual-source pairs are enqueued through the same paired import a fleet
 # consumer uses, so both jobs are genuinely dual-source (`M_`/`R_` labels) and
@@ -2366,7 +2364,7 @@ run_naming_switch() {
     log "$label: first job rows  $first_labels ($survivor at row $first_index)"
     log "$label: second job rows $second_labels ($second_count rows, survivor $survivor, other $other_label)"
     [ "$(jq -r '.meetingTitle' <<<"$first_naming")" = "$(jq -r '.meetingTitle' <<<"$second_naming")" ] \
-        || fail "$label: the two jobs do not share a meeting title ($(jq -r '.meetingTitle' <<<"$first_naming") vs $(jq -r '.meetingTitle' <<<"$second_naming")); the window would give the second job fresh fields and the retained coordinator would never be exercised"
+        || fail "$label: the two jobs do not share a meeting title ($(jq -r '.meetingTitle' <<<"$first_naming") vs $(jq -r '.meetingTitle' <<<"$second_naming")); the window would give the second job fresh fields and no reused field would be exercised"
     [ -n "$other_label" ] \
         || fail "$label: the second job has only the survivor row ($second_labels); the misroute check needs another row to prove the write did not land there"
     [ "$first_index" -ge 0 ] \
@@ -2445,10 +2443,10 @@ run_naming_switch() {
     # Switch to the second job the way the reporter did: with BOTH jobs still
     # pending, pick the other one in the dialog's segmented job picker ("while
     # the second dialog is showing"). This is what keeps one view alive across
-    # the switch and so keeps the retained coordinator in play. Resolving the
+    # the switch and so keeps its reused fields in play. Resolving the
     # first job instead would drop the picker (count 2 -> 1), which shifts the
     # SpeakerNamingView's structural slot and makes SwiftUI rebuild it with
-    # FRESH coordinators, and the defect then cannot show. Measured on the
+    # FRESH fields, and the defect then cannot show. Measured on the
     # unfixed build: the resolve-first path did not crash; the picker-switch
     # path does.
     _ns_select_job "$second" "$second_labels" second

@@ -88,6 +88,11 @@ enum A11yID {
     static let participantNamePrefix = "participant-name-"
 
     /// Prefix for the per-speaker name fields (`speaker-name-<label>`).
+    /// Consumed out of band by `scripts/drive-naming-field.swift` (the
+    /// `--naming-switch` e2e lane), which matches the raw `speaker-name-`
+    /// string by AX identifier and is not compiler-checked. A rename here
+    /// leaves the whole unit suite green and breaks only that self-hosted lane,
+    /// which PRs do not run, so change both together.
     static let speakerNamePrefix = "speaker-name-"
 
     static func speakerName(_ speakerLabel: String) -> String {

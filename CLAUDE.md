@@ -226,7 +226,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `MenuBarIcon` renders animated waveform reflecting pipeline state (idle, recording, transcribing, diarizing, protocol).
 - `AppPickerView` enables manual recording of any app via app picker.
 - `UpdateChecker` checks GitHub releases for newer versions, shows badge on menu bar icon.
-- **`SpeakerNamingView` keys the name fields and `knownExpanded` by speaker label, never by row position (issue #700).** An `NSViewRepresentable` coordinator is created once and kept for the row's whole life, so a binding captured by position goes stale when a surviving label moves to another sorted position: it wrote the user's typing into another row and trapped once `names` had fewer entries than that index. `AccessibleTextField.updateNSView` re-arms the coordinator as the second line of defence. **Which switch reproduces it was measured, and only one does:** switching between two still-pending jobs with the segmented picker keeps the coordinator, while *completing* the first job does not, because `speakerNamingPicker` is gated on `pendingSpeakerNamingJobs.count > 1` and dropping it changes the enclosing `VStack`'s structure, so SwiftUI rebuilds the form with fresh coordinators. A Re-run keeps the slot too. `SpeakerNamingFieldIdentityTests` hosts the view in a real `NSWindow` because ViewInspector cannot instantiate a retained coordinator, and `scripts/e2e-app.sh --naming-switch` drives the same switch in the shipped app.
+- **`SpeakerNamingView` keys the name fields and `knownExpanded` by speaker label, never by row position (issue #700).** The name field is a plain SwiftUI `TextField`, which takes a fresh binding on every update. It used to be an `NSViewRepresentable` whose coordinator kept the binding it was created with for the row's whole life, so a binding captured by position went stale when a surviving label moved to another sorted position: it wrote the user's typing into another row and trapped once `names` had fewer entries than that index. That representable existed only so an accessibility set-value (AppleScript `set value of text field`) could drive the field; the automation API (`/v1/jobs/<id>/naming`) took that over, so it was removed rather than armed against the hazard (issue #702). **Which switch reproduces it was measured, and only one does:** switching between two still-pending jobs with the segmented picker keeps the fields, while *completing* the first job does not, because `speakerNamingPicker` is gated on `pendingSpeakerNamingJobs.count > 1` and dropping it changes the enclosing `VStack`'s structure, so SwiftUI rebuilds the form with fresh fields. A Re-run keeps the slot too. `SpeakerNamingFieldIdentityTests` hosts the view in a real `NSWindow` (ViewInspector cannot instantiate a reused field), locates each row by the seed value it shows, and proves the typed name reaches that row's binding by committing the edit (resigning first responder re-reads each field from its binding). `scripts/e2e-app.sh --naming-switch` drives the same switch in the shipped app.
 
 **Permission health check:**
 - `PermissionHealthCheck` verifies each TCC permission by combining the system verdict with a live probe. Each resolves to `PermissionStatus` (`.healthy | .denied | .broken | .notDetermined`). `.broken` means TCC says allowed but the probe disagrees — fix is to toggle the permission off and on in System Settings. The Accessibility probe is a cross-process call, so only `kAXErrorAPIDisabled` counts as `.broken`; `.success` and `.noValue` are `AccessibilityProbe.responded`, and every other AXError is `.inconclusive` and reports healthy. Treating those as broken produced a notification telling users to toggle a permission that was working. `kAXErrorNotImplemented` stays inconclusive on purpose: Apple documents it as the asked process lacking AX support. The raw code is appended to `/tmp/mt-permission.log`, which `debugLog` truncates per process.
@@ -312,6 +312,20 @@ the pressed control); test SwiftUI framework behavior (e.g. that `.keyboardShort
 fires). **Manual-QA-only, accepted:** menu-bar dropdown interaction, modal panels
 (NSOpenPanel/NSAlert), TCC prompts, drag/focus order, visual appearance beyond dev-only
 snapshots.
+
+**A self-pid accessibility tree is not a unit-test locator: it is empty behind
+the lock screen.** Measured on macOS 26: with the screen locked, HIServices
+answers every window query on the app's own `AXUIElement` with the application
+element itself and serves no SwiftUI element, so a SwiftUI
+`.accessibilityIdentifier` is unreachable there even though it is present when
+unlocked; `NSApplication.finishLaunching()` does not change this, and neither the
+backing `NSTextField` nor its cell ever carries the identifier. A unit test that
+finds controls through the AX tree is green at an unlocked desk and red on an
+unattended or locked runner. Locate hosted controls by their `NSView` state
+instead (`SpeakerNamingFieldIdentityTests` finds a name field by the seed value
+it shows). The AX identifier stays the contract for the out-of-process drivers
+(`/ui/*`, `scripts/drive-naming-field.swift`), which run against a live, unlocked
+app rather than xctest.
 
 **Escape resists injection, and the reason shapes how Escape must be bound.** A
 hand-built `NSEvent` with keycode 53 does not reach SwiftUI's `onExitCommand`:

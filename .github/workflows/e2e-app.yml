@@ -382,9 +382,8 @@ jobs:
 
       # Typing-after-switch lane (issue #700): the naming dialog switches to the
       # next pending job of the same meeting title, a speaker label survives the
-      # switch at a lower row, and the user types into it. Pre-fix that field
-      # wrote through a binding captured at its old row and the first keystroke
-      # trapped in Array._checkSubscript_mutating, taking the app down. The lane
+      # switch at a lower row, and the user types into it, which must reach that
+      # label's binding and no other (see issue #700 for the defect). The lane
       # imports two dual-source pairs under one stem (shared title, real M_/R_
       # labels), pins expected speakers to 1 so only the mic clusters decide
       # where the surviving R_ label sits, asserts that geometry, then (with both
@@ -398,7 +397,7 @@ jobs:
       # preflights it and skips loudly when it is missing. Switching via the
       # picker (not resolving the first job) is load-bearing: resolving it drops
       # the picker, shifts the view's slot, and SwiftUI rebuilds it with fresh
-      # coordinators so the defect cannot show. Measured on the unfixed build.
+      # fields so the defect cannot show. Measured on the unfixed build.
       # PLACEMENT: file-driven and not level-sensitive, so next to the other two
       # naming lanes and ahead of crash-recovery.
       - name: Run live-recording E2E driver (speaker-naming switch)
