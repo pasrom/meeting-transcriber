@@ -151,9 +151,38 @@ jobs:
           # SWIFT_SUPPRESS_WARNINGS=NO: without it xcodebuild fails outright on
           # AudioTapLib's warning gate. Reason at the flag in
           # tools/audiotap/Package.swift.
-          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' SWIFT_SUPPRESS_WARNINGS=NO build-for-testing 2>&1 | tee /tmp/xcodebuild.log
+          #
+          # OTHER_SWIFT_FLAGS adds the per-body type-check timing print that the
+          # report step below turns into a step summary. `$(inherited)` is
+          # load-bearing: a command-line setting reaches every SPM target, and
+          # without it the override would replace the package's own
+          # -warn-long-function-bodies gate instead of sitting next to it
+          # (verified on Xcode 26.6: both flags on the same compile command).
+          # The compiler prints one line per body, some 33,000 across app and
+          # dependencies, so the file keeps them and the console stream does
+          # not. Clean build time was unchanged within noise.
+          # shellcheck disable=SC2016  # $(inherited) is an Xcode setting reference, not a shell expansion
+          xcodebuild -scheme MeetingTranscriber -destination 'platform=macOS' SWIFT_SUPPRESS_WARNINGS=NO \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -debug-time-function-bodies' build-for-testing 2>&1 \
+            | tee /tmp/xcodebuild.log | bash "$GITHUB_WORKSPACE/scripts/ci/type-check-timings.sh" strip
           cd "$GITHUB_WORKSPACE"
-          swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging
+          # swiftlint analyze re-runs the compiler with the arguments it finds
+          # in the log, timing flag included, so SourceKit prints the same lines
+          # into swiftlint's output; stripped the same way. Its findings do not
+          # change: output identical after the strip, +14 s on a 212 s run.
+          swiftlint analyze --strict --compiler-log-path /tmp/xcodebuild.log --reporter github-actions-logging 2>&1 \
+            | bash scripts/ci/type-check-timings.sh strip
+      # Non-gating by construction: the 300 ms limit in Package.swift stays the
+      # only enforcement. `continue-on-error` keeps any report problem from
+      # failing the job, including the script's own exit 1 when it found no
+      # timings, which then shows as a tolerated step failure plus a warning
+      # annotation rather than as an empty table. Runs after a failed build
+      # too: when the gate fires, the bodies measured before the error are
+      # exactly the ones to read.
+      - name: Report slowest type-checks
+        if: success() || failure()
+        continue-on-error: true
+        run: bash scripts/ci/type-check-timings.sh report /tmp/xcodebuild.log --root "$GITHUB_WORKSPACE"
       - name: Cancel run on failure
         if: failure()
         uses: ./.github/actions/cancel-on-failure
