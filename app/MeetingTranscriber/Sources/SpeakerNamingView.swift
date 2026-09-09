@@ -44,6 +44,14 @@ struct AccessibleTextField: NSViewRepresentable {
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
+        /// Captured once: SwiftUI creates the coordinator when the row first
+        /// appears and keeps it for as long as the row's identity lives, so
+        /// this is the binding from that first render, whatever `updateNSView`
+        /// has seen since. A caller must therefore bind through something as
+        /// stable as the row identity itself. Binding by array position broke
+        /// that: a row that survived a data switch at a new position kept
+        /// writing to the old one, and trapped once the array had shrunk
+        /// below it (issue #700).
         var text: Binding<String>
 
         init(text: Binding<String>) {
@@ -115,10 +123,10 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         self.onDismissRequest = onDismissRequest
         self.onComplete = onComplete
         // Seed `names` and `rerunCount` synchronously so the view renders
-        // its chip rows on first body evaluation (the chips depend on
-        // `index < names.count`). `.onAppear` re-runs the same logic for
-        // belt-and-braces, but this lets ViewInspector tests + tests that
-        // never trigger SwiftUI lifecycle still see the correct surface.
+        // its fields and chip rows with the right contents on first body
+        // evaluation. `.onAppear` re-runs the same logic for belt-and-braces,
+        // but this lets ViewInspector tests + tests that never trigger the
+        // SwiftUI lifecycle still see the correct surface.
         let speakerList = Self.computeSpeakers(from: data)
         _names = State(initialValue: Self.computeInitialNames(speakers: speakerList))
         let initialMode = currentDiarizerMode ?? .offline
@@ -151,7 +159,11 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     }
 
     @State private var keyboardGracePeriodActive: Bool = true
-    @State private var names: [String] = []
+    /// Field contents keyed by speaker label, not by row position. The rows
+    /// are identified by label, and each row's text field keeps the binding
+    /// it was created with, so the key has to be the one thing that cannot
+    /// move under a row: its label. See `AccessibleTextField.Coordinator`.
+    @State private var names: [String: String] = [:]
     /// Job-ID for which this view has already fired `onComplete`. Tracked
     /// per-job (not just a Bool) so that when the window switches to a
     /// different pending job, the `Confirm` / `Skip` / `Re-run` buttons
@@ -441,20 +453,30 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                         .foregroundStyle(.secondary)
                 }
 
-                if index < names.count {
-                    nameField(for: index, label: speaker.label)
-                    suggestionChips(for: index)
-                }
+                nameField(for: speaker.label)
+                suggestionChips(for: index, speaker: speaker)
             }
             .padding(4)
         }
     }
 
-    private func nameField(for index: Int, label: String) -> some View {
+    private func nameField(for label: String) -> some View {
         AccessibleTextField(
-            text: $names[index],
+            text: nameBinding(for: label),
             placeholder: "Name",
             identifier: "speaker-name-\(label)",
+        )
+    }
+
+    /// Never a position: the field's coordinator keeps the first binding it
+    /// is given for the row's whole life, and a row keeps its identity (the
+    /// label) across a job switch or Re-run even when its sorted position
+    /// changes. A position captured there wrote into another speaker's row
+    /// and trapped when `names` shrank below it (issue #700).
+    private func nameBinding(for label: String) -> Binding<String> {
+        Binding(
+            get: { names[label] ?? "" },
+            set: { names[label] = $0 },
         )
     }
 
@@ -463,27 +485,34 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     /// Same name in multiple rows is allowed (legitimate in dual-track when
     /// M_ and R_ pick up the same speaker).
     @ViewBuilder
-    private func suggestionChips(for index: Int) -> some View {
-        let query = index < names.count ? names[index] : ""
-        participantChips(for: index, query: query)
-        knownChips(for: index, query: query)
+    private func suggestionChips(
+        for index: Int,
+        speaker: (label: String, autoName: String?, speakingTime: Double),
+    ) -> some View {
+        let query = names[speaker.label] ?? ""
+        participantChips(for: speaker.label, query: query)
+        knownChips(for: index, speaker: speaker, query: query)
     }
 
     @ViewBuilder
-    private func participantChips(for index: Int, query: String) -> some View {
+    private func participantChips(for label: String, query: String) -> some View {
         let participants = Self.filterByQuery(names: data.participants, query: query)
         if !participants.isEmpty {
-            chipRow(names: participants, idPrefix: A11yID.participantNamePrefix) { names[index] = $0 }
+            chipRow(names: participants, idPrefix: A11yID.participantNamePrefix) { names[label] = $0 }
         }
     }
 
+    /// `index` only keys `knownExpanded`; every write to `names` goes by label.
     @ViewBuilder
-    private func knownChips(for index: Int, query: String) -> some View {
+    private func knownChips(
+        for index: Int,
+        speaker: (label: String, autoName: String?, speakingTime: Double),
+        query: String,
+    ) -> some View {
         let known = Self.filterByQuery(names: knownNamesNotInParticipants, query: query)
         if !known.isEmpty {
-            let autoName = index < speakers.count ? speakers[index].autoName : nil
             let ranked = Self.rankedKnownNames(
-                known: known, autoName: autoName, participants: data.participants,
+                known: known, autoName: speaker.autoName, participants: data.participants,
             )
             let expanded = knownExpanded.contains(index)
             // Don't bother with the Top-N cap once the user has typed — they're
@@ -491,7 +520,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             let limit = query.isEmpty ? Self.knownChipsCollapsedLimit : ranked.count
             let visible = expanded ? ranked : Array(ranked.prefix(limit))
             let hidden = ranked.count - visible.count
-            let speakerLabel = index < speakers.count ? speakers[index].label : "\(index)"
+            let speakerLabel = speaker.label
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("Known:")
@@ -500,7 +529,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 ChipFlowLayout(spacing: 4) {
                     ForEach(visible, id: \.self) { name in
                         chipButton(label: name, identifier: A11yID.knownName(name)) {
-                            names[index] = name
+                            names[speaker.label] = name
                         }
                     }
                     if hidden > 0 {
@@ -672,11 +701,13 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         return pure ?? longestSegment(forSpeaker: label, in: segments)
     }
 
-    /// Computes initial text field names from speaker auto-name mappings.
+    /// Computes the initial text field contents from the speaker auto-name
+    /// mappings, keyed by speaker label. Labels are `data.mapping`'s keys and so
+    /// unique by construction; first wins rather than trapping if that changes.
     static func computeInitialNames(
         speakers: [(label: String, autoName: String?, speakingTime: Double)],
-    ) -> [String] {
-        speakers.map { $0.autoName ?? "" }
+    ) -> [String: String] {
+        Dictionary(speakers.map { ($0.label, $0.autoName ?? "") }) { first, _ in first }
     }
 
     /// Filter names against the user's current input. Empty query → unchanged.
@@ -741,15 +772,15 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         name.split(separator: " ").first.map(String.init) ?? name
     }
 
-    /// Builds the speaker label → user-entered name mapping, skipping empty names.
+    /// Builds the speaker label → user-entered name mapping, skipping empty names
+    /// and speakers with no entry in `names`.
     static func buildSpeakerMapping(
         speakers: [(label: String, autoName: String?, speakingTime: Double)],
-        names: [String],
+        names: [String: String],
     ) -> [String: String] {
         var mapping: [String: String] = [:]
-        for (index, speaker) in speakers.enumerated() {
-            let name = index < names.count
-                ? names[index].trimmingCharacters(in: .whitespaces) : ""
+        for speaker in speakers {
+            let name = (names[speaker.label] ?? "").trimmingCharacters(in: .whitespaces)
             if !name.isEmpty {
                 mapping[speaker.label] = name
             }
