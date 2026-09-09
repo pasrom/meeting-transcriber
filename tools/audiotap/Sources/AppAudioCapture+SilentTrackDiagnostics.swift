@@ -57,7 +57,7 @@ extension AppAudioCapture {
     /// The sink `SilentTrackDiagnostics` reports into, on its own queue.
     /// `@Sendable` and static because it must not capture a capture instance.
     static let logSilentTrackProbe: SilentTrackDiagnostics.Sink = { reason, outcome in
-        guard case let .read(states) = outcome else {
+        guard case let .read(snapshot) = outcome else {
             // Not swallowed: a skip means an earlier read has not come back, and
             // if that one is wedged every later probe is skipped too. Silence
             // here would look identical to a probe nobody asked for.
@@ -66,11 +66,19 @@ extension AppAudioCapture {
             )
             return
         }
-        guard !states.isEmpty else {
+        // Before the per-process lines and independent of them: a tap with no
+        // processes still has an aggregate, and "the aggregate never started"
+        // is the finding that outlives every process detail (issue #693).
+        if let device = snapshot.device {
+            logger.info(
+                "App audio device (\(reason, privacy: .public)): \(device.summary, privacy: .public)",
+            )
+        }
+        guard !snapshot.processes.isEmpty else {
             logger.info("App audio process state (\(reason, privacy: .public)): no tapped processes")
             return
         }
-        for state in states {
+        for state in snapshot.processes {
             let exe = getExecutableName(pid: state.process.pid)
             logger.info(
                 "App audio process state (\(reason, privacy: .public)): exe=\(exe, privacy: .public) \(state.summary, privacy: .public)",
@@ -90,7 +98,11 @@ extension AppAudioCapture {
             // The one moment worth asking the tapped processes what they are
             // doing: whether their output is still running, and whether it went
             // to a device this tap does not follow.
-            silentTrackDiagnostics.probeAsync(processes, reason: "zero run started")
+            silentTrackDiagnostics.probeAsync(
+                processes,
+                aggregateID: silentTrackDiagnostics.lastInstalledAggregateID,
+                reason: "zero run started",
+            )
 
         case let .exitedZeroRun(durationSeconds):
             logger.info(
@@ -114,7 +126,11 @@ extension AppAudioCapture {
         logger.info(
             "App audio at stop: lastBufferAge=\(lastBuffer, privacy: .public) lastEnergyAge=\(lastEnergy, privacy: .public) zeroRuns=\(counters.zeroRuns, privacy: .public) longestZeroRun=\(Self.seconds(counters.longestZeroRun), privacy: .public)",
         )
-        silentTrackDiagnostics.probeAsync(silentTrackDiagnostics.lastInstalledProcesses, reason: "stop")
+        silentTrackDiagnostics.probeAsync(
+            silentTrackDiagnostics.lastInstalledProcesses,
+            aggregateID: silentTrackDiagnostics.lastInstalledAggregateID,
+            reason: "stop",
+        )
     }
 
     /// One decimal place: these are durations in seconds, and the full Double
