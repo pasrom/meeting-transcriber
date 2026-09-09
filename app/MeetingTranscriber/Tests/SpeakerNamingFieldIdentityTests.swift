@@ -20,7 +20,8 @@ import XCTest
 /// soon as the new job had fewer speakers than the captured index. The
 /// representable is gone (issue #702) and the plain `TextField` in its place
 /// takes a fresh binding on every update; this test is what says so for a
-/// hosted, reused field, which ViewInspector never instantiates.
+/// hosted, reused field, which ViewInspector never instantiates. The full
+/// history of why the representable existed and was removed is in CLAUDE.md.
 ///
 /// The measured mechanism is the shift, not a dropped row: a field whose label
 /// disappears leaves the window and loses first-responder status, so nothing
@@ -28,12 +29,9 @@ import XCTest
 @MainActor
 final class SpeakerNamingFieldIdentityTests: XCTestCase {
     /// Stand-in for the naming window host: republishing `data` re-renders the
-    /// same view slot with the next job, exactly as the scene does, and
-    /// republishing `pendingJobCount` re-renders it with the same job, as
-    /// another job reaching naming does.
+    /// same view slot with the next job, exactly as the scene does.
     private final class Host: ObservableObject {
         @Published var data: PipelineQueue.SpeakerNamingData
-        @Published var pendingJobCount = 1
         init(data: PipelineQueue.SpeakerNamingData) {
             self.data = data
         }
@@ -42,7 +40,7 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
     private struct Root: View {
         @ObservedObject var host: Host
         var body: some View {
-            SpeakerNamingView(data: host.data, pendingJobCount: host.pendingJobCount, gracePeriod: 0) { _ in }
+            SpeakerNamingView(data: host.data, gracePeriod: 0) { _ in }
         }
     }
 
@@ -51,10 +49,9 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
     /// under test would silently stop exercising the reused field.
     private static let sharedTitle = "Weekly sync"
 
-    /// Every job seeds each field with its label's auto name. It is what tells
-    /// the test that a job has rendered (the field count is the same before and
-    /// after the switch on purpose) and what lets the locator check it has the
-    /// right row.
+    /// Every job seeds each field with its label's auto name, unique per label.
+    /// It is both the render signal (a field shows it once the job has drawn)
+    /// and the locator: the field showing `seed(label)` is that label's field.
     private static func seed(_ label: String) -> String {
         "Auto \(label)"
     }
@@ -75,36 +72,30 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
 
     // MARK: - Locating a label's field
 
-    /// A row's field is found by where it sits, and only trusted once every row
-    /// shows its own label's seed. Nothing names a field from the AppKit side: a
-    /// SwiftUI `.accessibilityIdentifier` is never written onto the backing
-    /// `NSTextField` or its cell (both stay empty), and the process's
-    /// accessibility tree, which does carry it, is not a locator a unit test may
-    /// lean on: with the screen locked HIServices answers every window query
-    /// with the application element itself and serves no SwiftUI element at all
-    /// (measured), so a test built on it is green at a desk and red on a runner
-    /// nobody is looking at. The rows are a `VStack` over the sorted labels, so
-    /// the field at a label's rank from the top is that label's field, and
-    /// `shownValues` is asserted before each lookup so a wrong rank cannot pass
-    /// quietly.
+    /// The dialog's name fields. Assumes they are the only *editable*
+    /// `NSTextField`s in it — the label/auto-name rows are non-editable text —
+    /// which holds for `SpeakerNamingView` today.
     private func nameFields(in view: NSView) -> [NSTextField] {
-        view.descendants(of: NSTextField.self)
-            .filter(\.isEditable)
-            .sorted { $0.convert($0.bounds, to: nil).maxY > $1.convert($1.bounds, to: nil).maxY }
+        view.descendants(of: NSTextField.self).filter(\.isEditable)
     }
 
-    /// What the fields show, top to bottom.
+    /// What the fields show, sorted so the set can be compared regardless of
+    /// layout order.
     private func shownValues(in view: NSView) -> [String] {
-        nameFields(in: view).map(\.stringValue)
+        nameFields(in: view).map(\.stringValue).sorted()
     }
 
-    /// The field for `label` in a job whose rows are `labels`, or nil when the
-    /// row count does not match, so a half-rendered switch is never read.
-    private func field(_ label: String, among labels: [String], in view: NSView) -> NSTextField? {
-        let sorted = labels.sorted()
-        let fields = nameFields(in: view)
-        guard fields.count == sorted.count, let rank = sorted.firstIndex(of: label) else { return nil }
-        return fields[rank]
+    /// The field for `label`, found by the seed it shows: `seed(label)` is
+    /// unique per label, so the editable field whose value equals it is that
+    /// row (valid while the field still shows its seed, i.e. before it is
+    /// typed into). By value rather than by window position, which CLAUDE.md's
+    /// GUI-testing guidance warns against, or by identifier, which does not
+    /// survive to the backing `NSTextField` and whose AX form is not served to
+    /// a unit test (see the screen-lock note in CLAUDE.md's GUI Testing
+    /// section). `shownValues` is checked before each lookup so a half-rendered
+    /// switch is never read.
+    private func field(_ label: String, in view: NSView) -> NSTextField? {
+        nameFields(in: view).first { $0.stringValue == Self.seed(label) }
     }
 
     private func makeWindow(host: Host) -> (NSWindow, NSHostingView<Root>) {
@@ -131,22 +122,22 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
     }
 
     func testTypingStaysInItsRowWhenLabelChangesPositionAcrossJobSwitch() throws {
-        // Job A: one mic speaker, two remote. Sorted, R_SPEAKER_00 sits at index 1.
+        // Job A: one mic speaker, two remote.
         let labelsA = ["M_SPEAKER_00", "R_SPEAKER_00", "R_SPEAKER_01"]
         let host = Host(data: makeData(labels: labelsA))
         let (window, hosting) = makeWindow(host: host)
-        pump { self.shownValues(in: hosting) == labelsA.map(Self.seed) }
-        XCTAssertEqual(shownValues(in: hosting), labelsA.map(Self.seed), "each row must show its own label's seed, top to bottom")
-        let fieldBefore = try XCTUnwrap(field("R_SPEAKER_00", among: labelsA, in: hosting))
+        pump { self.shownValues(in: hosting) == labelsA.map(Self.seed).sorted() }
+        XCTAssertEqual(shownValues(in: hosting), labelsA.map(Self.seed).sorted(), "each row must show its own label's seed")
+        let fieldBefore = try XCTUnwrap(field("R_SPEAKER_00", in: hosting))
 
-        // Job B, same title: two mic speakers, one remote. R_SPEAKER_00 survives
-        // but now sits at index 2; the speaker count is unchanged so the old
-        // binding stays in bounds and the defect shows as a misrouted write.
+        // Job B, same title: two mic speakers, one remote. R_SPEAKER_00 survives.
+        // The speaker count is unchanged, so a stale positional binding would
+        // stay in bounds and the defect would show as a misrouted write.
         let labelsB = ["M_SPEAKER_00", "M_SPEAKER_01", "R_SPEAKER_00"]
         host.data = makeData(labels: labelsB)
-        pump { self.shownValues(in: hosting) == labelsB.map(Self.seed) }
-        XCTAssertEqual(shownValues(in: hosting), labelsB.map(Self.seed), "the second job must be on screen, each row showing its own label's seed")
-        let fieldAfter = try XCTUnwrap(field("R_SPEAKER_00", among: labelsB, in: hosting))
+        pump { self.shownValues(in: hosting) == labelsB.map(Self.seed).sorted() }
+        XCTAssertEqual(shownValues(in: hosting), labelsB.map(Self.seed).sorted(), "the second job must be on screen, each row showing its own seed")
+        let fieldAfter = try XCTUnwrap(field("R_SPEAKER_00", in: hosting))
         XCTAssertIdentical(
             fieldBefore, fieldAfter,
             "precondition: the surviving label must keep its NSTextField across the switch, or no reused field is exercised",
@@ -155,27 +146,26 @@ final class SpeakerNamingFieldIdentityTests: XCTestCase {
         XCTAssertTrue(window.makeFirstResponder(fieldAfter))
         try type("Bob", into: window)
         pump { fieldAfter.stringValue == "Bob" }
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
 
-        XCTAssertEqual(fieldAfter.stringValue, "Bob", "typing must stay in the row it was typed into")
+        // The field editor shows "Bob" whether or not the binding observed the
+        // keystroke, so reading it now proves nothing about which key the write
+        // reached. Committing the edit does: resigning first responder re-reads
+        // every field from its binding. Measured on this view — a write that
+        // reached R_SPEAKER_00's binding keeps "Bob"; a swallowed or misrouted
+        // one reverts the field to its seed, synchronously, in the same runloop
+        // turn. (A re-render would not re-sync a field whose binding value is
+        // unchanged: SwiftUI diffs against its own cached value, so a re-render
+        // is not an observable signal here — the commit is.)
+        XCTAssertTrue(window.makeFirstResponder(nil), "the edit must commit")
+        pump { !(window.firstResponder is NSTextView) }
+
         XCTAssertEqual(
-            field("M_SPEAKER_01", among: labelsB, in: hosting)?.stringValue, Self.seed("M_SPEAKER_01"),
-            "the row that took over the old index must not receive the typing",
+            fieldAfter.stringValue, "Bob",
+            "the typed name must have reached R_SPEAKER_00's binding, not just its field editor",
         )
-
-        // What the field shows is not what the view holds: a field editor updates
-        // the NSTextField whether or not the binding behind it saw the keystroke.
-        // The next render writes the view's state back into every field, so end
-        // editing and re-render (another job reaching naming does exactly this):
-        // a swallowed write comes back as the seed, a misrouted one shows up in
-        // the other row. Measured both ways before this was relied on.
-        window.makeFirstResponder(nil)
-        host.pendingJobCount = 2
-        pump(timeout: 0.3) { false }
-        XCTAssertEqual(fieldAfter.stringValue, "Bob", "the binding must hold the typed name: a re-render pushed something else into the field")
         XCTAssertEqual(
-            shownValues(in: hosting), [Self.seed("M_SPEAKER_00"), Self.seed("M_SPEAKER_01"), "Bob"],
-            "after a re-render every row must show what the view holds for its own label",
+            shownValues(in: hosting), [Self.seed("M_SPEAKER_00"), Self.seed("M_SPEAKER_01"), "Bob"].sorted(),
+            "only R_SPEAKER_00's binding may hold the typed name; every other row must still hold its seed",
         )
     }
 }

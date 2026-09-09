@@ -602,6 +602,27 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertEqual(daveButtons.count, 1)
     }
 
+    // MARK: - Name field identifier
+
+    /// The name field carries `A11yID.speakerName(label)`. That string is the
+    /// handle the out-of-process driver behind `scripts/e2e-app.sh
+    /// --naming-switch` finds a row by, and nothing else in the unit suite reads
+    /// it: `SpeakerNamingFieldIdentityTests` locates rows by the seed they show,
+    /// because a SwiftUI identifier never reaches the backing `NSTextField`.
+    /// Findable here only because the field is a plain `TextField`; ViewInspector
+    /// cannot see into the `NSViewRepresentable` it replaced (issue #702).
+    /// Write-back is not asserted at this layer: a `setInput` on an unhosted
+    /// `@State` binding does not stick (see
+    /// `testKnownChipTapInvokesActionClosureAndConfirmFires`).
+    func testNameFieldCarriesTheSpeakerIdentifier() throws {
+        let sut = SpeakerNamingView(data: makeData()) { _ in }
+        // Direct finder, not the predicate form: on failure it names the
+        // identifier it looked for, where the predicate form reports only that
+        // the search threw.
+        let field = try sut.inspect().find(viewWithAccessibilityIdentifier: A11yID.speakerName("SPEAKER_00"))
+        XCTAssertNoThrow(try field.textField(), "the control carrying A11yID.speakerName(label) must be the text field")
+    }
+
     // MARK: - longestSegment (pure)
 
     /// `playSpeakerSnippet` plays the longest segment per speaker so the
