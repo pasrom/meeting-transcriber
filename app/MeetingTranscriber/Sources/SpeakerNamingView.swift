@@ -67,7 +67,9 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         // but this lets ViewInspector tests + tests that never trigger the
         // SwiftUI lifecycle still see the correct surface.
         let speakerList = Self.computeSpeakers(from: data)
-        _names = State(initialValue: Self.computeInitialNames(speakers: speakerList))
+        _rows = State(
+            initialValue: SpeakerNamingRowState(names: Self.computeInitialNames(speakers: speakerList)),
+        )
         let initialMode = currentDiarizerMode ?? .offline
         _rerunMode = State(initialValue: initialMode)
         let initialCount = max(2, speakerList.count + 1)
@@ -98,10 +100,10 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     }
 
     @State private var keyboardGracePeriodActive: Bool = true
-    /// Field contents keyed by speaker label, not by row position. The rows
-    /// are identified by label, so the key has to be the one thing that cannot
-    /// move under a row: its label (issue #700).
-    @State private var names: [String: String] = [:]
+    /// Everything the user changes in the rows: the name per label and which
+    /// rows are expanded. A reference type held in `@State`, so a row's write
+    /// is observable from outside the view (see `SpeakerNamingRowState`).
+    @State private var rows: SpeakerNamingRowState
     /// Job-ID for which this view has already fired `onComplete`. Tracked
     /// per-job (not just a Bool) so that when the window switches to a
     /// different pending job, the `Confirm` / `Skip` / `Re-run` buttons
@@ -112,10 +114,6 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     @State private var playingLabel: String?
     @State private var rerunMode: DiarizerMode = .offline
     @State private var rerunCount: Int = 2
-    /// Labels of speaker rows where the user clicked "More…" to reveal the full
-    /// known-names list instead of the top-N ranked subset. Keyed by label for
-    /// the same reason `names` is: a row's position is not its identity.
-    @State private var knownExpanded: Set<String> = []
     /// Number of "Known:" chips shown by default before "More…" appears.
     private static let knownChipsCollapsedLimit = 8
 
@@ -330,12 +328,13 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         }
     }
 
-    /// Re-seed all per-presentation @State from the current `data`. Called
-    /// on first appearance and again whenever `data.mapping` changes (the
-    /// signal that lateDiarization replaced the speakers for this jobID).
+    /// Re-seed all per-presentation state from the current `data`. Called on
+    /// first appearance and again whenever `data.revision` changes. The key is
+    /// `revision` and not `mapping` on purpose: a re-diarization can produce a
+    /// byte-equal `mapping`, and comparing that would swallow the reset.
     private func resetForCurrentPresentation() {
         completedJobID = nil
-        names = Self.computeInitialNames(speakers: speakers)
+        rows.reset(names: Self.computeInitialNames(speakers: speakers))
         // Re-seed `rerunMode` from the prop so cross-job dialog switches
         // (same view identity, different data) start with the correct
         // picker selection instead of inheriting the previous job's mode.
@@ -346,9 +345,6 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
         let mode = currentDiarizerMode ?? rerunMode
         rerunMode = mode
         rerunCount = Self.clampCount(max(2, speakers.count + 1), for: mode)
-        // Collapse every "More…" row again: the next job's known-names list is
-        // a different list, so carrying the expansion over would be arbitrary.
-        knownExpanded.removeAll()
     }
 
     private func speakerRow(
@@ -391,8 +387,19 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                         .foregroundStyle(.secondary)
                 }
 
+                // Read here, next to the field, and passed down rather than
+                // read inside `suggestionChips`. Beyond feeding the chip
+                // filter, this read is what registers the row body's
+                // observation dependency on `names`, and that dependency is
+                // what redraws the field when a chip writes into it. Measured
+                // in a hosted window: mutate the object, the field repaints.
+                // A refactor that stops reading `names` while rendering the row
+                // would leave chip taps invisible on screen while every
+                // in-process test stayed green, since those re-evaluate the
+                // body themselves.
+                let typed = rows.names[speaker.label] ?? ""
                 nameField(for: speaker.label)
-                suggestionChips(for: speaker)
+                suggestionChips(for: speaker, query: typed)
             }
             .padding(4)
         }
@@ -407,14 +414,14 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             .accessibilityIdentifier(A11yID.speakerName(label))
     }
 
-    /// Captures the `names` binding rather than `self`: SwiftUI keeps the
-    /// binding it handed the field until the next update, and capturing the
-    /// view would keep that job's segments and embeddings alive with it.
+    /// Captures the row state rather than `self`: SwiftUI keeps the binding it
+    /// handed the field until the next update, and capturing the view would
+    /// keep that job's segments and embeddings alive with it.
     private func nameBinding(for label: String) -> Binding<String> {
-        let store = $names
+        let store = rows
         return Binding(
-            get: { store.wrappedValue[label] ?? "" },
-            set: { store.wrappedValue[label] = $0 },
+            get: { store.names[label] ?? "" },
+            set: { store.names[label] = $0 },
         )
     }
 
@@ -425,8 +432,8 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     @ViewBuilder
     private func suggestionChips(
         for speaker: (label: String, autoName: String?, speakingTime: Double),
+        query: String,
     ) -> some View {
-        let query = names[speaker.label] ?? ""
         participantChips(for: speaker.label, query: query)
         knownChips(for: speaker, query: query)
     }
@@ -435,7 +442,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     private func participantChips(for label: String, query: String) -> some View {
         let participants = Self.filterByQuery(names: data.participants, query: query)
         if !participants.isEmpty {
-            chipRow(names: participants, idPrefix: A11yID.participantNamePrefix) { names[label] = $0 }
+            chipRow(names: participants, idPrefix: A11yID.participantNamePrefix) { rows.names[label] = $0 }
         }
     }
 
@@ -449,7 +456,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             let ranked = Self.rankedKnownNames(
                 known: known, autoName: speaker.autoName, participants: data.participants,
             )
-            let expanded = knownExpanded.contains(speaker.label)
+            let expanded = rows.knownExpanded.contains(speaker.label)
             // Don't bother with the Top-N cap once the user has typed — they're
             // already looking at a filtered short list.
             let limit = query.isEmpty ? Self.knownChipsCollapsedLimit : ranked.count
@@ -463,19 +470,19 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 ChipFlowLayout(spacing: 4) {
                     ForEach(visible, id: \.self) { name in
                         chipButton(label: name, identifier: A11yID.knownName(name)) {
-                            names[speaker.label] = name
+                            rows.names[speaker.label] = name
                         }
                     }
                     if hidden > 0 {
                         chipMoreButton(
                             label: "More (\(hidden))…",
                             identifier: A11yID.knownMore(speaker.label),
-                        ) { knownExpanded.insert(speaker.label) }
+                        ) { rows.knownExpanded.insert(speaker.label) }
                     } else if expanded, ranked.count > Self.knownChipsCollapsedLimit {
                         chipMoreButton(
                             label: "Less",
                             identifier: A11yID.knownLess(speaker.label),
-                        ) { knownExpanded.remove(speaker.label) }
+                        ) { rows.knownExpanded.remove(speaker.label) }
                     }
                 }
             }
@@ -588,7 +595,7 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
 
     private func confirm() {
         player?.stop()
-        let mapping = Self.buildSpeakerMapping(speakers: speakers, names: names)
+        let mapping = Self.buildSpeakerMapping(speakers: speakers, names: rows.names)
         onComplete(.confirmed(mapping))
     }
 
