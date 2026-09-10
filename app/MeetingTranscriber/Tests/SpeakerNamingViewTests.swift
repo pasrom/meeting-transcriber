@@ -476,26 +476,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertNoThrow(try body.find(button: "Charlie"))
     }
 
-    func testKnownChipTapInvokesActionClosureAndConfirmFires() throws {
-        // Tap the known chip (covers the chipButton action closure inside
-        // `knownChips`), then Confirm. We don't assert on the mapping content
-        // because @State assignment from a ViewInspector tap doesn't
-        // reliably propagate to subsequent .inspect() calls; the goal here
-        // is exercising the chip's action path.
-        var result: PipelineQueue.SpeakerNamingResult?
-        let sut = SpeakerNamingView(
-            data: makeData(),
-            knownSpeakerNames: ["Alice"],
-            gracePeriod: 0,
-        ) { result = $0 }
-        let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(button: "Alice").tap())
-        try body.find(button: "Confirm").tap()
-        if case .confirmed = result {} else {
-            XCTFail("Expected .confirmed, got \(String(describing: result))")
-        }
-    }
-
     // MARK: - More button (collapsed → expanded chip list)
 
     func testMoreChipAppearsWhenKnownNamesExceedCollapsedLimit() throws {
@@ -545,32 +525,6 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertNoThrow(try body.find(button: "Eve"))
     }
 
-    func testParticipantChipTapInvokesActionClosureAndConfirmFires() throws {
-        // Same coverage goal as the known-chip test — tap the participant
-        // chip to exercise the chipButton action closure inside
-        // `participantChips`, then Confirm. State propagation through
-        // ViewInspector taps is unreliable, so we don't assert mapping content.
-        var result: PipelineQueue.SpeakerNamingResult?
-        let data = PipelineQueue.SpeakerNamingData(
-            jobID: UUID(),
-            meetingTitle: "Standup",
-            mapping: ["SPEAKER_00": "SPEAKER_00"],
-            speakingTimes: ["SPEAKER_00": 60],
-            embeddings: ["SPEAKER_00": [0.1, 0.2, 0.3]],
-            audioPath: nil,
-            segments: [],
-            participants: ["Dave"],
-            isDualSource: false,
-        )
-        let sut = SpeakerNamingView(data: data, gracePeriod: 0) { result = $0 }
-        let body = try sut.inspect()
-        XCTAssertNoThrow(try body.find(button: "Dave").tap())
-        try body.find(button: "Confirm").tap()
-        if case .confirmed = result {} else {
-            XCTFail("Expected .confirmed, got \(String(describing: result))")
-        }
-    }
-
     // MARK: - Known speakers also in participants are de-duplicated
 
     func testKnownNameAlreadyInParticipantsIsNotShownTwice() throws {
@@ -611,9 +565,9 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
     /// because a SwiftUI identifier never reaches the backing `NSTextField`.
     /// Findable here only because the field is a plain `TextField`; ViewInspector
     /// cannot see into the `NSViewRepresentable` it replaced (issue #702).
-    /// Write-back is not asserted at this layer: a `setInput` on an unhosted
-    /// `@State` binding does not stick (see
-    /// `testKnownChipTapInvokesActionClosureAndConfirmFires`).
+    /// What a tap or a `setInput` on this field then does to the row is
+    /// asserted in `SpeakerNamingRowWritesTests`, which is where the write
+    /// side of the naming rows lives.
     func testNameFieldCarriesTheSpeakerIdentifier() throws {
         let sut = SpeakerNamingView(data: makeData()) { _ in }
         // Direct finder, not the predicate form: on failure it names the
