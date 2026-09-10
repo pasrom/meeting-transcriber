@@ -447,9 +447,6 @@ final class ChannelHealthController {
     /// follows that a channel silent since the first buffer very well might be,
     /// so that message keeps the pane and the interception check.
     ///
-    /// Buffers stopping altogether is a third thing again: a denied tap still
-    /// delivers, it delivers zeroes, so a stopped IOProc is never a grant.
-    ///
     /// Buffers stopping altogether is a third thing again, and the honest thing
     /// to say about it is less than it is tempting to say. What was measured for
     /// issue #524 is a tap denied from the start: it delivers zeroes, not
