@@ -812,7 +812,7 @@ extension PipelineQueue {
             }
             stopElapsedTimer()
         } catch {
-            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
+            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .private)")
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
             stopElapsedTimer()
         }

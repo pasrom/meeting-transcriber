@@ -128,12 +128,7 @@
 
             if process.terminationStatus != 0 {
                 let stderrData = await stderrRead
-                let stderrText = String(data: stderrData, encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                logger.error(
-                    "claude_cli_failed exit=\(process.terminationStatus, privacy: .public) stderr=\(stderrText, privacy: .public)",
-                )
-                throw Self.makeFailureError(exitCode: process.terminationStatus, stderrText: stderrText)
+                throw Self.handleFailure(exitCode: process.terminationStatus, stderrData: stderrData, text: text)
             }
 
             return try Self.validateGeneratedText(text)
@@ -143,6 +138,29 @@
         /// `ProtocolError.cliFailed`.
         static func makeFailureError(exitCode: Int32, stderrText: String) -> ProtocolError {
             .cliFailed(Int(exitCode), stderrText)
+        }
+
+        /// On a nonzero exit, `text` (accumulated from stream-json on stdout)
+        /// often carries the CLI's actual failure reason as a synthetic
+        /// assistant message (e.g. "Failed to authenticate. API Error: 401
+        /// API key is invalid."), while `stderrText` can be empty or
+        /// uninformative for the same failure. Prefer `text` when it has
+        /// content; fall back to `stderrText` otherwise.
+        static func selectFailureMessage(text: String, stderrText: String) -> String {
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmedText.isEmpty ? stderrText : trimmedText
+        }
+
+        /// Decodes `stderrData`, logs the raw exit/stderr/text, and builds the
+        /// error `generate()` throws on a nonzero exit — pulled out of
+        /// `generate()` itself to keep that function's body short.
+        static func handleFailure(exitCode: Int32, stderrData: Data, text: String) -> ProtocolError {
+            let stderrText = String(data: stderrData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            logger.error(
+                "claude_cli_failed exit=\(exitCode, privacy: .public) stderr=\(stderrText, privacy: .public) text=\(text, privacy: .private)",
+            )
+            return makeFailureError(exitCode: exitCode, stderrText: selectFailureMessage(text: text, stderrText: stderrText))
         }
 
         /// Trim whitespace from CLI output. Throws `.emptyProtocol` when
