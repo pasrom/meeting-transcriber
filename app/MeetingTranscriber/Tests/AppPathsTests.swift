@@ -63,6 +63,37 @@ final class AppPathsTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: AppPaths.ipcDir.path))
     }
 
+    /// Every constant that names a directory has to *be* a directory URL, and
+    /// not because it is tidier.
+    ///
+    /// `URL.appendingPathComponent(_:)` without the `isDirectory:` argument asks
+    /// the filesystem whether the component it just appended is a directory, and
+    /// marks the URL (and so its trailing slash) from the answer. These are
+    /// `static let`s, so that question is asked once per process, at whatever
+    /// moment the first access happens, and on a machine where the directory
+    /// does not exist yet the answer is "no". The URL then compares unequal to
+    /// the same directory reached any other way: `deletingLastPathComponent()`
+    /// on a child always yields the slashed form. That is a constant whose value
+    /// depends on disk state and on evaluation order, and it made
+    /// `testLivenessMarkerIsNamedPerBundleInTheDataDirectory` pass on a
+    /// developer machine and fail on a fresh CI runner, in one variant of one
+    /// run, with no code change between the two.
+    ///
+    /// The file constants are left alone: a missing file probes as a file, which
+    /// is what they should be, so they carry no such swing.
+    func testTheDirectoryConstantsAreDirectoryURLs() {
+        let directories: [(String, URL)] = [
+            ("dataDir", AppPaths.dataDir),
+            ("ipcDir", AppPaths.ipcDir),
+            ("recordingsDir", AppPaths.recordingsDir),
+            ("protocolsDir", AppPaths.protocolsDir),
+            ("downloadsProtocolsDir", AppPaths.downloadsProtocolsDir),
+        ]
+        for (name, url) in directories {
+            XCTAssertTrue(url.hasDirectoryPath, "\(name) must not depend on whether it exists yet")
+        }
+    }
+
     /// The liveness marker (issue #703) sits beside the other state in the
     /// data directory and never in the recordings directory, which is scanned
     /// for crash signatures by filename. It is named per bundle identifier

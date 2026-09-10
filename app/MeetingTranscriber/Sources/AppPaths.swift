@@ -12,22 +12,22 @@ enum AppPaths {
     static let dataDir: URL = {
         if let appSupport = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            return appSupport.appendingPathComponent("MeetingTranscriber")
+            return appSupport.appendingPathComponent("MeetingTranscriber", isDirectory: true)
         }
         Logger(subsystem: logSubsystem, category: "AppPaths")
             .error("Application Support directory unavailable — falling back to home directory")
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".MeetingTranscriber")
+            .appendingPathComponent(".MeetingTranscriber", isDirectory: true)
     }()
 
     /// IPC directory: under `dataDir` for sandbox compatibility.
-    static let ipcDir = dataDir.appendingPathComponent("ipc")
+    static let ipcDir = dataDir.appendingPathComponent("ipc", isDirectory: true)
 
     /// Recordings directory.
-    static let recordingsDir = dataDir.appendingPathComponent("recordings")
+    static let recordingsDir = dataDir.appendingPathComponent("recordings", isDirectory: true)
 
     /// Protocols output directory (legacy, inside Application Support).
-    static let protocolsDir = dataDir.appendingPathComponent("protocols")
+    static let protocolsDir = dataDir.appendingPathComponent("protocols", isDirectory: true)
 
     /// Default protocols output in Downloads: `~/Downloads/MeetingTranscriber/`
     /// In sandbox, `FileManager.urls(for: .downloadsDirectory)` resolves to the container-granted path.
@@ -37,7 +37,7 @@ enum AppPaths {
         else {
             return protocolsDir
         }
-        return downloads.appendingPathComponent("MeetingTranscriber")
+        return downloads.appendingPathComponent("MeetingTranscriber", isDirectory: true)
     }()
 
     /// Speaker voice profiles DB.
@@ -56,7 +56,7 @@ enum AppPaths {
 
     /// Legacy IPC directory (`~/.meeting-transcriber/`) used before sandbox migration.
     private static let legacyIpcDir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent(".meeting-transcriber")
+        .appendingPathComponent(".meeting-transcriber", isDirectory: true)
 
     private static let logger = Logger(subsystem: logSubsystem, category: "AppPaths")
 
