@@ -18,6 +18,19 @@ public enum SystemSettingsPaths {
         return screenRecordingPath(sequoiaOrLater: sequoiaOrLater)
     }
 
+    /// Path to the pane that changes which device the system plays through.
+    ///
+    /// Named in the app-audio fault messages because switching the system
+    /// output device is the one thing that rebuilds the tap, and a user told to
+    /// switch it reaches for the picker in front of them, which during a call is
+    /// the meeting app's own. That one cannot work: the rebuild is triggered by
+    /// a change of the *system* default output device, which an output chosen
+    /// inside another app does not touch.
+    ///
+    /// Unlike ``screenRecording`` this needs no OS branch. Output has lived
+    /// inside the Sound pane since Ventura, and the app's floor is macOS 14.2.
+    public static let soundOutput = "System Settings → Sound → Output"
+
     /// Pure form of ``screenRecording`` so both OS branches are unit-testable
     /// without faking the running OS version.
     static func screenRecordingPath(sequoiaOrLater: Bool) -> String {

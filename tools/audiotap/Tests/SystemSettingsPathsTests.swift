@@ -27,4 +27,11 @@ final class SystemSettingsPathsTests: XCTestCase {
                 || resolved == SystemSettingsPaths.screenRecordingPath(sequoiaOrLater: false),
         )
     }
+
+    func testSoundOutputNamesThePaneThatChangesTheOutputDevice() {
+        // Not version-dependent the way the recording pane is: Ventura through
+        // macOS 26 all keep Output inside the Sound pane, and the app's floor is
+        // macOS 14.2.
+        XCTAssertEqual(SystemSettingsPaths.soundOutput, "System Settings → Sound → Output")
+    }
 }
