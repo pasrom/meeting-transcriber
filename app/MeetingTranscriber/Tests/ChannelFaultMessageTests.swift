@@ -55,8 +55,14 @@ final class ChannelFaultMessageTests: XCTestCase {
     }
 
     func testAStoppedAppTapIsNotBlamedOnAPermission() {
-        // Buffers stopping entirely is a dead tap, not a denied one: a denied
-        // tap still delivers, it delivers zeroes.
+        // Not because a permission cannot cause it: whether a mid-recording
+        // revocation stops the IOProc was never measured, and
+        // `testTheStoppedTapMessageClaimsNothingAboutPermissionsOrTheMicrophone`
+        // below is there to keep this message from claiming either way. The
+        // pane stays out because it is not the remedy: what #524 measured is a
+        // tap denied from the start, which delivers zeroes rather than nothing,
+        // so a channel with no buffers at all is not the signature that pane
+        // repairs.
         let message = ChannelHealthController.faultMessage(
             channel: .app, fault: .noBuffers, everCarriedSignal: true,
         )
@@ -114,6 +120,35 @@ final class ChannelFaultMessageTests: XCTestCase {
             ).lowercased()
             XCTAssertFalse(message.contains("and back"), "\(fault)/\(carried)")
         }
+    }
+
+    func testTheNoBuffersMessagesDoNotClaimTheChannelEverDelivered() {
+        // `ChannelFaultMonitor` reads `ages.secondsSinceLastBuffer ?? elapsedSinceStart`,
+        // so `noBuffers` fires for a channel that never delivered a single
+        // buffer exactly as it does for one that delivered and then stopped. The
+        // never-started case is not the rare one either: it is the whole of
+        // issue #693, where the aggregate reports noErr and the IOProc never
+        // runs. "stopped delivering" was therefore false in the case the message
+        // is most often shown for, and it was false in the first sentence, the
+        // one a notification banner shows before it truncates.
+        //
+        // The contrast is the arm where a past delivery *is* guaranteed:
+        // `digitalSilence` with `everCarriedSignal` true is reported only for a
+        // channel that carried a non-zero sample, and that one says so.
+        for (channel, carried) in [(AudioChannel.app, true), (.app, false), (.mic, true), (.mic, false)] {
+            let message = ChannelHealthController.faultMessage(
+                channel: channel, fault: .noBuffers, everCarriedSignal: carried,
+            ).lowercased()
+            for pastClaim in ["stopped", "no longer", "any more", "earlier"] {
+                XCTAssertFalse(message.contains(pastClaim), "\(channel)/\(carried): \(pastClaim)")
+            }
+        }
+        XCTAssertTrue(
+            ChannelHealthController.faultMessage(
+                channel: .app, fault: .digitalSilence, everCarriedSignal: true,
+            ).lowercased().contains("earlier"),
+            "the one arm that may claim a past delivery still does",
+        )
     }
 
     func testTheStoppedTapMessageDoesNotDeclareAnythingDead() {

@@ -477,6 +477,16 @@ final class ChannelHealthController {
     /// the tap dead and the one made in Control Center recovering it, so both
     /// halves are named: where it does work, and where it does not.
     ///
+    /// **`noBuffers` claims nothing about the past.** The monitor reads
+    /// `ages.secondsSinceLastBuffer ?? elapsedSinceStart`, so this fault covers
+    /// a channel that never delivered a single buffer exactly as it covers one
+    /// that delivered and then stopped. The never-started case is not the rare
+    /// one: it is the whole of issue #693, where the aggregate is created, the
+    /// start returns `noErr` and the IOProc never runs. Both messages therefore
+    /// state the present. The one arm where a past delivery is guaranteed is
+    /// `digitalSilence` with `everCarriedSignal` true, and that is the only one
+    /// that says so.
+    ///
     /// **One switch, not "and back".** Switching back rebuilds the tap a second
     /// time, and a rebuild can land in the same failing window the first one
     /// did: in that same report a freshly started capture failed identically to
@@ -499,7 +509,7 @@ final class ChannelHealthController {
             captureGaveUpMessage(for: channel)
 
         case (.app, .noBuffers, _):
-            "The app-audio channel stopped delivering audio to this recording. Switch the system "
+            "The app-audio channel is delivering no audio to this recording. Switch the system "
                 + "output device to another one, in Control Center or in "
                 + "\(SystemSettingsPaths.soundOutput). That rebuilds the tap. Changing the output "
                 + "inside the meeting app does not."
@@ -521,7 +531,7 @@ final class ChannelHealthController {
                 + "app's audio."
 
         case (.mic, .noBuffers, _):
-            "The microphone stopped delivering audio to this recording. "
+            "The microphone is delivering no audio to this recording. "
                 + "Check that the input device is still connected, and that Meeting Transcriber "
                 + "still has permission to use the microphone."
 

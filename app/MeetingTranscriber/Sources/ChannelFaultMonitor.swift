@@ -7,8 +7,17 @@ import Foundation
 /// Swift rename would change the automation surface silently; `ChannelFaultMonitorTests`
 /// pins them for that reason.
 enum ChannelFault: String, Equatable {
-    /// Nothing arrives from this channel any more, or ever did. The tap died,
-    /// the device was unplugged, or the permission went away mid-recording.
+    /// Nothing arrives from this channel any more, or ever did.
+    ///
+    /// Both halves of that are real and the second is the common one: the
+    /// monitor falls back to the elapsed time when no buffer ever arrived, so a
+    /// capture whose aggregate was created, started with `noErr` and never ran
+    /// its IOProc lands here (issue #693) alongside one that delivered and then
+    /// stopped. Causes, none of them established for a given report: the tap
+    /// never started, the tap died, the device was unplugged, or the permission
+    /// went away mid-recording. Anything copied from here into a user-facing
+    /// message has to keep that open, which is what
+    /// `ChannelFaultMessageTests` pins.
     case noBuffers
 
     /// Buffers keep arriving and every sample in them is zero. The transport is
