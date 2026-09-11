@@ -79,6 +79,58 @@ final class ChannelFaultMessageTests: XCTestCase {
         XCTAssertTrue(wentSilent.lowercased().contains("output device"))
     }
 
+    /// The three arms that name the output-device lever, as a fixture the
+    /// wording tests below share.
+    private static let actionableAppFaults: [(ChannelFault, Bool)] = [
+        (.noBuffers, true), (.noBuffers, false), (.digitalSilence, true),
+    ]
+
+    func testTheOutputDeviceLeverSaysWhereToPullIt() {
+        // Measured in the field (issue #693): the switch recovered a dead tap
+        // when it was made in Control Center, and had not recovered it on the
+        // earlier attempts made in the meeting app's own speaker picker. That
+        // picker is the one in front of the user during a call, so it is the one
+        // they reach for, and it cannot work: the rebuild is triggered by a
+        // change of the *system* default output device, which an output chosen
+        // inside a meeting app does not touch.
+        for (fault, carried) in Self.actionableAppFaults {
+            let message = ChannelHealthController.faultMessage(
+                channel: .app, fault: fault, everCarriedSignal: carried,
+            )
+            XCTAssertTrue(message.contains("Control Center"), "\(fault)/\(carried)")
+            XCTAssertTrue(message.contains(SystemSettingsPaths.soundOutput), "\(fault)/\(carried)")
+        }
+    }
+
+    func testTheOutputDeviceLeverDoesNotTellTheUserToSwitchBack() {
+        // One switch rebuilds the tap. Switching back rebuilds it a second time,
+        // and that rebuild rolls the same dice the first one did: in the field
+        // report a fresh capture failed identically to the one before it, with
+        // nothing changed. Staying on the device the user moved to costs less
+        // than a second throw, so the advice stops at one switch.
+        for (fault, carried) in Self.actionableAppFaults {
+            let message = ChannelHealthController.faultMessage(
+                channel: .app, fault: fault, everCarriedSignal: carried,
+            ).lowercased()
+            XCTAssertFalse(message.contains("and back"), "\(fault)/\(carried)")
+        }
+    }
+
+    func testTheStoppedTapMessageDoesNotDeclareAnythingDead() {
+        // "that rebuilds the tap on the meeting app, which has died" was wrong
+        // on both readings. The meeting app is alive: it is still playing the
+        // call the user is listening to. And the tap need not have died either,
+        // because the case this message is most often shown for is a tap whose
+        // aggregate never started at all (issue #693), which is not the same
+        // failure and not repaired by the same reasoning.
+        for carried in [true, false] {
+            let message = ChannelHealthController.faultMessage(
+                channel: .app, fault: .noBuffers, everCarriedSignal: carried,
+            ).lowercased()
+            XCTAssertFalse(message.contains("died"), "noBuffers/\(carried)")
+        }
+    }
+
     func testTheStoppedTapMessageClaimsNothingAboutPermissionsOrTheMicrophone() {
         // Two claims this message must not make, both of which it made once and
         // both of which were lost again without a single test going red.
@@ -117,6 +169,32 @@ final class ChannelFaultMessageTests: XCTestCase {
             guard let lever else { continue }
             let offset = message.distance(from: message.startIndex, to: lever.lowerBound)
             XCTAssertLessThan(offset, 150, "the remedy must survive truncation: \(fault)/\(carried)")
+        }
+    }
+
+    func testTheAddressReachesTheReaderBeforeTheReasoning() {
+        // The lever is pinned above; this pins the half of it that was missing
+        // until this change. An address that arrives after the diagnosis is an
+        // address nobody reads, and the whole point of naming Control Center is
+        // that the reader stops looking in the meeting app's own picker.
+        //
+        // Control Center is what is pinned rather than the Sound pane, because
+        // it is named first on purpose: it is the faster route, and it is the
+        // one that fits when a banner keeps only the opening. The bound is loose
+        // for the same reason the lever's is, and looser than the lever's
+        // because the address necessarily follows it: it pins the order of
+        // what-to-do against why, not the wording. Measured headroom at the time
+        // of writing is 85 and 56 characters.
+        for (fault, carried) in Self.actionableAppFaults {
+            let message = ChannelHealthController.faultMessage(
+                channel: .app, fault: fault, everCarriedSignal: carried,
+            )
+            guard let address = message.range(of: "Control Center") else {
+                XCTFail("no address at all: \(fault)/\(carried)")
+                continue
+            }
+            let offset = message.distance(from: message.startIndex, to: address.lowerBound)
+            XCTAssertLessThan(offset, 200, "the address must survive truncation: \(fault)/\(carried)")
         }
     }
 

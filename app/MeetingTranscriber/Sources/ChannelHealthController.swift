@@ -468,6 +468,21 @@ final class ChannelHealthController {
     /// Each actionable app arm therefore reads: what happened, what to do, and
     /// only then the reasoning.
     ///
+    /// **The lever needs an address.** "Switch the system output device" sends
+    /// the reader to the picker in front of them, which during a call is the
+    /// meeting app's own, and that one cannot work: the rebuild is triggered by
+    /// a change of `kAudioHardwarePropertyDefaultOutputDevice`, which an output
+    /// chosen inside another app does not touch. A field report has it both
+    /// ways in one call, the attempts made in the meeting app's picker leaving
+    /// the tap dead and the one made in Control Center recovering it, so both
+    /// halves are named: where it does work, and where it does not.
+    ///
+    /// **One switch, not "and back".** Switching back rebuilds the tap a second
+    /// time, and a rebuild can land in the same failing window the first one
+    /// did: in that same report a freshly started capture failed identically to
+    /// the one before it, with nothing changed. Living with the other output
+    /// device for the rest of the call is the smaller cost.
+    ///
     /// The microphone's two messages ignore the flag. A device that stopped
     /// answering and a device that is muted are different things to go and fix,
     /// and neither depends on what the channel carried earlier.
@@ -485,15 +500,18 @@ final class ChannelHealthController {
 
         case (.app, .noBuffers, _):
             "The app-audio channel stopped delivering audio to this recording. Switch the system "
-                + "output device to another one and back: that rebuilds the tap on the meeting "
-                + "app, which has died."
+                + "output device to another one, in Control Center or in "
+                + "\(SystemSettingsPaths.soundOutput). That rebuilds the tap. Changing the output "
+                + "inside the meeting app does not."
 
         case (.app, .digitalSilence, true):
             "The app-audio channel carried audio earlier in this recording and now delivers only "
-                + "silence. Switch the system output device to another one and back: that "
-                + "rebuilds the tap. This is not a permission problem, because a tap that is not "
-                + "allowed to hear the app never delivers audio at all. If the silence persists, "
-                + "the meeting app has moved its output to a path the tap does not follow."
+                + "silence. Switch the system output device to another one, in Control Center or "
+                + "in \(SystemSettingsPaths.soundOutput): that rebuilds the tap. Changing the "
+                + "output inside the meeting app does not. This is not a permission problem, "
+                + "because a tap that is not allowed to hear the app never delivers audio at all. "
+                + "If the silence persists, the meeting app has moved its output to a path the "
+                + "tap does not follow."
 
         case (.app, .digitalSilence, false):
             "The app-audio channel has delivered only silence since this recording started, "
