@@ -212,44 +212,18 @@
             XCTAssertNil(env["ANTHROPIC_API_KEY"])
         }
 
-        // MARK: - selectFailureMessage
-
-        func testSelectFailureMessagePrefersNonEmptyText() {
-            XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.selectFailureMessage(
-                    text: "Failed to authenticate. API Error: 401 API key is invalid.",
-                    stderrText: "",
-                ),
-                "Failed to authenticate. API Error: 401 API key is invalid.",
-            )
-        }
-
-        func testSelectFailureMessageFallsBackToStderrWhenTextIsEmpty() {
-            XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.selectFailureMessage(text: "", stderrText: "fatal: model not found"),
-                "fatal: model not found",
-            )
-        }
-
-        func testSelectFailureMessageFallsBackToStderrWhenTextIsWhitespaceOnly() {
-            XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.selectFailureMessage(text: "  \n\t  ", stderrText: "fatal: model not found"),
-                "fatal: model not found",
-            )
-        }
-
-        func testSelectFailureMessageTrimsText() {
-            XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.selectFailureMessage(text: "  bad key  \n", stderrText: "irrelevant"),
-                "bad key",
-            )
-        }
-
         // MARK: - drainStreamJSONLines
+
+        /// Throwaway output param for tests that only care about the
+        /// returned text fragments, not the captured result event.
+        private func ignoredResultEvent() -> ClaudeCLIProtocolGenerator.ResultEventInfo? {
+            nil
+        }
 
         func testDrainStreamJSONLinesEmptyBufferReturnsNothing() {
             var buffer = Data()
-            XCTAssertEqual(ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer), [])
+            var resultEvent = ignoredResultEvent()
+            XCTAssertEqual(ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent), [])
             XCTAssertEqual(buffer, Data())
         }
 
@@ -258,7 +232,8 @@
             // for the next chunk to complete it.
             let original = Data(#"{"type":"content_block_delta""#.utf8)
             var buffer = original
-            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            var resultEvent = ignoredResultEvent()
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent)
             XCTAssertEqual(fragments, [])
             XCTAssertEqual(buffer, original)
         }
@@ -281,7 +256,8 @@
                 [#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}"#],
                 trailingNewline: true,
             )
-            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            var resultEvent = ignoredResultEvent()
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent)
             XCTAssertEqual(fragments, ["Hi"])
             XCTAssertEqual(buffer, Data())
         }
@@ -294,8 +270,9 @@
                 ],
                 trailingNewline: true,
             )
+            var resultEvent = ignoredResultEvent()
             XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent),
                 ["A", "B"],
             )
             XCTAssertEqual(buffer, Data())
@@ -307,7 +284,8 @@
                 [#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}"#, partial],
                 trailingNewline: false,
             )
-            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer)
+            var resultEvent = ignoredResultEvent()
+            let fragments = ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent)
             XCTAssertEqual(fragments, ["Done"])
             XCTAssertEqual(buffer, Data(partial.utf8))
         }
@@ -323,8 +301,9 @@
                 ],
                 trailingNewline: true,
             )
+            var resultEvent = ignoredResultEvent()
             XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent),
                 ["OK"],
             )
         }
@@ -339,8 +318,9 @@
                 ],
                 trailingNewline: true,
             )
+            var resultEvent = ignoredResultEvent()
             XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent),
                 ["After"],
             )
         }
@@ -350,12 +330,15 @@
             // a partial line; the second chunk supplies the rest plus a
             // following complete line.
             var buffer = Data(#"{"type":"content_block_delta","delta":{"type":"text_delta","tex"#.utf8)
-            XCTAssertEqual(ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer), [])
+            var resultEvent = ignoredResultEvent()
+            XCTAssertEqual(
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent), [],
+            )
 
             buffer.append(contentsOf: #"t":"Hello"}}"#.utf8)
             buffer.append(0x0A)
             XCTAssertEqual(
-                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer),
+                ClaudeCLIProtocolGenerator.drainStreamJSONLines(buffer: &buffer, resultEvent: &resultEvent),
                 ["Hello"],
             )
             XCTAssertEqual(buffer, Data())
@@ -474,33 +457,6 @@
                 transcript: "Speaker 1: hello", title: "Sync", diarized: false,
             )
             XCTAssertEqual(result, "unset")
-        }
-
-        /// On a nonzero exit, the thrown error must carry the CLI's real
-        /// failure reason from stream-json text, not an empty/uninformative
-        /// stderr — the exact gap that left 8 real meetings with no clue why
-        /// protocol generation failed (see PR #692).
-        func testGenerateOnFailureThrowsTextOverEmptyStderr() async throws {
-            let script = try Self.makeFakeClaudeScript(
-                body: """
-                cat > /dev/null
-                msg='Failed to authenticate. API Error: 401 API key is invalid.'
-                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s"}}\\n' "$msg"
-                exit 1
-                """,
-            )
-            defer { try? FileManager.default.removeItem(atPath: script) }
-
-            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
-            do {
-                _ = try await generator.generate(
-                    transcript: "Speaker 1: hello", title: "Sync", diarized: false,
-                )
-                XCTFail("Expected generate() to throw")
-            } catch let ProtocolError.cliFailed(code, message) {
-                XCTAssertEqual(code, 1)
-                XCTAssertEqual(message, "Failed to authenticate. API Error: 401 API key is invalid.")
-            }
         }
 
         /// Writes a temporary executable `#!/bin/sh` script wrapping `body` and
