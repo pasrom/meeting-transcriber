@@ -812,7 +812,16 @@ extension PipelineQueue {
             }
             stopElapsedTimer()
         } catch {
-            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .private)")
+            // Every ProtocolGenerating error's message is now guaranteed
+            // content-free: ClaudeCLIProtocolGenerator sources cliFailed's
+            // text from the stream-json result event (never generated
+            // content, see ClaudeCLIProtocolGenerator.publicFailureMessage)
+            // or a fixed placeholder, never from the accumulated protocol
+            // text; every other case (cliNotFound, timeout, emptyProtocol,
+            // and OpenAIProtocolGenerator's connection/HTTP errors) already
+            // only ever carried diagnostic text. Safe to log at .public —
+            // restores the visibility traded away in PR #692's 4th commit.
+            logger.warning("[\(shortID, privacy: .public)] protocol_generation_failed error=\(error.localizedDescription, privacy: .public)")
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
             stopElapsedTimer()
         }
