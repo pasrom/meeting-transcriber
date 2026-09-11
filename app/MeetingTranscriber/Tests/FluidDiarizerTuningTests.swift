@@ -1,3 +1,4 @@
+import CoreML
 import FluidAudio
 @testable import MeetingTranscriber
 import XCTest
@@ -103,5 +104,11 @@ final class FluidDiarizerTuningTests: XCTestCase {
         let negative = FluidOfflineProcessor.makeConfig(tuning: .defaults, numSpeakers: -3)
         XCTAssertNil(negative.clustering.minSpeakers)
         XCTAssertNil(negative.clustering.maxSpeakers)
+    }
+
+    func testModelConfigurationAvoidsMetalInference() {
+        let configuration = FluidOfflineProcessor.makeModelConfiguration()
+
+        XCTAssertEqual(configuration.computeUnits, MLComputeUnits.cpuAndNeuralEngine)
     }
 }
