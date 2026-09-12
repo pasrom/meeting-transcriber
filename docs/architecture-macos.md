@@ -108,6 +108,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `Settings/HelpBadge.swift` / `Settings/SettingsHelp.swift` | Reusable "?" help-popover badge + its shared copy, used across Settings sections |
 | `Settings/View+RecordOnly.swift` | `recordOnlyDisabled(_:)` view modifier — dims + disables the Transcription/Protocol/VAD/Diarization sections when record-only mode is on |
 | `SpeakerNamingView.swift` | Speaker naming dialog after diarization |
+| `SpeakerNamingRowState.swift` | Per-presentation naming-row state (name text, expanded known-names) held as one `@Observable` reference type keyed by speaker label, not row position — a chip tap or `TextField` edit is otherwise unobservable/misdirected across a re-render (issue #700) |
 | `NamingGraceKey.swift` | Identity of one keyboard-grace window in the naming dialog — what counts as "a new grace window" (data revision + pending-job count), so the gate re-locks when another job steals focus |
 | `KnownVoicesView.swift` | Manage persisted speaker DB (rename, delete, merge) — embedded in `SpeakersSettingsView` |
 | `RecognitionStatsView.swift` | Recognition stats display — aggregate counts from `recognition_log.jsonl` |
@@ -248,9 +249,12 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SampleRateDriftDetector.swift` | Watches actual vs declared CATap sample rate (catches USB hot-plug + HFP↔A2DP renegotiation drift) |
 | `tools/audiotap/Sources/AppAudioCapture.swift` | CATapDescription + IOProc → FileHandle |
 | `tools/audiotap/Sources/AppAudioCapture+PIDTranslation.swift` | Translates PIDs to CoreAudio `AudioObjectID`s (multi-process tap for Electron apps like Teams 2.x) |
+| `tools/audiotap/Sources/TappedProcess.swift` | One process the tap was built from (pid + `AudioObjectID`), kept so its own state can be read again later instead of re-translating a possibly-reused pid |
 | `tools/audiotap/Sources/AppAudioCapture+DebugLogging.swift` | Per-buffer dBFS/RMS logging helpers extracted from `AppAudioCapture` (line-cap split) |
+| `tools/audiotap/Sources/AppAudioCapture+SilentTrackDiagnostics.swift` | Unconditional silent-track log call sites (issue #672), split from `AppAudioCapture` to stay under the line cap |
 | `tools/audiotap/Sources/AppAudioCapture+LiveSink.swift` | Live-buffer forwarding from CATap IOProc into `LiveAudioBuffer` sinks (line-cap split) |
 | `tools/audiotap/Sources/AppAudioCapture+AggregateDescription.swift` | The CFDictionary describing the private aggregate device wrapping a process tap (line-cap split from `AppAudioCapture`) |
+| `tools/audiotap/Sources/AggregateRunState.swift` | What the aggregate device says about itself (`kAudioDevicePropertyDeviceIsRunning`) plus the default output device it was bound to, read together so "tap created, no buffer ever arrived" is decidable (issue #693) |
 | `tools/audiotap/Sources/AppAudioCapture+Restart.swift` | Output-device-change restart path: off-main-queue, generation-tagged, deadline-bounded attempts (issue #588; line-cap split) |
 | `tools/audiotap/Sources/AppTapSession.swift` | Owns one tap attempt's HAL resources (tap, aggregate device, IOProc) and their release ordering, injectable for testing without hardware |
 | `tools/audiotap/Sources/MicCaptureHandler.swift` | AVAudioEngine → WAV |
@@ -266,6 +270,11 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/LevelPublisher.swift` | Cross-thread dBFS slot: audio callback writes, UI thread reads |
 | `tools/audiotap/Sources/ChannelSignalAges.swift` | How long ago a channel last delivered a buffer, and last delivered one carrying signal — a single dBFS reading can't tell "dead", "muted", and "quiet room" apart, ages can (feeds `ChannelFaultMonitor`) |
 | `tools/audiotap/Sources/DebugRMSReporter.swift` | Throttled RMS accumulator/reporter for audio debug logging |
+| `tools/audiotap/Sources/SilentTrackObserver.swift` | Notices when the app track enters/leaves a run of exact zeros while buffers keep arriving, logging the transition rather than only the end state (issue #672) |
+| `tools/audiotap/Sources/SilentTrackDiagnostics.swift` | Owns the dedicated queue, single-reader guard, and observer state the silent-track instrumentation needs (issue #672); reads run off the IOProc's own delivery queue so a wedged HAL read can't block teardown |
+| `tools/audiotap/Sources/ProcessOutputState.swift` | A tapped process's own `isRunningOutput`/`outputDevices` CoreAudio properties (issue #672) — separates a dead tap from one rendering silence, and says whether its output even reached the tapped device |
+| `tools/audiotap/Sources/DeliveredRateTracker.swift` | Measures the rate the tap is actually delivering per buffer, catching an in-place device renegotiation that a default-output-device listener never fires for (issue #673) |
+| `tools/audiotap/Sources/AppAudioCapture+RateQueries.swift` | The sample-rate property queries + priority ladder between them, split out of `AppAudioCapture` (line-cap); answers what a device says its rate is, as opposed to `DeliveredRateTracker`'s what-it-delivers |
 | `tools/audiotap/Sources/Helpers.swift` | `machTicksToSeconds`, `getDefaultOutputDeviceUID`, `writeAllToFileHandle` |
 | `tools/audiotap/Sources/MicRestartPolicy.swift` | Pure decision logic for mic engine restart on device change |
 | `tools/audiotap/Sources/CaptureRestartRetryPolicy.swift` | Retry/backoff policy for a failed capture restart, shared by both the app-audio and mic channels (issue #379) |
@@ -598,7 +607,7 @@ governed by their separate retention policy.
 
 - **Input:** Meeting metadata + protocol prompt (with variables substituted) + transcript piped to stdin
 - **Output:** Stream-json parsed line-by-line (content_block_delta + assistant message)
-- **Environment:** `CLAUDECODE` env var stripped to allow nested invocation
+- **Environment:** `CLAUDECODE` env var stripped to allow nested invocation. `ANTHROPIC_API_KEY` is injected only when `AppSettings.claudeAPIKey` (Settings → Output, optional) is set and the base environment carries no key of its own — lets the subprocess authenticate when the CLI's own OAuth session can't stay signed in, without silently switching a healthy subscription session onto metered billing
 - **Timeout:** 10 minutes
 
 ### Output Structure
