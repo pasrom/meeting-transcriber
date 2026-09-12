@@ -87,9 +87,79 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
 
     private let state = OSAllocatedUnfairLock(initialState: State())
 
-    init(probe: @escaping Probe = SilentTrackDiagnostics.readAll, sink: @escaping Sink) {
+    /// The deadlines armed for the capture attempt currently installed, held so
+    /// the first buffer and teardown can disarm them. Kept out of `State` and
+    /// behind its own lock because `DispatchWorkItem` is not `Sendable` and
+    /// `State` has to stay so; this class is already `@unchecked Sendable`, and
+    /// cancelling a work item is documented as safe from any thread.
+    private let armedLock = NSLock()
+    private var armedNoBufferProbes: [DispatchWorkItem] = []
+
+    /// How a deadline is armed. Nil means the diagnostics queue's own
+    /// `asyncAfter`, which is what production uses; a test injects one so it
+    /// decides when each deadline is reached. Proving a probe did *not* fire by
+    /// sleeping past a real five-second deadline is a coin toss on a loaded
+    /// machine, not an assertion.
+    typealias DelayedWork = @Sendable (TimeInterval, DispatchWorkItem) -> Void
+
+    private let delayedWork: DelayedWork?
+
+    init(
+        probe: @escaping Probe = SilentTrackDiagnostics.readAll,
+        sink: @escaping Sink,
+        delayedWork: DelayedWork? = nil,
+    ) {
         self.probe = probe
         self.sink = sink
+        self.delayedWork = delayedWork
+    }
+
+    /// Arm one probe per offset, replacing anything a previous attempt armed.
+    ///
+    /// Called from `startCapture()`, so a device-change restart re-arms rather
+    /// than stacking: without the replacement the old attempt's deadlines would
+    /// keep firing against an aggregate that no longer exists, and every rebuild
+    /// would add another set.
+    ///
+    /// The processes and the aggregate are captured by value for the same
+    /// reason the IOProc block captures its session: a deadline that outlives
+    /// its own attempt must report the aggregate it was armed for, not whatever
+    /// the newest attempt installed.
+    func scheduleNoBufferProbes(
+        _ processes: [TappedProcess],
+        aggregateID: AudioObjectID,
+        schedule: NoFirstBufferProbeSchedule = .production,
+    ) {
+        cancelNoBufferProbes()
+        let items = schedule.offsets.map { offset in
+            let reason = schedule.reason(after: offset)
+            return (offset, DispatchWorkItem { [weak self] in
+                _ = self?.probeAsync(processes, aggregateID: aggregateID, reason: reason)
+            })
+        }
+        armedLock.lock()
+        armedNoBufferProbes = items.map(\.1)
+        armedLock.unlock()
+        for (offset, item) in items {
+            if let delayedWork {
+                delayedWork(offset, item)
+            } else {
+                queue.asyncAfter(deadline: .now() + offset, execute: item)
+            }
+        }
+    }
+
+    /// Disarm every pending probe. Called when the first buffer arrives, which
+    /// is why a healthy recording emits none of these lines, and again on
+    /// teardown so a destroyed aggregate is never read.
+    func cancelNoBufferProbes() {
+        armedLock.lock()
+        let pending = armedNoBufferProbes
+        armedNoBufferProbes = []
+        armedLock.unlock()
+        for item in pending {
+            item.cancel()
+        }
     }
 
     /// Feed one tick's signal ages and hand back the edge, if this tick is one.
