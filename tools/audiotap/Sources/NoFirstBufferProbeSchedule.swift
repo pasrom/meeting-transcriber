@@ -18,10 +18,22 @@ import Foundation
 ///
 /// So the one reading that separates a dormant aggregate from a dead one has to
 /// be taken while the recording is still running, which is what this schedules.
-/// The pair it produces is the discriminator: a tapped process rendering to the
-/// tapped device while nothing arrives is the fault, because
+/// The pair it produces is the discriminator: a tapped process reporting
+/// `isRunningOutput` while nothing arrives is the fault, because
 /// `kAudioAggregateDeviceTapAutoStartKey` promises the aggregate starts when a
 /// tapped process runs IO. No process rendering is the benign case.
+///
+/// **The device the process renders to is not part of that test**, and reading
+/// it as part of it was measured wrong. A `stereoMixdownOfProcesses` tap follows
+/// the process, not the device: with the tapped aggregate on the default output
+/// and the target rendering to an entirely different device, the capture came
+/// back byte-identical to the control, at the same levels, and the aggregate
+/// reported running throughout. `outputDevices` said the other device the whole
+/// time. So a user who picks a different output inside the meeting app, which
+/// Teams, Zoom and Webex all offer, is captured exactly as anyone else is, and a
+/// verdict gated on that list would call their genuine fault undecided.
+/// `outputDevices` stays on the line because it says where the audio went, which
+/// is what issue #671 turns on. It just does not gate this.
 ///
 /// A healthy recording emits nothing: every offset is cancelled by the first
 /// buffer, which arrives inside the first of them by two orders of magnitude.
