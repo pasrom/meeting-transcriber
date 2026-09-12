@@ -69,7 +69,11 @@ public class AppAudioCapture: @unchecked Sendable {
     /// `internal` (not `private`) so the cross-file `+DebugLogging` extension
     /// can drive the per-buffer RMS accumulator + dBFS report cadence.
     /// Issue #672; see `AppAudioCapture+SilentTrackDiagnostics`.
-    let silentTrackDiagnostics = SilentTrackDiagnostics(sink: AppAudioCapture.logSilentTrackProbe)
+    /// Injected rather than constructed inline so a test can watch what the
+    /// capture lifecycle asks of it. Production passes nothing and gets the
+    /// logging sink; the seam is the same one `probe` and `sink` already are one
+    /// level down.
+    let silentTrackDiagnostics: SilentTrackDiagnostics
 
     var debugRMS = DebugRMSReporter()
     var debugTotalBytes: UInt64 = 0
@@ -181,6 +185,9 @@ public class AppAudioCapture: @unchecked Sendable {
         debugLogging: Bool = false,
         liveSink: LiveAudioSink? = nil,
         attemptBody: (() throws -> AppTapSession?)?,
+        silentTrackDiagnostics: SilentTrackDiagnostics = SilentTrackDiagnostics(
+            sink: AppAudioCapture.logSilentTrackProbe,
+        ),
     ) {
         self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
@@ -189,6 +196,7 @@ public class AppAudioCapture: @unchecked Sendable {
         self.debugLogging = debugLogging
         self.liveSink = liveSink
         self.attemptBody = attemptBody
+        self.silentTrackDiagnostics = silentTrackDiagnostics
         resampler = StreamingMonoResampler(targetRate: Int(speechSampleRate))
     }
 
@@ -384,6 +392,12 @@ public class AppAudioCapture: @unchecked Sendable {
             // Log format on first callback
             if !self.didLogFormat {
                 self.didLogFormat = true
+                // This capture is delivering, so nothing it was armed with has
+                // anything left to report. Safe from the write queue:
+                // cancelling a `DispatchWorkItem` is documented as safe from
+                // any thread, and it takes only the diagnostics object's own
+                // lock, never the HAL.
+                self.silentTrackDiagnostics.cancelNoBufferProbes()
                 // Only record the very first frame time — not after device restarts.
                 // MicCaptureHandler uses the same guard. Without this, a device change
                 // mid-recording overwrites the timestamp, corrupting the micDelay
@@ -461,11 +475,24 @@ public class AppAudioCapture: @unchecked Sendable {
         silentTrackDiagnostics.probeAsync(
             session.tappedProcesses, aggregateID: session.aggregateID, reason: "start",
         )
+        // The reading this one cannot take. The start probe above lands before
+        // `AudioCaptureSession.start()` opens the microphone, and that open is
+        // what flips a Bluetooth headset out of A2DP, so it reads the state
+        // before the trigger. These are taken while the recording is running and
+        // are disarmed by the first buffer, so a healthy capture emits none of
+        // them (issue #693).
+        silentTrackDiagnostics.scheduleNoBufferProbes(
+            session.tappedProcesses, aggregateID: session.aggregateID,
+        )
         return session
     }
 
     func stopCapture() {
         isRunning = false
+        // Before the teardown below, so no deadline can read an aggregate that
+        // `destroy()` is about to remove. A restart calls this too, and
+        // `startCapture()` re-arms.
+        silentTrackDiagnostics.cancelNoBufferProbes()
 
         if debugLogging {
             logger.info(
