@@ -17,20 +17,27 @@ extension AppAudioCapture {
         levelPublisher.publish(level: debugRMS.lastLevelDBFS, hasEnergy: debugRMS.lastBufferHadEnergy)
     }
 
-    /// Sums squares of the interleaved Float32 buffer into the shared RMS reporter.
-    /// Called unconditionally from the IOProc; the dBFS log line is gated separately.
-    func accumulateDebugRMS(data: UnsafeMutableRawPointer, byteCount: Int) {
+    /// Measure energy and individual zero samples in one pass, independently
+    /// of whether verbose logging is enabled.
+    func accumulateDebugRMS(
+        data: UnsafeMutableRawPointer, byteCount: Int,
+        now: TimeInterval = machTicksToSeconds(mach_absolute_time()),
+        generation: Int? = nil,
+    ) {
         let count = byteCount / MemoryLayout<Float>.size
         guard count > 0 else { return }
         let buf = UnsafeBufferPointer(
             start: data.assumingMemoryBound(to: Float.self), count: count,
         )
         var sumSq: Double = 0
+        var zeros = 0
         for sample in buf {
             sumSq += Double(sample) * Double(sample)
+            if sample == 0 { zeros += 1 }
         }
         debugRMS.add(sumSq: sumSq, samples: count)
         debugTotalBytes += UInt64(byteCount)
+        observeForDigitalSilence(zeroSamples: zeros, samples: count, now: now, generation: generation)
     }
 
     /// Drain the 5-s throttle and act on it.

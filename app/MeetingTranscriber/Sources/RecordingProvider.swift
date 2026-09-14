@@ -25,6 +25,12 @@ protocol RecordingProvider {
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
 
+    /// The capture layer's rolling digital-silence verdict, independent of the
+    /// instantaneous level or microphone activity. It means mostly exact
+    /// zeros over a full observation window, not proof of a routing failure.
+    /// Default false for providers that do not simulate capture.
+    var appCaptureDigitallySilent: Bool { get }
+
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. This is what says whether a channel is broken;
     /// `appLevelDBFS` / `micLevelDBFS` only say how loud it is, and report the
@@ -66,5 +72,9 @@ extension RecordingProvider {
 
     var micSignalAges: ChannelSignalAges {
         .deliveringSignalNow
+    }
+
+    var appCaptureDigitallySilent: Bool {
+        false
     }
 }

@@ -224,24 +224,9 @@ func getDefaultInputDeviceName() -> String? {
         .flatMap { readCFStringAudioProperty($0, kAudioObjectPropertyName) }
 }
 
-/// Transport type of the default output device as a short string
-/// (e.g. "Bluetooth", "USB", "Built-In", "AirPlay", "Aggregate").
-func getDefaultOutputDeviceTransportType() -> String? {
-    guard let deviceID = resolveDefaultDevice(selector: kAudioHardwarePropertyDefaultOutputDevice) else {
-        return nil
-    }
-    var addr = AudioObjectPropertyAddress(
-        mSelector: kAudioDevicePropertyTransportType,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain,
-    )
-    var raw: UInt32 = 0
-    var size = UInt32(MemoryLayout<UInt32>.size)
-    guard AudioObjectGetPropertyData(deviceID, &addr, 0, nil, &size, &raw) == noErr else { return nil }
-    return transportTypeNames[raw] ?? "Unknown(\(raw))"
-}
-
-private let transportTypeNames: [UInt32: String] = [
+/// Module-internal (not file-private) so `OutputDeviceEnumeration` can label the
+/// transport of *any* device, not just the default output.
+let transportTypeNames: [UInt32: String] = [
     kAudioDeviceTransportTypeBuiltIn: "Built-In",
     kAudioDeviceTransportTypeUSB: "USB",
     kAudioDeviceTransportTypeBluetooth: "Bluetooth",

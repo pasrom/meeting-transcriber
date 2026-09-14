@@ -121,6 +121,33 @@ public class AppAudioCapture: @unchecked Sendable {
     /// one attempt may take before it counts as never returning.
     let restartArbiter = OSAllocatedUnfairLock(initialState: RestartArbiter())
 
+    /// Notices a tap that is alive but delivering mostly exact digital zeros. Written
+    /// from the IOProc path (`writeQueue`) and read/reset from the main queue on
+    /// restart, hence lock-backed like the arbiter above. `internal` for the
+    /// cross-file `+Anchor` extension that owns its wiring.
+    let silentTapWatchdog = OSAllocatedUnfairLock(initialState: SilentTapWatchdog())
+
+    /// Where the anchor search stands: which candidate is in use, and which
+    /// anchor last proved it delivers audio. Lock-backed because the delivery
+    /// credit is written from the IOProc path while the cursor is moved from
+    /// the main queue.
+    let anchorSearch = OSAllocatedUnfairLock(initialState: AnchorSearch())
+
+    /// Decides when the current anchor has carried enough real audio to be
+    /// remembered as good. Written from the IOProc path and reset from the main
+    /// queue on teardown, hence lock-backed like the watchdog above.
+    let deliveryCredit = OSAllocatedUnfairLock(initialState: AnchorDeliveryCredit())
+
+    /// Published only when an attempt is adopted, never while it is building.
+    let currentAnchorUID = OSAllocatedUnfairLock<String?>(initialState: nil)
+
+    /// Invalidates a render-queue verdict waiting for main-queue delivery when
+    /// the device changes or the recording stops in between.
+    let anchorGeneration = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Main-queue confined, published together with the adopted session.
+    var anchorCandidateCount = 0
+
     /// Restart attempts run here, never on the main queue. `startCapture` is a
     /// chain of HAL calls through the same coreaudiod that can stop answering,
     /// and on the main queue a stuck one takes the whole app down.
@@ -209,6 +236,8 @@ public class AppAudioCapture: @unchecked Sendable {
     /// something" a fact the type system carries rather than a convention.
     func install(_ session: AppTapSession) {
         tapSession = session
+        currentAnchorUID.withLock { $0 = session.anchorUID }
+        anchorCandidateCount = session.anchorCandidateCount
         silentTrackDiagnostics.remember(session.tappedProcesses, aggregateID: session.aggregateID)
         actualSampleRate = session.resolvedSampleRate
     }
@@ -256,6 +285,7 @@ public class AppAudioCapture: @unchecked Sendable {
 
     // swiftlint:disable:next function_body_length
     private func startCapture() throws -> AppTapSession {
+        let generation = anchorGeneration.withLock { $0 }
         let translated = try translatePIDs()
         let processObjectIDs = translated.map(\.audioObjectID)
 
@@ -278,25 +308,10 @@ public class AppAudioCapture: @unchecked Sendable {
             }
         }
 
-        // Get default output device UID
-        guard let systemOutputUID = getDefaultOutputDeviceUID() else {
+        guard let anchor = resolveOutputAnchor() else {
             throw NSError(
                 domain: "audiotap", code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Cannot get default output device UID"],
-            )
-        }
-        // Transport type is logged unconditionally (not personal data, unlike
-        // the device name/UID): a "Virtual"/"Aggregate" transport is the first
-        // sign that a third-party audio tool has interposed on the output and
-        // the process tap may capture silence (issue #524).
-        let transport = getDefaultOutputDeviceTransportType() ?? "?"
-        logger.info("System output device: \(systemOutputUID) transport=\(transport, privacy: .public)")
-
-        if debugLogging {
-            let deviceName = getDefaultOutputDeviceName() ?? "?"
-            let deviceRate = getDefaultOutputDeviceSampleRate() ?? 0
-            logger.info(
-                "[debug] Default output device: name=\(deviceName, privacy: .public) uid=\(systemOutputUID, privacy: .public) transport=\(transport, privacy: .public) rate=\(deviceRate, privacy: .public)",
             )
         }
 
@@ -328,14 +343,17 @@ public class AppAudioCapture: @unchecked Sendable {
         // would silently skip the barrier once self is gone, which is exactly the
         // write-after-close bug the barrier exists to prevent, and a strong self
         // would make the session keep its owner alive.
-        let session = AppTapSession(tapID: newTapID, tappedProcesses: translated) { [writeQueue] in
+        let session = AppTapSession(
+            tapID: newTapID, tappedProcesses: translated,
+            anchorUID: anchor.uid, anchorCandidateCount: anchor.candidateCount,
+        ) { [writeQueue] in
             writeQueue.sync {}
         }
         logger.info("Created process tap: \(newTapID)")
 
         let desc = Self.aggregateDescription(
             nameTag: pids.first.map(String.init) ?? "0",
-            outputUID: systemOutputUID,
+            outputUID: anchor.uid,
             tapUUID: tap.uuid.uuidString,
         )
 
@@ -345,6 +363,9 @@ public class AppAudioCapture: @unchecked Sendable {
         )
         guard aggStatus == noErr else {
             session.destroy()
+            logger.error(
+                "Failed to create the aggregate device around the chosen anchor (status: \(aggStatus, privacy: .public))",
+            )
             throw NSError(
                 domain: "audiotap", code: Int(aggStatus),
                 userInfo: [
@@ -422,7 +443,7 @@ public class AppAudioCapture: @unchecked Sendable {
             let hostTicks = Self.hostTicks(from: inInputTime)
             self.writeCapturedBuffer(fd: fd, data: data, byteCount: byteCount, hostTicks: hostTicks)
 
-            self.accumulateDebugRMS(data: data, byteCount: byteCount)
+            self.accumulateDebugRMS(data: data, byteCount: byteCount, generation: generation)
             self.publishCurrentLevel()
             self.maybeReportDebugRMS(processes: session.tappedProcesses)
         }
@@ -466,6 +487,7 @@ public class AppAudioCapture: @unchecked Sendable {
 
     func stopCapture() {
         isRunning = false
+        anchorGeneration.withLock { $0 += 1 }
 
         if debugLogging {
             logger.info(
@@ -478,7 +500,15 @@ public class AppAudioCapture: @unchecked Sendable {
         // about to close.
         tapSession?.destroy()
         tapSession = nil
+        currentAnchorUID.withLock { $0 = nil }
         didLogFormat = false
+        // After the drain, so no in-flight buffer can pool into the window we
+        // just closed. Every restart path funnels through here, which is why
+        // the reset lives at the teardown rather than at each caller. Both
+        // measurements are dropped: buffers from the next anchor must not be
+        // judged against evidence gathered at the previous one.
+        silentTapWatchdog.withLock { $0.resetWindow() }
+        deliveryCredit.withLock { $0.reset() }
     }
 
     public func stop() {

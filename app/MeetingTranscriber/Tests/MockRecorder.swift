@@ -44,6 +44,9 @@ class MockRecorder: RecordingProvider {
     /// false, matching the protocol's default, so existing tests are unaffected.
     var micCaptureGaveUp = false
     var appCaptureGaveUp = false
+    /// Whether the app-audio tap's rolling window is mostly exact zeros. Default
+    /// false, matching the protocol's default.
+    var appCaptureDigitallySilent = false
 
     /// What the capture layer reports about each channel. Defaults describe a
     /// channel delivering signal right now, so a test has to say explicitly

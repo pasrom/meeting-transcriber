@@ -224,6 +224,7 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `SilentRecordingMonitor.swift` | Pure state machine detecting fully-silent recordings (both channels below threshold) |
 | `ChannelHealthMonitor.swift` | Pure state machine for per-channel asymmetric silence detection (one channel live, other dead) — levels + hysteresis, drives the menu-bar tint |
 | `ChannelHealthController.swift` | `@Observable` controller polling channel dBFS levels and driving `ChannelHealthMonitor` |
+| `ChannelHealthController+Alerts.swift` | Capture-fault and recovery notification copy, shared by the controller's fault paths |
 | `ChannelFaultMonitor.swift` | Pure state machine deciding whether a channel has stopped delivering, from per-buffer ages rather than levels (issue #614) — drives the "Capture Channel Silent" notification, deliberately separate from the level-based tint |
 | `PairedImportPanelDelegate.swift` | `NSOpenPanel` delegate + accessory view for paired dual-source file import |
 | `PairedRecordingResolver.swift` | Groups recording URLs into dual-source groups (app + mic pairs, singletons) for reimport |
@@ -252,6 +253,13 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/AppAudioCapture+LiveSink.swift` | Live-buffer forwarding from CATap IOProc into `LiveAudioBuffer` sinks (line-cap split) |
 | `tools/audiotap/Sources/AppAudioCapture+AggregateDescription.swift` | The CFDictionary describing the private aggregate device wrapping a process tap (line-cap split from `AppAudioCapture`) |
 | `tools/audiotap/Sources/AppAudioCapture+Restart.swift` | Output-device-change restart path: off-main-queue, generation-tagged, deadline-bounded attempts (issue #588; line-cap split) |
+| `tools/audiotap/Sources/AppAudioCapture+Anchor.swift` | Connects the rolling-zero detector to bounded output-device fallback (issue #712) |
+| `tools/audiotap/Sources/OutputDeviceAnchorPolicy.swift` | Default-first candidate ordering, with running-I/O priority among fallback devices |
+| `tools/audiotap/Sources/OutputDeviceEnumeration.swift` | Reads output device identities, transport types, and running-I/O state |
+| `tools/audiotap/Sources/AnchorSearch.swift` | Per-recording fallback cursor and last-known-good device |
+| `tools/audiotap/Sources/AnchorDeliveryCredit.swift` | Remembers an anchor only after a substantially non-silent delivery interval |
+| `tools/audiotap/Sources/RollingZeroFraction.swift` | Bounded, sample-weighted rolling zero counts |
+| `tools/audiotap/Sources/SilentTapWatchdog.swift` | Conservative rolling-silence verdict, recovery hysteresis, and per-recording trigger budget |
 | `tools/audiotap/Sources/AppTapSession.swift` | Owns one tap attempt's HAL resources (tap, aggregate device, IOProc) and their release ordering, injectable for testing without hardware |
 | `tools/audiotap/Sources/MicCaptureHandler.swift` | AVAudioEngine → WAV |
 | `tools/audiotap/Sources/MicCaptureHandler+Restart.swift` | Mic-side device-change restart path: off-main-queue, generation-tagged, deadline-bounded attempts (issue #588; same pattern as `AppAudioCapture+Restart`) |
@@ -418,6 +426,12 @@ AudioTapLib (CATapDescription)
 **Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
 
 **Restart bounding (issue #588):** a device-change restart on either channel can wedge inside AVFAudio/CoreAudio and never return (e.g. `AVAudioEngine.inputNode` looping on a dangling Bluetooth sub-device held by coreaudiod). `RestartArbiter` bounds how long a single restart attempt may run — attempts carry a generation and run off the main queue, so a result from a wedged attempt that eventually returns is rejected rather than adopted. `CaptureRestartRetryPolicy` bounds how many attempts are made and is shared by both channels. A channel that gives up tells the user directly (`AudioCaptureSession`/`DualSourceRecorder` expose which one) instead of only decaying to silence, which the asymmetric-silence detector would otherwise misreport as a routing/mute problem rather than a channel that is gone for good.
+
+**Output-device mismatch recovery (issue #712, related to #672):** the meeting app can play through a different device from the system default while the process tap keeps delivering mostly zero samples. The tap still tries the system default first, including virtual devices that legitimately carry the meeting. `SilentTapWatchdog` requests an alternative anchor only after a full 120-second window contains at least 90% exactly-zero samples. Samples are counted individually, because occasional nonzero buffers defeated the earlier uninterrupted-silence detector. These thresholds separate the original measured healthy (12.2–41.7%) and failed (98.7–100%) recordings; that corpus was measured after 16 kHz conversion, so it does not establish a universal discriminator.
+
+Fallback candidates prefer devices with running I/O, then retain the order of last-known-good, built-in, and remaining physical/aggregate outputs. Running I/O is not proof that the meeting plays there. An anchor earns delivery credit only after a five-second interval with at most 50% zeros. Recovery uses the existing restart coordinator, deadline, retry budget, and timeline-gap handling; it does not change the user's system output or tap unrelated processes. Selection is published only when the attempt is adopted, and queued silence verdicts are generation-checked so an old tap cannot restart its replacement.
+
+The watchdog allows at most three moves per recording and only one per continuous silence episode. A failed fallback stays latched rather than repeatedly rebuilding; the rolling verdict clears below or at 50% zeros. A real default-device change resets the search to the default, but not the recording's trigger budget. Exhausted candidates or budget leave the silence visible without promising another restart. `/state.channelHealth.appDigitalSilence` exposes the rolling verdict alongside the existing fault/age fields; it is neither a claim that every sample is zero nor a diagnosis of the separate Safari/VoiceProcessingIO issue #671.
 
 **Safari support (issue #524):** the app-audio tap targets processes via macOS's *responsible-process* attribution (`ProcessResponsibility`) as well as bundle-path enumeration (`ProcessTreeEnumerator`) — Safari's call audio comes from WebKit XPC services outside `Safari.app`, unlike Electron/Chrome helpers that live inside their own bundle.
 

@@ -318,13 +318,14 @@
 
         /// Snapshot the channel-health flags. Extracted into a helper (rather
         /// than inlined in `rpcStateSnapshot`'s already-large literal) because
-        /// reading the three `channelHealth.*` flags through the sub-controller
+        /// reading the `channelHealth.*` flags through the sub-controller
         /// inside that expression pushed its type-check over the 300 ms budget.
         private func channelHealthSnapshot() -> RPCStateSnapshot.ChannelHealth {
             RPCStateSnapshot.ChannelHealth(
                 micSilent: channelHealth.micSilentActive,
                 appSilent: channelHealth.appSilentActive,
                 recordingSilent: channelHealth.recordingSilentActive,
+                appDigitalSilence: channelHealth.appDigitalSilenceActive,
                 micFault: channelHealth.micFault?.rawValue,
                 appFault: channelHealth.appFault?.rawValue,
                 micLevelDBFS: channelHealth.micLevelDBFS,

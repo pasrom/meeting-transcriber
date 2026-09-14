@@ -32,6 +32,11 @@ protocol AudioCapturing: AnyObject {
     /// protocol it sits behind.
     var appSignalAges: ChannelSignalAges { get }
     var micSignalAges: ChannelSignalAges { get }
+
+    /// The capture layer's rolling-sample verdict: at least 90% exact zeros
+    /// across a full 120-second window, clearing at 50% or less.
+    /// This can indicate a routing problem; it does not prove one.
+    var appCaptureDigitallySilent: Bool { get }
 }
 
 @available(macOS 14.2, *)

@@ -70,11 +70,13 @@ class DualSourceRecorder: RecordingProvider {
         captureSession?.micCaptureGaveUp ?? false
     }
 
-    /// Requested app-audio capture format (what the CATap aggregate device is
-    /// asked for). The device may renegotiate to another rate/channel count
-    /// mid-session; `AppAudioCapture` resamples every buffer to 16 kHz mono in
-    /// the IOProc regardless, so the written file — and crash recovery — are
-    /// always at the speech target rate, not this one.
+    var appCaptureDigitallySilent: Bool {
+        captureSession?.appCaptureDigitallySilent ?? false
+    }
+
+    /// Requested app-audio format; the CATap aggregate may renegotiate it.
+    /// `AppAudioCapture` always resamples to 16 kHz mono in the IOProc, so the
+    /// written file and crash recovery use the speech target rate, not this one.
     nonisolated static let defaultRecordRate = 48000
     nonisolated static let defaultAppChannels = 2
 

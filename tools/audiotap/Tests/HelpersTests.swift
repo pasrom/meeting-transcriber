@@ -176,12 +176,6 @@ final class HelpersTests: XCTestCase {
         }
     }
 
-    func testGetDefaultOutputDeviceTransportTypeShape() {
-        if let transport = getDefaultOutputDeviceTransportType() {
-            XCTAssertFalse(transport.isEmpty)
-        }
-    }
-
     func testGetDefaultInputDeviceUIDShape() {
         if let uid = getDefaultInputDeviceUID() {
             XCTAssertFalse(uid.isEmpty)

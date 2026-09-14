@@ -49,6 +49,8 @@ final class AppTapSession: @unchecked Sendable {
     /// PID is reused, and because re-translating is another HAL call. Defaults
     /// to empty so a session built by a test seam is honest about having none.
     let tappedProcesses: [TappedProcess]
+    let anchorUID: String?
+    let anchorCandidateCount: Int
     /// Filled in as the attempt gets further. A session that never got past the
     /// tap still cleans up correctly, which is the point: every failure path
     /// hands back one object instead of remembering which of three ids it owns.
@@ -68,11 +70,15 @@ final class AppTapSession: @unchecked Sendable {
     init(
         tapID: AudioObjectID,
         tappedProcesses: [TappedProcess] = [],
+        anchorUID: String? = nil,
+        anchorCandidateCount: Int = 0,
         hal: AppTapSessionHAL = .real,
         drain: @escaping () -> Void,
     ) {
         self.tapID = tapID
         self.tappedProcesses = tappedProcesses
+        self.anchorUID = anchorUID
+        self.anchorCandidateCount = anchorCandidateCount
         self.hal = hal
         self.drain = drain
     }

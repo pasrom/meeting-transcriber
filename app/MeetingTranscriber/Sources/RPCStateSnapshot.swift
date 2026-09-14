@@ -157,12 +157,16 @@
             /// the polling chain wired up to `SilentRecordingMonitor`
             /// without screenshot OCR.
             let recordingSilent: Bool
+            /// The capture layer's rolling verdict of mostly exact-zero
+            /// samples. Reported without additional debounce or microphone
+            /// corroboration; false again when the rolling window recovers.
+            let appDigitalSilence: Bool
 
-            /// The capture fault reported for each channel in this recording:
-            /// "noBuffers", "digitalSilence", or absent when the channel is
-            /// fine. Distinct from `micSilent` / `appSilent`, which say only
-            /// that one channel is quieter than the other and are true of a
-            /// muted microphone, a quiet room and a dead tap alike.
+            /// The fault reported for each channel in this recording:
+            /// "noBuffers", "digitalSilence", "gaveUp", or absent when none
+            /// was reported. The app's "digitalSilence" includes the rolling
+            /// verdict above. These persist as history until recording stops;
+            /// `appDigitalSilence` and the level-driven flags are live state.
             let micFault: String?
             let appFault: String?
 
@@ -183,6 +187,7 @@
                 micSilent: false,
                 appSilent: false,
                 recordingSilent: false,
+                appDigitalSilence: false,
                 micFault: nil,
                 appFault: nil,
                 micLevelDBFS: nil,

@@ -39,6 +39,15 @@ public class AudioCaptureSession {
     /// restarts. Read from the polling path that already watches channel levels.
     public private(set) var appCaptureGaveUp = false
     public private(set) var micCaptureGaveUp = false
+
+    /// True while the app-audio tap is alive but delivering buffers whose every
+    /// sample is exactly zero — the failure a virtual output driver taking over
+    /// the system default produces, which reports no error anywhere. Polled
+    /// alongside the per-channel levels; see `SilentTapWatchdog`.
+    public var appCaptureDigitallySilent: Bool {
+        appCapture?.isDeliveringDigitalSilence ?? false
+    }
+
     private var appFileHandle: FileHandle?
 
     /// Each option is documented on `AudioCaptureConfiguration`.
