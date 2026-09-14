@@ -161,6 +161,42 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(toggle.isDisabled())
     }
 
+    // MARK: - Caption size picker
+
+    func testCaptionSizePickerSelectionWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.liveTranscriptionEnabled = true
+        XCTAssertEqual(settings.liveCaptionsSize, .medium, "precondition: default preset")
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+
+        let picker = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsSizePicker)
+            .find(ViewType.Picker.self)
+        try picker.select(value: LiveCaptionsSize.small)
+
+        XCTAssertEqual(settings.liveCaptionsSize, .small, "selecting a preset must write back to settings")
+    }
+
+    /// A hidden bar has no size to pick, so the picker follows the overlay
+    /// toggle exactly as that toggle follows the master switch.
+    func testCaptionSizePickerDisabledWhenOverlayHidden() throws {
+        let settings = makeSettings()
+        settings.liveTranscriptionEnabled = true
+        settings.liveCaptionsOverlayEnabled = false
+        let view = TranscriptionSettingsView(
+            settings: settings,
+            whisperKitEngine: WhisperKitEngine(),
+            parakeetEngine: ParakeetEngine(),
+        )
+        let picker = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsSizePicker)
+        XCTAssertTrue(picker.isDisabled())
+    }
+
     // MARK: - LiveCaptionsOverlay render
 
     func testLiveCaptionsOverlayBackendIdentifierTracksActiveBackend() throws {

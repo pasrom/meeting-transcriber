@@ -204,13 +204,20 @@ struct MeetingTranscriberApp: App {
             }
         }
         .onChange(of: appState.shouldShowLiveCaptions, initial: true) { _, visible in
-            let controller = captionsWindow ?? LiveCaptionsWindowController(state: appState.liveCaptions)
+            let controller = captionsWindow ?? LiveCaptionsWindowController(
+                state: appState.liveCaptions, size: appState.settings.liveCaptionsSize,
+            )
             captionsWindow = controller
             if visible {
                 controller.show()
             } else {
                 controller.hide()
             }
+        }
+        // Not `initial: true`: the controller is created with the current
+        // preset above, and a hidden bar picks the preset up on `show()`.
+        .onChange(of: appState.settings.liveCaptionsSize) { _, size in
+            captionsWindow?.apply(size: size)
         }
     }
 

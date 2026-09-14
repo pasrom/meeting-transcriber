@@ -43,7 +43,7 @@ struct LiveCaptionsOverlay: View {
         VStack(alignment: .leading, spacing: 4) {
             if let backend = state.activeBackend {
                 Text(backend)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: state.size.labelFontSize, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.45))
                     .accessibilityIdentifier(A11yID.liveCaptionBackend)
             }
@@ -57,7 +57,7 @@ struct LiveCaptionsOverlay: View {
                 row(speaker: state.micLabel, text: state.hypothesisMic, opacity: 0.6)
             }
         }
-        .font(.system(size: 22, weight: .medium, design: .rounded))
+        .font(.system(size: state.size.fontSize, weight: .medium, design: .rounded))
         .multilineTextAlignment(.leading)
         .padding(.horizontal, 24)
         .padding(.vertical, 14)

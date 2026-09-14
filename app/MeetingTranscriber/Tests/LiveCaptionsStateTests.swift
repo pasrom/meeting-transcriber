@@ -172,4 +172,16 @@ final class LiveCaptionsStateTests: XCTestCase {
             .addingTimeInterval(LiveCaptionsState.fadeEndSeconds + 10.0)
         XCTAssertEqual(state.opacity(at: wayLater), 0.0, accuracy: 0.0001)
     }
+
+    /// The overlay reads its font size from the state, so the window
+    /// controller has one place to push a preset change; `.medium` keeps the
+    /// bar unchanged until Settings says otherwise.
+    func testSizeDefaultsToMediumAndFollowsSetSize() {
+        let state = LiveCaptionsState()
+        XCTAssertEqual(state.size, .medium)
+
+        state.setSize(.small)
+
+        XCTAssertEqual(state.size, .small)
+    }
 }

@@ -77,6 +77,17 @@ final class LiveCaptionsState {
         activeBackend = label
     }
 
+    /// Size preset the overlay renders at. Lives here rather than being read
+    /// from `AppSettings` by the view because the overlay is hosted in a panel
+    /// that has no settings object, and `LiveCaptionsWindowController` has to
+    /// resize that panel in the same step anyway: it pushes the preset through
+    /// `setSize` so font and frame never disagree.
+    private(set) var size: LiveCaptionsSize = .medium
+
+    func setSize(_ size: LiveCaptionsSize) {
+        self.size = size
+    }
+
     /// Cap on `recentFinals` length. 2 keeps the bar at most two prior lines
     /// plus the two live hypothesis rows on top.
     static let maxFinalsKept = 2

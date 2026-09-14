@@ -49,6 +49,7 @@
                 perChannelIndicatorEnabled: perChannelIndicatorEnabled,
                 liveTranscriptionEnabled: liveTranscriptionEnabled,
                 liveCaptionsOverlayEnabled: liveCaptionsOverlayEnabled,
+                liveCaptionsSize: liveCaptionsSize.rawValue,
                 asymmetricSilenceWarningSeconds: asymmetricSilenceWarningSeconds,
             )
         }

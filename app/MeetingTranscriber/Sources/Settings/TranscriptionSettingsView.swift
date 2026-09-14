@@ -148,6 +148,7 @@ struct TranscriptionSettingsView: View {
             }
 
             captionOverlayToggle
+            captionSizePicker
 
             Text(captionBackendFootnote)
                 .font(.caption)
@@ -171,6 +172,21 @@ struct TranscriptionSettingsView: View {
         Toggle("Show caption overlay", isOn: $settings.liveCaptionsOverlayEnabled)
             .disabled(!settings.liveTranscriptionEnabled)
             .accessibilityIdentifier(A11yID.liveCaptionsOverlayToggle)
+    }
+
+    /// Nested one level deeper than the overlay toggle: a hidden bar has no
+    /// size, so the picker is disabled whenever the toggle is off or disabled.
+    /// Segmented, since three named presets read better side by side than in
+    /// a menu.
+    private var captionSizePicker: some View {
+        Picker("Caption size", selection: $settings.liveCaptionsSize) {
+            ForEach(LiveCaptionsSize.allCases, id: \.self) { size in
+                Text(size.label).tag(size)
+            }
+        }
+        .pickerStyle(.segmented)
+        .disabled(!settings.liveTranscriptionEnabled || !settings.liveCaptionsOverlayEnabled)
+        .accessibilityIdentifier(A11yID.liveCaptionsSizePicker)
     }
 
     /// True when enabling captions would trigger the first-use Nemotron download:

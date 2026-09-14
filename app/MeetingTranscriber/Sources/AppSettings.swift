@@ -231,6 +231,13 @@ final class AppSettings {
         didSet { defaults.set(liveCaptionsOverlayEnabled, forKey: "liveCaptionsOverlayEnabled") }
     }
 
+    /// Size preset of the caption bar (font + panel, see `LiveCaptionsSize`).
+    /// Default `.medium` is the pre-preset geometry, so an upgrade changes
+    /// nothing; an unknown stored value also reads as `.medium`.
+    var liveCaptionsSize: LiveCaptionsSize {
+        didSet { defaults.set(liveCaptionsSize.rawValue, forKey: "liveCaptionsSize") }
+    }
+
     /// Seconds of continuous asymmetric silence before the indicator + notification
     /// fire. Clamped to [30, 300] on write — short enough to surface a dead channel
     /// inside a meeting, long enough not to trigger on normal speaking pauses.
@@ -572,6 +579,8 @@ final class AppSettings {
         perChannelIndicatorEnabled = defaults.object(forKey: "perChannelIndicatorEnabled") as? Bool ?? true
         liveTranscriptionEnabled = defaults.object(forKey: "liveTranscriptionEnabled") as? Bool ?? false
         liveCaptionsOverlayEnabled = defaults.object(forKey: "liveCaptionsOverlayEnabled") as? Bool ?? true
+        liveCaptionsSize = defaults.string(forKey: "liveCaptionsSize")
+            .flatMap(LiveCaptionsSize.init(rawValue:)) ?? .medium
         asymmetricSilenceWarningSeconds = max(30, min(300, defaults.object(forKey: "asymmetricSilenceWarningSeconds") as? Double ?? 90))
 
         transcriptionEngine = (defaults.string(forKey: "transcriptionEngine")
