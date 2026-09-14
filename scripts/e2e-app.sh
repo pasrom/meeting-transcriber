@@ -1742,7 +1742,14 @@ run_crash_recovery() {
     #    Kill the simulator too so the relaunch sees no active meeting — the
     #    only recording that can surface post-relaunch is the recovered one.
     log "$label: SIGKILL the app mid-recording (simulating a crash)"
-    pkill -KILL -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" 2>/dev/null || true
+    # Everything below this line is equally true of an app that is still
+    # running, so the kill needs a verdict of its own. The helper owns the whole
+    # sequence — capture the victims, refuse if there are none, kill, prove
+    # those process ids are gone — because a caller that kills first and asks
+    # afterwards cannot tell a successful kill from a pattern that matched
+    # nothing, and the second is the likelier failure here.
+    kill_and_verify_gone "$_DEV_APP_PATTERN" 10 \
+        || fail "$label: the kill did not demonstrably remove the app. Nothing below this point would exercise crash recovery: a live recorder keeps the raw temp present and the mix absent, so every later assertion passes against an ordinary recording. See the message above for which of the two happened; a pattern that matched nothing means the bundle or executable was renamed."
     [ -n "${SIM_PID:-}" ] && kill "$SIM_PID" 2>/dev/null || true
     SIM_PID=""
     sleep 2
@@ -1787,6 +1794,7 @@ run_crash_recovery() {
     #    crashed recording was re-mixed AND transcribed end-to-end.
     _poll_for_new_lastjob_terminal "$label"
     [ "$POLL_LJ_STATE" = "done" ] || fail "$label: recovered job state=$POLL_LJ_STATE, expected done"
+
     log "$label: recovered recording transcribed (lastJob done) ✅"
 }
 

@@ -378,3 +378,93 @@ transcript_is_german() {
     GERMAN_MARKER_MATCHED="$matched"
     [ "$matched" -ge "$GERMAN_MARKER_WORDS_MIN" ]
 }
+
+# _pid_is_alive <pid> — does this process exist, whether or not we may signal it.
+#
+# `kill -0` answers a different question: "may I signal it". It fails the same
+# way for a dead pid and for a live one owned by somebody else, so a guard whose
+# whole purpose is not to fail open cannot rest on it alone. Measured: `kill -0 1`
+# reports "Operation not permitted" and exits 1 while launchd is plainly
+# running. `ps -p` answers existence regardless of ownership.
+_pid_is_alive() {
+    kill -0 "$1" 2>/dev/null && return 0
+    ps -p "$1" >/dev/null 2>&1
+}
+
+# _no_pid_alive <pid>... — the pids arrive as separate arguments rather than as
+# one string on purpose. Splitting a string depends on the CALLER's IFS, and a
+# caller with IFS unset of its space turns both the kill and the check into
+# no-ops whose failures cancel into a false success. Measured on two live
+# processes with IFS set to newline: reported gone, both still running.
+_no_pid_alive() {
+    local pid
+    for pid in "$@"; do
+        _pid_is_alive "$pid" && return 1
+    done
+    return 0
+}
+
+# kill_and_verify_gone <pattern> [timeout_s] — SIGKILL every process matching
+# `pattern` and prove those processes are gone. Returns 1 when the pattern
+# matched nothing, when pgrep could not answer, and when a victim is still
+# alive after `timeout_s`.
+#
+# `pkill` reports "matched nothing" and "killed it" identically to a caller that
+# discards the status, and a lane that kills and then asserts on files cannot
+# tell the two apart: a live process leaves the files in exactly the state the
+# assertions expect.
+#
+# THE WHOLE SEQUENCE LIVES HERE, and that is the point. An earlier draft of this
+# same change only waited for the pattern to stop matching, which reads "gone" on
+# the first tick when the pattern matches nothing — the likeliest failure of all,
+# since a pattern is a path fragment and paths get renamed. A caller cannot fix
+# that by checking first either, because the process can exit on its own between
+# its check and its kill. So the victims are captured once, before the signal,
+# and it is THOSE PROCESS IDS that have to disappear.
+#
+# Watching ids rather than the pattern also matters on a shared host: the pattern
+# names a deploy path that every lane and the console user share, so another
+# process matching it can appear while this one waits. An empty victim list is a
+# refusal rather than an early success, because having nothing to wait for and
+# having killed something are opposite facts.
+kill_and_verify_gone() {
+    local pattern="$1" timeout_s="${2:-10}" raw status=0 pid
+    local -a victims=()
+
+    # `--` because a pattern may begin with a dash, which pgrep would otherwise
+    # read as an option; measured, it exits 2 for a usage error. And the status
+    # is examined rather than discarded: 1 means no match, anything above it
+    # means pgrep could not answer, and reporting that as "matched no process"
+    # would be a confident wrong diagnosis.
+    raw="$(pgrep -f -- "$pattern")" || status=$?
+    if [ "$status" -gt 1 ]; then
+        echo "kill_and_verify_gone: pgrep failed with status $status for '$pattern'," >&2
+        echo "  so whether anything matched is unknown. Refusing rather than guessing." >&2
+        return 1
+    fi
+
+    while IFS= read -r pid; do
+        if [ -n "$pid" ]; then
+            victims+=("$pid")
+        fi
+    done <<< "$raw"
+
+    if [ "${#victims[@]}" -eq 0 ]; then
+        echo "kill_and_verify_gone: '$pattern' matched no process, so the kill would" >&2
+        echo "  be a no-op. Refusing rather than reporting a kill that never happened:" >&2
+        echo "  everything a caller does after this point is equally true of a process" >&2
+        echo "  that is still running." >&2
+        return 1
+    fi
+
+    kill -KILL "${victims[@]}" 2>/dev/null || true
+
+    if poll_until "$timeout_s" 0.2 _no_pid_alive "${victims[@]}"; then
+        return 0
+    fi
+    echo "kill_and_verify_gone: still alive after ${timeout_s}s despite SIGKILL:" >&2
+    for pid in "${victims[@]}"; do
+        _pid_is_alive "$pid" && echo "    pid $pid" >&2
+    done
+    return 1
+}
