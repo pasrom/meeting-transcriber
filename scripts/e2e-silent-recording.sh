@@ -29,6 +29,12 @@
 #   - Self-hosted Mac mini with BlackHole 2ch as default input (so the mic
 #     side is genuinely silent under the synthetic meeting)
 #
+# A build run additionally needs a way to sign the deployed bundle, either
+# DEVELOPER_ID in the environment or the dev keychain from
+# scripts/setup-self-hosted-runner.sh, and refuses without one: the TCC grants
+# are keyed on the certificate, and a denied capture is indistinguishable from
+# the silence this lane asserts.
+#
 # Usage: bash scripts/e2e-silent-recording.sh [--no-build]
 
 set -euo pipefail
@@ -109,6 +115,16 @@ trap cleanup EXIT
 # --- 1. Build + deploy ------------------------------------------------------
 
 if [ "$NO_BUILD" = false ]; then
+    # Establish the signing identity BEFORE anything is built or deployed.
+    #
+    # This lane's verdict rests entirely on the TCC grants: without a re-sign
+    # the capture stack is denied and the tap delivers zeroes from its first
+    # buffer, which is precisely the silence the lane asserts, and the two are
+    # indistinguishable from in here. The deploy below also replaces the shared
+    # bundle, so a refusal afterwards would strand an unsigned one at the path
+    # every `--no-build` sibling lane reuses. See `require_signing_identity`.
+    require_signing_identity || exit 1
+
     echo "▸ Building dev .app…"
     "$ROOT/scripts/run_app.sh" --build-only >/dev/null
     # meeting-simulator and mt-cli live under separate `.build/` dirs and
@@ -140,32 +156,14 @@ if [ "$NO_BUILD" = false ]; then
     else
         cp -R "$DEV_BUNDLE_BUILD" "$DEV_BUNDLE_DEPLOY"
     fi
-    if [ -n "${DEVELOPER_ID:-}" ]; then
-        echo "▸ Re-signing with Developer ID '$DEVELOPER_ID'…"
-        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
-            || die "Developer ID re-sign failed"
-    else
-        # Local-dev path: self-signed cert from setup-self-hosted-runner.sh,
-        # resolved from the keychain by dev_signing_identity.
-        if [ -f "$DEV_KEYCHAIN" ]; then
-            DEV_CERT_HASH="$(dev_signing_identity)"
-            if [ -n "$DEV_CERT_HASH" ]; then
-                echo "▸ Re-signing with self-signed dev cert (SHA1=${DEV_CERT_HASH})..."
-                # codesign honours `--keychain` for the signing identity but
-                # still consults the user-domain search list for trust-chain
-                # resolution. Prepending the dev keychain matches scripts/e2e-app.sh.
-                "$ROOT/scripts/keychain-prepend.sh" "$DEV_KEYCHAIN" 2>/dev/null || true
-                resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
-                    || die "dev-cert re-sign failed"
-            else
-                echo "  Run scripts/setup-self-hosted-runner.sh to (re-)create it" >&2
-                die "dev keychain present but no '$DEV_CERT_NAME' identity inside"
-            fi
-        else
-            echo "▸ WARNING: no DEVELOPER_ID and no $DEV_KEYCHAIN — TCC may deny capture" >&2
-            echo "  (run scripts/setup-self-hosted-runner.sh to fix)"
-        fi
-    fi
+    echo "▸ Re-signing $DEV_BUNDLE_DEPLOY with ${SIGN_IDENTITY}…"
+    # Re-assert the search list right before codesign: a parallel job on the
+    # Mini's other runner (shared OS user) may have mutated it during our build.
+    # codesign honours `--keychain` for the identity but still consults the
+    # search list for trust-chain resolution.
+    [ -z "$SIGN_KEYCHAIN" ] || "$ROOT/scripts/keychain-prepend.sh" "$SIGN_KEYCHAIN" 2>/dev/null || true
+    resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN" \
+        || die "re-sign of the deployed bundle failed"
 fi
 
 for path in "$BIN" "$MTCLI" "$SIM"; do

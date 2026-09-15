@@ -644,6 +644,22 @@ if [ "$NO_BUILD" = true ]; then
     [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
     log "Skipping build/deploy/re-sign — using existing $DEV_BUNDLE_DEPLOY"
 else
+    # Establish the signing identity before the build. The deploy below replaces
+    # the shared bundle whose TCC grants are keyed on the certificate, and every
+    # `--no-build` sibling lane reuses it, so a lane that only discovers it
+    # cannot sign afterwards has already stranded an unsigned one there.
+    #
+    #
+    # No exemption for `--redeploy-only`, deliberately. It is the build path of
+    # the browser, channel-fault and soak drivers as well as the cleanup step
+    # that restores the canonical bundle, and on main all four refused here. A
+    # blanket exemption would downgrade three whole lanes to a warning, and the
+    # channel-fault lane asserts channel silence, which a denied capture also
+    # produces. The cleanup's own concern (refusing leaves a fault-injection
+    # bundle deployed) is real but narrower, and needs a flag of its own rather
+    # than this door.
+    require_signing_identity || exit 1
+
     log "Building dev .app bundle"
     "$SCRIPT_DIR/run_app.sh" --build-only
 
@@ -669,26 +685,15 @@ else
     # entitlements through that re-sign, and skips it entirely when the build
     # already used this certificate — a bare codesign would silently strip both
     # the microphone and the time-sensitive entitlement (issue #609).
-    if [ -n "${DEVELOPER_ID:-}" ]; then
-        log "Re-signing $DEV_BUNDLE_DEPLOY with Developer ID '$DEVELOPER_ID'"
-        # Re-assert the signing keychain right before codesign — a parallel
-        # job on the Mini's other runner (shared OS user) may have mutated
-        # the user search list during our 60–90 s build. codesign honours
-        # `--keychain` for the signing identity but still consults the
-        # search list for trust-chain resolution.
-        if [ -n "${E2E_SIGNING_KEYCHAIN:-}" ]; then
-            "$SCRIPT_DIR/keychain-prepend.sh" "$E2E_SIGNING_KEYCHAIN"
-        fi
-        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEVELOPER_ID" "${E2E_SIGNING_KEYCHAIN:-}" \
-            || fail "codesign with Developer ID failed — check DEVELOPER_ID + E2E_SIGNING_KEYCHAIN env vars"
-    else
-        DEV_CERT_HASH="$(dev_signing_identity)"
-        [ -n "$DEV_CERT_HASH" ] \
-            || fail "no Developer ID and no '$DEV_CERT_NAME' identity in $DEV_KEYCHAIN — set DEVELOPER_ID env or run scripts/setup-self-hosted-runner.sh first"
-        log "Re-signing $DEV_BUNDLE_DEPLOY with self-signed dev cert ($DEV_CERT_HASH)"
-        resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$DEV_CERT_HASH" "$DEV_KEYCHAIN" \
-            || fail "codesign with dev cert failed — try re-running scripts/setup-self-hosted-runner.sh"
-    fi
+    log "Re-signing $DEV_BUNDLE_DEPLOY with $SIGN_IDENTITY"
+    # Re-assert the signing keychain right before codesign — a parallel job
+    # on the Mini's other runner (shared OS user) may have mutated the user
+    # search list during our 60-90 s build. codesign honours `--keychain`
+    # for the signing identity but still consults the search list for
+    # trust-chain resolution.
+    [ -z "$SIGN_KEYCHAIN" ] || "$SCRIPT_DIR/keychain-prepend.sh" "$SIGN_KEYCHAIN" 2>/dev/null || true
+    resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN" \
+        || fail "re-sign of the deployed bundle failed — see the message above"
 fi
 
 # --redeploy-only stops here: the canonical bundle is rebuilt + deployed +

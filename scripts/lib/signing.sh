@@ -389,6 +389,72 @@ dev_signing_identity() {
     identity_sha1 "$DEV_CERT_NAME" "$DEV_KEYCHAIN"
 }
 
+# require_signing_identity — establish how this host will re-sign the deployed
+# bundle, or refuse. Sets SIGN_IDENTITY and SIGN_KEYCHAIN for a later
+# `resign_deployed_bundle`; prints the diagnosis and returns 1 when neither
+# route is available.
+#
+# Call it BEFORE the build. The deploy that follows replaces the bundle at the
+# shared path whose TCC grants are keyed on the certificate leaf, and every
+# `--no-build` sibling lane reuses that same bundle. A lane that discovers it
+# cannot sign only afterwards has already swapped a working, granted deployment
+# for an unsigned one, which leaves the host worse off than no check at all.
+#
+# Both routes are resolved, not merely named. The workflow exports DEVELOPER_ID
+# on every lane but imports the certificate only when the keychain secret is
+# present, so a set name is no evidence that anything can sign.
+# shellcheck disable=SC2034  # SIGN_IDENTITY/SIGN_KEYCHAIN are read by the e2e drivers
+require_signing_identity() {
+    local candidate="" keychain=""
+
+    if [ -n "${DEVELOPER_ID:-}" ]; then
+        keychain="${E2E_SIGNING_KEYCHAIN:-}"
+        if [ -n "$(identity_sha1 "$DEVELOPER_ID" "$keychain")" ]; then
+            SIGN_IDENTITY="$DEVELOPER_ID"
+            SIGN_KEYCHAIN="$keychain"
+            return 0
+        fi
+        # Fall through rather than refuse. The name and the certificate are two
+        # separate secrets: the workflow exports DEVELOPER_ID on every lane and
+        # imports the certificate only when its own secret is present, and it
+        # documents the self-signed cert as the fallback for exactly that case.
+        # Said out loud, because a run signed by the dev cert is one the manual
+        # Developer-ID TCC grant does not cover.
+        # `identity_sha1` returns empty for an absent name AND for one that
+        # matches more than one certificate, which is the normal state during a
+        # renewal overlap. The message names both, because the remedies differ
+        # and the fallback silently costs the Developer-ID TCC grant either way.
+        echo "DEVELOPER_ID names '$DEVELOPER_ID', which resolves to no identity" >&2
+        echo "  or to more than one${keychain:+ in $keychain}; falling back to the dev keychain." >&2
+        echo "  A run signed by the dev cert is NOT covered by the Developer-ID grant." >&2
+    fi
+
+    candidate="$(dev_signing_identity)"
+    if [ -n "$candidate" ]; then
+        SIGN_IDENTITY="$candidate"
+        SIGN_KEYCHAIN="$DEV_KEYCHAIN"
+        return 0
+    fi
+
+    # Nothing is assigned on this path on purpose: a caller that forgets the
+    # `|| exit 1` then trips `set -u` at the first use instead of quietly
+    # signing with values this function already rejected.
+    #
+    # Two different failures, and only one is fixed by re-running the setup
+    # script: an identity left behind under a renamed variant makes
+    # `identity_sha1` refuse to guess, and creating another one does not help.
+    if [ -f "$DEV_KEYCHAIN" ]; then
+        echo "$DEV_KEYCHAIN holds no unambiguous '$DEV_CERT_NAME' identity." >&2
+        echo "  If two certificates there carry that name, remove the stale one;" >&2
+        echo "  re-running scripts/setup-self-hosted-runner.sh will not resolve it." >&2
+    else
+        echo "No usable Developer ID and no $DEV_KEYCHAIN." >&2
+        echo "  Set DEVELOPER_ID in the environment, or run" >&2
+        echo "  scripts/setup-self-hosted-runner.sh to create the dev identity." >&2
+    fi
+    return 1
+}
+
 # resign_deployed_bundle <app-bundle> <identity> [keychain]
 #
 # Re-sign a bundle that was built and deployed elsewhere, with a stable identity
@@ -427,6 +493,16 @@ dev_signing_identity() {
 # caller has to expand a possibly-empty array under `set -u`.
 resign_deployed_bundle() {
     local bundle="$1" identity="$2" keychain="${3:-}"
+
+    # The dev keychain's unlock belongs here rather than only where the identity
+    # was resolved: a lane that resolves before its build (which is where the
+    # decision has to be taken, so a refusal cannot strand the deployment) puts
+    # minutes between the two, and this is the step that needs the private key.
+    # Scoped to that one keychain because the empty password is a property of
+    # how setup-self-hosted-runner.sh creates it, not of keychains in general.
+    if [ -n "$keychain" ] && [ "$keychain" = "${DEV_KEYCHAIN:-}" ]; then
+        security unlock-keychain -p "" "$keychain" 2>/dev/null || true
+    fi
 
     local want have=""
     want="$(identity_sha1 "$identity" "$keychain")"
