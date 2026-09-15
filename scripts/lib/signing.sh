@@ -481,7 +481,13 @@ assert_deployed_signing_leaf() {
     actual="$(bundle_signing_cert_sha1 "$bundle")"
     verdict="$(deployed_leaf_verdict "$actual" "$recorded" "$have")"
     case "$verdict" in
-        match) return 0 ;;
+        match)
+            # Said out loud on purpose. A silent pass is indistinguishable in
+            # the log from a check that was never reached, and a gate whose
+            # success looks exactly like its absence is the failure mode this
+            # whole mechanism exists to remove.
+            echo "Deployed bundle carries the certificate the last deploy recorded ($actual)." >&2
+            return 0 ;;
         unrecorded)
             echo "No signing record beside $bundle; cannot tell which certificate it carries." >&2
             echo "  Runs after the next build+deploy will have one." >&2

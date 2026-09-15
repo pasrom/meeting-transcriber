@@ -117,12 +117,23 @@ test_a_trailing_slash_does_not_move_the_record() {
 # a gutted recorder would pass a test that only looks at the verdict.
 test_recording_writes_the_leaf_and_reads_back_as_a_match() {
     local dir rc=0 out; dir="$(mktemp -d)"
+    # The bundle directory has to exist, or the assertion takes the
+    # "no deployment at all" branch and returns accepted from the wrong path.
+    # That is how this test was first written, and the log assertion below is
+    # what caught it.
+    mkdir -p "$dir/Foo.app"
     out="$(_with_lib "$LEAF_A" '
         record_deployed_signing_leaf "'"$dir"'/Foo.app"
         printf "%s|" "$(cat "'"$dir"'/.Foo.app.signing-leaf" 2>/dev/null)"
-        if assert_deployed_signing_leaf "'"$dir"'/Foo.app" 2>/dev/null; then
+        if assert_deployed_signing_leaf "'"$dir"'/Foo.app" 2>"'"$dir"'/err"; then
             printf accepted; else printf refused; fi')"
     _expect round_trip "$LEAF_A|accepted" "$out" || rc=1
+    # A pass has to be legible in the log. Silence would read the same as a
+    # check that never ran, which is the hollow gate this file is about.
+    case "$(cat "$dir/err" 2>/dev/null)" in
+        *"carries the certificate the last deploy recorded"*) ;;
+        *) echo "  the match passed without saying anything" >&2; rc=1 ;;
+    esac
     rm -rf "$dir"; return "$rc"
 }
 
