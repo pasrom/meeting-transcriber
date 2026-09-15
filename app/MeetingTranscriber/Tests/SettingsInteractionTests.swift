@@ -161,6 +161,21 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertTrue(toggle.isDisabled())
     }
 
+    // MARK: - Calendar titles toggle
+
+    func testCalendarTitlesToggleWritesBackToSettings() throws {
+        let settings = makeSettings()
+        XCTAssertFalse(settings.calendarTitlesEnabled, "precondition: opt-in defaults off")
+        let view = GeneralSettingsView(settings: settings)
+
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.calendarTitlesToggle)
+            .find(ViewType.Toggle.self)
+        try toggle.tap()
+
+        XCTAssertTrue(settings.calendarTitlesEnabled, "tapping the toggle must turn the setting on")
+    }
+
     // MARK: - LiveCaptionsOverlay render
 
     func testLiveCaptionsOverlayBackendIdentifierTracksActiveBackend() throws {

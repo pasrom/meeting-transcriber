@@ -174,6 +174,14 @@ final class AppSettings {
         didSet { defaults.set(autoWatch, forKey: "autoWatch") }
     }
 
+    /// Name recordings after the calendar event they fall into and hand its
+    /// attendees to the protocol (see `EventKitMeetingLookup`). Off by
+    /// default: switching it on asks for Calendar access, which an update
+    /// must never do unprompted.
+    var calendarTitlesEnabled: Bool {
+        didSet { defaults.set(calendarTitlesEnabled, forKey: "calendarTitlesEnabled") }
+    }
+
     // MARK: - Recording
 
     var pollInterval: Double {
@@ -562,6 +570,7 @@ final class AppSettings {
         watchFaceTime = defaults.object(forKey: "watchFaceTime") as? Bool ?? false
         watchWhatsApp = defaults.object(forKey: "watchWhatsApp") as? Bool ?? false
         autoWatch = defaults.object(forKey: "autoWatch") as? Bool ?? false
+        calendarTitlesEnabled = defaults.object(forKey: "calendarTitlesEnabled") as? Bool ?? false
 
         pollInterval = defaults.object(forKey: "pollInterval") as? Double ?? 3.0
         endGrace = defaults.object(forKey: "endGrace") as? Double ?? 15.0

@@ -55,6 +55,8 @@ struct GeneralSettingsView: View {
                 consentDenyList
             }
 
+            calendarSection
+
             Section("Detection") {
                 HStack {
                     Text("Poll Interval")
@@ -80,6 +82,40 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// Read on appear and after each request, not live: the only way it
+    /// changes is through the request below or System Settings, and returning
+    /// from System Settings re-renders the view anyway.
+    @State private var calendarAccessGranted = EventKitMeetingLookup.hasAccess
+
+    /// Opt-in because it triggers a permission prompt. The toggle asks for
+    /// access the moment it is switched on, so a user who sees "no access"
+    /// below knows the answer came from macOS, not from a step they missed.
+    private var calendarSection: some View {
+        Section("Calendar") {
+            Toggle("Name recordings after calendar events", isOn: $settings.calendarTitlesEnabled)
+                .accessibilityIdentifier(A11yID.calendarTitlesToggle)
+                .onChange(of: settings.calendarTitlesEnabled) { _, enabled in
+                    guard enabled, !calendarAccessGranted else { return }
+                    Task { calendarAccessGranted = await EventKitMeetingLookup.requestAccess() }
+                }
+            Text(
+                """
+                Uses the event that is running when a recording starts for the file name and \
+                protocol title, and hands its attendees to the protocol. Calendars come from \
+                System Settings → Internet Accounts; nothing is sent anywhere.
+                """,
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if settings.calendarTitlesEnabled, !calendarAccessGranted {
+                Text("Calendar access was not granted. Allow Meeting Transcriber under System Settings → Privacy & Security → Calendars.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .onAppear { calendarAccessGranted = EventKitMeetingLookup.hasAccess }
     }
 
     /// Apps the user answered "Never for this app" about.

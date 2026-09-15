@@ -251,6 +251,7 @@ final class WatchingController {
                     },
                     notifier: notifier,
                     denyListStore: ConsentDenyListStore(settings: settings),
+                    calendarLookup: EventKitMeetingLookup { [settings] in settings.calendarTitlesEnabled },
                 )
 
                 attachStateChangeHandler(to: loop, notifyOnRecording: true)
@@ -475,6 +476,7 @@ final class WatchingController {
                 .production(parent: pipeline.outputDirectory.resolve())
             },
             notifier: notifier,
+            calendarLookup: EventKitMeetingLookup { [settings] in settings.calendarTitlesEnabled },
         )
         watchLoop = loop
 

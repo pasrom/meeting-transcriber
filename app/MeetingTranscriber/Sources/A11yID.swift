@@ -20,6 +20,7 @@ enum A11yID {
     // Settings — section anchors + record-only controls.
     static let recordOnlyToggle = "recordOnlyToggle"
     static let watchBrowserToggle = "watchBrowserToggle"
+    static let calendarTitlesToggle = "calendarTitlesToggle"
     static let browserConsentWarning = "browserConsentWarning"
     static let consentDenyListSection = "consentDenyListSection"
     /// Per-row Remove button in the never-record list, addressed by ROW INDEX,

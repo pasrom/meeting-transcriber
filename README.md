@@ -86,6 +86,7 @@ flowchart TD
 - **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
   - [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) (NVIDIA) — 25 EU languages, ~50 MB model, ~10× faster
+- **Calendar titles** — Opt-in (Settings → General): a recording is named after the calendar event running when it starts, and the event's attendees are handed to the protocol. Reads the calendars already on the Mac via EventKit; a recording that starts after an event ended is never filed under it
 - **Custom vocabulary & terminology** — One shared vocabulary file boosts recognition of names/jargon on Parakeet (CTC boosting) and, optionally, on WhisperKit (experimental decoder-prompt hint); an independent, opt-in terminology-normalization pass rewrites recognized spelling variants to a canonical form after transcription, regardless of engine
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidInference/FluidAudio) via CoreML/ANE — no HuggingFace token needed; two modes: standard (`OfflineDiarizer`) and overlap-aware (`Sortformer`)
 - **Dual-track diarization** — App and mic tracks diarized separately for clean speaker separation without echo interference
@@ -172,6 +173,7 @@ cd meeting-transcriber
 | Screen Recording | Optional — sharpens the meeting *title* and acts as a fallback for the audio tap. Detection itself works without it | System Settings → Privacy & Security |
 | Microphone | Mic recording | Prompted on first use |
 | Accessibility | Mute detection, participant reading (Teams) | System Settings → Privacy & Security |
+| Calendars | Optional — calendar titles (Settings → General) | Requested when the setting is switched on |
 | App audio capture | — | No permission needed (purple dot indicator only) |
 
 ---

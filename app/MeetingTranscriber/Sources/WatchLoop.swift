@@ -80,6 +80,8 @@ class WatchLoop {
     /// Internal so the consent gate can live in `WatchLoop+Consent.swift`.
     var consentPolicy: BrowserConsentPolicy
     let denyListStore: any ConsentDenyListStoring
+    /// Names a recording after the calendar event it falls into; see `WatchLoop+CalendarTitle.swift`.
+    let calendarLookup: any CalendarMeetingLookup
 
     /// The app whose consent prompt is currently parked, nil when no question
     /// is open. The answer is awaited in `consentTask` rather than inline, so
@@ -131,6 +133,7 @@ class WatchLoop {
         pidAliveCheck: @escaping (pid_t) -> Bool = { kill($0, 0) == 0 },
         consentPolicy: BrowserConsentPolicy = BrowserConsentPolicy(),
         denyListStore: any ConsentDenyListStoring = InMemoryConsentDenyListStore(),
+        calendarLookup: any CalendarMeetingLookup = NoCalendarLookup(),
     ) {
         self.detector = detector
         self.recorderFactory = recorderFactory
@@ -149,6 +152,7 @@ class WatchLoop {
         self.pidAliveCheck = pidAliveCheck
         self.consentPolicy = consentPolicy
         self.denyListStore = denyListStore
+        self.calendarLookup = calendarLookup
     }
 
     nonisolated static var defaultOutputDir: URL {
@@ -273,8 +277,12 @@ class WatchLoop {
         var failureMessage: String?
         do {
             let recording = try recorder.stop()
+            // The app picker passes the app name when the title field was left
+            // blank, and the microphone entry point has no field at all; a title
+            // the user typed is a decision the calendar must not overrule.
             enqueueRecording(
                 title: info.title, appName: info.appName, recording: recording, trigger: .manual,
+                calendarMayName: info.title == info.appName || info.title == ManualRecordingInfo.microphoneTitle,
             )
         } catch {
             logger.error("Failed to stop manual recording: \(error.localizedDescription, privacy: .public)")
@@ -454,7 +462,13 @@ class WatchLoop {
         recording: RecordingResult,
         trigger: RecordingSidecar.Trigger,
         participants: [String] = [],
+        calendarMayName: Bool = true,
     ) {
+        let (title, participants) = calendarNamed(
+            title: title, participants: participants, appName: appName,
+            recording: recording, calendarMayName: calendarMayName,
+        )
+
         if recordOnly() {
             do {
                 try writeRecordOnlySidecar(

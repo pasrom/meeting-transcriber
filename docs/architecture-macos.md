@@ -145,6 +145,9 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `BrowserConsentReadiness.swift` | Whether a browser-meeting consent prompt can actually reach the user — polls `NotificationVisibility` since the prompt is itself a notification and a broken notification channel can't report its own brokenness |
 | `ConsentPromptCoordinator.swift` | Coordinates an async yes/no recording-consent prompt: register pending decision by id, resolve once via answer or timeout |
 | `WatchLoop+Consent.swift` | Browser-meeting consent gate, split out of `WatchLoop`; only patterns with `requiresRecordingConsent` reach it |
+| `WatchLoop+CalendarTitle.swift` | Calendar-backed naming at enqueue, split out of `WatchLoop`: title + attendees from the event running at recording start |
+| `CalendarMeetingMatcher.swift` | Pure choice of the calendar event a recording belongs to (must still be running at recording start; conference link, attendees, closest start break ties) |
+| `CalendarMeetingLookup.swift` | `CalendarMeetingLookup` protocol, `NoCalendarLookup` default, `EventKitMeetingLookup` reading the Mac's calendars |
 | `DualSourceRecorder.swift` | Orchestrates AudioTapLib capture + mic, mixes tracks |
 | `RecordingProvider.swift` | Protocol abstraction over `DualSourceRecorder` for mock injection in `WatchLoop` tests |
 | `WatchLoop+RecordOnly.swift` | Record-only output branch (moves WAVs + writes `RecordingSidecar`), split out of `WatchLoop` |
