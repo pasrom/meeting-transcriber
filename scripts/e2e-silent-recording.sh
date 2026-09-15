@@ -164,6 +164,23 @@ if [ "$NO_BUILD" = false ]; then
     [ -z "$SIGN_KEYCHAIN" ] || "$ROOT/scripts/keychain-prepend.sh" "$SIGN_KEYCHAIN" 2>/dev/null || true
     resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN" \
         || die "re-sign of the deployed bundle failed"
+else
+    # Under `--no-build` this lane signs nothing: it inherits whatever bundle the
+    # step before it left at the shared deploy path, and inherits that step's
+    # certificate with it. That matters more here than in any sibling lane,
+    # because this lane's PASS condition is silence on both tracks. A bundle TCC
+    # will not grant capture to produces exactly that, from the first buffer and
+    # with no error anywhere, so a denied run and a working watchdog look
+    # identical from in here.
+    #
+    # The expectation cannot be recomputed here. The workflow sets DEVELOPER_ID
+    # per step, and the step this lane runs in is one of the few that does not
+    # carry it, so asking "what would this host sign with" would answer with the
+    # dev keychain's self-signed certificate and refuse every run. The deploy
+    # that signed the bundle records its leaf beside it, and this compares
+    # against that record instead.
+    assert_deployed_signing_leaf "$DEV_BUNDLE_DEPLOY" \
+        || die "the deployed bundle is not the one that was signed — see above"
 fi
 
 for path in "$BIN" "$MTCLI" "$SIM"; do

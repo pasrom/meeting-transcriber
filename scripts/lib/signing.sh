@@ -389,6 +389,122 @@ dev_signing_identity() {
     identity_sha1 "$DEV_CERT_NAME" "$DEV_KEYCHAIN"
 }
 
+# deployed_leaf_record <bundle> — where the leaf a driver signed with is
+# recorded. Beside the bundle, never inside it: anything written into the
+# bundle after signing invalidates the signature it is meant to describe.
+# Derived from the bundle path so the two cannot drift apart.
+deployed_leaf_record() {
+    local bundle="${1%/}"
+    printf '%s/.%s.signing-leaf' "$(dirname "$bundle")" "$(basename "$bundle")"
+}
+
+# record_deployed_signing_leaf <bundle> — remember which certificate the bundle
+# at the shared deploy path was last signed with.
+#
+# A `--no-build` lane inherits whatever an earlier driver left there, and the
+# TCC grants it depends on are keyed on that certificate. The step this lane
+# runs in carries no DEVELOPER_ID, so it cannot recompute the expectation for
+# itself: asking "what would this host sign with" would answer with the dev
+# keychain's self-signed certificate and refuse every run. Recording it at the
+# one place that knows is the only honest source.
+#
+# THE EMPTY LEAF IS RECORDED, NOT ERASED. A deploy that left the bundle ad-hoc
+# is a fact the next lane has to refuse on. An earlier draft deleted the record
+# in that case, reasoning that an empty file reads the same as no file; that is
+# true and is exactly why deleting was wrong. Both forms report "nothing
+# recorded", which PASSES, so the deletion turned the one state that refuses
+# into the one that does not. The file's existence now says a deploy recorded
+# something, and its content is the leaf.
+record_deployed_signing_leaf() {
+    local bundle="$1" leaf record tmp
+    leaf="$(bundle_signing_cert_sha1 "$bundle")"
+    record="$(deployed_leaf_record "$bundle")"
+    tmp="$record.$$.tmp"
+    # Written to a temp file and renamed, so a reader never sees the truncated
+    # window between opening the record and filling it. A zero-byte record now
+    # means "the deploy signed ad-hoc" and refuses, so a torn write would be a
+    # false refusal rather than a false pass.
+    #
+    # `2>/dev/null` comes FIRST: redirections are applied left to right, so a
+    # trailing one does not cover the failure of opening the file before it.
+    # Measured: with the order reversed, an unwritable deploy path prints a raw
+    # "Permission denied" into the driver's log right under the re-sign line.
+    #
+    # Best effort on purpose. A deploy path we cannot write beside costs the
+    # next lane its check, which that lane reports; failing the re-sign over it
+    # would cost that lane the whole run.
+    if printf '%s' "$leaf" 2>/dev/null > "$tmp"; then
+        mv -f "$tmp" "$record" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+    else
+        rm -f "$tmp" 2>/dev/null || true
+    fi
+}
+
+# deployed_leaf_verdict <actual> <recorded> <have_record> — the pure decision,
+# so the lanes agree on what counts as a problem and it can be exercised
+# without a bundle.
+#
+# `have_record` is a separate input from `recorded` on purpose, and folding the
+# two together is the defect this signature exists to prevent: "no record at
+# all" must not refuse, because the record appears only after the first deploy
+# that follows this change, while "recorded as carrying no certificate" must.
+deployed_leaf_verdict() {
+    local actual="$1" recorded="$2" have_record="$3"
+    if [ "$have_record" != yes ]; then printf 'unrecorded'; return 0; fi
+    if [ -z "$recorded" ]; then printf 'deployed-adhoc'; return 0; fi
+    if [ -z "$actual" ]; then printf 'adhoc'; return 0; fi
+    if [ "$actual" = "$recorded" ]; then printf 'match'; else printf 'mismatch'; fi
+}
+
+# assert_deployed_signing_leaf <bundle> — refuse when the bundle is demonstrably
+# not the one that was signed. Returns 1 only on a verdict that says so.
+#
+# What a passing verdict does NOT promise: it speaks about the certificate, not
+# about which build carries it. A driver that deploys a differently compiled
+# bundle and signs it with the same certificate reads as a match, which is
+# correct for the TCC question and says nothing about the code under test.
+assert_deployed_signing_leaf() {
+    local bundle="$1" record actual recorded="" have=no verdict
+    # No deployment at all is a different question, and the drivers already ask
+    # it right after this: each checks its binaries exist and names the missing
+    # one. Answering it here too would replace that clear message with a
+    # confusing one about certificates.
+    if [ ! -d "$bundle" ]; then
+        echo "No bundle at $bundle; leaving the missing-binary check to say so." >&2
+        return 0
+    fi
+    record="$(deployed_leaf_record "$bundle")"
+    if [ -f "$record" ]; then
+        have=yes
+        recorded="$(cat "$record" 2>/dev/null || true)"
+    fi
+    actual="$(bundle_signing_cert_sha1 "$bundle")"
+    verdict="$(deployed_leaf_verdict "$actual" "$recorded" "$have")"
+    case "$verdict" in
+        match) return 0 ;;
+        unrecorded)
+            echo "No signing record beside $bundle; cannot tell which certificate it carries." >&2
+            echo "  Runs after the next build+deploy will have one." >&2
+            return 0 ;;
+        deployed-adhoc)
+            echo "The last deploy signed $bundle with no certificate at all." >&2
+            echo "  The TCC grants are keyed on a certificate, so capture would be denied" >&2
+            echo "  and this lane would read that denial as its own result." >&2
+            return 1 ;;
+        adhoc)
+            echo "$bundle carries no certificate (ad-hoc signed or replaced)." >&2
+            echo "  The TCC grants are keyed on a certificate, so capture would be denied" >&2
+            echo "  and this lane would read that denial as its own result." >&2
+            return 1 ;;
+        *)
+            echo "$bundle is signed by $actual, but the last deploy signed it with $recorded." >&2
+            echo "  Something replaced or re-signed the bundle since, or the last re-sign" >&2
+            echo "  failed after codesign had already run. Either way the TCC grants do not" >&2
+            echo "  follow, so capture would be denied and read as this lane's result." >&2
+            return 1 ;;
+    esac
+}
+
 # require_signing_identity — establish how this host will re-sign the deployed
 # bundle, or refuse. Sets SIGN_IDENTITY and SIGN_KEYCHAIN for a later
 # `resign_deployed_bundle`; prints the diagnosis and returns 1 when neither
@@ -554,5 +670,22 @@ resign_deployed_bundle() {
         codesign -d --entitlements :- "$bundle" 2>/dev/null | grep -q '<key>' \
             || { echo "  ERROR: the new signature carries no entitlements (issue #609)" >&2; return 1; }
     fi
-    verify_signing "$bundle"
+    # Recorded here rather than in each driver: this is the only place that knows
+    # the bundle at the shared deploy path is now on a known certificate, and
+    # every driver that deploys comes through it, including the branch above
+    # that keeps an existing signature. A `--no-build` lane inherits the bundle
+    # and can then tell "the deployment I was given" from "something else has
+    # been put there since".
+    #
+    # The status check is a contract, not a live gate: every exit in
+    # verify_signing today is `return 0`, so it never actually withholds the
+    # record. It is written this way so a future verify_signing that can fail
+    # does not silently start recording bundles it rejected. The failures that
+    # CAN happen here all return earlier, before anything is recorded.
+    local status=0
+    verify_signing "$bundle" || status=$?
+    if [ "$status" -eq 0 ]; then
+        record_deployed_signing_leaf "$bundle"
+    fi
+    return "$status"
 }
