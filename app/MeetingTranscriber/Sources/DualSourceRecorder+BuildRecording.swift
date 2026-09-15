@@ -79,13 +79,59 @@ extension DualSourceRecorder {
                 micDelay: micDelay,
             )
 
-        if micDelay != 0 {
-            logger.info("Mic delay: \(micDelay)s")
-        }
         if tempURL != nil {
             logAppFormat(channels: actualChannels, rate: actualRate, format: format)
         }
 
+        // ── Load mic audio ──
+        var micPath: URL?
+        var micSamples: [Float] = []
+        let expectedMicPath = captureResult.micAudioFileURL
+
+        if let expectedMicPath,
+           FileManager.default.fileExists(atPath: expectedMicPath.path),
+           (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
+            // `try?`, not `try`, and that is load-bearing now that this block
+            // runs before the app WAV is written. A throw here used to leave a
+            // finished `_app.wav` behind; it no longer would, and the next
+            // launch runs recovery (which retries the same corrupt file and
+            // throws again) and then `cleanupTempFiles`, which deletes the raw
+            // temp once it is older than thirty seconds. A microphone whose
+            // header cannot be read would take the app audio with it. Falling
+            // through to the app-only path is also how this block already
+            // treats a missing or too-small file.
+            if let micAudioFile = try? AVAudioFile(forReading: expectedMicPath),
+               let loaded = try? AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath) {
+                micSamples = loaded
+                micPath = expectedMicPath
+                let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
+                logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
+            } else {
+                logger.warning("Mic audio could not be read — continuing with app audio only")
+            }
+        }
+
+        // A microphone that started before the app tap makes `micDelay`
+        // negative, which is what opening the microphone first does on every
+        // dual-source recording. Rather than teach a dozen consumers a new sign,
+        // the app track is padded here and the reported delay becomes zero, so
+        // both files and every timeline derived from them share one origin.
+        let normalisation = MicDelayNormalisation.decide(
+            rawDelay: micDelay, micLoaded: micPath != nil, sampleRate: format.targetRate,
+        )
+        if micDelay != 0 {
+            // Both numbers, because normalisation makes the reported one zero
+            // and the measured delta would otherwise survive nowhere: not in the
+            // result, the job or the sidecar. It is the size of the tap's
+            // lateness, which is the thing issue #693 is about.
+            logger.info(
+                "Mic delay: measured \(micDelay)s, reported \(normalisation.reportedDelay)s, pad \(normalisation.padFrames) frames",
+            )
+        }
+
+        // Loaded before the app track is written, not after, because whether a
+        // microphone track exists decides whether the app track is padded below,
+        // and the app WAV is on disk by the end of that block.
         // ── Convert app audio from temp file to Float32 mono ──
         var appPath: URL?
         var appSamples: [Float] = []
@@ -111,6 +157,15 @@ extension DualSourceRecorder {
 
             // Resample to 16kHz and save app track
             appSamples16k = AudioMixer.resample(appSamples, from: actualRate, to: format.targetRate)
+            if normalisation.padFrames > 0 {
+                // Released first: on the production path the temp is already
+                // 16 kHz mono, so `floats`, `appSamples` and `appSamples16k`
+                // share one buffer, and the concatenation below would otherwise
+                // hold a second full copy of the track alive to the end of the
+                // function. About 220 MB per recorded hour at 16 kHz Float32.
+                appSamples = []
+                appSamples16k = [Float](repeating: 0, count: normalisation.padFrames) + appSamples16k
+            }
             let appFile = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.app)")
             try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: format.targetRate, url: appFile)
             appPath = appFile
@@ -128,21 +183,6 @@ extension DualSourceRecorder {
             logger.warning("No app audio captured — capture may have failed to create the tap")
         }
 
-        // ── Load mic audio ──
-        var micPath: URL?
-        var micSamples: [Float] = []
-        let expectedMicPath = captureResult.micAudioFileURL
-
-        if let expectedMicPath,
-           FileManager.default.fileExists(atPath: expectedMicPath.path),
-           (try? FileManager.default.attributesOfItem(atPath: expectedMicPath.path)[.size] as? Int) ?? 0 > 44 {
-            let micAudioFile = try AVAudioFile(forReading: expectedMicPath)
-            let micFileRate = Int(micAudioFile.processingFormat.sampleRate)
-            micSamples = try AudioMixer.loadAudioFileAsFloat32(url: expectedMicPath)
-            micPath = expectedMicPath
-            logger.info("Mic audio loaded: \(expectedMicPath.lastPathComponent) (\(micFileRate) Hz)")
-        }
-
         // ── Mix via AudioMixer ──
         // Both app and mic are already at 16kHz at this point.
         let mixRate = format.targetRate
@@ -154,7 +194,7 @@ extension DualSourceRecorder {
                 appAudioPath: app,
                 micAudioPath: mic,
                 outputPath: mixPath,
-                micDelay: micDelay,
+                micDelay: normalisation.reportedDelay,
                 sampleRate: mixRate,
             )
         } else if !appSamples16k.isEmpty {
@@ -178,7 +218,7 @@ extension DualSourceRecorder {
             mixPath: mixPath,
             appPath: appPath,
             micPath: micPath,
-            micDelay: micDelay,
+            micDelay: normalisation.reportedDelay,
             recordingStartDate: recordingStartDate,
         )
     }
