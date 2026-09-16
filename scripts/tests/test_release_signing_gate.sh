@@ -264,6 +264,35 @@ test_the_stubbed_adhoc_output_is_refused_too() {
     return "$rc"
 }
 
+# Whose certificate and whether the seal is intact are different questions.
+# A bundle signed by a Developer ID and then modified still reports the same
+# authority chain, so the verdict alone would accept it. Produced for real:
+# ad-hoc signing needs no certificate and breaking the seal afterwards needs
+# nothing but a file.
+test_a_broken_signature_seal_is_refused() {
+    local dir rc=0 status; dir="$TMP/seal"
+    mkdir -p "$dir/X.app/Contents/MacOS" "$dir/X.app/Contents/Resources"
+    cp /bin/echo "$dir/X.app/Contents/MacOS/X"
+    printf '%s' '<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>X</string>
+<key>CFBundleIdentifier</key><string>x.local</string></dict></plist>' \
+        > "$dir/X.app/Contents/Info.plist"
+    codesign --force --sign - "$dir/X.app" 2>/dev/null
+    printf 'added after signing' > "$dir/X.app/Contents/Resources/extra.txt"
+    bash "$GATE" verify "$dir/X.app" > "$TMP/seal.out" 2>&1
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "  a bundle modified after signing passed the release check" >&2; rc=1
+    fi
+    case "$(cat "$TMP/seal.out")" in
+        *"signature seal"*) ;;
+        *) echo "  refused, but not for the broken seal:" >&2
+           sed 's|^|    |' "$TMP/seal.out" >&2; rc=1 ;;
+    esac
+    return "$rc"
+}
+
 # --- the workflow has no way around the gate --------------------------------
 
 # Structural, and stated as such: a workflow cannot be executed from here. What
@@ -271,8 +300,50 @@ test_the_stubbed_adhoc_output_is_refused_too() {
 # that decides the build mode. The gate script prints the mode, so if the
 # workflow still branches on the secret itself it can build unsigned whatever
 # the gate says.
+# Extracts one workflow step by name and checks it cannot report success while
+# its own check fails, and that it inspects the build that actually ships.
+#
+# Measured before this existed: `|| true` on either verify step, a
+# `continue-on-error`, or an `if:` pointing at the variant that is never
+# published each restored the original defect with the whole suite green. The
+# gate script was pinned; its wiring was not, and the wiring is the only thing
+# between a refusal and a published DMG.
+_assert_gate_step_is_binding() {
+    local wf="$1" name="$2" body rc=0
+    body="$(awk -v want="      - name: $name" '
+        $0 == want { f = 1; next }
+        f && /^      - name: / { exit }
+        f' "$wf")"
+    if [ -z "$body" ]; then
+        echo "  step not found: $name" >&2
+        return 1
+    fi
+    case "$body" in
+        *"continue-on-error"*)
+            echo "  '$name' is continue-on-error, so its verdict changes nothing" >&2; rc=1 ;;
+    esac
+    case "$body" in
+        *"|| true"*|*"|| :"*|*"|| echo"*)
+            echo "  '$name' discards the status of its own check" >&2; rc=1 ;;
+    esac
+    case "$body" in
+        *"matrix.variant == 'homebrew'"*) ;;
+        *) echo "  '$name' is not scoped to the variant that gets published" >&2; rc=1 ;;
+    esac
+    # The one bundle build_release.sh produces and the DMG is built from. A
+    # check pointed anywhere else inspects something nobody ships.
+    case "$body" in
+        *".build/release/MeetingTranscriber.app"*) ;;
+        *) echo "  '$name' does not inspect the bundle that gets published" >&2; rc=1 ;;
+    esac
+    return "$rc"
+}
+
+# Structural, and stated as such: a workflow cannot be executed from here. What
+# it pins is that there is no SECOND place deciding what the gate decides, and
+# that the steps enforcing it are actually binding.
 test_the_release_workflow_does_not_decide_the_mode_itself() {
-    local wf="$REPO_ROOT/.github/workflows/release.yml" rc=0 body
+    local wf="$REPO_ROOT/.github/workflows/release.yml" rc=0 body build_step call name
     body="$(grep -v '^\s*#' "$wf")"
     case "$body" in
         *release-signing-gate.sh*) ;;
@@ -296,36 +367,51 @@ test_the_release_workflow_does_not_decide_the_mode_itself() {
         *"release-signing-gate.sh preflight"*) ;;
         *) echo "  release.yml never runs the preflight" >&2; rc=1 ;;
     esac
-    # The preflight reads both secrets from its environment, so the step that
-    # runs it has to pass them. Dropping the profile from that env does not
-    # weaken the gate, it makes it refuse every release instead, which is loud
-    # but is still not what anyone intended.
-    local build_step
-    build_step="$(awk '/^      - name: Build .app and DMG$/{f=1}
-                       f && /^      - name: /&&!/Build .app and DMG$/{exit}
+
+    build_step="$(awk '/^      - name: Build .app and DMG$/{f=1; next}
+                       f && /^      - name: /{exit}
                        f' "$wf")"
     if [ -z "$build_step" ]; then
         echo "  could not find the build step; release.yml was restructured" >&2
         return 1
     fi
-    for secret in DEVELOPER_ID RELEASE_PROVISIONING_PROFILE; do
+    # The preflight reads both secrets from its environment, so the step that
+    # runs it has to pass them. Dropping one does not weaken the gate, it makes
+    # it refuse every release instead, which is loud but is still not what
+    # anyone intended.
+    for name in DEVELOPER_ID RELEASE_PROVISIONING_PROFILE; do
         case "$build_step" in
-            *"$secret:"*) ;;
-            *) echo "  the build step does not pass $secret, which the preflight reads" >&2
+            *"$name:"*) ;;
+            *) echo "  the build step does not pass $name, which the preflight reads" >&2
                rc=1 ;;
         esac
+    done
+    # The refusal works only because the failing command substitution takes the
+    # step down with it under `bash -e`. Any `||` on that line hands the
+    # assignment a zero status and the refusal becomes an ad-hoc build, which
+    # is the original defect exactly.
+    call="$(printf '%s\n' "$build_step" | grep 'release-signing-gate.sh preflight' || true)"
+    case "$call" in
+        *"||"*)
+            echo "  the preflight's status is swallowed on its own line, so a refusal" >&2
+            echo "  would fall through to the unsigned build:" >&2
+            printf '%s\n' "$call" | sed 's|^|    |' >&2
+            rc=1 ;;
+    esac
+
+    for name in "Verify the release carries the time-sensitive entitlement" \
+                "Verify the release is signed by a Developer ID"; do
+        _assert_gate_step_is_binding "$wf" "$name" || rc=1
     done
     return "$rc"
 }
 
 # The entitlement check used to read the provisioning-profile secret and exit 0
 # when it was absent, so the single case worth catching switched off the check
-# that would have caught it. Structural, and stated as such: a workflow cannot
-# be executed from here, so what this pins is that the step no longer has an
-# input it can excuse itself with, and that it refuses on a release tag.
+# that would have caught it. It must now have no input it can excuse itself
+# with, and it must keep the coverage it already had.
 test_the_entitlement_check_cannot_excuse_itself() {
     local wf="$REPO_ROOT/.github/workflows/release.yml" rc=0 step
-    # The step body, comments excluded, up to the next step.
     step="$(awk '/^      - name: Verify the release carries the time-sensitive entitlement$/{f=1}
                  f && /^      - name: /&&!/time-sensitive entitlement$/{exit}
                  f' "$wf" | grep -v '^\s*#')"
@@ -353,6 +439,17 @@ test_the_entitlement_check_cannot_excuse_itself() {
         *bundle_has_time_sensitive*) ;;
         *) echo "  the entitlement check no longer asks the built app" >&2; rc=1 ;;
     esac
+    # The half that predates this change and has to survive it: a build that
+    # embedded a profile and still lacks the key is codesign having dropped it,
+    # which is a regression worth catching on ANY ref. Narrowing the step to
+    # tags alone is what stopped a push to main from catching it.
+    case "$step" in
+        *embedded.provisionprofile*) ;;
+        *) echo "  the entitlement check no longer refuses a build that embedded a" >&2
+           echo "  profile and lost the key anyway, so that regression surfaces only" >&2
+           echo "  once somebody cuts a release tag" >&2
+           rc=1 ;;
+    esac
     return "$rc"
 }
 
@@ -372,6 +469,7 @@ run_test "a development certificate is not a Developer ID"       test_a_developm
 run_test "a really ad-hoc signed bundle is refused"              test_a_really_adhoc_signed_bundle_is_refused
 run_test "a Developer ID signed bundle passes and says so"       test_a_developer_id_signed_bundle_passes_and_says_so
 run_test "the stubbed ad-hoc output is refused too"              test_the_stubbed_adhoc_output_is_refused_too
+run_test "a broken signature seal is refused"                     test_a_broken_signature_seal_is_refused
 run_test "the release workflow does not decide the mode itself"  test_the_release_workflow_does_not_decide_the_mode_itself
 run_test "the entitlement check cannot excuse itself"            test_the_entitlement_check_cannot_excuse_itself
 echo

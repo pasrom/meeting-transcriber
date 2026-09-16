@@ -154,11 +154,13 @@ signing_authority_verdict() {
 # anything?
 #
 # Only a `v*` tag of the homebrew variant is attached to the GitHub Release and
-# has its SHA-256 written into the Homebrew cask. A push to main, a pull
-# request and a manual dispatch have no access to the signing secrets and are
-# not published, so they keep building rather than failing. The App Store
-# variant is built with --appstore --no-notarize by design and is uploaded only
-# as a short-lived workflow artifact.
+# has its SHA-256 written into the Homebrew cask. A push to main, a pull request
+# and a manual dispatch are not published, so they keep building rather than
+# failing. Being unpublished is the whole reason, and not a lack of credentials:
+# same-repo pushes and pull requests DO receive the signing secrets and are
+# normally signed; only a fork's pull request has none. The App Store variant is
+# built with --appstore --no-notarize by design and is uploaded only as a
+# short-lived workflow artifact.
 #
 # Named for what it answers rather than for its first caller: the same question
 # decides whether a missing certificate and a missing provisioning profile are

@@ -87,8 +87,11 @@ jobs:
       # account artifacts and gitignored, so without this step a release ships
       # with the entitlement missing and the browser-consent prompt stays
       # suppressed under Focus for every user — the exact bug it fixes.
-      # Absent secret: prepare_signing takes its no-profile path and the build
-      # still succeeds, so a fork release is not blocked by it.
+      # Absent secret: prepare_signing takes its no-profile path and this step
+      # still succeeds, so a contributor build is not blocked by it. On a
+      # RELEASE TAG it no longer ends there: the preflight in the build step
+      # below refuses outright, because a release without the entitlement is
+      # one where nobody with Focus on ever sees the consent prompt.
       - name: Install provisioning profile
         if: matrix.variant == 'homebrew'
         env:
@@ -170,11 +173,27 @@ jobs:
             echo "Signature carries $TIME_SENSITIVE_KEY"
             exit 0
           fi
+          # Two independent reasons to refuse, and both read the built app
+          # rather than a secret.
+          #
+          # A profile was embedded and the key is still not in the signature:
+          # that is codesign having dropped it, which is the regression this
+          # step has always existed to catch, on any ref. Keying it on the
+          # embedded profile rather than on the secret is what stops the check
+          # disabling itself, while keeping the coverage it had.
+          #
+          # Or this is a release tag, where the entitlement is required whatever
+          # the build did, because without it every user with Focus on loses the
+          # browser-meeting consent prompt and with it every browser recording.
+          if [ -f "$APP_BUNDLE/Contents/embedded.provisionprofile" ]; then
+            echo "::error::a provisioning profile was embedded but $TIME_SENSITIVE_KEY is not in the signature — codesign dropped it"
+            exit 1
+          fi
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "::error::the release is missing $TIME_SENSITIVE_KEY — under Focus the browser-meeting consent prompt would never appear, so no browser meeting would ever be recorded"
             exit 1
           fi
-          echo "Not a published build, and the entitlement is absent — nothing to enforce here."
+          echo "No profile embedded and not a release build — nothing to enforce here."
 
       # Asked of the artifact that is about to be published, not of the inputs
       # that produced it. The preflight above can only see whether a secret is

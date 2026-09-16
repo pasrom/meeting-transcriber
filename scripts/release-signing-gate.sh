@@ -77,9 +77,12 @@ cmd_preflight() {
     fi
 
     # Not a published build: a branch push, a pull request or a manual run.
-    # These have no access to the secrets and are attached to nothing, so a
-    # build is the useful outcome rather than a failure. A certificate is still
-    # used when one happens to be available.
+    # Nothing here is attached to a release or hashed into the cask, so a build
+    # is the useful outcome rather than a failure. Note that these runs usually
+    # DO have the secrets — same-repo pushes and pull requests receive them, and
+    # in practice they are signed. Not being published is the reason they may
+    # fall back, not a lack of credentials; only a fork's pull request actually
+    # lacks them.
     if [ -n "${DEVELOPER_ID:-}" ]; then
         printf 'developer-id\n'
     else
@@ -96,6 +99,20 @@ cmd_verify() {
     # is an answer this function reports rather than a failure to obtain one.
     output="$(codesign -dvvv "$bundle" 2>&1 || true)"
     verdict="$(signing_authority_verdict "$output")"
+
+    # Whose certificate and whether the seal is intact are two questions, and
+    # the answer to one says nothing about the other. `codesign --verify` is no
+    # use for the first (it passes an ad-hoc bundle, which is why the verdict
+    # above exists), and the verdict is no use for the second: a bundle signed
+    # by a Developer ID and then modified still reports the same authority
+    # chain. Both are one line, so ask both.
+    if ! codesign --verify --strict --deep "$bundle" 2>/dev/null; then
+        echo "::error::$bundle has a broken or incomplete signature seal." >&2
+        echo "  codesign --verify reports:" >&2
+        codesign --verify --strict --deep "$bundle" 2>&1 | sed 's|^|    |' >&2 || true
+        echo "  Something changed inside the bundle after it was signed." >&2
+        return 1
+    fi
 
     case "$verdict" in
         developer-id)
