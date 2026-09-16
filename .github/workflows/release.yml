@@ -116,6 +116,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           TEAM_ID: ${{ secrets.TEAM_ID }}
           APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+          # Read by the preflight only, so a release tag missing it is refused
+          # here rather than twenty minutes later. The build itself takes the
+          # profile from disk, where the step above installed it.
+          RELEASE_PROVISIONING_PROFILE: ${{ secrets.RELEASE_PROVISIONING_PROFILE }}
         run: |
           # Tag builds: use tag as version and staple notarization for offline Gatekeeper
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
@@ -142,24 +146,35 @@ jobs:
       # check on the input. verify_signing only warns, deliberately, so
       # contributor builds keep working — the release lane is the one caller
       # that has to fail.
+      # This step used to read the provisioning-profile secret and exit 0 when
+      # it was absent, which meant the one case worth catching disabled the
+      # check that would have caught it: a release built with that secret
+      # missing shipped without the entitlement and reported nothing. It now
+      # asks the built app and never the inputs, so there is no state in which
+      # it can excuse itself.
+      #
+      # On a release tag the entitlement is mandatory. Without it the app still
+      # installs and runs, and then, for every user with Focus on, the
+      # browser-meeting consent prompt never breaks through: it times out, that
+      # counts as a decline, and no browser meeting is ever recorded while the
+      # setting still reads as enabled. The capture-channel-lost alert goes the
+      # same way. Off a release tag the entitlement is simply reported, since a
+      # contributor has no profile and their build is attached to nothing.
       - name: Verify the release carries the time-sensitive entitlement
         if: matrix.variant == 'homebrew'
-        env:
-          PROFILE_B64: ${{ secrets.RELEASE_PROVISIONING_PROFILE }}
         run: |
-          if [ -z "${PROFILE_B64:-}" ]; then
-            echo "No profile was installed — nothing to verify."
-            exit 0
-          fi
           # shellcheck source=scripts/lib/signing.sh
           source scripts/lib/signing.sh
           APP_BUNDLE=".build/release/MeetingTranscriber.app"
           if bundle_has_time_sensitive "$APP_BUNDLE"; then
             echo "Signature carries $TIME_SENSITIVE_KEY"
-          else
-            echo "::error::the built app is missing $TIME_SENSITIVE_KEY — the consent prompt would stay suppressed under Focus"
+            exit 0
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::the release is missing $TIME_SENSITIVE_KEY — under Focus the browser-meeting consent prompt would never appear, so no browser meeting would ever be recorded"
             exit 1
           fi
+          echo "Not a published build, and the entitlement is absent — nothing to enforce here."
 
       # Asked of the artifact that is about to be published, not of the inputs
       # that produced it. The preflight above can only see whether a secret is

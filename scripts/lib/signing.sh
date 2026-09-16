@@ -149,16 +149,21 @@ signing_authority_verdict() {
     esac
 }
 
-# release_requires_developer_id <git_ref> <variant> — is this the build whose
-# artifact gets published, and therefore the one that must not fall back?
+# release_is_published_build <git_ref> <variant> — is this the build whose
+# artifact reaches users, and therefore the one that may not fall back on
+# anything?
 #
 # Only a `v*` tag of the homebrew variant is attached to the GitHub Release and
 # has its SHA-256 written into the Homebrew cask. A push to main, a pull
-# request and a manual dispatch have no access to the signing secret and are
-# not published, so they keep producing an ad-hoc build rather than failing.
-# The App Store variant is built with --appstore --no-notarize by design and is
-# uploaded only as a short-lived workflow artifact.
-release_requires_developer_id() {
+# request and a manual dispatch have no access to the signing secrets and are
+# not published, so they keep building rather than failing. The App Store
+# variant is built with --appstore --no-notarize by design and is uploaded only
+# as a short-lived workflow artifact.
+#
+# Named for what it answers rather than for its first caller: the same question
+# decides whether a missing certificate and a missing provisioning profile are
+# tolerable, and it will decide the next one too.
+release_is_published_build() {
     case "$1" in
         refs/tags/v*) [ "$2" = homebrew ] && printf yes || printf no ;;
         *) printf no ;;

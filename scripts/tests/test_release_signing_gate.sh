@@ -59,9 +59,12 @@ TeamIdentifier=not set'
 
 # Prints `<mode>|<status>`. The mode is captured rather than let through, or
 # the trailing newline the gate writes for `$(...)` would land between the two.
+# `$4` is the provisioning-profile secret; it defaults to present, since most
+# cases here are about the certificate and a test should only vary one thing.
 _preflight() {
-    local ref="$1" variant="$2" devid="$3" mode status
-    mode="$(DEVELOPER_ID="$devid" bash "$GATE" preflight "$ref" "$variant" 2>"$TMP/err")"
+    local ref="$1" variant="$2" devid="$3" profile="${4-PROFILE-PRESENT}" mode status
+    mode="$(DEVELOPER_ID="$devid" RELEASE_PROVISIONING_PROFILE="$profile" \
+            bash "$GATE" preflight "$ref" "$variant" 2>"$TMP/err")"
     status=$?
     printf '%s|%s' "$mode" "$status"
 }
@@ -115,6 +118,53 @@ test_a_non_version_tag_is_not_treated_as_a_release() {
     local rc=0 out
     out="$(_preflight refs/tags/nightly homebrew "")"
     _expect other_tag "adhoc|0" "$out" || rc=1
+    return "$rc"
+}
+
+# The provisioning profile is the second release input that used to fail open.
+# Without it the app is signed WITHOUT the time-sensitive entitlement, and the
+# browser-meeting consent prompt then never breaks through Focus: it times out,
+# that counts as a decline, and the app silently never records a browser
+# meeting while its toggle still reads as on.
+test_a_tag_build_without_a_provisioning_profile_is_refused() {
+    local rc=0 out
+    out="$(_preflight refs/tags/v1.2.3 homebrew "Developer ID Application: A (T)" "")"
+    case "$out" in
+        *"|0") echo "  a release tag with no provisioning profile was allowed" >&2; rc=1 ;;
+    esac
+    local err; err="$(cat "$TMP/err" 2>/dev/null)"
+    case "$err" in
+        *RELEASE_PROVISIONING_PROFILE*) ;;
+        *) echo "  the refusal does not name the missing secret" >&2; rc=1 ;;
+    esac
+    case "$err" in
+        *Focus*) ;;
+        *) echo "  the refusal does not say what the release would lose" >&2; rc=1 ;;
+    esac
+    return "$rc"
+}
+
+# Both missing is one run, not two. A fresh setup should learn everything it
+# has to fix from a single failure rather than discovering the second secret
+# only after fixing the first.
+test_both_missing_secrets_are_reported_together() {
+    local rc=0 out err
+    out="$(_preflight refs/tags/v1.2.3 homebrew "" "")"
+    case "$out" in *"|0") echo "  a tag build with neither secret was allowed" >&2; rc=1 ;; esac
+    err="$(cat "$TMP/err" 2>/dev/null)"
+    case "$err" in *DEVELOPER_ID*) ;; *) echo "  the certificate is not mentioned" >&2; rc=1 ;; esac
+    case "$err" in *RELEASE_PROVISIONING_PROFILE*) ;; *) echo "  the profile is not mentioned" >&2; rc=1 ;; esac
+    return "$rc"
+}
+
+# The control: outside a release, a missing profile is the normal state for
+# anyone without the secret and must not stop the build.
+test_a_branch_build_without_a_profile_is_unaffected() {
+    local rc=0 out
+    out="$(_preflight refs/heads/main homebrew "" "")"
+    _expect branch_no_profile "adhoc|0" "$out" || rc=1
+    out="$(_preflight refs/heads/main homebrew "Developer ID Application: A (T)" "")"
+    _expect branch_signed_no_profile "developer-id|0" "$out" || rc=1
     return "$rc"
 }
 
@@ -246,6 +296,63 @@ test_the_release_workflow_does_not_decide_the_mode_itself() {
         *"release-signing-gate.sh preflight"*) ;;
         *) echo "  release.yml never runs the preflight" >&2; rc=1 ;;
     esac
+    # The preflight reads both secrets from its environment, so the step that
+    # runs it has to pass them. Dropping the profile from that env does not
+    # weaken the gate, it makes it refuse every release instead, which is loud
+    # but is still not what anyone intended.
+    local build_step
+    build_step="$(awk '/^      - name: Build .app and DMG$/{f=1}
+                       f && /^      - name: /&&!/Build .app and DMG$/{exit}
+                       f' "$wf")"
+    if [ -z "$build_step" ]; then
+        echo "  could not find the build step; release.yml was restructured" >&2
+        return 1
+    fi
+    for secret in DEVELOPER_ID RELEASE_PROVISIONING_PROFILE; do
+        case "$build_step" in
+            *"$secret:"*) ;;
+            *) echo "  the build step does not pass $secret, which the preflight reads" >&2
+               rc=1 ;;
+        esac
+    done
+    return "$rc"
+}
+
+# The entitlement check used to read the provisioning-profile secret and exit 0
+# when it was absent, so the single case worth catching switched off the check
+# that would have caught it. Structural, and stated as such: a workflow cannot
+# be executed from here, so what this pins is that the step no longer has an
+# input it can excuse itself with, and that it refuses on a release tag.
+test_the_entitlement_check_cannot_excuse_itself() {
+    local wf="$REPO_ROOT/.github/workflows/release.yml" rc=0 step
+    # The step body, comments excluded, up to the next step.
+    step="$(awk '/^      - name: Verify the release carries the time-sensitive entitlement$/{f=1}
+                 f && /^      - name: /&&!/time-sensitive entitlement$/{exit}
+                 f' "$wf" | grep -v '^\s*#')"
+    if [ -z "$step" ]; then
+        echo "  could not find the entitlement step; release.yml was restructured" >&2
+        return 1
+    fi
+    case "$step" in
+        *PROFILE_B64*|*RELEASE_PROVISIONING_PROFILE*)
+            echo "  the entitlement check still reads the profile secret, so a missing" >&2
+            echo "  secret can still switch it off" >&2
+            rc=1 ;;
+    esac
+    case "$step" in
+        *"refs/tags/v*"*) ;;
+        *) echo "  the entitlement check does not distinguish a release tag, so it either" >&2
+           echo "  fails every contributor build or enforces nothing on a release" >&2
+           rc=1 ;;
+    esac
+    case "$step" in
+        *"exit 1"*) ;;
+        *) echo "  the entitlement check has no failing path at all" >&2; rc=1 ;;
+    esac
+    case "$step" in
+        *bundle_has_time_sensitive*) ;;
+        *) echo "  the entitlement check no longer asks the built app" >&2; rc=1 ;;
+    esac
     return "$rc"
 }
 
@@ -257,12 +364,16 @@ run_test "a tag build with a certificate selects signed mode"    test_a_tag_buil
 run_test "a branch build without a certificate still builds"     test_a_branch_build_without_a_certificate_still_builds_adhoc
 run_test "the appstore variant on a tag is not required signed"  test_the_appstore_variant_on_a_tag_is_not_required_to_be_signed
 run_test "a non-version tag is not treated as a release"         test_a_non_version_tag_is_not_treated_as_a_release
+run_test "a tag build without a provisioning profile is refused"  test_a_tag_build_without_a_provisioning_profile_is_refused
+run_test "both missing secrets are reported together"            test_both_missing_secrets_are_reported_together
+run_test "a branch build without a profile is unaffected"        test_a_branch_build_without_a_profile_is_unaffected
 run_test "the verdict tells a Developer ID from an ad-hoc sig"   test_the_verdict_tells_a_developer_id_from_an_adhoc_signature
 run_test "a development certificate is not a Developer ID"       test_a_development_certificate_is_not_a_developer_id
 run_test "a really ad-hoc signed bundle is refused"              test_a_really_adhoc_signed_bundle_is_refused
 run_test "a Developer ID signed bundle passes and says so"       test_a_developer_id_signed_bundle_passes_and_says_so
 run_test "the stubbed ad-hoc output is refused too"              test_the_stubbed_adhoc_output_is_refused_too
 run_test "the release workflow does not decide the mode itself"  test_the_release_workflow_does_not_decide_the_mode_itself
+run_test "the entitlement check cannot excuse itself"            test_the_entitlement_check_cannot_excuse_itself
 echo
 
 if [ "$FAILED" -eq 0 ]; then

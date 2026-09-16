@@ -45,25 +45,46 @@ cmd_preflight() {
     local ref="${1:-}" variant="${2:-}"
     [ -n "$ref" ] && [ -n "$variant" ] || usage
 
-    if [ -n "${DEVELOPER_ID:-}" ]; then
+    if [ "$(release_is_published_build "$ref" "$variant")" = yes ]; then
+        # Every missing input is reported in one run. A fresh or restored setup
+        # should learn everything it has to fix from a single failure, rather
+        # than discovering the second secret only after fixing the first.
+        local missing=0
+        if [ -z "${DEVELOPER_ID:-}" ]; then
+            missing=1
+            echo "::error::DEVELOPER_ID is not set, and $ref is a release tag." >&2
+            echo "  Without it this build would ad-hoc sign the app and still produce a DMG," >&2
+            echo "  which would be attached to the release and hashed into the Homebrew cask." >&2
+            echo "  Gatekeeper refuses an ad-hoc signed download, so the release would be" >&2
+            echo "  uninstallable for everyone while every job in this run reported success." >&2
+        fi
+        if [ -z "${RELEASE_PROVISIONING_PROFILE:-}" ]; then
+            missing=1
+            echo "::error::RELEASE_PROVISIONING_PROFILE is not set, and $ref is a release tag." >&2
+            echo "  The profile is what authorises the time-sensitive notification entitlement," >&2
+            echo "  and codesign silently drops any entitlement no embedded profile grants." >&2
+            echo "  The release would install and run, and then, for every user with Focus on," >&2
+            echo "  the browser-meeting consent prompt would never break through: it times out," >&2
+            echo "  that counts as a decline, and no browser meeting is ever recorded while the" >&2
+            echo "  setting still reads as enabled. The capture-channel-lost alert goes the same way." >&2
+        fi
+        if [ "$missing" -ne 0 ]; then
+            echo "  Fix: make the named secrets available to this workflow, then re-run." >&2
+            return 1
+        fi
         printf 'developer-id\n'
         return 0
     fi
 
-    if [ "$(release_requires_developer_id "$ref" "$variant")" = yes ]; then
-        echo "::error::DEVELOPER_ID is not set, and $ref is a release tag." >&2
-        echo "  Without it this build would ad-hoc sign the app and still produce a DMG," >&2
-        echo "  which would be attached to the release and hashed into the Homebrew cask." >&2
-        echo "  Gatekeeper refuses an ad-hoc signed download, so the release would be" >&2
-        echo "  uninstallable for everyone while every job in this run reported success." >&2
-        echo "  Fix: make the DEVELOPER_ID secret available to this workflow, then re-run." >&2
-        return 1
-    fi
-
     # Not a published build: a branch push, a pull request or a manual run.
-    # These have no access to the secret and are not attached to anything, so
-    # an ad-hoc DMG is the useful outcome rather than a failure.
-    printf 'adhoc\n'
+    # These have no access to the secrets and are attached to nothing, so a
+    # build is the useful outcome rather than a failure. A certificate is still
+    # used when one happens to be available.
+    if [ -n "${DEVELOPER_ID:-}" ]; then
+        printf 'developer-id\n'
+    else
+        printf 'adhoc\n'
+    fi
 }
 
 cmd_verify() {
