@@ -98,8 +98,101 @@ test_the_exclusion_list_has_no_stale_members() {
     return "$rc"
 }
 
+# The order check above is a grep, and a grep cannot see whether the refusal is
+# FATAL. Measured: downgrading `require_signing_identity || exit 1` to `|| true`
+# in the silent-recording driver left this file and all three sibling signing
+# suites green, while the lane went on to overwrite the shared deployment with a
+# bundle it had just failed to find an identity for. That is the same shape as
+# the four sabotages a text check let through elsewhere in this change.
+#
+# So this one runs the driver. Sandbox: HOME is a throwaway directory, so the
+# dev keychain the fallback looks for does not exist; `swift` is stubbed to fail
+# immediately, so a driver that gets past the precondition dies at its build
+# instead of actually building; `launchctl` is stubbed so the exit trap cannot
+# boot out a developer's real dev app. Nothing is deployed on either path: the
+# rsync sits far below both stopping points.
+#
+# Scoped to this one driver on purpose. The other three reach their precondition
+# after substantially more setup, and driving them here would test that setup
+# rather than this property; they keep the order assertion above.
+_precondition_sandbox() {
+    local home="$1"
+    mkdir -p "$home/bin"
+    # The stub announces itself, because the property under test is whether the
+    # driver REACHES the build, not what it prints on the way. A first version
+    # of this test asserted the refusal message instead and stayed green under
+    # `|| true`: the message is printed either way, only the stopping differs.
+    printf '#!/usr/bin/env bash\necho REACHED_THE_BUILD >&2\nexit 1\n' > "$home/bin/swift"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$home/bin/launchctl"
+    chmod +x "$home/bin/swift" "$home/bin/launchctl"
+}
+
+# Runs the driver on its BUILD path (no --no-build) and reports where it stopped.
+_run_build_path() {
+    local home="$1"
+    shift
+    # Pinned rather than inherited: the drivers and the library both read it,
+    # and CI is where these tests run.
+    HOME="$home" PATH="$home/bin:$PATH" GITHUB_ACTIONS= "$@" \
+        bash "$REPO_ROOT/scripts/e2e-silent-recording.sh" > "$home/out" 2>&1
+    printf '%s' "$?"
+}
+
+test_the_refusal_actually_stops_the_run() {
+    local home rc=0 status out; home="$(mktemp -d)"
+    _precondition_sandbox "$home"
+
+    # Experiment: nothing can be resolved, so the driver must stop AT the
+    # precondition and never reach its build.
+    status="$(_run_build_path "$home" env DEVELOPER_ID=)"
+    out="$(cat "$home/out" 2>/dev/null)"
+    if [ "$status" -eq 0 ]; then
+        echo "  the driver ran to completion with no signing identity at all" >&2; rc=1
+    fi
+    case "$out" in
+        *"setup-self-hosted-runner.sh"*) ;;
+        *) echo "  it stopped, but not at the signing precondition:" >&2
+           printf '%s\n' "$out" | sed 's|^|    |' >&2; rc=1 ;;
+    esac
+    # The load-bearing half: diagnosing and then carrying on is exactly the
+    # defect. If the build was reached, the refusal was not fatal.
+    case "$out" in
+        *REACHED_THE_BUILD*)
+            echo "  it diagnosed the missing identity and then built anyway, which means" >&2
+            echo "  the deployment further down would have been overwritten regardless" >&2
+            rc=1 ;;
+    esac
+    # The control is what makes the above mean something: with an identity
+    # available the driver must get PAST the precondition and die at the build.
+    # Without this, a refusal caused by the sandbox itself would read as a pass.
+    local dev="$home/dev.keychain-db"
+    : > "$dev"
+    printf '#!/usr/bin/env bash\ncase "${1:-}" in find-identity) echo "  1) 1234567890ABCDEF1234567890ABCDEF12345678 \"MeetingTranscriberDevSelfHosted\"";; esac\nexit 0\n' \
+        > "$home/bin/security"
+    chmod +x "$home/bin/security"
+    status="$(_run_build_path "$home" env DEVELOPER_ID= DEV_KEYCHAIN="$dev")"
+    out="$(cat "$home/out" 2>/dev/null)"
+    if [ "$status" -eq 0 ]; then
+        echo "  the control run somehow succeeded inside the sandbox" >&2; rc=1
+    fi
+    case "$out" in
+        *"setup-self-hosted-runner.sh"*)
+            echo "  the control was refused too, so the experiment proves nothing:" >&2
+            printf '%s\n' "$out" | sed 's|^|    |' >&2; rc=1 ;;
+    esac
+    case "$out" in
+        *REACHED_THE_BUILD*) ;;
+        *) echo "  the control never reached the build, so 'did not reach the build'" >&2
+           echo "  is not evidence of anything in the experiment above:" >&2
+           printf '%s\n' "$out" | sed 's|^|    |' >&2; rc=1 ;;
+    esac
+    rm -rf "$home"; return "$rc"
+}
+
 run_test "identity established before the deployment is overwritten" \
     test_identity_is_established_before_the_deployment_is_overwritten
+run_test "the refusal actually stops the run" \
+    test_the_refusal_actually_stops_the_run
 run_test "exclusion list has no stale members" \
     test_the_exclusion_list_has_no_stale_members
 echo

@@ -121,6 +121,35 @@ test_unresolvable_developer_id_falls_back_to_the_dev_keychain() {
     rm -rf "$dir"; return "$rc"
 }
 
+# Two certificates carrying the DEVELOPER_ID name is what a renewal overlap
+# looks like, and it must NOT take the fallback. The host has the certificate;
+# signing with the dev cert there would silently drop the Developer-ID grant
+# this lane exists to exercise, and it would do it on the one host where
+# continuing is indefensible.
+#
+# The control is the dev identity in the fixture: a fallback WOULD succeed, so
+# the refusal cannot be coming from a lack of alternatives.
+test_an_ambiguous_developer_id_refuses_instead_of_falling_back() {
+    local dir name; dir="$(mktemp -d)" rc=0
+    name="Developer ID Application: Someone (TEAM)"
+    _write_security_stub "$dir"
+    printf '  1) %s "%s"\n  2) %s "%s (renewed)"\n  3) %s "MeetingTranscriberDevSelfHosted"\n' \
+        "$HASH_A" "$name" "$HASH_B" "$name" "$HASH_A" > "$dir/identities"
+    : > "$dir/dev.keychain-db"
+    check ambiguous_devid refused "" "" \
+        _require "$dir" "$name" "$dir/dev.keychain-db" "$dir/ci.keychain-db" || rc=1
+    local err; err="$(_stderr_of "$dir")"
+    case "$err" in
+        *"matches 2 certificates"*) ;;
+        *) echo "  the refusal does not say how many certificates matched" >&2; rc=1 ;;
+    esac
+    case "$err" in
+        *"falling back"*)
+            echo "  it announced a fallback on the path that must not fall back" >&2; rc=1 ;;
+    esac
+    rm -rf "$dir"; return "$rc"
+}
+
 # The self-hosted and local route.
 test_dev_keychain_identity_is_accepted() {
     local dir; dir="$(mktemp -d)" rc=0
@@ -165,6 +194,7 @@ test_ambiguous_dev_identity_is_not_blamed_on_a_missing_setup() {
 
 run_test "a Developer ID that resolves is accepted"              test_developer_id_that_resolves_is_accepted
 run_test "an unresolvable Developer ID falls back"              test_unresolvable_developer_id_falls_back_to_the_dev_keychain
+run_test "an ambiguous Developer ID refuses, it does not fall back" test_an_ambiguous_developer_id_refuses_instead_of_falling_back
 run_test "a dev-keychain identity is accepted"                   test_dev_keychain_identity_is_accepted
 run_test "no route at all is refused, naming both remedies"      test_no_route_at_all_is_refused_with_both_remedies
 run_test "an ambiguous dev identity is reported as ambiguous"    test_ambiguous_dev_identity_is_not_blamed_on_a_missing_setup

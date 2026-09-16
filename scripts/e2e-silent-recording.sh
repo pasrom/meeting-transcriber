@@ -161,7 +161,7 @@ if [ "$NO_BUILD" = false ]; then
     # Mini's other runner (shared OS user) may have mutated it during our build.
     # codesign honours `--keychain` for the identity but still consults the
     # search list for trust-chain resolution.
-    [ -z "$SIGN_KEYCHAIN" ] || "$ROOT/scripts/keychain-prepend.sh" "$SIGN_KEYCHAIN" 2>/dev/null || true
+    [ -z "$SIGN_KEYCHAIN" ] || "$ROOT/scripts/keychain-prepend.sh" "$SIGN_KEYCHAIN" || true
     resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN" \
         || die "re-sign of the deployed bundle failed"
 else

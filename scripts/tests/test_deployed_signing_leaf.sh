@@ -45,7 +45,11 @@ run_test() {
 # tested command, nested subshells included.
 _with_lib() {
     local leaf="$1" snippet="$2"
-    SIGNING_LIB="$SIGNING_LIB" STUB_LEAF="$leaf" bash -c '
+    # GITHUB_ACTIONS is pinned, never inherited: the rollout exemption is
+    # deliberately stricter in CI, and CI is exactly where these tests run. An
+    # inherited value would make every case below mean something different
+    # there than it does here.
+    SIGNING_LIB="$SIGNING_LIB" STUB_LEAF="$leaf" GITHUB_ACTIONS="${CI_MODE:-}" bash -c '
         set -uo pipefail
         source "$SIGNING_LIB"
         bundle_signing_cert_sha1() { printf "%s" "$STUB_LEAF"; }
@@ -130,9 +134,24 @@ test_recording_writes_the_leaf_and_reads_back_as_a_match() {
     _expect round_trip "$LEAF_A|accepted" "$out" || rc=1
     # A pass has to be legible in the log. Silence would read the same as a
     # check that never ran, which is the hollow gate this file is about.
+    # Both halves: that it said something, and that it named the certificate it
+    # recognised. Naming it is the point; without this the value can be dropped
+    # from the message with every test still green.
     case "$(cat "$dir/err" 2>/dev/null)" in
         *"carries the certificate the last deploy recorded"*) ;;
         *) echo "  the match passed without saying anything" >&2; rc=1 ;;
+    esac
+    case "$(cat "$dir/err" 2>/dev/null)" in
+        *"$LEAF_A"*) ;;
+        *) echo "  the match did not name the certificate it recognised" >&2; rc=1 ;;
+    esac
+    # And the bundle. One of the four sabotages a text check let through was
+    # pointing the assertion at the build path instead of the deploy path; a
+    # success line that does not name what it looked at cannot show that in a
+    # log, which is the one job the line has.
+    case "$(cat "$dir/err" 2>/dev/null)" in
+        *"$dir/Foo.app"*) ;;
+        *) echo "  the match did not name the bundle it looked at" >&2; rc=1 ;;
     esac
     rm -rf "$dir"; return "$rc"
 }
@@ -209,6 +228,47 @@ test_an_absent_bundle_is_left_to_the_missing_binary_check() {
     case "$(cat "$dir/err" 2>/dev/null)" in
         *"No bundle at"*) ;;
         *) echo "  it passed without saying there is no bundle" >&2; rc=1 ;;
+    esac
+    rm -rf "$dir"; return "$rc"
+}
+
+# In CI the exemption does not apply, and that is the whole reason it is safe to
+# have one. The deploy that signs runs earlier in the same job, so a missing
+# record there means the deployment came from somewhere else. Left
+# unconditional, the exemption would become a permanent silent pass the first
+# time anything deploys by another route, and its message would read like a
+# benign rollout note rather than a dead gate.
+test_a_missing_record_refuses_in_ci() {
+    local dir rc=0 out; dir="$(mktemp -d)"
+    mkdir -p "$dir/Foo.app"
+    out="$(CI_MODE=true _with_lib "$LEAF_A" '
+        if assert_deployed_signing_leaf "'"$dir"'/Foo.app" 2>"'"$dir"'/err"; then
+            printf accepted; else printf refused; fi')"
+    _expect unrecorded_ci refused "$out" || rc=1
+    case "$(cat "$dir/err" 2>/dev/null)" in
+        *"unknown provenance"*) ;;
+        *) echo "  refused in CI, but not for the stated reason" >&2; rc=1 ;;
+    esac
+    rm -rf "$dir"; return "$rc"
+}
+
+# The passing verdicts must not claim a comparison they never made. Copying the
+# match sentence into either of them leaves the rest of this file green, because
+# every other assertion here is a substring match on a different sentence, and a
+# log that announces a match on a path that compared nothing is the exact
+# hollowness this whole change exists to remove.
+test_the_non_comparing_verdicts_do_not_claim_a_match() {
+    local dir rc=0 sentence="carries the certificate the last deploy recorded"
+    dir="$(mktemp -d)"
+    mkdir -p "$dir/Foo.app"
+    _with_lib "$LEAF_A" 'assert_deployed_signing_leaf "'"$dir"'/Foo.app" 2>"'"$dir"'/err1"' >/dev/null
+    case "$(cat "$dir/err1" 2>/dev/null)" in
+        *"$sentence"*) echo "  the rollout exemption claims a match it never made" >&2; rc=1 ;;
+    esac
+    printf '%s' "$LEAF_A" > "$dir/.Gone.app.signing-leaf"
+    _with_lib "" 'assert_deployed_signing_leaf "'"$dir"'/Gone.app" 2>"'"$dir"'/err2"' >/dev/null
+    case "$(cat "$dir/err2" 2>/dev/null)" in
+        *"$sentence"*) echo "  the absent-bundle path claims a match it never made" >&2; rc=1 ;;
     esac
     rm -rf "$dir"; return "$rc"
 }
@@ -316,7 +376,7 @@ _lane_sandbox() {
 
 _run_lane() {
     local home="$1"
-    HOME="$home" PATH="$home/bin:$PATH" \
+    HOME="$home" PATH="$home/bin:$PATH" GITHUB_ACTIONS="${CI_MODE:-}" \
         bash "$REPO_ROOT/scripts/e2e-silent-recording.sh" --no-build \
         > "$home/out" 2>&1
     printf '%s' "$?"
@@ -380,6 +440,8 @@ run_test "a deploy that signed ad-hoc refuses the next lane"       test_a_deploy
 run_test "a different certificate is refused"                      test_a_different_certificate_is_refused
 run_test "a missing record warns instead of refusing"              test_a_missing_record_warns_instead_of_refusing
 run_test "an absent bundle is left to the missing-binary check"    test_an_absent_bundle_is_left_to_the_missing_binary_check
+run_test "a missing record refuses in CI"                        test_a_missing_record_refuses_in_ci
+run_test "the non-comparing verdicts do not claim a match"       test_the_non_comparing_verdicts_do_not_claim_a_match
 run_test "a real re-sign records the new leaf"                     test_a_real_resign_records_the_new_leaf
 run_test "keeping an existing signature still records"             test_keeping_an_existing_signature_still_records
 run_test "a failed verification would record nothing"              test_a_failed_verification_would_record_nothing

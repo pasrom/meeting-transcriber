@@ -217,7 +217,7 @@ else
     # list during our 60-90 s build. codesign honours `--keychain` for the
     # signing identity but still consults the search list for trust-chain
     # resolution.
-    [ -z "$SIGN_KEYCHAIN" ] || "$SCRIPT_DIR/keychain-prepend.sh" "$SIGN_KEYCHAIN" 2>/dev/null || true
+    [ -z "$SIGN_KEYCHAIN" ] || "$SCRIPT_DIR/keychain-prepend.sh" "$SIGN_KEYCHAIN" || true
     resign_deployed_bundle "$DEV_BUNDLE_DEPLOY" "$SIGN_IDENTITY" "$SIGN_KEYCHAIN" \
         || fail "re-sign of the deployed bundle failed — see the message above"
 fi

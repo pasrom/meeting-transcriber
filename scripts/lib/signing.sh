@@ -337,21 +337,35 @@ first_developer_id() {
 # `find-identity` prints would reject identities codesign accepts — and since an
 # unresolved identity can never match the bundle, the caller would then always
 # take the destructive branch.
+# identity_matches <name> [keychain] — the SHA-1 of every codesigning identity
+# whose line contains this name, one per line, deduplicated.
+#
+# Split out of identity_sha1 because the COUNT is load-bearing to a second
+# caller and that function deliberately throws it away: it answers empty both
+# for a name nothing matches and for one that several do, which are opposite
+# situations with opposite remedies. A caller that has to tell them apart asks
+# here instead of running a second, separately maintained query.
+#
+# `|| true` because a keychain that cannot be read is a normal answer (empty),
+# not a failure. Without it, `pipefail` would make this the function's status
+# and abort the caller's `x="$(…)"` assignment with no output at all, the trap
+# documented at profile_for.
+identity_matches() {
+    local identity="$1" keychain="${2:-}" args=(-v -p codesigning)
+    [ -n "$keychain" ] && args+=("$keychain")
+    security find-identity "${args[@]}" 2>/dev/null \
+        | awk -v name="$identity" 'index($0, name) { print toupper($2) }' \
+        | sort -u || true
+}
+
 identity_sha1() {
     local identity="$1" keychain="${2:-}"
     if [[ $identity =~ ^[0-9A-Fa-f]{40}$ ]]; then
         printf '%s' "$identity" | tr '[:lower:]' '[:upper:]'
         return 0
     fi
-    local args=(-v -p codesigning) matches count
-    [ -n "$keychain" ] && args+=("$keychain")
-    # `|| true` because a keychain that cannot be read is a normal answer (empty),
-    # not a failure — without it, `pipefail` would make this the function's status
-    # and abort the caller's `want="$(…)"` assignment with no output at all, the
-    # trap documented at profile_for.
-    matches="$(security find-identity "${args[@]}" 2>/dev/null \
-        | awk -v name="$identity" 'index($0, name) { print toupper($2) }' \
-        | sort -u || true)"
+    local matches count
+    matches="$(identity_matches "$identity" "$keychain")"
     count="$(printf '%s' "$matches" | grep -c . || true)"
     # Ambiguous is not a match. Guessing between two certificates that both
     # contain the name could skip a re-sign the bundle needed; re-signing when it
@@ -376,9 +390,12 @@ DEV_CERT_NAME="${DEV_CERT_NAME:-MeetingTranscriberDevSelfHosted}"
 # identity were both intact. Nothing depends on that copy any more; it is an
 # artifact to look at.
 #
-# The unlock belongs here rather than at the call sites: the empty password is a
-# property of how the setup script creates THIS keychain, and codesign needs the
-# private key a moment later.
+# The unlock here is for the LOOKUP, not for a signature: `security
+# find-identity` needs the keychain readable, and the empty password is a
+# property of how the setup script creates THIS keychain. `resign_deployed_bundle`
+# unlocks again for the same reason a second time, and that is not redundant:
+# callers now resolve the identity before their build, so minutes of building sit
+# between this unlock and the codesign that needs the private key.
 # The lookup itself is identity_sha1's, so there is one definition of how a name
 # becomes a hash — including its refusal to guess between two certificates whose
 # names both contain the string, which here means an identity left behind under a
@@ -430,9 +447,13 @@ record_deployed_signing_leaf() {
     # Measured: with the order reversed, an unwritable deploy path prints a raw
     # "Permission denied" into the driver's log right under the re-sign line.
     #
-    # Best effort on purpose. A deploy path we cannot write beside costs the
-    # next lane its check, which that lane reports; failing the re-sign over it
-    # would cost that lane the whole run.
+    # Best effort on purpose: failing the re-sign over a record would cost the
+    # lane its whole run. What a failed write costs depends on what was already
+    # there. With no record yet the next lane simply cannot look, and says so.
+    # With an older record still in place it compares against a deploy that has
+    # since been superseded, which reads as "something replaced the bundle" and
+    # refuses. That is the safe direction, and it is why the write is a rename
+    # rather than an in-place truncation.
     if printf '%s' "$leaf" 2>/dev/null > "$tmp"; then
         mv -f "$tmp" "$record" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
     else
@@ -486,11 +507,24 @@ assert_deployed_signing_leaf() {
             # the log from a check that was never reached, and a gate whose
             # success looks exactly like its absence is the failure mode this
             # whole mechanism exists to remove.
-            echo "Deployed bundle carries the certificate the last deploy recorded ($actual)." >&2
+            echo "$bundle carries the certificate the last deploy recorded ($actual)." >&2
             return 0 ;;
         unrecorded)
             echo "No signing record beside $bundle; cannot tell which certificate it carries." >&2
-            echo "  Runs after the next build+deploy will have one." >&2
+            if [ "${GITHUB_ACTIONS:-}" = true ]; then
+                # The exemption exists so a rollout is not an outage, and that
+                # reason does not apply here: in CI the deploy that signs runs
+                # earlier in the same job, so by the time this lane runs a
+                # record exists unless the deployment came from somewhere else.
+                # Left unconditional, the exemption would be a permanent silent
+                # pass the first time anything deploys by another route, and
+                # its own message would read like a benign rollout note.
+                echo "  The deploy that signs runs earlier in this same job, so a missing" >&2
+                echo "  record means this deployment did not come from it. Refusing rather" >&2
+                echo "  than reporting on a bundle of unknown provenance." >&2
+                return 1
+            fi
+            echo "  Locally this is the normal state until the next build and deploy." >&2
             return 0 ;;
         deployed-adhoc)
             echo "The last deploy signed $bundle with no certificate at all." >&2
@@ -536,18 +570,35 @@ require_signing_identity() {
             SIGN_KEYCHAIN="$keychain"
             return 0
         fi
-        # Fall through rather than refuse. The name and the certificate are two
-        # separate secrets: the workflow exports DEVELOPER_ID on every lane and
-        # imports the certificate only when its own secret is present, and it
-        # documents the self-signed cert as the fallback for exactly that case.
-        # Said out loud, because a run signed by the dev cert is one the manual
-        # Developer-ID TCC grant does not cover.
-        # `identity_sha1` returns empty for an absent name AND for one that
-        # matches more than one certificate, which is the normal state during a
-        # renewal overlap. The message names both, because the remedies differ
-        # and the fallback silently costs the Developer-ID TCC grant either way.
-        echo "DEVELOPER_ID names '$DEVELOPER_ID', which resolves to no identity" >&2
-        echo "  or to more than one${keychain:+ in $keychain}; falling back to the dev keychain." >&2
+        # `identity_sha1` answers empty for TWO opposite situations, and they
+        # must not share an outcome.
+        local matched
+        matched="$(printf '%s' "$(identity_matches "$DEVELOPER_ID" "$keychain")" | grep -c . || true)"
+
+        if [ "$matched" -gt 1 ]; then
+            # Several certificates carry this name, which is the normal state
+            # during a renewal overlap. Falling back here would sign with the
+            # dev cert on a lane whose whole point is the Developer-ID grant,
+            # and it would do so on a host that HAS the certificate, which is
+            # the one case where continuing is indefensible. Refuse instead.
+            echo "DEVELOPER_ID names '$DEVELOPER_ID', which matches $matched certificates" >&2
+            echo "  ${keychain:+in $keychain }and so cannot be resolved to one." >&2
+            echo "  This is what a renewal overlap looks like. Falling back to the dev cert" >&2
+            echo "  would silently drop the Developer-ID TCC grant this lane depends on, so" >&2
+            echo "  the run stops here instead." >&2
+            echo "  Fix: remove the superseded certificate, or point DEVELOPER_ID at the" >&2
+            echo "  SHA-1 of the one you want." >&2
+            return 1
+        fi
+
+        # Nothing matched: fall through rather than refuse. The name and the
+        # certificate are two separate secrets. The workflow exports
+        # DEVELOPER_ID on every lane and imports the certificate only when its
+        # own secret is present, and it documents the self-signed cert as the
+        # fallback for exactly that case. Said out loud, because a run signed by
+        # the dev cert is one the manual Developer-ID grant does not cover.
+        echo "DEVELOPER_ID names '$DEVELOPER_ID', which matches no identity" >&2
+        echo "  ${keychain:+in $keychain}; falling back to the dev keychain." >&2
         echo "  A run signed by the dev cert is NOT covered by the Developer-ID grant." >&2
     fi
 
