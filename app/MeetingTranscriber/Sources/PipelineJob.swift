@@ -111,6 +111,19 @@ struct PipelineJob: Identifiable, Codable {
     // swiftlint:disable:next discouraged_optional_boolean
     var autoSkipNaming: Bool?
 
+    /// The output directory this job's naming sidecars were written under,
+    /// captured when they were written.
+    ///
+    /// A queue's `outputDir` is the *current* setting. Repointing the output
+    /// folder would otherwise make the snapshot restore clean up the new folder
+    /// while the files sit in the old one, and the job that names them is
+    /// discarded in the same breath, so nothing could ever find them again.
+    ///
+    /// `nil` for legacy snapshots and for jobs that never wrote sidecars;
+    /// callers fall back to the current output directory, which is what the
+    /// code did before this field existed.
+    var sidecarOutputDir: URL?
+
     init(
         meetingTitle: String,
         appName: String,

@@ -68,6 +68,16 @@ final class InFlightRunRegistry {
         claims.removeValue(forKey: jobID)
     }
 
+    /// Whether either of a job's identities is claimed.
+    ///
+    /// The two are checked together because a claim carries both, and asking
+    /// only about the id is how a run claimed under a fresh job id slips
+    /// through. Callers holding a whole job want this rather than the two
+    /// single-identity overloads.
+    func isInFlight(_ job: PipelineJob) -> Bool {
+        isInFlight(jobID: job.id) || job.mixPath.map { isInFlight(mixPath: $0) } ?? false
+    }
+
     func isInFlight(jobID: UUID) -> Bool {
         claims[jobID] != nil
     }
