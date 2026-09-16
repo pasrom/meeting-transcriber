@@ -30,8 +30,34 @@ struct SpeakerNamingStore {
         )
     }
 
+    /// The per-slug sidecars this store owns, as one list so the cleanup and
+    /// the tests that pin it cannot drift apart. `namingJSONSuffix` is kept
+    /// separate because `deleteNamingJSON` removes only that one.
+    static let namingJSONSuffix = "_naming.json"
+    static let segmentsSuffix = "_segments.json"
+    static let sidecarSuffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", segmentsSuffix]
+
     private var recordingsDir: URL? {
         outputDir?.appendingPathComponent("recordings")
+    }
+
+    /// Run `body` with the output directory's security scope open.
+    ///
+    /// Security-scoped access is the caller's job for anything under a
+    /// user-picked output folder, and the removals below go through `try?`, so
+    /// a sandboxed build without the scope deletes nothing and says nothing.
+    /// It sits here rather than at each caller because every site that drops a
+    /// job's sidecars would otherwise need its own copy, and all but one never
+    /// had one. Opened on `outputDir`, the bookmark-resolved root, not on the
+    /// `recordings` child.
+    private func withOutputDirAccess<R>(_ body: () throws -> R) rethrows -> R {
+        let accessing = outputDir?.startAccessingSecurityScopedResource() ?? false
+        defer {
+            if accessing {
+                outputDir?.stopAccessingSecurityScopedResource()
+            }
+        }
+        return try body()
     }
 
     // FluidAudio embeddings can contain NaN/Inf for short or silent segments.
@@ -60,7 +86,7 @@ struct SpeakerNamingStore {
     func save(_ data: PipelineQueue.SpeakerNamingData, slug: String) throws {
         guard let recordingsDir else { return }
         try? FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
-        let path = recordingsDir.appendingPathComponent("\(slug)_naming.json")
+        let path = recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)")
         let json = try Self.makeEncoder().encode(data)
         try json.write(to: path, options: .atomic)
         // Carries per-speaker voice embeddings — restrict to owner-only.
@@ -69,7 +95,7 @@ struct SpeakerNamingStore {
 
     func load(slug: String) -> PipelineQueue.SpeakerNamingData? {
         guard let recordingsDir else { return nil }
-        let path = recordingsDir.appendingPathComponent("\(slug)_naming.json")
+        let path = recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)")
         guard let json = try? Data(contentsOf: path) else { return nil }
         return try? Self.makeDecoder().decode(PipelineQueue.SpeakerNamingData.self, from: json)
     }
@@ -78,7 +104,11 @@ struct SpeakerNamingStore {
     /// the concern of `cleanupSidecarFiles`.
     func deleteNamingJSON(slug: String?) {
         guard let slug, let recordingsDir else { return }
-        try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)_naming.json"))
+        withOutputDirAccess {
+            try? FileManager.default.removeItem(
+                at: recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)"),
+            )
+        }
     }
 
     /// Delete only the cached transcript segments. These contain verbatim
@@ -86,17 +116,20 @@ struct SpeakerNamingStore {
     /// when separate raw-transcript output is disabled.
     func deleteTranscriptSegments(slug: String?) throws {
         guard let slug, let recordingsDir else { return }
-        let path = recordingsDir.appendingPathComponent("\(slug)_segments.json")
-        guard FileManager.default.fileExists(atPath: path.path) else { return }
-        try FileManager.default.removeItem(at: path)
+        let path = recordingsDir.appendingPathComponent("\(slug)\(Self.segmentsSuffix)")
+        try withOutputDirAccess {
+            guard FileManager.default.fileExists(atPath: path.path) else { return }
+            try FileManager.default.removeItem(at: path)
+        }
     }
 
     /// Delete the 16 kHz audio and segment sidecar files for a slug.
     func cleanupSidecarFiles(slug: String?) {
         guard let slug, let recordingsDir else { return }
-        let suffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
-        for suffix in suffixes {
-            try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
+        withOutputDirAccess {
+            for suffix in Self.sidecarSuffixes {
+                try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
+            }
         }
     }
 }

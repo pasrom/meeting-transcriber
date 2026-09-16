@@ -38,8 +38,10 @@ extension PipelineQueue {
             }
         }
 
-        // Discard done jobs
+        // Discard done jobs, and let their sidecars go with them.
+        let doneJobs = loaded.filter { $0.state == .done }
         loaded.removeAll { $0.state == .done }
+        removeNamingDataOfDiscardedJobs(doneJobs)
 
         // Discard jobs whose audio file no longer exists, EXCEPT
         // .speakerNamingPending — those have their own slug-based
@@ -58,9 +60,7 @@ extension PipelineQueue {
         // starts it a second time. Speaker naming is exempt because a job
         // parked there is waiting on the user, not executing.
         loaded.removeAll { job in
-            guard job.state != .speakerNamingPending else { return false }
-            if inFlightRuns.isInFlight(jobID: job.id) { return true }
-            return job.mixPath.map { inFlightRuns.isInFlight(mixPath: $0) } ?? false
+            job.state != .speakerNamingPending && inFlightRuns.isInFlight(job)
         }
 
         guard !loaded.isEmpty else {
@@ -96,6 +96,48 @@ extension PipelineQueue {
         // pop, so MeetingTranscriberApp brings the window forward.
         if !pendingSpeakerNamingJobs.isEmpty {
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
+        }
+    }
+
+    /// Drop the naming sidecars of the `.done` jobs the restore threw away.
+    ///
+    /// Dropping a job has to drop what belongs to it, the same rule `removeJob`
+    /// follows unconditionally. This restore is the last owner of those files:
+    /// the slug that names them lives on the job, nothing sweeps the output
+    /// folder for orphans, and the reaping task that would normally remove them
+    /// never runs for a job already gone by the time the app comes back. Left
+    /// alone they stay for good, and for a dual-source hour that is hundreds of
+    /// MB per job.
+    ///
+    /// **Only the `.done` rule feeds this.** The missing-audio rule drops jobs
+    /// whose audio is in fact fine: `persistAudioToOutput` relocates it without
+    /// writing the new paths back onto the job, so `mixPath` still names an
+    /// emptied staging path. Those are exactly the jobs a late re-diarization or
+    /// late re-confirm may still be running on a queue that `rebuild()` swapped
+    /// out, reading the very sidecars this would delete, and the registry cannot
+    /// separate them because only `processNext` ever claims. Writing the
+    /// relocated paths back is what would make that rule safe to clean up after,
+    /// and it is tracked separately rather than widened in here.
+    ///
+    /// The in-flight check below is not merely belt and braces: the transition
+    /// to `.done` happens inside the claimed run, before `processNext` releases
+    /// the claim, so an in-session `rebuild()` can restore a `.done` job that is
+    /// still being worked on.
+    ///
+    /// The directory comes from the job, not from the current setting: the
+    /// queue's `outputDir` is wherever the user points today, and repointing it
+    /// would otherwise have this clean the new folder while the files sit in
+    /// the old one, with the job that names them discarded in the same breath.
+    ///
+    /// Removals are synchronous on the main actor, unlike the snapshot write
+    /// further down. The realistic set is one job, the measured worst case a
+    /// few hundred unlinks, and the precedent for moving filesystem work off
+    /// this actor is a rename deadlock rather than unlink.
+    private func removeNamingDataOfDiscardedJobs(_ discarded: [PipelineJob]) {
+        for job in discarded where !inFlightRuns.isInFlight(job) {
+            naming.removeNamingData(
+                jobID: job.id, slug: job.namingSlug, in: job.sidecarOutputDir ?? outputDir,
+            )
         }
     }
 

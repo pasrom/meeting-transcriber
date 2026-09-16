@@ -383,12 +383,17 @@ final class SpeakerNamingSession {
     /// Remove all naming-related data for a job: RAM caches, disk JSON, and
     /// sidecar files. Also clears the recognition-stats stash dicts so they
     /// don't leak across rerun / stale-cleanup paths.
-    func removeNamingData(jobID: UUID, slug: String?) {
+    /// `outputDir` overrides where the sidecars are looked for. Callers acting
+    /// on a live job leave it nil and get this session's own store; the snapshot
+    /// restore passes the directory the job recorded, because the setting may
+    /// have been repointed since those files were written.
+    func removeNamingData(jobID: UUID, slug: String?, in outputDir: URL? = nil) {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         stashedSuggestedAtDialog.removeValue(forKey: jobID)
         stashedTopCandidates.removeValue(forKey: jobID)
-        namingStore.deleteNamingJSON(slug: slug)
-        namingStore.cleanupSidecarFiles(slug: slug)
+        let store = outputDir.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
+        store.deleteNamingJSON(slug: slug)
+        store.cleanupSidecarFiles(slug: slug)
     }
 
     /// Removes only the transcript-bearing segment sidecar. The queue uses this

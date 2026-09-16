@@ -705,6 +705,9 @@ extension PipelineQueue {
         if let idx = jobs.firstIndex(where: { $0.id == ctx.jobID }) {
             jobs[idx].transcriptPath = txtPath
             jobs[idx].namingSlug = ctx.slug
+            // Where the sidecars below land, so a later restore can clean them
+            // up even if the output folder setting has moved on since.
+            jobs[idx].sidecarOutputDir = outputDir
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
