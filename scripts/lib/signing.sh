@@ -118,6 +118,53 @@ prepare_signing() {
     SIGNING_ENTITLEMENTS="$derived"
 }
 
+# signing_authority_verdict <codesign_dvvv_output> — whose certificate is on
+# this bundle: `developer-id`, `adhoc`, `other`, or `unsigned`.
+#
+# Pure, so the release gate's decision can be exercised on a runner that has no
+# certificate of its own, and so the four answers are stated in one place.
+#
+# Why this and not `codesign --verify`: MEASURED, that command exits 0 on an
+# ad-hoc signed bundle and reports it as valid on disk and satisfying its
+# designated requirement. It answers whether a signature is internally intact,
+# never whose it is, so against an accidental ad-hoc release it is no check at
+# all. The certificate chain is what differs: an ad-hoc signature carries no
+# Authority line and says Signature=adhoc.
+#
+# `other` is its own answer rather than a kind of failure at the call site: an
+# Apple Development certificate is a real certificate, is not a Developer ID,
+# and Gatekeeper will not accept it from a download. Collapsing it into
+# `developer-id` would pass a release nobody outside the signing machine could
+# open.
+signing_authority_verdict() {
+    local output="$1" authority
+    case "$output" in
+        *"Signature=adhoc"*) printf 'adhoc'; return 0 ;;
+    esac
+    authority="$(printf '%s\n' "$output" | grep -m1 '^Authority=' || true)"
+    if [ -z "$authority" ]; then printf 'unsigned'; return 0; fi
+    case "$authority" in
+        "Authority=Developer ID Application:"*) printf 'developer-id' ;;
+        *) printf 'other' ;;
+    esac
+}
+
+# release_requires_developer_id <git_ref> <variant> — is this the build whose
+# artifact gets published, and therefore the one that must not fall back?
+#
+# Only a `v*` tag of the homebrew variant is attached to the GitHub Release and
+# has its SHA-256 written into the Homebrew cask. A push to main, a pull
+# request and a manual dispatch have no access to the signing secret and are
+# not published, so they keep producing an ad-hoc build rather than failing.
+# The App Store variant is built with --appstore --no-notarize by design and is
+# uploaded only as a short-lived workflow artifact.
+release_requires_developer_id() {
+    case "$1" in
+        refs/tags/v*) [ "$2" = homebrew ] && printf yes || printf no ;;
+        *) printf no ;;
+    esac
+}
+
 # verify_signing <app-bundle>
 #
 # Call AFTER codesign. Requesting the entitlement is not the same as getting it:

@@ -122,7 +122,14 @@ jobs:
             BUILD_VERSION="--version=${GITHUB_REF_NAME#v}"
             STAPLE_FLAG="--staple"
           fi
-          if [ "${{ matrix.variant }}" = "homebrew" ] && [ -n "${DEVELOPER_ID:-}" ]; then
+          # The gate decides, and this step has no opinion of its own. It used
+          # to branch on `[ -n "$DEVELOPER_ID" ]` right here, which meant a
+          # release tag built with that secret missing quietly took the
+          # unsigned path and still produced a DMG to attach. With the mode
+          # coming from the gate there is no second place for that decision to
+          # be made differently.
+          MODE="$(./scripts/release-signing-gate.sh preflight "$GITHUB_REF" "${{ matrix.variant }}")"
+          if [ "$MODE" = "developer-id" ] && [ "${{ matrix.variant }}" = "homebrew" ]; then
             ./scripts/build_release.sh $STAPLE_FLAG ${BUILD_VERSION:-}
           else
             ./scripts/build_release.sh ${{ matrix.build-flags }} --no-notarize ${BUILD_VERSION:-}
@@ -153,6 +160,18 @@ jobs:
             echo "::error::the built app is missing $TIME_SENSITIVE_KEY — the consent prompt would stay suppressed under Focus"
             exit 1
           fi
+
+      # Asked of the artifact that is about to be published, not of the inputs
+      # that produced it. The preflight above can only see whether a secret is
+      # present; this sees what actually ended up on the app, which is the only
+      # thing a user is affected by. Restricted to the build that gets attached
+      # to the release: nothing else here is distributed.
+      #
+      # Not `codesign --verify`: measured, it exits 0 on an ad-hoc signed
+      # bundle, so it would have passed the exact artifact this exists to stop.
+      - name: Verify the release is signed by a Developer ID
+        if: matrix.variant == 'homebrew' && startsWith(github.ref, 'refs/tags/v')
+        run: ./scripts/release-signing-gate.sh verify .build/release/MeetingTranscriber.app
 
       - name: Get version
         id: version
