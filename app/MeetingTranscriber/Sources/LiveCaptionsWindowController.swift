@@ -7,8 +7,14 @@ import SwiftUI
 /// below (Teams / Zoom / browser).
 ///
 /// To reposition: hold ⌥ (Option) and drag — the modifier monitor below
-/// flips `ignoresMouseEvents` off and `isMovableByWindowBackground` on,
-/// then back when the key is released. The post-drag origin is persisted
+/// flips `ignoresMouseEvents` off while the key is held, and the panel
+/// (`LiveCaptionsPanel`) moves itself from the mouse events it then
+/// receives. It used to lean on `isMovableByWindowBackground`, which on
+/// macOS 27 no longer moves a window whose content view is an
+/// `NSHostingView` (measured: the same panel with a plain `NSView` still
+/// moves, and style mask, level and collection behaviour make no
+/// difference); the events still arrive, so the panel does the moving.
+/// The post-drag origin is persisted
 /// to `UserDefaults` (`liveCaptionsPanelOriginKey`) and a follow-up screen
 /// is picked by containing-screen lookup on next launch, so the bar
 /// re-appears on the secondary display if that's where the user last
@@ -64,7 +70,7 @@ final class LiveCaptionsWindowController {
         let host = NSHostingView(rootView: LiveCaptionsOverlay(state: state))
         host.autoresizingMask = [.width, .height]
 
-        let panel = NSPanel(
+        let panel = LiveCaptionsPanel(
             contentRect: NSRect(
                 x: 0, y: 0, width: Self.panelWidth, height: Self.panelHeight,
             ),
@@ -137,8 +143,8 @@ final class LiveCaptionsWindowController {
         )
     }
 
-    /// Watch ⌥ (Option). While held, flip the panel into drag-friendly mode;
-    /// release returns it to click-through. Uses both local + global
+    /// Watch ⌥ (Option). While held, let mouse events reach the panel so it
+    /// can drag itself; release returns it to click-through. Uses both local + global
     /// monitors so the key works whether or not our app is frontmost. The
     /// NSEvent callbacks are not @MainActor-isolated, so each hop onto the
     /// main actor before touching the panel.
@@ -167,9 +173,7 @@ final class LiveCaptionsWindowController {
     }
 
     private func applyModifierState(to panel: NSPanel, flags: NSEvent.ModifierFlags) {
-        let dragMode = flags.contains(.option)
-        panel.ignoresMouseEvents = !dragMode
-        panel.isMovableByWindowBackground = dragMode
+        panel.ignoresMouseEvents = !flags.contains(.option)
     }
 
     private func installMoveObserver(for panel: NSPanel) {
@@ -184,5 +188,32 @@ final class LiveCaptionsWindowController {
                 self.persistOrigin(panel.frame.origin)
             }
         }
+    }
+}
+
+/// The caption panel moves itself from the mouse events it receives while
+/// ⌥ is held (see the controller header for why `isMovableByWindowBackground`
+/// is not enough). A drag that started keeps following the mouse after ⌥ is
+/// released: AppKit routes the rest of the drag to the mouse-down window
+/// regardless of `ignoresMouseEvents`, which is also how the old
+/// background drag behaved.
+final class LiveCaptionsPanel: NSPanel {
+    private var drag = PanelDragTracker()
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            drag.begin(mouse: NSEvent.mouseLocation, frameOrigin: frame.origin)
+
+        case .leftMouseDragged:
+            if let origin = drag.origin(forMouse: NSEvent.mouseLocation) { setFrameOrigin(origin) }
+
+        case .leftMouseUp:
+            drag.end()
+
+        default:
+            break
+        }
+        super.sendEvent(event)
     }
 }
