@@ -29,7 +29,8 @@ FAILED=0
 ok()  { echo "$1 ... PASS"; PASSED=$(( PASSED + 1 )); }
 bad() { echo "$1 ... FAIL: $2"; FAILED=1; }
 
-# The one accepted condition. Single-quoted, so it is the literal text.
+# The one accepted condition, with the leading `$` escaped so the shell
+# leaves it alone: the value below is the literal text a job must carry.
 EXPECTED="\${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}"
 
 # The jobs that must carry it, named per workflow. An explicit list is what
@@ -47,16 +48,46 @@ RELEASE_GUARDED="build"
 # job-header pattern that reached only one of them would leave the reverse check
 # quietly reading a different set of jobs than the forward one.
 JOB_TRACK='
-    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(/:$/, "", job); next }
-    /^[^[:space:]]/ { job = ""; next }
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(/:$/, "", job); inneeds = 0; next }
+    /^[^[:space:]]/ { job = ""; inneeds = 0; next }
 '
 
+# The JOB-level `if:` of job $2 in file $1, or the empty string. Four spaces
+# exactly: a step's keys are deeper, and matching any indentation reads a step's
+# condition as the job's. That is not hypothetical. For the guarded jobs it is
+# harmless, because their expected condition is a hundred characters no step
+# would carry, but `sanitizer-gate` is expected to hold `always()`, which is the
+# commonest step condition in this repository. Measured: with that job's own
+# `if:` deleted and an ordinary trailing step carrying `if: always()`, the loose
+# form reported the job as guarded while a failed `changes` would skip it.
 job_condition() {
     awk -v want="$2" "$JOB_TRACK"'
-        job == want && /^[[:space:]]*if:/ && cond == "" {
+        job == want && /^    if:/ && cond == "" {
             cond = $0; sub(/^[[:space:]]*if:[[:space:]]*/, "", cond)
         }
         END { print cond }
+    ' "$1"
+}
+
+# The body of job $2 in file $1 with comment lines removed. Both halves matter:
+# a check that searches the whole file is satisfied by text belonging to another
+# job, and one that keeps comments is satisfied by a historical note describing
+# what the job used to do.
+job_body() {
+    awk -v want="$2" "$JOB_TRACK"'
+        job == want && $0 !~ /^[[:space:]]*#/ { print }
+    ' "$1"
+}
+
+# The contiguous run of comment lines immediately above the `changes:` job key.
+# Anchored there because that block is what the guarded jobs point a reader to;
+# a comment anywhere else in the file saying the right thing does not make that
+# block correct.
+changes_job_comment() {
+    awk '
+        /^  changes:[[:space:]]*$/ { printf "%s", block; exit }
+        /^[[:space:]]*#/ { block = block $0 "\n"; next }
+        { block = "" }
     ' "$1"
 }
 
@@ -66,7 +97,10 @@ job_condition() {
 # form the scan above does not recognise still has to appear in the list below.
 jobs_depending_on_changes() {
     awk "$JOB_TRACK"'
-        /^[[:space:]]*needs:[^#]*changes/ && job != "" { print job }
+        /^[[:space:]]*needs:[^#]*changes/ && job != "" { print job; inneeds = 0; next }
+        /^[[:space:]]*needs:[[:space:]]*(#.*)?$/ && job != "" { inneeds = 1; next }
+        inneeds && /^[[:space:]]*-[[:space:]]*changes[[:space:]]*(#.*)?$/ && job != "" { print job; next }
+        inneeds && $0 !~ /^[[:space:]]*-/ { inneeds = 0 }
     ' "$1" | sort -u
 }
 
@@ -95,10 +129,11 @@ check_workflow() {
     # place a reader is sent to. A quoted example that drifts from the thing it
     # documents is worse than none, and nothing else would notice: the drift
     # would be in a comment, where no workflow run and no diff review looks.
-    # Match a COMMENT line carrying it, not merely the string somewhere in the
-    # file: the guarded jobs contain it too, so a plain search is satisfied by
-    # them and would pass over a comment that had drifted to something else.
-    if grep -E '^[[:space:]]*#' "$file" | grep -qF "$EXPECTED"; then
+    # Match the comment block of the `changes` job specifically. Searching the
+    # whole file for a comment line is satisfied by any comment anywhere, a
+    # historical note at the end of the file included, while the block a reader
+    # is actually sent to says something else.
+    if changes_job_comment "$file" | grep -qF "$EXPECTED"; then
         ok "$wf:documented-condition"
     else
         bad "$wf" "the \`changes\` job's comment no longer quotes the condition the guarded jobs carry, so the explanation a reader is sent to shows something the workflow does not do."
@@ -144,18 +179,37 @@ else
         ok "quality-and-safety.yml:sanitizer-gate runs on always()"
     fi
 
-    if grep -q 'CHANGES_RESULT: ${{ needs.changes.result }}' "$qs" \
-        && grep -qE 'if \[ "\$CHANGES_RESULT" != "success" \]; then' "$qs"; then
+    gate_body="$(job_body "$qs" sanitizer-gate)"
+
+    if printf '%s\n' "$gate_body" | grep -q 'CHANGES_RESULT: ${{ needs.changes.result }}' \
+        && printf '%s\n' "$gate_body" | grep -qE 'if \[ "\$CHANGES_RESULT" != "success" \]; then'; then
         ok "quality-and-safety.yml:sanitizer-gate inspects the changes result"
     else
-        bad "quality-and-safety.yml:sanitizer-gate" "no longer fails when the \`changes\` job it needs did not succeed. Without that arm the two sanitizer legs skip through \`needs\`, and both are required checks that count a skip as a pass."
+        bad "quality-and-safety.yml:sanitizer-gate" "no longer reads the result of the \`changes\` job it needs. Without that the two sanitizer legs skip through \`needs\` unnoticed, and both are required checks that count a skip as a pass."
     fi
 
-    # The arm has to set the failure flag, not only print a row.
-    if awk '/if \[ "\$CHANGES_RESULT" != "success" \]; then/,/fi/' "$qs" | grep -q 'failed=1'; then
-        ok "quality-and-safety.yml:sanitizer-gate fails on that result"
+    # The arm has to set the failure flag. The range ends on a line that is
+    # nothing but `fi`: an unanchored /fi/ ends on any line containing those two
+    # letters, so a message mentioning a filter or a config would truncate the
+    # range and turn this red for no reason.
+    if printf '%s\n' "$gate_body" \
+        | awk '/if \[ "\$CHANGES_RESULT" != "success" \]; then/,/^[[:space:]]*fi[[:space:]]*$/' \
+        | grep -q 'failed=1'; then
+        ok "quality-and-safety.yml:sanitizer-gate raises the flag on that result"
     else
         bad "quality-and-safety.yml:sanitizer-gate" "reports a non-successful \`changes\` but does not set the failure flag, so the gate stays green while nothing was checked."
+    fi
+
+    # And something has to ACT on the flag. Setting it proves nothing on its
+    # own: with the terminal arm deleted the step always exits 0, so the gate
+    # can no longer fail for a bad `changes`, a failed ASan leg or a cancelled
+    # TSan leg, while a check that only looked for `failed=1` still passed.
+    if printf '%s\n' "$gate_body" \
+        | awk '/if \[ "\$failed" -ne 0 \]; then/,/^[[:space:]]*fi[[:space:]]*$/' \
+        | grep -q 'exit 1'; then
+        ok "quality-and-safety.yml:sanitizer-gate acts on the flag"
+    else
+        bad "quality-and-safety.yml:sanitizer-gate" "sets a failure flag that nothing exits on, so the step always succeeds and the gate reports green whatever the legs did."
     fi
 fi
 
