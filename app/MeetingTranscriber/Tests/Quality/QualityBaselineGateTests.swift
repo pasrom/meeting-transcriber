@@ -31,18 +31,40 @@ final class QualityBaselineGateTests: XCTestCase {
         XCTAssertEqual(r?.current, 0.30)
     }
 
-    // MARK: - compare(): a run that measured nothing
+    // MARK: - compare(): a row with no measurement fails, it is not a note
 
-    /// The case this gate exists for and did not cover. A baseline row with no
-    /// counterpart used to be a note, and notes do not fail, so a run that
-    /// produced no measurements at all reported success: every row became a
-    /// note and `regressions` stayed empty.
-    ///
-    /// Reachable without anybody breaking a measurement. The CI step selects
-    /// the quality classes with a hand-written `--filter`, so renaming one of
-    /// them drops its rows silently, and this gate is a required status check
-    /// for moving a stable tag.
-    /// One row gone while the rest are fine still fails, and says which.
+    /// Renamed and inverted. It used to assert that a baseline row with no
+    /// counterpart is a note and the gate still passes, which is the behaviour
+    /// that let a run measuring NOTHING report success. A note does not fail,
+    /// and this gate is a required status check for moving a stable tag.
+    func test_compare_missingFromCurrentRunFailsTheGate() {
+        let report = QualityBaselineGate.compare(
+            baseline: [
+                entry(engine: "whisperKit", fixture: "two", wer: 0.20),
+                entry(engine: "parakeet", fixture: "two", wer: 0.25),
+            ],
+            current: [],
+        )
+
+        XCTAssertFalse(report.passed, "a run that measured nothing must not pass")
+        XCTAssertTrue(report.regressions.isEmpty, "nothing got worse; there is no number at all")
+        // Two rows rather than one, and the count asserted rather than only
+        // non-emptiness: a report that names the first missing row and stops
+        // would satisfy every other assertion here.
+        XCTAssertEqual(report.missing.count, 2)
+        XCTAssertTrue(
+            report.missing.contains { $0.contains("whisperKit") },
+            "expected the missing rows to name each engine, got: \(report.missing)",
+        )
+        XCTAssertTrue(
+            report.missing.contains { $0.contains("parakeet") },
+            "expected the missing rows to name each engine, got: \(report.missing)",
+        )
+    }
+
+    /// A partial miss: one row gone while the rest are fine still fails, and
+    /// the failure says which row. The whole-run case is
+    /// `test_compare_missingFromCurrentRunFailsTheGate`.
     func test_compare_singleMissingRowFailsAndNamesIt() {
         let report = QualityBaselineGate.compare(
             baseline: [
@@ -78,6 +100,8 @@ final class QualityBaselineGateTests: XCTestCase {
         XCTAssertTrue(report.passed)
         XCTAssertTrue(report.missing.isEmpty)
     }
+
+    // MARK: - compare(): tolerance
 
     func test_compare_passesWithinTolerance() {
         let report = QualityBaselineGate.compare(
@@ -163,33 +187,29 @@ final class QualityBaselineGateTests: XCTestCase {
         )
     }
 
-    /// Renamed and inverted. It used to assert that a baseline row with no
-    /// counterpart is a note and the gate still passes, which is the behaviour
-    /// that let a run measuring NOTHING report success. A note does not fail,
-    /// and this gate is a required status check for moving a stable tag.
-    func test_compare_missingFromCurrentRunFailsTheGate() {
-        let report = QualityBaselineGate.compare(
-            baseline: [
-                entry(engine: "whisperKit", fixture: "two", wer: 0.20),
-                entry(engine: "parakeet", fixture: "two", wer: 0.25),
-            ],
-            current: [],
-        )
+    // MARK: - compare(): an empty baseline compares nothing
 
-        XCTAssertFalse(report.passed, "a run that measured nothing must not pass")
-        XCTAssertTrue(report.regressions.isEmpty, "nothing got worse; there is no number at all")
-        // Two rows rather than one, and the count asserted rather than only
-        // non-emptiness: a report that names the first missing row and stops
-        // would satisfy every other assertion here.
-        XCTAssertEqual(report.missing.count, 2)
-        XCTAssertTrue(
-            report.missing.contains { $0.contains("whisperKit") },
-            "expected the missing rows to name each engine, got: \(report.missing)",
-        )
-        XCTAssertTrue(
-            report.missing.contains { $0.contains("parakeet") },
-            "expected the missing rows to name each engine, got: \(report.missing)",
-        )
+    /// An empty baseline compares nothing and therefore proves nothing, but
+    /// `regressions.isEmpty && missing.isEmpty` is true for it, so the gate
+    /// used to pass. That is reachable without anyone acting in bad faith: the
+    /// gate's own failure message says to re-bless, `bless_quality_baseline.sh`
+    /// accepts a results file with zero rows, and re-blessing from a run that
+    /// measured nothing writes `[]` and leaves a required check permanently
+    /// and silently green.
+    func test_compare_emptyBaselineFailsRatherThanComparingNothing() {
+        let report = QualityBaselineGate.compare(baseline: [], current: [])
+        XCTAssertFalse(report.passed, "an empty baseline compares nothing and must not read as a pass")
+        XCTAssertEqual(report.baselineRowCount, 0)
+    }
+
+    /// The counterpart: a populated baseline still passes on a clean run, so
+    /// the guard above refuses emptiness and nothing else.
+    func test_compare_populatedBaselinePassesOnACleanRun() {
+        let base = [entry(engine: "parakeet", fixture: "two_speakers_de", wer: 0.20)]
+        let current = [result(engine: "parakeet", fixture: "two_speakers_de", wer: 0.20)]
+        let report = QualityBaselineGate.compare(baseline: base, current: current)
+        XCTAssertTrue(report.passed, "a real comparison with no regression must still pass")
+        XCTAssertEqual(report.baselineRowCount, 1)
     }
 
     // MARK: - compare(): key discrimination + multi-metric
@@ -377,29 +397,6 @@ final class QualityBaselineGateTests: XCTestCase {
                 + "scripts/bless_quality_baseline.sh once the change is intended.\n"
                 + report.regressions.map(\.summary).joined(separator: "\n"),
         )
-    }
-
-    /// An empty baseline compares nothing and therefore proves nothing, but
-    /// `regressions.isEmpty && missing.isEmpty` is true for it, so the gate
-    /// used to pass. That is reachable without anyone acting in bad faith: the
-    /// gate's own failure message says to re-bless, `bless_quality_baseline.sh`
-    /// accepts a results file with zero rows, and re-blessing from a run that
-    /// measured nothing writes `[]` and leaves a required check permanently
-    /// and silently green.
-    func test_compare_emptyBaselineFailsRatherThanComparingNothing() {
-        let report = QualityBaselineGate.compare(baseline: [], current: [])
-        XCTAssertFalse(report.passed, "an empty baseline compares nothing and must not read as a pass")
-        XCTAssertEqual(report.baselineRowCount, 0)
-    }
-
-    /// The counterpart: a populated baseline still passes on a clean run, so
-    /// the guard above refuses emptiness and nothing else.
-    func test_compare_populatedBaselinePassesOnACleanRun() {
-        let base = [entry(engine: "parakeet", fixture: "two_speakers_de", wer: 0.20)]
-        let current = [result(engine: "parakeet", fixture: "two_speakers_de", wer: 0.20)]
-        let report = QualityBaselineGate.compare(baseline: base, current: current)
-        XCTAssertTrue(report.passed, "a real comparison with no regression must still pass")
-        XCTAssertEqual(report.baselineRowCount, 1)
     }
 
     // MARK: - Builders
