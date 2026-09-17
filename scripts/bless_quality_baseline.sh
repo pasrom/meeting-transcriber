@@ -52,6 +52,20 @@ def slim(row):
 baseline = [slim(r) for r in rows]
 baseline.sort(key=lambda r: (r["engine"], r["fixture"], r.get("modelVariant") or ""))
 
+# A run that produced no rows measured nothing, and writing its emptiness over
+# the baseline would leave the gate comparing zero rows against zero rows --
+# green forever, with nothing checked and no diff to notice. This is a
+# plausible accident rather than a contrived one: the gate's failure message
+# invites a re-bless, and a leg that died early produces exactly this file.
+if not baseline:
+    sys.stderr.write(
+        "ERROR: %s contains no usable rows, so blessing it would replace the "
+        "baseline with an empty one and leave the quality gate comparing "
+        "nothing. Find out why the run measured nothing; the baseline in git "
+        "is still the correct one.\n" % results_path
+    )
+    sys.exit(1)
+
 with open(out_path, "w") as f:
     json.dump(baseline, f, indent=2, sort_keys=True)
     f.write("\n")
