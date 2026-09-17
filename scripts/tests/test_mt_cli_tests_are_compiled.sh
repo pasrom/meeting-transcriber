@@ -4,10 +4,11 @@
 # REQUIRED check.
 #
 # `tools/mt-cli` carried 31 tests that no gate compiled. `swift build` does not
-# build a test target, and the only mention of that directory anywhere in CI was
-# scripts/lint.sh, which formats and lints the files without ever type-checking
-# them against the code they test. The tests were written, reviewed, committed
-# and counted, and could not have failed.
+# build a test target, and the only gate that touched the test FILES was
+# scripts/lint.sh, which formats and lints them without ever type-checking them
+# against the code they test. Other lanes build the package, none with
+# `swift test` or `--build-tests`. So the tests were written, reviewed,
+# committed and counted, and could not have failed.
 #
 # The general check below exists because naming one package would fix the
 # instance and not the class: the next `tools/*` package to grow a test target
@@ -27,7 +28,7 @@ source "$ROOT/scripts/lib/ci-yaml.sh"
 
 CI="$ROOT/.github/workflows/ci.yml"
 REQUIRED_JOB="test"
-STEP_NAME="mt-cli tests"
+STEP_RUN="cd tools/mt-cli && swift test"
 PASSED=0
 FAILED=0
 
@@ -53,7 +54,7 @@ while IFS= read -r manifest; do
     rel="${pkg_dir#"$ROOT"/}"
     grep -q 'testTarget' "$manifest" || continue
     found_any=1
-    if grep -q "cd $rel && swift test" "$CI"; then
+    if ci_without_comments "$CI" | grep -q "cd $rel && swift test"; then
         ok "ci.yml runs the tests of $rel"
     else
         bad "ci.yml runs the tests of $rel" "this package declares a test target that no job in ci.yml builds. \`swift build\` does not build test targets, so those tests cannot fail and cannot be trusted."
@@ -68,7 +69,10 @@ fi
 
 # 2. mt-cli specifically has to keep its test functions. A step that runs an
 #    emptied target is green and proves nothing.
-count="$(grep -h 'func test' "$ROOT"/tools/mt-cli/Tests/*.swift 2>/dev/null | wc -l | tr -d ' ')"
+# `|| true`: with no match, grep exits 1 and `set -e` kills the script here,
+# which produced an exit code with no FAIL line and no summary, indistinguishable
+# from a truncated run. Measured, with every `func test` renamed away.
+count="$( { grep -h 'func test' "$ROOT"/tools/mt-cli/Tests/*.swift 2>/dev/null || true; } | wc -l | tr -d ' ')"
 if [ "${count:-0}" -gt 0 ]; then
     ok "mt-cli has $count test functions"
 else
@@ -88,22 +92,32 @@ else
     bad "the required $REQUIRED_JOB job runs the mt-cli tests" "the \`$REQUIRED_JOB\` job does not run them. A job branch protection does not require is not equivalent: cancel-on-failure cannot retract a conclusion an already-finished required leg reported, so a late failure there leaves the pull request mergeable."
 fi
 
-# 4. And the step has to be REACHABLE. Gating it to one matrix leg is house
-#    style here, but it is a bare string match with nothing to check it against:
-#    renaming the leg makes the condition evaluate false forever, with no error
-#    and no annotation, and a check that only greps for the command still
-#    passes. Measured before this check existed.
-step_if="$(ci_step_condition "$CI" "$REQUIRED_JOB" "$STEP_NAME")"
+# 4. And the step has to EXIST and be REACHABLE. Two separate things, and
+#    conflating them is how the first version of this check let a step that had
+#    been renamed away and gated to a leg that does not exist report as fine:
+#    the reader returned the empty string both for "no condition" and for "no
+#    such step", and the caller read empty as harmless.
+#
+#    Gating to a matrix leg is house style here, but it is a bare string with
+#    nothing to check it against: rename the leg and the condition evaluates
+#    false forever, with no error and no annotation in the run. The leg is
+#    therefore compared against the job's actual matrix values, as whole
+#    strings rather than through a regex, so a leg containing a `.` cannot match
+#    a different one and a leg containing a `+` cannot make the comparison error
+#    out and be blamed on the matrix.
+step_if="$(ci_step_condition_for_run "$CI" "$REQUIRED_JOB" "$STEP_RUN")"
 if [ -z "$step_if" ]; then
+    bad "the mt-cli step exists in the \`$REQUIRED_JOB\` job" "no step in that job runs \`$STEP_RUN\`. If the command moved or changed shape, move this check with it; an absent step must never read as an unconditional one."
+elif [ "$step_if" = "__NO_CONDITION__" ]; then
     ok "the mt-cli step is unconditional"
 else
     leg="$(printf '%s' "$step_if" | sed -n "s/.*matrix\.variant[[:space:]]*==[[:space:]]*'\([^']*\)'.*/\1/p")"
     if [ -z "$leg" ]; then
         bad "the mt-cli step is reachable" "its condition is \`$step_if\`, which this test cannot resolve to a matrix leg. If the gating changed shape, teach this check the new shape rather than leaving a condition nothing verifies."
-    elif printf '%s\n' "$body" | grep -qE "variant:[[:space:]]*\[.*\b$leg\b.*\]"; then
+    elif ci_matrix_values "$CI" "$REQUIRED_JOB" variant | grep -qxF "$leg"; then
         ok "the mt-cli step's leg \`$leg\` is in the matrix"
     else
-        bad "the mt-cli step's leg \`$leg\` is in the matrix" "the step runs only on \`$leg\` and the \`$REQUIRED_JOB\` job's matrix has no such leg, so the step never runs on any leg. Renaming a leg does this silently: no error, no annotation, the tests simply stop."
+        bad "the mt-cli step's leg \`$leg\` is in the matrix" "the step runs only on \`$leg\` and the \`$REQUIRED_JOB\` job's matrix has no such leg, so the step never runs on any leg. The run itself reports no error and no annotation for that. Renaming a leg also renames the required check built from it, which blocks every pull request until branch protection is updated to match; update both and the step stops running with nothing left to say so."
     fi
 fi
 

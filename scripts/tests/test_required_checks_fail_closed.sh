@@ -42,9 +42,6 @@ EXPECTED="\${{ !cancelled() && (needs.changes.result != 'success' || needs.chang
 CI_GUARDED="lint analyze test audiotap-coverage"
 RELEASE_GUARDED="build"
 
-# The `if:` of job $2 in file $1, or the empty string. Jobs are two-space
-# indented keys; a job's body runs to the next such key, which is what keeps
-# this from reading the following job's condition.
 check_workflow() {
     local wf="$1" expected_jobs="$2"
     local file="$ROOT/.github/workflows/$wf"
