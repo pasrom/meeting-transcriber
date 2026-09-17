@@ -23,6 +23,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=../lib/ci-yaml.sh
+source "$ROOT/scripts/lib/ci-yaml.sh"
 PASSED=0
 FAILED=0
 
@@ -43,67 +45,6 @@ RELEASE_GUARDED="build"
 # The `if:` of job $2 in file $1, or the empty string. Jobs are two-space
 # indented keys; a job's body runs to the next such key, which is what keeps
 # this from reading the following job's condition.
-# Which job each line belongs to. Spliced into both awk programs below rather
-# than written twice: the two used to carry identical copies, and a tweak to the
-# job-header pattern that reached only one of them would leave the reverse check
-# quietly reading a different set of jobs than the forward one.
-JOB_TRACK='
-    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(/:$/, "", job); inneeds = 0; next }
-    /^[^[:space:]]/ { job = ""; inneeds = 0; next }
-'
-
-# The JOB-level `if:` of job $2 in file $1, or the empty string. Four spaces
-# exactly: a step's keys are deeper, and matching any indentation reads a step's
-# condition as the job's. That is not hypothetical. For the guarded jobs it is
-# harmless, because their expected condition is a hundred characters no step
-# would carry, but `sanitizer-gate` is expected to hold `always()`, which is the
-# commonest step condition in this repository. Measured: with that job's own
-# `if:` deleted and an ordinary trailing step carrying `if: always()`, the loose
-# form reported the job as guarded while a failed `changes` would skip it.
-job_condition() {
-    awk -v want="$2" "$JOB_TRACK"'
-        job == want && /^    if:/ && cond == "" {
-            cond = $0; sub(/^[[:space:]]*if:[[:space:]]*/, "", cond)
-        }
-        END { print cond }
-    ' "$1"
-}
-
-# The body of job $2 in file $1 with comment lines removed. Both halves matter:
-# a check that searches the whole file is satisfied by text belonging to another
-# job, and one that keeps comments is satisfied by a historical note describing
-# what the job used to do.
-job_body() {
-    awk -v want="$2" "$JOB_TRACK"'
-        job == want && $0 !~ /^[[:space:]]*#/ { print }
-    ' "$1"
-}
-
-# The contiguous run of comment lines immediately above the `changes:` job key.
-# Anchored there because that block is what the guarded jobs point a reader to;
-# a comment anywhere else in the file saying the right thing does not make that
-# block correct.
-changes_job_comment() {
-    awk '
-        /^  changes:[[:space:]]*$/ { printf "%s", block; exit }
-        /^[[:space:]]*#/ { block = block $0 "\n"; next }
-        { block = "" }
-    ' "$1"
-}
-
-# Every job in $1 that declares ANY dependency on `changes`, in any spelling:
-# the bare scalar, the `[changes]` list form, or a line carrying a comment.
-# Deliberately broader than the expected spelling, so a job that moves to a
-# form the scan above does not recognise still has to appear in the list below.
-jobs_depending_on_changes() {
-    awk "$JOB_TRACK"'
-        /^[[:space:]]*needs:[^#]*changes/ && job != "" { print job; inneeds = 0; next }
-        /^[[:space:]]*needs:[[:space:]]*(#.*)?$/ && job != "" { inneeds = 1; next }
-        inneeds && /^[[:space:]]*-[[:space:]]*changes[[:space:]]*(#.*)?$/ && job != "" { print job; next }
-        inneeds && $0 !~ /^[[:space:]]*-/ { inneeds = 0 }
-    ' "$1" | sort -u
-}
-
 check_workflow() {
     local wf="$1" expected_jobs="$2"
     local file="$ROOT/.github/workflows/$wf"
@@ -111,7 +52,7 @@ check_workflow() {
 
     local job cond actual
     for job in $expected_jobs; do
-        cond="$(job_condition "$file" "$job")"
+        cond="$(ci_job_condition "$file" "$job")"
         if [ -z "$cond" ]; then
             bad "$wf:$job" "this job is required to carry the fail-closed condition but has no \`if:\` at all, or no longer exists under this name. If it was renamed, rename it here too; do not drop it."
             continue
@@ -133,7 +74,7 @@ check_workflow() {
     # whole file for a comment line is satisfied by any comment anywhere, a
     # historical note at the end of the file included, while the block a reader
     # is actually sent to says something else.
-    if changes_job_comment "$file" | grep -qF "$EXPECTED"; then
+    if ci_job_comment "$file" changes | grep -qF "$EXPECTED"; then
         ok "$wf:documented-condition"
     else
         bad "$wf" "the \`changes\` job's comment no longer quotes the condition the guarded jobs carry, so the explanation a reader is sent to shows something the workflow does not do."
@@ -143,7 +84,7 @@ check_workflow() {
     # the list above is unreviewed, and a job that vanished from the file while
     # staying in the list is caught by the loop. Together these two make the
     # list and the workflow hold each other accountable.
-    actual="$(jobs_depending_on_changes "$file" | tr '\n' ' ')"
+    actual="$(ci_jobs_depending_on "$file" changes | tr '\n' ' ')"
     local expected_sorted
     expected_sorted="$(printf '%s\n' $expected_jobs | sort -u | tr '\n' ' ')"
     if [ "$actual" != "$expected_sorted" ]; then
@@ -172,14 +113,14 @@ qs="$ROOT/.github/workflows/quality-and-safety.yml"
 if [ ! -f "$qs" ]; then
     bad "quality-and-safety.yml" "workflow not found"
 else
-    gate_cond="$(job_condition "$qs" "sanitizer-gate")"
+    gate_cond="$(ci_job_condition "$qs" "sanitizer-gate")"
     if [ "$gate_cond" != "always()" ]; then
         bad "quality-and-safety.yml:sanitizer-gate" "must run on always(), or a failed \`changes\` skips the very job that reports the skipped legs: $gate_cond"
     else
         ok "quality-and-safety.yml:sanitizer-gate runs on always()"
     fi
 
-    gate_body="$(job_body "$qs" sanitizer-gate)"
+    gate_body="$(ci_job_body "$qs" sanitizer-gate)"
 
     if printf '%s\n' "$gate_body" | grep -q 'CHANGES_RESULT: ${{ needs.changes.result }}' \
         && printf '%s\n' "$gate_body" | grep -qE 'if \[ "\$CHANGES_RESULT" != "success" \]; then'; then
