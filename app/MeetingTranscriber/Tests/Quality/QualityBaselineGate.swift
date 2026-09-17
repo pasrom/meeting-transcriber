@@ -73,13 +73,33 @@ struct QualityRegression: Equatable {
 }
 
 /// Outcome of comparing a fresh `quality-results.json` against the committed
-/// baseline. Only `regressions` fail the gate; `notes` are informational
-/// (improvements, new/unbaselined rows, rows missing from the current run).
+/// baseline. `regressions` and `missing` fail the gate; `notes` are
+/// informational (improvements, new/unbaselined rows).
+///
+/// `missing` is separate from `notes` and load-bearing. A baseline row with no
+/// counterpart in the current run used to be a note, so a run that measured
+/// NOTHING passed: every row went to `notes`, `regressions` stayed empty, and
+/// the gate reported success. That is reachable without anybody breaking a
+/// measurement — the CI step selects the quality classes with a hand-written
+/// `--filter`, so renaming one of them silently drops its rows, and this gate
+/// is a required status check for moving a stable tag.
+///
+/// It is separate from `regressions` rather than folded into it because it is a
+/// different fact: a regression says a number got worse, this says there is no
+/// number. Removing a fixture on purpose is expressed by re-blessing the
+/// baseline, which drops the row.
 struct QualityGateReport: Equatable {
     let regressions: [QualityRegression]
+    /// Baseline rows the current run did not measure. A required check that
+    /// reports success for a run which measured nothing is indistinguishable
+    /// from one that never ran, so these fail the gate rather than annotate it.
+    let missing: [String]
     let notes: [String]
+    /// How many rows the comparison actually had to compare against. Zero is
+    /// not a clean comparison, it is the absence of one.
+    let baselineRowCount: Int
     var passed: Bool {
-        regressions.isEmpty
+        regressions.isEmpty && missing.isEmpty && baselineRowCount > 0
     }
 }
 
@@ -111,12 +131,17 @@ enum QualityBaselineGate {
         let baselineKeys = Set(baseline.map { Key(engine: $0.engine, fixture: $0.fixture, modelVariant: $0.modelVariant) })
 
         var regressions: [QualityRegression] = []
+        var missing: [String] = []
         var notes: [String] = []
 
         for entry in baseline {
             let key = Key(engine: entry.engine, fixture: entry.fixture, modelVariant: entry.modelVariant)
             guard let row = currentByKey[key] else {
-                notes.append("missing from current run: \(label(key))")
+                missing.append(
+                    "missing from current run: \(label(key)) — the run produced no measurement for "
+                        + "a row the baseline tracks. Either the measurement did not happen (check the "
+                        + "test filter in the CI step) or the fixture is gone, in which case re-bless.",
+                )
                 continue
             }
             let metrics: [(QualityMetric, Double?, Double?)] = [
@@ -138,7 +163,12 @@ enum QualityBaselineGate {
             notes.append("unbaselined (no baseline entry): \(label(key)) — bless to start tracking it")
         }
 
-        return QualityGateReport(regressions: regressions, notes: notes.sorted())
+        return QualityGateReport(
+            regressions: regressions,
+            missing: missing.sorted(),
+            notes: notes.sorted(),
+            baselineRowCount: baseline.count,
+        )
     }
 
     /// Decode both files and compare. Throws if either file is missing or malformed.
