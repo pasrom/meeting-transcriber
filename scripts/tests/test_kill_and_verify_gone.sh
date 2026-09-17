@@ -300,5 +300,18 @@ case "$FOLLOWING" in
 $FOLLOWING" ;;
 esac
 
+# --- the lane says WHICH recording it recovered -----------------------------
+
+# Structural, like the check above, and for the same reason. What it pins is
+# that the terminal assertion names this run's stem: without it, an orphan left
+# by an interrupted earlier run is recovered at the same launch and satisfies
+# both the queue count and the terminal check, so the lane can report success on
+# a recording it never crashed. That is the same hollowness as an unverified
+# kill, one step further down the lane.
+case "$(grep -c 'Recovered Recording (\${stem})' "$LANE" || true)" in
+    0) bad lane_names_its_own_recording "the lane does not tie the finished job to its own stem" ;;
+    *) ok lane_names_its_own_recording ;;
+esac
+
 COMPLETED=1
 echo "$PASSED checks passed"

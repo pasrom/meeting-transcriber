@@ -1795,7 +1795,19 @@ run_crash_recovery() {
     _poll_for_new_lastjob_terminal "$label"
     [ "$POLL_LJ_STATE" = "done" ] || fail "$label: recovered job state=$POLL_LJ_STATE, expected done"
 
-    log "$label: recovered recording transcribed (lastJob done) ✅"
+
+    # 9. Tie that job to THIS run's recording. Steps 7 and 8 accept any job, and
+    #    "any job" is reachable without this lane having recovered anything: an
+    #    orphan left behind by an interrupted earlier run is recovered at the
+    #    same launch, satisfies the queue count at once, and satisfies the
+    #    terminal check when it finishes. The lane would then report success on
+    #    a recording it never crashed. Recovery titles the job after the stem it
+    #    rebuilt, which is the only thing in the snapshot that names ours.
+    local want_title="Recovered Recording (${stem})" got_title
+    got_title="$(rpc /state | jq -r '.lastJob.meetingTitle // ""')"
+    [ "$got_title" = "$want_title" ] \
+        || fail "$label: the job that finished is titled '$got_title', not '$want_title'. Something reached a terminal state, but not the recording this lane crashed — most likely an orphan left by an earlier interrupted run, recovered at the same launch."
+    log "$label: recovered recording transcribed and it is ours (lastJob done) ✅"
 }
 
 # Speaker-naming CONFIRM lane. Every other lane's shared poll loop auto-skips
