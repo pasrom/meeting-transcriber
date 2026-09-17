@@ -24,6 +24,11 @@ struct MenuBarView: View {
     let onOpenSettings: () -> Void
     let onNameSpeakers: (() -> Void)?
     let onProcessFiles: () -> Void
+    /// The "Show Captions" item is the same switch as Settings → Transcription
+    /// → "Show caption overlay", one click from the menu bar for a bar that is
+    /// in the way mid-call; transcription keeps running either way.
+    let captionOverlay: CaptionOverlayItem
+    let onToggleCaptionOverlay: () -> Void
     let onDismissJob: (UUID) -> Void
     let onQuit: () -> Void
 
@@ -155,6 +160,17 @@ struct MenuBarView: View {
                 Label("Record App...", systemImage: "record.circle")
             }
             .keyboardShortcut("r")
+        }
+
+        if captionOverlay != .unavailable {
+            // A Toggle in a menu renders as a checkmark item. The binding's
+            // setter ignores the value: the source of truth is the setting the
+            // callback flips, and the next render reads it back.
+            Toggle("Show Captions", isOn: Binding(
+                get: { captionOverlay == .shown },
+                set: { _ in onToggleCaptionOverlay() },
+            ))
+            .keyboardShortcut("l")
         }
 
         if let onNameSpeakers {
@@ -319,5 +335,22 @@ struct MenuBarView: View {
         case .done: job.warnings.isEmpty ? .green : .yellow
         case .error: .red
         }
+    }
+}
+
+/// What the menu's "Show Captions" item has to say about the caption bar.
+enum CaptionOverlayItem: Equatable {
+    /// Live transcription is off, so there is no bar and no item: shown, it
+    /// would only raise the question of what it does.
+    case unavailable
+    case shown
+    case hidden
+
+    init(liveTranscriptionEnabled: Bool, overlayEnabled: Bool) {
+        guard liveTranscriptionEnabled else {
+            self = .unavailable
+            return
+        }
+        self = overlayEnabled ? .shown : .hidden
     }
 }

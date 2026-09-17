@@ -39,6 +39,8 @@ final class MenuBarViewTests: XCTestCase {
         onRecordMicrophone: @escaping () -> Void = {},
         noMic: Bool = false,
         manualRecordingPendingOrActive: Bool = false,
+        captionOverlay: CaptionOverlayItem = .unavailable,
+        onToggleCaptionOverlay: @escaping () -> Void = {},
     ) -> MenuBarView {
         MenuBarView(
             status: status,
@@ -57,6 +59,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: onNameSpeakers,
             onProcessFiles: {},
+            captionOverlay: captionOverlay,
+            onToggleCaptionOverlay: onToggleCaptionOverlay,
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -243,6 +247,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -270,6 +276,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: { called = true },
         )
@@ -297,6 +305,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: { called = true },
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -324,6 +334,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -351,6 +363,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -378,6 +392,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: { called = true },
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -441,6 +457,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -480,6 +498,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -506,6 +526,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: { called = true },
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -545,6 +567,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { dismissedID = $0 },
             onQuit: {},
         )
@@ -583,6 +607,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -623,6 +649,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -663,6 +691,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -705,6 +735,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -782,6 +814,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )
@@ -804,6 +838,49 @@ final class MenuBarViewTests: XCTestCase {
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Stop Recording"))
         XCTAssertThrowsError(try body.find(text: "Record App..."))
+    }
+
+    // MARK: - Show Captions
+
+    /// The Settings toggle already hides the bar live; this is the same switch
+    /// one click from the menu bar, for a bar that is in the way mid-call.
+    func testShowCaptionsItemReflectsTheOverlayState() throws {
+        let shown = makeView(status: makeStatus(state: .recording), captionOverlay: .shown)
+        let toggle = try shown.inspect().find(ViewType.Toggle.self) { toggle in
+            try toggle.labelView().text().string() == "Show Captions"
+        }
+        XCTAssertTrue(try toggle.isOn())
+
+        let hidden = makeView(status: makeStatus(state: .recording), captionOverlay: .hidden)
+        let off = try hidden.inspect().find(ViewType.Toggle.self) { toggle in
+            try toggle.labelView().text().string() == "Show Captions"
+        }
+        XCTAssertFalse(try off.isOn())
+    }
+
+    func testShowCaptionsItemCallsCallback() throws {
+        var called = false
+        let onToggle: () -> Void = { called = true }
+        let sut = makeView(status: makeStatus(state: .idle), captionOverlay: .shown, onToggleCaptionOverlay: onToggle)
+
+        try sut.inspect().find(ViewType.Toggle.self) { toggle in
+            try toggle.labelView().text().string() == "Show Captions"
+        }.tap()
+
+        XCTAssertTrue(called)
+    }
+
+    /// With live transcription off there is no bar to hide, so the item would
+    /// only raise the question of what it does.
+    func testShowCaptionsItemHiddenWhenLiveTranscriptionIsOff() throws {
+        let sut = makeView(status: makeStatus(state: .recording), captionOverlay: .unavailable)
+        XCTAssertThrowsError(try sut.inspect().find(text: "Show Captions"))
+    }
+
+    func testCaptionOverlayItemFollowsBothSettings() {
+        XCTAssertEqual(CaptionOverlayItem(liveTranscriptionEnabled: false, overlayEnabled: true), .unavailable)
+        XCTAssertEqual(CaptionOverlayItem(liveTranscriptionEnabled: true, overlayEnabled: true), .shown)
+        XCTAssertEqual(CaptionOverlayItem(liveTranscriptionEnabled: true, overlayEnabled: false), .hidden)
     }
 
     // MARK: - Job state labels
@@ -923,6 +1000,8 @@ final class MenuBarViewTests: XCTestCase {
             onOpenSettings: {},
             onNameSpeakers: nil,
             onProcessFiles: {},
+            captionOverlay: .unavailable,
+            onToggleCaptionOverlay: {},
             onDismissJob: { _ in },
             onQuit: {},
         )

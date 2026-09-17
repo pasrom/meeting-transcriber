@@ -251,7 +251,7 @@ Open Settings via the menu bar item or ⌘,.
 |---|---|
 | **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
-| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
+| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC; the menu bar's **Show Captions** item flips the same switch mid-call) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, protocol language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |

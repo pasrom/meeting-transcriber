@@ -152,6 +152,11 @@ struct MeetingTranscriberApp: App {
                 bringWindowToFront(id: "speaker-naming")
             } : nil,
             onProcessFiles: processAudioFiles,
+            captionOverlay: CaptionOverlayItem(
+                liveTranscriptionEnabled: appState.settings.liveTranscriptionEnabled,
+                overlayEnabled: appState.settings.liveCaptionsOverlayEnabled,
+            ),
+            onToggleCaptionOverlay: { appState.settings.liveCaptionsOverlayEnabled.toggle() },
             onDismissJob: { id in appState.pipelineQueue.removeJob(id: id) },
             onQuit: quit,
         )
