@@ -182,18 +182,6 @@ final class HelpersTests: XCTestCase {
         }
     }
 
-    func testGetDefaultInputDeviceUIDShape() {
-        if let uid = getDefaultInputDeviceUID() {
-            XCTAssertFalse(uid.isEmpty)
-        }
-    }
-
-    func testGetDefaultInputDeviceNameShape() {
-        if let name = getDefaultInputDeviceName() {
-            XCTAssertFalse(name.isEmpty)
-        }
-    }
-
     // MARK: - readCFStringAudioProperty / getProcessBundleID
 
     func testReadCFStringAudioPropertyReturnsNilForUnsupportedProperty() {

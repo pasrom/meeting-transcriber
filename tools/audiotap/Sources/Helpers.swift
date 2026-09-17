@@ -214,16 +214,6 @@ private func resolveDefaultDevice(selector: AudioObjectPropertySelector) -> Audi
     return deviceID
 }
 
-func getDefaultInputDeviceUID() -> String? {
-    resolveDefaultDevice(selector: kAudioHardwarePropertyDefaultInputDevice)
-        .flatMap { readCFStringAudioProperty($0, kAudioDevicePropertyDeviceUID) }
-}
-
-func getDefaultInputDeviceName() -> String? {
-    resolveDefaultDevice(selector: kAudioHardwarePropertyDefaultInputDevice)
-        .flatMap { readCFStringAudioProperty($0, kAudioObjectPropertyName) }
-}
-
 /// Transport type of the default output device as a short string
 /// (e.g. "Bluetooth", "USB", "Built-In", "AirPlay", "Aggregate").
 func getDefaultOutputDeviceTransportType() -> String? {
