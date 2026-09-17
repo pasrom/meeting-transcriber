@@ -20,6 +20,35 @@ jobs:
   # output empty, and the job output falls back to 'true' so the full suite
   # always runs on non-PR triggers. Skipped required checks count as success
   # in branch protection, so docs-only PRs stay mergeable.
+  # Jobs that depend on this one carry
+  #   if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+  # and that shape is load-bearing in both halves.
+  #
+  # This job's whole purpose is to notice a docs-only change, and when it does
+  # not SUCCEED every job that needs it is skipped -- while branch protection
+  # and the stable-tag ruleset both count a skipped required check as a PASS.
+  # A timeout here, an outage of the third-party filter action, or an API
+  # hiccup would therefore turn the required checks green without one of them
+  # having run, and a longer timeout only narrows that window.
+  #
+  # The mechanism is not that the outputs go empty. MEASURED on a throwaway
+  # branch, with this job's step exiting 1: `outputs.code` came back as 'true'
+  # through the fallback below, so `needs.changes.outputs.code == 'true'` was
+  # TRUE, and the dependent job was skipped anyway. A job whose `needs` failed
+  # is skipped before its condition decides anything, unless that condition
+  # calls a status function. That is what `!cancelled()` is for, and it is the
+  # half without which nothing else in the condition can be reached.
+  #
+  # The other half, `result != 'success'`, covers the case the measurement
+  # above does not produce: a job that dies before finalising its outputs, on a
+  # timeout, a cancellation or an infrastructure fault, where `code` really is
+  # empty and the fallback never ran. Both halves are needed.
+  #
+  # `always()` would also reach the condition, and would additionally keep the
+  # expensive macOS jobs running after someone cancels the run.
+  #
+  # A genuine docs-only PR still skips, which is the one case this job exists
+  # for. scripts/tests/test_required_checks_fail_closed.sh pins the condition.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -85,7 +114,8 @@ jobs:
 
   lint:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Fail closed; see the `changes` job for why this exact condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
@@ -130,7 +160,8 @@ jobs:
 
   analyze:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Fail closed; see the `changes` job for why this exact condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -189,7 +220,8 @@ jobs:
 
   test:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Fail closed; see the `changes` job for why this exact condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: macos-26
     # 25 min job-timeout = 20 min setup (cold cache) + ~5 min margin. The
     # `Swift tests` step below has its own 18 min step-timeout so a hang
@@ -264,7 +296,8 @@ jobs:
   # so a single upload + `carryforward` in `.codecov.yml` is sufficient.
   audiotap-coverage:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # Fail closed; see the `changes` job for why this exact condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
