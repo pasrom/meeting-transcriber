@@ -281,6 +281,24 @@ jobs:
       - name: Swift tests
         timeout-minutes: 18
         run: cd app/MeetingTranscriber && swift test --parallel --enable-code-coverage --skip ModelPreloadTests ${{ matrix.swift-flags }}
+      # `tools/mt-cli` has its own test target, and until now nothing built it:
+      # `swift build` skips test targets, and the only gate that touched the
+      # test FILES was scripts/lint.sh, which formats and lints them without
+      # type-checking them against the code they test. The e2e lanes build the
+      # package, none of them with `swift test` or `--build-tests`. So its tests
+      # could not have failed.
+      #
+      # They run here rather than in a job of their own because this one is a
+      # required check. `audiotap-coverage` is the obvious template and is not
+      # required: it relies on cancel-on-failure, which only reaches jobs still
+      # running, so a late failure leaves already-successful required checks
+      # green and the pull request mergeable. Homebrew leg only: mt-cli is a
+      # development client with no App Store variant, so the appstore leg would
+      # repeat the identical run. About 13 s cold, 31 tests.
+      - name: mt-cli tests
+        if: matrix.variant == 'homebrew'
+        timeout-minutes: 5
+        run: cd tools/mt-cli && swift test --parallel
       # Skipping on test failure is intentional — we never want a stale
       # coverage snapshot uploaded as if it were green.
       - uses: ./.github/actions/export-lcov
