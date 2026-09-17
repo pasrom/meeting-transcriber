@@ -51,10 +51,12 @@ jobs:
   # for. scripts/tests/test_required_checks_fail_closed.sh pins the condition.
   changes:
     runs-on: ubuntu-latest
-    # Seconds of work, but the budget has to cover a checkout and a
-    # third-party action, and missing the deadline now costs a full run of
-    # every dependent job rather than a skip. Two minutes, the same slack
-    # and the same reason as the `changes` job in quality-and-safety.yml.
+    # Seconds of work, but the budget has to cover a checkout and, here, a
+    # third-party action; one minute was the tightest deadline in either file.
+    # Two minutes is the slack the `changes` job in quality-and-safety.yml
+    # carries, though for the opposite reason: a timeout there turns its gate
+    # RED, while a timeout here is now merely expensive, since every dependent
+    # job runs on a pull request that may have touched only documentation.
     timeout-minutes: 2
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
