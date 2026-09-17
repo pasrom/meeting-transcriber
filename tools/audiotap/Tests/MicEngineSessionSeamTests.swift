@@ -33,6 +33,17 @@ final class MicEngineSessionSeamTests: XCTestCase {
         var format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 2)!
         var hardwareFormatError: (any Error)?
 
+        /// What the engine's own input unit would report. The read counter is
+        /// the point: the diagnostics must ask the session, because only it
+        /// knows which device the unit ended up bound to.
+        var reportedInputDevice: MicInputDevice?
+        private(set) var boundInputDeviceReads = 0
+
+        var boundInputDevice: MicInputDevice? {
+            boundInputDeviceReads += 1
+            return reportedInputDevice
+        }
+
         func hardwareFormat(deviceUID: String?) throws -> AVAudioFormat {
             calls.append(.hardwareFormat(deviceUID: deviceUID))
             if let hardwareFormatError { throw hardwareFormatError }
@@ -59,10 +70,14 @@ final class MicEngineSessionSeamTests: XCTestCase {
         }
     }
 
-    private func makeHandler(_ session: FakeSession) -> (MicCaptureHandler, URL) {
+    private func makeHandler(
+        _ session: FakeSession, debugLogging: Bool = false,
+    ) -> (MicCaptureHandler, URL) {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("seam-\(UUID().uuidString).wav")
-        let handler = MicCaptureHandler(outputURL: url) { session }
+        let handler = MicCaptureHandler(
+            outputURL: url, debugLogging: debugLogging,
+        ) { session }
         return (handler, url)
     }
 
@@ -115,6 +130,50 @@ final class MicEngineSessionSeamTests: XCTestCase {
         XCTAssertThrowsError(try handler.start())
         XCTAssertEqual(session.calls, [.hardwareFormat(deviceUID: nil)])
         XCTAssertFalse(session.tapInstalled)
+    }
+
+    // MARK: - Which microphone the diagnostics name (issue #724)
+
+    /// The debug line used to resolve `kAudioHardwarePropertyDefaultInputDevice`
+    /// itself, so it reported the system default no matter which device the
+    /// engine had been pointed at. With a device pinned it therefore named a
+    /// microphone that was not recording, which is what made the field report
+    /// unreadable. The identity has to come from the session, which is the only
+    /// thing that knows whether a pin took.
+    ///
+    /// What this proves and what it does not: the handler asks the session.
+    /// That the device then reaches the emitted text is proved separately, on
+    /// `micInputDeviceLogLine` in `MicDeviceDiagnosticsTests`. The one line
+    /// joining them, passing this value into that function, is covered by
+    /// neither, because os_log output is not readable from in-process xctest.
+    func testTheDebugDiagnosticsAskTheSessionWhichDeviceIsBound() throws {
+        let session = FakeSession()
+        session.reportedInputDevice = MicInputDevice(
+            uid: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone",
+        )
+        let (handler, url) = makeHandler(session, debugLogging: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try handler.start()
+        handler.stop()
+
+        XCTAssertEqual(
+            session.boundInputDeviceReads, 1,
+            "the diagnostics must read the bound device off the session, once per start",
+        )
+    }
+
+    /// The read costs a CoreAudio round trip on the real session, and the
+    /// toggle exists so nothing is spent when it is off.
+    func testNoDeviceIsReadWhenDebugLoggingIsOff() throws {
+        let session = FakeSession()
+        let (handler, url) = makeHandler(session)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try handler.start()
+        handler.stop()
+
+        XCTAssertEqual(session.boundInputDeviceReads, 0)
     }
 
     // MARK: - Converter ownership (issue #589)
