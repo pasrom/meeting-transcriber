@@ -80,7 +80,7 @@ struct QualityRegression: Equatable {
 /// counterpart in the current run used to be a note, so a run that measured
 /// NOTHING passed: every row went to `notes`, `regressions` stayed empty, and
 /// the gate reported success. That is reachable without anybody breaking a
-/// measurement — the CI step selects the quality classes with a hand-written
+/// measurement. The CI step selects the quality classes with a hand-written
 /// `--filter`, so renaming one of them silently drops its rows, and this gate
 /// is a required status check for moving a stable tag.
 ///
@@ -138,7 +138,7 @@ enum QualityBaselineGate {
             let key = Key(engine: entry.engine, fixture: entry.fixture, modelVariant: entry.modelVariant)
             guard let row = currentByKey[key] else {
                 missing.append(
-                    "missing from current run: \(label(key)) — the run produced no measurement for "
+                    "missing from current run: \(label(key)); the run produced no measurement for "
                         + "a row the baseline tracks. Either the measurement did not happen (check the "
                         + "test filter in the CI step) or the fixture is gone, in which case re-bless.",
                 )

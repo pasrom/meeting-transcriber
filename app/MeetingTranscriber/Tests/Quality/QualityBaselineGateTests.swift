@@ -42,20 +42,6 @@ final class QualityBaselineGateTests: XCTestCase {
     /// the quality classes with a hand-written `--filter`, so renaming one of
     /// them drops its rows silently, and this gate is a required status check
     /// for moving a stable tag.
-    func test_compare_emptyRunFailsRatherThanPassingQuietly() {
-        let report = QualityBaselineGate.compare(
-            baseline: [
-                entry(engine: "whisperKit", fixture: "two", wer: 0.20),
-                entry(engine: "parakeet", fixture: "two", wer: 0.25),
-            ],
-            current: [],
-        )
-
-        XCTAssertFalse(report.passed, "a run that measured nothing must not pass")
-        XCTAssertTrue(report.regressions.isEmpty, "nothing got worse; there is simply no number")
-        XCTAssertEqual(report.missing.count, 2)
-    }
-
     /// One row gone while the rest are fine still fails, and says which.
     func test_compare_singleMissingRowFailsAndNamesIt() {
         let report = QualityBaselineGate.compare(
@@ -183,16 +169,27 @@ final class QualityBaselineGateTests: XCTestCase {
     /// and this gate is a required status check for moving a stable tag.
     func test_compare_missingFromCurrentRunFailsTheGate() {
         let report = QualityBaselineGate.compare(
-            baseline: [entry(engine: "whisperKit", fixture: "two", wer: 0.20)],
+            baseline: [
+                entry(engine: "whisperKit", fixture: "two", wer: 0.20),
+                entry(engine: "parakeet", fixture: "two", wer: 0.25),
+            ],
             current: [],
         )
 
-        XCTAssertFalse(report.passed, "a baseline row with no measurement must not pass")
+        XCTAssertFalse(report.passed, "a run that measured nothing must not pass")
+        XCTAssertTrue(report.regressions.isEmpty, "nothing got worse; there is no number at all")
+        // Two rows rather than one, and the count asserted rather than only
+        // non-emptiness: a report that names the first missing row and stops
+        // would satisfy every other assertion here.
+        XCTAssertEqual(report.missing.count, 2)
         XCTAssertTrue(
             report.missing.contains { $0.contains("whisperKit") },
-            "expected the missing row to name the engine, got: \(report.missing)",
+            "expected the missing rows to name each engine, got: \(report.missing)",
         )
-        XCTAssertTrue(report.regressions.isEmpty, "nothing got worse; there is no number at all")
+        XCTAssertTrue(
+            report.missing.contains { $0.contains("parakeet") },
+            "expected the missing rows to name each engine, got: \(report.missing)",
+        )
     }
 
     // MARK: - compare(): key discrimination + multi-metric

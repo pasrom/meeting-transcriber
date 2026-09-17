@@ -1,30 +1,25 @@
 #!/bin/bash
 # Regression test: a required check may not pass by being skipped.
 #
-# Four checks are required to merge into main and nine to move a stable tag.
-# All four of the first, and those same four among the nine, live in ci.yml and
-# depend on `changes`, a one-minute job whose only purpose is to notice a
-# docs-only pull request. When `changes` does not SUCCEED, its outputs are empty
-# and a condition of the form `needs.changes.outputs.code == 'true'` is false,
-# so the job is skipped -- and both branch protection and the tag ruleset count
-# a skipped required check as a pass.
+# The reasoning lives next to the `changes` job in ci.yml and release.yml, where
+# a reader of those files finds it. In short: a job whose `changes` dependency
+# did not succeed is skipped, and a skipped required check counts as a pass.
 #
-# So a timeout, an outage of the third-party filter action, or a GitHub API
-# hiccup in that one minute turns those required checks green without one of
-# them having run. The remedy is not a longer timeout, which only narrows the
-# window: the condition has to tell "the filter said no code" apart from "the
-# filter never answered", and run the full suite for the second.
-#
-# `!cancelled()` is load-bearing and not decoration. A job whose `needs` failed
-# is skipped no matter what its `if` says, UNLESS that `if` calls a status
-# function; without it the fail-closed arm below could never be reached.
+# What is specific to this test, and the reason it looks the way it does:
 #
 # The condition is compared BYTE FOR BYTE against the one expected form rather
 # than searched for tokens. Token matching cannot do this job: the shape
-# `!cancelled() && needs.changes.result == 'success' && ...` contains both
-# `needs.changes.result` and `cancelled()` and is exactly the hole this test
-# exists to prevent. All guarded jobs carry the identical line, so the strict
+# `!cancelled() && needs.changes.result == 'success' && ...` contains every
+# token the real condition is made of and is exactly the hole this test exists
+# to prevent. All guarded jobs carry the identical line, so the strict
 # comparison costs nothing and is the only form that refuses the near-miss.
+#
+# The jobs are named in a written list rather than discovered. A parser that
+# checks whatever it recognises reports success after a job leaves its view:
+# spelling the dependency `needs: [changes]`, or putting a comment after it,
+# made an earlier version inspect four jobs where five depend on `changes`.
+# The list and the workflow then hold each other accountable in both
+# directions, which is what the job-list check below is for.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -47,12 +42,17 @@ RELEASE_GUARDED="build"
 # The `if:` of job $2 in file $1, or the empty string. Jobs are two-space
 # indented keys; a job's body runs to the next such key, which is what keeps
 # this from reading the following job's condition.
+# Which job each line belongs to. Spliced into both awk programs below rather
+# than written twice: the two used to carry identical copies, and a tweak to the
+# job-header pattern that reached only one of them would leave the reverse check
+# quietly reading a different set of jobs than the forward one.
+JOB_TRACK='
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(/:$/, "", job); next }
+    /^[^[:space:]]/ { job = ""; next }
+'
+
 job_condition() {
-    awk -v want="$2" '
-        /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-            job = $1; sub(/:$/, "", job); next
-        }
-        /^[^[:space:]]/ { job = ""; next }
+    awk -v want="$2" "$JOB_TRACK"'
         job == want && /^[[:space:]]*if:/ && cond == "" {
             cond = $0; sub(/^[[:space:]]*if:[[:space:]]*/, "", cond)
         }
@@ -65,11 +65,7 @@ job_condition() {
 # Deliberately broader than the expected spelling, so a job that moves to a
 # form the scan above does not recognise still has to appear in the list below.
 jobs_depending_on_changes() {
-    awk '
-        /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
-            job = $1; sub(/:$/, "", job); next
-        }
-        /^[^[:space:]]/ { job = ""; next }
+    awk "$JOB_TRACK"'
         /^[[:space:]]*needs:[^#]*changes/ && job != "" { print job }
     ' "$1" | sort -u
 }
@@ -94,6 +90,19 @@ check_workflow() {
         fi
         ok "$wf:$job"
     done
+
+    # The `changes` job's comment quotes the condition verbatim, as the one
+    # place a reader is sent to. A quoted example that drifts from the thing it
+    # documents is worse than none, and nothing else would notice: the drift
+    # would be in a comment, where no workflow run and no diff review looks.
+    # Match a COMMENT line carrying it, not merely the string somewhere in the
+    # file: the guarded jobs contain it too, so a plain search is satisfied by
+    # them and would pass over a comment that had drifted to something else.
+    if grep -E '^[[:space:]]*#' "$file" | grep -qF "$EXPECTED"; then
+        ok "$wf:documented-condition"
+    else
+        bad "$wf" "the \`changes\` job's comment no longer quotes the condition the guarded jobs carry, so the explanation a reader is sent to shows something the workflow does not do."
+    fi
 
     # The reverse direction: a NEW job that depends on `changes` and is not in
     # the list above is unreviewed, and a job that vanished from the file while
