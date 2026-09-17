@@ -43,6 +43,18 @@ protocol MicEngineSessionProviding: AnyObject {
     /// This is the call that can wedge. Everything after it is cheap.
     func hardwareFormat(deviceUID: String?) throws -> AVAudioFormat
 
+    /// The microphone this recording is coming from, as of the last
+    /// `hardwareFormat`. Nil before then, and when no device could be
+    /// identified at all.
+    ///
+    /// The diagnostics need it from here rather than from
+    /// `kAudioHardwarePropertyDefaultInputDevice`, because a pinned device and
+    /// the system default are not the same microphone and the log named the
+    /// wrong one (issue #724). What it is *not* is the raw device the unit is
+    /// bound to: see the implementation for why that answer is unusable when
+    /// nothing is pinned.
+    var boundInputDevice: MicInputDevice? { get }
+
     /// Attach the capture tap. Raises from AVFAudio are bridged to throws.
     func installTap(format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock) throws
 
@@ -53,6 +65,16 @@ protocol MicEngineSessionProviding: AnyObject {
     func teardown()
 }
 
+extension MicEngineSessionProviding {
+    /// A session that does not track its device reports nothing, which the
+    /// diagnostics render exactly as CoreAudio declining to answer. Only the
+    /// real session can know, and only the diagnostics ask, so a fake that is
+    /// about something else does not have to care.
+    var boundInputDevice: MicInputDevice? {
+        nil
+    }
+}
+
 /// The real implementation, wrapping one `AVAudioEngine`.
 final class MicEngineSession: MicEngineSessionProviding {
     private var engine = AVAudioEngine()
@@ -60,8 +82,51 @@ final class MicEngineSession: MicEngineSessionProviding {
 
     private(set) var tapInstalled = false
 
+    /// What came of the last `hardwareFormat`'s device pin, including what the
+    /// unit answered afterwards. Both the log line and `boundInputDevice` are
+    /// derived from it, so they cannot disagree.
+    ///
+    /// The read it carries is taken eagerly, in `hardwareFormat`, even though
+    /// only the diagnostics consume it. That costs one property read per engine
+    /// start. Reading it inside the getter instead would have the getter reach
+    /// back into the engine at a time nothing here controls, including after
+    /// `teardown` has stopped and reset it, and one cheap read on a unit that
+    /// is known to be up buys that question away.
+    private var pinOutcome: MicDevicePinOutcome = .notRequested
+
     var notificationObject: AnyObject {
         engine
+    }
+
+    /// The pinned device when the pin took, the system default input otherwise.
+    ///
+    /// Deliberately not "whatever device the unit reports". Measured on macOS
+    /// 26: with nothing pinned, `AVAudioEngine` does not bind its input unit to
+    /// the microphone at all but to a private aggregate of its own, named
+    /// `CADefaultDeviceAggregate-<n>-0`, which follows the system default
+    /// input. Naming that aggregate answers nothing a reader can act on, and
+    /// the question these diagnostics exist for is exactly "built-in or
+    /// headset". So when nothing was pinned, or a pin did not take, the honest
+    /// answer is the device the aggregate is following, which is what this used
+    /// to report and what it still reports there.
+    var boundInputDevice: MicInputDevice? {
+        pinOutcome
+            .deviceToReport(systemDefault: Self.systemDefaultInputDeviceID())
+            .map(Self.describe)
+    }
+
+    private static func describe(_ deviceID: AudioDeviceID) -> MicInputDevice {
+        MicInputDevice(
+            uid: readCFStringAudioProperty(deviceID, kAudioDevicePropertyDeviceUID),
+            name: readCFStringAudioProperty(deviceID, kAudioObjectPropertyName),
+        )
+    }
+
+    private static func systemDefaultInputDeviceID() -> AudioDeviceID? {
+        guard case let .value(deviceID) = defaultDeviceReading(
+            selector: kAudioHardwarePropertyDefaultInputDevice,
+        ), deviceID != kAudioObjectUnknown else { return nil }
+        return deviceID
     }
 
     init(removeInputTap: @escaping (AVAudioEngine) -> Void = { $0.inputNode.removeTap(onBus: 0) }) {
@@ -77,23 +142,58 @@ final class MicEngineSession: MicEngineSessionProviding {
 
         let inputNode = engine.inputNode
 
-        if let uid = deviceUID {
-            var deviceID = Self.deviceIDForUID(uid)
-            if deviceID != kAudioObjectUnknown {
-                let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
-                AudioUnitSetProperty(
-                    audioUnit,
-                    kAudioOutputUnitProperty_CurrentDevice,
-                    kAudioUnitScope_Global, 0,
-                    &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
-                )
-                logger.info("Mic device set: \(uid) (ID \(deviceID))")
-            } else {
-                logger.warning("Unknown mic device UID '\(uid)', using default")
-            }
+        pinOutcome = pin(deviceUID: deviceUID, on: inputNode)
+        if let line = pinOutcome.logLine {
+            // A pin that was refused, or accepted and then not adopted, means
+            // the recording is running on a microphone the user did not choose.
+            // That is a finding, not a note, and it used to be logged as a
+            // success either way. The level comes from the outcome so the three
+            // ordinary-to-serious steps stay where they are decided and tested.
+            //
+            // Public is safe only because `logLine` carries no device UID: this
+            // line is unconditional and lands in the exported diagnostics. See
+            // the note on `logLine`.
+            logger.log(level: pinOutcome.level, "\(line, privacy: .public)")
         }
 
         return inputNode.outputFormat(forBus: 0)
+    }
+
+    /// Point the unit at the configured device, then ask the unit where it
+    /// actually is. Asking is the point: `AudioUnitSetProperty` returning
+    /// `noErr` says the call was accepted, not that the unit moved, and this is
+    /// the one place that difference can still be seen.
+    private func pin(deviceUID: String?, on inputNode: AVAudioInputNode) -> MicDevicePinOutcome {
+        guard let uid = deviceUID else { return .notRequested }
+        var deviceID = Self.deviceIDForUID(uid)
+        guard deviceID != kAudioObjectUnknown else { return .unresolvedUID(uid) }
+        let audioUnit = inputNode.audioUnit! // swiftlint:disable:this force_unwrapping
+        let status = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0,
+            &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size),
+        )
+        return .set(
+            uid: uid, requested: deviceID, status: status,
+            actual: Self.currentDeviceID(of: inputNode),
+        )
+    }
+
+    /// The device the unit is currently on. Optional rather than force-unwrapped
+    /// because a diagnostic must never be the thing that crashes a recording.
+    private static func currentDeviceID(of inputNode: AVAudioInputNode) -> AudioDeviceID? {
+        guard let audioUnit = inputNode.audioUnit else { return nil }
+        var deviceID = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioUnitGetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0,
+            &deviceID, &size,
+        )
+        guard status == noErr, deviceID != kAudioObjectUnknown else { return nil }
+        return deviceID
     }
 
     func installTap(format: AVAudioFormat, block: @escaping AVAudioNodeTapBlock) throws {
@@ -122,6 +222,9 @@ final class MicEngineSession: MicEngineSessionProviding {
         }
         engine.stop()
         engine.reset()
+        // A session is one engine's lifetime, so the device it was on stops
+        // being an answer here rather than becoming a stale one.
+        pinOutcome = .notRequested
 
         // Hold a strong reference to the engine for a grace period so any
         // in-flight `AVAudioIOUnit::IOUnitPropertyListener` blocks that

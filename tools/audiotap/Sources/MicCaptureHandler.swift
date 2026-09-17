@@ -216,11 +216,15 @@ public class MicCaptureHandler: @unchecked Sendable {
         let tapFormat = try validatedTapFormat(for: hwFormat)
 
         if debugLogging {
-            let inUID = getDefaultInputDeviceUID() ?? "?"
-            let inName = getDefaultInputDeviceName() ?? "?"
-            logger.info(
-                "[debug] Mic input device: name=\(inName, privacy: .public) uid=\(inUID, privacy: .public) hwRate=\(hwFormat.sampleRate, privacy: .public) hwChannels=\(hwFormat.channelCount, privacy: .public)",
+            // The microphone the session says this recording comes from, which
+            // with a device configured is not the system default this line used
+            // to name (issue #724).
+            let line = micInputDeviceLogLine(
+                device: session.boundInputDevice,
+                hardwareRate: hwFormat.sampleRate,
+                hardwareChannels: hwFormat.channelCount,
             )
+            logger.info("\(line, privacy: .public)")
         }
 
         logger.info("Mic tap format: \(tapFormat.sampleRate) Hz, \(tapFormat.channelCount)ch")
