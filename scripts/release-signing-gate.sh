@@ -116,11 +116,48 @@ cmd_verify() {
 
     case "$verdict" in
         developer-id)
+            # The certificate is right. One question is left, and it is the one
+            # nothing in this lane asked before: does the embedded provisioning
+            # profile authorise THIS certificate? A profile lists specific
+            # certificates, and macOS refuses to launch a bundle carrying the
+            # restricted entitlement under one the profile does not list.
+            #
+            # The two expire on unrelated schedules, which is what makes this a
+            # trap rather than a theoretical gap: measured in September 2026,
+            # the certificate runs out on 2027-02-01 and the profile on
+            # 2044-07-24. Renew the certificate,
+            # rotate its secret, leave the profile alone because nothing says
+            # otherwise, and every check here still passes while the release
+            # starts for nobody.
+            local profile="$bundle/Contents/embedded.provisionprofile" authorised leaf
+            leaf="$(bundle_signing_cert_sha1 "$bundle")"
+            if [ -f "$profile" ]; then
+                if ! authorised="$(profile_authorised_leaves "$profile")"; then
+                    echo "::error::$bundle embeds a provisioning profile that cannot be read." >&2
+                    echo "  Without reading it there is no way to tell whether it authorises the" >&2
+                    echo "  certificate the bundle is signed with, and an unauthorised pair does" >&2
+                    echo "  not launch at all." >&2
+                    return 1
+                fi
+                if [ "$(leaf_is_authorised "$leaf" "$authorised")" != yes ]; then
+                    echo "::error::$bundle is signed by $leaf, which the embedded profile does not authorise." >&2
+                    echo "  The profile authorises:" >&2
+                    printf '%s\n' "$authorised" | sed 's|^|    |' >&2
+                    echo "  macOS refuses to launch a bundle carrying a restricted entitlement" >&2
+                    echo "  under a certificate its profile does not list, so this release would" >&2
+                    echo "  install and then fail to start for everyone." >&2
+                    echo "  This is what renewing the signing certificate without re-exporting" >&2
+                    echo "  the provisioning profile looks like: both secrets are present and" >&2
+                    echo "  every other check passes." >&2
+                    return 1
+                fi
+            fi
             # Said out loud. A check that passes silently is indistinguishable
             # in a log from a check that never ran.
             local authority
             authority="$(printf '%s\n' "$output" | grep -m1 '^Authority=' || true)"
             echo "Release signature accepted: ${authority#Authority=}"
+            [ -f "$profile" ] && echo "  and the embedded provisioning profile authorises it"
             return 0 ;;
         adhoc)
             echo "::error::$bundle is ad-hoc signed and must not be published." >&2

@@ -27,6 +27,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GATE="$REPO_ROOT/scripts/release-signing-gate.sh"
 FAILED=0
 
+# Two arbitrary, distinct SHA-1-shaped values for the pairing decision. They
+# stand for "the certificate the bundle carries" and "one the profile lists
+# instead"; nothing here needs them to be real fingerprints.
+LEAF_A="1234567890ABCDEF1234567890ABCDEF12345678"
+LEAF_B="ABCDEF1234567890ABCDEF1234567890ABCDEF12"
+
 run_test() {
     local name="$1"
     printf '%s ... ' "$name"
@@ -293,6 +299,139 @@ test_a_broken_signature_seal_is_refused() {
     return "$rc"
 }
 
+# The trap this gate exists to close, and the one no step in the release lane
+# asked about before: a provisioning profile authorises SPECIFIC certificates,
+# and macOS refuses to launch a bundle carrying the restricted entitlement under
+# one the profile does not list. The two halves expire on unrelated schedules,
+# so renewing the certificate without re-exporting the profile produces a
+# release where both secrets are present, every other check passes, and the app
+# starts for nobody.
+#
+# Built with a real certificate from `openssl` and a real plist read by `plutil`.
+# Only `security cms -D` is stubbed, because decoding the profile's CMS wrapper
+# is the one step that needs Apple's tooling and none of the logic under test.
+_profile_fixture() {
+    local dir="$1" subject="$2"
+    mkdir -p "$dir/bin"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+        -keyout "$dir/key.pem" -out "$dir/cert.pem" -days 2 -subj "/CN=$subject" \
+        >/dev/null 2>&1
+    openssl x509 -in "$dir/cert.pem" -outform DER -out "$dir/cert.der" 2>/dev/null
+    {
+        printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+        printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        printf '<plist version="1.0"><dict><key>DeveloperCertificates</key><array><data>\n'
+        base64 < "$dir/cert.der"
+        printf '</data></array></dict></plist>\n'
+    } > "$dir/profile.plist"
+    printf '#!/usr/bin/env bash\ncase "${1:-}" in cms) cat "%s" ;; esac\nexit 0\n' \
+        "$dir/profile.plist" > "$dir/bin/security"
+    chmod +x "$dir/bin/security"
+    # The SHA-1 the fixture authorises, for the test to compare against.
+    openssl x509 -in "$dir/cert.pem" -noout -fingerprint -sha1 2>/dev/null \
+        | sed 's/^.*=//' | tr -d ':' | tr '[:lower:]' '[:upper:]'
+}
+
+test_the_authorised_leaves_are_read_from_the_profile() {
+    local dir rc=0 want got; dir="$TMP/prof"
+    want="$(_profile_fixture "$dir" "Developer ID Application: Fixture")"
+    got="$(PATH="$dir/bin:$PATH" bash -c '
+        source "'"$REPO_ROOT"'/scripts/lib/signing.sh"
+        profile_authorised_leaves "'"$dir"'/profile.plist"')"
+    _expect authorised_leaves "$want" "$got" || rc=1
+    return "$rc"
+}
+
+test_the_pairing_decision_is_exact() {
+    local rc=0 out
+    out="$(A="$LEAF_A" B="$LEAF_B" SIGNING_LIB="$REPO_ROOT/scripts/lib/signing.sh" bash -c '
+        source "$SIGNING_LIB"
+        both="$(printf "%s\n%s" "$B" "$A")"
+        printf "%s %s %s %s" \
+            "$(leaf_is_authorised "$A" "$A")" \
+            "$(leaf_is_authorised "$A" "$B")" \
+            "$(leaf_is_authorised "$A" "$both")" \
+            "$(leaf_is_authorised "" "$A")"')"
+    # match, mismatch, one of several, and an ad-hoc bundle whose empty leaf
+    # must never read as authorised: absence of a certificate is not permission.
+    _expect pairing "yes no yes no" "$out" || rc=1
+    return "$rc"
+}
+
+# A profile that exists and cannot be decoded must refuse, not shrug. Reading
+# nothing and reading "authorises nothing" are the same value and opposite
+# facts, which is the shape of hollowness this whole change is about.
+test_an_unreadable_profile_is_refused_not_ignored() {
+    local rc=0 status; local dir="$TMP/unreadable"
+    mkdir -p "$dir/bin"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/bin/security"
+    chmod +x "$dir/bin/security"
+    : > "$dir/profile.plist"
+    status="$(PATH="$dir/bin:$PATH" bash -c '
+        source "'"$REPO_ROOT"'/scripts/lib/signing.sh"
+        profile_authorised_leaves "'"$dir"'/profile.plist" >/dev/null; printf "%s" "$?"')"
+    _expect unreadable 1 "$status" || rc=1
+    # And a profile that is simply not there is not an error: there is nothing
+    # to pair against, which is a different answer.
+    status="$(bash -c '
+        source "'"$REPO_ROOT"'/scripts/lib/signing.sh"
+        profile_authorised_leaves "'"$dir"'/absent.plist" >/dev/null; printf "%s" "$?"')"
+    _expect absent_profile 0 "$status" || rc=1
+    return "$rc"
+}
+
+# The pieces above are exercised separately; this drives `verify` itself, which
+# is where the pairing has to be wired for any of it to matter. The bundle
+# reports one certificate and the embedded profile authorises a different one,
+# which is exactly the state a renewed certificate and a stale profile produce.
+#
+# `codesign` is stubbed three ways, because the real one needs a keychain: the
+# description, the certificate extraction (it writes codesign0 into the current
+# directory, which is what bundle_signing_cert_sha1 reads), and the seal check.
+test_verify_refuses_a_certificate_the_profile_does_not_authorise() {
+    local dir rc=0 status authorised; dir="$TMP/pairwire"
+    authorised="$(_profile_fixture "$dir" "Developer ID Application: Other")"
+    mkdir -p "$dir/App.app/Contents"
+    : > "$dir/App.app/Contents/embedded.provisionprofile"
+    # A second, unrelated certificate: the one the bundle is signed with.
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+        -keyout "$dir/leafkey.pem" -out "$dir/leaf.pem" -days 2 \
+        -subj "/CN=Developer ID Application: Renewed" >/dev/null 2>&1
+    openssl x509 -in "$dir/leaf.pem" -outform DER -out "$dir/leaf.der" 2>/dev/null
+    cat > "$dir/bin/codesign" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do
+    case "\$a" in
+        --extract-certificates) cp "$dir/leaf.der" ./codesign0; exit 0 ;;
+        --verify) exit 0 ;;
+    esac
+done
+cat <<'OUT'
+$DEVID_OUTPUT
+OUT
+exit 0
+STUB
+    chmod +x "$dir/bin/codesign"
+    PATH="$dir/bin:$PATH" bash "$GATE" verify "$dir/App.app" > "$TMP/pair.out" 2>&1
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        echo "  a certificate the profile does not authorise passed the release check" >&2
+        rc=1
+    fi
+    case "$(cat "$TMP/pair.out")" in
+        *"does not authorise"*) ;;
+        *) echo "  refused, but not on the pairing:" >&2
+           sed 's|^|    |' "$TMP/pair.out" >&2; rc=1 ;;
+    esac
+    # The message has to name the certificate the profile DOES authorise, or the
+    # person renewing a certificate cannot tell which half is stale.
+    case "$(cat "$TMP/pair.out")" in
+        *"$authorised"*) ;;
+        *) echo "  the refusal does not name the authorised certificate" >&2; rc=1 ;;
+    esac
+    return "$rc"
+}
+
 # --- the workflow has no way around the gate --------------------------------
 
 # Structural, and stated as such: a workflow cannot be executed from here. What
@@ -399,10 +538,32 @@ test_the_release_workflow_does_not_decide_the_mode_itself() {
             rc=1 ;;
     esac
 
+    # `set +e` anywhere in the build step disarms the refusal just as surely as
+    # a `||` on the call, and it can sit lines away from it.
+    case "$build_step" in
+        *"set +e"*)
+            echo "  the build step turns errexit off, so the preflight's refusal" >&2
+            echo "  would no longer stop it" >&2
+            rc=1 ;;
+    esac
+
     for name in "Verify the release carries the time-sensitive entitlement" \
                 "Verify the release is signed by a Developer ID"; do
         _assert_gate_step_is_binding "$wf" "$name" || rc=1
     done
+
+    # The Developer-ID step is one command. Pinning it verbatim kills every way
+    # of neutering it at once, which a list of forbidden spellings cannot: the
+    # list is a blacklist, and the next neutering is always the one not on it.
+    local verify_cmd
+    verify_cmd="$(awk '/^      - name: Verify the release is signed by a Developer ID$/{f=1; next}
+                       f && /^      - name: /{exit}
+                       f && /^        run:/{print; exit}' "$wf")"
+    if [ "$verify_cmd" != "        run: ./scripts/release-signing-gate.sh verify .build/release/MeetingTranscriber.app" ]; then
+        echo "  the Developer-ID verify step is no longer exactly the gate call:" >&2
+        printf '%s\n' "${verify_cmd:-<not found>}" | sed 's|^|    |' >&2
+        rc=1
+    fi
     return "$rc"
 }
 
@@ -443,6 +604,25 @@ test_the_entitlement_check_cannot_excuse_itself() {
     # embedded a profile and still lacks the key is codesign having dropped it,
     # which is a regression worth catching on ANY ref. Narrowing the step to
     # tags alone is what stopped a push to main from catching it.
+    # The tag ground has its own `exit 1`, and it has to be the one that follows
+    # the tag test. Asserting only that "exit 1" and "refs/tags/v" both appear
+    # somewhere is satisfied by the OTHER ground plus an inverted test, which is
+    # how both could be removed with this file green.
+    local tag_arm
+    tag_arm="$(printf '%s\n' "$step" | grep -A3 'refs/tags/v' || true)"
+    case "$tag_arm" in
+        *"exit 1"*) ;;
+        *) echo "  the release-tag ground no longer fails; the only remaining refusal" >&2
+           echo "  is the embedded-profile one, which a release without a profile skips" >&2
+           rc=1 ;;
+    esac
+    case "$tag_arm" in
+        *'== refs/tags/v'*) ;;
+        *) echo "  the release-tag test is not an equality, so it fires on everything" >&2
+           echo "  except a release:" >&2
+           printf '%s\n' "$tag_arm" | sed 's|^|    |' >&2
+           rc=1 ;;
+    esac
     case "$step" in
         *embedded.provisionprofile*) ;;
         *) echo "  the entitlement check no longer refuses a build that embedded a" >&2
@@ -470,6 +650,10 @@ run_test "a really ad-hoc signed bundle is refused"              test_a_really_a
 run_test "a Developer ID signed bundle passes and says so"       test_a_developer_id_signed_bundle_passes_and_says_so
 run_test "the stubbed ad-hoc output is refused too"              test_the_stubbed_adhoc_output_is_refused_too
 run_test "a broken signature seal is refused"                     test_a_broken_signature_seal_is_refused
+run_test "the authorised leaves are read from the profile"        test_the_authorised_leaves_are_read_from_the_profile
+run_test "the pairing decision is exact"                         test_the_pairing_decision_is_exact
+run_test "an unreadable profile is refused, not ignored"         test_an_unreadable_profile_is_refused_not_ignored
+run_test "verify refuses a certificate the profile does not authorise" test_verify_refuses_a_certificate_the_profile_does_not_authorise
 run_test "the release workflow does not decide the mode itself"  test_the_release_workflow_does_not_decide_the_mode_itself
 run_test "the entitlement check cannot excuse itself"            test_the_entitlement_check_cannot_excuse_itself
 echo

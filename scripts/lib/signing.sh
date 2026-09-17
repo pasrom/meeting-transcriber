@@ -149,6 +149,53 @@ signing_authority_verdict() {
     esac
 }
 
+# profile_authorised_leaves <profile-path> — the SHA-1 of every certificate the
+# provisioning profile authorises, one per line, uppercase. Returns 1 when the
+# profile exists but cannot be read, so a caller can tell "nothing to pair
+# against" from "could not look".
+#
+# A profile authorises SPECIFIC certificates. Signing with one it does not list
+# makes macOS refuse the launch outright once the restricted entitlement is
+# really present, which is the measured brick this file's header describes.
+# Nothing in the release lane compared the two before this, and the two halves
+# expire on schedules that have nothing to do with each other. Measured on the
+# shipped 0.8.1 in September 2026: the certificate and the one the profile
+# authorises are the same and both run out on 2027-02-01, while the profile is
+# good until 2044-07-24. Renewing the certificate without re-exporting the
+# profile therefore produces a release that passes every check here and starts
+# for nobody.
+profile_authorised_leaves() {
+    local profile="$1" plist der count i
+    [ -f "$profile" ] || return 0
+    plist="$(mktemp)"; der="$(mktemp)"
+    if ! security cms -D -i "$profile" > "$plist" 2>/dev/null; then
+        rm -f "$plist" "$der"; return 1
+    fi
+    count="$(plutil -extract DeveloperCertificates raw "$plist" 2>/dev/null || true)"
+    case "$count" in ''|*[!0-9]*) rm -f "$plist" "$der"; return 1 ;; esac
+    i=0
+    while [ "$i" -lt "$count" ]; do
+        if plutil -extract "DeveloperCertificates.$i" raw -o - "$plist" 2>/dev/null \
+            | base64 --decode > "$der" 2>/dev/null; then
+            openssl x509 -inform DER -in "$der" -noout -fingerprint -sha1 2>/dev/null \
+                | sed 's/^.*=//' | tr -d ':' | tr '[:lower:]' '[:upper:]'
+        fi
+        i=$(( i + 1 ))
+    done
+    rm -f "$plist" "$der"
+}
+
+# leaf_is_authorised <leaf> <authorised-leaves> — the pure comparison, so the
+# decision can be exercised without a profile or a keychain.
+#
+# An empty leaf never pairs: an ad-hoc bundle has no certificate to authorise,
+# and answering "yes" for it would turn the absence of evidence into evidence.
+leaf_is_authorised() {
+    local leaf="$1" authorised="$2"
+    [ -n "$leaf" ] || { printf no; return 0; }
+    if printf '%s\n' "$authorised" | grep -qxF "$leaf"; then printf yes; else printf no; fi
+}
+
 # release_is_published_build <git_ref> <variant> — is this the build whose
 # artifact reaches users, and therefore the one that may not fall back on
 # anything?
