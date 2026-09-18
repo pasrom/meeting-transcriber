@@ -71,44 +71,73 @@ ci_job_comment() {
     ' "$1"
 }
 
-# The `if:` of the step in job $2 of file $1 whose `run:` contains the literal
-# $3, printed as the condition, or `__NO_CONDITION__` when the step exists and
-# carries none, or nothing at all when no such step exists.
+# The `if:` of the step in job $2 of file $1 whose `run:` STARTS a line with
+# the literal $3, printed as the condition, or `__NO_CONDITION__` when such a
+# step exists and carries none, or nothing at all when none does.
 #
-# Anchored on the command rather than on the step's `name:`, and three-valued
-# rather than two. Both were measured, not guessed. A name is not an anchor: it
-# can be renamed, quoted, ordered after `if:`, omitted entirely, or worn by a
-# second step, and each of those made a name-anchored reader hand back the empty
-# string or another step's condition. And an empty string cannot mean both "no
-# condition" and "no such step": a caller that reads the first as harmless then
-# reports a step that has been renamed away and gated to a matrix leg that does
-# not exist as fine.
+# Anchored on the command, and inside the step's `run:` value rather than
+# anywhere in its text. Both halves were measured. A `name:` is not an anchor:
+# it can be renamed, quoted, ordered after `if:`, omitted, or worn by a second
+# step. And "somewhere in the step" is not an anchor either: a step whose `run:`
+# was `echo "skipping cd tools/mt-cli && swift test until the flake is fixed"`,
+# one that had the command demoted to a trailing shell comment, and a decoy
+# whose `name:` merely quoted it all satisfied it while the real step ran
+# nowhere.
+#
+# An empty result also has to stop meaning two things. "No condition" and "no
+# such step" were both the empty string, and a caller reading the first as
+# harmless reported a step renamed away AND gated to a leg that does not exist
+# as fine.
+#
+# KNOWN LIMIT, deliberate: a command split across a `run: |` block is not found,
+# and the first matching step wins if two run the same command. The caller is
+# expected to fail closed and say so rather than guess.
 ci_step_condition_for_run() {
     ci_job_body "$1" "$2" | awk -v want="$3" '
         function flush() {
-            if (buf ~ want_re) {
+            if (runbuf ~ want_re) {
                 print (cond == "" ? "__NO_CONDITION__" : cond)
                 found = 1
             }
         }
-        BEGIN { want_re = want; gsub(/[][(){}.*+?^$\\|]/, "\\\\&", want_re) }
-        # A step begins on a dash line, and its first key sits ON that line.
-        # `- if: ...` is therefore a condition like any other; reading only the
-        # deeper-indented form missed it, and the caller then reported a step
-        # gated to a leg that does not exist as unconditional.
+        BEGIN {
+            want_re = want; gsub(/[][(){}.*+?^$\\|]/, "\\\\&", want_re)
+            want_re = "(^|\n)[[:space:]]*" want_re
+        }
+        # A step begins on a dash line, and its first key sits ON that line, so
+        # `- if:` and `- run:` are keys like any other.
         /^      - / {
             if (!found) flush()
-            buf = ""; cond = ""
+            runbuf = ""; cond = ""; inrun = 0
             if ($0 ~ /^      -[[:space:]]+if:/) {
                 cond = $0; sub(/^[[:space:]]*-[[:space:]]*if:[[:space:]]*/, "", cond)
             }
+            if ($0 ~ /^      -[[:space:]]+run:/) {
+                v = $0; sub(/^[[:space:]]*-[[:space:]]*run:[[:space:]]*/, "", v)
+                runbuf = v "\n"; inrun = 1
+            }
+            next
         }
         /^        if:/ && cond == "" {
             cond = $0; sub(/^[[:space:]]*if:[[:space:]]*/, "", cond)
         }
-        { buf = buf $0 "\n" }
+        /^        run:/ {
+            v = $0; sub(/^[[:space:]]*run:[[:space:]]*/, "", v)
+            runbuf = runbuf v "\n"; inrun = 1; next
+        }
+        /^        [A-Za-z_-]+:/ { inrun = 0 }
+        inrun { v = $0; sub(/^[[:space:]]+/, "", v); runbuf = runbuf v "\n" }
         END { if (!found) flush() }
     '
+}
+
+# Whether job $2 of file $1 has steps at the indentation the reader above
+# assumes. Four-space steps are valid YAML and are what some formatters emit;
+# with them the reader sees no step boundary at all, every condition reads as
+# absent, and a step gated to a leg that does not exist reported as fine.
+# Measured. The caller uses this to fail with the real reason instead.
+ci_job_has_readable_steps() {
+    ci_job_body "$1" "$2" | grep -q '^      - '
 }
 
 # Every value of matrix key $3 in job $2 of file $1, one per line, for both the
@@ -116,7 +145,8 @@ ci_step_condition_for_run() {
 # Returning values instead of a regex to grep the job body with is what lets the
 # caller compare whole strings: a leg containing a `.` matched any character,
 # and a leg containing a `+` made grep error out and the caller blame the
-# matrix. Quotes are stripped by the caller.
+# matrix. NOT read, and the caller's message has to allow for it: a flow list
+# broken across several lines, and a leg contributed only through `include:`. Quotes are stripped here, not by the caller.
 ci_matrix_values() {
     ci_job_body "$1" "$2" | awk -v key="$3" '
         $0 ~ "^[[:space:]]*" key ":[[:space:]]*\\[" {
@@ -139,9 +169,3 @@ ci_matrix_values() {
     ' | tr -d "\"'"
 }
 
-# The file with YAML comment lines removed. A check that greps the raw workflow
-# is satisfied by a command that survives only as a comment; measured, with the
-# audiotap invocation commented out and replaced by `echo skipped`.
-ci_without_comments() {
-    grep -v '^[[:space:]]*#' "$1"
-}

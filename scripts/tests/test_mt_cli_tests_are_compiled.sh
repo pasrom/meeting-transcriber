@@ -54,7 +54,13 @@ while IFS= read -r manifest; do
     rel="${pkg_dir#"$ROOT"/}"
     grep -q 'testTarget' "$manifest" || continue
     found_any=1
-    if ci_without_comments "$CI" | grep -q "cd $rel && swift test"; then
+    # Anchored on a `run:` key rather than searched for anywhere in the file.
+    # Two reasons, both measured. A comment keeps the text alive after the
+    # command is gone. And `producer | grep -q` under `set -o pipefail` reports
+    # 141 when grep exits on the first match while the producer still has more
+    # than a pipe buffer to write, which turned a passing package red once the
+    # file grew past about 13 KB below the match.
+    if grep -qE "^[[:space:]]*(- )?run:[[:space:]]*cd $rel && swift test" "$CI"; then
         ok "ci.yml runs the tests of $rel"
     else
         bad "ci.yml runs the tests of $rel" "this package declares a test target that no job in ci.yml builds. \`swift build\` does not build test targets, so those tests cannot fail and cannot be trusted."
@@ -105,9 +111,14 @@ fi
 #    strings rather than through a regex, so a leg containing a `.` cannot match
 #    a different one and a leg containing a `+` cannot make the comparison error
 #    out and be blamed on the matrix.
+if ! ci_job_has_readable_steps "$CI" "$REQUIRED_JOB"; then
+    bad "the \`$REQUIRED_JOB\` job's steps are where this check reads them" "its steps are not at the indentation the reader assumes, so every condition would read as absent and a step gated to a leg that does not exist would report as fine. Four-space steps are valid YAML and are what some formatters emit. Teach the reader the new layout rather than leaving it guessing."
+    summary
+fi
+
 step_if="$(ci_step_condition_for_run "$CI" "$REQUIRED_JOB" "$STEP_RUN")"
 if [ -z "$step_if" ]; then
-    bad "the mt-cli step exists in the \`$REQUIRED_JOB\` job" "no step in that job runs \`$STEP_RUN\`. If the command moved or changed shape, move this check with it; an absent step must never read as an unconditional one."
+    bad "the mt-cli step exists in the \`$REQUIRED_JOB\` job" "no step in that job begins a \`run:\` line with \`$STEP_RUN\`. The command being present elsewhere in the step does not count, because an echo, a trailing shell comment and a decoy step's name all satisfied that once. A command split across a \`run: |\` block is not read either; if it moved there, teach this check that shape rather than loosening the match."
 elif [ "$step_if" = "__NO_CONDITION__" ]; then
     ok "the mt-cli step is unconditional"
 else
@@ -117,7 +128,7 @@ else
     elif ci_matrix_values "$CI" "$REQUIRED_JOB" variant | grep -qxF "$leg"; then
         ok "the mt-cli step's leg \`$leg\` is in the matrix"
     else
-        bad "the mt-cli step's leg \`$leg\` is in the matrix" "the step runs only on \`$leg\` and the \`$REQUIRED_JOB\` job's matrix has no such leg, so the step never runs on any leg. The run itself reports no error and no annotation for that. Renaming a leg also renames the required check built from it, which blocks every pull request until branch protection is updated to match; update both and the step stops running with nothing left to say so."
+        bad "the mt-cli step's leg \`$leg\` is in the matrix" "the step runs only on \`$leg\` and this check found no such leg in the \`$REQUIRED_JOB\` job's matrix, so either the leg was renamed and the step now runs nowhere, or the matrix is written in a form this check does not read: a flow list broken across lines, or a leg contributed only through \`include:\`. The run itself reports no error and no annotation for that. Renaming a leg also renames the required check built from it, which blocks every pull request until branch protection is updated to match; update both and the step stops running with nothing left to say so."
     fi
 fi
 
