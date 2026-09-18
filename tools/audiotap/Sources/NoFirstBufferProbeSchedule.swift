@@ -6,10 +6,12 @@ import Foundation
 /// **Why a fourth probe point.** The three that shipped with issue #693 cannot
 /// answer the question they were built for, and each for its own reason:
 ///
-/// - `start` is taken right after `AudioDeviceStart` and therefore *before*
-///   `AudioCaptureSession.start()` opens the microphone. That open is what
-///   flips a Bluetooth headset out of A2DP, so the start probe reads the state
-///   before the trigger and cannot see the fault at all.
+/// - `start` is taken right after `AudioDeviceStart`, before the aggregate has
+///   run a single IO cycle, so it reports only that the device object exists.
+///   Every trigger that leaves it started but never cycling lands after it: a
+///   headset flipping out of A2DP when the meeting app opens its own input, or
+///   any other route change during the call. Our own microphone open used to be
+///   one of those and is no longer, because it now precedes the tap (#693).
 /// - `zero run started` needs buffers to be arriving and carrying only zeroes.
 ///   In this fault none arrive, so it never fires.
 /// - `stop` is enqueued asynchronously and then raced by a synchronous
