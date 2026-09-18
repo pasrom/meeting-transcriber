@@ -1,3 +1,4 @@
+import CoreML
 import FluidAudio
 import Foundation
 import os.log
@@ -283,6 +284,17 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
         return config
     }
 
+    /// Keep FluidAudio's offline inference off Metal. Core ML's `.all`
+    /// routing can send the WeSpeaker embedding model through MPSGraph, whose
+    /// in-process abort cannot be caught or retried by the pipeline. The CPU +
+    /// Neural Engine route retains hardware acceleration without invoking the
+    /// crash-prone GPU path.
+    static func makeModelConfiguration() -> MLModelConfiguration {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuAndNeuralEngine
+        return configuration
+    }
+
     mutating func prepare(numSpeakers: Int?) async throws {
         guard manager == nil || numSpeakers != currentNumSpeakers else { return }
 
@@ -296,7 +308,7 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
                 "FluidAudio offline tuning (\(flag)): clusterThreshold=\(t.clusterThreshold) warmStartFa=\(t.warmStartFa) warmStartFb=\(t.warmStartFb) minSegmentDurationSeconds=\(t.minSegmentDurationSeconds) excludeOverlap=\(t.excludeOverlap)",
             )
         let newManager = OfflineDiarizerManager(config: config)
-        try await newManager.prepareModels()
+        try await newManager.prepareModels(configuration: Self.makeModelConfiguration())
         manager = newManager
         currentNumSpeakers = numSpeakers
         logger.info("FluidAudio offline models ready")
