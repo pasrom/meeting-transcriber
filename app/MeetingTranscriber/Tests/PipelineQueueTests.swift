@@ -701,8 +701,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         let slug = try XCTUnwrap(queue.jobs.first { $0.id == jobID }?.namingSlug)
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
-        let leftovers = ["_naming.json", "_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
-            .map { recordingsDir.appendingPathComponent("\(slug)\($0)") }
+        let leftovers = sidecarURLs(slug: slug, in: recordingsDir)
 
         // Premise: naming really did park with data on disk, or the test proves
         // nothing about cleaning it up.
@@ -713,11 +712,7 @@ final class PipelineQueueTests: XCTestCase {
 
         queue.removeJob(id: jobID)
 
-        let stranded = leftovers.filter { FileManager.default.fileExists(atPath: $0.path) }
-        XCTAssertTrue(
-            stranded.isEmpty,
-            "dismissing left these behind for good: \(stranded.map(\.lastPathComponent))",
-        )
+        assertSidecars(leftovers, exist: false)
     }
 
     // MARK: - Cancelling a job
@@ -3890,6 +3885,210 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(queue.jobs.first?.state, .speakerNamingPending)
     }
 
+    // MARK: - Snapshot Restore Cleans Up What It Discards
+
+    /// Write the per-slug sidecars `removeNamingData` owns. Suffixes come from
+    /// the production list, so adding one there fails these tests rather than
+    /// quietly stranding the new file.
+    private func sidecarURLs(slug: String, in recordingsDir: URL) -> [URL] {
+        (SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix])
+            .map { recordingsDir.appendingPathComponent("\(slug)\($0)") }
+    }
+
+    private func writeSidecars(slug: String, in recordingsDir: URL) throws -> [URL] {
+        let urls = sidecarURLs(slug: slug, in: recordingsDir)
+        for url in urls {
+            try Data([0]).write(to: url)
+        }
+        return urls
+    }
+
+    private func assertSidecars(
+        _ sidecars: [URL], exist: Bool,
+        file: StaticString = #filePath, line: UInt = #line,
+    ) {
+        for sidecar in sidecars {
+            XCTAssertEqual(
+                FileManager.default.fileExists(atPath: sidecar.path), exist,
+                "\(sidecar.lastPathComponent): expected exists=\(exist)",
+                file: file, line: line,
+            )
+        }
+    }
+
+    private func makeRestoreQueue(
+        outputDir: URL, diarizeEnabled: Bool = false, inFlightRuns: InFlightRunRegistry? = nil,
+    ) -> PipelineQueue {
+        PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: outputDir,
+            logDir: tmpDir,
+            diarizeEnabled: diarizeEnabled,
+            inFlightRuns: inFlightRuns,
+        )
+    }
+
+    /// Quitting inside `completedJobLifetime` of a `.done` job means `removeJob`
+    /// never runs, so the restore is the last owner of those sidecars.
+    func testLoadSnapshotCleansSidecarsOfDiscardedDoneJob() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Reaped Before Quit", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.namingSlug = "reaped_before_quit"
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let sidecars = try writeSidecars(slug: "reaped_before_quit", in: recordingsDir)
+
+        let freshQueue = makeRestoreQueue(outputDir: outputDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+        assertSidecars(sidecars, exist: false)
+    }
+
+    /// The guard that keeps this cleanup off a job another queue is running.
+    /// Without it the restore deletes files a live flow is still reading.
+    func testLoadSnapshotKeepsSidecarsOfAnInFlightDiscardedJob() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Running Elsewhere", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.namingSlug = "running_elsewhere"
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let sidecars = try writeSidecars(slug: "running_elsewhere", in: recordingsDir)
+
+        let registry = InFlightRunRegistry()
+        XCTAssertEqual(registry.begin(jobID: job.id, mixPath: mixPath), .claimed)
+
+        let freshQueue = makeRestoreQueue(outputDir: outputDir, inFlightRuns: registry)
+        freshQueue.loadSnapshot()
+
+        assertSidecars(sidecars, exist: true)
+    }
+
+    /// The missing-audio rule is where a job that another queue is still running
+    /// lands once that queue relocated the audio, and the late naming flows never
+    /// claim in the registry. Cleaning up there would delete the 16 kHz audio a
+    /// live re-diarization reads, so this rule deliberately leaves it alone.
+    func testLoadSnapshotKeepsSidecarsOfJobDiscardedForMissingAudio() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        var job = PipelineJob(
+            meetingTitle: "Audio Relocated", appName: "App",
+            mixPath: tmpDir.appendingPathComponent("gone_\(UUID().uuidString).wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .generatingProtocol
+        job.namingSlug = "audio_relocated"
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let sidecars = try writeSidecars(slug: "audio_relocated", in: recordingsDir)
+
+        let freshQueue = makeRestoreQueue(outputDir: outputDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.count, 0)
+        assertSidecars(sidecars, exist: true)
+    }
+
+    /// The cleanup has to look where the files are, not where the setting
+    /// currently points. Repointing the output folder between the job finishing
+    /// and the restore would otherwise leave the sidecars orphaned for good,
+    /// since the job that names them is discarded in the same breath.
+    func testLoadSnapshotCleansSidecarsInTheJobsOwnOutputDir() throws {
+        let oldOutputDir = tmpDir.appendingPathComponent("old-output")
+        let oldRecordingsDir = oldOutputDir.appendingPathComponent("recordings")
+        let newOutputDir = tmpDir.appendingPathComponent("new-output")
+        for dir in [oldRecordingsDir, newOutputDir.appendingPathComponent("recordings")] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Folder Moved", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .done
+        job.namingSlug = "folder_moved"
+        job.sidecarOutputDir = oldOutputDir
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let sidecars = try writeSidecars(slug: "folder_moved", in: oldRecordingsDir)
+
+        // The user repointed the output folder; the queue is built on the new one.
+        let freshQueue = makeRestoreQueue(outputDir: newOutputDir)
+        freshQueue.loadSnapshot()
+
+        assertSidecars(sidecars, exist: false)
+    }
+
+    /// A job that survives the restore must keep everything it owns. Without
+    /// this, widening the cleanup to every loaded job stays green while
+    /// production wipes the re-diarization audio of each restored job.
+    func testLoadSnapshotKeepsSidecarsOfSurvivingNamingPendingJob() throws {
+        let outputDir = tmpDir.appendingPathComponent("output")
+        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
+
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Awaiting Names", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "awaiting_names"
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let sidecars = try writeSidecars(slug: "awaiting_names", in: recordingsDir)
+
+        // Overwrite the placeholder with decodable naming data so restore keeps
+        // the job; the audio and segment sidecars stay as written above.
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Awaiting Names",
+            mapping: ["SPEAKER_0": "Speaker A"],
+            speakingTimes: ["SPEAKER_0": 60.0],
+            embeddings: ["SPEAKER_0": [0.1, 0.2]],
+            audioPath: recordingsDir.appendingPathComponent("awaiting_names_16k.wav"),
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            participants: [],
+            isDualSource: false,
+        )
+        try SpeakerNamingStore(outputDir: outputDir).save(namingData, slug: "awaiting_names")
+
+        let freshQueue = makeRestoreQueue(outputDir: outputDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
+        assertSidecars(sidecars, exist: true)
+    }
+
     // MARK: - Snapshot Restore + Speaker Naming Cache
 
     func testLoadSnapshotRebuildsSpeakerNamingCache() throws {
@@ -3930,15 +4129,7 @@ final class PipelineQueueTests: XCTestCase {
         try json.write(to: recordingsDir.appendingPathComponent("snapshot_test_naming.json"))
 
         // Load snapshot in a new queue that has outputDir set
-        let mockEngine = MockEngine()
-        let freshQueue = PipelineQueue(
-            engine: mockEngine,
-            diarizationFactory: { MockDiarization() },
-            protocolGeneratorFactory: { nil },
-            outputDir: outputDir,
-            logDir: tmpDir,
-            diarizeEnabled: true,
-        )
+        let freshQueue = makeRestoreQueue(outputDir: outputDir, diarizeEnabled: true)
         freshQueue.loadSnapshot()
 
         // Verify: job still in speakerNamingPending, naming data loaded

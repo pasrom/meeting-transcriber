@@ -152,14 +152,14 @@ final class SpeakerNamingStoreTests: XCTestCase {
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
         try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
         let slug = "del_test"
-        for suffix in ["_naming.json", "_16k.wav"] {
+        for suffix in [SpeakerNamingStore.namingJSONSuffix, "_16k.wav"] {
             try Data([0]).write(to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
         }
 
         store.deleteNamingJSON(slug: slug)
 
         XCTAssertFalse(FileManager.default.fileExists(
-            atPath: recordingsDir.appendingPathComponent("\(slug)_naming.json").path,
+            atPath: recordingsDir.appendingPathComponent("\(slug)\(SpeakerNamingStore.namingJSONSuffix)").path,
         ))
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: recordingsDir.appendingPathComponent("\(slug)_16k.wav").path,
@@ -171,7 +171,7 @@ final class SpeakerNamingStoreTests: XCTestCase {
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
         try FileManager.default.createDirectory(at: recordingsDir, withIntermediateDirectories: true)
         let slug = "cleanup_test"
-        let suffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", "_segments.json"]
+        let suffixes = SpeakerNamingStore.sidecarSuffixes
         for suffix in suffixes {
             try Data([0]).write(to: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
         }
