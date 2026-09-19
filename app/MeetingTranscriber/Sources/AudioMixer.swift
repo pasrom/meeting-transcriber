@@ -351,8 +351,13 @@ enum AudioMixer {
 
     // MARK: - Audio I/O
 
-    /// Frames an audio file holds, without decoding it: `AVAudioFile` reads
-    /// the header and answers in O(1).
+    /// Frames an audio file holds, without decoding it.
+    ///
+    /// Constant-time on the uncompressed tracks this is called with: measured at
+    /// 21-25 us for a WAV, the same for a header-only file as for nineteen
+    /// megabytes. Not a general promise. The same ten minutes as `.m4a` took
+    /// 979 us, because the length comes out of the sample table, so a future
+    /// caller handing this a compressed file should not expect a free read.
     ///
     /// Zero for a file that cannot be opened at all, which puts an unreadable
     /// track in the same place as an empty one. That is the intended reading

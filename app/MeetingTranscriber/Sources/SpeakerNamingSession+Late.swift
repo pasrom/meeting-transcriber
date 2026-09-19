@@ -267,6 +267,7 @@ extension SpeakerNamingSession {
                     app: recordingsDir.appendingPathComponent("\(slug)_app_16k.wav"),
                     mic: recordingsDir.appendingPathComponent("\(slug)_mic_16k.wav"),
                     micDelay: micDelay,
+                    viability: delegate.job(withID: jobID)?.trackViability,
                 ),
                 speakerCount: speakerCount, title: title, jobID: jobID,
             )
@@ -330,19 +331,17 @@ extension SpeakerNamingSession {
             )
             return
         }
+        // The rebuild renders from the cached segments, which never carried the
+        // recording-level note, so the rendering is handed it again. `note` has
+        // no default, so this caller cannot forget it the way a rule about
+        // write sites could.
         guard let delegate, let rebuilt = delegate.renderLabeledTranscript(
             run: run, cachedSegments: cachedSegments,
             isDualSource: isDualSource, autoNames: autoNames,
+            note: delegate.job(withID: jobID)?.trackViability?.transcriptNote,
         ) else { return }
-        // The rebuild renders from the cached segments, which never carried
-        // the recording-level note, so it has to be put back or a late
-        // re-diarization silently drops the one line saying the recording is
-        // missing a track.
-        let annotated = TranscriptNote.prepend(
-            delegate.job(withID: jobID)?.transcriptNote, to: rebuilt,
-        )
         do {
-            try annotated.write(to: transcriptPath, atomically: true, encoding: .utf8)
+            try rebuilt.write(to: transcriptPath, atomically: true, encoding: .utf8)
             // Keep the rewritten transcript owner-only, matching the original save.
             try FileManager.default.restrictToOwner(transcriptPath)
         } catch {

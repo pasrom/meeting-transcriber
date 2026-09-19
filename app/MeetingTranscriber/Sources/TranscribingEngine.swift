@@ -14,6 +14,18 @@ protocol TranscribingEngine: AnyObject {
     /// warning (it would otherwise collapse the meeting onto one speaker).
     var providesTimestamps: Bool { get }
 
+    /// The shortest input this engine will accept, in 16 kHz frames. The
+    /// pipeline asks before handing a track over, so a track it would refuse is
+    /// dropped with the rest of the recording kept rather than throwing the
+    /// whole job away (issue #724).
+    ///
+    /// Default 1, which is the only floor that holds for every backend: a track
+    /// with no frames at all has nothing to transcribe whatever the engine.
+    /// Anything above that is one backend's rule and belongs to that backend, or
+    /// a recording would be annotated as empty by a threshold its engine never
+    /// had.
+    var minimumAudioFrames: Int { get }
+
     func loadModel() async
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment]
 }
@@ -23,6 +35,11 @@ extension TranscribingEngine {
     /// override this.
     var providesTimestamps: Bool {
         true
+    }
+
+    /// Only an engine with a documented floor of its own overrides this.
+    var minimumAudioFrames: Int {
+        1
     }
 }
 

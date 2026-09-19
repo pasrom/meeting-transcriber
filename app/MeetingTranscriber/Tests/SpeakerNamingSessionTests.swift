@@ -58,7 +58,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func runDualTrackDiarization(
             diarizeProcess _: any DiarizationProvider,
-            tracks _: (app: URL, mic: URL, micDelay: TimeInterval),
+            tracks _: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
             speakerCount _: Int?, title _: String, jobID _: UUID,
         ) throws -> DiarizationRun {
             throw DiarizationError.notAvailable
@@ -66,7 +66,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func renderLabeledTranscript(
             run _: DiarizationRun, cachedSegments _: [TimestampedSegment],
-            isDualSource _: Bool, autoNames _: [String: String],
+            isDualSource _: Bool, autoNames _: [String: String], note _: String?,
         ) -> String? {
             nil
         }
@@ -361,7 +361,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func runDualTrackDiarization(
             diarizeProcess _: any DiarizationProvider,
-            tracks _: (app: URL, mic: URL, micDelay: TimeInterval),
+            tracks _: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
             speakerCount _: Int?, title _: String, jobID _: UUID,
         ) throws -> DiarizationRun {
             throw DiarizationError.notAvailable
@@ -369,7 +369,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         func renderLabeledTranscript(
             run _: DiarizationRun, cachedSegments _: [TimestampedSegment],
-            isDualSource _: Bool, autoNames _: [String: String],
+            isDualSource _: Bool, autoNames _: [String: String], note _: String?,
         ) -> String? {
             nil
         }

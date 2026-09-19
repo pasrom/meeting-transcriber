@@ -27,6 +27,10 @@ final class DualTrackViabilityTests: XCTestCase {
         )
     }
 
+    /// The field cases are header-only files rather than zero-byte ones, and
+    /// both reduce to the same frame count. That is why the check is on frames
+    /// and not on the file size the recorder already gates on: 4096 bytes pass
+    /// `> 44` and did.
     func testAnEmptyMicTrackLeavesTheAppTrack() {
         XCTAssertEqual(
             DualTrackViability.resolve(appFrames: 10_208_000, micFrames: 0, minimumFrames: minimum),
@@ -67,15 +71,25 @@ final class DualTrackViabilityTests: XCTestCase {
         )
     }
 
-    /// The 09-16 field case in #724 is not an empty file but a header-only one.
-    /// Both reduce to the same frame count, which is why the check is on frames
-    /// and not on the file size the recorder already gates on (4096 > 44 bytes
-    /// passes that gate, and did).
-    func testAHeaderOnlyTrackCountsAsEmpty() {
-        XCTAssertEqual(
-            DualTrackViability.resolve(appFrames: 10_208_000, micFrames: 0, minimumFrames: minimum),
-            .appOnly,
-        )
+    // MARK: - Which track a stage may still touch
+
+    func testBothTracksAreOfferedWhenBothCarryAudio() {
+        XCTAssertTrue(DualTrackViability.both.carriesAppAudio)
+        XCTAssertTrue(DualTrackViability.both.carriesMicAudio)
+    }
+
+    /// The reason these exist: a stage downstream of transcription must not
+    /// hand a file already measured as empty to a model.
+    func testADroppedTrackIsNotOfferedToALaterStage() {
+        XCTAssertTrue(DualTrackViability.appOnly.carriesAppAudio)
+        XCTAssertFalse(DualTrackViability.appOnly.carriesMicAudio)
+        XCTAssertFalse(DualTrackViability.micOnly.carriesAppAudio)
+        XCTAssertTrue(DualTrackViability.micOnly.carriesMicAudio)
+    }
+
+    func testNeitherTrackIsOfferedWhenBothAreEmpty() {
+        XCTAssertFalse(DualTrackViability.neither.carriesAppAudio)
+        XCTAssertFalse(DualTrackViability.neither.carriesMicAudio)
     }
 
     // MARK: - What the user is told

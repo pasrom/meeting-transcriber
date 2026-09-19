@@ -34,14 +34,14 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     /// reused by the late re-run).
     func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
-        tracks: (app: URL, mic: URL, micDelay: TimeInterval),
+        tracks: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
         speakerCount: Int?, title: String, jobID: UUID,
     ) async throws -> DiarizationRun
     /// Render the speaker-labeled transcript from a diarization run + cached
     /// transcript segments (a queue pipeline stage, reused by the late rewrite).
     func renderLabeledTranscript(
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
-        isDualSource: Bool, autoNames: [String: String],
+        isDualSource: Bool, autoNames: [String: String], note: String?,
     ) -> String?
     /// Enter the diarizing stage for a late re-run: `updateJobState(.diarizing)`
     /// + start the menu's elapsed timer.

@@ -2,13 +2,13 @@ import Foundation
 
 /// Puts a recording-level annotation at the top of a transcript.
 ///
-/// The transcript is written out more than once and rebuilt in between:
-/// diarization replaces it with the speaker-labeled rendering, and a late
-/// re-diarization renders it again from the cached segments and writes that
-/// over the saved file. An annotation prepended where the transcript is first
-/// composed does not survive either. So the note is carried on the job and
-/// applied at each point that writes a transcript out, which is why applying
-/// it twice to the same text has to be harmless.
+/// Called from one place, `[TimestampedSegment].transcriptText(note:)`, which
+/// every transcript that reaches disk is rendered through. That is deliberate:
+/// the transcript is rendered more than once (the mid-pipeline draft, the
+/// speaker-labeled rewrite, and the late re-diarization's rebuild from cached
+/// segments), and annotating at each point that *writes* one instead left the
+/// draft without a note. Rendering composes the text fresh each time, so the
+/// note lands exactly once by construction rather than by a guard.
 enum TranscriptNote {
     /// - Parameters:
     ///   - note: The line to place first, or nil when the recording has
@@ -18,7 +18,8 @@ enum TranscriptNote {
     ///   - transcript: The transcript text as rendered.
     static func prepend(_ note: String?, to transcript: String) -> String {
         guard let note, !note.isEmpty else { return transcript }
-        guard !transcript.hasPrefix(note) else { return transcript }
+        // An all-suppressed late rebuild genuinely renders empty, and a
+        // trailing blank line on a note-only file would be noise.
         guard !transcript.isEmpty else { return note }
         // A blank line, because run together with the first utterance the note
         // reads as part of what someone said.

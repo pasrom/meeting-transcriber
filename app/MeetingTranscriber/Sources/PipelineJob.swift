@@ -106,16 +106,18 @@ struct PipelineJob: Identifiable, Codable {
     var error: String?
     var warnings: [String]
 
-    /// One line placed at the top of the saved transcript, and with it at the
-    /// top of the text handed to the protocol model. Set when a track was
-    /// dropped for holding no audio (`DualTrackViability`).
+    /// Which of a dual-source recording's tracks had audio to transcribe. Nil
+    /// for a single-source job and for snapshots written before this field
+    /// existed.
     ///
-    /// Carried on the job rather than folded into the transcript where it is
-    /// composed, because the transcript is rewritten after that: diarization
-    /// replaces it with the speaker-labeled rendering, and a late
-    /// re-diarization renders it again from the cached segments. Optional so
-    /// snapshots written before this field existed still decode.
-    var transcriptNote: String?
+    /// The fact, not its wording: the warning and the transcript note are
+    /// rendered from it at the point of use, the diarization stage reads it to
+    /// avoid handing an empty track to the diarizer, and a later consumer can
+    /// ask which track was dropped without matching English. Same shape as
+    /// `echo` below, which stores the verdict and leaves the sentence to the
+    /// reader. It has to live on the job because the transcript is rendered
+    /// again after the pipeline finishes, by the late re-diarization.
+    var trackViability: DualTrackViability?
     /// The echo detector's verdict, once the transcription stage has run it.
     /// Nil for single-source jobs and whenever no verdict was possible.
     var echo: EchoDetectionDTO?

@@ -51,11 +51,19 @@ struct TimestampedSegment: Codable {
 
 extension [TimestampedSegment] {
     /// The transcript as written to disk, without the segments that are only the
-    /// loudspeaker coming back. One helper rather than a filter at each of the
-    /// three rendering sites, so a fourth cannot quietly reintroduce the
-    /// duplicates.
-    var transcriptText: String {
-        filter { !$0.suppressed }.map(\.formattedLine).joined(separator: "\n")
+    /// loudspeaker coming back, and under the recording-level note when there is
+    /// one. One helper rather than a filter at each of the three rendering
+    /// sites, so a fourth cannot quietly reintroduce the duplicates.
+    ///
+    /// The note rides here for the same reason, and it is the reason `note` has
+    /// no default: every transcript that reaches disk is rendered through this,
+    /// including the mid-pipeline draft, so a site that has nothing to add must
+    /// say `nil` rather than forget. Applying it at each *write* site instead
+    /// missed that draft.
+    func transcriptText(note: String?) -> String {
+        TranscriptNote.prepend(
+            note, to: filter { !$0.suppressed }.map(\.formattedLine).joined(separator: "\n"),
+        )
     }
 }
 

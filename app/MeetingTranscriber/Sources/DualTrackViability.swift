@@ -19,7 +19,15 @@ import Foundation
 /// A named decision rather than two `if`s in the stage, for the reason
 /// `EchoRemedy` is one: the precedence is written down once, and the arms can
 /// be pinned on a CI runner with no audio, no engine and no microphone.
-enum DualTrackViability: Equatable, Sendable {
+enum DualTrackViability: String, Codable, Equatable, Sendable {
+    // SwiftLint wants a raw value spelled out on a camelCased Codable case so a
+    // rename cannot quietly change what is persisted; SwiftFormat deletes a raw
+    // value equal to the case name. The two cannot both be satisfied, and the
+    // repo already resolved it this way on `JobState`. Scoped rather than
+    // per-case because a `disable:next` between a doc comment and its case
+    // orphans the doc.
+    // swiftlint:disable raw_value_for_camel_cased_codable_enum
+
     /// Both tracks carry audio. What every healthy recording resolves to.
     case both
 
@@ -35,13 +43,16 @@ enum DualTrackViability: Equatable, Sendable {
     /// there is no transcript to save and nothing a warning could improve.
     case neither
 
+    // swiftlint:enable raw_value_for_camel_cased_codable_enum
+
     /// - Parameters:
     ///   - appFrames: Frames in the 16 kHz app track.
     ///   - micFrames: Frames in the 16 kHz microphone track.
-    ///   - minimumFrames: The engine's own guard, `ASRConstants`'s 300 ms at
-    ///     16 kHz. Passed in rather than read here so the threshold that
-    ///     decides and the threshold that throws cannot drift apart silently,
-    ///     and so the arms stay testable without FluidAudio.
+    ///   - minimumFrames: The active engine's own floor
+    ///     (`TranscribingEngine.minimumAudioFrames`). Passed in rather than read
+    ///     here so the threshold that decides and the one that throws cannot
+    ///     drift apart, so no backend inherits a floor it does not have, and so
+    ///     the arms stay testable without any engine at all.
     static func resolve(appFrames: Int, micFrames: Int, minimumFrames: Int) -> Self {
         // `>=`, not `>`: the engine accepts exactly its minimum, and a guard
         // that rejected what the engine would take would drop audio for no
@@ -52,6 +63,17 @@ enum DualTrackViability: Equatable, Sendable {
         case (false, true): .micOnly
         case (false, false): .neither
         }
+    }
+
+    /// Whether the app track holds audio. Read by the stages that would
+    /// otherwise hand an empty file to a model.
+    var carriesAppAudio: Bool {
+        self == .both || self == .appOnly
+    }
+
+    /// Whether the microphone track holds audio. Mirror of the above.
+    var carriesMicAudio: Bool {
+        self == .both || self == .micOnly
     }
 
     /// What the job records about the track it dropped, or nil when nothing was

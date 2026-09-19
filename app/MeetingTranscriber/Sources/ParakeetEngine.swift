@@ -16,6 +16,15 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     private(set) var downloadProgress: Double = 0
     private(set) var transcriptionProgress: Double = 0
 
+    /// FluidAudio refuses anything shorter with
+    /// `Invalid audio data provided. Must be at least 300ms of 16kHz audio`.
+    /// Taken from its own constant so the threshold the pipeline checks and the
+    /// one the engine enforces cannot drift apart, and stated here rather than
+    /// in the pipeline so no other backend inherits a floor it does not have.
+    var minimumAudioFrames: Int {
+        ASRConstants.minimumRequiredSamples(forSampleRate: AudioConstants.targetSampleRate)
+    }
+
     /// Path to a custom vocabulary file for CTC boosting. A change while the
     /// model is loaded is applied to the next transcription without restart.
     var customVocabularyPath: String = "" {
