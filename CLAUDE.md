@@ -144,7 +144,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Concurrency:**
 - `WatchLoop` is `@MainActor`. Tests for this class must also be `@MainActor`.
-- Both engine `loadModel()` methods deduplicate concurrent calls via `loadingTask` — second caller awaits the first's task. Safe to call from multiple places.
+- Both engine `loadModel()` methods deduplicate concurrent calls via the shared `SingleFlight` coordinator: a second caller awaits the run already in flight instead of starting its own, and the coordinator re-arms once that run finishes. Safe to call from multiple places. `WhisperKitEngine` guarantees the postcondition, not just one attempt: `loadModel()` ends with the currently requested variant loaded or a reported failure for it, because a load superseded by a variant change would otherwise return with nothing loaded (issue #738). The mechanism and the two rejected alternatives are at the loop in `loadModel`. `ParakeetEngine` has no variant selection and uses `SingleFlight<Void>`.
 - `ClaudeCLIProtocolGenerator` uses async process I/O: the process `terminationHandler` yields into an `AsyncStream<Void>` that the caller awaits, instead of blocking on `process.waitUntilExit()`. The stream is installed before `process.run()` and buffers the yield, so an early exit is never missed. stdin/stdout are written/read in detached `Task`s.
 
 **View architecture:**
