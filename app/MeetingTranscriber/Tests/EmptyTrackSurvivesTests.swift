@@ -266,10 +266,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
     func testAHealthyRecordingStillRecordsItsVerdict() async throws {
         let h = makeHarness()
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(h.queue.jobs.first?.trackViability, .both)
