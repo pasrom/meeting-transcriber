@@ -334,8 +334,15 @@ extension SpeakerNamingSession {
             run: run, cachedSegments: cachedSegments,
             isDualSource: isDualSource, autoNames: autoNames,
         ) else { return }
+        // The rebuild renders from the cached segments, which never carried
+        // the recording-level note, so it has to be put back or a late
+        // re-diarization silently drops the one line saying the recording is
+        // missing a track.
+        let annotated = TranscriptNote.prepend(
+            delegate.job(withID: jobID)?.transcriptNote, to: rebuilt,
+        )
         do {
-            try rebuilt.write(to: transcriptPath, atomically: true, encoding: .utf8)
+            try annotated.write(to: transcriptPath, atomically: true, encoding: .utf8)
             // Keep the rewritten transcript owner-only, matching the original save.
             try FileManager.default.restrictToOwner(transcriptPath)
         } catch {

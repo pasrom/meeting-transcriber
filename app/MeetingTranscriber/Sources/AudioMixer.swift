@@ -351,6 +351,19 @@ enum AudioMixer {
 
     // MARK: - Audio I/O
 
+    /// Frames an audio file holds, without decoding it: `AVAudioFile` reads
+    /// the header and answers in O(1).
+    ///
+    /// Zero for a file that cannot be opened at all, which puts an unreadable
+    /// track in the same place as an empty one. That is the intended reading
+    /// for the only caller: neither has anything to transcribe, and the job
+    /// keeping its other track is a better outcome than failing over a file
+    /// nothing downstream could have used either.
+    static func frameCount(of url: URL) -> Int {
+        guard let file = try? AVAudioFile(forReading: url) else { return 0 }
+        return Int(file.length)
+    }
+
     /// Load an audio file as mono Float32 samples.
     /// Supports all formats readable by AVAudioFile: WAV, MP3, M4A, AIFF, FLAC,
     /// CAF, AMR (`.amr`/`.awb`), 3GPP (`.3gp`/`.3g2`) and Ogg (`.opus`/`.ogg`).
