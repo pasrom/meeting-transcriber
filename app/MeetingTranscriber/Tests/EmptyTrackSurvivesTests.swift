@@ -15,6 +15,8 @@ import XCTest
 /// the refusal comes back out of the queue.
 @MainActor
 final class EmptyTrackSurvivesTests: XCTestCase {
+    // swiftlint:disable:previous balanced_xctest_lifecycle
+    // swiftlint:disable:next implicitly_unwrapped_optional
     private var tmpDir: URL!
 
     override func setUp() async throws {
@@ -94,10 +96,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness()
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
@@ -108,10 +110,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness()
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         let warnings = (h.queue.jobs.first?.warnings ?? []).joined(separator: " | ")
@@ -125,10 +127,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness()
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         let text = try transcript(h)
@@ -142,10 +144,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness(diarizeEnabled: true)
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         let text = try transcript(h)
@@ -165,11 +167,11 @@ final class EmptyTrackSurvivesTests: XCTestCase {
             return namingCalls == 1 ? .rerun(2) : .skipped
         }
 
-        h.queue.enqueue(PipelineJob(
+        try h.queue.enqueue(PipelineJob(
             meetingTitle: "meeting", appName: "File",
             mixPath: nil,
-            appPath: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            micPath: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            appPath: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            micPath: writeTrack(frames: 0, named: "meeting_mic.wav"),
             micDelay: 0,
         ))
         await h.queue.processNext()
@@ -188,10 +190,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness()
         h.engine.throwingPathSuffixes = ["app_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 0, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 0, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
@@ -206,10 +208,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness()
         h.engine.throwingPathSuffixes = ["app_16k.wav", "mic_16k.wav"]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 0, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 0, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(
@@ -221,10 +223,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
     func testAHealthyRecordingIsNeitherWarnedAboutNorAnnotated() async throws {
         let h = makeHarness()
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 160_000, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(h.queue.jobs.first?.state, .done)

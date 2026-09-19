@@ -420,10 +420,9 @@ class MockEngine: TranscribingEngine {
     var transcribeCallCount = 0
     var shouldThrow = false
     /// Path suffixes this engine refuses, standing in for the real engine's
-    /// `Invalid audio data provided. Must be at least 300ms of 16kHz audio`.
-    /// A dual-source test for an empty track needs the refusal to come from
-    /// the track that is empty, otherwise it asserts on the mock instead of on
-    /// the pipeline's decision not to ask.
+    /// `Invalid audio data provided...`. An empty-track test needs the refusal
+    /// to come from the empty track, or it asserts on the mock rather than on
+    /// the pipeline's decision not to ask it.
     var throwingPathSuffixes: Set<String> = []
 
     func loadModel() {
@@ -433,11 +432,8 @@ class MockEngine: TranscribingEngine {
     func transcribeSegments(audioPath: URL) throws -> [TimestampedSegment] {
         transcribeCallCount += 1
         if throwingPathSuffixes.contains(where: { audioPath.path.hasSuffix($0) }) {
-            throw NSError(
-                domain: "MockEngine", code: 2,
-                userInfo: [NSLocalizedDescriptionKey:
-                    "Invalid audio data provided. Must be at least 300ms of 16kHz audio"],
-            )
+            let refusal = "Invalid audio data provided. Must be at least 300ms of 16kHz audio"
+            throw NSError(domain: "MockEngine", code: 2, userInfo: [NSLocalizedDescriptionKey: refusal])
         }
         if shouldThrow {
             throw NSError(domain: "MockEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mock transcription error"])

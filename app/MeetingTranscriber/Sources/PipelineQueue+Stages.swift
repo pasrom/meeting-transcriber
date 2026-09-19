@@ -253,6 +253,35 @@ extension PipelineQueue {
     /// Split out of `transcribe` because the echo work pushed that function past
     /// the body-length cap, and because this half now has a shape of its own:
     /// everything here depends on there being two tracks to compare.
+    /// Which tracks of a dual-source recording carry audio, and the record of
+    /// a dropped one on the job.
+    ///
+    /// An empty track used to throw out of the whole job and take the intact
+    /// one with it: three recordings in issue #724 produced no transcript at
+    /// all while holding a complete far end next to a microphone file of 4096
+    /// bytes and zero audio packets. Reported in two places because the two
+    /// readers differ: `warnings` for whoever looks at the job, the transcript
+    /// note for the person reading the file later and for the model that
+    /// writes the protocol from it.
+    private func resolveTrackViability(
+        _ ctx: JobContext, app16k: URL, mic16k: URL,
+    ) -> DualTrackViability {
+        let viability = DualTrackViability.resolve(
+            appFrames: AudioMixer.frameCount(of: app16k),
+            micFrames: AudioMixer.frameCount(of: mic16k),
+            minimumFrames: ASRConstants.minimumRequiredSamples(
+                forSampleRate: AudioConstants.targetSampleRate,
+            ),
+        )
+        guard let warning = viability.droppedTrackWarning else { return viability }
+        logger.warning(
+            "[\(ctx.shortID, privacy: .public)] dual_track_dropped=\(String(describing: viability), privacy: .public)",
+        )
+        addWarning(id: ctx.jobID, warning)
+        setTranscriptNote(id: ctx.jobID, viability.transcriptNote)
+        return viability
+    }
+
     private func transcribeDualSource(
         _ ctx: JobContext, engine: any TranscribingEngine, workDir: URL,
         appAudioPath: URL, micAudioPath: URL,
@@ -265,24 +294,8 @@ extension PipelineQueue {
         try await micResample
 
         // Which of the two tracks has anything to transcribe, answered before
-        // any of the work below. An empty track used to throw out of the whole
-        // job and take the intact one with it: three recordings in issue #724
-        // produced no transcript at all while holding a complete far end next
-        // to a microphone file of 4096 bytes and zero audio packets.
-        let viability = DualTrackViability.resolve(
-            appFrames: AudioMixer.frameCount(of: app16k),
-            micFrames: AudioMixer.frameCount(of: mic16k),
-            minimumFrames: ASRConstants.minimumRequiredSamples(
-                forSampleRate: AudioConstants.targetSampleRate,
-            ),
-        )
-        if let warning = viability.droppedTrackWarning {
-            logger.warning(
-                "[\(ctx.shortID, privacy: .public)] dual_track_dropped=\(String(describing: viability), privacy: .public)",
-            )
-            addWarning(id: ctx.jobID, warning)
-            setTranscriptNote(id: ctx.jobID, viability.transcriptNote)
-        }
+        // any of the work below.
+        let viability = resolveTrackViability(ctx, app16k: app16k, mic16k: mic16k)
 
         // Both tracks now exist at 16 kHz. Measure here, before transcription
         // and before any remedy touches the audio, whether they carry the same

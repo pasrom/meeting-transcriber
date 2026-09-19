@@ -690,7 +690,7 @@ class PipelineQueue {
     /// Internal (not private) because the late re-diarization rewrite in
     /// `SpeakerNamingSession` writes a transcript too and has to carry it over.
     func transcriptNote(id: UUID) -> String? {
-        jobs.first(where: { $0.id == id })?.transcriptNote
+        jobs.first { $0.id == id }?.transcriptNote
     }
 
     /// Attach the echo detector's verdict to a job. Recorded even when it did
