@@ -29,6 +29,12 @@ enum RunClaim: Equatable {
 /// ledger compare paths. The two are stored together rather than side by side,
 /// so a release cannot name a different path than the claim did and strand it.
 ///
+/// A claim names the audio path as it was at claim time. Stage 3 relocates the
+/// file and records the new path on the job, so from then on the job and the
+/// claim name different paths for the same recording. Release and `isInFlight`
+/// both still match through the job ID, and the orphan scan still filters on
+/// the staging path the claim holds, which is the one it could otherwise find.
+///
 /// Only the mix path counts as the audio identity. A paired import carries no
 /// mix file, so two separate enqueues of the same app plus mic pair rest on the
 /// job ID alone and would not recognise each other. Accepted: the orphan scan

@@ -711,7 +711,14 @@ extension PipelineQueue {
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")
-        Self.persistAudioToOutput(ctx: ctx, outputDir: recordingsDir, stagingDir: stagingDir)
+        // Recorded before the transition below, so the snapshot that transition
+        // writes already names the new locations. That ordering is the whole
+        // fix: a quit during the protocol call must leave a snapshot the restore
+        // can still find the audio by.
+        recordRelocatedAudio(
+            jobID: ctx.jobID,
+            Self.persistAudioToOutput(ctx: ctx, outputDir: recordingsDir, stagingDir: stagingDir),
+        )
 
         // --- Persist 16kHz audio for re-diarization (move instead of copy to avoid double I/O) ---
         try? FileManager.default.moveItem(
@@ -871,7 +878,9 @@ extension PipelineQueue {
     /// directory, per `AudioPersistencePolicy`. Nil `mixPath` (paired imports
     /// without a `_mix.wav` source) → mix slot is skipped, no persistent mix is
     /// written.
-    private static func persistAudioToOutput(ctx: JobContext, outputDir: URL, stagingDir: URL) {
+    private static func persistAudioToOutput(
+        ctx: JobContext, outputDir: URL, stagingDir: URL,
+    ) -> RelocatedAudioPaths {
         let (mixPath, appPath, micPath) = (ctx.mixPath, ctx.appPath, ctx.micPath)
         // Each move below renames-in-place — if two of the three URLs point at
         // the same file, the first move destroys the source for the next one.
@@ -892,15 +901,12 @@ extension PipelineQueue {
 
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)
+
         // Reuse the job's single basename so the audio copies match the
         // transcript/protocol stems exactly (same meeting-start stamp + shortID).
-        let audioPaths: [(URL, String)] = [
-            mixPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.mix)") },
-            appPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.app)") },
-            micPath.map { ($0, "\(ctx.slug)\(RecordingFileSuffix.mic)") },
-        ].compactMap(\.self)
-
-        for (src, name) in audioPaths {
+        func persist(_ src: URL?, _ suffix: String) -> URL? {
+            guard let src else { return nil }
+            let name = "\(ctx.slug)\(suffix)"
             let dst = outputDir.appendingPathComponent(name)
             switch AudioPersistencePolicy.action(
                 source: src, stagingDir: stagingDir, destinationDir: outputDir,
@@ -911,11 +917,11 @@ extension PipelineQueue {
                 // compounding-rename loop on every re-import (orphan recovery
                 // re-picks the new name on next launch).
                 logger.info("Audio already in output dir, skipping rename: \(src.lastPathComponent, privacy: .private)")
-                continue
+                return src
 
             case .leaveInPlace:
                 logger.info("Imported audio left in place: \(src.lastPathComponent, privacy: .private)")
-                continue
+                return src
 
             case .move:
                 break
@@ -927,18 +933,26 @@ extension PipelineQueue {
             // rather than copied, no copy would remain anywhere.
             guard fm.fileExists(atPath: src.path) else {
                 logger.info("Audio already relocated, skipping: \(name, privacy: .private)")
-                continue
+                return fm.fileExists(atPath: dst.path) ? dst : src
             }
             do {
                 if fm.fileExists(atPath: dst.path) { try fm.removeItem(at: dst) }
                 try fm.moveItem(at: src, to: dst)
                 logger.info("Audio moved: \(name, privacy: .private)")
+                return dst
             } catch {
                 // Error left redacted: a file-move CocoaError embeds the
                 // meeting-title-derived filename in its description (the same
                 // data the sibling .private annotation hides).
                 logger.warning("Failed to move audio \(name, privacy: .private): \(error.localizedDescription)")
+                return src
             }
         }
+
+        return RelocatedAudioPaths(
+            mix: persist(mixPath, RecordingFileSuffix.mix),
+            app: persist(appPath, RecordingFileSuffix.app),
+            mic: persist(micPath, RecordingFileSuffix.mic),
+        )
     }
 }

@@ -27,6 +27,10 @@ extension PipelineQueue {
             return
         }
 
+        // The reset below overwrites the state a job was interrupted in, which
+        // is the one field a discard record is worth reading for.
+        let interruptedStates = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0.state) })
+
         // Reset active states back to waiting
         for i in loaded.indices {
             switch loaded[i].state {
@@ -43,28 +47,27 @@ extension PipelineQueue {
         loaded.removeAll { $0.state == .done }
         removeNamingDataOfDiscardedJobs(doneJobs)
 
-        // Discard jobs whose audio file no longer exists, EXCEPT
-        // .speakerNamingPending — those have their own slug-based
-        // `_16k.wav` sidecar and don't need the original mix.wav.
-        // Paired imports with nil mixPath: keep them — `appPath` is the
-        // ground-truth source and it's checked at processNext time.
-        loaded.removeAll { job in
-            guard let mixPath = job.mixPath else { return false }
-            return job.state != .speakerNamingPending
-                && !FileManager.default.fileExists(atPath: mixPath.path)
-        }
+        discardJobsWithMissingAudio(&loaded, interruptedIn: interruptedStates)
 
         // Drop what another queue is still running. This is where issue #558
         // brought the job back: a replacement queue reads the same snapshot,
         // finds the job recorded as active, resets it to waiting above and
         // starts it a second time. Speaker naming is exempt because a job
         // parked there is waiting on the user, not executing.
+        let beforeInFlightDrop = loaded.count
         loaded.removeAll { job in
             job.state != .speakerNamingPending && inFlightRuns.isInFlight(job)
         }
+        let droppedInFlight = loaded.count < beforeInFlightDrop
 
         guard !loaded.isEmpty else {
             logger.info("Snapshot loaded but no recoverable jobs")
+            // Rewrite the file, or a job discarded for good is read, discarded
+            // and logged again on every launch from here on, and the record of
+            // the loss cannot be told apart from the re-reads of it. Skipped
+            // when the in-flight rule dropped something: that job belongs to a
+            // queue still running it, whose own transitions own the file.
+            if !droppedInFlight { saveSnapshot() }
             return
         }
 
@@ -99,6 +102,38 @@ extension PipelineQueue {
         }
     }
 
+    /// Discard jobs whose audio file no longer exists, EXCEPT
+    /// `.speakerNamingPending` — those have their own slug-based `_16k.wav`
+    /// sidecar and don't need the original mix.wav. Paired imports with nil
+    /// `mixPath`: keep them, `appPath` is the ground-truth source and it's
+    /// checked at processNext time.
+    ///
+    /// Losing a job is worth a line. This used to drop one without a trace
+    /// anywhere, which is how the quit-during-protocol-generation case stayed
+    /// invisible: the job simply was not there any more, and the event log
+    /// ended mid-run. A job that reaches this rule now leaves a record naming
+    /// it, whether its audio was deleted, its relocation failed, or its
+    /// snapshot predates the job carrying its relocated paths.
+    private func discardJobsWithMissingAudio(
+        _ loaded: inout [PipelineJob], interruptedIn: [UUID: JobState],
+    ) {
+        let missing = loaded.filter { job in
+            guard let mixPath = job.mixPath else { return false }
+            return job.state != .speakerNamingPending
+                && !FileManager.default.fileExists(atPath: mixPath.path)
+        }
+        guard !missing.isEmpty else { return }
+        let missingIDs = Set(missing.map(\.id))
+        loaded.removeAll { missingIDs.contains($0.id) }
+        for job in missing {
+            logger.warning("Discarded restored job \(job.shortID, privacy: .public): audio no longer at the recorded path")
+            eventLog.append(
+                jobID: job.id, event: "discarded_missing_audio",
+                from: interruptedIn[job.id], to: job.state,
+            )
+        }
+    }
+
     /// Drop the naming sidecars of the `.done` jobs the restore threw away.
     ///
     /// Dropping a job has to drop what belongs to it, the same rule `removeJob`
@@ -109,15 +144,14 @@ extension PipelineQueue {
     /// alone they stay for good, and for a dual-source hour that is hundreds of
     /// MB per job.
     ///
-    /// **Only the `.done` rule feeds this.** The missing-audio rule drops jobs
-    /// whose audio is in fact fine: `persistAudioToOutput` relocates it without
-    /// writing the new paths back onto the job, so `mixPath` still names an
-    /// emptied staging path. Those are exactly the jobs a late re-diarization or
-    /// late re-confirm may still be running on a queue that `rebuild()` swapped
-    /// out, reading the very sidecars this would delete, and the registry cannot
-    /// separate them because only `processNext` ever claims. Writing the
-    /// relocated paths back is what would make that rule safe to clean up after,
-    /// and it is tracked separately rather than widened in here.
+    /// **Only the `.done` rule feeds this.** The missing-audio rule now fires on
+    /// three populations only: snapshots written before a job carried its
+    /// relocated paths, files the user really did delete, and relocations that
+    /// failed. The first of those can still be a late re-diarization or late
+    /// re-confirm running on a queue that `rebuild()` swapped out, reading the
+    /// very sidecars this would delete, and the registry cannot separate them
+    /// because only `processNext` ever claims a run. So that rule keeps its
+    /// hands off, at the price of leaving those legacy jobs' sidecars behind.
     ///
     /// The in-flight check below is not merely belt and braces: the transition
     /// to `.done` happens inside the claimed run, before `processNext` releases
