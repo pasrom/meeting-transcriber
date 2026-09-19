@@ -1901,6 +1901,237 @@ final class PipelineQueueTests: XCTestCase {
             FileManager.default.fileExists(atPath: audioPath.path),
             "import must not move the user's file out of its folder",
         )
+        XCTAssertEqual(
+            q.jobs.first?.mixPath?.standardizedFileURL, audioPath.standardizedFileURL,
+            "an import is never relocated, so its path on the job must not be rewritten",
+        )
+    }
+
+    // MARK: - Relocated Audio Paths (#726)
+
+    /// After stage 3 hands the audio to the output folder, the job has to name
+    /// the files where they now are. Otherwise every later reader, the restore
+    /// discard rule above all, judges the job by a staging path that was emptied
+    /// the moment the move succeeded.
+    func testFinishedJobCarriesTheRelocatedAudioPaths() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let job = try makeDualSourceJob(title: "Relocated Paths")
+        q.enqueue(job)
+        await q.processNext()
+
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let stem = try XCTUnwrap(q.jobs.first?.namingSlug)
+        let finished = try XCTUnwrap(q.jobs.first)
+        // All three slots, not just the mix: a re-run of a dual-source job reads
+        // appPath and micPath too, so a forgotten slot turns the fix into an error.
+        for (actual, suffix) in [
+            (finished.mixPath, RecordingFileSuffix.mix),
+            (finished.appPath, RecordingFileSuffix.app),
+            (finished.micPath, RecordingFileSuffix.mic),
+        ] {
+            let expected = recordingsDir.appendingPathComponent("\(stem)\(suffix)")
+            XCTAssertEqual(actual?.standardizedFileURL, expected.standardizedFileURL)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: expected.path))
+        }
+    }
+
+    /// The issue #726 repro: the app is quit while the LLM call runs, and the
+    /// job is gone after the next launch.
+    ///
+    /// The fixture is the production run's own output rather than a hand-written
+    /// path, because a hand-written one cannot tell the fix from its absence: it
+    /// would name the relocated file either way. Here the job is taken as stage 3
+    /// left it and only its state is wound back to the interrupted one, so
+    /// without the write-back it still carries the emptied staging path and the
+    /// restore drops it.
+    func testRestoreKeepsAJobInterruptedDuringProtocolGeneration() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        try q.enqueue(makeDualSourceJob(title: "Interrupted By Quit"))
+        await q.processNext()
+
+        // The snapshot worker is detached, so without this the `.done` snapshot
+        // can land on top of the one written below and the test fails for a
+        // reason that has nothing to do with #726.
+        await q.awaitSnapshotFlush()
+
+        var interrupted = try XCTUnwrap(q.jobs.first)
+        interrupted.state = .generatingProtocol
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        // Own registry: the shared one would drop the job as in-flight and the
+        // test would go red for a reason that has nothing to do with #726.
+        let restored = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            stagingDir: tmpDir,
+            inFlightRuns: InFlightRunRegistry(),
+        )
+        restored.loadSnapshot()
+
+        XCTAssertEqual(restored.jobs.count, 1, "the interrupted job must survive the restore")
+        let mixPath = try XCTUnwrap(restored.jobs.first?.mixPath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mixPath.path))
+
+        // The restore starts the surviving job; let it finish rather than
+        // leaving a run writing into tmpDir while tearDown deletes it.
+        await restored.awaitProcessing()
+    }
+
+    /// The persistence cannot ride on the next state transition, because with
+    /// no protocol generator configured there is none: `generateProtocol`
+    /// returns before its own transition. The relocation has to write the
+    /// snapshot itself.
+    func testRelocatedPathsSurviveARestoreWithoutAProtocolGenerator() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello world")]
+        let q = PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            stagingDir: tmpDir,
+            inFlightRuns: InFlightRunRegistry(),
+        )
+        try q.enqueue(makeDualSourceJob(title: "No Protocol Provider"))
+        await q.processNext()
+        await q.awaitSnapshotFlush()
+
+        let onDisk = try XCTUnwrap(PipelineSnapshot.load(from: tmpDir))
+        let mixPath = try XCTUnwrap(onDisk.first?.mixPath)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: mixPath.path),
+            "the snapshot must name the relocated audio even with no protocol generator",
+        )
+    }
+
+    /// The relocation has to persist itself rather than lean on a later state
+    /// transition, because there is not always one: `generateProtocol` returns
+    /// before its own transition when no protocol generator is configured, and
+    /// a quit in the window after the move would then leave a snapshot still
+    /// naming the emptied staging path.
+    func testRecordingRelocatedAudioWritesTheSnapshotItself() async {
+        let writes = OSAllocatedUnfairLock<Int>(initialState: 0)
+        // swiftlint:disable trailing_closure
+        let q = PipelineQueue(
+            logDir: tmpDir,
+            snapshotWriter: { _, _ in writes.withLock { $0 += 1 } },
+        )
+        // swiftlint:enable trailing_closure
+        let job = makeJob(title: "Persist On Relocation")
+        q.enqueue(job)
+        await q.awaitSnapshotFlush()
+        let before = writes.withLock { $0 }
+
+        q.recordRelocatedAudio(jobID: job.id, RelocatedAudioPaths(
+            mix: tmpDir.appendingPathComponent("recordings/moved_mix.wav"), app: nil, mic: nil,
+        ))
+        await q.awaitSnapshotFlush()
+
+        XCTAssertGreaterThan(
+            writes.withLock { $0 }, before,
+            "recording the relocation must reach disk on its own",
+        )
+        XCTAssertEqual(
+            q.jobs.first?.mixPath?.lastPathComponent, "moved_mix.wav",
+            "and it must be what the job carries afterwards",
+        )
+    }
+
+    /// A job interrupted during a late re-diarization is exposed the same way,
+    /// because that run puts an already relocated job back into `.diarizing`.
+    func testRestoreKeepsAJobInterruptedDuringLateRediarization() async throws {
+        let (queue, _, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Interrupted Re-diarization",
+            transcriptSegments: [TimestampedSegment(start: 0, end: 5, text: "Hello")],
+        )
+        await queue.awaitSnapshotFlush()
+
+        var interrupted = try XCTUnwrap(queue.jobs.first { $0.id == jobID })
+        interrupted.state = .diarizing
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let restored = PipelineQueue(
+            engine: MockEngine(),
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { nil },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            stagingDir: tmpDir,
+            inFlightRuns: InFlightRunRegistry(),
+        )
+        restored.loadSnapshot()
+
+        XCTAssertEqual(restored.jobs.count, 1)
+        await restored.awaitProcessing()
+    }
+
+    /// Losing a job has to leave a trace. The restore used to drop a job whose
+    /// audio it could not find without a single line anywhere, so the one case
+    /// that still reaches that rule after the write-back has to be readable
+    /// after the fact.
+    func testLoadSnapshotLogsJobsDiscardedForMissingAudio() async throws {
+        var job = PipelineJob(
+            meetingTitle: "Vanished Audio", appName: "App",
+            mixPath: tmpDir.appendingPathComponent("gone_\(UUID().uuidString).wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .generatingProtocol
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let queue = PipelineQueue(logDir: tmpDir)
+        queue.loadSnapshot()
+
+        XCTAssertEqual(queue.jobs.count, 0)
+        let log = try String(contentsOf: queue.eventLog.path, encoding: .utf8)
+        XCTAssertTrue(
+            log.contains("discarded_missing_audio") && log.contains(job.id.uuidString),
+            "the discard left no trace in the event log",
+        )
+        XCTAssertTrue(
+            log.contains("\"from\":\"generatingProtocol\""),
+            "the record must name the stage the job was interrupted in, not the reset state",
+        )
+
+        // Re-reading the same dead entry on every launch would bury the one
+        // record of the loss under copies of itself. The rewrite goes through
+        // the detached snapshot writer, so order it before the next launch.
+        await queue.awaitSnapshotFlush()
+        let second = PipelineQueue(logDir: tmpDir)
+        second.loadSnapshot()
+        let occurrences = try String(contentsOf: queue.eventLog.path, encoding: .utf8)
+            .components(separatedBy: "discarded_missing_audio").count - 1
+        XCTAssertEqual(occurrences, 1, "the discard must not repeat on the next launch")
+    }
+
+    /// A move that fails must leave the job naming the file that is still there.
+    /// Writing the intended destination unconditionally would put a path on the
+    /// job that nothing can open, and would record it in the processed ledger
+    /// while the real file sits in staging waiting to be re-picked as an orphan.
+    func testFailedRelocationKeepsTheStagingPathOnTheJob() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        // A regular file where the recordings folder belongs makes both the
+        // createDirectory and the move fail, deterministically and without
+        // touching permissions.
+        try Data([0]).write(to: tmpDir.appendingPathComponent("recordings"))
+        let job = try makeDualSourceJob(title: "Move Fails")
+        let stagedMix = try XCTUnwrap(job.mixPath)
+        q.enqueue(job)
+        await q.processNext()
+
+        XCTAssertEqual(q.jobs.first?.mixPath?.standardizedFileURL, stagedMix.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stagedMix.path))
+        XCTAssertTrue(
+            ProcessedRecordingsLedger(logDir: tmpDir).load()
+                .contains(stagedMix.standardizedFileURL.path),
+            "the ledger must record where the file actually is",
+        )
     }
 
     /// Transcript, protocol, and both audio artifacts of one job must all land on

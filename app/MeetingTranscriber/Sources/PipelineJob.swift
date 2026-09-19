@@ -30,6 +30,18 @@ enum JobState: String, Codable {
     }
 }
 
+/// Where a job's audio sits once stage 3 has handed it to the output folder:
+/// the destination for a slot that was actually moved, the original source for
+/// every other outcome, including a move that failed. Reporting the intent
+/// instead would put a path on the job that nothing can open, and the
+/// processed-recordings ledger would record it while the real file waited in
+/// staging to be re-picked as an orphan.
+struct RelocatedAudioPaths {
+    let mix: URL?
+    let app: URL?
+    let mic: URL?
+}
+
 struct PipelineJob: Identifiable, Codable {
     let id: UUID
 
@@ -50,9 +62,14 @@ struct PipelineJob: Identifiable, Codable {
     /// nil when the job is a paired-import without a `_mix.wav` source — the
     /// pipeline mixes `appPath`+`micPath` directly to the workdir `mix_16k.wav`
     /// in that case, so no persistent mix file is written.
-    let mixPath: URL?
-    let appPath: URL?
-    let micPath: URL?
+    ///
+    /// Settable only from inside this file, so `recordRelocatedAudio` below
+    /// stays the single writer after enqueue. Any other reassignment silently
+    /// changes what the processed-recordings ledger records and what the
+    /// snapshot restore judges the job by, and both failures are invisible.
+    private(set) var mixPath: URL?
+    private(set) var appPath: URL?
+    private(set) var micPath: URL?
     let micDelay: TimeInterval
     let participants: [String]
     let enqueuedAt: Date
@@ -69,6 +86,18 @@ struct PipelineJob: Identifiable, Codable {
 
     /// Timestamp used only for output artifact names. Reimports and recovery
     /// have no real meeting start, so their filenames use enqueue time.
+    /// Record where stage 3 left this job's audio.
+    ///
+    /// Until this existed, a relocated job kept naming the staging path the
+    /// move had just emptied, so the snapshot restore discarded it although the
+    /// audio was sitting in the output folder, and the ledger recorded a path
+    /// that no longer existed.
+    mutating func recordRelocatedAudio(_ paths: RelocatedAudioPaths) {
+        mixPath = paths.mix
+        appPath = paths.app
+        micPath = paths.mic
+    }
+
     var artifactStartTime: Date {
         meetingStartTime ?? enqueuedAt
     }

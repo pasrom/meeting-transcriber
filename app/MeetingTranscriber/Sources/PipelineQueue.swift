@@ -673,6 +673,20 @@ class PipelineQueue {
     /// not fire, so a later "why does my transcript have duplicates" can tell a
     /// missed detection from one that never ran.
     /// Internal (not private) because `PipelineQueue+EchoBleed.swift` calls it.
+    /// Record where stage 3 left a job's audio, and persist it.
+    ///
+    /// The snapshot write is the point. Leaving it to the next state transition
+    /// works only where there is one: `generateProtocol` returns before its
+    /// `.generatingProtocol` transition when no protocol generator is
+    /// configured, so a quit right after the relocation would leave a snapshot
+    /// still naming the emptied staging path and the restore would discard the
+    /// job exactly as it did before this fix.
+    func recordRelocatedAudio(jobID: UUID, _ paths: RelocatedAudioPaths) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        jobs[index].recordRelocatedAudio(paths)
+        saveSnapshot()
+    }
+
     func recordEchoVerdict(jobID: UUID, _ verdict: EchoDetectionDTO) {
         guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
         jobs[index].echo = verdict
