@@ -33,6 +33,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
     private struct Harness {
         let queue: PipelineQueue
         let engine: MockEngine
+        let diarization: MockDiarization
     }
 
     private func makeHarness(diarizeEnabled: Bool = false) -> Harness {
@@ -58,7 +59,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
             diarizeEnabled: diarizeEnabled,
             echoDedupEnabled: false,
         )
-        return Harness(queue: queue, engine: engine)
+        return Harness(queue: queue, engine: engine, diarization: diarization)
     }
 
     /// The whole recording, as the recorder leaves it. `frames: 0` writes the
@@ -73,16 +74,23 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         return url
     }
 
-    private func run(_ h: Harness, app: URL, mic: URL) async {
-        h.queue.speakerNamingHandler = { _ in .skipped }
+    /// `naming` is a parameter because the late-re-diarization test needs a
+    /// handler that reruns once; every other test skips naming.
+    private func run(
+        _ h: Harness,
+        naming: @escaping (PipelineQueue.SpeakerNamingData) async -> PipelineQueue.SpeakerNamingResult = { _ in .skipped },
+        app: URL, mic: URL,
+    ) async {
+        h.queue.speakerNamingHandler = naming
         h.queue.enqueue(PipelineJob(
             meetingTitle: "meeting", appName: "File",
             mixPath: nil, appPath: app, micPath: mic, micDelay: 0,
         ))
         await h.queue.processNext()
-        for _ in 0 ..< 200 where !(h.queue.jobs.first?.state.isTerminal ?? true) {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
+        // The suite's shared helper rather than a hand-rolled loop: the naming
+        // path lands just after `processNext` returns, so a 50 ms tick is paid
+        // in full for nothing.
+        await waitFor(h.queue.jobs.first?.state.isTerminal ?? false, timeout: .seconds(10))
     }
 
     private func transcript(_ h: Harness) throws -> String {
@@ -162,26 +170,58 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let h = makeHarness(diarizeEnabled: true)
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
         var namingCalls = 0
-        h.queue.speakerNamingHandler = { _ in
-            namingCalls += 1
-            return namingCalls == 1 ? .rerun(2) : .skipped
-        }
 
-        try h.queue.enqueue(PipelineJob(
-            meetingTitle: "meeting", appName: "File",
-            mixPath: nil,
-            appPath: writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            micPath: writeTrack(frames: 0, named: "meeting_mic.wav"),
-            micDelay: 0,
-        ))
-        await h.queue.processNext()
-        for _ in 0 ..< 400 where !(h.queue.jobs.first?.state.isTerminal ?? true) {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
+        try await run(
+            h,
+            naming: { _ in
+                namingCalls += 1
+                return namingCalls == 1 ? .rerun(2) : .skipped
+            },
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
+        )
 
         XCTAssertEqual(namingCalls, 2, "the rerun has to actually run the late rewrite")
         let text = try transcript(h)
         XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
+    }
+
+    /// The verdict is taken once and read by the stage after transcription too.
+    /// Without that the empty track was still handed to the diarizer, which
+    /// then failed on it and added a second warning for one cause, naming the
+    /// wrong one: nothing failed to diarize, there was nothing to diarize.
+    func testAnEmptyTrackIsNotOfferedToTheDiarizer() async throws {
+        let h = makeHarness(diarizeEnabled: true)
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
+        )
+
+        XCTAssertEqual(
+            h.diarization.runCount, 1,
+            "the app track only; a file already measured as empty must not reach a model",
+        )
+    }
+
+    func testTheEmptyTrackIsReportedOnceAndNotAsADiarizationFailure() async throws {
+        let h = makeHarness(diarizeEnabled: true)
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+
+        try await run(
+            h,
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
+        )
+
+        let warnings = h.queue.jobs.first?.warnings ?? []
+        XCTAssertEqual(warnings.count, 1, "one cause, one warning, got: \(warnings)")
+        XCTAssertFalse(
+            warnings[0].lowercased().contains("diarization failed"),
+            "got: \(warnings[0])",
+        )
     }
 
     // MARK: - The mirror case
@@ -218,6 +258,21 @@ final class EmptyTrackSurvivesTests: XCTestCase {
             h.queue.jobs.first?.state, .error,
             "with nothing on either side there is no transcript to save",
         )
+    }
+
+    /// Nil has to keep meaning "no verdict was taken". A healthy dual-source
+    /// recording records `.both`, so a reader can tell it apart from a job the
+    /// check never ran for.
+    func testAHealthyRecordingStillRecordsItsVerdict() async throws {
+        let h = makeHarness()
+
+        await run(
+            h,
+            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: try writeTrack(frames: 160_000, named: "meeting_mic.wav"),
+        )
+
+        XCTAssertEqual(h.queue.jobs.first?.trackViability, .both)
     }
 
     func testAHealthyRecordingIsNeitherWarnedAboutNorAnnotated() async throws {

@@ -1,5 +1,4 @@
 // swiftlint:disable file_length
-import FluidAudio
 import Foundation
 import os.log
 
@@ -33,6 +32,11 @@ extension PipelineQueue {
     /// Output of the transcription stage, consumed by diarization + protocol save.
     private struct TranscriptionOutput {
         let transcript: String
+        /// The recording-level line this job's transcript opens with, resolved
+        /// once in `transcribe` and carried so the diarization stage renders
+        /// the same one. The job holds the fact it comes from; this is that
+        /// fact's rendering for the length of one run.
+        let note: String?
         /// Segments cached for diarization reuse (avoids double transcription).
         let cachedSegments: [TimestampedSegment]? // swiftlint:disable:this discouraged_optional_collection
         let isDualSource: Bool
@@ -246,13 +250,13 @@ extension PipelineQueue {
 
     // MARK: - Pipeline stages
 
-    /// The dual-source half of stage 1: resample both tracks, measure the echo
-    /// between them, transcribe them separately, and merge the two transcripts
-    /// into one timeline.
-    ///
-    /// Split out of `transcribe` because the echo work pushed that function past
-    /// the body-length cap, and because this half now has a shape of its own:
-    /// everything here depends on there being two tracks to compare.
+    /// The line this job's transcript opens with, or nil when there is nothing
+    /// to say. Rendered from the stored verdict at the point of use rather than
+    /// stored as prose, so the wording never has to be parsed back.
+    private func transcriptNote(_ jobID: UUID) -> String? {
+        job(withID: jobID)?.trackViability?.transcriptNote
+    }
+
     /// Which tracks of a dual-source recording carry audio, and the record of
     /// a dropped one on the job.
     ///
@@ -264,24 +268,33 @@ extension PipelineQueue {
     /// note for the person reading the file later and for the model that
     /// writes the protocol from it.
     private func resolveTrackViability(
-        _ ctx: JobContext, app16k: URL, mic16k: URL,
+        _ ctx: JobContext, engine: any TranscribingEngine, app16k: URL, mic16k: URL,
     ) -> DualTrackViability {
         let viability = DualTrackViability.resolve(
             appFrames: AudioMixer.frameCount(of: app16k),
             micFrames: AudioMixer.frameCount(of: mic16k),
-            minimumFrames: ASRConstants.minimumRequiredSamples(
-                forSampleRate: AudioConstants.targetSampleRate,
-            ),
+            minimumFrames: engine.minimumAudioFrames,
         )
+        // Recorded for every dual-source job, not only when a track was
+        // dropped: the stages after this one read it, and nil has to keep
+        // meaning "no verdict was taken" rather than doubling as "the
+        // recording was fine".
+        setTrackViability(id: ctx.jobID, viability)
         guard let warning = viability.droppedTrackWarning else { return viability }
         logger.warning(
             "[\(ctx.shortID, privacy: .public)] dual_track_dropped=\(String(describing: viability), privacy: .public)",
         )
         addWarning(id: ctx.jobID, warning)
-        setTranscriptNote(id: ctx.jobID, viability.transcriptNote)
         return viability
     }
 
+    /// The dual-source half of stage 1: resample both tracks, measure the echo
+    /// between them, transcribe them separately, and merge the two transcripts
+    /// into one timeline.
+    ///
+    /// Split out of `transcribe` because the echo work pushed that function past
+    /// the body-length cap, and because this half now has a shape of its own:
+    /// everything here depends on there being two tracks to compare.
     private func transcribeDualSource(
         _ ctx: JobContext, engine: any TranscribingEngine, workDir: URL,
         appAudioPath: URL, micAudioPath: URL,
@@ -295,7 +308,7 @@ extension PipelineQueue {
 
         // Which of the two tracks has anything to transcribe, answered before
         // any of the work below.
-        let viability = resolveTrackViability(ctx, app16k: app16k, mic16k: mic16k)
+        let viability = resolveTrackViability(ctx, engine: engine, app16k: app16k, mic16k: mic16k)
 
         // Both tracks now exist at 16 kHz. Measure here, before transcription
         // and before any remedy touches the audio, whether they carry the same
@@ -305,10 +318,14 @@ extension PipelineQueue {
         // after the remedy would report every repaired recording as clean and
         // take the quarantine off the audio that needed it.
         //
-        // Only when both tracks carry audio. The detector correlates one
+        // Only when both tracks carry audio. The detector correlates one track
         // against the other, so with one of them empty there is nothing to
-        // correlate, and running it would cost a full load of both files to
-        // reach the verdict it starts from.
+        // correlate. What the skip saves is measured and modest: it loads the
+        // app track first, so an empty microphone means one full load (6 ms for
+        // ten minutes) before it bails on the second, and an empty app track
+        // means it bails immediately and the skip saves nothing. It is kept for
+        // the other reason: without it the run logs "a track could not be read",
+        // which describes the wrong thing.
         let echoAnalysis = viability == .both
             ? await measureEchoBleed(
                 jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
@@ -410,7 +427,7 @@ extension PipelineQueue {
             )
             let normalizedSegments = normalize(segments, with: normalizer)
             cachedSegments = normalizedSegments
-            transcript = normalizedSegments.transcriptText
+            transcript = normalizedSegments.transcriptText(note: transcriptNote(ctx.jobID))
         } else {
             // Single-source: resample mix to 16kHz
             guard let mixPath = ctx.mixPath else {
@@ -439,7 +456,9 @@ extension PipelineQueue {
             }
 
             cachedSegments = segments
-            transcript = segments.transcriptText
+            // Single-source has one track and no viability verdict, so nothing
+            // to annotate.
+            transcript = segments.transcriptText(note: nil)
         }
 
         stopElapsedTimer()
@@ -455,6 +474,7 @@ extension PipelineQueue {
 
         return TranscriptionOutput(
             transcript: transcript,
+            note: transcriptNote(ctx.jobID),
             cachedSegments: cachedSegments,
             isDualSource: isDualSource,
             terminologyNormalizer: normalizer,
@@ -604,6 +624,7 @@ extension PipelineQueue {
                 app: workDir.appendingPathComponent("app_16k.wav"),
                 mic: workDir.appendingPathComponent("mic_16k.wav"),
                 micDelay: ctx.micDelay,
+                viability: job(withID: ctx.jobID)?.trackViability,
             ),
             speakerCount: speakerCount, title: ctx.title, jobID: ctx.jobID,
         )
@@ -618,37 +639,49 @@ extension PipelineQueue {
     /// `R_`/`M_`-prefixed merge. Shared by the batch (`runDiarization`) and the
     /// session's late re-run so the fallback can't diverge between them. Internal
     /// (not private) because it is a `SpeakerNamingSessionDelegate` witness.
+    ///
+    /// A track the transcribe stage already measured as empty
+    /// (`tracks.viability`) is never offered to the diarizer. Without that it
+    /// still ran on a zero-frame file, and the job collected a second warning
+    /// for one cause which named the wrong one: nothing failed to diarize,
+    /// there was nothing to diarize. Nil means no verdict was taken (a late
+    /// re-run on a job from before this existed) and every track is offered,
+    /// as it was.
     func runDualTrackDiarization(
         diarizeProcess: any DiarizationProvider,
-        tracks: (app: URL, mic: URL, micDelay: TimeInterval),
+        tracks: (app: URL, mic: URL, micDelay: TimeInterval, viability: DualTrackViability?),
         speakerCount: Int?, title: String, jobID: UUID,
     ) async throws -> DiarizationRun {
         let sid = PipelineJob.shortID(for: jobID)
 
         var appDiarization: DiarizationResult?
         var appError: (any Error)?
-        do {
-            appDiarization = try await diarizeProcess.run(
-                audioPath: tracks.app, numSpeakers: speakerCount, meetingTitle: title,
-            )
-        } catch {
-            appError = error
+        if tracks.viability?.carriesAppAudio ?? true {
+            do {
+                appDiarization = try await diarizeProcess.run(
+                    audioPath: tracks.app, numSpeakers: speakerCount, meetingTitle: title,
+                )
+            } catch {
+                appError = error
+            }
         }
 
         var micDiarization: DiarizationResult?
         var micError: (any Error)?
-        do {
-            let rawMic = try await diarizeProcess.run(
-                audioPath: tracks.mic,
-                numSpeakers: nil, // auto-detect local speakers
-                meetingTitle: title,
-            )
-            // Shift the mic diarization onto the app/canonical timeline so it
-            // aligns with the mic transcript segments, which
-            // `mergeDualSourceSegments` already shifted by `+micDelay`.
-            micDiarization = DiarizationProcess.shiftSegments(rawMic, by: tracks.micDelay)
-        } catch {
-            micError = error
+        if tracks.viability?.carriesMicAudio ?? true {
+            do {
+                let rawMic = try await diarizeProcess.run(
+                    audioPath: tracks.mic,
+                    numSpeakers: nil, // auto-detect local speakers
+                    meetingTitle: title,
+                )
+                // Shift the mic diarization onto the app/canonical timeline so it
+                // aligns with the mic transcript segments, which
+                // `mergeDualSourceSegments` already shifted by `+micDelay`.
+                micDiarization = DiarizationProcess.shiftSegments(rawMic, by: tracks.micDelay)
+            } catch {
+                micError = error
+            }
         }
 
         // Tolerate one silent/failed track and fall back to the other: a silent
@@ -662,17 +695,25 @@ extension PipelineQueue {
             combined = DiarizationProcess.mergeDualTrackDiarization(appDiarization: app, micDiarization: mic)
 
         case let (app?, nil):
-            logger.warning(
-                "[\(sid, privacy: .public)] mic_diarization_failed error=\(micError?.localizedDescription ?? "unknown", privacy: .public) — falling back to app-only diarization",
-            )
-            addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+            // Only when it was tried and did not work. A track that held no
+            // audio was never offered, and the transcribe stage has already
+            // said so once.
+            if micError != nil {
+                logger.warning(
+                    "[\(sid, privacy: .public)] mic_diarization_failed error=\(micError?.localizedDescription ?? "unknown", privacy: .public) — falling back to app-only diarization",
+                )
+                addWarning(id: jobID, "Mic track diarization failed — speaker labels reflect remote audio only")
+            }
             combined = app
 
         case let (nil, mic?):
-            logger.warning(
-                "[\(sid, privacy: .public)] app_diarization_failed error=\(appError?.localizedDescription ?? "unknown", privacy: .public) — falling back to mic-only diarization",
-            )
-            addWarning(id: jobID, "App track diarization failed — speaker labels reflect local mic only")
+            // Mirror of the arm above: silent when the track was never offered.
+            if appError != nil {
+                logger.warning(
+                    "[\(sid, privacy: .public)] app_diarization_failed error=\(appError?.localizedDescription ?? "unknown", privacy: .public) — falling back to mic-only diarization",
+                )
+                addWarning(id: jobID, "App track diarization failed — speaker labels reflect local mic only")
+            }
             combined = mic
 
         case (nil, nil):
@@ -707,6 +748,7 @@ extension PipelineQueue {
         return renderLabeledTranscript(
             run: run, cachedSegments: cachedSegments,
             isDualSource: transcription.isDualSource, autoNames: autoNames,
+            note: transcription.note,
         )
     }
 
@@ -720,7 +762,7 @@ extension PipelineQueue {
     /// witness.
     func renderLabeledTranscript(
         run: DiarizationRun, cachedSegments: [TimestampedSegment],
-        isDualSource: Bool, autoNames: [String: String],
+        isDualSource: Bool, autoNames: [String: String], note: String?,
     ) -> String? {
         // Suppressed copies leave before anything gets a speaker. Left in,
         // they would be labeled like real speech and merged into adjacent
@@ -750,7 +792,7 @@ extension PipelineQueue {
         }
         guard let topology else { return nil }
         let labeled = DiarizationProcess.labelSegments(topology, autoNames: autoNames)
-        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).transcriptText
+        return DiarizationProcess.mergeConsecutiveSpeakers(labeled).transcriptText(note: note)
     }
 
     /// Stage 3 — persist the transcript + audio, run protocol generation
@@ -765,15 +807,6 @@ extension PipelineQueue {
         // opted out of a separate raw file: late speaker naming still needs to
         // rewrite it before generating the final protocol.
         let protocolsDir = outputDir.appendingPathComponent("protocols")
-        // Applied here rather than where the transcript was composed: the
-        // diarization stage replaces that text wholesale with its
-        // speaker-labeled rendering, so a note put in earlier is gone by now.
-        // Both consumers below take the annotated text, because the model
-        // writing the protocol needs to know the recording is half as much as
-        // the person reading the transcript does.
-        let finalTranscript = TranscriptNote.prepend(
-            transcriptNote(id: ctx.jobID), to: finalTranscript,
-        )
         let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, basename: ctx.slug, dir: protocolsDir)
         logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
 

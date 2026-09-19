@@ -418,6 +418,8 @@ class MockEngine: TranscribingEngine {
     /// the far end falls silent, which one shared list cannot express.
     var segmentsByPathSuffix: [String: [TimestampedSegment]] = [:]
     var transcribeCallCount = 0
+    /// Refuses every path. `throwingPathSuffixes` below is checked first, so a
+    /// test setting both gets that one's message.
     var shouldThrow = false
     /// Path suffixes this engine refuses, standing in for the real engine's
     /// `Invalid audio data provided...`. An empty-track test needs the refusal

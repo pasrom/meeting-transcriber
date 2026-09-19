@@ -678,19 +678,11 @@ class PipelineQueue {
         jobs[index].warnings.append(message)
     }
 
-    /// Record the line that goes at the top of this job's transcript. Applied
-    /// at each point that writes a transcript out, not here, because the
-    /// transcript is rebuilt between those points.
-    func setTranscriptNote(id: UUID, _ note: String?) {
+    /// Record which tracks of this job's recording had audio. Read back through
+    /// `job(withID:)` like every other per-job field.
+    func setTrackViability(id: UUID, _ viability: DualTrackViability) {
         guard let index = jobs.firstIndex(where: { $0.id == id }) else { return }
-        jobs[index].transcriptNote = note
-    }
-
-    /// The note to place at the top of this job's transcript, if any.
-    /// Internal (not private) because the late re-diarization rewrite in
-    /// `SpeakerNamingSession` writes a transcript too and has to carry it over.
-    func transcriptNote(id: UUID) -> String? {
-        jobs.first { $0.id == id }?.transcriptNote
+        jobs[index].trackViability = viability
     }
 
     /// Attach the echo detector's verdict to a job. Recorded even when it did
