@@ -216,6 +216,12 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - `FluidVAD` wraps FluidAudio Silero v6 for voice activity detection. When enabled (`AppSettings.vadEnabled`), silence is trimmed before transcription and timestamps are remapped back to the original timeline via `VadSegmentMap`.
 - `PipelineQueue` holds a cached `FluidVAD` instance (reused across jobs). Pass `vadConfig: nil` to disable.
 
+**Restoring an interrupted job:**
+- `ProtocolResumePolicy.decide(interruptedIn:transcriptExists:hasNamingSlug:hasProtocol:)` is the pure decision the snapshot restore makes for a job it found mid-run: `.resumeProtocolOnly` generates the protocol from the transcript already on disk, `.finish` only applies the terminal transition, `.fullRun` re-runs everything.
+- **It keys on the stage the job was interrupted in, never on "a transcript exists":** `saveTranscriptDraft` writes one in stage 1, so a job killed during diarization has a draft without speaker labels, and resuming from it would publish that draft. Only `.generatingProtocol` means the transcript on disk is the finished one. A late re-diarization therefore runs in full by design: its transcript is the segmentation the user asked to redo.
+- The marking is the snapshot state itself, held in memory as `protocolResumeDispositions` for the span of one restore. Nothing is persisted: a quit before the resume runs degrades to a full run rather than losing anything, and a second persisted field would have to be kept in step with the state it was derived from.
+- Why it is not merely a saving: a late confirm transits `.generatingProtocol` too, so a full run there re-diarizes, discards the names the user just confirmed and parks the job back in the dialog they just closed.
+
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
 - `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.
