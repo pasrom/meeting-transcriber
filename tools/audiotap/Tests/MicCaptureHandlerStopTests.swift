@@ -7,10 +7,10 @@ import XCTest
 /// from `deinit`) used to call `engine.inputNode.removeTap` unconditionally, and
 /// accessing `AVAudioEngine.inputNode` raises an uncatchable NSException on a
 /// host with no input device (a headless CI runner / Mac mini without a mic).
-/// `AudioCaptureSession.start()` drops its local `mic` the instant
-/// `mic.start()` throws `.noInputDevice`, running the drop straight into
-/// `deinit` → `stop()` on exactly that host. `stop()` must skip the tap
-/// teardown when the engine never started.
+/// `AudioCaptureSession.start()` reaches `stop()` on exactly that host the
+/// instant `mic.start()` throws `.noInputDevice`: it stops the handler itself
+/// and then drops it, and the drop runs `deinit` → `stop()` a second time.
+/// `stop()` must skip the tap teardown when the engine never started, on both.
 ///
 /// These are why the handler could not be instantiated in tests before the fix:
 /// the CI runner has no input device, so a bare `MicCaptureHandler()` + drop

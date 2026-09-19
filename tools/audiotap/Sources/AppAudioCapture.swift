@@ -453,6 +453,12 @@ public class AppAudioCapture: @unchecked Sendable {
         }
         session.attach(procID: validProcID)
 
+        // Ordering contract, issue #693: until this device has run its first IO
+        // callback, a sample-rate change on its main sub-device can leave it
+        // started and never cycling, and nothing reports that. Anything under
+        // our control that can change the route belongs outside that window,
+        // which is why `AudioCaptureSession.start()` opens the microphone before
+        // it reaches this function rather than after.
         let startStatus = AudioDeviceStart(newAggregateID, validProcID)
         guard startStatus == noErr else {
             session.destroy()
@@ -475,12 +481,12 @@ public class AppAudioCapture: @unchecked Sendable {
         silentTrackDiagnostics.probeAsync(
             session.tappedProcesses, aggregateID: session.aggregateID, reason: "start",
         )
-        // The reading this one cannot take. The start probe above lands before
-        // `AudioCaptureSession.start()` opens the microphone, and that open is
-        // what flips a Bluetooth headset out of A2DP, so it reads the state
-        // before the trigger. These are taken while the recording is running and
-        // are disarmed by the first buffer, so a healthy capture emits none of
-        // them (issue #693).
+        // The reading the start probe cannot take. It lands before the aggregate
+        // has run a single IO cycle, so it only reports that the device object
+        // exists; the triggers land after it (the meeting app opening its own
+        // input, a route change mid-call). These are taken while the recording
+        // is running and are disarmed by the first buffer, so a healthy capture
+        // emits none of them (issue #693).
         silentTrackDiagnostics.scheduleNoBufferProbes(
             session.tappedProcesses, aggregateID: session.aggregateID,
         )
