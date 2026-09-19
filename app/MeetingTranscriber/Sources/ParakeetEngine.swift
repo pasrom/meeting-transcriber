@@ -47,7 +47,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     private var asrManager: AsrManager?
-    private let modelLoad = SingleFlight()
+    private let modelLoad = SingleFlight<Void>()
 
     // CTC vocabulary boosting state
     private struct VocabularyBooster {
