@@ -147,11 +147,6 @@ extension PipelineQueue {
             isProcessing = false
             return
         }
-        guard let engine, let outputDir else {
-            logger.warning("Processing dependencies not configured — skipping")
-            isProcessing = false
-            return
-        }
         let job = jobs[index]
         guard claimRunOrGiveUpDuplicate(job) else { return }
         // Function scope on purpose: the run leaves through several exits,
@@ -159,6 +154,28 @@ extension PipelineQueue {
         // A claim that outlived one of them would lock the recording out of
         // any later attempt for the rest of the session.
         defer { inFlightRuns.end(jobID: job.id) }
+
+        // A job the restore found interrupted while its protocol was being
+        // generated already has its transcript on disk. Attempted under the
+        // claim, like every other exit here, and ahead of the dependency guard
+        // below: finishing one of these needs neither the transcription engine
+        // nor the output folder, and leaving it behind a nil engine would strand
+        // a job that only wants one LLM call until the marking dies with the
+        // session.
+        if await resumeProtocolOnly(job) {
+            // Same reason the `catch` blocks below clear it: an id left behind
+            // is what tells a later generic error apart from a cancellation.
+            cancelledJobIDs.remove(job.id)
+            isProcessing = false
+            triggerProcessing()
+            return
+        }
+
+        guard let engine, let outputDir else {
+            logger.warning("Processing dependencies not configured — skipping")
+            isProcessing = false
+            return
+        }
         let ctx = Self.makeContext(for: job)
 
         do {

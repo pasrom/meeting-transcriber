@@ -75,6 +75,14 @@ extension SpeakerNamingSession {
                 // Re-applying speaker names rewrites the transcript — keep it
                 // owner-only (the original save in saveTranscript already is).
                 try FileManager.default.restrictToOwner(transcriptPath)
+                // Dropped here, not after the protocol call below, so that the
+                // naming sidecar still being on disk means exactly one thing:
+                // this rewrite did not happen. `ProtocolResumePolicy` reads it
+                // that way, because the state hop into `.generatingProtocol` is
+                // synchronous and therefore says nothing about the transcript.
+                // Idempotent, and the unconditional call at the end still covers
+                // the paths that never reach this line.
+                removeNamingData(jobID: jobID, slug: slug)
 
                 if let outputDir {
                     await delegate.generateProtocol(

@@ -29,7 +29,9 @@ extension PipelineQueue {
 
         // The reset below overwrites the state a job was interrupted in, which
         // is the one field a discard record is worth reading for.
-        let interruptedStates = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0.state) })
+        let interruptedStates = Dictionary(loaded.map { ($0.id, $0.state) }) { _, last in last }
+
+        protocolResumeDispositions = resumeDispositions(for: loaded)
 
         // Reset active states back to waiting
         for i in loaded.indices {
@@ -59,6 +61,11 @@ extension PipelineQueue {
             job.state != .speakerNamingPending && inFlightRuns.isInFlight(job)
         }
         let droppedInFlight = loaded.count < beforeInFlightDrop
+
+        // Before the exits below, so a dropped job cannot leave its disposition
+        // behind for the session.
+        let survivingIDs = Set(loaded.map(\.id))
+        protocolResumeDispositions = protocolResumeDispositions.filter { survivingIDs.contains($0.key) }
 
         guard !loaded.isEmpty else {
             logger.info("Snapshot loaded but no recoverable jobs")
@@ -102,6 +109,87 @@ extension PipelineQueue {
         }
     }
 
+    /// What to do with each job that was interrupted mid-run, decided before
+    /// the reset loop overwrites the state it is decided from.
+    ///
+    /// The filesystem is only touched for a job that could actually use the
+    /// answer. `loadSnapshot` runs on the main actor at launch, and the output
+    /// folder may be a network mount, so statting every restored job's
+    /// transcript here would be blocking work the state guard then discards.
+    private func resumeDispositions(for loaded: [PipelineJob]) -> [UUID: ProtocolResumeDisposition] {
+        var dispositions: [UUID: ProtocolResumeDisposition] = [:]
+        for job in loaded where job.state == .generatingProtocol {
+            let store = SpeakerNamingStore(outputDir: job.sidecarOutputDir ?? outputDir)
+            let disposition = ProtocolResumePolicy.decide(
+                interruptedIn: job.state,
+                namingDataOnDisk: store.hasNamingData(slug: job.namingSlug),
+                transcriptExists: Self.fileExists(job.transcriptPath),
+                hasNamingSlug: job.namingSlug != nil,
+                protocolExists: Self.fileExists(job.protocolPath),
+            )
+            if disposition != .fullRun { dispositions[job.id] = disposition }
+        }
+        return dispositions
+    }
+
+    private static func fileExists(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Finish a job the app was killed in the middle of generating a protocol
+    /// for, without re-running the stages whose results are already on disk.
+    ///
+    /// Re-running them is not merely slower. A late confirm transits
+    /// `.generatingProtocol` too, and a full run there would re-diarize, throw
+    /// away the names the user had just confirmed and park the job back in the
+    /// dialog they had just closed.
+    ///
+    /// `protocolsDir` comes from the transcript's own location rather than the
+    /// current `outputDir`, because the setting may have been repointed since
+    /// the run and the `.md` belongs beside the `.txt` it was made from.
+    ///
+    /// Returns false when the transcript turned out to be unreadable, so the
+    /// caller falls back to the full run instead of finishing a job with
+    /// nothing to show.
+    func resumeProtocolOnly(_ job: PipelineJob) async -> Bool {
+        // Peeked, not consumed: a transcript that turns out unreadable this
+        // launch (a volume not mounted yet) must not permanently downgrade the
+        // job to a full run.
+        guard let disposition = protocolResumeDispositions[job.id] else { return false }
+        if disposition == .finish {
+            // Killed between writing the protocol and the terminal transition.
+            // Everything is on disk; a second LLM call would only overwrite an
+            // identical file.
+            protocolResumeDispositions.removeValue(forKey: job.id)
+            eventLog.append(jobID: job.id, event: "finished_after_restore", from: .waiting, to: .done)
+            updateJobState(id: job.id, to: .done)
+            return true
+        }
+        guard let transcriptPath = job.transcriptPath,
+              let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8),
+              // The same bar the main pipeline sets: a crash mid-write leaves a
+              // truncated or empty file, and spending an LLM call on it would
+              // publish whatever came back as the meeting protocol.
+              !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            addWarning(id: job.id, "Could not read the saved transcript; the meeting was processed again")
+            return false
+        }
+        protocolResumeDispositions.removeValue(forKey: job.id)
+        eventLog.append(
+            jobID: job.id, event: "resumed_protocol_only",
+            from: .waiting, to: .generatingProtocol,
+        )
+        await generateProtocol(
+            jobID: job.id, transcript: transcript, title: job.meetingTitle,
+            protocolsDir: transcriptPath.deletingLastPathComponent(),
+        )
+        stopElapsedTimer()
+        updateJobState(id: job.id, to: .done)
+        return true
+    }
+
     /// Discard jobs whose audio file no longer exists, EXCEPT
     /// `.speakerNamingPending` — those have their own slug-based `_16k.wav`
     /// sidecar and don't need the original mix.wav. Paired imports with nil
@@ -119,6 +207,11 @@ extension PipelineQueue {
     ) {
         let missing = loaded.filter { job in
             guard let mixPath = job.mixPath else { return false }
+            // Exempt, like `.speakerNamingPending`: a job the resume can finish
+            // reads its transcript and nothing else, so discarding it for a
+            // missing mix throws away the one thing that could still complete
+            // the meeting.
+            guard protocolResumeDispositions[job.id] == nil else { return false }
             return job.state != .speakerNamingPending
                 && !FileManager.default.fileExists(atPath: mixPath.path)
         }
