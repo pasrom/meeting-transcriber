@@ -142,53 +142,105 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
     private let modelLoad = SingleFlight()
+    /// The model-resolution boundary. Tests replace it wholesale; nothing needs to
+    /// tell an override from the default, so this is a value rather than an optional
+    /// beside a computed accessor.
+    private var modelSource: WhisperKitModelSource = .production
     private var vocabularyPromptCache = WhisperVocabularyPrompt.TokenCache()
     /// Debug/quality diagnostic for the effective prompt budget of the most
     /// recent decode. Zero means the decode ran without a vocabulary hint.
     private(set) var vocabularyPromptTokenCount = 0
+
+    /// Adopt `folder` as the loaded model. The one place the pipe is installed, so
+    /// the mid-load reconcile below cannot be maintained in one branch and forgotten
+    /// in the other.
+    private func adoptPipe(variant: String, from folder: URL, source: WhisperKitModelSource) async throws {
+        modelState = .loading
+        downloadProgress = 1.0
+        pipe = try await source.makePipe(variant, folder)
+        modelState = .loaded
+
+        // A model change that landed mid-load set `modelVariant` but saw a nil
+        // `pipe`, so `applyModelVariant` couldn't drop it. Reconcile here so the
+        // next transcription lazily reloads the now-current variant instead of
+        // silently serving this stale one.
+        if modelVariant != variant {
+            unloadModel()
+        }
+    }
+
+    /// Load from a complete on-disk copy, reporting whether that succeeded. Runs
+    /// before the download for the reason written down on `WhisperKitLocalSnapshot`.
+    ///
+    /// A false return means "not loaded from disk" for either reason, absent or
+    /// unusable, and the caller falls back to the download. That keeps a corrupt
+    /// copy repairable instead of permanently unloadable.
+    private func loadFromLocalSnapshot(variant: String, source: WhisperKitModelSource) async -> Bool {
+        guard let localFolder = source.locateLocal(variant) else { return false }
+        do {
+            try await adoptPipe(variant: variant, from: localFolder, source: source)
+            return true
+        } catch {
+            // Type public, message redacted. Unlike a Cocoa NSError, whose
+            // localizedDescription omits the path, the likely error here is
+            // WhisperKit's own `modelsUnavailable("Model file not found at <path>")`,
+            // whose message carries the full path and with it the account name. Do
+            // not widen this to .public in a mechanical sweep.
+            logger.warning(
+                """
+                WhisperKit: local model \(variant, privacy: .public) did not load                 (\(String(describing: type(of: error)), privacy: .public):                 \(error.localizedDescription, privacy: .private)), falling back to download
+                """,
+            )
+            return false
+        }
+    }
 
     func loadModel() async {
         await modelLoad.run { [self] in
             // Snapshot the requested variant once. `modelVariant` is `@MainActor`
             // mutable (the reactive settings sync calls `applyModelVariant`), so
             // reading it separately for the download and the init could tear
-            // across these awaits — downloading one variant's folder but
-            // initialising WhisperKit under another variant's name.
+            // across these awaits, downloading one variant's folder but
+            // initialising WhisperKit under another variant's name. `source` is
+            // read once for the same reason.
             let variant = modelVariant
+            let source = modelSource
+
+            if await loadFromLocalSnapshot(variant: variant, source: source) {
+                return
+            }
+
             modelState = .downloading
             downloadProgress = 0
             do {
-                // Step 1: Download with progress tracking
-                let modelFolder = try await WhisperKit.download(
-                    variant: variant,
-                ) { progress in
+                let modelFolder = try await source.download(variant) { progress in
                     Task { @MainActor in
                         self.downloadProgress = progress.fractionCompleted
                     }
                 }
-
-                // Step 2: Init with local model folder (skips download)
-                modelState = .loading
-                downloadProgress = 1.0
-                pipe = try await WhisperKit(
-                    WhisperKitConfig(
-                        model: variant,
-                        modelFolder: modelFolder.path(),
-                    ),
-                )
-                modelState = .loaded
-
-                // A model change that landed mid-load set `modelVariant` but saw
-                // a nil `pipe`, so `applyModelVariant` couldn't drop it. Reconcile
-                // here so the next transcription lazily reloads the now-current
-                // variant instead of silently serving this stale one.
-                if modelVariant != variant {
-                    unloadModel()
-                }
+                try await adoptPipe(variant: variant, from: modelFolder, source: source)
             } catch {
-                logger.error("WhisperKit model load failed: \(error.localizedDescription, privacy: .public)")
-                modelState = .unloaded
-                downloadProgress = 0
+                // Same reason as the local branch above: since the download path now
+                // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
+                // `modelsUnavailable` message, not only a path-free URLError.
+                logger.error(
+                    """
+                    WhisperKit model load failed                     (\(String(describing: type(of: error)), privacy: .public):                     \(error.localizedDescription, privacy: .private))
+                    """,
+                )
+                // A failed *reload* keeps the prior pipe (see `unloadModel`), and the
+                // state has to say so: `ensureModel` short-circuits on a non-nil pipe
+                // and keeps transcribing, so reporting `.unloaded` would have Settings
+                // offer "Load Model" and `/state` claim a failed preload while the
+                // engine is in fact working. Only a load that leaves nothing behind
+                // resets.
+                if pipe == nil {
+                    modelState = .unloaded
+                    downloadProgress = 0
+                } else {
+                    modelState = .loaded
+                    downloadProgress = 1.0
+                }
             }
         }
     }
@@ -242,6 +294,12 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// flow options without downloading or loading a speech model.
     func installDecodingClientForTesting(_ client: any WhisperDecodingClient) {
         decodingClientOverride = client
+    }
+
+    /// Installs a model-resolution boundary for focused load tests, so a test can
+    /// observe whether the Hub was contacted without downloading a speech model.
+    func installModelSourceForTesting(_ source: WhisperKitModelSource) {
+        modelSource = source
     }
 
     /// Installs a vocabulary-content loader for focused cache tests. Metadata
