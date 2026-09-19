@@ -100,6 +100,18 @@ struct SpeakerNamingStore {
         return try? Self.makeDecoder().decode(PipelineQueue.SpeakerNamingData.self, from: json)
     }
 
+    /// Whether a slug still has naming data on disk.
+    ///
+    /// Read by the snapshot restore: a confirm drops this the moment it has
+    /// rewritten the transcript, so finding it means the rewrite did not
+    /// happen and the transcript still carries the auto-names.
+    func hasNamingData(slug: String?) -> Bool {
+        guard let slug, let recordingsDir else { return false }
+        return FileManager.default.fileExists(
+            atPath: recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)").path,
+        )
+    }
+
     /// Delete only the `<slug>_naming.json` sidecar. Audio/segment sidecars are
     /// the concern of `cleanupSidecarFiles`.
     func deleteNamingJSON(slug: String?) {

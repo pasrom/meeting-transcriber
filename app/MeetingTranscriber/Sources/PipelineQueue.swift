@@ -48,6 +48,15 @@ class PipelineQueue {
     /// `logDirCreated` flag.
     let eventLog: PipelineEventLog
 
+    /// Jobs the restore found interrupted mid-protocol, and what to do with
+    /// them, derived from the snapshot state before it was reset to `.waiting`.
+    ///
+    /// Deliberately not persisted: the snapshot state IS the durable marking,
+    /// and a quit before the resume runs simply degrades to a full run rather
+    /// than losing anything. A second field would have to be kept in step with
+    /// the state it was derived from, for no gain.
+    var protocolResumeDispositions: [UUID: ProtocolResumeDisposition] = [:]
+
     // Dependencies for processing
     let engine: (any TranscribingEngine)?
     let diarizationFactory: (() -> any DiarizationProvider)?

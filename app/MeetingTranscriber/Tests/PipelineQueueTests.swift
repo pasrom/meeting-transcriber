@@ -2042,6 +2042,150 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// Reconstruct the snapshot of a job killed inside the protocol call: the
+    /// transcript is on disk, the protocol is not, and the state still names
+    /// the stage. Taken from a production run rather than hand-built, so the
+    /// paths are the ones the pipeline really writes.
+    private func snapshotOfJobInterruptedInProtocolGeneration(
+        _ queue: PipelineQueue, jobID: UUID,
+    ) throws -> PipelineJob {
+        var interrupted = try XCTUnwrap(queue.jobs.first { $0.id == jobID })
+        interrupted.state = .generatingProtocol
+        interrupted.protocolPath = nil
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        return interrupted
+    }
+
+    private func makeResumeQueue(
+        engine: MockEngine, protocolGen: MockProtocolGen,
+    ) -> PipelineQueue {
+        PipelineQueue(
+            engine: engine,
+            diarizationFactory: { MockDiarization() },
+            protocolGeneratorFactory: { protocolGen },
+            outputDir: tmpDir,
+            logDir: tmpDir,
+            stagingDir: tmpDir,
+            diarizeEnabled: true,
+            inFlightRuns: InFlightRunRegistry(),
+        )
+    }
+
+    /// The transcript and the diarization are already on disk, so the restore
+    /// has no business paying for them again.
+    func testRestoreResumesProtocolGenerationWithoutRetranscribing() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let job = try makeDualSourceJob(title: "Resume Without Retranscribing")
+        q.enqueue(job)
+        await q.processNext()
+        await q.awaitSnapshotFlush()
+        _ = try snapshotOfJobInterruptedInProtocolGeneration(q, jobID: job.id)
+
+        let engine = MockEngine()
+        let protocolGen = MockProtocolGen()
+        let restored = makeResumeQueue(engine: engine, protocolGen: protocolGen)
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        XCTAssertEqual(engine.transcribeCallCount, 0, "the transcript was already on disk")
+        XCTAssertTrue(protocolGen.generateCalled)
+        XCTAssertEqual(restored.jobs.first?.state, .done)
+        XCTAssertNotNil(restored.jobs.first?.protocolPath)
+    }
+
+    /// The case that makes the resume worth building rather than merely cheap.
+    /// A late confirm transits `.generatingProtocol` too, and a full run there
+    /// re-diarizes, discards the names the user just confirmed, and parks the
+    /// job back in the dialog they just closed.
+    func testRestoreAfterALateConfirmKeepsTheConfirmedNames() async throws {
+        let (queue, _, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Confirmed Then Quit",
+            transcriptSegments: [TimestampedSegment(start: 0, end: 5, text: "Hello")],
+        )
+        let confirmed = expectation(description: "the confirm reached its terminal state")
+        queue.onJobStateChange = { job, _, new in
+            if job.id == jobID, new == .done { confirmed.fulfill() }
+        }
+        queue.completeSpeakerNaming(
+            jobID: jobID, result: .confirmed(["SPEAKER_0": "Speaker A"]), source: .dialog,
+        )
+        await fulfillment(of: [confirmed], timeout: 5)
+        queue.onJobStateChange = nil
+        await queue.awaitSnapshotFlush()
+        _ = try snapshotOfJobInterruptedInProtocolGeneration(queue, jobID: jobID)
+
+        let engine = MockEngine()
+        let protocolGen = MockProtocolGen()
+        let restored = makeResumeQueue(engine: engine, protocolGen: protocolGen)
+        restored.speakerNamingHandler = { _ in
+            XCTFail("the restore asked for names the user had already confirmed")
+            return .skipped
+        }
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        let transcript = try XCTUnwrap(protocolGen.capturedTranscript)
+        XCTAssertTrue(transcript.contains("Speaker A"), "the confirmed name must survive the restore")
+        XCTAssertFalse(transcript.contains("SPEAKER_0"))
+        XCTAssertEqual(engine.transcribeCallCount, 0)
+    }
+
+    /// The window the state alone cannot see. A confirm enters
+    /// `.generatingProtocol` synchronously and only then rewrites the
+    /// transcript, so a quit in between leaves a finished-looking state over a
+    /// transcript that still carries the auto-names. Resuming there would
+    /// publish them and drop what the user confirmed; running in full asks
+    /// again, which is what happened before the resume existed.
+    func testRestoreDuringAnUnfinishedConfirmAsksAgainRatherThanPublishingAutoNames() async throws {
+        let (queue, _, jobID) = try await makeSingleSourceJobAtNamingPending(
+            title: "Quit Mid Confirm",
+            transcriptSegments: [TimestampedSegment(start: 0, end: 5, text: "Hello")],
+        )
+        await queue.awaitSnapshotFlush()
+
+        // Taken before any confirm runs: the naming sidecar is on disk and the
+        // transcript is the auto-named one, which is exactly the state the
+        // synchronous hop into `.generatingProtocol` leaves behind.
+        var interrupted = try XCTUnwrap(queue.jobs.first { $0.id == jobID })
+        interrupted.state = .generatingProtocol
+        interrupted.protocolPath = nil
+        try JSONEncoder().encode([interrupted])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let restored = makeResumeQueue(engine: engine, protocolGen: MockProtocolGen())
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        XCTAssertEqual(engine.transcribeCallCount, 1, "the unfinished confirm must be run again, not resumed")
+        let log = (try? String(contentsOf: restored.eventLog.path, encoding: .utf8)) ?? ""
+        XCTAssertFalse(log.contains("resumed_protocol_only"))
+    }
+
+    /// A crash mid-write leaves a truncated or empty transcript. Spending an
+    /// LLM call on it would publish whatever came back as the meeting protocol.
+    func testAnEmptyTranscriptFallsBackToTheFullRun() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let job = try makeDualSourceJob(title: "Truncated Transcript")
+        q.enqueue(job)
+        await q.processNext()
+        await q.awaitSnapshotFlush()
+        let interrupted = try snapshotOfJobInterruptedInProtocolGeneration(q, jobID: job.id)
+        try Data().write(to: XCTUnwrap(interrupted.transcriptPath))
+
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Recovered")]
+        let protocolGen = MockProtocolGen()
+        let restored = makeResumeQueue(engine: engine, protocolGen: protocolGen)
+        restored.loadSnapshot()
+        await restored.awaitProcessing()
+
+        XCTAssertGreaterThan(engine.transcribeCallCount, 0, "an empty transcript must not be resumed from")
+        XCTAssertEqual(protocolGen.capturedTranscript?.isEmpty, false)
+    }
+
     /// A job interrupted during a late re-diarization is exposed the same way,
     /// because that run puts an already relocated job back into `.diarizing`.
     func testRestoreKeepsAJobInterruptedDuringLateRediarization() async throws {
@@ -2056,8 +2200,9 @@ final class PipelineQueueTests: XCTestCase {
         try JSONEncoder().encode([interrupted])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
 
+        let engine = MockEngine()
         let restored = PipelineQueue(
-            engine: MockEngine(),
+            engine: engine,
             diarizationFactory: { MockDiarization() },
             protocolGeneratorFactory: { nil },
             outputDir: tmpDir,
@@ -2069,6 +2214,13 @@ final class PipelineQueueTests: XCTestCase {
 
         XCTAssertEqual(restored.jobs.count, 1)
         await restored.awaitProcessing()
+
+        // And it must run in full. The transcript on disk is the segmentation
+        // the user asked to redo, so resuming from it would hand back exactly
+        // what they rejected.
+        XCTAssertEqual(engine.transcribeCallCount, 1, "a re-diarization must not resume from the old transcript")
+        let log = (try? String(contentsOf: restored.eventLog.path, encoding: .utf8)) ?? ""
+        XCTAssertFalse(log.contains("resumed_protocol_only"))
     }
 
     /// Losing a job has to leave a trace. The restore used to drop a job whose
