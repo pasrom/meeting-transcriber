@@ -187,9 +187,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             // whose message carries the full path and with it the account name. Do
             // not widen this to .public in a mechanical sweep.
             logger.warning(
-                """
-                WhisperKit: local model \(variant, privacy: .public) did not load                 (\(String(describing: type(of: error)), privacy: .public):                 \(error.localizedDescription, privacy: .private)), falling back to download
-                """,
+                "WhisperKit: local model \(variant, privacy: .public) did not load (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private)), falling back to download",
             )
             return false
         }
@@ -224,9 +222,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                 // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
                 // `modelsUnavailable` message, not only a path-free URLError.
                 logger.error(
-                    """
-                    WhisperKit model load failed                     (\(String(describing: type(of: error)), privacy: .public):                     \(error.localizedDescription, privacy: .private))
-                    """,
+                    "WhisperKit model load failed (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
                 )
                 // A failed *reload* keeps the prior pipe (see `unloadModel`), and the
                 // state has to say so: `ensureModel` short-circuits on a non-nil pipe
