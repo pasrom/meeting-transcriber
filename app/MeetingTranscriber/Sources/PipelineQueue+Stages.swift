@@ -1,4 +1,5 @@
 // swiftlint:disable file_length
+import FluidAudio
 import Foundation
 import os.log
 
@@ -263,6 +264,26 @@ extension PipelineQueue {
         try await appResample
         try await micResample
 
+        // Which of the two tracks has anything to transcribe, answered before
+        // any of the work below. An empty track used to throw out of the whole
+        // job and take the intact one with it: three recordings in issue #724
+        // produced no transcript at all while holding a complete far end next
+        // to a microphone file of 4096 bytes and zero audio packets.
+        let viability = DualTrackViability.resolve(
+            appFrames: AudioMixer.frameCount(of: app16k),
+            micFrames: AudioMixer.frameCount(of: mic16k),
+            minimumFrames: ASRConstants.minimumRequiredSamples(
+                forSampleRate: AudioConstants.targetSampleRate,
+            ),
+        )
+        if let warning = viability.droppedTrackWarning {
+            logger.warning(
+                "[\(ctx.shortID, privacy: .public)] dual_track_dropped=\(String(describing: viability), privacy: .public)",
+            )
+            addWarning(id: ctx.jobID, warning)
+            setTranscriptNote(id: ctx.jobID, viability.transcriptNote)
+        }
+
         // Both tracks now exist at 16 kHz. Measure here, before transcription
         // and before any remedy touches the audio, whether they carry the same
         // speech: that means the loudspeaker output is coming back through the
@@ -270,9 +291,16 @@ extension PipelineQueue {
         // track no longer correlates with the app track, so a detector run
         // after the remedy would report every repaired recording as clean and
         // take the quarantine off the audio that needed it.
-        let echoAnalysis = await measureEchoBleed(
-            jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
-        )
+        //
+        // Only when both tracks carry audio. The detector correlates one
+        // against the other, so with one of them empty there is nothing to
+        // correlate, and running it would cost a full load of both files to
+        // reach the verdict it starts from.
+        let echoAnalysis = viability == .both
+            ? await measureEchoBleed(
+                jobID: ctx.jobID, appURL: app16k, micURL: mic16k, micDelay: ctx.micDelay,
+            )
+            : EchoBleedAnalysis(verdict: .notMeasured)
         let intended = EchoRemedy.intended(
             cancellationEnabled: echoCancellationEnabled, dedupEnabled: echoDedupEnabled,
         )
@@ -295,8 +323,16 @@ extension PipelineQueue {
         )
         announceEchoBleed(echoAnalysis, jobID: ctx.jobID, echoRemoved: echoRemoved)
 
-        let appSegments = try await engine.transcribeSegments(audioPath: app16k)
-        let micSegments = try await engine.transcribeSegments(audioPath: mic16k)
+        // The drop itself: a track with nothing in it is never handed to the
+        // engine. `.neither` deliberately stays on the unguarded path — with
+        // nothing on either side there is no transcript to save, so that job
+        // fails exactly as it did before, carrying the engine's own message.
+        let appSegments = viability == .micOnly
+            ? []
+            : try await engine.transcribeSegments(audioPath: app16k)
+        let micSegments = viability == .appOnly
+            ? []
+            : try await engine.transcribeSegments(audioPath: mic16k)
 
         // On an affected recording, work out which microphone segments are only
         // the loudspeaker coming back, so the merge can leave them out of the
@@ -716,6 +752,15 @@ extension PipelineQueue {
         // opted out of a separate raw file: late speaker naming still needs to
         // rewrite it before generating the final protocol.
         let protocolsDir = outputDir.appendingPathComponent("protocols")
+        // Applied here rather than where the transcript was composed: the
+        // diarization stage replaces that text wholesale with its
+        // speaker-labeled rendering, so a note put in earlier is gone by now.
+        // Both consumers below take the annotated text, because the model
+        // writing the protocol needs to know the recording is half as much as
+        // the person reading the transcript does.
+        let finalTranscript = TranscriptNote.prepend(
+            transcriptNote(id: ctx.jobID), to: finalTranscript,
+        )
         let txtPath = try ProtocolGenerator.saveTranscript(finalTranscript, basename: ctx.slug, dir: protocolsDir)
         logger.info("[\(ctx.shortID, privacy: .public)] transcript_saved file=\(txtPath.lastPathComponent, privacy: .private)")
 
