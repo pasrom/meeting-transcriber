@@ -141,7 +141,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     private var decodingClientOverride: (any WhisperDecodingClient)?
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
-    private let modelLoad = SingleFlight<String>()
+    private let modelLoad = SingleFlight<LoadAttempt>()
     /// The model-resolution boundary. Tests replace it wholesale; nothing needs to
     /// tell an override from the default, so this is a value rather than an optional
     /// beside a computed accessor.
@@ -162,8 +162,8 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 
         // A model change that landed mid-load set `modelVariant` but saw a nil
         // `pipe`, so `applyModelVariant` couldn't drop it. Reconcile here so the
-        // next transcription lazily reloads the now-current variant instead of
-        // silently serving this stale one.
+        // next transcription notice. Dropping it is what makes the attempt
+        // superseded, and `loadModel` then runs again for the current variant.
         if modelVariant != variant {
             unloadModel()
         }
@@ -194,7 +194,59 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     func loadModel() async {
-        await modelLoad.run { [self] in await performLoad() }
+        // Two decisions recorded here so they are not re-derived. The general form
+        // would be a named `loadedVariant`, with readiness defined as
+        // `loadedVariant == modelVariant`, which states the invariant directly and
+        // needs no outcome at all; it also redefines `modelState` from "some model is
+        // loaded" to "the requested one is", and that is protocol surface, `/state`
+        // surface and awaited by an e2e script. Too expensive for this defect.
+        //
+        // Visible while this runs: between the reconcile dropping the superseded pipe
+        // and the next pass setting `.loading`, the engine reports `.unloaded` and
+        // Settings offers "Load Model" for a few main-actor turns. Harmless today
+        // (nothing waits on "no longer loading"), but a driver written against that
+        // phase would read it as a finished failure.
+        //
+        // And the retry sits here rather than in `ensureModel`, although only that
+        // caller needs a model, so the Settings button and the status line are right
+        // too. The cost: a superseded launch preload holds its slot in the serial
+        // model warm-up queue for the whole chain, delaying the live-caption warm-up
+        // by one load (2.5 to 3.5 s warm). Releasing the gate between passes would
+        // bring back the concurrent CoreML peak that queue exists to prevent.
+        while true {
+            // The chain is unbounded by design, so a cancelled owner has to be able
+            // to stop it. Nothing below checks cancellation: the CoreML init is not
+            // interruptible, so this is the only point where it can take effect.
+            if Task.isCancelled { return }
+
+            let attempt = await modelLoad.run { [self] in await performLoad() }
+
+            // Nothing is loaded. Run again in two cases. Either the attempt built a
+            // pipe that is now gone, which means the reconcile dropped it because the
+            // variant moved on while it ran. Or it failed for a variant that is no
+            // longer the one requested, in which case the current one has not been
+            // tried yet.
+            //
+            // The variant comparison alone would not do, and that is the subtle part:
+            // the variant can change away and back while this caller is suspended, so
+            // a discarded attempt for A can come back to `attempt.variant == "A" ==
+            // modelVariant` and read as a plain failure. `builtPipe` is what tells the
+            // two apart.
+            //
+            // A failure for the variant still requested is deliberately not repeated,
+            // whether this call ran it or joined it. Repeating it would double the
+            // wait and the failed download for every caller that arrives during an
+            // offline load.
+            //
+            // No iteration cap. Each pass is a whole load, so this cannot spin: it
+            // only goes round again when the variant changed during that pass, which
+            // takes a user action per iteration (nothing in the load path writes
+            // `modelVariant`, and the settings observer tracks only `AppSettings`).
+            // A cap of N would restore the reported symptom on the Nth change.
+            guard attempt.needsAnotherAttempt(pipeInstalled: pipe != nil, requestedVariant: modelVariant) else {
+                return
+            }
+        }
     }
 
     /// One load attempt, reporting the variant it was for.
@@ -203,7 +255,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// asked for from one that was superseded while it ran. `SingleFlight` hands the
     /// same outcome to callers that joined this run rather than starting their own,
     /// which is what they would otherwise have no way to learn (issue #738).
-    private func performLoad() async -> String {
+    private func performLoad() async -> LoadAttempt {
         // Snapshot the requested variant once. `modelVariant` is `@MainActor`
         // mutable (the reactive settings sync calls `applyModelVariant`), so
         // reading it separately for the download and the init could tear
@@ -214,7 +266,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         let source = modelSource
 
         if await loadFromLocalSnapshot(variant: variant, source: source) {
-            return variant
+            return LoadAttempt(variant: variant, builtPipe: true)
         }
 
         modelState = .downloading
@@ -226,6 +278,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                 }
             }
             try await adoptPipe(variant: variant, from: modelFolder, source: source)
+            return LoadAttempt(variant: variant, builtPipe: true)
         } catch {
             // Same reason as the local branch above: since the download path now
             // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
@@ -248,7 +301,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             }
         }
 
-        return variant
+        return LoadAttempt(variant: variant, builtPipe: false)
     }
 
     /// Apply a model-variant change coming from settings. Updates `modelVariant`
@@ -267,7 +320,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     /// Reset to the unloaded state: drop the loaded pipe and its progress. Shared
-    /// by `applyModelVariant` and `loadModel`'s mid-load reconcile. The load
+    /// by `applyModelVariant` and `adoptPipe`'s mid-load reconcile. The load
     /// `catch` deliberately does NOT call this — a failed *reload* keeps the
     /// prior pipe rather than clobbering a still-good model.
     private func unloadModel() {
@@ -510,5 +563,31 @@ enum TranscriptionError: LocalizedError {
         case .modelNotLoaded: "WhisperKit model not loaded"
         case .streamingNotSupported: "This engine does not support sample-based live transcription"
         }
+    }
+}
+
+/// What one load attempt did, as much as a caller needs to decide whether to run
+/// another one.
+///
+/// `builtPipe` is the part the variant name cannot carry: an attempt that built a
+/// pipe and had it dropped again by the mid-load reconcile is superseded, and it
+/// has to be told apart from one that simply failed. Since the variant can change
+/// away and back while a caller is suspended, comparing names alone reads the
+/// first case as the second and leaves nothing loaded (issue #738).
+struct LoadAttempt: Sendable {
+    let variant: String
+    /// True when `adoptPipe` ran through, whether or not the reconcile then
+    /// discarded what it installed.
+    let builtPipe: Bool
+
+    /// Whether the caller has to run another attempt after observing this one.
+    ///
+    /// A pure decision so it can be tested directly. The case that motivates the
+    /// `builtPipe` flag needs the variant to change away and back inside the window
+    /// between a flight ending and its caller resuming, which no test can place
+    /// reliably, so the timing is not what is pinned here: the rule is.
+    func needsAnotherAttempt(pipeInstalled: Bool, requestedVariant: String) -> Bool {
+        guard !pipeInstalled else { return false }
+        return builtPipe || variant != requestedVariant
     }
 }

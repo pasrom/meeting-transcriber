@@ -15,6 +15,9 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
     private final class Recorder {
         var order: [String] = []
         var pipeFolders: [URL] = []
+        /// Which variants reached `makePipe`, in order. Separate from `order` so the
+        /// existing step-order assertions stay untouched.
+        var pipeVariants: [String] = []
     }
 
     /// A WhisperKit instance that loads nothing: `load: false` with
@@ -144,52 +147,6 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         )
     }
 
-    /// The mid-load reconcile, which `adoptPipe` now applies to the local branch too.
-    ///
-    /// Scenario from production: the launch preload starts on variant A, the user
-    /// changes the model in Settings, and the reactive settings sync calls
-    /// `applyModelVariant(B)`. With `pipe` still nil, that call can only update the
-    /// property, so without the reconcile the finished load would install A while
-    /// `modelVariant` says B, and `ensureModel` would short-circuit on the non-nil
-    /// pipe and transcribe with the wrong model forever.
-    ///
-    /// Untested before this test: the reconcile was moved into shared code with no
-    /// case that changes the variant, so dropping it kept every other test green.
-    func testLoadModelDropsALocallyLoadedPipeWhenTheVariantChangedMidLoad() async throws {
-        let engine = WhisperKitEngine()
-        engine.modelVariant = "openai_whisper-small"
-        let local = try makeTempDirectory(prefix: "wk-local")
-        let idle = try await makeIdlePipe()
-        let recorder = Recorder()
-
-        engine.installModelSourceForTesting(
-            WhisperKitModelSource(
-                locateLocal: { _ in local },
-                download: { _, _ in
-                    recorder.order.append("download")
-                    throw URLError(.networkConnectionLost)
-                },
-                makePipe: { _, folder in
-                    recorder.order.append("pipe")
-                    recorder.pipeFolders.append(folder)
-                    // The settings change lands while the load is in flight, exactly
-                    // where `applyModelVariant` finds a nil pipe and can only record
-                    // the new name.
-                    engine.applyModelVariant("openai_whisper-tiny")
-                    return idle
-                },
-            ),
-        )
-
-        await engine.loadModel()
-
-        XCTAssertEqual(
-            engine.modelState, .unloaded,
-            "A pipe loaded for the superseded variant must be dropped, so the next transcription reloads the current one",
-        )
-        XCTAssertEqual(recorder.order, ["pipe"], "The local branch is the one under test, no download involved")
-    }
-
     /// A failed *reload* must not report `.unloaded` while the previous pipe is still
     /// installed and still serving transcriptions.
     ///
@@ -237,5 +194,213 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             engine.downloadProgress, 1.0, accuracy: 0.001,
             "Progress must match the kept pipe, not the failed attempt",
         )
+    }
+
+    // MARK: - Superseded loads (issue #738)
+
+    /// A load serves the variant it snapshotted at its start. When the user changes
+    /// the model while a load is in flight, that load is superseded: `adoptPipe`
+    /// correctly drops the pipe it built for the old variant, but the caller used to
+    /// return with nothing loaded, and `ensureModel` then threw `modelNotLoaded`.
+    ///
+    /// This is the single-caller half of the problem, which needs no second caller at
+    /// all: the launch preload suspends, Settings changes the variant, and the job
+    /// that triggered the load fails once.
+    ///
+    /// It also carries what a separate reconcile test used to assert on its own. If
+    /// `adoptPipe` stopped dropping the pipe built for the superseded variant, the
+    /// first pass would leave a non-nil pipe, the retry would not run, and
+    /// `pipeVariants` would stay at one entry.
+    func testASupersededLoadEndsWithTheCurrentVariantLoaded() async throws {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let local = try makeTempDirectory(prefix: "wk-local")
+        let idle = try await makeIdlePipe()
+        let recorder = Recorder()
+
+        engine.installModelSourceForTesting(
+            WhisperKitModelSource(
+                locateLocal: { _ in local },
+                download: { _, _ in
+                    recorder.order.append("download")
+                    throw URLError(.networkConnectionLost)
+                },
+                makePipe: { variant, _ in
+                    recorder.order.append("pipe")
+                    recorder.pipeVariants.append(variant)
+                    // The settings change lands while this load is in flight, where
+                    // `applyModelVariant` finds a nil pipe and can only record the
+                    // new name. Only on the first pass, so the retry can finish.
+                    if variant == "openai_whisper-small" {
+                        engine.applyModelVariant("openai_whisper-tiny")
+                    }
+                    return idle
+                },
+            ),
+        )
+
+        await engine.loadModel()
+
+        XCTAssertEqual(
+            recorder.pipeVariants, ["openai_whisper-small", "openai_whisper-tiny"],
+            "The superseded load must be followed by one for the variant now requested",
+        )
+        XCTAssertEqual(
+            recorder.order, ["pipe", "pipe"],
+            "Both passes must load locally. Carried over from the reconcile test this replaces: a "
+                + "superseded local load falling through to the download would re-fetch the variant nobody "
+                + "wants any more, and nothing else covers that",
+        )
+        XCTAssertEqual(
+            engine.modelState, .loaded,
+            "Returning unloaded here is what makes the next transcription fail with modelNotLoaded",
+        )
+    }
+
+    /// The joined half, which is what #738 describes. The second caller must not be
+    /// left with the result of a flight that was for a variant nobody wants any more.
+    ///
+    /// Ordering is fixed by construction rather than by yielding: the joiner resumes
+    /// the parked first load itself, which only enqueues it on this actor, so the
+    /// joiner keeps the actor until its own first real suspension, and that is the
+    /// join inside `SingleFlight`.
+    func testAJoinedSupersededLoadEndsWithTheCurrentVariantLoaded() async throws {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let local = try makeTempDirectory(prefix: "wk-local")
+        let idle = try await makeIdlePipe()
+        let recorder = Recorder()
+        let parked = expectation(description: "first load parked in makePipe")
+        var release: (() -> Void)?
+        var parkedOnce = false
+
+        engine.installModelSourceForTesting(
+            WhisperKitModelSource(
+                locateLocal: { _ in local },
+                download: { _, _ in
+                    recorder.order.append("download")
+                    throw URLError(.networkConnectionLost)
+                },
+                makePipe: { variant, _ in
+                    recorder.order.append("pipe")
+                    recorder.pipeVariants.append(variant)
+                    // Park only the first pass. Parking again would fulfil the
+                    // expectation twice and trap.
+                    if !parkedOnce {
+                        parkedOnce = true
+                        parked.fulfill()
+                        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                            release = { cont.resume() }
+                        }
+                    }
+                    return idle
+                },
+            ),
+        )
+
+        let first = Task { @MainActor in await engine.loadModel() }
+        await fulfillment(of: [parked], timeout: 2)
+        engine.applyModelVariant("openai_whisper-tiny")
+
+        let joiner = Task { @MainActor in
+            release?()
+            await engine.loadModel()
+        }
+        await first.value
+        await joiner.value
+
+        XCTAssertEqual(
+            recorder.pipeVariants, ["openai_whisper-small", "openai_whisper-tiny"],
+            "The joiner must end up with the current variant loaded, and the dedup must build it only once",
+        )
+        XCTAssertEqual(engine.modelState, .loaded)
+    }
+
+    /// The guard in the other direction, and the one that rules out the simpler
+    /// "retry whenever the pipe is nil" rule: a load that failed for the variant that
+    /// is *still* requested must not be repeated, whether the caller ran it or joined
+    /// it. Repeating it would double the wait and the failed download for every
+    /// caller that arrives during an offline load.
+    func testAJoinedLoadThatFailedForTheCurrentVariantIsNotRepeated() async {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let recorder = Recorder()
+        let parked = expectation(description: "first load parked in download")
+        var release: (() -> Void)?
+        var parkedOnce = false
+
+        engine.installModelSourceForTesting(
+            WhisperKitModelSource(
+                locateLocal: { _ in nil },
+                download: { _, _ in
+                    recorder.order.append("download")
+                    if !parkedOnce {
+                        parkedOnce = true
+                        parked.fulfill()
+                        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                            release = { cont.resume() }
+                        }
+                    }
+                    throw URLError(.networkConnectionLost)
+                },
+                makePipe: { _, _ in throw WhisperError.modelsUnavailable() },
+            ),
+        )
+
+        let first = Task { @MainActor in await engine.loadModel() }
+        await fulfillment(of: [parked], timeout: 2)
+        let joiner = Task { @MainActor in
+            release?()
+            await engine.loadModel()
+        }
+        await first.value
+        await joiner.value
+
+        XCTAssertEqual(
+            recorder.order, ["download"],
+            "The joiner observed a failure for the variant it wanted, so it must not download again",
+        )
+        XCTAssertEqual(engine.modelState, .unloaded)
+    }
+
+    /// Two changes in a row, which is what rules out a single retry: the retry itself
+    /// can be superseded. With a one-shot retry this ends unloaded again, so the
+    /// condition has to be "keep going while the attempt was for a variant that is no
+    /// longer the current one" rather than a fixed number of tries.
+    func testLoadModelFollowsTheVariantAcrossTwoChangesMidLoad() async throws {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let local = try makeTempDirectory(prefix: "wk-local")
+        let idle = try await makeIdlePipe()
+        let recorder = Recorder()
+
+        engine.installModelSourceForTesting(
+            WhisperKitModelSource(
+                locateLocal: { _ in local },
+                download: { _, _ in
+                    recorder.order.append("download")
+                    throw URLError(.networkConnectionLost)
+                },
+                makePipe: { variant, _ in
+                    recorder.order.append("pipe")
+                    recorder.pipeVariants.append(variant)
+                    switch variant {
+                    case "openai_whisper-small": engine.applyModelVariant("openai_whisper-tiny")
+                    case "openai_whisper-tiny": engine.applyModelVariant("openai_whisper-base")
+                    default: break
+                    }
+                    return idle
+                },
+            ),
+        )
+
+        await engine.loadModel()
+
+        XCTAssertEqual(
+            recorder.pipeVariants,
+            ["openai_whisper-small", "openai_whisper-tiny", "openai_whisper-base"],
+            "Each superseded attempt must be followed by one for the variant current at that point",
+        )
+        XCTAssertEqual(engine.modelState, .loaded)
     }
 }
