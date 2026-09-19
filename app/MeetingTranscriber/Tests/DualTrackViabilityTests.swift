@@ -90,11 +90,11 @@ final class DualTrackViabilityTests: XCTestCase {
         XCTAssertNotNil(DualTrackViability.micOnly.droppedTrackWarning)
     }
 
-    func testTheWarningNamesTheTrackThatWasDropped() {
-        let appOnly = try? XCTUnwrap(DualTrackViability.appOnly.droppedTrackWarning)
-        let micOnly = try? XCTUnwrap(DualTrackViability.micOnly.droppedTrackWarning)
-        XCTAssertTrue(appOnly?.lowercased().contains("microphone") == true, "got: \(appOnly ?? "nil")")
-        XCTAssertTrue(micOnly?.lowercased().contains("app") == true, "got: \(micOnly ?? "nil")")
+    func testTheWarningNamesTheTrackThatWasDropped() throws {
+        let appOnly = try XCTUnwrap(DualTrackViability.appOnly.droppedTrackWarning)
+        XCTAssertTrue(appOnly.lowercased().contains("microphone"), "got: \(appOnly)")
+        let micOnly = try XCTUnwrap(DualTrackViability.micOnly.droppedTrackWarning)
+        XCTAssertTrue(micOnly.lowercased().contains("app"), "got: \(micOnly)")
     }
 
     // MARK: - What the transcript says

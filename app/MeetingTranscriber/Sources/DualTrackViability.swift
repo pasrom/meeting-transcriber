@@ -81,9 +81,11 @@ enum DualTrackViability: Equatable, Sendable {
     var transcriptNote: String? {
         switch self {
         case .both, .neither: nil
+
         case .appOnly:
             "[Recording note: the microphone track was empty, so this transcript "
                 + "contains only the other participants and nothing spoken locally.]"
+
         case .micOnly:
             "[Recording note: the app-audio track was empty, so this transcript "
                 + "contains only what the microphone captured and nothing from the "
