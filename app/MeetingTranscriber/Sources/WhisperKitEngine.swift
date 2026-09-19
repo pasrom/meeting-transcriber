@@ -141,7 +141,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     private var decodingClientOverride: (any WhisperDecodingClient)?
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
-    private let modelLoad = SingleFlight()
+    private let modelLoad = SingleFlight<String>()
     /// The model-resolution boundary. Tests replace it wholesale; nothing needs to
     /// tell an override from the default, so this is a value rather than an optional
     /// beside a computed accessor.
@@ -187,58 +187,68 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             // whose message carries the full path and with it the account name. Do
             // not widen this to .public in a mechanical sweep.
             logger.warning(
-                "WhisperKit: local model \(variant, privacy: .public) did not load (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private)), falling back to download",
+                "WhisperKit: local model \(variant, privacy: .public) did not load, falling back to download (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
             )
             return false
         }
     }
 
     func loadModel() async {
-        await modelLoad.run { [self] in
-            // Snapshot the requested variant once. `modelVariant` is `@MainActor`
-            // mutable (the reactive settings sync calls `applyModelVariant`), so
-            // reading it separately for the download and the init could tear
-            // across these awaits, downloading one variant's folder but
-            // initialising WhisperKit under another variant's name. `source` is
-            // read once for the same reason.
-            let variant = modelVariant
-            let source = modelSource
+        await modelLoad.run { [self] in await performLoad() }
+    }
 
-            if await loadFromLocalSnapshot(variant: variant, source: source) {
-                return
+    /// One load attempt, reporting the variant it was for.
+    ///
+    /// The variant is returned so a caller can tell a load that failed for what it
+    /// asked for from one that was superseded while it ran. `SingleFlight` hands the
+    /// same outcome to callers that joined this run rather than starting their own,
+    /// which is what they would otherwise have no way to learn (issue #738).
+    private func performLoad() async -> String {
+        // Snapshot the requested variant once. `modelVariant` is `@MainActor`
+        // mutable (the reactive settings sync calls `applyModelVariant`), so
+        // reading it separately for the download and the init could tear
+        // across these awaits, downloading one variant's folder but
+        // initialising WhisperKit under another variant's name. `source` is
+        // read once for the same reason.
+        let variant = modelVariant
+        let source = modelSource
+
+        if await loadFromLocalSnapshot(variant: variant, source: source) {
+            return variant
+        }
+
+        modelState = .downloading
+        downloadProgress = 0
+        do {
+            let modelFolder = try await source.download(variant) { progress in
+                Task { @MainActor in
+                    self.downloadProgress = progress.fractionCompleted
+                }
             }
-
-            modelState = .downloading
-            downloadProgress = 0
-            do {
-                let modelFolder = try await source.download(variant) { progress in
-                    Task { @MainActor in
-                        self.downloadProgress = progress.fractionCompleted
-                    }
-                }
-                try await adoptPipe(variant: variant, from: modelFolder, source: source)
-            } catch {
-                // Same reason as the local branch above: since the download path now
-                // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
-                // `modelsUnavailable` message, not only a path-free URLError.
-                logger.error(
-                    "WhisperKit model load failed (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
-                )
-                // A failed *reload* keeps the prior pipe (see `unloadModel`), and the
-                // state has to say so: `ensureModel` short-circuits on a non-nil pipe
-                // and keeps transcribing, so reporting `.unloaded` would have Settings
-                // offer "Load Model" and `/state` claim a failed preload while the
-                // engine is in fact working. Only a load that leaves nothing behind
-                // resets.
-                if pipe == nil {
-                    modelState = .unloaded
-                    downloadProgress = 0
-                } else {
-                    modelState = .loaded
-                    downloadProgress = 1.0
-                }
+            try await adoptPipe(variant: variant, from: modelFolder, source: source)
+        } catch {
+            // Same reason as the local branch above: since the download path now
+            // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
+            // `modelsUnavailable` message, not only a path-free URLError.
+            logger.error(
+                "WhisperKit model load failed (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
+            )
+            // A failed *reload* keeps the prior pipe (see `unloadModel`), and the
+            // state has to say so: `ensureModel` short-circuits on a non-nil pipe
+            // and keeps transcribing, so reporting `.unloaded` would have Settings
+            // offer "Load Model" and `/state` claim a failed preload while the
+            // engine is in fact working. Only a load that leaves nothing behind
+            // resets.
+            if pipe == nil {
+                modelState = .unloaded
+                downloadProgress = 0
+            } else {
+                modelState = .loaded
+                downloadProgress = 1.0
             }
         }
+
+        return variant
     }
 
     /// Apply a model-variant change coming from settings. Updates `modelVariant`
