@@ -152,6 +152,36 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
     }
 
+    /// The late re-diarization renders the transcript again from the cached
+    /// segments and writes that over the saved file. Those segments never
+    /// carried the note, so without carrying it over explicitly a re-run after
+    /// the meeting silently drops the one line saying a track is missing.
+    func testTheNoteSurvivesALateRediarization() async throws {
+        let h = makeHarness(diarizeEnabled: true)
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+        var namingCalls = 0
+        h.queue.speakerNamingHandler = { _ in
+            namingCalls += 1
+            return namingCalls == 1 ? .rerun(2) : .skipped
+        }
+
+        h.queue.enqueue(PipelineJob(
+            meetingTitle: "meeting", appName: "File",
+            mixPath: nil,
+            appPath: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            micPath: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            micDelay: 0,
+        ))
+        await h.queue.processNext()
+        for _ in 0 ..< 400 where !(h.queue.jobs.first?.state.isTerminal ?? true) {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+
+        XCTAssertEqual(namingCalls, 2, "the rerun has to actually run the late rewrite")
+        let text = try transcript(h)
+        XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
+    }
+
     // MARK: - The mirror case
 
     func testAnEmptyAppTrackKeepsTheMicrophoneTranscript() async throws {
