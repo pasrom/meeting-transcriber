@@ -32,7 +32,9 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     case both
 
     /// Only the app track. The microphone delivered nothing: the field cases
-    /// are a Bluetooth headset whose input never produced a buffer.
+    /// are a Bluetooth headset whose input never produced a buffer. A track
+    /// merely shorter than the active engine's floor lands here too, which is
+    /// why nothing reported from here claims the file was empty.
     case appOnly
 
     /// Only the microphone track. The mirror case, a solo meeting or a far end
@@ -82,8 +84,10 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     var droppedTrackWarning: String? {
         switch self {
         case .both, .neither: nil
-        case .appOnly: "The microphone track had no audio — transcribed the app audio only"
-        case .micOnly: "The app-audio track had no audio — transcribed the microphone only"
+        case .appOnly:
+            "The microphone track carried nothing the transcription engine could use — transcribed the app audio only"
+        case .micOnly:
+            "The app-audio track carried nothing the transcription engine could use — transcribed the microphone only"
         }
     }
 
@@ -105,13 +109,14 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
         case .both, .neither: nil
 
         case .appOnly:
-            "[Recording note: the microphone track was empty, so this transcript "
-                + "contains only the other participants and nothing spoken locally.]"
+            "[Recording note: the microphone track carried nothing this transcription "
+                + "engine could use, so this transcript contains only the other "
+                + "participants and nothing spoken locally.]"
 
         case .micOnly:
-            "[Recording note: the app-audio track was empty, so this transcript "
-                + "contains only what the microphone captured and nothing from the "
-                + "other participants.]"
+            "[Recording note: the app-audio track carried nothing this transcription "
+                + "engine could use, so this transcript contains only what the "
+                + "microphone captured and nothing from the other participants.]"
         }
     }
 }

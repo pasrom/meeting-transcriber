@@ -143,7 +143,7 @@ final class EmptyTrackSurvivesTests: XCTestCase {
 
         let text = try transcript(h)
         XCTAssertTrue(text.hasPrefix("[Recording note:"), "got: \(text.prefix(120))")
-        XCTAssertTrue(text.lowercased().contains("microphone track was empty"), "got: \(text.prefix(200))")
+        XCTAssertTrue(text.lowercased().contains("microphone track carried nothing"), "got: \(text.prefix(200))")
     }
 
     /// Diarization replaces the transcript with its speaker-labeled rendering,
@@ -239,7 +239,51 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
         let text = try transcript(h)
         XCTAssertTrue(text.contains("local answer"), "got: \(text)")
-        XCTAssertTrue(text.lowercased().contains("app-audio track was empty"), "got: \(text.prefix(200))")
+        XCTAssertTrue(text.lowercased().contains("app-audio track carried nothing"), "got: \(text.prefix(200))")
+    }
+
+    // MARK: - A track that cannot even be read
+
+    /// The resample runs before the verdict, so a source that throws there used
+    /// to end the job before anything could decide the other track was fine.
+    /// `frameCount` folding "unreadable" into "empty" was unreachable for
+    /// exactly the inputs it names.
+    func testAMicTrackThatCannotBeResampledKeepsTheAppTranscript() async throws {
+        let h = makeHarness()
+        let corrupt = tmpDir.appendingPathComponent("meeting_mic.wav")
+        try Data("not audio at all".utf8).write(to: corrupt)
+
+        await run(
+            h,
+            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: corrupt,
+        )
+
+        XCTAssertEqual(h.queue.jobs.first?.state, .done, "error: \(h.queue.jobs.first?.error ?? "none")")
+        XCTAssertTrue(try transcript(h).contains("far end speaking"))
+    }
+
+    // MARK: - The note must not stand in for a transcript
+
+    /// A dropped track renders its note even when the surviving track produces
+    /// no segments. The empty-transcript guard reads a string, so the note
+    /// alone satisfied it and the job was saved as a success carrying one
+    /// sentence, with a protocol generated from it.
+    func testANoteAloneIsNotATranscript() async throws {
+        let h = makeHarness()
+        h.engine.throwingPathSuffixes = ["mic_16k.wav"]
+        h.engine.segmentsByPathSuffix = ["app_16k.wav": []]
+
+        await run(
+            h,
+            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+        )
+
+        XCTAssertEqual(
+            h.queue.jobs.first?.state, .error,
+            "a transcript that is only the recording note is not a transcript",
+        )
     }
 
     // MARK: - What must not change
