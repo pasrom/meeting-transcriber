@@ -18,6 +18,9 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         /// Which variants reached `makePipe`, in order. Separate from `order` so the
         /// existing step-order assertions stay untouched.
         var pipeVariants: [String] = []
+        /// Which variants reached `download`, in order. Same reason, and it is what
+        /// lets a test name the variant a retry ran for when no pipe was ever built.
+        var downloadVariants: [String] = []
     }
 
     /// A WhisperKit instance that loads nothing: `load: false` with
@@ -55,8 +58,9 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         engine.installModelSourceForTesting(
             WhisperKitModelSource(
                 locateLocal: { _ in local },
-                download: { _, _ in
+                download: { variant, _ in
                     recorder.order.append("download")
+                    recorder.downloadVariants.append(variant)
                     await onDownload?()
                     return try download.get()
                 },
@@ -364,5 +368,45 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             "The joiner observed a failure for the variant it wanted, so it must not download again",
         )
         XCTAssertEqual(engine.modelState, .unloaded)
+    }
+
+    /// The variant comparison in `loadModel` is handed the engine's *current*
+    /// variant, and that argument needs a test of its own. A failed attempt for a
+    /// superseded variant is the only case the comparison decides alone, and it is
+    /// the download path: an attempt that got as far as building a pipe is carried
+    /// by `builtPipe` instead, whatever the variants say.
+    ///
+    /// `LoadAttemptTests` pins the rule but cannot pin what the engine passes into
+    /// it. Handing `needsAnotherAttempt` the attempt's own variant instead of the
+    /// requested one leaves every other test in this file green, which is how the
+    /// gap was found.
+    func testAFailedLoadForASupersededVariantIsRetriedForTheCurrentOne() async {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let recorder = installRecordingSource(
+            on: engine,
+            local: nil,
+            download: .failure(URLError(.networkConnectionLost)),
+            pipe: .failure(WhisperError.modelsUnavailable()),
+            // swiftlint:disable:next trailing_closure
+            onDownload: {
+                // The settings change lands while the first download is in flight,
+                // and only then: the retry has to be allowed to finish.
+                if engine.modelVariant == "openai_whisper-small" {
+                    engine.applyModelVariant("openai_whisper-tiny")
+                }
+            },
+        )
+
+        await engine.loadModel()
+
+        XCTAssertEqual(
+            recorder.downloadVariants, ["openai_whisper-small", "openai_whisper-tiny"],
+            "A download that failed for a variant nobody wants any more leaves the requested one untried",
+        )
+        XCTAssertEqual(
+            engine.modelState, .unloaded,
+            "Both attempts failed, so the engine must end up reporting that",
+        )
     }
 }
