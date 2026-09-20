@@ -409,4 +409,49 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             "Both attempts failed, so the engine must end up reporting that",
         )
     }
+
+    /// A cancelled owner has to be able to stop the retry chain. The chain is
+    /// unbounded by design and nothing below the loop checks cancellation, because
+    /// the CoreML init is not interruptible, so the top of the loop is the only
+    /// place a cancel can take effect.
+    ///
+    /// Arranged so that a retry is due and is then cancelled before it runs: the
+    /// load parks mid-build, the variant moves on, and the caller is cancelled while
+    /// the load is still parked. Without the check the loop runs a second attempt
+    /// for the new variant, which is what the assertion below reads.
+    func testACancelledLoadStopsTheRetryChain() async throws {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        let local = try makeTempDirectory(prefix: "wk-local")
+        let parked = expectation(description: "load parked in makePipe")
+        let gate = MainActorGate()
+        let recorder = try await installRecordingSource(
+            on: engine,
+            local: local,
+            download: .failure(URLError(.networkConnectionLost)),
+            pipe: .success(makeIdlePipe()),
+            // swiftlint:disable:next trailing_closure
+            onPipe: { variant in
+                guard variant == "openai_whisper-small" else { return }
+                parked.fulfill()
+                await gate.wait()
+            },
+        )
+
+        let loader = Task { @MainActor in await engine.loadModel() }
+        await fulfillment(of: [parked], timeout: 2)
+        engine.applyModelVariant("openai_whisper-tiny")
+        loader.cancel()
+        gate.open()
+        await loader.value
+
+        XCTAssertEqual(
+            recorder.pipeVariants, ["openai_whisper-small"],
+            "The retry that the supersession would otherwise require must not run after a cancel",
+        )
+        XCTAssertEqual(
+            engine.modelState, .unloaded,
+            "The reconcile dropped the pipe built for the superseded variant, and the cancel stopped the retry that would have replaced it",
+        )
+    }
 }
