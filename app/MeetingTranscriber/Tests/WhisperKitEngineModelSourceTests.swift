@@ -23,6 +23,19 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         var downloadVariants: [String] = []
     }
 
+    /// Carries the chain's own task handle so a hook can stop a runaway. Its own
+    /// type because the hook has to be built before the task it may have to cancel
+    /// exists.
+    @MainActor
+    private final class ChainRun {
+        var passes = 0
+        var load: Task<Void, Never>?
+    }
+
+    /// Well past the three passes the chain test expects, so the bound never
+    /// interferes with the behaviour under test.
+    private static let runawayBound = 8
+
     /// A WhisperKit instance that loads nothing: `load: false` with
     /// `download: false` keeps the initializer off the network and off CoreML, which
     /// is what lets it stand in for a real pipe in milliseconds.
@@ -51,7 +64,7 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         download: Result<URL, any Error>,
         pipe: Result<WhisperKit, any Error>,
         pipeFailsFor failingFolder: URL? = nil,
-        onDownload: (@MainActor () async -> Void)? = nil,
+        onDownload: (@MainActor (String) async -> Void)? = nil,
         onPipe: (@MainActor (String) async -> Void)? = nil,
     ) -> Recorder {
         let recorder = Recorder()
@@ -61,7 +74,7 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
                 download: { variant, _ in
                     recorder.order.append("download")
                     recorder.downloadVariants.append(variant)
-                    await onDownload?()
+                    await onDownload?(variant)
                     return try download.get()
                 },
                 makePipe: { variant, folder in
@@ -243,6 +256,12 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         let engine = WhisperKitEngine()
         engine.modelVariant = "openai_whisper-small"
         let local = try makeTempDirectory(prefix: "wk-local")
+        // The chain is unbounded in production, so a regression that supersedes
+        // every attempt turns this test into a hang rather than a failure: there is
+        // no per-test timeout and CI reports a job that runs out of time as
+        // cancelled. The bound below cancels the chain, which the loop head honours,
+        // so a runaway ends in the assertions instead of in the job timeout.
+        let chain = ChainRun()
         let recorder = try await installRecordingSource(
             on: engine,
             local: local,
@@ -250,6 +269,10 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             pipe: .success(makeIdlePipe()),
             // swiftlint:disable:next trailing_closure
             onPipe: { variant in
+                chain.passes += 1
+                if chain.passes > Self.runawayBound {
+                    chain.load?.cancel()
+                }
                 // The settings change lands while this load is in flight, where
                 // `applyModelVariant` finds a nil pipe and can only record the new
                 // name.
@@ -261,7 +284,11 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             },
         )
 
-        await engine.loadModel()
+        // The handle is stored before the task can run: creating it only enqueues
+        // it on this actor, and nothing suspends in between.
+        let load = Task { @MainActor in await engine.loadModel() }
+        chain.load = load
+        await load.value
 
         XCTAssertEqual(
             recorder.pipeVariants,
@@ -293,6 +320,11 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         engine.modelVariant = "openai_whisper-small"
         let local = try makeTempDirectory(prefix: "wk-local")
         let parked = expectation(description: "first load parked in makePipe")
+        // A second pass for the same variant would fulfil this again, and an
+        // over-fulfilled expectation throws an unhandled exception that takes the
+        // whole test process down before any assertion below is read. The assertions
+        // are what should report that pass, so let it through to them.
+        parked.assertForOverFulfill = false
         let gate = MainActorGate()
         let recorder = try await installRecordingSource(
             on: engine,
@@ -316,10 +348,19 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         let joiner = Task { @MainActor in
             gate.open()
             await engine.loadModel()
+            // Read inside the joiner, because what the defect is about is the state
+            // the JOINER is left with when its own call returns. The engine's state
+            // at the end of the test cannot say that: the first caller runs the
+            // retry as well, so it is loaded by then whatever the joiner saw.
+            return engine.modelState
         }
         await first.value
-        await joiner.value
+        let stateTheJoinerReturnedWith = await joiner.value
 
+        XCTAssertEqual(
+            stateTheJoinerReturnedWith, .loaded,
+            "A joiner that returns unloaded is the defect itself: its caller then fails with modelNotLoaded",
+        )
         XCTAssertEqual(
             recorder.pipeVariants, ["openai_whisper-small", "openai_whisper-tiny"],
             "The joiner must end up with the current variant loaded, and the dedup must build it only once",
@@ -348,7 +389,7 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             download: .failure(URLError(.networkConnectionLost)),
             pipe: .failure(WhisperError.modelsUnavailable()),
             // swiftlint:disable:next trailing_closure
-            onDownload: {
+            onDownload: { _ in
                 parked.fulfill()
                 await gate.wait()
             },
@@ -389,10 +430,10 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
             download: .failure(URLError(.networkConnectionLost)),
             pipe: .failure(WhisperError.modelsUnavailable()),
             // swiftlint:disable:next trailing_closure
-            onDownload: {
+            onDownload: { variant in
                 // The settings change lands while the first download is in flight,
                 // and only then: the retry has to be allowed to finish.
-                if engine.modelVariant == "openai_whisper-small" {
+                if variant == "openai_whisper-small" {
                     engine.applyModelVariant("openai_whisper-tiny")
                 }
             },
@@ -424,6 +465,9 @@ final class WhisperKitEngineModelSourceTests: XCTestCase {
         engine.modelVariant = "openai_whisper-small"
         let local = try makeTempDirectory(prefix: "wk-local")
         let parked = expectation(description: "load parked in makePipe")
+        // Same reason as in the joined test above: a second pass must reach the
+        // assertions rather than trap on an over-fulfilled expectation.
+        parked.assertForOverFulfill = false
         let gate = MainActorGate()
         let recorder = try await installRecordingSource(
             on: engine,

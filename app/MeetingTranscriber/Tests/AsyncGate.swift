@@ -47,16 +47,19 @@ actor AsyncGate {
 /// `WhisperKitEngineModelSourceTests` release a parked load and must then reach
 /// the join inside `SingleFlight` before the released side can finish its flight,
 /// and `await gate.open()` on the actor version suspends right between the two.
+/// The same applies to any `await` added ahead of that join later, in the loop head
+/// or at the top of `SingleFlight.run`.
 ///
-/// Not a failure that was observed: with the actor version those two tests still
-/// passed ten runs out of ten. The difference is that their ordering then rests on
-/// how the two continuations happen to be scheduled rather than on the code, and
-/// the assertion that would catch it is an indirect one (a joiner that ran its own
-/// flight shows up as a third entry in `pipeVariants`).
+/// Not a failure that was observed: with the actor version those two tests passed
+/// ten runs out of ten, and a probe inside `SingleFlight` showed the join happening
+/// every time. What makes it worth fixing by construction is that a caller which
+/// failed to join is close to invisible from outside: it would run its own flight
+/// for the same variant, the other caller would join that one, and the variant
+/// assertions would still hold. The only test that would notice is the one pinning
+/// that a failure for the current variant is not repeated, by seeing a second
+/// download.
 ///
-/// It is also one-shot in a way callers rely on: once open, a later `wait()`
-/// returns immediately, so a seam that is entered twice parks only on its first
-/// pass without the caller tracking that itself.
+/// One-shot like `AsyncGate`: once open, a later `wait()` returns immediately.
 @MainActor
 final class MainActorGate {
     private var continuations: [CheckedContinuation<Void, Never>] = []
