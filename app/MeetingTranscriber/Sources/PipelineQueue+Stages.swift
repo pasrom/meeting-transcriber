@@ -198,7 +198,13 @@ extension PipelineQueue {
 
             let transcription = try await transcribe(ctx, engine: engine, workDir: workDir)
 
-            guard !transcription.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            // The transcript WITHOUT its recording-level note. A dropped track
+            // renders that one line even when the surviving track produced no
+            // segments, and the rendered string would then pass a check meant
+            // to catch exactly that: a note-only transcript saved as a success,
+            // with a protocol generated from one sentence.
+            let body = transcription.cachedSegments?.transcriptText(note: nil) ?? transcription.transcript
+            guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 // Compute input RMS only on the failure path — loading the whole
                 // mix file is expensive (~MB-per-minute) and we only need it when
                 // diagnosing why transcription produced nothing. Paired imports
@@ -303,8 +309,22 @@ extension PipelineQueue {
         let mic16k = workDir.appendingPathComponent("mic_16k.wav")
         async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
         async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
-        try await appResample
-        try await micResample
+        // Per track, and deliberately not `try`: a source that cannot be
+        // resampled at all is a track without usable audio, not a reason to
+        // discard the other one. `AudioMixer.frameCount` reports 0 for the file
+        // that was never written, so the verdict below folds it into the same
+        // arm as an empty track. With a throw here that fold was unreachable
+        // for exactly the inputs it names.
+        do { try await appResample } catch {
+            logger.warning(
+                "[\(ctx.shortID, privacy: .public)] app_resample_failed error=\(error.localizedDescription, privacy: .public)",
+            )
+        }
+        do { try await micResample } catch {
+            logger.warning(
+                "[\(ctx.shortID, privacy: .public)] mic_resample_failed error=\(error.localizedDescription, privacy: .public)",
+            )
+        }
 
         // Which of the two tracks has anything to transcribe, answered before
         // any of the work below.

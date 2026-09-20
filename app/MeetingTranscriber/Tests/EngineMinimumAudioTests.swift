@@ -37,6 +37,16 @@ final class EngineMinimumAudioTests: XCTestCase {
         )
     }
 
+    /// Measured in the pinned dependency, not assumed: `windowClipTime`
+    /// defaults to 1.0 s and WhisperKit's decode loop runs
+    /// `while seek < seekClipEnd - windowClipTime * sampleRate`, so a track of
+    /// 16000 frames or fewer never enters it and returns no segments at all,
+    /// without throwing. At the protocol default of one frame a half-second
+    /// utterance would vanish with nothing said about it.
+    func testWhisperKitPublishesItsOneSecondFloor() {
+        XCTAssertEqual(WhisperKitEngine().minimumAudioFrames, 16001)
+    }
+
     /// The point of the whole arrangement: the same recording is judged by the
     /// engine that will transcribe it, not by a constant the pipeline picked.
     func testAShortButRealTrackSurvivesUnderAnEngineWithNoFloor() {
