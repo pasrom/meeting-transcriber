@@ -84,8 +84,10 @@ enum DualTrackViability: String, Codable, Equatable, Sendable {
     var droppedTrackWarning: String? {
         switch self {
         case .both, .neither: nil
+
         case .appOnly:
             "The microphone track carried nothing the transcription engine could use — transcribed the app audio only"
+
         case .micOnly:
             "The app-audio track carried nothing the transcription engine could use — transcribed the microphone only"
         }

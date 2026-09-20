@@ -256,6 +256,27 @@ extension PipelineQueue {
 
     // MARK: - Pipeline stages
 
+    /// Resample one source to 16 kHz, reporting a failure rather than raising
+    /// it.
+    ///
+    /// Deliberately not throwing: a source that cannot be read at all is a
+    /// track without usable audio, not a reason to discard the other one.
+    /// `AudioMixer.frameCount` reports 0 for the file this then never wrote, so
+    /// the viability verdict folds it into the same arm as an empty track.
+    /// While this threw, that fold was unreachable for exactly the inputs its
+    /// own documentation named.
+    private func resample(
+        _ source: URL, to destination: URL, track: String, ctx: JobContext,
+    ) async {
+        do {
+            try await AudioMixer.resampleFile(from: source, to: destination)
+        } catch {
+            logger.warning(
+                "[\(ctx.shortID, privacy: .public)] \(track, privacy: .public)_resample_failed error=\(error.localizedDescription, privacy: .public)",
+            )
+        }
+    }
+
     /// The line this job's transcript opens with, or nil when there is nothing
     /// to say. Rendered from the stored verdict at the point of use rather than
     /// stored as prose, so the wording never has to be parsed back.
@@ -307,24 +328,10 @@ extension PipelineQueue {
     ) async throws -> [TimestampedSegment] {
         let app16k = workDir.appendingPathComponent("app_16k.wav")
         let mic16k = workDir.appendingPathComponent("mic_16k.wav")
-        async let appResample: Void = AudioMixer.resampleFile(from: appAudioPath, to: app16k)
-        async let micResample: Void = AudioMixer.resampleFile(from: micAudioPath, to: mic16k)
-        // Per track, and deliberately not `try`: a source that cannot be
-        // resampled at all is a track without usable audio, not a reason to
-        // discard the other one. `AudioMixer.frameCount` reports 0 for the file
-        // that was never written, so the verdict below folds it into the same
-        // arm as an empty track. With a throw here that fold was unreachable
-        // for exactly the inputs it names.
-        do { try await appResample } catch {
-            logger.warning(
-                "[\(ctx.shortID, privacy: .public)] app_resample_failed error=\(error.localizedDescription, privacy: .public)",
-            )
-        }
-        do { try await micResample } catch {
-            logger.warning(
-                "[\(ctx.shortID, privacy: .public)] mic_resample_failed error=\(error.localizedDescription, privacy: .public)",
-            )
-        }
+        async let appResample: Void = resample(appAudioPath, to: app16k, track: "app", ctx: ctx)
+        async let micResample: Void = resample(micAudioPath, to: mic16k, track: "mic", ctx: ctx)
+        await appResample
+        await micResample
 
         // Which of the two tracks has anything to transcribe, answered before
         // any of the work below.

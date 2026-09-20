@@ -253,9 +253,9 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         let corrupt = tmpDir.appendingPathComponent("meeting_mic.wav")
         try Data("not audio at all".utf8).write(to: corrupt)
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
             mic: corrupt,
         )
 
@@ -274,10 +274,10 @@ final class EmptyTrackSurvivesTests: XCTestCase {
         h.engine.throwingPathSuffixes = ["mic_16k.wav"]
         h.engine.segmentsByPathSuffix = ["app_16k.wav": []]
 
-        await run(
+        try await run(
             h,
-            app: try writeTrack(frames: 160_000, named: "meeting_app.wav"),
-            mic: try writeTrack(frames: 0, named: "meeting_mic.wav"),
+            app: writeTrack(frames: 160_000, named: "meeting_app.wav"),
+            mic: writeTrack(frames: 0, named: "meeting_mic.wav"),
         )
 
         XCTAssertEqual(
