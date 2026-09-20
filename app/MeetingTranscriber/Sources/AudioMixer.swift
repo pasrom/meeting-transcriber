@@ -336,14 +336,32 @@ enum AudioMixer {
     /// Load an audio or video file, resample to a target rate, and save to a new WAV file.
     ///
     /// Fast path: if the source is already at `targetRate` (readable by AVAudioFile), copies
-    /// the file directly instead of decoding and re-encoding.
+    /// the file directly instead of decoding and re-encoding. Sources too large for one
+    /// `AVAudioPCMBuffer` are streamed; ordinary sources keep the established buffered path.
     static func resampleFile(from source: URL, to destination: URL, targetRate: Int = AudioConstants.targetSampleRate) async throws {
         // Probe rate without loading all samples — O(1) for WAV/MP3/M4A
-        if let audioFile = try? AVAudioFile(forReading: source),
-           Int(audioFile.processingFormat.sampleRate) == targetRate {
-            try FileManager.default.copyItem(at: source, to: destination)
-            return
+        if let audioFile = try? AVAudioFile(forReading: source) {
+            if Int(audioFile.processingFormat.sampleRate) == targetRate {
+                try FileManager.default.copyItem(at: source, to: destination)
+                return
+            }
+            if !canAllocateSinglePCMBuffer(frameCount: audioFile.length, format: audioFile.processingFormat) {
+                do {
+                    try await streamResampleFile(
+                        from: source,
+                        to: destination,
+                        targetRate: targetRate,
+                        sourceChannelCount: audioFile.processingFormat.channelCount,
+                    )
+                    return
+                } catch {
+                    logger.info(
+                        "Streaming resample failed for \(source.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public), trying buffered fallbacks",
+                    )
+                }
+            }
         }
+
         let (samples, sourceRate) = try await loadAudioAsFloat32(url: source)
         let resampled = resample(samples, from: sourceRate, to: targetRate)
         try saveWAV(samples: resampled, sampleRate: targetRate, url: destination)
@@ -401,8 +419,11 @@ enum AudioMixer {
     /// Read mono Float32 samples from an already-opened AVAudioFile.
     private static func readSamplesFromAudioFile(_ file: AVAudioFile) throws -> [Float] {
         let format = file.processingFormat
+        guard file.length > 0 else { return [] }
+        guard canAllocateSinglePCMBuffer(frameCount: file.length, format: format) else {
+            throw AudioMixerError.bufferCreationFailed
+        }
         let frameCount = AVAudioFrameCount(file.length)
-        guard frameCount > 0 else { return [] }
 
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
             throw AudioMixerError.bufferCreationFailed
@@ -433,6 +454,29 @@ enum AudioMixer {
             mono[i] *= scale
         }
         return mono
+    }
+
+    /// `AVAudioPCMBuffer` ultimately multiplies these values as unsigned 32 bit
+    /// integers. Check the decoded size first because the Objective-C exception
+    /// raised by an overflow cannot be caught by Swift's `do` / `catch`.
+    static func canAllocateSinglePCMBuffer(frameCount: AVAudioFramePosition, format: AVAudioFormat) -> Bool {
+        guard frameCount > 0, frameCount <= AVAudioFramePosition(UInt32.max) else { return false }
+
+        let bytesPerFrame = UInt64(format.streamDescription.pointee.mBytesPerFrame)
+        let bufferCount = format.isInterleaved ? UInt64(1) : UInt64(format.channelCount)
+        guard bytesPerFrame > 0, bufferCount > 0 else { return false }
+
+        let (bytesPerBuffer, frameOverflow) = UInt64(frameCount).multipliedReportingOverflow(by: bytesPerFrame)
+        guard !frameOverflow else { return false }
+
+        let alignment = UInt64(16)
+        let remainder = bytesPerBuffer % alignment
+        let padding = remainder == 0 ? 0 : alignment - remainder
+        let (alignedBytesPerBuffer, alignmentOverflow) = bytesPerBuffer.addingReportingOverflow(padding)
+        guard !alignmentOverflow else { return false }
+
+        let (decodedByteCount, channelOverflow) = alignedBytesPerBuffer.multipliedReportingOverflow(by: bufferCount)
+        return !channelOverflow && decodedByteCount <= UInt64(UInt32.max)
     }
 
     /// Save Float32 mono samples to a 16-bit PCM WAV file.
