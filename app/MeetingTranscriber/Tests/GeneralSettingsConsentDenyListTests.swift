@@ -11,7 +11,7 @@ final class GeneralSettingsConsentDenyListTests: XCTestCase {
     private func makeSettings(browserMeetings: Bool, denied: [String]) throws -> AppSettings {
         let suiteName = "GeneralSettingsBrowserDenyListTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock { suite.removePersistentDomain(forName: suiteName) }
+        addTeardownBlock { DefaultsSuite.remove(suiteName) }
         let settings = AppSettings(defaults: suite)
         settings.watchBrowserMeetings = browserMeetings
         settings.consentDeniedApps = denied

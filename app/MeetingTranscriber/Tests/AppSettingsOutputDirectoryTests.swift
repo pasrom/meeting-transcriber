@@ -29,7 +29,7 @@ final class AppSettingsOutputDirectoryTests: XCTestCase {
 
     override func tearDown() {
         settings = nil
-        defaults.removePersistentDomain(forName: suiteName)
+        DefaultsSuite.remove(suiteName)
         defaults = nil
         suiteName = nil
         KeychainHelper.delete(key: apiKeyAccount)

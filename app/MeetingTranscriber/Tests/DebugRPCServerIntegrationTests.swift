@@ -147,6 +147,7 @@
             let manager = NotificationManager()
             let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { DefaultsSuite.remove(suite) }
             let state = AppState(settings: AppSettings(defaults: defaults), notifier: manager)
             defer { state.liveCaptions.clear() }
             manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
@@ -181,7 +182,7 @@
         func testStateExposesEffectiveSettings() async throws {
             let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-            defer { defaults.removePersistentDomain(forName: suite) }
+            defer { DefaultsSuite.remove(suite) }
             let settings = AppSettings(defaults: defaults)
             settings.recordOnly = true
             settings.transcriptionEngine = .parakeet

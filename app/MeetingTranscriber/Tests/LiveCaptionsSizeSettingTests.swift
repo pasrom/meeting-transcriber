@@ -6,7 +6,9 @@ import XCTest
 /// the `file_length` limit and pins only the default.
 final class LiveCaptionsSizeSettingTests: XCTestCase {
     private func makeDefaults() throws -> UserDefaults {
-        try XCTUnwrap(UserDefaults(suiteName: "live-captions-size-\(getpid())-\(UUID().uuidString)"))
+        let name = "live-captions-size-\(getpid())-\(UUID().uuidString)"
+        addTeardownBlock { DefaultsSuite.remove(name) }
+        return try XCTUnwrap(UserDefaults(suiteName: name))
     }
 
     func testPersistsAcrossInstances() throws {

@@ -29,7 +29,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
 
     override func tearDown() async throws {
         settings = nil
-        defaults.removePersistentDomain(forName: testSuiteName)
+        DefaultsSuite.remove(testSuiteName)
         defaults = nil
         testSuiteName = nil
         try await super.tearDown()

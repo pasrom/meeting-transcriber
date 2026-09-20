@@ -19,7 +19,7 @@ final class GeneralSettingsBrowserWarningTests: XCTestCase {
     private func makeSettings(browserMeetings: Bool) throws -> AppSettings {
         let suiteName = "GeneralSettingsBrowserWarningTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        addTeardownBlock { suite.removePersistentDomain(forName: suiteName) }
+        addTeardownBlock { DefaultsSuite.remove(suiteName) }
         let settings = AppSettings(defaults: suite)
         settings.watchBrowserMeetings = browserMeetings
         return settings

@@ -27,7 +27,7 @@ final class AboutSettingsViewTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: testSuiteName)
+        DefaultsSuite.remove(testSuiteName)
         defaults = nil
         testSuiteName = nil
         try await super.tearDown()

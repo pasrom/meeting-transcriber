@@ -567,7 +567,7 @@ extension XCTestCase {
         guard let defaults = UserDefaults(suiteName: suite) else {
             fatalError("Could not create test UserDefaults suite")
         }
-        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        addTeardownBlock { DefaultsSuite.remove(suite) }
         return AppState(settings: AppSettings(defaults: defaults))
     }
 }

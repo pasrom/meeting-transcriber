@@ -7,8 +7,10 @@ import XCTest
 @MainActor
 final class EchoCancellationSettingTests: XCTestCase {
     private func freshSettings() -> AppSettings {
-        let defaults = UserDefaults(suiteName: "echo-cancel-\(UUID().uuidString)")!
+        let name = "echo-cancel-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
         // swiftlint:disable:previous force_unwrapping
+        addTeardownBlock { DefaultsSuite.remove(name) }
         return AppSettings(defaults: defaults)
     }
 
@@ -22,7 +24,9 @@ final class EchoCancellationSettingTests: XCTestCase {
     }
 
     func testTogglePersists() throws {
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: "echo-cancel-persist-\(UUID().uuidString)"))
+        let name = "echo-cancel-persist-\(UUID().uuidString)"
+        addTeardownBlock { DefaultsSuite.remove(name) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         let settings = AppSettings(defaults: defaults)
         settings.echoCancellationEnabled = true
         XCTAssertTrue(

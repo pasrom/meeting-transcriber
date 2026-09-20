@@ -287,7 +287,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// mid-recording assertion sees a rebuild (count 2) and fails.
     func testSettingsChangeDuringRecordingDefersRebuildUntilIdle() async {
         let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
-        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
         var recording = true
         let (coordinator, settings, buildCount) = makeEligibleCoordinator(suiteName) { recording }
         XCTAssertEqual(buildCount(), 1, "prewarm builds the controller once")
@@ -309,7 +309,7 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
     /// the controller immediately (so it re-warms against the new engine).
     func testSettingsChangeWhileIdleRebuildsImmediately() async {
         let suiteName = "LiveTxCoordTests-\(getpid())-\(UUID().uuidString)"
-        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
         let (coordinator, settings, buildCount) = makeEligibleCoordinator(suiteName) { false }
         XCTAssertEqual(buildCount(), 1)
 

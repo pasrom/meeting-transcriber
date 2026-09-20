@@ -15,7 +15,7 @@ final class ConsentDenyListStoreTests: XCTestCase {
             XCTFail("could not create defaults suite")
             return
         }
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
         body(defaults)
     }
 

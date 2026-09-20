@@ -19,7 +19,7 @@ final class ChannelFaultIntegrationTests: XCTestCase {
     private let silentSinceStart = ChannelHealthHarness.silentSinceStart
 
     private func makeController() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
-        ChannelHealthHarness.make()
+        ChannelHealthHarness.make(for: self)
     }
 
     // MARK: - Providers that do not simulate capture

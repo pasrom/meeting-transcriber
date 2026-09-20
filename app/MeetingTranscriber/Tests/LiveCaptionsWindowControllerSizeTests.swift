@@ -13,7 +13,7 @@ final class LiveCaptionsWindowControllerSizeTests: XCTestCase {
     private func makeDefaults() throws -> UserDefaults {
         let name = "captions-window-\(getpid())-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        addTeardownBlock { DefaultsSuite.remove(name) }
         return defaults
     }
 
