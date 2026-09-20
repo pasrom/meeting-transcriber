@@ -105,8 +105,8 @@ final class LegacyDefaultsMigrationTests: XCTestCase {
         let legacy = try XCTUnwrap(UserDefaults(suiteName: legacyName))
         let current = try XCTUnwrap(UserDefaults(suiteName: currentName))
         defer {
-            legacy.removePersistentDomain(forName: legacyName)
-            current.removePersistentDomain(forName: currentName)
+            DefaultsSuite.remove(legacyName)
+            DefaultsSuite.remove(currentName)
         }
         legacy.set("de", forKey: "whisperLanguage")
         legacy.set(true, forKey: "autoWatch")

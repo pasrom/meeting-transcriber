@@ -24,8 +24,13 @@ enum ChannelHealthHarness {
     /// A bare controller (not a full `AppState`), settings-backed closures and a
     /// notifier spy. The debounce is pinned to 30 s, the minimum the production
     /// clamp allows, and every test times relative to it.
-    static func make() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
+    /// - Parameter test: the case the scratch suite's teardown is hung on.
+    ///   This type is not an `XCTestCase`, so it has none of its own.
+    static func make(
+        for test: XCTestCase,
+    ) -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
         let suite = "ChannelHealthHarness-\(getpid())-\(UUID().uuidString)"
+        test.addTeardownBlock { DefaultsSuite.remove(suite) }
         // swiftlint:disable:next force_unwrapping
         let defaults = UserDefaults(suiteName: suite)!
         let settings = AppSettings(defaults: defaults)

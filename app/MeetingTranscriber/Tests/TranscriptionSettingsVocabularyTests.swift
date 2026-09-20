@@ -16,7 +16,7 @@ final class TranscriptionSettingsVocabularyTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        defaults.removePersistentDomain(forName: suiteName)
+        DefaultsSuite.remove(suiteName)
         defaults = nil
         suiteName = nil
         try await super.tearDown()

@@ -34,7 +34,7 @@ final class OutputDirectoryResolverTests: XCTestCase {
     override func tearDown() async throws {
         resolver = nil
         settings = nil
-        defaults.removePersistentDomain(forName: suiteName)
+        DefaultsSuite.remove(suiteName)
         defaults = nil
         suiteName = nil
         KeychainHelper.delete(key: apiKeyAccount)

@@ -22,37 +22,29 @@ extension XCTestCase {
 
     /// Remove the preference files of test processes that are gone.
     ///
-    /// Exact prefix, and only when the owning pid no longer exists, so a run in
-    /// flight keeps its own file — including a `--parallel` sibling, which is
-    /// its own process. The pid is the first component after the prefix, which
-    /// also matches the older `<pid>-<uuid>` names an earlier per-call version
-    /// of this factory left behind.
-    /// Whether no process holds this pid.
+    /// **This exists only to drain files created before `DefaultsSuite` did.**
+    /// The suite this factory makes now goes through `DefaultsSuite.remove`, so
+    /// everything from here on is recorded in a manifest and swept from there,
+    /// without reading the preferences directory at all. Once the backlog this
+    /// drains is gone, so is the reason for this function.
     ///
-    /// `kill(pid, 0) != 0` alone means "not signalable", which is not the same
-    /// thing: a live process owned by another user answers `EPERM`, and reading
-    /// that as dead would have this delete a file out from under a running one.
-    /// Proven reachable by planting a file named after pid 1. Harmless in the
-    /// scenarios this factory can actually produce, and still wrong, so the
-    /// predicate says what it means.
-    private static func processIsGone(_ pid: pid_t) -> Bool {
-        kill(pid, 0) != 0 && errno == ESRCH
-    }
-
+    /// Exact prefix, and only when the owning pid no longer exists, so a run in
+    /// flight keeps its own file, including a `--parallel` sibling, which is its
+    /// own process. The pid is the first component after the prefix, which also
+    /// matches the older `<pid>-<uuid>` names an earlier per-call version of
+    /// this factory left behind.
     static func sweepDeadFactoryDefaults() {
         guard !didSweepFactoryDefaults else { return }
         didSweepFactoryDefaults = true
         let prefix = "WatchingControllerFactory-"
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Preferences")
+        let dir = DefaultsSuite.preferencesDirectory
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         for name in names where name.hasPrefix(prefix) && name.hasSuffix(".plist") {
             let stem = name.dropFirst(prefix.count).dropLast(".plist".count)
             guard let owner = pid_t(stem.split(separator: "-").first ?? ""), owner > 0,
-                  Self.processIsGone(owner)
+                  DefaultsSuite.processHasExited(owner)
             else { continue }
-            UserDefaults().removePersistentDomain(forName: String(name.dropLast(".plist".count)))
-            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+            DefaultsSuite.removeSettled(String(name.dropLast(".plist".count)))
         }
     }
 
@@ -112,7 +104,7 @@ extension XCTestCase {
         // call wipe the first's persisted values. Their in-memory `AppSettings`
         // survive, since it snapshots at init, but do not build two and expect
         // both to persist.
-        UserDefaults().removePersistentDomain(forName: suite)
+        DefaultsSuite.remove(suite)
         let settings = AppSettings(
             defaults: UserDefaults(suiteName: suite) ?? .standard,
             // The default output folder is the one path from this factory into a

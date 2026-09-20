@@ -25,7 +25,7 @@ final class HelpBadgeTests: XCTestCase {
     }
 
     override func tearDown() async throws {
-        defaults?.removePersistentDomain(forName: testSuiteName)
+        if let testSuiteName { DefaultsSuite.remove(testSuiteName) }
         defaults = nil
         testSuiteName = nil
         try await super.tearDown()

@@ -227,6 +227,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // toggles. With Teams off and Zoom on, a Teams call is ignored and a
         // Zoom call fires.
         let suite = "WatchAppWiring-\(getpid())-\(UUID().uuidString)"
+        addTeardownBlock { DefaultsSuite.remove(suite) }
         let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
         settings.watchTeams = false
         settings.watchZoom = true
@@ -261,6 +262,7 @@ final class PowerAssertionDetectorPatternsTests: XCTestCase {
         // so a Chrome WebRTC call fires only when the toggle is on.
         func detector(browserOn: Bool) throws -> PowerAssertionDetector {
             let suite = "BrowserWatchWiring-\(browserOn)-\(getpid())-\(UUID().uuidString)"
+            addTeardownBlock { DefaultsSuite.remove(suite) }
             let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
             settings.watchBrowserMeetings = browserOn
             let d = try XCTUnwrap(

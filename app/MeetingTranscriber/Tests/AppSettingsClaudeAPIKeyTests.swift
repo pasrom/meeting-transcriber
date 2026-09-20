@@ -33,7 +33,7 @@
 
         override func tearDown() {
             settings = nil
-            defaults.removePersistentDomain(forName: testSuiteName)
+            DefaultsSuite.remove(testSuiteName)
             defaults = nil
             testSuiteName = nil
             KeychainHelper.delete(key: apiKeyAccount)

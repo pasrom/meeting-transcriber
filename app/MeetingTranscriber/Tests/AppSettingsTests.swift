@@ -39,7 +39,7 @@ final class AppSettingsTests: XCTestCase {
 
     override func tearDown() {
         settings = nil
-        defaults.removePersistentDomain(forName: testSuiteName)
+        DefaultsSuite.remove(testSuiteName)
         defaults = nil
         testSuiteName = nil
         KeychainHelper.delete(key: apiKeyAccount)
@@ -453,7 +453,7 @@ final class AppSettingsTests: XCTestCase {
             XCTFail("Could not create suite")
             return
         }
-        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
 
         suite.set(true, forKey: "audioDebugLogging")
 
@@ -468,7 +468,7 @@ final class AppSettingsTests: XCTestCase {
             XCTFail("Could not create suite")
             return
         }
-        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
 
         suite.set(true, forKey: "audioDebugLogging")
         suite.set(false, forKey: "verboseDiagnostics")
@@ -483,7 +483,7 @@ final class AppSettingsTests: XCTestCase {
             XCTFail("Could not create suite")
             return
         }
-        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defer { DefaultsSuite.remove(suiteName) }
 
         suite.set(true, forKey: "audioDebugLogging")
 

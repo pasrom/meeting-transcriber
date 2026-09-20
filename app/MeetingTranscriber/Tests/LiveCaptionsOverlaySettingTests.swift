@@ -13,9 +13,9 @@ import XCTest
 /// would catch.
 final class LiveCaptionsOverlaySettingTests: XCTestCase {
     func testPersistsAcrossInstances() throws {
-        let defaults = try XCTUnwrap(
-            UserDefaults(suiteName: "live-captions-overlay-\(getpid())-\(UUID().uuidString)"),
-        )
+        let name = "live-captions-overlay-\(getpid())-\(UUID().uuidString)"
+        addTeardownBlock { DefaultsSuite.remove(name) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         let settings = AppSettings(defaults: defaults)
         settings.liveCaptionsOverlayEnabled = false
         XCTAssertEqual(defaults.object(forKey: "liveCaptionsOverlayEnabled") as? Bool, false)

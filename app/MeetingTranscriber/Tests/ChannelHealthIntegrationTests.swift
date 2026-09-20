@@ -23,7 +23,7 @@ final class ChannelHealthIntegrationTests: XCTestCase {
     private let stoppedDelivering = ChannelHealthHarness.stoppedDelivering
 
     private func makeController() -> (ChannelHealthController, MockRecorder, RecordingNotifier, AppSettings) {
-        ChannelHealthHarness.make()
+        ChannelHealthHarness.make(for: self)
     }
 
     // MARK: - Defaults

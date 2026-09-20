@@ -32,6 +32,7 @@
             tmpDir = try makeTempDirectory(prefix: "AppStateRPCActions")
             dbPath = tmpDir.appendingPathComponent("speakers.json")
             let suite = "AppStateRPCActionsTests-\(getpid())-\(UUID().uuidString)"
+            addTeardownBlock { DefaultsSuite.remove(suite) }
             guard let defaults = UserDefaults(suiteName: suite) else {
                 XCTFail("Could not create test UserDefaults suite")
                 return
