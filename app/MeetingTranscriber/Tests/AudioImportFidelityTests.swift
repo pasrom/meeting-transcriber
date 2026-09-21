@@ -188,6 +188,27 @@ final class AudioImportFidelityTests: XCTestCase {
         )
     }
 
+    /// Differential on purpose: it asserts the two byte orders agree, not an
+    /// absolute level, so it stays valid whichever way the tier folds channels.
+    func testAVAssetFallbackDecodesBigEndianLikeLittleEndian() async throws {
+        let bigEndian = try makeStereoAIFF(amplitude: 0.5)
+        let littleEndian = try makeAsymmetricStereoWAV(left: 0.5, right: 0.5)
+
+        let fromBigEndian = try await AudioMixer.loadAudioFromAVAsset(url: bigEndian).samples
+        let fromLittleEndian = try await AudioMixer.loadAudioFromAVAsset(url: littleEndian).samples
+
+        XCTAssertEqual(
+            AudioMixer.rmsDecibels(samples: fromBigEndian),
+            AudioMixer.rmsDecibels(samples: fromLittleEndian),
+            accuracy: 0.5,
+            "byte order must not change the decoded level",
+        )
+        XCTAssertLessThan(
+            fromBigEndian.map(abs).max() ?? 0, 0.95,
+            "a 0.5-amplitude source must not reach full scale after decoding",
+        )
+    }
+
     // MARK: - Synthesised sources
 
     /// Settings derived from an `AVAudioFormat` rather than hand-built: a literal
