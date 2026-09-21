@@ -275,8 +275,8 @@ Rule: test each behavior at the cheapest layer that can falsify it.
    (`BadgeKind.compute`, `LiveCaptionsGate`, `WatchLoopEndPolicy` pattern) and put
    the bulk of assertions there.
 2. **ViewInspector** (`swift test`, every PR): exactly one wiring test per control —
-   find by its `A11yID` constant (or by label, for `Picker`/`Stepper`, which expose
-   no findable one — see Identifiers), drive (`.tap()`/`.select()`/`.increment()`),
+   find by its `A11yID` constant (see Identifiers), drive
+   (`.tap()`/`.select()`/`.increment()`),
    assert the `AppSettings` write-back. Don't enumerate logic states through the view;
    that's layer 1's job. (ViewInspector is reflection over undocumented SwiftUI
    internals — keep to the boring primitives; breakage is loud since it runs on
@@ -305,12 +305,26 @@ Rule: test each behavior at the cheapest layer that can falsify it.
 **Identifiers:** add `.accessibilityIdentifier` on demand via the shared `A11yID`
 namespace (`Sources/A11yID.swift`) — the view modifier, the ViewInspector `find`, and
 the `/ui/press` allowlist all reference the constant so the compiler catches drift.
-Interaction tests locate by the `A11yID` constant wherever a control exposes a
-findable one. Accepted exception: SwiftUI `Picker` and `Stepper` don't surface a
-ViewInspector-findable `.accessibilityIdentifier`, so those are located by label or
-document-order index (see `SettingsInteractionTests`) — the one sanctioned fallback,
-not a licence to skip identifiers where they work. `find(text:)` for a bare label
-only when the label itself is the behavior under test. An identifier makes a control
+Interaction tests locate by the `A11yID` constant, `Picker` and `Stepper`
+included. Both are findable by an identifier attached to the control itself, in
+two steps, because the lookup returns the modified view rather than the typed
+control and the second `find` is what makes `select`/`increment` reachable:
+
+```swift
+let picker = try view.inspect()
+    .find(viewWithAccessibilityIdentifier: A11yID.liveCaptionsSizePicker)
+    .find(ViewType.Picker.self)
+try picker.select(value: LiveCaptionsSize.small)
+```
+
+Measured under the pinned ViewInspector 0.10.3, and pinned by
+`ViewInspectorIdentifierTests`: a `Picker` and a `Stepper` each carrying an
+identifier are found and driven, and an unknown identifier throws, so the lookup
+is not matching whatever it is handed. This replaces an earlier note here that
+claimed neither control surfaces a findable identifier. The label and
+document-order locators still in `SettingsInteractionTests` date from that
+belief; they work, and they are not the shape to copy. `find(text:)` for a bare
+label only when the label itself is the behavior under test. An identifier makes a control
 tree-visible;
 press-drivable *additionally* requires a `/ui/press` allowlist entry — never allowlist
 a control whose action opens a menu/popover/sheet/panel (a nested runloop wedges the
