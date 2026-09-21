@@ -297,6 +297,11 @@ enum AudioMixer {
             AVLinearPCMIsFloatKey: true,
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsNonInterleaved: false,
+            // Explicit, because the reader otherwise inherits the source's byte
+            // order: an AIFF or big-endian CAF then arrives byte-swapped and is
+            // read as native floats. A clean 0.5 sine came back with NaN samples
+            // and a peak of 3.4e38, and nothing reports an error.
+            AVLinearPCMIsBigEndianKey: false,
             AVNumberOfChannelsKey: 1,
             AVSampleRateKey: AudioConstants.targetSampleRate,
         ]
