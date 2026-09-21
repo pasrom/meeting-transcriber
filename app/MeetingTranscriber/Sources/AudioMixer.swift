@@ -275,7 +275,17 @@ enum AudioMixer {
 
     /// Extract audio from a video container using AVAsset.
     static func loadAudioFromAVAsset(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
-        let asset = AVURLAsset(url: url)
+        // Precise timing is load-bearing here, not a nicety. Without it a
+        // Vorbis-in-Ogg track stops yielding sample buffers after a handful and
+        // `copyNextSampleBuffer()` never returns: a 49.8 s stereo Vorbis file
+        // was still blocked after 280 s, and decodes in 0.20 s with the option
+        // set. Nothing in this chain or in `PipelineQueue` bounds a decode and
+        // cancellation cannot interrupt one, so a hang here also costs the
+        // ffmpeg rescue that would otherwise follow.
+        let asset = AVURLAsset(
+            url: url,
+            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true],
+        )
         let tracks = try await asset.loadTracks(withMediaType: .audio)
         guard let audioTrack = tracks.first else {
             throw AudioMixerError.noAudioTrack
