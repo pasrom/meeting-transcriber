@@ -140,6 +140,54 @@ final class AudioImportFidelityTests: XCTestCase {
         )
     }
 
+    // MARK: - AVAsset fallback, called directly
+
+    /// `loadAudioFromAVAsset` is tier 2 of `loadAudioAsFloat32`, reached only
+    /// when `AVAudioFile` throws on a file that is not MKV/WebM. No fixture we
+    /// own makes tier 1 throw, so these call tier 2 directly, the way
+    /// `AudioMixerStreamingTests` calls `streamResampleFile`. Going through
+    /// `resampleFile` would exercise tier 1 and see none of this.
+    ///
+    /// The tier matters more than its reach suggests: it exists to rescue a
+    /// file tier 1 could not open, so a decode that returns wrong audio, or
+    /// never returns, also costs the ffmpeg rescue that would have followed.
+
+    /// Bounded explicitly: the failure guarded against is a decoder that blocks
+    /// forever rather than erroring. Nothing in `loadAudioAsFloat32` or
+    /// `PipelineQueue` imposes a deadline.
+    func testAVAssetFallbackTerminatesForOggVorbis() async throws {
+        let source = fixtureURL("two_speakers_de.ogg")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.path), "Fixture not found")
+        let destination = makeTempFile(suffix: ".wav")
+
+        let finished = expectation(description: "loadAudioFromAVAsset returns")
+        Task.detached {
+            defer { finished.fulfill() }
+            guard let decoded = try? await AudioMixer.loadAudioFromAVAsset(url: source) else { return }
+            try? AudioMixer.saveWAV(
+                samples: decoded.samples, sampleRate: decoded.sampleRate, url: destination,
+            )
+        }
+        await fulfillment(of: [finished], timeout: 30)
+        // Bound to the expectation only. Awaiting the task would deadlock the
+        // suite instead of failing it, because a blocked `copyNextSampleBuffer`
+        // never returns and cooperative cancellation cannot interrupt it. The
+        // result travels out through the file instead.
+        let outputFile = try AVAudioFile(forReading: destination)
+        let sourceFile = try AVAudioFile(forReading: source)
+        XCTAssertEqual(Int(outputFile.processingFormat.sampleRate), AudioConstants.targetSampleRate)
+        XCTAssertEqual(
+            Double(outputFile.length) / outputFile.processingFormat.sampleRate,
+            Double(sourceFile.length) / sourceFile.processingFormat.sampleRate,
+            accuracy: 0.02,
+            "a decode that stops early still reports success, so assert the whole track arrived",
+        )
+        XCTAssertGreaterThan(
+            AudioMixer.rmsDecibels(forFileAt: destination) ?? -.infinity, -40,
+            "the decoded Ogg must carry speech, not silence",
+        )
+    }
+
     // MARK: - Synthesised sources
 
     /// Settings derived from an `AVAudioFormat` rather than hand-built: a literal
