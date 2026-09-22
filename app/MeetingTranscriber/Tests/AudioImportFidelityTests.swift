@@ -209,6 +209,42 @@ final class AudioImportFidelityTests: XCTestCase {
         )
     }
 
+    /// Both tiers must fold channels the same way, or the level of an import
+    /// depends on which one happened to open the file.
+    func testAVAssetFallbackAveragesStereoChannelsLikeAVAudioFile() async throws {
+        let source = try makeAsymmetricStereoWAV(left: 0.8, right: 0.4)
+
+        let viaFallback = try await AudioMixer.loadAudioFromAVAsset(url: source).samples
+        let viaAudioFile = try AudioMixer.loadAudioFileAsFloat32(url: source)
+
+        XCTAssertEqual(
+            AudioMixer.rmsDecibels(samples: viaFallback),
+            AudioMixer.rmsDecibels(samples: viaAudioFile),
+            accuracy: 0.5,
+            "the AVAsset fallback must fold channels like AVAudioFile does",
+        )
+        // (0.8 + 0.4) / 2 = 0.6 amplitude -> 0.6 / sqrt(2) = -7.45 dBFS. Pinned
+        // as well as the comparison, so both tiers being wrong the same way
+        // cannot pass.
+        XCTAssertEqual(
+            AudioMixer.rmsDecibels(samples: viaFallback), -7.45, accuracy: 1.0,
+            "stereo must be folded by averaging the channels",
+        )
+    }
+
+    /// A tagged discrete layout decoding to silence is the worst shape of this
+    /// bug: the job succeeds and the transcript is simply empty.
+    func testAVAssetFallbackDecodesDiscreteChannelLayout() async throws {
+        let source = try makeDiscreteLayoutCAF(amplitude: 0.5)
+
+        let samples = try await AudioMixer.loadAudioFromAVAsset(url: source).samples
+
+        XCTAssertGreaterThan(
+            AudioMixer.rmsDecibels(samples: samples), -40,
+            "a discrete channel layout must not decode to silence",
+        )
+    }
+
     // MARK: - Synthesised sources
 
     /// Settings derived from an `AVAudioFormat` rather than hand-built: a literal
