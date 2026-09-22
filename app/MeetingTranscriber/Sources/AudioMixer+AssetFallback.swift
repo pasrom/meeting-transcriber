@@ -1,3 +1,4 @@
+import AudioTapLib
 @preconcurrency import AVFoundation
 import CoreMedia
 import Foundation
@@ -47,6 +48,12 @@ extension AudioMixer {
                 // came back with NaN samples and a peak of 3.4e38, and nothing
                 // reports an error.
                 AVLinearPCMIsBigEndianKey: false,
+                // Not 1: the reader's own mono fold is power-preserving, about
+                // 0.707 per channel, which is +3.01 dB against the equal-weight
+                // average tier 1 applies, and it emits digital silence with
+                // `status == .completed` for a
+                // `kAudioChannelLayoutTag_DiscreteInOrder` source. Fold in
+                // Swift instead, below.
                 AVNumberOfChannelsKey: channelCount,
                 AVSampleRateKey: AudioConstants.targetSampleRate,
             ],
@@ -87,37 +94,30 @@ extension AudioMixer {
         return (samples, AudioConstants.targetSampleRate)
     }
 
-    /// The reader's own mono fold is power-preserving, about 0.707 per channel:
-    /// +3.01 dB against the equal-weight average `readSamplesFromAudioFile`
-    /// applies, and digital silence with `status == .completed` for a
-    /// `kAudioChannelLayoutTag_DiscreteInOrder` source. Take the track's
-    /// channels and fold them in Swift instead, as `streamResampleFile` does.
-    ///
-    /// The count comes from the format description because `AVAudioFile`, which
-    /// supplies it there, is what has just failed by the time this tier runs.
+    /// The channel count comes from the format description because
+    /// `AVAudioFile`, which supplies it to `streamResampleFile`, is what has
+    /// just failed by the time this tier runs.
     private static func sourceChannelCount(of track: AVAssetTrack, url: URL) async throws -> Int {
         let formatDescriptions = try await track.load(.formatDescriptions)
-        let describedChannels = formatDescriptions.first
-            .flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mChannelsPerFrame }
-            .map(Int.init) ?? 0
-        guard describedChannels > 0 else {
+        guard let channels = formatDescriptions.first
+            .flatMap({ CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee.mChannelsPerFrame }),
+            channels > 0
+        else {
             assetFallbackLogger
                 .info(
                     "AVAsset track for \(url.lastPathComponent, privacy: .private) reports no channel count, assuming mono",
                 )
             return 1
         }
-        return describedChannels
+        return Int(channels)
     }
 
-    /// Drain the reader, folding each frame's channels to one sample by
-    /// averaging them.
+    /// Drain the reader, averaging each frame's channels down to one sample.
     private static func drainMonoSamples(
         from output: AVAssetReaderTrackOutput,
         channelCount: Int,
         into samples: inout [Float],
     ) throws {
-        let scale = 1.0 / Float(channelCount)
         while let sampleBuffer = output.copyNextSampleBuffer() {
             guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             let byteCount = CMBlockBufferGetDataLength(blockBuffer)
@@ -142,19 +142,9 @@ extension AudioMixer {
                 throw AudioMixerError.audioExtractionFailed("Cannot copy decoded audio (\(copyStatus))")
             }
 
-            guard channelCount > 1 else {
-                samples.append(contentsOf: interleaved)
-                continue
-            }
-            samples.reserveCapacity(samples.count + frameCount)
-            for frame in 0 ..< frameCount {
-                let firstSample = frame * channelCount
-                var sum: Float = 0
-                for channel in 0 ..< channelCount {
-                    sum += interleaved[firstSample + channel]
-                }
-                samples.append(sum * scale)
-            }
+            // Shared with the capture-time resampler so the averaging law lives
+            // once; it passes mono through untouched.
+            samples.append(contentsOf: AudioTapLib.downmixToMono(interleaved, channels: channelCount))
         }
     }
 }

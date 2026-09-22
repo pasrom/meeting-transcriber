@@ -264,10 +264,8 @@ enum AudioMixer {
             // runs only when tier 1 throws on a file that is not MKV/WebM. It
             // stays because it needs no ffmpeg install and decodes through a
             // different stack (AVFoundation's asset reader rather than
-            // AudioToolbox's ExtAudioFile). It must return: nothing here or in
-            // PipelineQueue bounds a decode, cancellation cannot interrupt one,
-            // and a decode that never returns also costs the ffmpeg rescue
-            // below.
+            // AudioToolbox's ExtAudioFile). See `loadAudioFromAVAsset` for why
+            // its reader options are what they are.
             logger.info("AVAudioFile failed for \(url.lastPathComponent, privacy: .private): \(audioFileError.localizedDescription), trying AVAsset fallback")
             do {
                 return try await loadAudioFromAVAsset(url: url)
