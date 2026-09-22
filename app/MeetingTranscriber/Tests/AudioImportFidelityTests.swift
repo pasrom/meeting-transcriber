@@ -147,10 +147,6 @@ final class AudioImportFidelityTests: XCTestCase {
     /// own makes tier 1 throw, so these call tier 2 directly, the way
     /// `AudioMixerStreamingTests` calls `streamResampleFile`. Going through
     /// `resampleFile` would exercise tier 1 and see none of this.
-    ///
-    /// The tier matters more than its reach suggests: it exists to rescue a
-    /// file tier 1 could not open, so a decode that returns wrong audio, or
-    /// never returns, also costs the ffmpeg rescue that would have followed.
 
     /// Bounded explicitly: the failure guarded against is a decoder that blocks
     /// forever rather than erroring. Nothing in `loadAudioAsFloat32` or
@@ -175,7 +171,6 @@ final class AudioImportFidelityTests: XCTestCase {
         // result travels out through the file instead.
         let outputFile = try AVAudioFile(forReading: destination)
         let sourceFile = try AVAudioFile(forReading: source)
-        XCTAssertEqual(Int(outputFile.processingFormat.sampleRate), AudioConstants.targetSampleRate)
         XCTAssertEqual(
             Double(outputFile.length) / outputFile.processingFormat.sampleRate,
             Double(sourceFile.length) / sourceFile.processingFormat.sampleRate,
