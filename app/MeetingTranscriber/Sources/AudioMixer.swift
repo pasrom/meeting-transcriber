@@ -251,14 +251,23 @@ enum AudioMixer {
             return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
         }
 
-        // Fast path: AVAudioFile handles all common audio formats
+        // Fast path: AVAudioFile opens every type the import picker offers on
+        // current macOS, MP4/MOV video containers included
         do {
             let file = try AVAudioFile(forReading: url)
             let sampleRate = Int(file.processingFormat.sampleRate)
             let samples = try readSamplesFromAudioFile(file)
             return (samples, sampleRate)
         } catch let audioFileError {
-            // Fallback 1: AVAsset for video containers (MP4, MOV)
+            // Fallback 1: AVAssetReader. On current macOS AVAudioFile also
+            // opens the MP4/MOV containers this tier was written for, so it
+            // runs only when tier 1 throws on a file that is not MKV/WebM. It
+            // stays because it needs no ffmpeg install and decodes through a
+            // different stack (AVFoundation's asset reader rather than
+            // AudioToolbox's ExtAudioFile). It must return: nothing here or in
+            // PipelineQueue bounds a decode, cancellation cannot interrupt one,
+            // and a decode that never returns also costs the ffmpeg rescue
+            // below.
             logger.info("AVAudioFile failed for \(url.lastPathComponent, privacy: .private): \(audioFileError.localizedDescription), trying AVAsset fallback")
             do {
                 return try await loadAudioFromAVAsset(url: url)
@@ -271,81 +280,6 @@ enum AudioMixer {
                 return try await FFmpegHelper.loadAudioWithFFmpeg(url: url)
             }
         }
-    }
-
-    /// Extract audio from a video container using AVAsset.
-    static func loadAudioFromAVAsset(url: URL) async throws -> (samples: [Float], sampleRate: Int) {
-        // Precise timing is load-bearing here, not a nicety. Without it a
-        // Vorbis-in-Ogg track stops yielding sample buffers after a handful and
-        // `copyNextSampleBuffer()` never returns: a 49.8 s stereo Vorbis file
-        // was still blocked after 280 s, and decodes in 0.20 s with the option
-        // set. Nothing in this chain or in `PipelineQueue` bounds a decode and
-        // cancellation cannot interrupt one, so a hang here also costs the
-        // ffmpeg rescue that would otherwise follow.
-        let asset = AVURLAsset(
-            url: url,
-            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true],
-        )
-        let tracks = try await asset.loadTracks(withMediaType: .audio)
-        guard let audioTrack = tracks.first else {
-            throw AudioMixerError.noAudioTrack
-        }
-
-        let reader = try AVAssetReader(asset: asset)
-        let outputSettings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVLinearPCMIsFloatKey: true,
-            AVLinearPCMBitDepthKey: 32,
-            AVLinearPCMIsNonInterleaved: false,
-            // Explicit, because the reader otherwise inherits the source's byte
-            // order: an AIFF or big-endian CAF then arrives byte-swapped and is
-            // read as native floats. A clean 0.5 sine came back with NaN samples
-            // and a peak of 3.4e38, and nothing reports an error.
-            AVLinearPCMIsBigEndianKey: false,
-            AVNumberOfChannelsKey: 1,
-            AVSampleRateKey: AudioConstants.targetSampleRate,
-        ]
-        let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: outputSettings)
-        reader.add(output)
-
-        guard reader.startReading() else {
-            throw AudioMixerError.audioExtractionFailed(
-                reader.error?.localizedDescription ?? "Unknown error",
-            )
-        }
-
-        // Pre-allocate based on asset duration to avoid repeated array reallocations
-        var samples = [Float]()
-        let duration = try await asset.load(.duration)
-        let estimatedSamples = Int(CMTimeGetSeconds(duration) * Double(AudioConstants.targetSampleRate))
-        if estimatedSamples > 0 {
-            samples.reserveCapacity(estimatedSamples)
-        }
-        while let sampleBuffer = output.copyNextSampleBuffer() {
-            guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
-            let length = CMBlockBufferGetDataLength(blockBuffer)
-            let floatCount = length / MemoryLayout<Float>.size
-            let offset = samples.count
-            samples.append(contentsOf: repeatElement(Float(0), count: floatCount))
-            _ = samples.withUnsafeMutableBufferPointer { buf in
-                CMBlockBufferCopyDataBytes(
-                    blockBuffer,
-                    atOffset: 0,
-                    dataLength: length,
-                    // swiftlint:disable:next force_unwrapping
-                    destination: buf.baseAddress! + offset,
-                )
-            }
-        }
-
-        if reader.status == .failed {
-            throw AudioMixerError.audioExtractionFailed(
-                reader.error?.localizedDescription ?? "Unknown error",
-            )
-        }
-
-        logger.info("AVAsset audio extracted: \(samples.count) samples at \(AudioConstants.targetSampleRate)Hz")
-        return (samples, AudioConstants.targetSampleRate)
     }
 
     /// Load an audio or video file, resample to a target rate, and save to a new WAV file.

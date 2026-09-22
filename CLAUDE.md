@@ -152,7 +152,7 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 
 **Audio loading:**
 - `AudioMixer.loadAudioAsFloat32()` uses a 3-tier fallback: `AVAudioFile` → `AVAsset` → `FFmpegHelper` (ffmpeg CLI).
-- `loadAudioFromAVAsset()` extracts audio tracks via `AVAssetReader`, outputs 16kHz Float32 PCM.
+- `loadAudioFromAVAsset()` extracts audio tracks via `AVAssetReader`, outputs 16kHz Float32 PCM. Rescue path only: `AVAudioFile` opens MP4/MOV too on current macOS, so this runs just when tier 1 throws on a non-MKV/WebM file. Its reader is configured like `streamResampleFile` (precise timing, little-endian float, source channels averaged in Swift), each option for a measured trap: an Ogg Vorbis track that never stops yielding, an AIFF read byte-swapped into NaN, a +3 dB fold against tier 1, and `DiscreteInOrder` decoding to silence with `status == .completed`.
 - `FFmpegHelper` detects ffmpeg binary (env var → `/opt/homebrew/bin` → `/usr/local/bin` → `~/.local/bin` → `/usr/bin`), cached via static let. Converts to 16kHz mono WAV via temp file.
 - Both `NSOpenPanel` type lists (batch import + voice enrollment) come from `AudioImportTypes`, not inline literals — the panels are manual-QA-only, so the pure type list is what tests can pin. Only MKV/WebM are ffmpeg-gated; AMR, 3GPP and Ogg (`.opus`/`.ogg`) decode natively and must stay out of `FFmpegHelper.ffmpegOnlyExtensions`, whose members skip `AVAudioFile`/`AVAsset` entirely.
 - ffmpeg is optional — install via `brew install ffmpeg`. Status shown in Settings → About.
