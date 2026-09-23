@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 import UserNotifications
 
 struct GeneralSettingsView: View {
@@ -40,6 +41,7 @@ struct GeneralSettingsView: View {
                 Toggle("Tencent Meeting", isOn: $settings.watchTencentMeeting)
                 Toggle("FaceTime", isOn: $settings.watchFaceTime)
                 Toggle("WhatsApp", isOn: $settings.watchWhatsApp)
+                customApps
                 Toggle("Browser Web Meetings", isOn: $settings.watchBrowserMeetings)
                     .accessibilityIdentifier(A11yID.watchBrowserToggle)
                 Text(
@@ -80,6 +82,46 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    @ViewBuilder private var customApps: some View {
+        ForEach(settings.watchCustomApps, id: \.self) { bundleID in
+            HStack {
+                Image(nsImage: Self.appIcon(bundleID: bundleID))
+                    .resizable()
+                    .frame(width: 16, height: 16)
+                Text(MicInputDetector.appDisplayName(bundleID: bundleID))
+                Spacer()
+                Button("Remove") {
+                    settings.watchCustomApps.removeAll { $0 == bundleID }
+                }
+            }
+        }
+        VStack(alignment: .leading, spacing: 4) {
+            Button("Add App…", action: addCustomApps)
+            Text("Recording starts when an added app keeps the microphone busy for a few seconds.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func addCustomApps() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        guard panel.runModal() == .OK else { return }
+        for bundleID in panel.urls.compactMap({ Bundle(url: $0)?.bundleIdentifier })
+            where !settings.watchCustomApps.contains(bundleID) {
+            settings.watchCustomApps.append(bundleID)
+        }
+    }
+
+    private static func appIcon(bundleID: String) -> NSImage {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return NSWorkspace.shared.icon(for: .application)
+        }
+        return NSWorkspace.shared.icon(forFile: url.path)
     }
 
     /// Apps the user answered "Never for this app" about.

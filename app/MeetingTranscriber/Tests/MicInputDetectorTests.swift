@@ -178,4 +178,47 @@ final class MicInputDetectorTests: XCTestCase {
         let one = MicInputDetector.patterns(watching: ["WeChat"])
         XCTAssertEqual(one.map(\.appName), ["WeChat"])
     }
+
+    func testCustomAppDetectsViaHelperAndTapsMainApp() throws {
+        let detector = MicInputDetector(
+            patterns: MicInputDetector.patterns(watching: [], customBundleIDs: ["com.example.callapp"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.mainAppPIDProvider = { $0 == "com.example.callapp" ? 100 : nil }
+        detector.processProvider = { [snapshot("com.example.callapp.helper", pid: 555)] }
+
+        let result = try XCTUnwrap(detector.checkOnce())
+        XCTAssertEqual(result.windowPID, 100)
+        XCTAssertTrue(detector.isMeetingActive(result))
+    }
+
+    func testCustomAppMainProcessKeepsItsOwnPID() {
+        let detector = MicInputDetector(
+            patterns: MicInputDetector.patterns(watching: [], customBundleIDs: ["com.example.callapp"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.mainAppPIDProvider = { _ in 100 }
+        detector.processProvider = { [snapshot("com.example.callapp", pid: 555)] }
+
+        XCTAssertEqual(detector.checkOnce()?.windowPID, 555)
+    }
+
+    func testCustomAppIgnoresBundleSharingOnlyAPrefix() {
+        let detector = MicInputDetector(
+            patterns: MicInputDetector.patterns(watching: [], customBundleIDs: ["com.example.callapp"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.processProvider = { [snapshot("com.example.callappextra", pid: 555)] }
+
+        XCTAssertNil(detector.checkOnce())
+    }
+
+    func testBuiltInPatternsDoNotMatchHelpers() {
+        let detector = makeDetector()
+        detector.processProvider = { [snapshot("com.tencent.xinWeChat.MiniProgram")] }
+        XCTAssertNil(detector.checkOnce())
+    }
 }
