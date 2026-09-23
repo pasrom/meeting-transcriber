@@ -131,6 +131,38 @@ final class AudioMixerStreamingTests: XCTestCase {
         XCTAssertEqual(outputSeconds, sourceSeconds, accuracy: 0.02)
     }
 
+    /// A VBR MP3 without a Xing header carries no frame count, so a container's
+    /// declared duration is only a bitrate estimate. AVFoundation stops the
+    /// reader at that estimate, so an understated one ends the decode early and
+    /// still reports success, which no synthesised fixture can show: their
+    /// durations are exact.
+    ///
+    /// `two_speakers_de_noxing.mp3` holds 49.86 s of audio and declares
+    /// somewhere between 44 s and 69 s depending on who is asked. Measured on
+    /// this fixture, dropping `AVURLAssetPreferPreciseDurationAndTimingKey`
+    /// costs 1.5 s off the end.
+    func testStreamResampleFileDecodesPastAnUnderstatedContainerDuration() async throws {
+        let sourceURL = fixtureURL("two_speakers_de_noxing.mp3")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: sourceURL.path), "Fixture not found")
+        let destinationURL = makeTempFile(suffix: ".wav")
+        let sourceFile = try AVAudioFile(forReading: sourceURL)
+
+        try await AudioMixer.streamResampleFile(
+            from: sourceURL,
+            to: destinationURL,
+            targetRate: 16000,
+            sourceChannelCount: sourceFile.processingFormat.channelCount,
+        )
+
+        let outputFile = try AVAudioFile(forReading: destinationURL)
+        let sourceSeconds = Double(sourceFile.length) / sourceFile.processingFormat.sampleRate
+        let outputSeconds = Double(outputFile.length) / outputFile.processingFormat.sampleRate
+        XCTAssertEqual(
+            outputSeconds, sourceSeconds, accuracy: 0.05,
+            "the decode must follow the audio, not the container's estimate of it",
+        )
+    }
+
     private func writerSettings(rate: Double) throws -> [String: Any] {
         let format = try XCTUnwrap(AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
