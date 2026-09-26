@@ -35,6 +35,21 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertEqual(NotificationUrgency.timeSensitive.rawValue, "timeSensitive")
     }
 
+    /// The settings line logged with each posted notification. Each field is
+    /// named, so "alertStyle=none" cannot be mistaken for the alert switch, and
+    /// the names are the `/state` ones.
+    func testTheSettingsLineNamesEverySettingThatCanHideANotification() {
+        let visibility = NotificationVisibility(
+            authorization: .authorized, alert: .enabled, alertStyle: .none,
+            timeSensitive: .disabled, scheduledDelivery: .enabled,
+        )
+
+        XCTAssertEqual(
+            visibility.logDescription,
+            "authorization=authorized alert=enabled alertStyle=none timeSensitive=disabled scheduledDelivery=enabled",
+        )
+    }
+
     // MARK: - handleTransition without setUp is no-op
 
     func testHandleTransitionWithoutSetUpDoesNotCrash() {

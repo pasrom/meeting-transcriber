@@ -39,6 +39,22 @@ final class NotificationManagerLoggingTests: XCTestCase {
         XCTAssertTrue(log.lines(.warning, startingWith: "notification_dropped").isEmpty)
     }
 
+    /// Read in a task of its own after the post, so it is waited for and
+    /// matched by id, not assumed to follow the posted line.
+    func testAPostedNotificationIsFollowedByItsSettingsUnderTheSameId() async throws {
+        let (manager, scheduler, log) = makeManager()
+        manager.setUp()
+
+        manager.notify(title: "Capture Channel Silent", body: "body", urgency: .timeSensitive)
+
+        let request = try XCTUnwrap(scheduler.added.first)
+        await waitFor({ !log.lines(.notice, startingWith: "notification_settings").isEmpty }, timeout: .seconds(2))
+        XCTAssertEqual(
+            log.lines(.notice, startingWith: "notification_settings"),
+            ["notification_settings id=\(request.identifier) \(scheduler.reportedVisibility.logDescription)"],
+        )
+    }
+
     func testADroppedConsentPromptIsLogged() async {
         let (manager, _, log) = makeManager()
 

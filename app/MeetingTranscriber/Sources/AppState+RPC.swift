@@ -32,51 +32,6 @@
         }
     }
 
-    extension UNAuthorizationStatus {
-        /// Stable wire string for the same snapshot. Hand-written rather than
-        /// derived from `rawValue` so a driver script asserts on a name that
-        /// cannot silently shift if Apple renumbers the enum. Lives here beside
-        /// its twin above, and inside this file's `#if !APPSTORE`, because the
-        /// snapshot is its only consumer.
-        var rpcValue: String {
-            switch self {
-            case .notDetermined: "notDetermined"
-            case .denied: "denied"
-            case .authorized: "authorized"
-            case .provisional: "provisional"
-            @unknown default: "unknown"
-            }
-        }
-    }
-
-    extension UNNotificationSetting {
-        /// Wire string for the presentation settings that decide whether the
-        /// consent prompt is seen. Hand-written for the same reason as the
-        /// authorisation table above.
-        var rpcValue: String {
-            switch self {
-            case .notSupported: "notSupported"
-            case .disabled: "disabled"
-            case .enabled: "enabled"
-            @unknown default: "unknown"
-            }
-        }
-    }
-
-    extension UNAlertStyle {
-        /// Wire string for the alert style. "none" is the interesting one: it
-        /// means Notification Center only, no banner, which is how an authorised
-        /// app can still never show a prompt with a deadline.
-        var rpcValue: String {
-            switch self {
-            case .none: "none"
-            case .banner: "banner"
-            case .alert: "alert"
-            @unknown default: "unknown"
-            }
-        }
-    }
-
     extension PipelineQueue {
         /// Build the RPC pipeline-queue status from inside `PipelineQueue`, so the
         /// counter reads are single-hop `self.` accesses. Constructing this

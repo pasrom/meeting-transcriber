@@ -139,8 +139,27 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// the system then refuses is logged by the scheduler as
     /// `notification_post_failed` under the same id. At notice level for the
     /// reason given on `OSLogDiagnostics`.
+    ///
+    /// Followed by a `notification_settings` line with this app's notification
+    /// settings: authorisation, the alert switch, the alert style, the Time
+    /// Sensitive switch and scheduled delivery. It is read right after posting,
+    /// in a task of its own, so it is matched to its post by id rather than by
+    /// order, and it may be missing if the app quits first. It narrows "posted
+    /// but never shown" to what those settings can explain, such as alerts off
+    /// or the style set to None. It does not settle it: nothing here says
+    /// whether a Focus was active, nor whether the running bundle carries the
+    /// time-sensitive entitlement, without which `.timeSensitive` silently
+    /// degrades to an ordinary banner (see `NotificationUrgency`). Read from the
+    /// scheduler directly, since the caller has already established that a
+    /// notification centre is there.
     private func logPosted(id: String, urgency: NotificationUrgency) {
         log.notice("notification_posted id=\(id) urgency=\(urgency.rawValue)")
+        let scheduler = scheduler
+        let log = log
+        Task {
+            let visibility = await scheduler.visibility()
+            log.notice("notification_settings id=\(id) \(visibility.logDescription)")
+        }
     }
 
     /// Pure builder for a notification's `UNMutableNotificationContent` (title,

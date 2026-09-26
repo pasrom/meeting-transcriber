@@ -43,3 +43,60 @@ struct NotificationVisibility: Equatable {
         scheduledDelivery: .notSupported,
     )
 }
+
+extension NotificationVisibility {
+    /// One line for the diagnostics log, in the same names `/state` uses (the
+    /// tables below). Only the system's own enum values, nothing about the user.
+    var logDescription: String {
+        "authorization=\(authorization.rpcValue) alert=\(alert.rpcValue) alertStyle=\(alertStyle.rpcValue) "
+            + "timeSensitive=\(timeSensitive.rpcValue) scheduledDelivery=\(scheduledDelivery.rpcValue)"
+    }
+}
+
+extension UNAuthorizationStatus {
+    /// Stable name for the authorisation status, shared by two readers: the
+    /// debug RPC `/state.permissionHealth` snapshot and the persisted
+    /// `notification_settings` diagnostics line. Renaming a value breaks both,
+    /// a driver script asserting on `/state` and anyone reading old logs.
+    /// Hand-written rather than derived from `rawValue` so the name cannot
+    /// silently shift if Apple renumbers the enum. Lives here, outside any
+    /// `#if`, because the log line exists in both build variants.
+    var rpcValue: String {
+        switch self {
+        case .notDetermined: "notDetermined"
+        case .denied: "denied"
+        case .authorized: "authorized"
+        case .provisional: "provisional"
+        @unknown default: "unknown"
+        }
+    }
+}
+
+extension UNNotificationSetting {
+    /// Stable name for the presentation settings that decide whether a
+    /// notification is seen. Shared by `/state` and the diagnostics log like
+    /// the authorisation table above, and hand-written for the same reason.
+    var rpcValue: String {
+        switch self {
+        case .notSupported: "notSupported"
+        case .disabled: "disabled"
+        case .enabled: "enabled"
+        @unknown default: "unknown"
+        }
+    }
+}
+
+extension UNAlertStyle {
+    /// Stable name for the alert style, shared by `/state` and the diagnostics
+    /// log like the tables above. "none" is the interesting one: it means
+    /// Notification Center only, no banner, which is how an authorised app can
+    /// still never show a notification with a deadline.
+    var rpcValue: String {
+        switch self {
+        case .none: "none"
+        case .banner: "banner"
+        case .alert: "alert"
+        @unknown default: "unknown"
+        }
+    }
+}
