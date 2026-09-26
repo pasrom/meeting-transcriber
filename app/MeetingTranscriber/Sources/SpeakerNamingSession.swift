@@ -417,7 +417,7 @@ final class SpeakerNamingSession {
     /// `pendingJobs` is the queue's already-filtered `.speakerNamingPending` list.
     func cleanupStalePending(pendingJobs: [PipelineJob], maxAge: TimeInterval = 86400) {
         let now = Date()
-        for job in pendingJobs where now.timeIntervalSince(job.enqueuedAt) > maxAge {
+        for job in pendingJobs where now.timeIntervalSince(job.namingDeadlineStart) > maxAge {
             logger.info("Auto-resolving stale pending naming for \(job.meetingTitle, privacy: .private)")
             // Log it like any other resolution. This used to accept the
             // auto-names with no row at all, which made a job that nobody ever

@@ -585,6 +585,12 @@ class PipelineQueue {
         guard oldState != newState || error != nil else { return }
         jobs[index].state = newState
         if let error { jobs[index].error = error }
+        // The stale-naming day counts from the first entry, see
+        // `namingDeadlineStart`. Returning from a late re-diarization is the
+        // same wait, not a new one.
+        if newState == .speakerNamingPending, jobs[index].namingStartedAt == nil {
+            jobs[index].namingStartedAt = Date()
+        }
         if newState == .done {
             removeRawTranscriptArtifactsIfSafe(for: index)
         } else if newState == .error,

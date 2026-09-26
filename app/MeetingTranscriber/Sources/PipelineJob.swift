@@ -166,6 +166,12 @@ struct PipelineJob: Identifiable, Codable {
     /// code did before this field existed.
     var sidecarOutputDir: URL?
 
+    /// When the job first entered `.speakerNamingPending` in this run, or nil
+    /// if it has not since this field existed. Read through
+    /// `namingDeadlineStart`. Optional so older snapshots decode, and an older
+    /// build reading a newer snapshot ignores the key.
+    var namingStartedAt: Date?
+
     init(
         meetingTitle: String,
         appName: String,
@@ -202,5 +208,15 @@ struct PipelineJob: Identifiable, Codable {
         self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
         self.usedDiarizerMode = nil
         self.autoSkipNaming = autoSkipNaming
+    }
+
+    /// When the stale-naming cleanup starts counting for this job: when it
+    /// entered the naming dialog. `enqueuedAt` is only the fallback for jobs
+    /// restored from a snapshot written before that was recorded. Measured
+    /// from `enqueuedAt`, a job that waited long in the queue was stale the
+    /// moment it reached the dialog, and `enqueuedAt` cannot move because the
+    /// output basename is anchored on it.
+    var namingDeadlineStart: Date {
+        namingStartedAt ?? enqueuedAt
     }
 }
