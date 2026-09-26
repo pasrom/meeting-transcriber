@@ -19,6 +19,22 @@ final class NotificationManagerTests: XCTestCase {
         XCTAssertFalse(manager.isSetUp)
     }
 
+    // MARK: - Why a notification is dropped (the reason the log names)
+
+    func testTheDropReasonNamesTheMissingBundleBeforeTheMissingSetUp() {
+        // `setUp()` refuses without a bundle, so both are false together, and
+        // the cause is the bundle.
+        XCTAssertEqual(NotificationManager.undeliverableReason(hasBundle: false), "no_app_bundle")
+        XCTAssertEqual(NotificationManager.undeliverableReason(hasBundle: true), "not_set_up")
+    }
+
+    /// The raw values are what `notification_posted` logs, so a renamed case
+    /// must fail here rather than change the log text unnoticed.
+    func testTheUrgencyNamesTheLogUsesArePinned() {
+        XCTAssertEqual(NotificationUrgency.standard.rawValue, "standard")
+        XCTAssertEqual(NotificationUrgency.timeSensitive.rawValue, "timeSensitive")
+    }
+
     // MARK: - handleTransition without setUp is no-op
 
     func testHandleTransitionWithoutSetUpDoesNotCrash() {

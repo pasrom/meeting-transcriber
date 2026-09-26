@@ -57,13 +57,18 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// check, tests inject a fake scheduler and flip `canDeliver`.
     private let scheduler: any NotificationScheduling
     private let canDeliver: @Sendable () -> Bool
+    /// Where the posted / dropped / settings lines go. Injected so a test can
+    /// assert they are written, not only what they would say.
+    private let log: any DiagnosticsLogging
 
     init(
         scheduler: any NotificationScheduling = SystemNotificationScheduler(),
         canDeliver: @escaping @Sendable () -> Bool = { Bundle.main.bundleIdentifier != nil },
+        log: any DiagnosticsLogging = OSLogDiagnostics(category: "NotificationManager"),
     ) {
         self.scheduler = scheduler
         self.canDeliver = canDeliver
+        self.log = log
         super.init()
     }
 
@@ -82,7 +87,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     }
 
     func notify(title: String, body: String, urgency: NotificationUrgency) {
-        let deliverable = isSetUp && canDeliver()
+        let deliverable = deliverableOrLogDrop()
 
         #if !APPSTORE
             // Record before the delivery guard so the app's *decision* to notify
@@ -96,11 +101,46 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
 
         guard deliverable else { return }
 
+        let id = UUID().uuidString
         scheduler.add(UNNotificationRequest(
-            identifier: UUID().uuidString,
+            identifier: id,
             content: Self.makeNotificationContent(title: title, body: body, urgency: urgency),
             trigger: nil,
         ))
+        logPosted(id: id, urgency: urgency)
+    }
+
+    /// Whether a notification can be handed to the notification centre now,
+    /// logging why not when it cannot. Before this a dropped notification left
+    /// no trace, so "the user saw nothing" could not be told apart from "the
+    /// app never asked". Both halves are read once, so the decision and the
+    /// logged reason come from the same snapshot. Nothing about the
+    /// notification itself is logged: a title can carry a meeting name.
+    private func deliverableOrLogDrop() -> Bool {
+        let setUp = isSetUp
+        let hasBundle = canDeliver()
+        guard setUp, hasBundle else {
+            let reason = Self.undeliverableReason(hasBundle: hasBundle)
+            log.warning("notification_dropped reason=\(reason)")
+            return false
+        }
+        return true
+    }
+
+    /// Why a notification could not be handed to the notification centre, for
+    /// a caller that already knows it could not. The missing bundle is named
+    /// first because `setUp()` refuses without one, so in that case "not set
+    /// up" would name the consequence rather than the cause.
+    static func undeliverableReason(hasBundle: Bool) -> String {
+        hasBundle ? "not_set_up" : "no_app_bundle"
+    }
+
+    /// Logs a request handed to the notification centre, under its id. A post
+    /// the system then refuses is logged by the scheduler as
+    /// `notification_post_failed` under the same id. At notice level for the
+    /// reason given on `OSLogDiagnostics`.
+    private func logPosted(id: String, urgency: NotificationUrgency) {
+        log.notice("notification_posted id=\(id) urgency=\(urgency.rawValue)")
     }
 
     /// Pure builder for a notification's `UNMutableNotificationContent` (title,
@@ -210,7 +250,7 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// visible prompt, `.expired` when nobody answered in time.
     @MainActor
     func askToRecord(title: String, body: String) async -> ConsentAnswer {
-        let deliverable = isSetUp && canDeliver()
+        let deliverable = deliverableOrLogDrop()
 
         #if !APPSTORE
             // Same contract as `notify(...)`, and for the same reason: record the
@@ -261,22 +301,21 @@ final class NotificationManager: NSObject, UNUserNotificationCenterDelegate, App
     /// itself is driven by `didReceive` / the coordinator timeout, whichever
     /// resolves first.
     private func postConsentNotification(id: String, title: String, body: String) {
+        // The one notification the app posts that asks a question with a
+        // deadline. At `.active` it is a banner: gone in seconds, and
+        // suppressed outright by any Focus mode, so it expires unseen and
+        // browser meetings silently never record. `.timeSensitive` is the
+        // only level that breaks through Focus, and it needs the matching
+        // entitlement to do so; see `NotificationUrgency.timeSensitive`.
+        let urgency = NotificationUrgency.timeSensitive
         scheduler.add(UNNotificationRequest(
             identifier: id,
             content: Self.makeNotificationContent(
-                title: title,
-                body: body,
-                categoryID: Self.consentCategoryID,
-                // The one notification the app posts that asks a question with a
-                // deadline. At `.active` it is a banner: gone in seconds, and
-                // suppressed outright by any Focus mode, so it expires unseen and
-                // browser meetings silently never record. `.timeSensitive` is the
-                // only level that breaks through Focus, and it needs the matching
-                // entitlement to do so; see `NotificationUrgency.timeSensitive`.
-                urgency: .timeSensitive,
+                title: title, body: body, categoryID: Self.consentCategoryID, urgency: urgency,
             ),
             trigger: nil,
         ))
+        logPosted(id: id, urgency: urgency)
     }
 
     /// Resolve a parked consent prompt from a notification response's primitives.

@@ -8,7 +8,11 @@ import UserNotifications
 /// and rings through a muted device, and `.passive` is quieter than anything
 /// this app posts, so neither is a policy the app has and neither is
 /// expressible here.
-enum NotificationUrgency {
+///
+/// The raw values are the names the diagnostics log uses. They are the case
+/// names, so a rename would change the log text; `NotificationManagerTests`
+/// pins them for that reason.
+enum NotificationUrgency: String {
     /// A banner the user reads whenever they get round to it. Suppressed by any
     /// Focus mode, which is right for anything without a deadline.
     case standard
