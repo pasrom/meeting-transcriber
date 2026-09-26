@@ -435,7 +435,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Safari call audio** | Yes (`ProcessResponsibility` via `dlsym`) | No (private symbol unavailable; bundle-derived PIDs only) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~1,900 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~3,300 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
