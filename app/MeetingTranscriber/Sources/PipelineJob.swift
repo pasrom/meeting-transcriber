@@ -213,10 +213,28 @@ struct PipelineJob: Identifiable, Codable {
     /// When the stale-naming cleanup starts counting for this job: when it
     /// entered the naming dialog. `enqueuedAt` is only the fallback for jobs
     /// restored from a snapshot written before that was recorded. Measured
-    /// from `enqueuedAt`, a job that waited long in the queue was stale the
-    /// moment it reached the dialog, and `enqueuedAt` cannot move because the
-    /// output basename is anchored on it.
+    /// from `enqueuedAt`, a job that waited long in the queue, or was retried
+    /// days after it first ran, was stale the moment it reached the dialog,
+    /// and `enqueuedAt` cannot move because the output basename is anchored on
+    /// it.
     var namingDeadlineStart: Date {
         namingStartedAt ?? enqueuedAt
+    }
+
+    /// Drop what the failed run concluded, before the job is queued again.
+    ///
+    /// The error, the warnings, the two per-run verdicts, the diarizer mode and
+    /// the naming start all describe the run that failed; the retry sets them
+    /// again from its own run, and a leftover one would describe a recording
+    /// the retry never saw that way. The paths stay: the audio is the input
+    /// the retry needs, and the slug and transcript path name files the retry
+    /// overwrites under the same basename.
+    mutating func prepareForRetry() {
+        error = nil
+        warnings = []
+        trackViability = nil
+        echo = nil
+        usedDiarizerMode = nil
+        namingStartedAt = nil
     }
 }

@@ -955,7 +955,14 @@ extension PipelineQueue: SpeakerNamingSessionDelegate {
     /// snapshot write — matches the previous inline mutations).
     func setNamingMetadata(jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?) {
         guard let idx = jobs.firstIndex(where: { $0.id == jobID }) else { return }
-        if let slug { jobs[idx].namingSlug = slug }
+        if let slug {
+            jobs[idx].namingSlug = slug
+            // The naming data was just written under this queue's output
+            // folder. Stage 3 records the same, but a run that fails before
+            // it would leave the data where nothing that reads the job finds
+            // it once the setting moves.
+            if jobs[idx].sidecarOutputDir == nil { jobs[idx].sidecarOutputDir = outputDir }
+        }
         if let usedDiarizerMode { jobs[idx].usedDiarizerMode = usedDiarizerMode }
     }
 

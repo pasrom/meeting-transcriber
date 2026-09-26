@@ -161,7 +161,15 @@ Responses:
 
 - `200 OK` with a [JobStatusDTO](#jobstatusdto).
 - `404 Not Found` if the id is unknown (never enqueued, or aged out of the
-  terminal store).
+  terminal store), and for a job cancelled before it finished, which leaves no
+  terminal record.
+
+A job in `error` is not necessarily final: the user can retry it from the menu
+bar, which moves it back to `waiting` under the **same id**, and the stale
+`error` record is dropped from the terminal store at that moment. A poller that
+sees `error` and keeps polling may therefore see the job run again and end in
+`done`. If a retried job is then cancelled, the id answers `404`, not the
+earlier error.
 
 ```bash
 curl -sS "$BASE/v1/jobs/<id>" -H "Authorization: Bearer $TOKEN"
@@ -391,7 +399,8 @@ Scope and limits:
 
 - `state`: one of `waiting`, `transcribing`, `diarizing`, `generatingProtocol`,
   `speakerNamingPending`, `done`, `error`. The terminal states are `done` and
-  `error`.
+  `error`; a user retry can move an `error` job back to `waiting` under the same
+  id (see `GET /v1/jobs/<id>` above).
 - `transcriptPath` / `protocolPath`: absolute paths, present once produced
   (`protocolPath` stays `null` when protocol generation is disabled or skipped).
 - `error`: a message string when `state == "error"`, else `null`.

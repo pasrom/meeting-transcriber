@@ -181,8 +181,8 @@ struct MenuBarView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(pipelineQueue.jobs) { job in
-                jobRow(job)
+            ForEach(Array(pipelineQueue.jobs.enumerated()), id: \.element.id) { index, job in
+                jobRow(job, index: index)
             }
         }
     }
@@ -239,7 +239,7 @@ struct MenuBarView: View {
 
     // MARK: - Helpers
 
-    private func jobRow(_ job: PipelineJob) -> some View {
+    private func jobRow(_ job: PipelineJob, index: Int) -> some View {
         HStack {
             Circle()
                 .fill(jobColor(job))
@@ -263,12 +263,24 @@ struct MenuBarView: View {
                 Button("Cancel") { pipelineQueue.cancelJob(id: job.id) }
                     .font(.caption2)
             }
+            retryButton(job, index: index)
             if job.state == .done || job.state == .error || job.state == .speakerNamingPending {
                 Button("Dismiss") { onDismissJob(job.id) }
                     .font(.caption2)
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    /// Runs a failed job again from its audio, instead of the user having to
+    /// find the staged recording and import it by hand.
+    @ViewBuilder
+    private func retryButton(_ job: PipelineJob, index: Int) -> some View {
+        if pipelineQueue.canRetryJob(id: job.id) {
+            Button("Retry") { pipelineQueue.retryJob(id: job.id) }
+                .font(.caption2)
+                .accessibilityIdentifier(A11yID.jobRetryButton(index))
+        }
     }
 
     private func jobStateLabel(_ job: PipelineJob) -> some View {

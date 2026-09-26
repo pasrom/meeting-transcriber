@@ -86,4 +86,25 @@ final class SpeakerNamingDeadlineTests: XCTestCase {
 
         XCTAssertEqual(state(of: old, in: queue), .done, "returning from a re-run restarted the naming day")
     }
+
+    /// A retry is a new run, though, and owes a full day: a job whose failed
+    /// run entered the dialog two days ago was otherwise resolved the moment
+    /// its retry got there.
+    func testARetriedJobGetsAFullDayInTheNamingDialog() throws {
+        let queue = PipelineQueue(logDir: tmpDir)
+        let old = try makeOldJob(state: .error, namingStartedAt: Date().addingTimeInterval(-2 * day))
+        try Data().write(to: XCTUnwrap(old.mixPath))
+        queue.insertJobForTesting(old)
+
+        // No engine, so nothing runs the job: move it straight to the dialog.
+        // (`awaitProcessing` would wait forever on a job nobody can take.)
+        XCTAssertTrue(queue.retryJob(id: old.id))
+        queue.updateJobState(id: old.id, to: .speakerNamingPending)
+        queue.cleanupStalePending(maxAge: day)
+
+        XCTAssertEqual(
+            state(of: old, in: queue), .speakerNamingPending,
+            "the retried job was auto-resolved as stale on reaching the dialog",
+        )
+    }
 }

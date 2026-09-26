@@ -47,6 +47,16 @@ final class TerminalJobStore {
         save()
     }
 
+    /// Drop a job's record and persist, for a job that is no longer finished:
+    /// a retried job answers from the live queue, and if it then leaves the
+    /// queue without a new record, the old outcome must not be served for it.
+    func remove(jobID: UUID) {
+        let key = jobID.uuidString
+        guard records.contains(where: { $0.jobID == key }) else { return }
+        records.removeAll { $0.jobID == key }
+        save()
+    }
+
     func lookup(jobID: UUID) -> JobStatusDTO? {
         records.last { $0.jobID == jobID.uuidString }
     }

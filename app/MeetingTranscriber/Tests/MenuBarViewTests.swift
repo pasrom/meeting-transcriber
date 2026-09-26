@@ -591,6 +591,53 @@ final class MenuBarViewTests: XCTestCase {
         XCTAssertNoThrow(try body.find(text: "Failed"))
     }
 
+    /// Retry is the only way to run a failed job again without importing its
+    /// audio by hand. The queue has its own logDir: the default one is the
+    /// app's real data folder.
+    ///
+    /// Each row carries its own identifier, so the second row's button retries
+    /// the second job and leaves the first alone.
+    func testRetryButtonRequeuesTheJobOfItsOwnRow() throws {
+        let dir = try makeTempDirectory(prefix: "menubar_retry_test")
+        let queue = PipelineQueue(logDir: dir)
+        let first = try queue.insertJobForTesting(mixPath: emptyFile("first_mix.wav", in: dir), state: .error, error: "Failed")
+        let second = try queue.insertJobForTesting(mixPath: emptyFile("second_mix.wav", in: dir), state: .error, error: "Failed")
+
+        let sut = makeView(status: makeStatus(), pipelineQueue: queue)
+        try sut.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.jobRetryButton(1))
+            .button()
+            .tap()
+
+        XCTAssertEqual(queue.jobs.first { $0.id == second }?.state, .waiting, "Retry did not requeue its own row's job")
+        XCTAssertEqual(queue.jobs.first { $0.id == first }?.state, .error, "Retry requeued another row's job")
+    }
+
+    /// The button follows the queue's own check rather than the job's state,
+    /// so it is absent for a failed job the queue would refuse to retry. The
+    /// full set of refusals is covered on the queue; this is the one case a
+    /// button keyed on the state alone would get wrong.
+    func testRetryButtonIsAbsentForAFailedJobTheQueueWouldRefuse() throws {
+        let dir = try makeTempDirectory(prefix: "menubar_retry_absent_test")
+        let queue = PipelineQueue(logDir: dir)
+        let mixPath = try emptyFile("shared_mix.wav", in: dir)
+        queue.insertJobForTesting(mixPath: mixPath, state: .transcribing)
+        queue.insertJobForTesting(mixPath: mixPath, state: .error, error: "This recording is already being processed")
+
+        let body = try makeView(status: makeStatus(), pipelineQueue: queue).inspect()
+
+        XCTAssertThrowsError(
+            try body.find(viewWithAccessibilityIdentifier: A11yID.jobRetryButton(1)),
+            "Retry offered while another job is still transcribing the same recording",
+        )
+    }
+
+    private func emptyFile(_ name: String, in dir: URL) throws -> URL {
+        let url = dir.appendingPathComponent(name)
+        try Data().write(to: url)
+        return url
+    }
+
     func testWarningJobShowsWarningText() throws {
         let queue = PipelineQueue()
         let job = PipelineJob(
