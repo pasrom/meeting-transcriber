@@ -139,15 +139,18 @@ final class ChannelHealthController {
     private let notifier: any AppNotifying
     private let debounceSeconds: () -> TimeInterval
     private let indicatorEnabled: () -> Bool
+    private let log: any DiagnosticsLogging
 
     init(
         notifier: any AppNotifying,
         debounceSeconds: @escaping () -> TimeInterval,
         indicatorEnabled: @escaping () -> Bool,
+        log: any DiagnosticsLogging = OSLogDiagnostics(category: "ChannelHealth"),
     ) {
         self.notifier = notifier
         self.debounceSeconds = debounceSeconds
         self.indicatorEnabled = indicatorEnabled
+        self.log = log
         self.channelHealthMonitor = ChannelHealthMonitor(debounceSeconds: debounceSeconds())
         self.silentRecordingMonitor = SilentRecordingMonitor(debounceSeconds: debounceSeconds())
         self.faultWindow = debounceSeconds()
@@ -170,6 +173,7 @@ final class ChannelHealthController {
         // Before the guards: a start that turns back still records which
         // channels this recording has, so a stale topology from the previous
         // one cannot decide what the icon paints.
+        let previousChannels = channels
         channels = source.capturedChannels
         // NOT gated on `indicatorEnabled()`. That setting is named for the
         // menu-bar tint and its help text describes an indicator, but gating
@@ -178,8 +182,12 @@ final class ChannelHealthController {
         // only remedy is restarting the app. Someone who finds a red icon
         // distracting was opting out of being told their microphone died. The
         // setting is applied where it belongs instead, in the two overlays.
-        guard levelMonitorTask == nil else { return }
+        guard levelMonitorTask == nil else {
+            log.notice(Self.restartIgnoredLogLine(channels: channels, previous: previousChannels))
+            return
+        }
         rebuild()
+        log.notice(Self.startLogLine(channels: channels, window: faultWindow))
         levelMonitorTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
@@ -194,6 +202,10 @@ final class ChannelHealthController {
     /// Stops the polling task and resets the monitors + UI flags. Called when
     /// recording ends or an error transition happens.
     func stop() {
+        // Only after a watched recording: this also runs on every idle transition.
+        if levelMonitorTask != nil {
+            log.notice(stopLogLine)
+        }
         levelMonitorTask?.cancel()
         levelMonitorTask = nil
         channelHealthMonitor.reset()
@@ -267,9 +279,12 @@ final class ChannelHealthController {
         let mic = recorder.micLevelDBFS
         let app = recorder.appLevelDBFS
 
-        if firstTickAt == nil { firstTickAt = now }
         micAges = recorder.micSignalAges
         appAges = recorder.appSignalAges
+        if firstTickAt == nil {
+            firstTickAt = now
+            log.notice(Self.firstTickLogLine(micAges: micAges, appAges: appAges))
+        }
         micLevelDBFS = mic
         appLevelDBFS = app
         // The monitor's own threshold, not a copy of its default: the init
@@ -314,6 +329,7 @@ final class ChannelHealthController {
         switch silentEvent {
         case .started:
             recordingSilentActive = true
+            log.notice(Self.silentRecordingLogLine(micDBFS: mic, appDBFS: app, window: silentRecordingMonitor.debounceSeconds))
             notifier.notify(
                 title: "Recording Appears Silent",
                 body: Self.silentRecordingMessage(for: channels),
@@ -325,6 +341,7 @@ final class ChannelHealthController {
 
         case .recovered:
             recordingSilentActive = false
+            log.notice(Self.silentRecordingRecoveredLogLine(micDBFS: mic, appDBFS: app))
 
         case .none:
             break
@@ -362,6 +379,8 @@ final class ChannelHealthController {
                 channel: channel, fault: fault,
                 everCarriedSignal: ages.secondsSinceLastEnergy != nil,
             )
+            // Whether it was then posted is logged by the notifier, which decides that.
+            log.notice(Self.faultLogLine(channel: channel, fault: fault, ages: ages, elapsed: elapsed, window: faultWindow))
             notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
         }
     }

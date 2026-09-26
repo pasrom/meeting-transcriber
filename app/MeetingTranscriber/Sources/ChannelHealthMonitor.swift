@@ -1,7 +1,11 @@
 import Foundation
 
 /// Which audio capture channel a `ChannelHealthMonitor` event refers to.
-enum AudioChannel: Hashable {
+///
+/// The raw values are the names the diagnostics log uses. They are the case
+/// names, so a rename would change the log text; `ChannelHealthLogLineTests`
+/// pins them for that reason.
+enum AudioChannel: String, Hashable {
     case mic
     case app
 }
