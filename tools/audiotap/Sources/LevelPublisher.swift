@@ -73,6 +73,13 @@ final class LevelPublisher: Sendable {
         return signalAges(lastUpdateTicks: updateTicks, lastEnergyTicks: energyTicks, nowTicks: now)
     }
 
+    /// Mach time of the last buffer, 0 before the first. Compared against a
+    /// stamp taken when the watchdog armed, it answers "did anything arrive
+    /// since then" without a second clock or a counter.
+    var lastBufferTicks: UInt64 {
+        lock.withLock { $0.lastUpdateTicks }
+    }
+
     /// Reads the most recent level, returning -120 dBFS if stale.
     var currentLevelDBFS: Double {
         lock.withLock { slot in

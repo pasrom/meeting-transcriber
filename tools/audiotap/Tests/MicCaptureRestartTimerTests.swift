@@ -66,6 +66,7 @@ final class MicCaptureRestartTimerTests: XCTestCase {
         clock.advance(by: 0.02) { settle(handler) }
         XCTAssertEqual(sessions.count, 3, "retried once the backoff elapsed")
         XCTAssertTrue(handler.isRecording, "and the retry was adopted")
+        XCTAssertEqual(sessions[0].teardowns, 1, "released by the attempt that failed, not again by its retry")
     }
 
     func testRetriesThatAllFailGiveUpOnce() throws {
@@ -91,6 +92,8 @@ final class MicCaptureRestartTimerTests: XCTestCase {
         waitForSessions(factory, count: 2)
         let wedged = try XCTUnwrap(sessions.last)
         wait(for: [wedged.entered], timeout: 5)
+        // It armed its deadline on the main queue before it wedged.
+        settle(handler, drainingRestartQueue: false)
 
         clock.advance(by: RestartArbiter.attemptTimeout - 0.01) { settle(handler, drainingRestartQueue: false) }
         XCTAssertEqual(gaveUp, 0, "the deadline has not passed")
@@ -107,6 +110,8 @@ final class MicCaptureRestartTimerTests: XCTestCase {
         waitForSessions(factory, count: 2)
         let wedged = try XCTUnwrap(sessions.last)
         wait(for: [wedged.entered], timeout: 5)
+        // It armed its deadline on the main queue before it wedged.
+        settle(handler, drainingRestartQueue: false)
 
         handler.stop()
         clock.advance(by: 60) { settle(handler, drainingRestartQueue: false) }
