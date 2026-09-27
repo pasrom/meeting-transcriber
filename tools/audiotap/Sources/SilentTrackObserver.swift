@@ -57,15 +57,9 @@ struct SilentTrackObserver: Equatable {
     }
 
     mutating func observe(_ ages: ChannelSignalAges) -> Event? {
-        // A channel that never carried a single non-zero sample is the signature
-        // of a tap that was never allowed to hear the app (issue #524). Different
-        // failure, different fix, and claiming it here would bury this one.
-        guard let energyAge = ages.secondsSinceLastEnergy else { return nil }
-        // Buffers stopping is `noBuffers`, which the app layer reports. A run
-        // already open stays open: the transport dying is not signal returning.
-        guard let bufferAge = ages.secondsSinceLastBuffer, bufferAge <= Self.maxBufferAge else {
-            return nil
-        }
+        // A run already open stays open when this is nil: the transport dying
+        // is not signal returning.
+        guard let energyAge = ages.zeroRunWhileBuffersArrive else { return nil }
 
         guard inZeroRun else {
             guard energyAge >= Self.zeroRunThreshold else { return nil }
@@ -88,5 +82,25 @@ struct SilentTrackObserver: Equatable {
         guard edges < Self.maxEdgesPerRecording else { return nil }
         edges += 1
         return event
+    }
+}
+
+extension ChannelSignalAges {
+    /// How long the track has carried only exact zeros, counted only while
+    /// buffers keep arriving; nil when it cannot be a zero run at all. The one
+    /// definition the observer and the watchdog share.
+    ///
+    /// Nil for a channel that never carried a single non-zero sample: that is
+    /// the signature of a tap that was never allowed to hear the app (issue
+    /// #524), a different failure with a different fix. Nil too once buffers
+    /// are older than `SilentTrackObserver.maxBufferAge`: buffers stopping is
+    /// `noBuffers`, which the app layer reports, and the content of a
+    /// transport that stopped says nothing.
+    var zeroRunWhileBuffersArrive: TimeInterval? {
+        guard let energyAge = secondsSinceLastEnergy,
+              let bufferAge = secondsSinceLastBuffer,
+              bufferAge <= SilentTrackObserver.maxBufferAge
+        else { return nil }
+        return energyAge
     }
 }
