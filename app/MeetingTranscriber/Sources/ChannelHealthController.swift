@@ -333,7 +333,8 @@ final class ChannelHealthController {
             notifier.notify(
                 title: "Recording Appears Silent",
                 body: Self.silentRecordingMessage(for: channels),
-                // Suppressible on purpose, see `captureAlert(channel:fault:)`: an auto-detected
+                // Suppressible on purpose, see
+                // `captureAlert(channel:fault:everCarriedSignal:)`: an auto-detected
                 // recording starts when the detector confirms rather than when
                 // anyone speaks, so a waiting room looks exactly like this.
                 urgency: .standard,
