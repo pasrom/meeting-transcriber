@@ -155,6 +155,10 @@ final class WatchingController {
         self.makeDetector = makeDetector ?? { [settings] in
             Self.defaultDetector(settings: settings)
         }
+        // See `PipelineController.onQueueReplaced`.
+        pipeline.onQueueReplaced = { [weak self] queue in
+            self?.watchLoop?.pipelineQueue = queue
+        }
     }
 
     /// Wire the engine-sync hook. Called once from `AppState.init` after its

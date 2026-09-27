@@ -9,6 +9,43 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 /// type inherits that isolation, so the moved methods need no explicit
 /// annotation. Pure move; no behavior change.
 extension PipelineQueue {
+    // MARK: - Adopting the jobs of a replaced queue
+
+    /// Take over the state of the queue this one replaces, instead of reading
+    /// the snapshot file.
+    ///
+    /// The counterpart to `loadSnapshot()`, and it has to make the same
+    /// decisions, because the only difference is where the jobs come from. A
+    /// folder change is triggered by the very job transition whose snapshot
+    /// write is still in flight, so the file on disk can still show a finished
+    /// job as running; restoring it from there would queue that job a second
+    /// time (issue #744). The queue being replaced holds the current state in
+    /// memory, and the caller has already checked that it holds no unfinished
+    /// work.
+    ///
+    /// Finished jobs are dropped with their sidecars, exactly as the restore
+    /// drops them. Keeping them looked harmless and is not: the reaper that
+    /// removes a `.done` job after `completedJobLifetime` is a task owned by the
+    /// queue the job came from, so an adopted job would carry no reaper, sit in
+    /// the list and the snapshot indefinitely, keep its 16 kHz sidecars in the
+    /// folder the user navigated away from, and offer the menu an "open" that
+    /// reaches into a folder whose security scope died with the old queue.
+    /// Failed jobs are kept, because the restore keeps them and a retry is
+    /// what cleans up after them.
+    func adoptJobs(of replaced: PipelineQueue) {
+        var adopted = replaced.jobs
+        let finished = adopted.filter { $0.state == .done }
+        adopted.removeAll { $0.state == .done }
+        jobs = adopted
+        removeNamingDataOfDiscardedJobs(finished)
+        // Load-bearing, not redundant. The replaced queue's snapshot worker is a
+        // detached task holding `self` weakly, and it hops to the main actor
+        // before it writes; by then the replaced queue is gone, `self` is nil and
+        // its pending batch is dropped. This is therefore the only write that
+        // records the terminal state, and removing it would lose it.
+        saveSnapshot()
+    }
+
     // MARK: - Snapshot Recovery
 
     /// Load pipeline queue from the JSON snapshot written by `saveSnapshot()`.
