@@ -46,16 +46,28 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
 
         private var failing = false
 
+        /// When set, every attempt from now on blocks until `release` is
+        /// signalled: an attempt stuck inside coreaudiod (issue #588), which
+        /// only the restart deadline ends.
+        var hang: Bool {
+            get { lock.withLock { hanging } }
+            set { lock.withLock { hanging = newValue } }
+        }
+
+        private var hanging = false
+        let release = DispatchSemaphore(value: 0)
+
         func run() throws -> AppTapSession? {
-            let fails = lock.withLock {
+            let (fails, hangs) = lock.withLock {
                 count += 1
                 waiters.removeAll { target, expectation in
                     guard count >= target else { return false }
                     expectation.fulfill()
                     return true
                 }
-                return failing
+                return (failing, hanging)
             }
+            if hangs { release.wait() }
             if fails { throw MicCaptureError.noInputDevice }
             return Self.session(tapID: 7)
         }
@@ -296,6 +308,29 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         rig.capture.evaluateSilentTrackWatchdog(ages: ages(energy: 61), now: 1000, processes: processes)
         wait(for: [gaveUp], timeout: 10)
 
+        let counters = rig.capture.silentTrackDiagnostics.watchdogCounters
+        XCTAssertEqual(counters?.rebuilds, 1)
+        XCTAssertEqual(counters?.endedChannel, true)
+    }
+
+    /// The rebuild's attempt never returns, the wedge of issue #588. The
+    /// restart deadline ends it and gives up on the channel, and that give-up
+    /// is the other one the watchdog has to hear: the rebuild ended the
+    /// channel, and the evidence the watchdog exists for must say so.
+    func testARebuildWhoseAttemptWedgesIsRecordedAsEndingTheChannel() throws {
+        let rig = try startedRig()
+        defer { rig.capture.stop() }
+        // Let the stuck attempt return once the test is over; the arbiter
+        // rejects it as stale and it releases only what it built.
+        addTeardownBlock { rig.attempts.release.signal() }
+        let gaveUp = expectation(description: "the restart deadline gave up")
+        rig.capture.onGiveUp = { gaveUp.fulfill() }
+        rig.attempts.hang = true
+
+        rig.capture.evaluateSilentTrackWatchdog(ages: ages(energy: 61), now: 1000, processes: processes)
+        wait(for: [gaveUp], timeout: RestartArbiter.attemptTimeout + 5)
+
+        XCTAssertEqual(rig.attempts.starts, 2, "precondition: the rebuild's attempt ran and is stuck")
         let counters = rig.capture.silentTrackDiagnostics.watchdogCounters
         XCTAssertEqual(counters?.rebuilds, 1)
         XCTAssertEqual(counters?.endedChannel, true)
