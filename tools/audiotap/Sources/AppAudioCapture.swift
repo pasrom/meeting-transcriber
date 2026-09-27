@@ -141,6 +141,22 @@ public class AppAudioCapture: @unchecked Sendable {
     /// attempt exceeded its deadline or because the retry budget ran out.
     public var onGiveUp: (() -> Void)?
 
+    /// Called once, on the main queue, when the opt-in silent-track watchdog
+    /// stopped rebuilding because its rebuilds did not restore signal (issue
+    /// #672). Unlike `onGiveUp` the channel is still capturing; it is
+    /// capturing zeros.
+    public var onSilentTrackWatchdogGaveUp: (() -> Void)?
+    /// Whether the watchdog was armed, stored so the 5 s tick can skip it
+    /// without a lock or a clock read when it is off.
+    let silentTrackWatchdog: Bool
+    /// What the 5 s tick and the watchdog's re-check read as the track's ages,
+    /// nil for the level publisher. Test seam beside `attemptBody`: a minute
+    /// of zeros cannot be produced through the real publisher in a unit test.
+    let signalAgesOverride: (@Sendable () -> ChannelSignalAges)?
+    /// The watchdog's clock in monotonic seconds, nil for the mach clock. Same
+    /// seam, so a test drives the tick and the rebuild start on one clock.
+    let clockOverride: (@Sendable () -> TimeInterval)?
+
     /// - Parameters:
     ///   - pids: Process IDs to capture audio from. Pass the meeting app's
     ///     root PID plus its helper/renderer child PIDs for Electron-based
@@ -188,6 +204,9 @@ public class AppAudioCapture: @unchecked Sendable {
         silentTrackDiagnostics: SilentTrackDiagnostics = SilentTrackDiagnostics(
             sink: AppAudioCapture.logSilentTrackProbe,
         ),
+        silentTrackWatchdog: Bool = false,
+        signalAgesOverride: (@Sendable () -> ChannelSignalAges)? = nil,
+        clockOverride: (@Sendable () -> TimeInterval)? = nil,
     ) {
         self.pids = pids
         self.outputFileDescriptor = outputFileDescriptor
@@ -197,7 +216,14 @@ public class AppAudioCapture: @unchecked Sendable {
         self.liveSink = liveSink
         self.attemptBody = attemptBody
         self.silentTrackDiagnostics = silentTrackDiagnostics
+        self.silentTrackWatchdog = silentTrackWatchdog
+        self.signalAgesOverride = signalAgesOverride
+        self.clockOverride = clockOverride
         resampler = StreamingMonoResampler(targetRate: Int(speechSampleRate))
+        // Armed here or never: off must mean no watchdog state at all.
+        if silentTrackWatchdog {
+            silentTrackDiagnostics.armWatchdog()
+        }
     }
 
     /// One attempt's worth of work: bring the tap up, or whatever a test injected.
@@ -260,6 +286,7 @@ public class AppAudioCapture: @unchecked Sendable {
         isRunning = true
         _ = restartArbiter.withLock { $0.handle(.startSucceeded) }
         installOutputDeviceChangeListener()
+        logSilentTrackWatchdogArmed()
     }
 
     // swiftlint:disable:next function_body_length
@@ -515,6 +542,9 @@ public class AppAudioCapture: @unchecked Sendable {
     }
 
     public func stop() {
+        // Before the summary, so a check still in flight cannot move a counter
+        // or write a line after it.
+        silentTrackDiagnostics.stopWatchdog()
         // Not in stopCapture, which a restart also calls. See the extension.
         logSilentTrackSummary()
         // Ask first: an attempt may be stuck inside the same coreaudiod, and every

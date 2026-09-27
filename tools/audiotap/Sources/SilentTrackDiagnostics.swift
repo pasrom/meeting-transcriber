@@ -83,6 +83,15 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         /// The aggregate of the most recently installed tap, for the same
         /// reason as the processes above: at stop the session is often gone.
         var lastInstalledAggregateID = AudioObjectID(kAudioObjectUnknown)
+        /// The silent-track watchdog's state, nil unless the user opted in.
+        /// Nil rather than a disabled policy so that "off" holds no state at
+        /// all and every watchdog entry point below is a no-op by construction.
+        /// Behind the same lock as the observer because it is ticked on the
+        /// write queue and concluded on the diagnostics queue.
+        var watchdog: SilentTrackWatchdogPolicy?
+        /// Bumped by every adoption, so the watchdog can tell whether the tap
+        /// it judged is still the one installed.
+        var installGeneration = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -185,20 +194,114 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         state.withLock { $0.lastInstalledAggregateID }
     }
 
+    /// Turn the silent-track watchdog on for this capture (issue #672). Called
+    /// once, from `AppAudioCapture`'s init, before any buffer can tick it.
+    func armWatchdog() {
+        state.withLock { $0.watchdog = SilentTrackWatchdogPolicy() }
+    }
+
+    /// Run one step of the armed watchdog under the lock, in place. Every
+    /// entry point below goes through here, and each body reaches the policy
+    /// through optional chaining, so with the watchdog off (nil) nothing runs
+    /// and nothing changes. Unchecked because the body is generic: every
+    /// caller runs a few value-type mutations and returns plain values.
+    @discardableResult
+    private func withWatchdog<T>(_ body: (inout SilentTrackWatchdogPolicy?, Int) -> T?) -> T? {
+        state.withLockUnchecked { state in
+            body(&state.watchdog, state.installGeneration)
+        }
+    }
+
+    /// Feed one tick into the watchdog. Called on the write queue. The
+    /// generation says which installed tap the tick judged, so a rebuild
+    /// decided on it can be refused once another tap has replaced it.
+    func watchdogTick(
+        _ ages: ChannelSignalAges, now: TimeInterval,
+    ) -> (event: SilentTrackWatchdogPolicy.TickEvent, generation: Int)? {
+        withWatchdog { watchdog, generation in
+            watchdog?.tick(ages, now: now).map { ($0, generation) }
+        }
+    }
+
+    /// Close the open check. Called on the diagnostics queue.
+    func watchdogConclude(anyRunningOutput: Bool) -> SilentTrackWatchdogPolicy.CheckResult? {
+        withWatchdog { watchdog, _ in watchdog?.conclude(anyRunningOutput: anyRunningOutput) }
+    }
+
+    /// Re-check a requested rebuild on the main queue; nil means go ahead.
+    /// See `SilentTrackWatchdogPolicy.beginRebuild`.
+    func watchdogBeginRebuild(
+        _ ages: ChannelSignalAges, judgedGeneration: Int, captureRunning: Bool,
+    ) -> SilentTrackWatchdogPolicy.Abandoned? {
+        withWatchdog { watchdog, generation in
+            guard watchdog != nil else { return .captureNotRunning }
+            return watchdog?.beginRebuild(ages, sameTap: generation == judgedGeneration, captureRunning: captureRunning)
+        }
+    }
+
+    func watchdogRebuildStarted(now: TimeInterval) -> Int? {
+        withWatchdog { watchdog, _ in watchdog?.rebuildStarted(now: now) }
+    }
+
+    func watchdogRebuildNotStarted() {
+        withWatchdog { watchdog, _ in watchdog?.rebuildNotStarted() }
+    }
+
+    /// A restart gave up; returns the watchdog rebuild it ended, if one was
+    /// open. See `SilentTrackWatchdogPolicy.restartGaveUp`.
+    func watchdogRestartGaveUp() -> Int? {
+        withWatchdog { watchdog, _ in watchdog?.restartGaveUp() }
+    }
+
+    func watchdogClaimSkipLine() -> Bool {
+        withWatchdog { watchdog, _ in watchdog?.claimSkipLine() } ?? false
+    }
+
+    /// See `SilentTrackWatchdogPolicy.abandonCheck`.
+    func watchdogAbandonCheck() {
+        withWatchdog { watchdog, _ in watchdog?.abandonCheck() }
+    }
+
+    /// Called from `AppAudioCapture.stop()`, before the stop summary.
+    func stopWatchdog() {
+        withWatchdog { watchdog, _ in watchdog?.stop() }
+    }
+
+    /// True once the recording stopped, and when the watchdog was never armed.
+    var watchdogStopped: Bool {
+        state.withLock { $0.watchdog?.stopped ?? true }
+    }
+
+    /// What the stop summary reports, nil when the watchdog was never armed.
+    var watchdogCounters: SilentTrackWatchdogPolicy.Counters? {
+        state.withLock { $0.watchdog?.counters }
+    }
+
     /// Called from the tap adoption, on the main queue.
     func remember(_ processes: [TappedProcess], aggregateID: AudioObjectID) {
         state.withLock { state in
             state.lastInstalledProcesses = processes
             state.lastInstalledAggregateID = aggregateID
+            state.installGeneration += 1
         }
     }
 
     /// Take a process-state reading off every hot queue, unless one is already
     /// running. Returns whether this call started one, which is what makes the
     /// guard assertable.
+    ///
+    /// `reportToSink` false keeps a successful read out of the log, which is
+    /// how a caller with its own log budget stays inside it; a skip is still
+    /// reported, for the reason given on `Outcome`. `then` hears the snapshot
+    /// on the diagnostics queue after the sink, and is how the watchdog acts on
+    /// the same read the log shows rather than taking a second one.
     @discardableResult
     func probeAsync(
-        _ processes: [TappedProcess], aggregateID: AudioObjectID, reason: String,
+        _ processes: [TappedProcess],
+        aggregateID: AudioObjectID,
+        reason: String,
+        reportToSink: Bool = true,
+        then: (@Sendable (ProbeSnapshot) -> Void)? = nil,
     ) -> Bool {
         let started = state.withLock { state -> Bool in
             guard !state.probeInFlight else { return false }
@@ -226,7 +329,10 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
             // flag only ever bounds how many blocks a wedged read can collect
             // behind it, and a clear the read must return to reach keeps that.
             self.state.withLock { $0.probeInFlight = false }
-            self.sink(reason, .read(snapshot))
+            if reportToSink {
+                self.sink(reason, .read(snapshot))
+            }
+            then?(snapshot)
         }
         return true
     }

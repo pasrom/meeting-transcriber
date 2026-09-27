@@ -123,8 +123,12 @@ extension AppAudioCapture {
         let ages = currentSignalAges
         let lastBuffer = ages.secondsSinceLastBuffer.map(Self.seconds) ?? "never"
         let lastEnergy = ages.secondsSinceLastEnergy.map(Self.seconds) ?? "never"
+        // The watchdog's counters ride on the same line when it was on, so one
+        // grep gives the whole recording; when it was off the line is exactly
+        // what it was before the watchdog existed.
+        let watchdog = silentTrackWatchdogSummary.map { " " + $0 } ?? ""
         logger.info(
-            "App audio at stop: lastBufferAge=\(lastBuffer, privacy: .public) lastEnergyAge=\(lastEnergy, privacy: .public) zeroRuns=\(counters.zeroRuns, privacy: .public) longestZeroRun=\(Self.seconds(counters.longestZeroRun), privacy: .public)",
+            "App audio at stop: lastBufferAge=\(lastBuffer, privacy: .public) lastEnergyAge=\(lastEnergy, privacy: .public) zeroRuns=\(counters.zeroRuns, privacy: .public) longestZeroRun=\(Self.seconds(counters.longestZeroRun), privacy: .public)\(watchdog, privacy: .public)",
         )
         silentTrackDiagnostics.probeAsync(
             silentTrackDiagnostics.lastInstalledProcesses,
@@ -135,7 +139,8 @@ extension AppAudioCapture {
 
     /// One decimal place: these are durations in seconds, and the full Double
     /// makes the line harder to read without saying anything more.
-    private static func seconds(_ value: TimeInterval) -> String {
+    /// Internal so the watchdog's lines format durations the same way.
+    static func seconds(_ value: TimeInterval) -> String {
         String(format: "%.1f", value)
     }
 }

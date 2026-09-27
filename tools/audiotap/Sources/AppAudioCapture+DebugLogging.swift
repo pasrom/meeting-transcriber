@@ -10,6 +10,12 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// than `private` on the parent class.
 @available(macOS 14.2, *)
 extension AppAudioCapture {
+    /// The track's ages as the silent-track consumers read them: the level
+    /// publisher's, unless a test substituted its own.
+    var liveSignalAges: ChannelSignalAges {
+        signalAgesOverride?() ?? currentSignalAges
+    }
+
     /// Publish the most recent per-buffer dBFS reading so UI consumers
     /// (menu bar level indicator) can poll it. Called from the IOProc
     /// after `accumulateDebugRMS`.
@@ -47,9 +53,15 @@ extension AppAudioCapture {
     /// cannot report about a tap it does not belong to. Required rather than
     /// defaulted: an empty list is a real state (a session built by a test seam
     /// has none) and a default would let a new call site reach it by accident.
+    ///
+    /// The ages are read once per tick and handed to both silent-track
+    /// consumers: each read takes the lock the IOProc publishes under.
     func maybeReportDebugRMS(processes: [TappedProcess]) {
         guard let report = debugRMS.tick() else { return }
-        observeSilentTrack(ages: currentSignalAges, processes: processes)
+        let ages = liveSignalAges
+        observeSilentTrack(ages: ages, processes: processes)
+        // A no-op unless the user opted in (issue #672).
+        tickSilentTrackWatchdog(ages: ages, processes: processes)
         guard debugLogging else { return }
         let dBStr = String(format: "%.1f", report.dBFS)
         logger.info(

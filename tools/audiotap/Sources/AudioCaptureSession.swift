@@ -43,6 +43,12 @@ public class AudioCaptureSession {
     /// restarts. Read from the polling path that already watches channel levels.
     public private(set) var appCaptureGaveUp = false
     public private(set) var micCaptureGaveUp = false
+
+    /// Set when the opt-in silent-track watchdog stopped rebuilding the app tap
+    /// because its rebuilds did not restore signal (issue #672). Not terminal,
+    /// unlike `appCaptureGaveUp`: the channel still captures, it captures
+    /// zeros. Read from the same polling path.
+    public private(set) var appSilentTrackWatchdogGaveUp = false
     private var appFileHandle: FileHandle?
 
     /// Whether the microphone's output path was free when this start reached it.
@@ -240,6 +246,7 @@ public class AudioCaptureSession {
         try capture.start()
         appFileHandle = handle
         capture.onGiveUp = { [weak self] in self?.appCaptureGaveUp = true }
+        capture.onSilentTrackWatchdogGaveUp = { [weak self] in self?.appSilentTrackWatchdogGaveUp = true }
         appCapture = capture
     }
 
@@ -261,6 +268,7 @@ public class AudioCaptureSession {
             debugLogging: config.debugLogging,
             liveSink: config.appLiveSink,
             attemptBody: attemptBody,
+            silentTrackWatchdog: config.silentTrackWatchdog,
         )
     }
 

@@ -44,6 +44,13 @@ public struct AudioCaptureConfiguration: Sendable {
     public let micDeviceUID: String?
     public let debugLogging: Bool
 
+    /// Rebuild the app tap when its track sits at exact zeros while a tapped
+    /// process still reports output (issue #672). Opt-in and off by default:
+    /// whether a rebuild restores a dying tap is unmeasured, and each rebuild
+    /// is exposed to the restart wedge of issue #588. See
+    /// `SilentTrackWatchdogPolicy`.
+    public let silentTrackWatchdog: Bool
+
     /// Optional real-time buffer callback for the app audio track (CATap
     /// output, interleaved Float32 at the tap's native rate, typically 48 kHz).
     /// Called from the IOProc thread — non-blocking.
@@ -81,6 +88,7 @@ public struct AudioCaptureConfiguration: Sendable {
         channels: Int,
         micDeviceUID: String? = nil,
         debugLogging: Bool = false,
+        silentTrackWatchdog: Bool = false,
         appLiveSink: LiveAudioSink? = nil,
         micLiveSink: LiveAudioSink? = nil,
     ) {
@@ -91,6 +99,7 @@ public struct AudioCaptureConfiguration: Sendable {
         self.channels = channels
         self.micDeviceUID = micDeviceUID
         self.debugLogging = debugLogging
+        self.silentTrackWatchdog = silentTrackWatchdog
         self.appLiveSink = appLiveSink
         self.micLiveSink = micLiveSink
     }

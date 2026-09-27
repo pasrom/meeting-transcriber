@@ -110,10 +110,13 @@ extension AppAudioCapture {
             "App audio: restart attempt did not return within \(RestartArbiter.attemptTimeout, privacy: .public)s — giving up on the app track",
         )
         markStoppedAfterGiveUp()
+        noteRestartGaveUpForWatchdog()
         onGiveUp?()
     }
 
-    private func applyAction(_ action: OutputDeviceChangeCoordinator.Action) {
+    /// Internal rather than private so the silent-track watchdog drives the
+    /// same restart path a device change does, not a copy of it.
+    func applyAction(_ action: OutputDeviceChangeCoordinator.Action) {
         switch action {
         case .ignore:
             break
@@ -140,6 +143,7 @@ extension AppAudioCapture {
                 return
             }
             logger.error("App audio: retry budget exhausted; giving up on the app track")
+            noteRestartGaveUpForWatchdog()
             onGiveUp?()
         }
     }
