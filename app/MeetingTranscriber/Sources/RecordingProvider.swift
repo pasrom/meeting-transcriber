@@ -30,6 +30,12 @@ protocol RecordingProvider {
     /// give-up: the channel still captures. Default false.
     var appSilentTrackWatchdogGaveUp: Bool { get }
 
+    /// Whether the microphone is released because it went without audio for
+    /// the capture layer's whole budget, and how many times it was (issues
+    /// #724, #706). Unlike a give-up it can clear: a device change brings the
+    /// microphone back.
+    var micCaptureStall: MicCaptureStall { get }
+
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. This is what says whether a channel is broken;
     /// `appLevelDBFS` / `micLevelDBFS` only say how loud it is, and report the
@@ -67,6 +73,10 @@ extension RecordingProvider {
 
     var appSilentTrackWatchdogGaveUp: Bool {
         false
+    }
+
+    var micCaptureStall: MicCaptureStall {
+        MicCaptureStall()
     }
 
     var appSignalAges: ChannelSignalAges {

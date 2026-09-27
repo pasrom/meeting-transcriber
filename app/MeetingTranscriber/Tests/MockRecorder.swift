@@ -47,6 +47,8 @@ class MockRecorder: RecordingProvider {
     /// Whether the silent-track watchdog stopped rebuilding (issue #672).
     /// Default false, matching the protocol's default.
     var appSilentTrackWatchdogGaveUp = false
+    /// Whether the microphone stalled for lack of audio (issues #724, #706).
+    var micCaptureStall = MicCaptureStall()
 
     /// What the capture layer reports about each channel. Defaults describe a
     /// channel delivering signal right now, so a test has to say explicitly

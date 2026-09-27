@@ -42,7 +42,7 @@ enum MicCaptureProgress: Equatable {
 /// its call profile, would be rebuilt on the same clock until any count ran
 /// out. So each rebuild gets a longer deadline than the last, and the give-up
 /// is the time without audio alone.
-enum MicCaptureProgressPolicy {
+public enum MicCaptureProgressPolicy {
     /// How long a fresh engine may go without its first buffer before it is
     /// rebuilt.
     ///
@@ -76,8 +76,8 @@ enum MicCaptureProgressPolicy {
     /// budget of rebuilds. Three covers the user trying the built-in
     /// microphone and one or two other devices after being told, and bounds a
     /// flapping input to about three more minutes and a dozen rebuilds. Any
-    /// delivery resets it.
-    static let maxRevivalsWithoutAudio = 3
+    /// delivery resets it. Public because the stall notice names it.
+    public static let maxRevivalsWithoutAudio = 3
 
     /// The deadline for an epoch that follows `rebuilds` rebuilds without
     /// audio: 3, 6, 12, 24, 24, ... seconds.
