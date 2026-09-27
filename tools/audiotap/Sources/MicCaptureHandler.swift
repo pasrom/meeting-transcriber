@@ -98,6 +98,10 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// channels default to the same shared policy; injected only so a test can
     /// use a schedule that does not spend six seconds proving a give-up.
     let decideRetry: @Sendable (Int) -> CaptureRestartRetryAction
+    /// Runs work on the main queue after a delay. Every timer of the restart
+    /// path goes through it, so a test can drive the backoff and the attempt
+    /// deadline on a manual clock instead of waiting them out.
+    let scheduleOnMain: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     var configChangeObserver: (any NSObjectProtocol)?
     var selectedDeviceUID: String?
@@ -166,8 +170,11 @@ public class MicCaptureHandler: @unchecked Sendable {
         sessionFactory: @escaping () -> any MicEngineSessionProviding,
         decideRetry: @escaping @Sendable (Int) -> CaptureRestartRetryAction
             = CaptureRestartRetryPolicy.decide,
+        scheduleOnMain: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+            = { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
     ) {
         self.decideRetry = decideRetry
+        self.scheduleOnMain = scheduleOnMain
         self.outputURL = outputURL
         self.debugLogging = debugLogging
         self.liveSink = liveSink

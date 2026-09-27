@@ -60,7 +60,7 @@ extension MicCaptureHandler {
         removeConfigChangeObserver()
         session.teardown()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + RestartArbiter.attemptTimeout) { [weak self] in
+        scheduleOnMain(RestartArbiter.attemptTimeout) { [weak self] in
             self?.handleAttemptTimeout(generation: generation)
         }
 
@@ -182,7 +182,7 @@ extension MicCaptureHandler {
         case let .retry(delay):
             restartRetryCount += 1
             let attempt = restartRetryCount
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            scheduleOnMain(delay) { [weak self] in
                 guard let self else { return }
                 guard case let .launchAttempt(generation) = self.arbiter.withLock({ $0.handle(.retryDue) })
                 else { return }
