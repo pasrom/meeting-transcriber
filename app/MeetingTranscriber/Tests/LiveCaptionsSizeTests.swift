@@ -75,27 +75,10 @@ final class LiveCaptionsSizeTests: XCTestCase {
     func testResizedFrameKeepsBottomCentre() {
         let medium = NSRect(x: 100, y: 60, width: 720, height: 200)
 
-        let small = LiveCaptionsWindowController.resizedFrame(medium, to: .small, within: nil)
+        let small = LiveCaptionsWindowController.resizedFrame(medium, to: .small)
 
         XCTAssertEqual(small.size, LiveCaptionsSize.small.panelSize)
         XCTAssertEqual(small.midX, medium.midX)
         XCTAssertEqual(small.minY, medium.minY)
-    }
-
-    /// AppKit does not constrain a borderless non-activating panel, so a bar
-    /// parked flush against a screen edge would grow past it by half the
-    /// width delta. The resized frame is pushed back inside the screen.
-    @MainActor
-    func testResizedFrameStaysInsideTheScreen() {
-        let screen = NSRect(x: 0, y: 0, width: 1512, height: 900)
-        let flushRight = NSRect(x: 1512 - 520, y: 60, width: 520, height: 160)
-        let flushLeft = NSRect(x: 0, y: 60, width: 520, height: 160)
-
-        let right = LiveCaptionsWindowController.resizedFrame(flushRight, to: .large, within: screen)
-        let left = LiveCaptionsWindowController.resizedFrame(flushLeft, to: .large, within: screen)
-
-        XCTAssertEqual(right.maxX, 1512)
-        XCTAssertEqual(left.minX, 0)
-        XCTAssertEqual(right.size, LiveCaptionsSize.large.panelSize)
     }
 }
