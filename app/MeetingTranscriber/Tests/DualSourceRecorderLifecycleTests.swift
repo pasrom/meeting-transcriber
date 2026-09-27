@@ -28,6 +28,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var micLevelDBFS: Double = -120
         var appCaptureGaveUp = false
         var micCaptureGaveUp = false
+        var appSilentTrackWatchdogGaveUp = false
         var appSignalAges: ChannelSignalAges = .unknown
         var micSignalAges: ChannelSignalAges = .unknown
         /// The configuration the recorder handed the factory, so a test can
@@ -191,6 +192,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         session.micLevelDBFS = -30
         session.appCaptureGaveUp = true
         session.micCaptureGaveUp = false
+        session.appSilentTrackWatchdogGaveUp = true
         session.appSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 1, secondsSinceLastEnergy: 2)
         session.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 3, secondsSinceLastEnergy: 4)
 
@@ -201,6 +203,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.micLevelDBFS, -120, accuracy: 0.001)
         XCTAssertFalse(recorder.appCaptureGaveUp)
         XCTAssertFalse(recorder.micCaptureGaveUp)
+        XCTAssertFalse(recorder.appSilentTrackWatchdogGaveUp)
         // Never opened, not "opened and long silent": the fault monitor reads
         // the two apart, so the no-session answer has to be the absent one.
         XCTAssertEqual(recorder.appSignalAges, .unknown)
@@ -212,6 +215,11 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.micLevelDBFS, -30, accuracy: 0.001)
         XCTAssertTrue(recorder.appCaptureGaveUp)
         XCTAssertFalse(recorder.micCaptureGaveUp)
+        XCTAssertTrue(recorder.appSilentTrackWatchdogGaveUp)
+        // Its own flag, not the give-up one read under another name.
+        session.appCaptureGaveUp = false
+        XCTAssertTrue(recorder.appSilentTrackWatchdogGaveUp)
+        session.appCaptureGaveUp = true
         XCTAssertEqual(recorder.appSignalAges.secondsSinceLastBuffer, 1)
         XCTAssertEqual(recorder.appSignalAges.secondsSinceLastEnergy, 2)
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastBuffer, 3)

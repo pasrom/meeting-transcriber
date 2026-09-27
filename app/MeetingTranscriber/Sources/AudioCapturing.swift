@@ -22,6 +22,7 @@ protocol AudioCapturing: AnyObject {
     var micLevelDBFS: Double { get }
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
+    var appSilentTrackWatchdogGaveUp: Bool { get }
 
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. See `ChannelSignalAges` for why the levels above

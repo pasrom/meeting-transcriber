@@ -28,6 +28,13 @@ enum ChannelFault: String, Equatable {
     /// Terminal in a way the other two are not: the track is gone for the rest
     /// of the recording and only restarting the app brings it back.
     case gaveUp
+
+    /// The opt-in silent-track watchdog rebuilt the app tap and the rebuilds
+    /// did not bring non-zero samples back, so it stopped trying (issue #672).
+    /// A silence report with one more fact in it: the automatic remedy has
+    /// been tried. The channel is still capturing, which is what keeps this
+    /// apart from `gaveUp`.
+    case rebuildsExhausted
 }
 
 /// Decides whether one capture channel has failed, from what the capture layer
@@ -75,6 +82,13 @@ struct ChannelFaultMonitor {
     /// the channel twice or the state showed no fault at all.
     private var reportedGiveUp = false
 
+    /// Its own latch for the same reason the give-up has one: it says
+    /// something the silence report cannot, that rebuilding was tried and
+    /// failed, so it is still worth reporting after one. It ends digital-
+    /// silence reporting for the channel; buffers stopping later and a later
+    /// give-up are still news.
+    private var reportedRebuildsExhausted = false
+
     init(window: TimeInterval) {
         self.window = window
     }
@@ -95,11 +109,15 @@ struct ChannelFaultMonitor {
     ///     derivable from the ages: a channel that gave up may have delivered a
     ///     buffer a moment ago, and no age can say it will never deliver
     ///     another.
+    ///   - rebuildsExhausted: whether the silent-track watchdog stopped
+    ///     rebuilding this channel's capture. Defaulted because only the app
+    ///     channel has a watchdog, so false is the true answer everywhere else.
     mutating func update(
         ages: ChannelSignalAges,
         gaveUp: Bool,
         elapsedSinceStart: TimeInterval,
         corroborated: Bool,
+        rebuildsExhausted: Bool = false,
     ) -> ChannelFault? {
         // First, and without waiting for the window: this is already terminal
         // when the flag flips, and the window exists to rule out states that
@@ -107,6 +125,16 @@ struct ChannelFaultMonitor {
         if gaveUp, !reportedGiveUp {
             reportedGiveUp = true
             return .gaveUp
+        }
+        // Without the window, because the watchdog only gives up after
+        // minutes of zeros and three rebuilds. With the same corroboration
+        // `digitalSilence` needs (issue #614): the watchdog cannot tell a dead
+        // tap from a far end that is silent, a muted call or a lobby, and this
+        // pierces Focus, so it waits for the other channel to show the call is
+        // live. The flag stays set, so a later corroborated tick reports it.
+        if rebuildsExhausted, corroborated, !reportedRebuildsExhausted, !reportedGiveUp {
+            reportedRebuildsExhausted = true
+            return .rebuildsExhausted
         }
         guard !reportedSilence, !reportedGiveUp, elapsedSinceStart >= window else { return nil }
 
@@ -116,8 +144,12 @@ struct ChannelFaultMonitor {
             return .noBuffers
         }
 
+        // The watchdog report already said this channel is silent, with more
+        // in it; a plain silence report after it would say less. A channel
+        // that then stops delivering altogether is a different failure, which
+        // is why only this arm is suppressed.
         let energyAge = ages.secondsSinceLastEnergy ?? elapsedSinceStart
-        guard energyAge >= window, corroborated else { return nil }
+        guard energyAge >= window, corroborated, !reportedRebuildsExhausted else { return nil }
         reportedSilence = true
         return .digitalSilence
     }
@@ -125,5 +157,6 @@ struct ChannelFaultMonitor {
     mutating func reset() {
         reportedSilence = false
         reportedGiveUp = false
+        reportedRebuildsExhausted = false
     }
 }

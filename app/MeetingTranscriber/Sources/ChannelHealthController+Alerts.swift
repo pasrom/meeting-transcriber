@@ -136,6 +136,19 @@ extension ChannelHealthController {
                 + "If the silence persists, the meeting app has moved its output to a path the "
                 + "tap does not follow."
 
+        // Before the plain silence arms, because it says one thing more: the
+        // capture was rebuilt and that did not help. What it cannot say is
+        // whether anyone was talking, since a process rendering a silent far
+        // end reports its output running just the same, so the advice is
+        // conditional on that.
+        case (.app, .rebuildsExhausted, _):
+            "The app-audio channel is recording only silence, and rebuilding the capture "
+                + "\(SilentTrackWatchdogLimits.rebuildsWithoutSignal) times did not bring audio back. "
+                + "If the other participants are talking, switch "
+                + "the system output device to another one, in Control Center or in "
+                + "\(SystemSettingsPaths.soundOutput). Changing the output inside the meeting app "
+                + "does not help. The recording continues."
+
         case (.app, .digitalSilence, false):
             "The app-audio channel has delivered only silence since this recording started, "
                 + "while the microphone carries audio. Check that Meeting Transcriber is enabled "
@@ -148,7 +161,9 @@ extension ChannelHealthController {
                 + "Check that the input device is still connected, and that Meeting Transcriber "
                 + "still has permission to use the microphone."
 
-        case (.mic, .digitalSilence, _):
+        // The microphone has no watchdog; if it ever reports this, it is
+        // still a microphone delivering zeros.
+        case (.mic, .digitalSilence, _), (.mic, .rebuildsExhausted, _):
             "The microphone is delivering silence, not quiet audio. "
                 + "Check the mute switch on your headset or input device, and the input mute "
                 + "in macOS. A meeting app's own mute button does not cause this."

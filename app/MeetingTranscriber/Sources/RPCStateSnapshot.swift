@@ -159,8 +159,8 @@
             let recordingSilent: Bool
 
             /// The capture fault reported for each channel in this recording:
-            /// "noBuffers", "digitalSilence", or absent when the channel is
-            /// fine. Distinct from `micSilent` / `appSilent`, which say only
+            /// "noBuffers", "digitalSilence", "gaveUp", "rebuildsExhausted"
+            /// (the app channel only), or absent when the channel is fine. Distinct from `micSilent` / `appSilent`, which say only
             /// that one channel is quieter than the other and are true of a
             /// muted microphone, a quiet room and a dead tap alike.
             let micFault: String?

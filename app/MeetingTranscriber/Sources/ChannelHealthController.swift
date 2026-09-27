@@ -366,9 +366,8 @@ final class ChannelHealthController {
         for channel in [AudioChannel.mic, .app] {
             guard channel == .mic ? channels.mic : channels.app else { continue }
             let ages = channel == .mic ? micAges : appAges
-            let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
             guard let fault = updateFaultMonitor(
-                for: channel, ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsed, now: now,
+                for: channel, ages: ages, recorder: recorder, elapsedSinceStart: elapsed, now: now,
             ) else { continue }
             switch channel {
             case .mic: micFault = fault
@@ -389,10 +388,13 @@ final class ChannelHealthController {
     private func updateFaultMonitor(
         for channel: AudioChannel,
         ages: ChannelSignalAges,
-        gaveUp: Bool,
+        recorder: any RecordingProvider,
         elapsedSinceStart: TimeInterval,
         now: Date,
     ) -> ChannelFault? {
+        let gaveUp = channel == .mic ? recorder.micCaptureGaveUp : recorder.appCaptureGaveUp
+        // Only the app channel has a silent-track watchdog.
+        let rebuildsExhausted = channel == .app && recorder.appSilentTrackWatchdogGaveUp
         let otherChannel: AudioChannel = channel == .mic ? .app : .mic
         // The window the monitors were built with, not the live setting: a
         // change mid-recording would otherwise judge the fault against one
@@ -404,12 +406,12 @@ final class ChannelHealthController {
         return switch channel {
         case .mic: micFaultMonitor.update(
                 ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
-                corroborated: corroborated,
+                corroborated: corroborated, rebuildsExhausted: rebuildsExhausted,
             )
 
         case .app: appFaultMonitor.update(
                 ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
-                corroborated: corroborated,
+                corroborated: corroborated, rebuildsExhausted: rebuildsExhausted,
             )
         }
     }

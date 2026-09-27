@@ -25,6 +25,11 @@ protocol RecordingProvider {
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
 
+    /// True once the opt-in silent-track watchdog stopped rebuilding the app
+    /// capture because its rebuilds did not restore signal (issue #672). Not a
+    /// give-up: the channel still captures. Default false.
+    var appSilentTrackWatchdogGaveUp: Bool { get }
+
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. This is what says whether a channel is broken;
     /// `appLevelDBFS` / `micLevelDBFS` only say how loud it is, and report the
@@ -57,6 +62,10 @@ extension RecordingProvider {
     }
 
     var micCaptureGaveUp: Bool {
+        false
+    }
+
+    var appSilentTrackWatchdogGaveUp: Bool {
         false
     }
 

@@ -26,6 +26,7 @@ final class ChannelFaultMonitorTests: XCTestCase {
         XCTAssertEqual(ChannelFault.noBuffers.rawValue, "noBuffers")
         XCTAssertEqual(ChannelFault.digitalSilence.rawValue, "digitalSilence")
         XCTAssertEqual(ChannelFault.gaveUp.rawValue, "gaveUp")
+        XCTAssertEqual(ChannelFault.rebuildsExhausted.rawValue, "rebuildsExhausted")
     }
 
     // MARK: - A channel that gave up
