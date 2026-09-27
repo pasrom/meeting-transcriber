@@ -236,19 +236,32 @@ public class AudioCaptureSession {
     private func startAppCapture(writingTo handle: FileHandle?) throws {
         guard let handle else { return }
 
-        let capture = AppAudioCapture(
-            pids: config.pids,
-            outputFileDescriptor: handle.fileDescriptor,
-            sampleRate: config.sampleRate,
-            channels: config.channels,
-            debugLogging: config.debugLogging,
-            liveSink: config.appLiveSink,
-            attemptBody: appAttemptBody,
-        )
+        let capture = Self.makeAppCapture(config, fileDescriptor: handle.fileDescriptor, attemptBody: appAttemptBody)
         try capture.start()
         appFileHandle = handle
         capture.onGiveUp = { [weak self] in self?.appCaptureGaveUp = true }
         appCapture = capture
+    }
+
+    /// The app capture a configuration describes. Split out so the mapping from
+    /// configuration to capture options is assertable without starting a tap:
+    /// an option dropped here falls back to its default for every real
+    /// recording, which is the failure `AudioCaptureConfiguration` exists to
+    /// make visible.
+    static func makeAppCapture(
+        _ config: AudioCaptureConfiguration,
+        fileDescriptor: Int32,
+        attemptBody: (() throws -> AppTapSession?)?,
+    ) -> AppAudioCapture {
+        AppAudioCapture(
+            pids: config.pids,
+            outputFileDescriptor: fileDescriptor,
+            sampleRate: config.sampleRate,
+            channels: config.channels,
+            debugLogging: config.debugLogging,
+            liveSink: config.appLiveSink,
+            attemptBody: attemptBody,
+        )
     }
 
     /// Stop a microphone this start opened and remove the file it created.
