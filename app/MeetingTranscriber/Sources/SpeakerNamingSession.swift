@@ -406,8 +406,10 @@ final class SpeakerNamingSession {
     /// Rebuild the RAM naming cache for a restored `.speakerNamingPending` job
     /// from its on-disk sidecar. Returns false when the sidecar is missing (the
     /// queue then marks the job `.done`). Called from `loadSnapshot`.
-    func restore(jobID: UUID, slug: String) -> Bool {
-        guard let data = namingStore.load(slug: slug) else { return false }
+    /// `outputDir` is the directory the job recorded, as for `removeNamingData`.
+    func restore(jobID: UUID, slug: String, in outputDir: URL? = nil) -> Bool {
+        let store = outputDir.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
+        guard let data = store.load(slug: slug) else { return false }
         speakerNamingDataByJob[jobID] = data
         return true
     }

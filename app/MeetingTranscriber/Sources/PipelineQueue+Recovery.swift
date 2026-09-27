@@ -84,7 +84,8 @@ extension PipelineQueue {
         // .speakerNamingPending jobs.
         let missingNamingDataJobIDs = jobs.compactMap { job -> UUID? in
             guard job.state == .speakerNamingPending else { return nil }
-            if let slug = job.namingSlug, naming.restore(jobID: job.id, slug: slug) {
+            if let slug = job.namingSlug,
+               naming.restore(jobID: job.id, slug: slug, in: job.sidecarOutputDir ?? outputDir) {
                 return nil
             }
             logger.warning("Naming data not found for job \(job.id), marking as done")

@@ -4472,6 +4472,50 @@ final class PipelineQueueTests: XCTestCase {
         assertSidecars(sidecars, exist: true)
     }
 
+    /// The naming data is read where the job recorded its sidecars, like the
+    /// cleanup above and the resume decision, not from wherever the output
+    /// setting points now. Reading the current folder found nothing after a
+    /// repoint and finished the job with auto-names the user never confirmed.
+    func testLoadSnapshotRestoresNamingDataFromTheJobsOwnOutputDir() throws {
+        let oldOutputDir = tmpDir.appendingPathComponent("old-output")
+        let newOutputDir = tmpDir.appendingPathComponent("new-output")
+        for dir in [oldOutputDir, newOutputDir] {
+            try FileManager.default.createDirectory(
+                at: dir.appendingPathComponent("recordings"), withIntermediateDirectories: true,
+            )
+        }
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+
+        var job = PipelineJob(
+            meetingTitle: "Named Elsewhere", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .speakerNamingPending
+        job.namingSlug = "named_elsewhere"
+        job.sidecarOutputDir = oldOutputDir
+        try JSONEncoder().encode([job])
+            .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
+        let namingData = PipelineQueue.SpeakerNamingData(
+            jobID: job.id,
+            meetingTitle: "Named Elsewhere",
+            mapping: ["SPEAKER_0": "Speaker A"],
+            speakingTimes: ["SPEAKER_0": 60.0],
+            embeddings: ["SPEAKER_0": [0.1, 0.2]],
+            audioPath: oldOutputDir.appendingPathComponent("recordings/named_elsewhere_16k.wav"),
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            participants: [],
+            isDualSource: false,
+        )
+        try SpeakerNamingStore(outputDir: oldOutputDir).save(namingData, slug: "named_elsewhere")
+
+        let freshQueue = makeRestoreQueue(outputDir: newOutputDir)
+        freshQueue.loadSnapshot()
+
+        XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(freshQueue.naming.speakerNamingDataByJob[job.id])
+    }
+
     // MARK: - Snapshot Restore + Speaker Naming Cache
 
     func testLoadSnapshotRebuildsSpeakerNamingCache() throws {

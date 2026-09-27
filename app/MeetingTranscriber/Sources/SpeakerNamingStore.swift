@@ -17,8 +17,8 @@ struct SpeakerNamingStore {
     ///
     /// Opens no security scope of its own. A store on the queue's own output
     /// root is covered by the scope `PipelineQueue` holds for its lifetime. A
-    /// store built on a job's recorded `sidecarOutputDir` (its cleanup) is
-    /// covered only while that folder is still the current root; an
+    /// store built on a job's recorded `sidecarOutputDir` (restore and its
+    /// cleanup) is covered only while that folder is still the current root; an
     /// earlier output folder is unreachable in the sandboxed build, and opening
     /// a scope here would not help, since a URL decoded from the snapshot
     /// carries none.
