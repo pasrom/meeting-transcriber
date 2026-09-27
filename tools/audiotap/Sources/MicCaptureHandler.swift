@@ -414,6 +414,9 @@ public class MicCaptureHandler: @unchecked Sendable {
         case .sealAndSkipEngine:
             logger.warning("Mic: stopping while a restart attempt is outstanding — leaving its engine alone")
 
+        case .nothingToRelease:
+            logger.info("Mic: stopping a capture that stalled without audio; its engine was already released")
+
         default:
             // Already stopped. Nothing to release, and touching the engine again
             // would be a double teardown via deinit.
