@@ -49,7 +49,7 @@ extension AppAudioCapture {
     /// has none) and a default would let a new call site reach it by accident.
     func maybeReportDebugRMS(processes: [TappedProcess]) {
         guard let report = debugRMS.tick() else { return }
-        observeSilentTrack(processes: processes)
+        observeSilentTrack(ages: currentSignalAges, processes: processes)
         guard debugLogging else { return }
         let dBStr = String(format: "%.1f", report.dBFS)
         logger.info(

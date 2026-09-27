@@ -88,8 +88,8 @@ extension AppAudioCapture {
 
     /// Feed one 5 s tick into the observer and log the edges. Runs on the write
     /// queue; every HAL read it triggers runs on the diagnostics queue.
-    func observeSilentTrack(processes: [TappedProcess]) {
-        guard let event = silentTrackDiagnostics.observe(currentSignalAges) else { return }
+    func observeSilentTrack(ages: ChannelSignalAges, processes: [TappedProcess]) {
+        guard let event = silentTrackDiagnostics.observe(ages) else { return }
         switch event {
         case let .enteredZeroRun(afterSignalSeconds):
             logger.warning(
