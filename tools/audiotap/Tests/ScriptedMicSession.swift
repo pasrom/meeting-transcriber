@@ -75,11 +75,11 @@ final class ScriptedMicSession: MicEngineSessionProviding, @unchecked Sendable {
 
     /// One buffer through the handler's real tap block. A released engine
     /// delivers nothing, as a real one does.
-    func deliver() {
+    func deliver(hostTime: UInt64 = mach_absolute_time()) {
         guard let block = lock.withLock({ storedTapBlock }),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 480) else { return }
         buffer.frameLength = 480
-        block(buffer, AVAudioTime(hostTime: mach_absolute_time()))
+        block(buffer, AVAudioTime(hostTime: hostTime))
     }
 }
 

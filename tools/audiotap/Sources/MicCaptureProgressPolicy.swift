@@ -68,6 +68,17 @@ enum MicCaptureProgressPolicy {
     /// the first minute of the meeting rather than after it.
     static let maxSecondsWithoutAudio: TimeInterval = 60
 
+    /// Revivals a released microphone gets without delivering in between.
+    ///
+    /// A revival is triggered by the system input device changing, which is
+    /// usually the user acting on the notification, but a headset that keeps
+    /// connecting and dropping changes it too, and every revival runs a fresh
+    /// budget of rebuilds. Three covers the user trying the built-in
+    /// microphone and one or two other devices after being told, and bounds a
+    /// flapping input to about three more minutes and a dozen rebuilds. Any
+    /// delivery resets it.
+    static let maxRevivalsWithoutAudio = 3
+
     /// The deadline for an epoch that follows `rebuilds` rebuilds without
     /// audio: 3, 6, 12, 24, 24, ... seconds.
     static func bufferDeadline(afterRebuilds rebuilds: Int) -> TimeInterval {

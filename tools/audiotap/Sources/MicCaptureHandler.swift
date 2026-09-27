@@ -85,6 +85,14 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// rest of the session keeps recording.
     public var onGiveUp: (() -> Void)?
 
+    /// Called when the microphone went without audio for the whole budget and
+    /// was released (issues #724, #706), with what the stall can say about
+    /// itself. Main queue. See `+Progress`.
+    public var onStall: ((MicStallDetails) -> Void)?
+    /// Called when a microphone a device change brought back after a stall
+    /// has delivered again. Main queue.
+    public var onResume: (() -> Void)?
+
     var isRecording: Bool {
         arbiter.withLock { $0.isCapturing }
     }
@@ -102,6 +110,13 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// path goes through it, so a test can drive the backoff and the attempt
     /// deadline on a manual clock instead of waiting them out.
     let scheduleOnMain: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+    /// Seconds on a monotonic clock, for the progress watchdog. Injected for
+    /// the same reason as `scheduleOnMain`.
+    let clock: @Sendable () -> TimeInterval
+    /// What a stall's silence bridge is written under; see `TimelineBridgeGate`.
+    let bridgeGate = TimelineBridgeGate()
+    /// Whether the capture is getting anywhere. Main queue only.
+    var progress = MicProgressState()
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     var configChangeObserver: (any NSObjectProtocol)?
     var selectedDeviceUID: String?
@@ -110,6 +125,12 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// `internal` for that cross-file extension; survives restarts (never reset).
     var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
     public private(set) var firstFrameTime: UInt64 = 0
+    /// Mach time `start()` began at.
+    var captureStartTicks: UInt64 = 0
+    /// Mach time the track was anchored at if it was restarted before its
+    /// first buffer (see `+Timeline`), else 0. Becomes `firstFrameTime` once
+    /// a buffer arrives, so the track's sample 0 and its reported start agree.
+    var timelineOriginTicks: UInt64 = 0
 
     // State for an injected DebugTapFault (above). Always compiled but inert
     // unless a fault was injected — see resolveTapInstallFormat /
@@ -119,6 +140,11 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     private var debugRMS = DebugRMSReporter()
     private let levelPublisher = LevelPublisher()
+
+    /// Mach time of the last buffer, for the progress watchdog.
+    var lastBufferTicks: UInt64 {
+        levelPublisher.lastBufferTicks
+    }
 
     /// Returns the instantaneous mic level in dBFS, decayed to -120 if no buffer
     /// arrived in the last 0.5 seconds (e.g. device muted or unplugged) — without
@@ -172,7 +198,9 @@ public class MicCaptureHandler: @unchecked Sendable {
             = CaptureRestartRetryPolicy.decide,
         scheduleOnMain: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
             = { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     ) {
+        self.clock = clock
         self.decideRetry = decideRetry
         self.scheduleOnMain = scheduleOnMain
         self.outputURL = outputURL
@@ -189,8 +217,10 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
+        captureStartTicks = mach_absolute_time()
         try startEngine(deviceUID: deviceUID, on: session)
         _ = arbiter.withLock { $0.handle(.startSucceeded) }
+        beginProgressWatch()
         installDeviceChangeListener()
         installConfigChangeObserver()
     }
@@ -297,7 +327,7 @@ public class MicCaptureHandler: @unchecked Sendable {
             // swiftlint:enable closure_parameter_position closure_body_length
             guard let self, self.isRecording else { return }
             if self.firstFrameTime == 0 {
-                self.firstFrameTime = mach_absolute_time()
+                self.firstFrameTime = self.timelineOriginTicks != 0 ? self.timelineOriginTicks : mach_absolute_time()
             }
             self.accumulateDebugRMS(buffer: buffer)
             self.publishCurrentLevel()
@@ -377,7 +407,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     private func handleEngineConfigChange() {
         logger.info("Mic: engine configuration changed (format/route change)")
-        handleDeviceChange()
+        handleDeviceChange(fromConfigurationChange: true)
     }
 
     private func handleDefaultInputDeviceChanged() {
@@ -429,7 +459,7 @@ public class MicCaptureHandler: @unchecked Sendable {
             // would be a double teardown via deinit.
             break
         }
-        outputFile = nil
+        closeFileAfterBridgeChunk()
         logger.info("Mic recording stopped")
     }
 }
