@@ -115,18 +115,30 @@ final class PipelineController {
     ///    only on the current queue. A fresh queue restores the parked job from
     ///    the snapshot without that data, orphaning the user's pending naming.
     ///
-    /// When either holds, keep the existing queue and let it drain. Note this
-    /// defers queue-captured settings (engine choice, output dir, diarization,
-    /// VAD, numSpeakers) to the next idle watch-start rather than refreshing them
-    /// automatically; live engine language/vocabulary still sync separately onto
-    /// the shared engine instances meanwhile.
+    /// A third case needs the job states rather than `isProcessing`: a late
+    /// confirm or re-run from the naming dialog runs in a task of the naming
+    /// session, so the job sits in `.diarizing` or `.generatingProtocol` while
+    /// `isProcessing` is false and nothing is parked for naming. A fresh queue
+    /// would pick that job up from the snapshot and run it a second time.
+    ///
+    /// So the queue is replaced only when every job it holds is finished. Note
+    /// this defers queue-captured settings (engine choice, output dir,
+    /// diarization, VAD, numSpeakers) to the next idle watch-start rather than
+    /// refreshing them automatically; live engine language/vocabulary still sync
+    /// separately onto the shared engine instances meanwhile.
     func rebuild() {
-        guard !queue.isProcessing, queue.pendingSpeakerNamingJobs.isEmpty else {
-            logger.info("Skipping queue rebuild: a job is in flight or awaiting speaker naming")
+        guard canReplaceQueue else {
+            logger.info("Skipping queue rebuild: a job is unfinished or awaiting speaker naming")
             return
         }
         queue = makeQueue()
         configureCallbacks()
+    }
+
+    /// Whether the queue holds no unfinished work: nothing processing, and
+    /// every job done or failed (a job parked for naming is neither).
+    private var canReplaceQueue: Bool {
+        !queue.isProcessing && queue.jobs.allSatisfy(\.state.isTerminal)
     }
 
     /// Rebuild only when the queue isn't already wired to an engine. The

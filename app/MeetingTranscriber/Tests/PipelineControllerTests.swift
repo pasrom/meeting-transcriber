@@ -149,6 +149,25 @@ final class PipelineControllerTests: XCTestCase {
         )
     }
 
+    /// A late confirm or re-run runs in the naming session's own task, so its
+    /// job is mid-stage while `isProcessing` is false and nothing is parked for
+    /// naming. A fresh queue would restore that job from the snapshot and run it
+    /// a second time next to the first.
+    func testRebuildSkippedWhileALateNamingFlowRuns() {
+        for state in [JobState.diarizing, .generatingProtocol, .transcribing, .waiting] {
+            let pc = makeWiredController()
+            pc.activate { MockEngine() }
+            pc.queue.insertJobForTesting(mixPath: tmpDir.appendingPathComponent("late.wav"), state: state)
+            XCTAssertFalse(pc.queue.isProcessing, "precondition: no processNext running")
+            XCTAssertTrue(pc.queue.pendingSpeakerNamingJobs.isEmpty, "precondition: nothing parked for naming")
+            let before = pc.queue
+
+            pc.rebuild()
+
+            XCTAssertIdentical(pc.queue, before, "rebuild replaced a queue holding a job in \(state)")
+        }
+    }
+
     // MARK: - enqueueFiles (bare controller)
 
     func testEnqueueFilesCreatesJobOnBareController() {
