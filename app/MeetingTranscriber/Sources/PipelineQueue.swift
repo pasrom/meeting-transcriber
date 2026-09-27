@@ -672,12 +672,6 @@ class PipelineQueue {
 
         let transcriptPath = jobs[index].transcriptPath
         let slug = jobs[index].namingSlug
-        let isAccessingOutputDir = outputDir?.startAccessingSecurityScopedResource() ?? false
-        defer {
-            if isAccessingOutputDir {
-                outputDir?.stopAccessingSecurityScopedResource()
-            }
-        }
         if let transcriptPath {
             do {
                 try FileManager.default.removeItem(at: transcriptPath)

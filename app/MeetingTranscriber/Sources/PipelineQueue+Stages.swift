@@ -1012,7 +1012,8 @@ extension PipelineQueue {
     /// Hand the app's own staging recordings over to the protocol output
     /// directory, per `AudioPersistencePolicy`. Nil `mixPath` (paired imports
     /// without a `_mix.wav` source) → mix slot is skipped, no persistent mix is
-    /// written.
+    /// written. `outputDir` here is `<root>/recordings`, reachable because the
+    /// queue holds the security scope on the root.
     private static func persistAudioToOutput(
         ctx: JobContext, outputDir: URL, stagingDir: URL,
     ) -> RelocatedAudioPaths {
@@ -1030,9 +1031,6 @@ extension PipelineQueue {
                 "persistAudioToOutput: mixPath aliases micPath — would destroy source",
             )
         }
-
-        let accessing = outputDir.startAccessingSecurityScopedResource()
-        defer { if accessing { outputDir.stopAccessingSecurityScopedResource() } }
 
         let fm = FileManager.default
         try? fm.createDirectory(at: outputDir, withIntermediateDirectories: true)

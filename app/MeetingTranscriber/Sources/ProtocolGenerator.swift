@@ -168,10 +168,11 @@ enum ProtocolGenerator {
     /// `basename` is the job's precomputed, meeting-start-anchored stem (shared
     /// with the protocol and audio artifacts); the `.txt` extension is appended.
     ///
+    /// Opens no security scope: `PipelineQueue` holds it on the output root
+    /// (see `SecurityScopeAccess`).
+    ///
     /// - Returns: URL of the saved file
     static func saveTranscript(_ text: String, basename: String, dir: URL) throws -> URL {
-        let accessing = dir.startAccessingSecurityScopedResource()
-        defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("\(basename).txt")
         try text.write(to: url, atomically: true, encoding: .utf8)
@@ -186,10 +187,10 @@ enum ProtocolGenerator {
     /// `basename` is the job's precomputed, meeting-start-anchored stem (shared
     /// with the transcript and audio artifacts); the `.md` extension is appended.
     ///
+    /// Opens no security scope, as for `saveTranscript`.
+    ///
     /// - Returns: URL of the saved file
     static func saveProtocol(_ markdown: String, basename: String, dir: URL) throws -> URL {
-        let accessing = dir.startAccessingSecurityScopedResource()
-        defer { if accessing { dir.stopAccessingSecurityScopedResource() } }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("\(basename).md")
         try markdown.write(to: url, atomically: true, encoding: .utf8)

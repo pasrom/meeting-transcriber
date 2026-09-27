@@ -48,8 +48,10 @@ extension AppSettings {
 
     /// Resolved URL from the security-scoped bookmark, or nil when none is set
     /// or the bookmark no longer resolves. Read-only: security-scoped *access*
-    /// is the caller's job — every call site does its own paired
-    /// `startAccessingSecurityScopedResource()` / `stopAccessing…`.
+    /// is the caller's job, opened on the URL returned here (each read resolves
+    /// a new one). The pipeline holds it for a queue's lifetime
+    /// (`PipelineQueue`); the record-only write and the "open folder" action
+    /// open and close it around their own call. See `SecurityScopeAccess`.
     ///
     /// A stale bookmark still resolves, so this deliberately does not repair it.
     /// `body` reads this through `effectiveOutputDir`, and repairing here would
