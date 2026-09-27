@@ -290,9 +290,9 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
     /// running. Returns whether this call started one, which is what makes the
     /// guard assertable.
     ///
-    /// `reportToSink` false keeps a successful read out of the log, which is
-    /// how a caller with its own log budget stays inside it; a skip is still
-    /// reported, for the reason given on `Outcome`. `then` hears the snapshot
+    /// `reportToSink` false keeps the outcome out of the log, a skip included,
+    /// which is how a caller with its own log budget stays inside it; that
+    /// caller owns the skip line `Outcome` asks for. `then` hears the snapshot
     /// on the diagnostics queue after the sink, and is how the watchdog acts on
     /// the same read the log shows rather than taking a second one.
     @discardableResult
@@ -309,7 +309,9 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
             return true
         }
         guard started else {
-            sink(reason, .skipped)
+            if reportToSink {
+                sink(reason, .skipped)
+            }
             return false
         }
 

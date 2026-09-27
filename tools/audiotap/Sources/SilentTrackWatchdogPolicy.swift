@@ -79,9 +79,10 @@ struct SilentTrackWatchdogPolicy: Equatable {
     /// end.
     static let maxRebuildsPerRecording = SilentTrackWatchdogLimits.rebuildsPerRecording
 
-    /// Lines per recording for checks that did not rebuild (declined, or a
-    /// request dropped on re-check). Rebuild lines need no budget of their
-    /// own: the total cap bounds them.
+    /// Lines per recording for checks that did not rebuild (declined, skipped
+    /// behind another probe's outstanding read, or a request dropped on
+    /// re-check). Rebuild lines need no budget of their own: the total cap
+    /// bounds them.
     static let maxLoggedSkips = 20
 
     struct Counters: Equatable {

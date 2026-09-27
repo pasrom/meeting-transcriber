@@ -89,10 +89,14 @@ extension AppAudioCapture {
             ) { [weak self] snapshot in
                 self?.concludeSilentTrackCheck(snapshot, generation: generation)
             }
-            // A read still outstanding. The sink has already said so, and the
-            // policy waits out the interval before asking again.
+            // Another probe's read is still outstanding. The policy waits out
+            // the interval before asking again, and the line is budgeted: a
+            // wedged read skips every check for as long as the run lasts.
             if !started {
                 silentTrackDiagnostics.watchdogAbandonCheck()
+                if silentTrackDiagnostics.watchdogClaimSkipLine() {
+                    logger.info("App audio watchdog: check skipped, a process-state read is still outstanding")
+                }
             }
         }
     }

@@ -162,6 +162,8 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         running: Bool = true,
         hold: Bool = false,
         readAges: @escaping @Sendable () -> ChannelSignalAges = { ages(energy: 65) },
+        // After `readAges`, so a trailing closure keeps binding to that one.
+        sink: @escaping SilentTrackDiagnostics.Sink = { _, _ in },
     ) -> Rig {
         let attempts = Attempts()
         let state = ProcessState()
@@ -174,7 +176,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
                 pids: [1],
                 outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
                 attemptBody: { try attempts.run() },
-                silentTrackDiagnostics: SilentTrackDiagnostics(probe: state.probe) { _, _ in },
+                silentTrackDiagnostics: SilentTrackDiagnostics(probe: state.probe, sink: sink),
                 silentTrackWatchdog: watchdog,
                 signalAgesOverride: readAges,
                 clockOverride: readClock,
@@ -443,6 +445,39 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.rebuilds, 0)
         XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.declined, 0)
         XCTAssertTrue(rig.capture.silentTrackDiagnostics.watchdogStopped)
+    }
+
+    /// Another probe's read that never comes back (issue #588), such as the
+    /// observer's at the start of the zero run, skips every later check, once
+    /// a minute for as long as the run lasts. Those skips stay inside the
+    /// watchdog's own line budget: the shared sink would write one per check,
+    /// without a bound, for the rest of the recording. (The watchdog's own
+    /// read wedging needs no budget: its check stays open and blocks the next.)
+    func testChecksSkippedBehindAWedgedReadStayInsideTheLineBudget() {
+        let skipsInSink = CallCounter()
+        let countSkips: SilentTrackDiagnostics.Sink = { _, outcome in
+            if outcome == .skipped { skipsInSink.increment() }
+        }
+        let rig = makeRig(hold: true, sink: countSkips)
+        defer {
+            rig.state.hold = false
+            rig.state.release.signal()
+        }
+        rig.capture.silentTrackDiagnostics.probeAsync(processes, aggregateID: 0, reason: "zero run started")
+        XCTAssertEqual(rig.state.entered.wait(timeout: .now() + 2), .success, "precondition: the read is stuck")
+
+        let skipped = SilentTrackWatchdogPolicy.maxLoggedSkips + 5
+        for check in 1 ... skipped {
+            let now = 1000 + Double(check) * interval
+            rig.capture.evaluateSilentTrackWatchdog(ages: ages(energy: 61 + now - 1000), now: now, processes: processes)
+        }
+
+        XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.dropped, skipped, "precondition")
+        XCTAssertEqual(skipsInSink.value, 0, "the watchdog's skips are not the sink's to log")
+        XCTAssertFalse(
+            rig.capture.silentTrackDiagnostics.watchdogClaimSkipLine(),
+            "they were logged against the watchdog's budget, which is now spent",
+        )
     }
 
     // MARK: - Off
