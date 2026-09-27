@@ -250,12 +250,16 @@ final class UpdateCheckerTests: XCTestCase {
 
     // MARK: - Periodic Checks
 
-    func testStartPeriodicChecksCancelsOnDealloc() async {
+    func testStartPeriodicChecksCancelsOnDealloc() async throws {
         let provider = MockUpdateProvider()
         provider.latestReleaseResult = .success(makeRelease(tag: "v99.0.0"))
 
         let checker = UpdateChecker(provider: provider)
-        let settings = AppSettings()
+        // Its own suite: `AppSettings()` would write this into the test host's
+        // real `UserDefaults` domain.
+        let suite = "UpdateCheckerTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suite) }
+        let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
         settings.checkForUpdates = false
 
         checker.startPeriodicChecks(settings: settings)

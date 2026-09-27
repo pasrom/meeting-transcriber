@@ -2,8 +2,12 @@
 import XCTest
 
 final class FluidDiarizerSortformerTests: XCTestCase {
-    func testDiarizerModeDefault() {
-        let settings = AppSettings()
+    func testDiarizerModeDefault() throws {
+        // Its own suite: on `.standard` this reads whatever another run left in
+        // the test host's real domain, which is not the default.
+        let suite = "FluidDiarizerSortformerTests-\(getpid())-\(UUID().uuidString)"
+        defer { DefaultsSuite.remove(suite) }
+        let settings = try AppSettings(defaults: XCTUnwrap(UserDefaults(suiteName: suite)))
         XCTAssertEqual(settings.diarizerMode, .offline)
     }
 
