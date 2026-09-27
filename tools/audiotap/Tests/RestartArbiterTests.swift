@@ -10,6 +10,146 @@ import XCTest
 /// attempt must remain harmless if the call does eventually return (it did,
 /// three hours later).
 final class RestartArbiterTests: XCTestCase {
+    // MARK: - The progress watchdog
+
+    /// The watchdog rebuilds an engine that came up and never called back. It
+    /// has to go through the arbiter like every other restart, or a second
+    /// attempt could be launched into one that is already wedged.
+    func testAnElapsedProgressDeadlineLaunchesAnAttempt() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        XCTAssertEqual(arbiter.handle(.progressDeadlineElapsed), .launchAttempt(generation: 1))
+        XCTAssertEqual(arbiter.phase, .attemptInFlight(generation: 1))
+    }
+
+    /// An attempt is already outstanding and may be wedged inside AVFAudio, so
+    /// neither watchdog event may act on it.
+    func testProgressEventsDuringAnAttemptAreIgnored() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.deviceChanged)
+        XCTAssertEqual(arbiter.handle(.progressDeadlineElapsed), .ignore)
+        XCTAssertEqual(arbiter.handle(.progressBudgetExhausted), .ignore)
+        XCTAssertEqual(arbiter.phase, .attemptInFlight(generation: 1))
+    }
+
+    /// A capture that went without audio for the whole budget stalls: not the
+    /// terminal give-up of a wedged attempt, because its engine is idle and can
+    /// be released and rebuilt.
+    func testAnExhaustedBudgetStallsRatherThanGivingUp() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        XCTAssertEqual(arbiter.handle(.progressBudgetExhausted), .stall)
+        XCTAssertEqual(arbiter.phase, .stalled)
+        XCTAssertFalse(arbiter.isCapturing, "the tap must drop anything a released engine still hands over")
+        XCTAssertEqual(arbiter.handle(.progressBudgetExhausted), .ignore, "one stall, one notification")
+    }
+
+    /// A stall keeps the recording's file, so a revived capture continues it
+    /// instead of truncating it.
+    func testAStallKeepsTheFileWritable() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        XCTAssertTrue(arbiter.mayCreateOutputFile)
+    }
+
+    /// The user switches the input or reconnects the headset after being told:
+    /// that brings the microphone back.
+    func testADeviceChangeRevivesAStalledCapture() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        XCTAssertEqual(arbiter.handle(.deviceChanged), .launchAttempt(generation: 1))
+        XCTAssertEqual(arbiter.phase, .attemptInFlight(generation: 1))
+    }
+
+    /// Nothing but a device change revives it: no watchdog timer and no retry.
+    func testOnlyADeviceChangeRevivesAStalledCapture() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        XCTAssertEqual(arbiter.handle(.progressDeadlineElapsed), .ignore)
+        XCTAssertEqual(arbiter.handle(.retryDue), .ignore)
+        XCTAssertEqual(arbiter.handle(.attemptTimedOut(generation: 0)), .ignore)
+        XCTAssertEqual(arbiter.phase, .stalled)
+    }
+
+    /// Its engine was already released, so a stop has nothing to tear down and
+    /// says so rather than claiming an attempt is outstanding.
+    func testStopAfterAStallHasNothingToRelease() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        XCTAssertEqual(arbiter.handle(.stopRequested), .nothingToRelease)
+        XCTAssertEqual(arbiter.phase, .stopped)
+        XCTAssertFalse(arbiter.mayCreateOutputFile)
+    }
+
+    /// A revival whose attempts all come back with errors has not wedged
+    /// anything, so it goes back to waiting for the next device change
+    /// instead of ending the microphone for the rest of the recording.
+    func testARevivalThatRunsOutOfRetriesReturnsToStalled() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        XCTAssertEqual(arbiter.handle(.deviceChanged), .launchAttempt(generation: 1))
+        XCTAssertEqual(arbiter.handle(.attemptReturned(generation: 1, succeeded: false)), .retry)
+        XCTAssertEqual(arbiter.handle(.retryBudgetExhausted), .returnToStall)
+        XCTAssertEqual(arbiter.phase, .stalled)
+        XCTAssertEqual(arbiter.handle(.deviceChanged), .launchAttempt(generation: 2), "and can be revived again")
+    }
+
+    /// A rebuild the progress watchdog ordered is the same: its attempts all
+    /// came back with errors, nothing is wedged and no device change caused
+    /// it, so the capture stalls instead of ending for the recording.
+    func testARebuildThatRunsOutOfRetriesStallsInsteadOfGivingUp() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        XCTAssertEqual(arbiter.handle(.progressDeadlineElapsed), .launchAttempt(generation: 1))
+        XCTAssertEqual(arbiter.handle(.attemptReturned(generation: 1, succeeded: false)), .retry)
+        XCTAssertEqual(arbiter.handle(.retryDue), .launchAttempt(generation: 2))
+        XCTAssertEqual(arbiter.handle(.attemptReturned(generation: 2, succeeded: false)), .retry)
+        XCTAssertEqual(arbiter.handle(.retryBudgetExhausted), .returnToStall)
+        XCTAssertEqual(arbiter.phase, .stalled)
+        XCTAssertTrue(arbiter.mayCreateOutputFile, "the file stays open for a revival")
+    }
+
+    /// A revival that wedges is the #588 case like any other attempt: terminal.
+    func testARevivalThatWedgesStillGivesUp() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        _ = arbiter.handle(.deviceChanged)
+        XCTAssertEqual(arbiter.handle(.attemptTimedOut(generation: 1)), .giveUp)
+        XCTAssertEqual(arbiter.phase, .gaveUp)
+    }
+
+    /// Once a revival was adopted the capture is an ordinary one again, and a
+    /// later device-change restart that runs out of retries gives up as it
+    /// always did.
+    func testAfterAnAdoptedRevivalExhaustedRetriesGiveUpAsBefore() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.progressBudgetExhausted)
+        _ = arbiter.handle(.deviceChanged)
+        _ = arbiter.handle(.attemptReturned(generation: 1, succeeded: true))
+        XCTAssertEqual(arbiter.handle(.commitReady(generation: 1)), .adopt)
+        _ = arbiter.handle(.deviceChanged)
+        _ = arbiter.handle(.attemptReturned(generation: 2, succeeded: false))
+        XCTAssertEqual(arbiter.handle(.retryBudgetExhausted), .giveUp)
+    }
+
+    /// A terminal give-up stays terminal: a wedged attempt may still hold the
+    /// engine's mutex, and a device change must not launch into it.
+    func testADeviceChangeStillCannotReviveAWedgedGiveUp() {
+        var arbiter = RestartArbiter()
+        _ = arbiter.handle(.startSucceeded)
+        _ = arbiter.handle(.deviceChanged)
+        _ = arbiter.handle(.attemptTimedOut(generation: 1))
+        XCTAssertEqual(arbiter.handle(.deviceChanged), .ignore)
+    }
+
     // MARK: - Launching attempts
 
     func testDeviceChangeWhileCapturingLaunchesFirstAttempt() {
