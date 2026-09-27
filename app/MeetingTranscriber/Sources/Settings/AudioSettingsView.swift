@@ -110,6 +110,15 @@ private struct PerChannelIndicatorSection: View {
                 isOn: $settings.perChannelIndicatorEnabled,
             )
 
+            // Next to the indicator because it acts on the same failure the
+            // indicator shows: an app channel delivering only zeros.
+            HelpfulToggle(
+                title: "Rebuild a Silent App-Audio Capture",
+                help: SettingsHelp.silentTrackWatchdog,
+                isOn: $settings.silentTrackWatchdogEnabled,
+            )
+            .accessibilityIdentifier(A11yID.silentTrackWatchdogToggle)
+
             // Shown whether or not the toggle above is on. The toggle decides
             // whether the menu bar turns red; this number decides how long a
             // channel must be failing before you are told about it, and that

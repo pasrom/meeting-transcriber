@@ -1,3 +1,4 @@
+import AudioTapLib
 import Foundation
 
 /// Short, plain-English explanations for settings options, surfaced via ``HelpBadge``.
@@ -45,6 +46,22 @@ enum SettingsHelp {
         "it is merely quiet, so muting yourself is not reported as a fault. Turning this " +
         "off removes the colour, not the warnings: a channel that stops delivering is " +
         "still reported."
+
+    static let silentTrackWatchdog =
+        """
+        When the app-audio track has carried only silence for a minute while the \
+        meeting app still reports playing audio, rebuild the capture, at most \
+        once every \(Int(SilentTrackWatchdogLimits.secondsBetweenRebuilds)) seconds \
+        and \(SilentTrackWatchdogLimits.rebuildsPerRecording) times per recording. \
+        After \(SilentTrackWatchdogLimits.rebuildsWithoutSignal) rebuilds that do \
+        not bring the audio back it stops, and tells you once your microphone \
+        shows the call is live.
+
+        Off by default because it is not yet known to help: each rebuild loses \
+        at least half a second of audio, and a far end that is genuinely silent looks \
+        the same. Every attempt is written to the diagnostic log, which is what \
+        a report about a silent app track needs.
+        """
 
     static let asymmetricSilenceWarning =
         "How long the condition must last before the indicator turns red and, for a channel " +

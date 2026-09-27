@@ -4,8 +4,8 @@ import Foundation
 /// configured for it.
 ///
 /// Its own file because `WatchingController.swift` sits at the line cap; the
-/// members it reaches into (`makeRecorder`, `liveTranscription`) are internal
-/// rather than private for exactly that.
+/// members it reaches into (`makeRecorder`, `liveTranscription`, `settings`)
+/// are internal rather than private for exactly that.
 @MainActor
 extension WatchingController {
     /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
@@ -20,6 +20,9 @@ extension WatchingController {
             // the production recorder or nothing. An injected double has no
             // sinks and needs none: captions are off in every test that uses one.
             if let dualSource = recorder as? DualSourceRecorder {
+                // Read per recording, so a change applies from the next one
+                // without restarting watching.
+                dualSource.silentTrackWatchdogEnabled = self?.settings.silentTrackWatchdogEnabled ?? false
                 await self?.liveTranscription.attachSinks(to: dualSource)
             }
             return recorder

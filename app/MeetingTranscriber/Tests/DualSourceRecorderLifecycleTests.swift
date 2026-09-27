@@ -225,4 +225,49 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastBuffer, 3)
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastEnergy, 4)
     }
+
+    // MARK: - Silent-track watchdog option (issue #672)
+
+    /// The option has to travel from the setting to the capture configuration
+    /// a recording opens with. Two hops live in this module: the recorder
+    /// factory reads the setting into the recorder, and the recorder writes it
+    /// into `AudioCaptureConfiguration`. The hop from there into the tap is
+    /// pinned in AudioTapLib. A dropped hop would leave the switch reading "on"
+    /// while every recording ran without the watchdog.
+    func testTheRecorderOpensWithoutTheWatchdogByDefault() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_watchdog_default")
+        let (recorder, session) = makeRecorder(dir: dir)
+        try recorder.start(source: .micOnly)
+        XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, false)
+    }
+
+    func testTheRecorderHandsTheWatchdogToTheCapture() throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_watchdog_on")
+        let (recorder, session) = makeRecorder(dir: dir)
+        recorder.silentTrackWatchdogEnabled = true
+        try recorder.start(source: .micOnly)
+        XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, true)
+    }
+
+    /// The setting reaches a recording that `WatchingController` starts, read
+    /// when that recording starts rather than when watching was set up.
+    func testTheSettingReachesARecordingTheControllerStarts() async throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_watchdog_controller")
+        let (recorder, session) = makeRecorder(dir: dir.appendingPathComponent("staging", isDirectory: true))
+        let controller = makeWatchingController(
+            logDir: dir, permissionHealth: .allHealthy,
+            // Labelled on purpose: as a trailing closure it would bind to the
+            // first closure parameter, not to `makeRecorder`.
+            // swiftlint:disable:next trailing_closure
+            makeRecorder: { recorder },
+        )
+        controller.settings.silentTrackWatchdogEnabled = true
+
+        // This process, so the target is alive for the length of the test.
+        controller.startManualRecording(pid: getpid(), appName: "Chrome", title: "Standup")
+        addTeardownBlock { controller.stopManualRecording() }
+        await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
+
+        XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, true)
+    }
 }

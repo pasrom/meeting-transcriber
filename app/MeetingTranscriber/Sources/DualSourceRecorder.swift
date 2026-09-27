@@ -381,6 +381,13 @@ class DualSourceRecorder: RecordingProvider {
     var micLiveSink: LiveAudioSink?
     var appLiveSink: LiveAudioSink?
 
+    /// Whether the next capture session runs the opt-in silent-track watchdog
+    /// (issue #672). Set before `start(...)`, like the sinks above, by the
+    /// recorder factory from `AppSettings.silentTrackWatchdogEnabled`. A
+    /// property rather than another `start` argument so the `RecordingProvider`
+    /// doubles, which record nothing, do not all have to learn it.
+    var silentTrackWatchdogEnabled = false
+
     /// Start recording whichever channels `source` asks for.
     func start(
         source: RecordingSource,
@@ -438,6 +445,7 @@ class DualSourceRecorder: RecordingProvider {
                 channels: appChannels,
                 micDeviceUID: (micDeviceUID?.isEmpty ?? true) ? nil : micDeviceUID,
                 debugLogging: debugLogging,
+                silentTrackWatchdog: silentTrackWatchdogEnabled,
                 appLiveSink: appLiveSink,
                 micLiveSink: micLiveSink,
             ))
