@@ -67,6 +67,21 @@ class PipelineQueue {
     let diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)?
     let protocolGeneratorFactory: (() -> (any ProtocolGenerating)?)?
     let outputDir: URL?
+    /// Opens and closes security-scoped access on `outputDir`. Injectable so a
+    /// test can record where and when the scope is held; see `SecurityScopeAccess`.
+    let securityScope: SecurityScopeAccess
+    /// `outputDir`, when this queue holds the security scope on it.
+    ///
+    /// Opened once in `init`, on the URL object this queue was built with (the
+    /// one that resolved from the bookmark), and closed in `deinit`. Everything
+    /// the queue and its naming session read or write under the output folder
+    /// therefore runs inside it, with no call site opening a scope of its own.
+    /// One scope for the lifetime rather than one per call, because the defect
+    /// this replaces was a call site that opened none, or opened it on the
+    /// wrong URL. A rebuilt queue opens its own; the queue it replaces keeps
+    /// its scope until it is deallocated, which a running job delays, since
+    /// the processing task holds the queue until the job returns.
+    private let scopedOutputDir: URL?
     /// Where `DualSourceRecorder` writes, i.e. the audio this app produced and
     /// may therefore relocate. Injectable so a test can exercise the hand-off
     /// without writing into the real user directory; see `AudioPersistencePolicy`.
@@ -280,6 +295,8 @@ class PipelineQueue {
         self.diarizationFactoryWithMode = nil
         self.protocolGeneratorFactory = nil
         self.outputDir = nil
+        securityScope = .live
+        scopedOutputDir = nil
         stagingDir = AppPaths.recordingsDir
         self.diarizeEnabled = false
         echoDedupEnabled = true
@@ -383,6 +400,7 @@ class PipelineQueue {
         completedJobLifetime: TimeInterval = 60,
         terminalJobStore: TerminalJobStore? = nil,
         inFlightRuns: InFlightRunRegistry? = nil,
+        securityScope: SecurityScopeAccess = .live,
     ) {
         self.logDir = logDir ?? AppPaths.ipcDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
@@ -392,6 +410,8 @@ class PipelineQueue {
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
         self.protocolGeneratorFactory = protocolGeneratorFactory
         self.outputDir = outputDir
+        self.securityScope = securityScope
+        scopedOutputDir = securityScope.start(outputDir) ? outputDir : nil
         self.stagingDir = stagingDir
         self.diarizeEnabled = diarizeEnabled
         self.echoDedupEnabled = echoDedupEnabled
@@ -433,6 +453,15 @@ class PipelineQueue {
         )
         naming.delegate = self
         refreshStageAverages()
+    }
+
+    /// May run off the main actor: the snapshot worker can hold the last
+    /// reference. `SecurityScopeAccess` requires `stop` to be callable from
+    /// any thread for that reason.
+    deinit {
+        if let scopedOutputDir {
+            securityScope.stop(scopedOutputDir)
+        }
     }
 
     var activeJobs: [PipelineJob] {
