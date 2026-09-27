@@ -214,6 +214,7 @@ final class AppState {
         settings: AppSettings = AppState.makeDefaultSettings(),
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
+        pipelineEnvironment: PipelineController.QueueEnvironment = .production,
     ) {
         // Dependency defaults are resolved through explicitly-typed factory
         // helpers (above) rather than inline `?? SomeType()` expressions (and an
@@ -233,7 +234,9 @@ final class AppState {
         self.engines = EngineController(settings: settings, warmupQueue: warmupQueue)
         self.permissions = PermissionsController(notifier: notifier)
         self.updateChecker = updateChecker ?? Self.makeUpdateChecker()
-        self.pipeline = PipelineController(settings: settings, notifier: notifier)
+        self.pipeline = PipelineController(
+            settings: settings, notifier: notifier, queueEnvironment: pipelineEnvironment,
+        )
         self.channelHealth = ChannelHealthController(
             notifier: notifier,
             debounceSeconds: { [settings] in settings.asymmetricSilenceWarningSeconds },

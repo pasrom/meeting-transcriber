@@ -46,19 +46,51 @@ final class PipelineController {
     /// by `jobStatus(forID:)` for the automation API. Test-injectable.
     let terminalJobStore: TerminalJobStore
 
+    /// Where the queues this controller builds keep their data beyond the
+    /// settings: the logs and snapshot, the staging folder they may relocate
+    /// from, and the recovery of that staging folder a new queue runs.
+    /// Production uses `.production`, the app's own data directories; a test
+    /// passes temp folders so a queue it builds never reads or writes the
+    /// installed app's data.
+    struct QueueEnvironment {
+        var logDir: URL?
+        var stagingDir: URL
+        /// Rescues crashed recordings from the staging folder and enqueues
+        /// orphans into the queue it is handed; nil skips it.
+        var recoverStagedRecordings: (@MainActor (PipelineQueue) -> Void)?
+
+        static var production: Self {
+            Self(
+                logDir: nil,
+                stagingDir: AppPaths.recordingsDir,
+                recoverStagedRecordings: PipelineController.recoverStagedRecordings(into:),
+            )
+        }
+    }
+
+    @ObservationIgnored private let queueEnvironment: QueueEnvironment
+
     /// Source of the currently-active engine. Set by `activate`; nil before then
     /// (so `makeQueue()` safely returns the current queue if called early — only
     /// reachable at process teardown, since `rebuild`/`ensureQueue` are driven by
     /// user actions while `AppState` is alive). Captures the owner weakly.
     private var engineProvider: (() -> (any TranscribingEngine)?)?
 
-    init(settings: AppSettings, notifier: any AppNotifying, terminalJobStore: TerminalJobStore? = nil) {
+    init(
+        settings: AppSettings,
+        notifier: any AppNotifying,
+        terminalJobStore: TerminalJobStore? = nil,
+        queueEnvironment: QueueEnvironment = .production,
+    ) {
         self.settings = settings
         self.notifier = notifier
+        self.queueEnvironment = queueEnvironment
         self.outputDirectory = OutputDirectoryResolver(settings: settings, notifier: notifier)
         self.terminalJobStore = terminalJobStore
-            ?? TerminalJobStore(path: AppPaths.ipcDir.appendingPathComponent("terminal_jobs.json"))
-        self.queue = PipelineQueue()
+            ?? TerminalJobStore(
+                path: (queueEnvironment.logDir ?? AppPaths.ipcDir).appendingPathComponent("terminal_jobs.json"),
+            )
+        self.queue = PipelineQueue(logDir: queueEnvironment.logDir)
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its
@@ -119,6 +151,8 @@ final class PipelineController {
             // this queue will run is decided, so a fallback is reported here and
             // not from `effectiveOutputDir`, which `body` reads on every render.
             outputDir: outputDirectory.resolve(),
+            logDir: queueEnvironment.logDir,
+            stagingDir: queueEnvironment.stagingDir,
             diarizeEnabled: settings.diarize,
             echoDedupEnabled: settings.echoDedupEnabled,
             echoCancellationEnabled: { [settings] in settings.echoCancellationEnabled },
@@ -142,9 +176,15 @@ final class PipelineController {
             terminalJobStore: terminalJobStore,
         )
         q.loadSnapshot()
-        // Fire-and-forget: dir scan + per-file attr probes run off-main so app
-        // startup (and the first call to `enqueueFiles`) isn't blocked by a slow
-        // filesystem. Recovered jobs appear in `queue.jobs` once the scan returns.
+        queueEnvironment.recoverStagedRecordings?(q)
+        q.refreshKnownSpeakerNames()
+        return q
+    }
+
+    /// Fire-and-forget: dir scan + per-file attr probes run off-main so app
+    /// startup (and the first call to `enqueueFiles`) isn't blocked by a slow
+    /// filesystem. Recovered jobs appear in `queue.jobs` once the scan returns.
+    private static func recoverStagedRecordings(into q: PipelineQueue) {
         Task {
             // Rescue recordings whose writer was killed mid-stream (#379), then
             // hand off to the orphan scan which enqueues the results. Detached
@@ -163,8 +203,6 @@ final class PipelineController {
             }.value
             await q.recoverOrphanedRecordings()
         }
-        q.refreshKnownSpeakerNames()
-        return q
     }
 
     /// One-stop FluidDiarizer instantiation. Captures the current tuning fields
