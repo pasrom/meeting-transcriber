@@ -366,6 +366,9 @@ final class ChannelHealthController {
         for channel in [AudioChannel.mic, .app] {
             guard channel == .mic ? channels.mic : channels.app else { continue }
             let ages = channel == .mic ? micAges : appAges
+            // A device change brought it back, so `/state` stops reporting a
+            // stall that is over. The monitor re-arms itself on the same edge.
+            if channel == .mic, !recorder.micCaptureStall.isActive, micFault == .stalled { micFault = nil }
             guard let fault = updateFaultMonitor(
                 for: channel, ages: ages, recorder: recorder, elapsedSinceStart: elapsed, now: now,
             ) else { continue }
@@ -378,6 +381,7 @@ final class ChannelHealthController {
             let alert = Self.captureAlert(
                 channel: channel, fault: fault,
                 everCarriedSignal: ages.secondsSinceLastEnergy != nil,
+                stall: recorder.micCaptureStall.details,
             )
             // Whether it was then posted is logged by the notifier, which decides that.
             log.notice(Self.faultLogLine(channel: channel, fault: fault, ages: ages, elapsed: elapsed, window: faultWindow))
@@ -407,6 +411,9 @@ final class ChannelHealthController {
         case .mic: micFaultMonitor.update(
                 ages: ages, gaveUp: gaveUp, elapsedSinceStart: elapsedSinceStart,
                 corroborated: corroborated, rebuildsExhausted: rebuildsExhausted,
+                // Only the microphone stalls: the app tap's watchdog rebuilds
+                // it but never releases it.
+                stall: recorder.micCaptureStall,
             )
 
         case .app: appFaultMonitor.update(

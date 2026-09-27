@@ -134,6 +134,123 @@ final class ChannelFaultIntegrationTests: XCTestCase {
         XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 1)
     }
 
+    /// The microphone went without audio for the capture layer's whole budget
+    /// and was released (issues #724, #706). Reported at once, visible in the
+    /// state, and with the remedy that actually brings it back: a device
+    /// change, not an app restart, and no talk of a stuck restart attempt.
+    func testAStalledMicrophoneIsReportedWithItsOwnRemedy() throws {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1)
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
+
+        XCTAssertEqual(controller.micFault, .stalled)
+        let lost = notifier.calls.filter { $0.title == "Capture Channel Lost" }
+        XCTAssertEqual(lost.count, 1)
+        let body = try XCTUnwrap(lost.first?.body)
+        XCTAssertTrue(body.contains("input device"), body)
+        XCTAssertTrue(body.contains("After \(MicCaptureProgressPolicy.maxRevivalsWithoutAudio) tries"), "names the limit: \(body)")
+        XCTAssertFalse(body.contains("Restart Meeting Transcriber"), body)
+        XCTAssertFalse(body.contains("restart attempt"), body)
+    }
+
+    /// The notice is worded from what the capture layer reported about this
+    /// stall, not from a fixed text.
+    func testTheStallNoticeIsWordedFromTheReportedStall() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        let details = MicStallDetails(everDelivered: false, mayRevive: false)
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1, details: details)
+
+        controller.applyTick(recorder: recorder, now: t0)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
+
+        let lost = notifier.calls.filter { $0.title == "Capture Channel Lost" }
+        XCTAssertEqual(lost.map(\.body), [ChannelHealthController.captureStalledMessage(for: details)])
+    }
+
+    /// Right after a revival the ages the capture layer reports still span the
+    /// stall. The next tick must not read them as a dead microphone and latch
+    /// that for the rest of the recording.
+    func testNoFaultRightAfterARevivalLongerThanTheWindow() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micSignalAges = stoppedDelivering
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1)
+        controller.applyTick(recorder: recorder, now: t0)
+
+        recorder.micCaptureStall.isActive = false
+        recorder.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 120, secondsSinceLastEnergy: 120)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120))
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(120.1))
+
+        XCTAssertNil(controller.micFault)
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Silent" }.count, 0)
+    }
+
+    /// Once a device change brought the microphone back, the state no longer
+    /// reports it as stalled, and a second stall is told again.
+    func testAStallThatClearsLeavesTheStateAndIsToldAgainIfItReturns() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1)
+        controller.applyTick(recorder: recorder, now: t0)
+
+        recorder.micCaptureStall.isActive = false
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(10))
+        XCTAssertNil(controller.micFault, "revived")
+
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 2)
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(80))
+        XCTAssertEqual(controller.micFault, .stalled)
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 2)
+    }
+
+    /// A revival that never delivered and stalled again is told again, with
+    /// the stall never clearing in between: the user acted on the first
+    /// notice and has to learn that it did not help.
+    func testAFailedRevivalIsToldAgain() {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1)
+        controller.applyTick(recorder: recorder, now: t0)
+
+        recorder.micCaptureStall.count = 2
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(80))
+
+        XCTAssertEqual(controller.micFault, .stalled)
+        XCTAssertEqual(notifier.calls.filter { $0.title == "Capture Channel Lost" }.count, 2)
+    }
+
+    /// A revival that wedges gives up, and the capture layer ends the stall
+    /// with it. The give-up is told and the state ends on it, not on the
+    /// stall.
+    func testARevivalThatWedgesEndsOnTheGiveUp() throws {
+        let (controller, recorder, notifier, _) = makeController()
+        recorder.appLevelDBFS = -20
+        recorder.micLevelDBFS = -120
+        recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 1)
+        controller.applyTick(recorder: recorder, now: t0)
+
+        recorder.micCaptureGaveUp = true
+        recorder.micCaptureStall.noteGaveUp()
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(80))
+        _ = controller.applyTick(recorder: recorder, now: t0.addingTimeInterval(81))
+
+        XCTAssertEqual(controller.micFault, .gaveUp)
+        let lost = notifier.calls.filter { $0.title == "Capture Channel Lost" }
+        XCTAssertEqual(lost.count, 2)
+        let body = try XCTUnwrap(lost.last?.body)
+        XCTAssertTrue(body.contains("Restart Meeting Transcriber"), body)
+    }
+
     func testAChannelThatFallsSilentAndThenGivesUpReportsBothExactlyOnce() {
         // The other order. These are not the same news: the first says the
         // channel stopped delivering, the second says only a restart brings it

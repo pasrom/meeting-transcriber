@@ -17,6 +17,11 @@ final class ChannelFaultMonitorTests: XCTestCase {
         ChannelFaultMonitor(window: window)
     }
 
+    /// Stalled now, after `count` stalls in the recording.
+    private func stalled(_ count: Int = 1) -> MicCaptureStall {
+        MicCaptureStall(isActive: true, count: count)
+    }
+
     // MARK: - Wire names
 
     func testTheWireNamesAreTheOnesTheAutomationApiPromises() {
@@ -27,6 +32,145 @@ final class ChannelFaultMonitorTests: XCTestCase {
         XCTAssertEqual(ChannelFault.digitalSilence.rawValue, "digitalSilence")
         XCTAssertEqual(ChannelFault.gaveUp.rawValue, "gaveUp")
         XCTAssertEqual(ChannelFault.rebuildsExhausted.rawValue, "rebuildsExhausted")
+        XCTAssertEqual(ChannelFault.stalled.rawValue, "stalled")
+    }
+
+    // MARK: - A microphone that stalled
+
+    func testAStallIsReportedImmediatelyAndOnce() {
+        // The capture layer already waited out its own budget before it
+        // stalled, so a second window here would only delay the news.
+        var monitor = makeMonitor()
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled()),
+            .stalled,
+        )
+        XCTAssertNil(monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 600, corroborated: true, stall: stalled()))
+    }
+
+    func testWhileStalledNoSilenceIsReported() {
+        // The stall message already says the microphone delivers nothing and
+        // what brings it back; a silence report during it repeats half of that.
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
+        XCTAssertNil(monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 600, corroborated: true, stall: stalled()))
+    }
+
+    /// The user followed the advice, the microphone came back and stalled
+    /// again. That is news again, not a repetition of the first report.
+    func testAStallAfterARevivalIsReportedAgain() {
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        XCTAssertNil(monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 70, corroborated: false))
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 140, corroborated: false, stall: stalled(2)),
+            .stalled,
+        )
+    }
+
+    /// The user switched the input, the revived microphone never delivered,
+    /// and it stalled again. The stall never cleared in between, but the
+    /// remedy the first report gave did not work, and that is news.
+    func testAStallAfterARevivalThatNeverDeliveredIsReportedAgain() {
+        var monitor = makeMonitor()
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled()),
+            .stalled,
+        )
+        XCTAssertNil(monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 70, corroborated: false, stall: stalled()))
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 140, corroborated: false, stall: stalled(2)),
+            .stalled,
+        )
+    }
+
+    /// The ages still span the stall when the flag clears, so judging them at
+    /// once would report the revived microphone as dead before it had a
+    /// chance. The revival gets a full window of its own.
+    func testARevivalGetsAFreshWindow() {
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        let spanningTheStall = ChannelSignalAges(secondsSinceLastBuffer: 200, secondsSinceLastEnergy: 200)
+        XCTAssertNil(monitor.update(ages: spanningTheStall, gaveUp: false, elapsedSinceStart: 200, corroborated: true))
+        XCTAssertNil(monitor.update(
+            ages: spanningTheStall, gaveUp: false, elapsedSinceStart: 200 + window - 1, corroborated: true,
+        ))
+        XCTAssertEqual(
+            monitor.update(ages: spanningTheStall, gaveUp: false, elapsedSinceStart: 200 + window, corroborated: true),
+            .noBuffers,
+            "a revived microphone that stays dead for a whole window is reported",
+        )
+    }
+
+    /// A silence report from before the stall does not silence the revived
+    /// microphone for the rest of the recording.
+    func testASilenceReportBeforeAStallIsReArmedByTheRevival() {
+        var monitor = makeMonitor()
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
+        XCTAssertEqual(monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        _ = monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 660, corroborated: true, stall: stalled())
+        XCTAssertNil(monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 700, corroborated: true))
+        let stillDead = ChannelSignalAges(secondsSinceLastBuffer: 700, secondsSinceLastEnergy: 700)
+        XCTAssertEqual(
+            monitor.update(ages: stillDead, gaveUp: false, elapsedSinceStart: 700 + window, corroborated: true),
+            .noBuffers,
+        )
+    }
+
+    /// A revived microphone that delivers only zeroes, a headset's known
+    /// failure shape the watchdog counts as delivering, is still reported.
+    func testARevivedMicrophoneThatDeliversZeroesIsReported() {
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        let zeroes = ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 600)
+        XCTAssertNil(monitor.update(ages: zeroes, gaveUp: false, elapsedSinceStart: 600, corroborated: true))
+        XCTAssertEqual(
+            monitor.update(ages: zeroes, gaveUp: false, elapsedSinceStart: 600 + window, corroborated: true),
+            .digitalSilence,
+            "once it has had its window",
+        )
+    }
+
+    func testAStallAfterASilenceReportIsStillReported() {
+        // Not a repetition: silence said the microphone stopped, the stall
+        // says restarting it did not help and what will.
+        var monitor = makeMonitor()
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: window, secondsSinceLastEnergy: window)
+        XCTAssertEqual(monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 600, corroborated: true), .noBuffers)
+        XCTAssertEqual(
+            monitor.update(ages: dead, gaveUp: false, elapsedSinceStart: 601, corroborated: true, stall: stalled()),
+            .stalled,
+        )
+    }
+
+    func testAGiveUpAfterAStallIsStillReported() {
+        // A revival can wedge, and that is terminal news the stall could not
+        // give. The capture layer ends the stall with the give-up, so that is
+        // the pair to feed.
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        let ended = MicCaptureStall(isActive: false, count: 1)
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 10, corroborated: false, stall: ended),
+            .gaveUp,
+        )
+        let dead = ChannelSignalAges(secondsSinceLastBuffer: 600, secondsSinceLastEnergy: 600)
+        XCTAssertNil(
+            monitor.update(ages: dead, gaveUp: true, elapsedSinceStart: 600, corroborated: true, stall: ended),
+            "nothing after the terminal report, the silence included",
+        )
+    }
+
+    func testAGiveUpReportedWhileStillStalledIsReportedToo() {
+        // Not what the capture layer reports, but the give-up is terminal
+        // news whatever the stall says beside it.
+        var monitor = makeMonitor()
+        _ = monitor.update(ages: .unknown, gaveUp: false, elapsedSinceStart: 0, corroborated: false, stall: stalled())
+        XCTAssertEqual(
+            monitor.update(ages: .unknown, gaveUp: true, elapsedSinceStart: 10, corroborated: false, stall: stalled()),
+            .gaveUp,
+        )
     }
 
     // MARK: - A channel that gave up
