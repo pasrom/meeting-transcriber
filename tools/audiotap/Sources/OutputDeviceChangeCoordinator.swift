@@ -6,13 +6,14 @@ import Foundation
 ///
 /// Lifecycle (one cycle per device change):
 ///   .idle → deviceChanged          → .restarting    + .stopAndRetry(initial)
+///   .idle → rebuildRequested       → the same as deviceChanged
 ///   .restarting → succeeded(rate>0)  → .idle         + .complete
 ///   .restarting → succeeded(rate≤0)  → .retrying(1) + .stopAndRetry(backoff)
 ///   .restarting → failed             → .retrying(1) + .restart(backoff)
 ///   .retrying(n) → succeeded(rate>0)           → .idle + .complete
 ///   .retrying(n) → succeeded(rate≤0) | failed  → .retrying(n+1) while the
 ///     shared retry policy still grants an attempt, otherwise .idle + .giveUp
-///   deviceChanged while not idle is ignored.
+///   deviceChanged or rebuildRequested while not idle is ignored.
 ///
 /// Not Equatable: it carries the injected retry policy now, and nothing ever
 /// compared two coordinators. Tests compare `state`.
@@ -28,6 +29,13 @@ struct OutputDeviceChangeCoordinator {
 
     enum Event: Equatable {
         case deviceChanged
+        /// The silent-track watchdog wants the tap rebuilt on the device it is
+        /// already anchored to (issue #672). The same cycle as a device change:
+        /// stop, wait, rebuild, retry within the shared budget. A separate event
+        /// rather than a reused `deviceChanged` so the state table says which
+        /// triggers exist, and so a rebuild the watchdog asks for while a device
+        /// change is already being handled is visibly the same `ignore`.
+        case rebuildRequested
         case startSucceeded(rate: Int)
         case startFailed
     }
@@ -79,7 +87,7 @@ struct OutputDeviceChangeCoordinator {
 
     mutating func handle(_ event: Event) -> Action {
         switch (state, event) {
-        case (.idle, .deviceChanged):
+        case (.idle, .deviceChanged), (.idle, .rebuildRequested):
             state = .restarting
             return .stopAndRetry(delay: initialRestartDelay)
 
@@ -105,7 +113,8 @@ struct OutputDeviceChangeCoordinator {
         case let (.retrying(attempts), .startFailed):
             return afterFailedAttempt(attemptsSoFar: attempts, stopFirst: false)
 
-        case (.restarting, .deviceChanged), (.retrying, .deviceChanged):
+        case (.restarting, .deviceChanged), (.retrying, .deviceChanged),
+             (.restarting, .rebuildRequested), (.retrying, .rebuildRequested):
             return .ignore
 
         case (.idle, .startSucceeded), (.idle, .startFailed):

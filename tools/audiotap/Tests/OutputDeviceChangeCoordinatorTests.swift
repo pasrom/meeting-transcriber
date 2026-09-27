@@ -147,4 +147,29 @@ final class OutputDeviceChangeCoordinatorTests: XCTestCase {
         XCTAssertEqual(secondCycle, .stopAndRetry(delay: 0.5))
         XCTAssertEqual(coord.state, .restarting)
     }
+
+    // MARK: - Watchdog rebuild (issue #672)
+
+    /// A rebuild the silent-track watchdog asks for runs the same cycle a device
+    /// change does, with the same initial wait, so it inherits the deadline and
+    /// the shared retry budget rather than getting a path of its own.
+    func testARequestedRebuildRunsTheDeviceChangeCycle() {
+        var coord = OutputDeviceChangeCoordinator()
+        XCTAssertEqual(coord.handle(.rebuildRequested), .stopAndRetry(delay: 0.5))
+        XCTAssertEqual(coord.state, .restarting)
+        XCTAssertEqual(coord.handle(.startSucceeded(rate: 48000)), .complete)
+        XCTAssertEqual(coord.state, .idle)
+    }
+
+    /// A restart already in flight rebuilds the tap anyway. A second cycle on
+    /// top of it would stop a tap the first one is still bringing up.
+    func testARequestedRebuildDuringARestartIsIgnored() {
+        var coord = OutputDeviceChangeCoordinator()
+        _ = coord.handle(.deviceChanged)
+        XCTAssertEqual(coord.handle(.rebuildRequested), .ignore)
+        _ = coord.handle(.startFailed)
+        XCTAssertEqual(coord.state, .retrying(attemptsSoFar: 1))
+        XCTAssertEqual(coord.handle(.rebuildRequested), .ignore)
+        XCTAssertEqual(coord.state, .retrying(attemptsSoFar: 1))
+    }
 }
