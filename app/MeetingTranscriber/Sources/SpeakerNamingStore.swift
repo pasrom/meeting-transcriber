@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "SpeakerNamingStore")
 
 /// Disk persistence for a job's speaker-naming sidecars, keyed by a per-job
 /// `slug`. Pure I/O over a single `outputDir` (the protocol output folder) —
@@ -105,9 +108,7 @@ struct SpeakerNamingStore {
     /// the concern of `cleanupSidecarFiles`.
     func deleteNamingJSON(slug: String?) {
         guard let slug, let recordingsDir else { return }
-        try? FileManager.default.removeItem(
-            at: recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)"),
-        )
+        Self.remove(recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)"))
     }
 
     /// Delete only the cached transcript segments. These contain verbatim
@@ -124,7 +125,23 @@ struct SpeakerNamingStore {
     func cleanupSidecarFiles(slug: String?) {
         guard let slug, let recordingsDir else { return }
         for suffix in Self.sidecarSuffixes {
-            try? FileManager.default.removeItem(at: recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
+            Self.remove(recordingsDir.appendingPathComponent("\(slug)\(suffix)"))
+        }
+    }
+
+    /// Best-effort removal. A file that is not there is the normal case (not
+    /// every job has every sidecar); any other failure, a missing security
+    /// scope among them, is logged rather than dropped. The path is private
+    /// because the file name carries the meeting title.
+    private static func remove(_ url: URL) {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch CocoaError.fileNoSuchFile {
+            return
+        } catch {
+            logger.warning(
+                "Could not remove naming sidecar \(url.lastPathComponent, privacy: .private): \((error as NSError).domain, privacy: .public) \((error as NSError).code, privacy: .public)",
+            )
         }
     }
 }
