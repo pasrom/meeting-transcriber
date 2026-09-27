@@ -6,6 +6,9 @@ import Foundation
 /// and behaviour drift apart. `SilentTrackWatchdogPolicy` reads its own
 /// constants from here; its doc comment says why each value is what it is.
 public enum SilentTrackWatchdogLimits {
+    /// Seconds of exact zeros, with buffers still arriving, before a rebuild
+    /// is considered.
+    public static let secondsOfZerosBeforeRebuild: TimeInterval = 60
     /// Seconds between two checks, and so between two rebuilds.
     public static let secondsBetweenRebuilds: TimeInterval = 60
     /// Rebuilds in one zero run that did not bring audio back before the

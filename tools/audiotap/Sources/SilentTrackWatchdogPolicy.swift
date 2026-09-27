@@ -46,7 +46,7 @@ struct SilentTrackWatchdogPolicy: Equatable {
     ///   stretches of silence in every call.
     ///
     /// A low non-zero floor is out of scope: it never counts as a zero run.
-    static let triggerZeroRunSeconds: TimeInterval = 60
+    static let triggerZeroRunSeconds = SilentTrackWatchdogLimits.secondsOfZerosBeforeRebuild
 
     /// At most one check, and so at most one rebuild, per this many seconds,
     /// counted from the last check whether it rebuilt or not.
