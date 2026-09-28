@@ -29,6 +29,16 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         }
     }
 
+    /// Where `modelVariant` comes from: the stock repository unless a custom model
+    /// is configured. Compared along with the variant wherever the engine asks
+    /// whether the loaded model is the requested one (see `WhisperKitModelOrigin`).
+    var modelOrigin: WhisperKitModelOrigin = .stock {
+        didSet {
+            guard modelOrigin != oldValue else { return }
+            vocabularyPromptCache.invalidate()
+        }
+    }
+
     var language: String?
     /// Path to the shared one-term-per-line vocabulary file. Whisper uses the
     /// terms as a soft decoder hint; unlike Parakeet CTC rescoring, it cannot
@@ -69,10 +79,10 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Test-only loader override used to count content reads on cache hits.
     private var vocabularyTermsLoaderOverride: ((String, WhisperVocabularyPrompt.FileRevision) -> WhisperVocabularyPrompt.VocabularyTermsLoadResult)?
     private let modelLoad = SingleFlight<LoadAttempt>()
-    /// The model-resolution boundary. Tests replace it wholesale; nothing needs to
-    /// tell an override from the default, so this is a value rather than an optional
-    /// beside a computed accessor.
-    private var modelSource: WhisperKitModelSource = .production
+    /// The model-resolution boundary, per origin. Tests replace it wholesale; nothing
+    /// needs to tell an override from the default, so this is a value rather than an
+    /// optional beside a computed accessor.
+    private var modelSource: @MainActor (WhisperKitModelOrigin) -> WhisperKitModelSource = WhisperKitModelSource.production(for:)
     private var vocabularyPromptCache = WhisperVocabularyPrompt.TokenCache()
     /// Debug/quality diagnostic for the effective prompt budget of the most
     /// recent decode. Zero means the decode ran without a vocabulary hint.
@@ -81,7 +91,12 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Adopt `folder` as the loaded model. The one place the pipe is installed, so
     /// the mid-load reconcile below cannot be maintained in one branch and forgotten
     /// in the other.
-    private func adoptPipe(variant: String, from folder: URL, source: WhisperKitModelSource) async throws {
+    private func adoptPipe(
+        variant: String,
+        origin: WhisperKitModelOrigin,
+        from folder: URL,
+        source: WhisperKitModelSource,
+    ) async throws {
         modelState = .loading
         downloadProgress = 1.0
         pipe = try await source.makePipe(variant, folder)
@@ -91,7 +106,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         // `pipe`, so `applyModelVariant` couldn't drop it. Reconcile here so the
         // next transcription notice. Dropping it is what makes the attempt
         // superseded, and `loadModel` then runs again for the current variant.
-        if modelVariant != variant {
+        if modelVariant != variant || modelOrigin != origin {
             unloadModel()
         }
     }
@@ -102,10 +117,14 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// A false return means "not loaded from disk" for either reason, absent or
     /// unusable, and the caller falls back to the download. That keeps a corrupt
     /// copy repairable instead of permanently unloadable.
-    private func loadFromLocalSnapshot(variant: String, source: WhisperKitModelSource) async -> Bool {
+    private func loadFromLocalSnapshot(
+        variant: String,
+        origin: WhisperKitModelOrigin,
+        source: WhisperKitModelSource,
+    ) async -> Bool {
         guard let localFolder = source.locateLocal(variant) else { return false }
         do {
-            try await adoptPipe(variant: variant, from: localFolder, source: source)
+            try await adoptPipe(variant: variant, origin: origin, from: localFolder, source: source)
             return true
         } catch {
             // Type public, message redacted. Unlike a Cocoa NSError, whose
@@ -170,7 +189,11 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             // takes a user action per iteration (nothing in the load path writes
             // `modelVariant`, and the settings observer tracks only `AppSettings`).
             // A cap of N would restore the reported symptom on the Nth change.
-            guard attempt.needsAnotherAttempt(pipeInstalled: pipe != nil, requestedVariant: modelVariant) else {
+            guard attempt.needsAnotherAttempt(
+                pipeInstalled: pipe != nil,
+                requestedVariant: modelVariant,
+                requestedOrigin: modelOrigin,
+            ) else {
                 return
             }
         }
@@ -187,13 +210,14 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         // mutable (the reactive settings sync calls `applyModelVariant`), so
         // reading it separately for the download and the init could tear
         // across these awaits, downloading one variant's folder but
-        // initialising WhisperKit under another variant's name. `source` is
-        // read once for the same reason.
+        // initialising WhisperKit under another variant's name. The origin and
+        // `source` are read once for the same reason.
         let variant = modelVariant
-        let source = modelSource
+        let origin = modelOrigin
+        let source = modelSource(origin)
 
-        if await loadFromLocalSnapshot(variant: variant, source: source) {
-            return LoadAttempt(variant: variant, builtPipe: true)
+        if await loadFromLocalSnapshot(variant: variant, origin: origin, source: source) {
+            return LoadAttempt(variant: variant, origin: origin, builtPipe: true)
         }
 
         modelState = .downloading
@@ -204,8 +228,8 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
                     self.downloadProgress = progress.fractionCompleted
                 }
             }
-            try await adoptPipe(variant: variant, from: modelFolder, source: source)
-            return LoadAttempt(variant: variant, builtPipe: true)
+            try await adoptPipe(variant: variant, origin: origin, from: modelFolder, source: source)
+            return LoadAttempt(variant: variant, origin: origin, builtPipe: true)
         } catch {
             // Same reason as the local branch above: since the download path now
             // also ends in `adoptPipe`, this can carry WhisperKit's path-bearing
@@ -228,20 +252,22 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             }
         }
 
-        return LoadAttempt(variant: variant, builtPipe: false)
+        return LoadAttempt(variant: variant, origin: origin, builtPipe: false)
     }
 
-    /// Apply a model-variant change coming from settings. Updates `modelVariant`
-    /// and, if a model is already loaded, drops it so the next transcription
+    /// Apply a model change coming from settings. Updates `modelVariant` and
+    /// `modelOrigin` and, if a model is already loaded, drops it so the next transcription
     /// lazily reloads with the new variant — `ensureModel()` short-circuits on a
     /// non-nil `pipe`, so without this drop a settings change would never reach
     /// an already-loaded (e.g. launch-preloaded) engine. Safe against an
     /// in-flight transcription: `transcribeSegments` holds its own local `pipe`
     /// reference, so clearing this one only affects the *next* load. No-op when
-    /// the variant is unchanged.
-    func applyModelVariant(_ variant: String) {
-        guard variant != modelVariant else { return }
+    /// neither changed. `origin` defaults to the stock repository, so a custom
+    /// model only reaches the engine when a caller names its origin.
+    func applyModelVariant(_ variant: String, origin: WhisperKitModelOrigin = .stock) {
+        guard variant != modelVariant || origin != modelOrigin else { return }
         modelVariant = variant
+        modelOrigin = origin
         guard pipe != nil else { return }
         unloadModel()
     }
@@ -285,7 +311,12 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Installs a model-resolution boundary for focused load tests, so a test can
     /// observe whether the Hub was contacted without downloading a speech model.
     func installModelSourceForTesting(_ source: WhisperKitModelSource) {
-        modelSource = source
+        modelSource = { _ in source }
+    }
+
+    /// Same, for a test that needs to see which origin a load resolved.
+    func installModelSourceForTesting(_ makeSource: @escaping @MainActor (WhisperKitModelOrigin) -> WhisperKitModelSource) {
+        modelSource = makeSource
     }
 
     /// Installs a vocabulary-content loader for focused cache tests. Metadata
@@ -503,6 +534,9 @@ enum TranscriptionError: LocalizedError {
 /// first case as the second and leaves nothing loaded (issue #738).
 struct LoadAttempt: Sendable {
     let variant: String
+    /// Compared along with `variant`, since two origins can carry a variant of the
+    /// same name.
+    let origin: WhisperKitModelOrigin
     /// True when `adoptPipe` ran through, whether or not the reconcile then
     /// discarded what it installed.
     let builtPipe: Bool
@@ -513,8 +547,12 @@ struct LoadAttempt: Sendable {
     /// `builtPipe` flag needs the variant to change away and back inside the window
     /// between a flight ending and its caller resuming, which no test can place
     /// reliably, so the timing is not what is pinned here: the rule is.
-    func needsAnotherAttempt(pipeInstalled: Bool, requestedVariant: String) -> Bool {
+    func needsAnotherAttempt(
+        pipeInstalled: Bool,
+        requestedVariant: String,
+        requestedOrigin: WhisperKitModelOrigin,
+    ) -> Bool {
         guard !pipeInstalled else { return false }
-        return builtPipe || variant != requestedVariant
+        return builtPipe || variant != requestedVariant || origin != requestedOrigin
     }
 }
