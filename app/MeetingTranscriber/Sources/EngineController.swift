@@ -94,7 +94,8 @@ final class EngineController {
     func syncEngineSettings() {
         switch settings.transcriptionEngine {
         case .whisperKit:
-            whisperKit.applyModelVariant(settings.whisperKitModel)
+            let model = settings.whisperKitModelSelection
+            whisperKit.applyModelVariant(model.variant, origin: model.origin)
             let next = settings.whisperLanguageOrNil
             if whisperKit.language != next { whisperKit.language = next }
             let nextVocab = settings.customVocabularyPath
@@ -123,6 +124,11 @@ final class EngineController {
         withObservationTracking {
             _ = settings.transcriptionEngine
             _ = settings.whisperKitModel
+            _ = settings.whisperKitCustomModelEnabled
+            _ = settings.whisperKitCustomRepo
+            _ = settings.whisperKitCustomVariant
+            _ = settings.whisperKitCustomModelFolderPath
+            _ = settings.whisperKitCustomModelFolderBookmark
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
             _ = settings.customVocabularyBookmark
