@@ -84,7 +84,7 @@ flowchart TD
 - **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp) — per app, off by default, and unlike the browser path it starts recording without a prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Two engines, selectable in Settings:
-  - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
+  - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model; besides the stock models, a custom WhisperKit model can be loaded from another Hugging Face repository or a local folder (see [Custom WhisperKit models](#custom-whisperkit-models))
   - [Parakeet TDT v3](https://github.com/FluidInference/FluidAudio) (NVIDIA) — 25 EU languages, ~50 MB model, ~10× faster
 - **Custom vocabulary & terminology** — One shared vocabulary file boosts recognition of names/jargon on Parakeet (CTC boosting) and, optionally, on WhisperKit (experimental decoder-prompt hint); an independent, opt-in terminology-normalization pass rewrites recognized spelling variants to a canonical form after transcription, regardless of engine
 - **On-device speaker diarization** — [FluidAudio](https://github.com/FluidInference/FluidAudio) via CoreML/ANE — no HuggingFace token needed; two modes: standard (`OfflineDiarizer`) and overlap-aware (`Sortformer`)
@@ -251,10 +251,14 @@ Open Settings via the menu bar item or ⌘,.
 |---|---|
 | **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp), detection timing, update checks |
 | **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
-| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
+| **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model incl. a custom WhisperKit model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, protocol language, output folder, custom prompt |
 | **Advanced** | Permissions status, diagnostics, version info |
+
+### Custom WhisperKit models
+
+Settings → Transcribe → Model → **Custom model…** loads a fine-tuned WhisperKit model instead of a stock one, for example a Swiss German fine-tune. Enter a Hugging Face repository laid out like [`argmaxinc/whisperkit-coreml`](https://huggingface.co/argmaxinc/whisperkit-coreml) (one folder per variant) plus the variant folder name, e.g. `spert/flix-swissgerman-whisperkit` and `flix-swissgerman-large-v3_8bit`; it downloads on first use and loads offline afterwards. Alternatively choose a model folder on disk: it must contain `AudioEncoder.mlmodelc`, `TextDecoder.mlmodelc`, `MelSpectrogram.mlmodelc`, `tokenizer.json` and `tokenizer_config.json`, and is never downloaded. Until a custom model is filled in, the previously selected stock model is used.
 
 ---
 
