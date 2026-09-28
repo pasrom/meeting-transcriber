@@ -30,16 +30,14 @@ extension AppSettings {
         var isStale = false
         guard let url = resolveCustomVocabularyFile(isStale: &isStale) else { return nil }
         if isStale,
-           let refreshed = VocabularyFileAccess.withAccess(to: url, makeCustomVocabularyBookmark) {
+           let refreshed = VocabularyFileAccess.withAccess(to: url, VocabularyFileAccess.makeBookmark) {
             updateCustomVocabularySelection(path: url.path, bookmark: refreshed)
         }
         return url
     }
 
     func setCustomVocabularyFile(_ url: URL) {
-        let bookmark = VocabularyFileAccess.withAccess(to: url) { scopedURL in
-            makeCustomVocabularyBookmark(for: scopedURL)
-        }
+        let bookmark = VocabularyFileAccess.withAccess(to: url, VocabularyFileAccess.makeBookmark)
         updateCustomVocabularySelection(path: url.path, bookmark: bookmark)
         refreshCustomVocabularyValidation()
     }
@@ -59,11 +57,10 @@ extension AppSettings {
     }
 
     func repairStaleCustomVocabularyBookmark() {
-        var isStale = false
-        guard let url = resolveCustomVocabularyFile(isStale: &isStale), isStale,
-              let refreshed = VocabularyFileAccess.withAccess(to: url, makeCustomVocabularyBookmark)
+        guard let bookmark = customVocabularyBookmark,
+              let repaired = VocabularyFileAccess.refreshedStaleBookmark(bookmark)
         else { return }
-        updateCustomVocabularySelection(path: url.path, bookmark: refreshed)
+        updateCustomVocabularySelection(path: repaired.url.path, bookmark: repaired.bookmark)
         refreshCustomVocabularyValidation()
     }
 
@@ -98,13 +95,5 @@ extension AppSettings {
         }
         guard !customVocabularyPath.isEmpty else { return nil }
         return URL(fileURLWithPath: customVocabularyPath)
-    }
-
-    private func makeCustomVocabularyBookmark(for url: URL) -> Data? {
-        try? url.bookmarkData(
-            options: .withSecurityScope,
-            includingResourceValuesForKeys: nil,
-            relativeTo: nil,
-        )
     }
 }

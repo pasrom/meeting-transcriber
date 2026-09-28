@@ -201,6 +201,7 @@ final class AppState {
         // mid-`body`.
         settings.repairStaleCustomOutputDirBookmark()
         settings.repairStaleCustomVocabularyBookmark()
+        settings.repairStaleWhisperKitCustomModelFolderBookmark()
         return settings
     }
 

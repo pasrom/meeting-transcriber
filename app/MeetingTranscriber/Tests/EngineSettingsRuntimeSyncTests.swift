@@ -104,6 +104,59 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         XCTAssertNotEqual(engines.whisperKit.modelVariant, original)
     }
 
+    /// A custom model reaches the engine with its repository, and turning it off
+    /// hands the engine back the stock variant from the stock repository.
+    func test_runtimeChange_customWhisperKitModel_propagatesToEngine() async {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitModel = "openai_whisper-small"
+        settings.whisperKitCustomRepo = "spert/flix-swissgerman-whisperkit"
+        settings.whisperKitCustomVariant = "flix-swissgerman-large-v3_8bit"
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, .stock, "Filled-in fields alone must not switch the model")
+
+        settings.whisperKitCustomModelEnabled = true
+
+        let swissGerman = WhisperKitModelOrigin.hub(repoID: "spert/flix-swissgerman-whisperkit")
+        // `waitFor` only waits; the origin is asserted explicitly because a timeout
+        // would otherwise pass straight through to the variant check.
+        await waitFor(engines.whisperKit.modelOrigin == swissGerman)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, swissGerman)
+        XCTAssertEqual(engines.whisperKit.modelVariant, "flix-swissgerman-large-v3_8bit")
+
+        settings.whisperKitCustomModelEnabled = false
+
+        await waitFor(engines.whisperKit.modelOrigin == .stock)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, .stock)
+        XCTAssertEqual(engines.whisperKit.modelVariant, "openai_whisper-small")
+    }
+
+    /// With the custom model on, each of its fields is a key the observer has to
+    /// track on its own: a changed repository, variant or folder is a different
+    /// model, and one that is not observed would reach the engine only at relaunch.
+    func test_runtimeChange_customModelFields_propagateToEngine() async throws {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitCustomModelEnabled = true
+        settings.whisperKitCustomRepo = "spert/flix-swissgerman-whisperkit"
+        settings.whisperKitCustomVariant = "flix-swissgerman-large-v3_8bit"
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, .hub(repoID: "spert/flix-swissgerman-whisperkit"))
+
+        settings.whisperKitCustomRepo = "someone/else"
+        await waitFor(engines.whisperKit.modelOrigin == .hub(repoID: "someone/else"))
+        XCTAssertEqual(engines.whisperKit.modelOrigin, .hub(repoID: "someone/else"))
+
+        settings.whisperKitCustomVariant = "other-large-v3"
+        await waitFor(engines.whisperKit.modelVariant == "other-large-v3")
+        XCTAssertEqual(engines.whisperKit.modelVariant, "other-large-v3")
+
+        let folder = try makeTempDirectory(prefix: "wk-folder")
+        settings.setWhisperKitCustomModelFolderPath(folder.path)
+        let picked = WhisperKitModelOrigin.localFolder(path: folder.path, bookmark: nil)
+        await waitFor(engines.whisperKit.modelOrigin == picked)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, picked)
+        XCTAssertEqual(engines.whisperKit.modelVariant, folder.lastPathComponent)
+    }
+
     func test_runtimeChange_customVocabularyPath_propagatesToParakeet() async {
         settings.transcriptionEngine = .parakeet
         let engines = EngineController(settings: settings)
