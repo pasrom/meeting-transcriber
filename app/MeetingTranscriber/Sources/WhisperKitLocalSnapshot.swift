@@ -22,9 +22,10 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Whisper
 /// already does with its `modelsExist` early-out. Then `loadModel()` can call the
 /// downloader unconditionally again and this file goes away.
 enum WhisperKitLocalSnapshot {
-    /// The repository `WhisperKit.download` defaults to. Passed explicitly to the
-    /// downloader as well, so the locator and the download cannot end up pointing
-    /// at different repositories.
+    /// The repository `WhisperKit.download` defaults to, and the one the stock
+    /// variants come from. Passed explicitly to the downloader as well, so the
+    /// locator and the download cannot end up pointing at different repositories.
+    /// A custom model names its own (`WhisperKitModelOrigin.hub`).
     static let repoID = "argmaxinc/whisperkit-coreml"
 
     /// The CoreML bundles `WhisperKit.loadModels` requires before it will run.
@@ -38,12 +39,25 @@ enum WhisperKitLocalSnapshot {
     /// present directory proves nothing while a file at its final path is whole.
     static let requiredFiles = ["coremldata.bin", "model.mil", "weights/weight.bin"]
 
+    /// What `WhisperKit.loadTokenizerIfNeeded` reads from a model folder before it
+    /// falls back to fetching the tokenizer from the Hub. Only a picked folder has to
+    /// carry them: it is never downloaded, so without them a load needs the network
+    /// after all. A Hub variant is not checked for them, because the stock ones do
+    /// not ship them and get the tokenizer through the download cache instead.
+    static let requiredTokenizerFiles = ["tokenizer.json", "tokenizer_config.json"]
+
     /// The root WhisperKit's own downloader writes into. Taken from
     /// `HubApiWrapper`, the API published for exactly this ("callers outside
     /// ArgmaxCore have no dependency on the internal Hub types"), instead of
     /// rebuilding `Documents/huggingface` by hand, so the two cannot drift and the
     /// sandboxed build resolves it inside its container automatically.
     static var defaultRepoRoot: URL {
+        repoRoot(for: repoID)
+    }
+
+    /// The root the downloader writes `repoID`'s variants into, so a custom
+    /// repository is looked up where its own download put it.
+    static func repoRoot(for repoID: String) -> URL {
         HubApiWrapper.shared.localRepoLocation(HubApiWrapper.Repo(id: repoID, type: .models))
     }
 
@@ -66,24 +80,40 @@ enum WhisperKitLocalSnapshot {
     /// download rather than load wrongly.
     static func locate(variant: String, in repoRoot: URL) -> URL? {
         let folder = repoRoot.appendingPathComponent(variant, isDirectory: true)
-        for bundle in requiredBundles {
-            let bundleURL = folder.appendingPathComponent("\(bundle).mlmodelc", isDirectory: true)
-            for file in requiredFiles {
-                guard FileManager.default.fileExists(atPath: bundleURL.appendingPathComponent(file).path) else {
-                    // Logged because rejecting a folder that is actually there is
-                    // the failure mode of stale borrowed names, and it would
-                    // otherwise be silent: every load would quietly go back to the
-                    // download and reintroduce issue #736 offline. Names only, no
-                    // path, which would carry the account name.
-                    if FileManager.default.fileExists(atPath: folder.path) {
-                        logger.warning(
-                            "Local model \(variant, privacy: .public) rejected: \(bundle, privacy: .public) is missing \(file, privacy: .public)",
-                        )
-                    }
-                    return nil
-                }
-            }
+        guard let missing = firstMissingFile(in: folder) else { return folder }
+        // Logged because rejecting a folder that is actually there is the failure
+        // mode of stale borrowed names, and it would otherwise be silent: every load
+        // would quietly go back to the download and reintroduce issue #736 offline.
+        // Names only, no path, which would carry the account name.
+        if FileManager.default.fileExists(atPath: folder.path) {
+            logger.warning(
+                "Local model \(variant, privacy: .public) rejected: missing \(missing, privacy: .public)",
+            )
         }
-        return folder
+        return nil
+    }
+
+    /// Why a picked model folder cannot be loaded, or nil when it can. Shared by the
+    /// Settings validation line and the load, so both report the same reason.
+    static func checkModelFolder(_ folder: URL) -> WhisperKitModelError? {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory),
+              isDirectory.boolValue
+        else { return .folderUnavailable }
+        return firstMissingFile(in: folder, includingTokenizer: true).map(WhisperKitModelError.folderIncomplete)
+    }
+
+    /// The first file a load needs that `folder` lacks, relative to it, or nil when
+    /// every one is there. Checks the CoreML bundles file by file (see
+    /// `requiredFiles`), plus the tokenizer when `includingTokenizer` is set, which
+    /// only a folder that is never downloaded needs (see `requiredTokenizerFiles`).
+    static func firstMissingFile(in folder: URL, includingTokenizer: Bool = false) -> String? {
+        var required = requiredBundles.flatMap { bundle in
+            requiredFiles.map { "\(bundle).mlmodelc/\($0)" }
+        }
+        if includingTokenizer {
+            required += requiredTokenizerFiles
+        }
+        return required.first { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }
     }
 }
