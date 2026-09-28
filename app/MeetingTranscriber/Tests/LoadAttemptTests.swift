@@ -9,9 +9,9 @@ final class LoadAttemptTests: XCTestCase {
     private let current = "openai_whisper-small"
 
     func testALoadedPipeNeedsNothingFurther() {
-        let attempt = LoadAttempt(variant: current, builtPipe: true)
+        let attempt = LoadAttempt(variant: current, origin: .stock, builtPipe: true)
 
-        XCTAssertFalse(attempt.needsAnotherAttempt(pipeInstalled: true, requestedVariant: current))
+        XCTAssertFalse(attempt.needsAnotherAttempt(pipeInstalled: true, requestedVariant: current, requestedOrigin: .stock))
     }
 
     /// The load-bearing case. The attempt built a pipe and the reconcile dropped it
@@ -20,10 +20,10 @@ final class LoadAttemptTests: XCTestCase {
     /// from a plain failure. Reading it as a failure is the original bug: nothing
     /// loaded, and `ensureModel` throws.
     func testADiscardedPipeIsRetriedEvenWhenTheVariantMatchesAgain() {
-        let attempt = LoadAttempt(variant: current, builtPipe: true)
+        let attempt = LoadAttempt(variant: current, origin: .stock, builtPipe: true)
 
         XCTAssertTrue(
-            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current),
+            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current, requestedOrigin: .stock),
             "An attempt that built a pipe which is now gone was superseded, not failed",
         )
     }
@@ -32,10 +32,10 @@ final class LoadAttemptTests: XCTestCase {
     /// for the variant still requested must not be repeated, for this caller or for
     /// any that joined it.
     func testAFailureForTheCurrentVariantIsNotRetried() {
-        let attempt = LoadAttempt(variant: current, builtPipe: false)
+        let attempt = LoadAttempt(variant: current, origin: .stock, builtPipe: false)
 
         XCTAssertFalse(
-            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current),
+            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current, requestedOrigin: .stock),
             "Repeating this would double the wait and the failed download for every caller",
         )
     }
@@ -43,11 +43,26 @@ final class LoadAttemptTests: XCTestCase {
     /// A failure for a variant nobody wants any more still leaves the current one
     /// untried, so it has to be tried.
     func testAFailureForASupersededVariantIsRetried() {
-        let attempt = LoadAttempt(variant: "openai_whisper-tiny", builtPipe: false)
+        let attempt = LoadAttempt(variant: "openai_whisper-tiny", origin: .stock, builtPipe: false)
 
         XCTAssertTrue(
-            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current),
+            attempt.needsAnotherAttempt(pipeInstalled: false, requestedVariant: current, requestedOrigin: .stock),
             "The variant that is actually requested has not been attempted yet",
+        )
+    }
+
+    /// A fine-tune usually keeps its base model's folder name, so a failure for the
+    /// same variant from another origin says nothing about the requested model.
+    func testAFailureForTheSameVariantFromAnotherOriginIsRetried() {
+        let attempt = LoadAttempt(variant: current, origin: .stock, builtPipe: false)
+
+        XCTAssertTrue(
+            attempt.needsAnotherAttempt(
+                pipeInstalled: false,
+                requestedVariant: current,
+                requestedOrigin: .hub(repoID: "spert/flix-swissgerman-whisperkit"),
+            ),
+            "The model that is actually requested has not been attempted yet",
         )
     }
 }
