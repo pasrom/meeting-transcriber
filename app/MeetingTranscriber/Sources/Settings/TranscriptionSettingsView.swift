@@ -61,17 +61,30 @@ struct TranscriptionSettingsView: View {
     @ViewBuilder
     private var whisperKitPickers: some View { // swiftlint:disable:this attributes
         if settings.transcriptionEngine == .whisperKit {
-            Picker("Model", selection: $settings.whisperKitModel) {
-                ForEach(Self.whisperKitModels, id: \.variant) { model in
-                    Text(model.label).tag(model.variant)
-                }
-            }
+            whisperKitModelPicker
 
             Picker("Language", selection: $settings.whisperLanguage) {
                 ForEach(PickerLanguages.whisperKit, id: \.code) { lang in
                     Text(lang.label).tag(lang.code)
                 }
             }
+        }
+    }
+
+    /// Its own property so that anything added next to the model choice grows
+    /// this body rather than `whisperKitPickers`.
+    @ViewBuilder
+    private var whisperKitModelPicker: some View { // swiftlint:disable:this attributes
+        Picker("Model", selection: whisperKitModelPickerSelection) {
+            ForEach(Self.whisperKitModels, id: \.variant) { model in
+                Text(model.label).tag(model.variant)
+            }
+            Text("Custom model\u{2026}").tag(Self.customModelTag)
+        }
+        .accessibilityIdentifier(A11yID.whisperKitModelPicker)
+
+        if settings.whisperKitCustomModelEnabled {
+            customWhisperKitModelFields
         }
     }
 
@@ -150,6 +163,58 @@ struct TranscriptionSettingsView: View {
                 .foregroundStyle(.secondary)
         }
     }
+
+    /// Picker tag of the custom-model entry. Never stored: `whisperKitModel` keeps
+    /// the stock variant, which is what an unfinished custom model falls back to.
+    static let customModelTag = "custom"
+
+    private var whisperKitModelPickerSelection: Binding<String> {
+        Binding(
+            get: { settings.whisperKitCustomModelEnabled ? Self.customModelTag : settings.whisperKitModel },
+            set: { tag in
+                settings.whisperKitCustomModelEnabled = tag == Self.customModelTag
+                if tag != Self.customModelTag { settings.whisperKitModel = tag }
+            },
+        )
+    }
+
+    /// Hoisted out of `body` for the same type-check reason as
+    /// `liveTranscriptionSection`.
+    @ViewBuilder private var customWhisperKitModelFields: some View {
+        TextField("Hugging Face repository", text: $settings.whisperKitCustomRepo, prompt: Text("owner/name"))
+            .textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier(A11yID.whisperKitCustomRepoField)
+        TextField("Variant", text: $settings.whisperKitCustomVariant, prompt: Text("folder in the repository"))
+            .textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier(A11yID.whisperKitCustomVariantField)
+        HStack {
+            TextField("Or model folder", text: Binding(
+                get: { settings.whisperKitCustomModelFolderPath },
+                set: { settings.setWhisperKitCustomModelFolderPath($0) },
+            ))
+            .textFieldStyle(.roundedBorder)
+            .accessibilityIdentifier(A11yID.whisperKitCustomModelFolderField)
+            Button("Choose\u{2026}") {
+                let panel = NSOpenPanel()
+                panel.canChooseDirectories = true
+                panel.canChooseFiles = false
+                panel.allowsMultipleSelection = false
+                if panel.runModal() == .OK, let url = panel.url {
+                    settings.setWhisperKitCustomModelFolder(url)
+                }
+            }
+        }
+        .help(Self.customModelFolderHelpText)
+        Text(settings.whisperKitCustomModelValidation.message)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .onAppear { settings.refreshWhisperKitCustomModelValidation() }
+    }
+
+    static let customModelFolderHelpText =
+        "A WhisperKit model folder on disk, used instead of the repository when set. "
+            + "It must contain AudioEncoder.mlmodelc, TextDecoder.mlmodelc, MelSpectrogram.mlmodelc, "
+            + "tokenizer.json and tokenizer_config.json, and is loaded without any download."
 
     /// Hoisted out of `body` into a named property so the section's nesting
     /// doesn't grow the `body` type-check past the 300 ms hard limit on CI.
@@ -334,7 +399,8 @@ struct TranscriptionSettingsView: View {
         case .unloaded:
             Button("Load Model") {
                 if settings.transcriptionEngine == .whisperKit {
-                    whisperKitEngine.modelVariant = settings.whisperKitModel
+                    let model = settings.whisperKitModelSelection
+                    whisperKitEngine.applyModelVariant(model.variant, origin: model.origin)
                 }
                 Task { await engine.loadModel() }
             }
