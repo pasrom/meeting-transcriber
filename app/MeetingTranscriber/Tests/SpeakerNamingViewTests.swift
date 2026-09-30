@@ -680,6 +680,15 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
         XCTAssertEqual(SpeakerNamingView.clampCount(10, for: .sortformer), 4)
     }
 
+    func testRerunCountRangeIsOneToEightForNemotron() {
+        XCTAssertEqual(SpeakerNamingView.rerunCountRange(for: .nemotron), 1 ... 8)
+    }
+
+    func testClampCountClampsValueAboveNemotronCap() {
+        XCTAssertEqual(SpeakerNamingView.clampCount(8, for: .nemotron), 8)
+        XCTAssertEqual(SpeakerNamingView.clampCount(10, for: .nemotron), 8)
+    }
+
     func testClampCountIsIdentityForOfflineMode() {
         XCTAssertEqual(SpeakerNamingView.clampCount(2, for: .offline), 2)
         XCTAssertEqual(SpeakerNamingView.clampCount(8, for: .offline), 8)
@@ -767,5 +776,34 @@ final class SpeakerNamingViewTests: XCTestCase { // swiftlint:disable:this type_
             return
         }
         XCTAssertEqual(mode, .sortformer)
+    }
+
+    /// The re-run picker lists its modes by hand, so a new mode has to be
+    /// added there as well: a job diarized in Nemotron 3 mode opens the
+    /// dialog with that mode selected, and without its segment the picker
+    /// would hold a selection it cannot show. The picker's own write lands in
+    /// `@State` and cannot be read back here (see CLAUDE.md, GUI Testing), so
+    /// this pins the segment, the cap hint and the mode the Re-run carries.
+    func testRerunWithNemotronModeCarriesModeAndShowsCap() throws {
+        var captured: PipelineQueue.SpeakerNamingResult?
+        let sut = SpeakerNamingView(
+            data: makeData(),
+            currentDiarizerMode: .nemotron,
+            gracePeriod: 0,
+        ) { result in captured = result }
+        let body = try sut.inspect()
+        let picker = try body.find(viewWithAccessibilityIdentifier: A11yID.rerunModePicker)
+        XCTAssertNoThrow(try picker.find(text: DiarizerMode.nemotron.shortLabel))
+        XCTAssertEqual(
+            try body.find(viewWithAccessibilityIdentifier: A11yID.speakerCapHint).text().string(),
+            "Nemotron 3 caps at 8 speakers — switch to Offline for larger meetings.",
+        )
+        try body.find(button: "Re-run").tap()
+        guard case let .rerunWithMode(mode, count) = captured else {
+            XCTFail("Expected .rerunWithMode, got \(String(describing: captured))")
+            return
+        }
+        XCTAssertEqual(mode, .nemotron)
+        XCTAssertLessThanOrEqual(count, DiarizerMode.nemotron.speakerCap)
     }
 }

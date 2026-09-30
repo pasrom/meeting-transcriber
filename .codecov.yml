@@ -135,6 +135,17 @@ ignore:
   # and miss the real file. Backslash-escape with `\\+` to match the
   # literal `+`.
   - "app/MeetingTranscriber/Sources/FluidDiarizer\\+SortformerEmbeddings.swift"
+  # Nemotron 3 model load (HuggingFace download + CoreML load), only
+  # exercisable with the ~200 MB CoreML model. Exercised by the Nemotron rows
+  # of FluidDiarizerQualityTests and SortformerEmbeddingsE2ETests under
+  # RUN_QUALITY_TESTS=1. FluidDiarizer+Nemotron.swift stays counted, but its
+  # default-lane tests reach only part of it: a stub loader drives the gates,
+  # the cancellation checks and the feed loop up to the end of the stream.
+  # The body of `append`, the WeSpeaker embedding pass and `buildResult` run
+  # only under RUN_QUALITY_TESTS=1: the stub cannot return a non-empty chunk
+  # (FluidAudio's Nemotron3ChunkResult has no public initialiser), and the
+  # embedding pass needs its own model download.
+  - "app/MeetingTranscriber/Sources/FluidDiarizer\\+NemotronModelLoad.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
   - "tools/meeting-simulator/**/*"
   - "tools/mt-cli/**/*"

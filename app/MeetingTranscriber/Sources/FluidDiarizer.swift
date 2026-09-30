@@ -43,10 +43,12 @@ struct OfflineDiarizerTuning: Equatable {
 }
 
 /// CoreML-based speaker diarization using FluidAudio (on-device, no HuggingFace token needed).
-/// `@unchecked Sendable` because `PipelineQueue` shares one instance across
-/// two `async let` diarisation runs. The mutable `offlineProcessor` /
-/// `sortformerDiarizer` are init-once-then-read; the underlying FluidAudio
-/// CoreML inference is documented thread-safe.
+/// `@unchecked Sendable` because `DiarizationProvider` is `Sendable`: one
+/// instance diarizes both tracks of a dual-source job, which
+/// `PipelineQueue.runDualTrackDiarization` runs one after the other, not in
+/// parallel. The lazily set `offlineProcessor` / `sortformerDiarizer` state is
+/// not synchronised and relies on that order. Nemotron 3 mode does not: its
+/// stream state is not thread-safe, so its runs go through `nemotronRunGate`.
 final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     let mode: DiarizerMode
     private var offlineProcessor: any OfflineDiarizationProcessing
@@ -56,6 +58,21 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     /// reports the units its loaded model carries. Everything that needs the
     /// real model sits behind this one seam, so a test can supply a stub.
     private let makeSortformerDiarizer: (MLComputeUnits) async throws -> (SortformerDiarizer, MLComputeUnits)
+    /// Lazily-loaded Nemotron 3 diarizer, used only by
+    /// `FluidDiarizer+Nemotron.runNemotron`. Not `private` because that
+    /// extension lives in a separate file. Unlike the CoreML inference it
+    /// carries streaming state and is not thread-safe, so it is only touched
+    /// inside `nemotronRunGate`; `runNemotron` resets it at the start of a run.
+    var nemotronDiarizer: (any NemotronStreamingDiarizing)?
+    /// Serialises Nemotron 3 runs on this instance, so in this mode, unlike
+    /// Offline and Sortformer, `run` is safe to call concurrently.
+    let nemotronRunGate = AsyncSerialGate()
+    /// Loads the Nemotron 3 model for the requested compute units and returns
+    /// a ready streaming diarizer plus the units its loaded model carries.
+    /// Everything that needs the real model sits behind this one seam, so a
+    /// test can supply a stub. Not `private` for the same reason as
+    /// `nemotronDiarizer`.
+    let makeNemotronDiarizer: (MLComputeUnits) async throws -> (any NemotronStreamingDiarizing, MLComputeUnits)
     /// Lazily-loaded WeSpeaker (pyannote `wespeaker_v2`) models, used only by
     /// `FluidDiarizer+SortformerEmbeddings.extractSortformerEmbeddings`. Not
     /// `private` because the extension lives in a separate file (codecov-
@@ -76,10 +93,14 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
             diarizer.initialize(models: models)
             return (diarizer, models.mainModel.configuration.computeUnits)
         },
+        makeNemotronDiarizer: @escaping (MLComputeUnits) async throws -> (any NemotronStreamingDiarizing, MLComputeUnits) = { computeUnits in
+            try await FluidDiarizer.loadNemotronDiarizer(computeUnits: computeUnits)
+        },
     ) {
         self.mode = mode
         self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor(tuning: tuning)
         self.makeSortformerDiarizer = makeSortformerDiarizer
+        self.makeNemotronDiarizer = makeNemotronDiarizer
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
@@ -98,6 +119,9 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
 
         case .sortformer:
             try await runSortformer(audioPath: audioPath)
+
+        case .nemotron:
+            try await runNemotron(audioPath: audioPath, numSpeakers: numSpeakers)
         }
     }
 
@@ -143,30 +167,23 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     /// follow in Sortformer mode keep FluidAudio's default routing.
     static let sortformerComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
 
+    /// Log label for compute units read back from a loaded model.
+    static func computeUnitsLabel(_ units: MLComputeUnits) -> String {
+        units == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "rawValue \(units.rawValue)"
+    }
+
     private func runSortformer(audioPath: URL) async throws -> MeetingTranscriber.DiarizationResult {
         if sortformerDiarizer == nil {
             let (diarizer, routed) = try await makeSortformerDiarizer(Self.sortformerComputeUnits)
             sortformerDiarizer = diarizer
             // `routed` is read back from the loaded model, so the log shows the
             // routing Core ML was given rather than the value this file asked for.
-            let routedLabel = routed == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "rawValue \(routed.rawValue)"
-            logger.info("FluidAudio Sortformer models ready (computeUnits: \(routedLabel, privacy: .public))")
+            logger.info("FluidAudio Sortformer models ready (computeUnits: \(Self.computeUnitsLabel(routed), privacy: .public))")
         }
 
         logger.info("Starting Sortformer diarization: \(audioPath.lastPathComponent)")
         // swiftlint:disable:next force_unwrapping
         let timeline = try sortformerDiarizer!.processComplete(audioFileURL: audioPath)
-
-        let segments = timeline.speakers.flatMap { index, speaker in
-            let label = Self.normalizeSpeakerId(speaker.name ?? "Speaker \(index)")
-            return speaker.finalizedSegments.map { seg in
-                MeetingTranscriber.DiarizationResult.Segment(
-                    start: TimeInterval(seg.startTime),
-                    end: TimeInterval(seg.endTime),
-                    speaker: label,
-                )
-            }
-        }
 
         // Phase 1 of issue #165: run WeSpeaker post-hoc on Sortformer's
         // overlap-excluded frames so the naming dialog + SpeakerMatcher
@@ -175,8 +192,61 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
         // naming flow (issue #109).
         let embeddings = try await extractSortformerEmbeddings(audioPath: audioPath, timeline: timeline)
 
-        return Self.buildResult(segments: segments, speakerDatabase: embeddings)
+        return Self.buildResult(segments: Self.segments(from: timeline), speakerDatabase: embeddings)
     }
+
+    /// One segment per finalized timeline segment, labelled by speaker slot
+    /// (`SPEAKER_<slot>`, the same key the post-hoc embeddings use). Shared by
+    /// the Sortformer and Nemotron 3 modes, which both end in a
+    /// `DiarizerTimeline`. Pure so unit tests can pin it without a model.
+    static func segments(from timeline: DiarizerTimeline) -> [MeetingTranscriber.DiarizationResult.Segment] {
+        timeline.speakers.flatMap { index, speaker in
+            let label = normalizeSpeakerId(speaker.name ?? "Speaker \(index)")
+            return speaker.finalizedSegments.map { seg in
+                MeetingTranscriber.DiarizationResult.Segment(
+                    start: TimeInterval(seg.startTime),
+                    end: TimeInterval(seg.endTime),
+                    speaker: label,
+                )
+            }
+        }
+    }
+
+    // MARK: - Nemotron 3 Mode (Nemotron3Diarizer)
+
+    /// Nemotron 3 preset: `fast128` feeds the model 10.24 s of audio per call.
+    /// FluidAudio's benchmark (AMI test, 16 meetings) has it at the lowest
+    /// error of the published presets, with the speaker count right in all 16
+    /// meetings; the window length is what buys the counting, and counting
+    /// more than four speakers is the reason to pick this mode at all. Its
+    /// 10.56 s latency does not matter after the meeting. `offline` (30 s
+    /// window) is faster but does not compile for the Neural Engine and got
+    /// the count wrong in two meetings; the 95 MB `c128-split-w8a8` build
+    /// would halve the download for a slightly higher error.
+    static let nemotronConfig = Nemotron3Config.fast128
+
+    /// Compute units for the Nemotron 3 model. `Nemotron3Models.loadFromHuggingFace`
+    /// defaults to `.all`, which lets Core ML put parts of the graph on the
+    /// GPU; this keeps it off that path like the other two modes (see
+    /// `FluidOfflineProcessor.makeModelConfiguration` and
+    /// `sortformerComputeUnits`). The `fast128` preset compiles for the
+    /// Neural Engine. Unlike Sortformer's, this choice has not been
+    /// benchmarked against `.all`.
+    static let nemotronComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
+
+    /// Turns Nemotron 3's frame probabilities into segments: its 10 ms frames,
+    /// the 0.5 activity threshold Sortformer mode uses, and speech shorter
+    /// than 0.2 s dropped, the default of FluidAudio's own
+    /// `Nemotron3Diarizer.segments`. Without that floor a 10 ms frame grid
+    /// turns every flicker around the threshold into a segment of its own.
+    static let nemotronTimelineConfig = DiarizerTimelineConfig(
+        numSpeakers: nemotronConfig.numSpeakers,
+        frameDurationSeconds: nemotronConfig.outputFrameSeconds,
+        onsetPadSeconds: 0,
+        offsetPadSeconds: 0,
+        minDurationOn: 0.2,
+        minDurationOff: 0,
+    )
 
     /// L2-normalised running-mean of per-chunk embeddings → one centroid
     /// per speaker. Pure so unit tests can pin behaviour without CoreML.

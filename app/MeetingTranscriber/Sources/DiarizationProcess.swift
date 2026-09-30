@@ -15,10 +15,13 @@ struct DiarizationResult {
 }
 
 /// Abstraction for diarization, enabling mock injection in tests.
-/// `Sendable` because `PipelineQueue` runs two diarisations concurrently
-/// from the same instance via `async let`. Implementations must keep
-/// `run` stateless (or internally synchronised); FluidAudio's CoreML
-/// inference is thread-safe, mocks must follow the same contract.
+/// `Sendable` because one instance crosses tasks: `PipelineQueue` diarizes
+/// both tracks of a dual-source job with it, one track after the other.
+/// `Sendable` does not make `run` safe to call concurrently. Callers must not
+/// overlap two `run` calls on one instance unless the implementation says it
+/// serialises them: `FluidDiarizer` in Offline and Sortformer mode keeps
+/// unsynchronised state and relies on that order, while its Nemotron 3 mode
+/// serialises its own runs. Mocks may assume the same order.
 protocol DiarizationProvider: Sendable {
     var isAvailable: Bool { get }
     /// The diarizer mode this provider was instantiated with. Read post-run

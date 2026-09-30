@@ -9,11 +9,16 @@ let package = Package(
         .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.5"),
         .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.19.1"),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0"),
-        // 0.15.5 is the first release whose offline diarizer reads the
-        // `computeUnits` of the configuration passed to `prepareModels`.
-        // Before it the argument compiles and is silently ignored, which
-        // would put the Metal routing back with no diagnostic.
-        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.15.5"),
+        // Floor 0.17.4, for two reasons. API: `Nemotron3Diarizer` streaming
+        // (`appendAudio` / `finishStream`) exists since 0.17.0. Behaviour:
+        // the Nemotron 3 bundles that 0.17.0 to 0.17.3 load do not compile for
+        // the Neural Engine on M3-class Macs (upstream issue 951); 0.17.2
+        // stops the resulting first-prediction failure by retrying without the
+        // fixed output buffers, and 0.17.4 loads the re-exported
+        // `monolithic/v2` bundles that compile there. It also keeps the older
+        // 0.15.5 floor, below which the offline diarizer silently ignores the
+        // `computeUnits` passed to `prepareModels` and falls back to Metal.
+        .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.17.4"),
         .package(path: "../../tools/audiotap"),
     ],
     targets: [

@@ -281,11 +281,29 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         ))
     }
 
+    func testNemotronWarningShownWhenSelected() throws {
+        let settings = makeSettings()
+        settings.diarize = true
+        settings.diarizerMode = .nemotron
+        let body = try makeSpeakers(settings: settings).inspect()
+        XCTAssertNoThrow(try body.find(
+            text: "Nemotron 3 supports up to 8 speakers per meeting. Switch to Offline mode for meetings with more participants.",
+        ))
+    }
+
     // MARK: - Speakers Settings ↔ Diarizer Mode coupling
 
     func testSpeakerCountRangePerMode() {
         XCTAssertEqual(SpeakersSettingsView.speakerCountRange(for: .sortformer), 0 ... 4)
         XCTAssertEqual(SpeakersSettingsView.speakerCountRange(for: .offline), 0 ... 10)
+        XCTAssertEqual(SpeakersSettingsView.speakerCountRange(for: .nemotron), 0 ... 8)
+    }
+
+    func testClampSpeakerCountForNemotron() {
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(0, for: .nemotron), 0)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(6, for: .nemotron), 6)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(8, for: .nemotron), 8)
+        XCTAssertEqual(SpeakersSettingsView.clampSpeakerCount(10, for: .nemotron), 8)
     }
 
     func testClampSpeakerCountPerMode() {

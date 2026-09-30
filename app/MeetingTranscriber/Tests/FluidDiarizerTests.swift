@@ -146,7 +146,7 @@ final class FluidDiarizerTests: XCTestCase {
 
 // MARK: - Mock
 
-private struct MockOfflineProcessor: OfflineDiarizationProcessing {
+struct MockOfflineProcessor: OfflineDiarizationProcessing {
     var onProcess: ((URL) async throws -> DiarizationResult)?
 
     // swiftlint:disable:next async_without_await unneeded_throws_rethrows
