@@ -10,6 +10,7 @@ final class FluidDiarizerSortformerTests: XCTestCase {
     func testDiarizerModeLabels() {
         XCTAssertEqual(DiarizerMode.offline.label, "Offline (Clustering)")
         XCTAssertEqual(DiarizerMode.sortformer.label, "Sortformer (Overlap-aware)")
+        XCTAssertEqual(DiarizerMode.nemotron.label, "Nemotron 3 (8 speakers)")
     }
 
     func testFluidDiarizerDefaultModeIsOffline() {

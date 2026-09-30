@@ -371,7 +371,7 @@
 
             struct Diarization: Codable {
                 let diarize: Bool
-                /// `DiarizerMode` raw value ("offline" | "sortformer").
+                /// `DiarizerMode` raw value ("offline" | "sortformer" | "nemotron").
                 let mode: String
                 /// 0 = auto-detect speaker count.
                 let numSpeakers: Int

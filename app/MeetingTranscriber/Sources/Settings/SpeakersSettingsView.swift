@@ -101,9 +101,9 @@ struct SpeakersSettingsView: View {
             Toggle("Speaker Diarization", isOn: $settings.diarize)
             if settings.diarize {
                 diarizationModePicker
-                if settings.diarizerMode == .sortformer {
+                if settings.diarizerMode != .offline {
                     Label(
-                        "Sortformer supports up to \(DiarizerMode.sortformer.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
+                        "\(settings.diarizerMode.shortLabel) supports up to \(settings.diarizerMode.speakerCap) speakers per meeting. Switch to Offline mode for meetings with more participants.",
                         systemImage: "info.circle",
                     )
                     .foregroundStyle(.secondary)
