@@ -135,6 +135,12 @@ ignore:
   # and miss the real file. Backslash-escape with `\\+` to match the
   # literal `+`.
   - "app/MeetingTranscriber/Sources/FluidDiarizer\\+SortformerEmbeddings.swift"
+  # Nemotron 3 diarization glue (model download + streaming loop), only
+  # exercisable with the ~200 MB CoreML model. Exercised by the Nemotron rows
+  # of FluidDiarizerQualityTests and SortformerEmbeddingsE2ETests under
+  # RUN_QUALITY_TESTS=1; the pure timeline config and segment conversion stay
+  # in FluidDiarizer.swift and are covered by the default lane.
+  - "app/MeetingTranscriber/Sources/FluidDiarizer\\+Nemotron.swift"
   # CLI-only / tools targets — separate test suites, not part of the app.
   - "tools/meeting-simulator/**/*"
   - "tools/mt-cli/**/*"

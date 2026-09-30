@@ -122,11 +122,11 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
     }
 
     /// Re-run controls: mode picker, speaker-count Stepper, and Re-run button.
-    /// Stepper range narrows in Sortformer mode (1...4); mode-flip clamps
-    /// `rerunCount` to the new range. Re-run posts `.rerunWithMode(mode, count)`
-    /// when the picked mode differs from `currentDiarizerMode`, otherwise the
-    /// legacy `.rerun(count)` form (so consumers that don't care about
-    /// mode-switching stay unaffected).
+    /// Stepper range narrows in Sortformer mode (1...4) and Nemotron 3 mode
+    /// (1...8); mode-flip clamps `rerunCount` to the new range. Re-run posts
+    /// `.rerunWithMode(mode, count)` when the picked mode differs from
+    /// `currentDiarizerMode`, otherwise the legacy `.rerun(count)` form (so
+    /// consumers that don't care about mode-switching stay unaffected).
     private var rerunSection: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
@@ -146,22 +146,23 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
                 .accessibilityIdentifier(A11yID.rerunStepper)
                 rerunButton
             }
-            if currentDiarizerMode != nil, rerunMode == .sortformer {
-                Text("Sortformer caps at \(DiarizerMode.sortformer.speakerCap) speakers — switch to Offline for larger meetings.")
+            if currentDiarizerMode != nil, rerunMode != .offline {
+                Text("\(rerunMode.shortLabel) caps at \(rerunMode.speakerCap) speakers — switch to Offline for larger meetings.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(A11yID.sortformerCapHint)
+                    .accessibilityIdentifier(A11yID.speakerCapHint)
             }
         }
     }
 
     private var rerunModePicker: some View {
         Picker("", selection: $rerunMode) {
-            Text("Sortformer").tag(DiarizerMode.sortformer)
-            Text("Offline").tag(DiarizerMode.offline)
+            Text(DiarizerMode.sortformer.shortLabel).tag(DiarizerMode.sortformer)
+            Text(DiarizerMode.offline.shortLabel).tag(DiarizerMode.offline)
+            Text(DiarizerMode.nemotron.shortLabel).tag(DiarizerMode.nemotron)
         }
         .pickerStyle(.segmented)
-        .frame(width: 200)
+        .frame(width: 280)
         .font(.caption)
         .accessibilityIdentifier(A11yID.rerunModePicker)
         .onChange(of: rerunMode) { _, newMode in

@@ -311,7 +311,7 @@ final class PipelineController {
     /// One-stop FluidDiarizer instantiation. Captures the current tuning fields
     /// from settings so both the global-mode factory and the per-job
     /// mode-override factory stay in sync. Tuning only affects `.offline` mode,
-    /// but is harmless when passed to `.sortformer`.
+    /// but is harmless when passed to the other modes.
     private func makeFluidDiarizer(mode: DiarizerMode) -> FluidDiarizer {
         FluidDiarizer(
             mode: mode,
