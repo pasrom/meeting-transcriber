@@ -27,7 +27,10 @@ extension WatchingController {
         }
         return [
             assertions,
-            MicInputDetector(patterns: MicInputDetector.patterns(watching: settings.watchApps)),
+            MicInputDetector(patterns: MicInputDetector.patterns(
+                watching: settings.watchApps,
+                customBundleIDs: settings.watchCustomApps,
+            )),
         ]
     }
 }

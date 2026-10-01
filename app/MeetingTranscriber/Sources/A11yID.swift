@@ -32,6 +32,10 @@ enum A11yID {
         "consentDeniedAppRemove.\(index)"
     }
 
+    static func watchCustomAppRemove(_ index: Int) -> String {
+        "watchCustomAppRemove.\(index)"
+    }
+
     /// Menu bar job row's Retry button, addressed by ROW INDEX like
     /// `consentDeniedAppRemove`, so every row's button has its own handle and
     /// no meeting title ends up in an identifier.
