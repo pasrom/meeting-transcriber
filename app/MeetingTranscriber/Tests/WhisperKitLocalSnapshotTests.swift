@@ -76,7 +76,8 @@ final class WhisperKitLocalSnapshotTests: XCTestCase {
     /// suffix one. For the six variants this app offers, the library's own
     /// `*<variant>/*` glob resolves to exactly one folder of the same name, so no
     /// fixture built from those names can tell an exact match from a suffix match.
-    /// Only a prefixed neighbour could, and the repository publishes none.
+    /// Only a prefixed neighbour could; the stock repository publishes none, and the
+    /// test below builds one the way a custom repository can.
     func testLocateIgnoresACompleteSiblingVariant() throws {
         let root = try makeTempDirectory(prefix: "wk-snapshot")
         try writeSnapshot(variant: "openai_whisper-large-v3-v20240930_turbo", in: root)
@@ -84,6 +85,22 @@ final class WhisperKitLocalSnapshotTests: XCTestCase {
         XCTAssertNil(
             WhisperKitLocalSnapshot.locate(variant: "openai_whisper-large-v3", in: root),
             "Only the requested variant counts, a different complete one must not be served",
+        )
+    }
+
+    /// The suffix case the sibling test cannot reach. WhisperKit's downloader matches
+    /// `*<variant>/*`, so a variant typed as the tail of the real folder name fetches
+    /// that folder into the cache under its real name. The locator must not serve it
+    /// for the typed name: the download step refuses the mismatch and names the real
+    /// folder, and a locator that matched by suffix would quietly load what the
+    /// download step just refused.
+    func testLocateDoesNotServeAFolderThatMerelyEndsInTheVariant() throws {
+        let root = try makeTempDirectory(prefix: "wk-snapshot")
+        try writeSnapshot(variant: "flix-swissgerman-large-v3_8bit", in: root)
+
+        XCTAssertNil(
+            WhisperKitLocalSnapshot.locate(variant: "large-v3_8bit", in: root),
+            "A folder that merely ends in the variant is another model and must not be loaded for it",
         )
     }
 

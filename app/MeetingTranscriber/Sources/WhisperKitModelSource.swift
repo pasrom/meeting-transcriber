@@ -29,6 +29,71 @@ struct WhisperKitModelSource {
         folder.path(percentEncoded: false)
     }
 
+    /// Run a Hub download with the token WhisperKit finds on its own, and once more
+    /// without any token when the Hub turns that token away.
+    ///
+    /// WhisperKit's downloader sends the Hugging Face token it finds in the
+    /// environment (`HF_TOKEN` or `HUGGING_FACE_HUB_TOKEN`) with every request, and
+    /// the Hub answers a revoked or expired token with 401 even for a public
+    /// repository. A token left in the environment by some other tool would then fail
+    /// every download with "authentication required", for a model that needs no
+    /// authentication at all. The token is still tried first, so a private or gated
+    /// repository keeps working with a valid one. When the anonymous attempt fails
+    /// too, the first error is the one reported, because it names the actual problem.
+    ///
+    /// `attempt` receives nil to let WhisperKit look the token up, and `""` for the
+    /// retry: WhisperKit only falls back to its lookup for nil, so an empty string
+    /// is what keeps the rejected token out. For an empty token WhisperKit sends no
+    /// `Authorization` header on any request: the file listing, the HEAD requests
+    /// and the file download alike.
+    static func downloadRetryingAnonymously(
+        _ attempt: (String?) async throws -> URL,
+    ) async throws -> URL {
+        do {
+            return try await attempt(nil)
+        } catch where isRejectedToken(error) {
+            do {
+                return try await attempt("")
+            } catch _ {
+                throw error
+            }
+        }
+    }
+
+    /// Whether `error` is the Hub refusing the request's credentials:
+    /// `authorizationRequired(statusCode:)`, which WhisperKit throws for a 401 or
+    /// 403 answer and, with nil, when it has no token where one is required.
+    /// WhisperKit keeps its Hub error type internal, so it is matched by its fully
+    /// qualified case name, whatever the status code, which
+    /// `testRejectedTokenMatchesWhisperKitsOwnError` pins against the real type.
+    nonisolated static func isRejectedToken(_ error: any Error) -> Bool {
+        String(reflecting: error).hasPrefix("ArgmaxCore.Hub.HubClientError.authorizationRequired(")
+    }
+
+    /// Run a Hub download for `variant` (with the anonymous retry above) and accept
+    /// only a folder of exactly that name.
+    ///
+    /// `WhisperKit.download` matches the variant as the glob `*<variant>/*` and
+    /// returns the folder that matched, so a variant typed as the tail of the real
+    /// folder name downloads fine: `large-v3_8bit` fetches
+    /// `flix-swissgerman-large-v3_8bit`. The engine would load it once and then
+    /// never again offline, because the locator looks for a folder of the typed
+    /// name, finds none, and every later load goes back to the Hub (issue #736 for
+    /// one model). A neighbour that merely ends in the variant could be picked the
+    /// same way. Refusing the mismatch here turns that into one error that names
+    /// the exact folder. The files the refused download left in the cache sit under
+    /// the real name, where the locator never serves them for the typed one.
+    static func downloadExactly(
+        _ variant: String,
+        _ attempt: (String?) async throws -> URL,
+    ) async throws -> URL {
+        let folder = try await downloadRetryingAnonymously(attempt)
+        guard folder.lastPathComponent == variant else {
+            throw WhisperKitModelError.variantNameMismatch(requested: variant, repositoryFolder: folder.lastPathComponent)
+        }
+        return folder
+    }
+
     /// Resolve every step against WhisperKit itself, for the model's origin.
     static func production(for origin: WhisperKitModelOrigin) -> Self {
         switch origin {
@@ -50,11 +115,14 @@ struct WhisperKitModelSource {
                 // for the stock models: the locator derives its root from the same
                 // id, and a changed default would otherwise have the two point at
                 // different repositories, which shows up as "the model is never found".
-                try await WhisperKit.download(
-                    variant: variant,
-                    from: repoID,
-                    progressCallback: progress,
-                )
+                try await downloadExactly(variant) { token in
+                    try await WhisperKit.download(
+                        variant: variant,
+                        from: repoID,
+                        token: token,
+                        progressCallback: progress,
+                    )
+                }
             },
             makePipe: { variant, folder in
                 try await WhisperKit(WhisperKitConfig(model: variant, modelFolder: modelFolderArgument(folder)))

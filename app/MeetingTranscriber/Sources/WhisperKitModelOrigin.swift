@@ -21,7 +21,9 @@ enum WhisperKitModelOrigin: Equatable, Sendable {
     static let stock = Self.hub(repoID: WhisperKitLocalSnapshot.repoID)
 }
 
-/// Why a picked model folder cannot be loaded, worded for the user.
+/// Why a custom model cannot be loaded, worded for the user. None of the
+/// messages carries a path: they are shown in Settings and in a failed job's
+/// error text, and a path would carry the account name.
 enum WhisperKitModelError: LocalizedError, Equatable {
     /// The folder is gone, or its sandbox grant no longer resolves.
     case folderUnavailable
@@ -29,13 +31,24 @@ enum WhisperKitModelError: LocalizedError, Equatable {
     case folderIncomplete(missing: String)
     /// Every file is there and WhisperKit still refused it; its own error is logged.
     case folderNotLoadable
+    /// The Hub download matched a folder whose name is not the requested variant.
+    /// Reason on `WhisperKitModelSource.downloadExactly`.
+    case variantNameMismatch(requested: String, repositoryFolder: String)
 
     /// Also shown as it is by the Settings validation line.
     var message: String {
         switch self {
-        case .folderUnavailable: "Model folder cannot be read."
-        case let .folderIncomplete(missing): "Model folder is missing \(missing)."
-        case .folderNotLoadable: "Model folder could not be loaded by WhisperKit."
+        case .folderUnavailable:
+            "Model folder cannot be read."
+
+        case let .folderIncomplete(missing):
+            "Model folder is missing \(missing)."
+
+        case .folderNotLoadable:
+            "Model folder could not be loaded by WhisperKit."
+
+        case let .variantNameMismatch(requested, repositoryFolder):
+            "The repository folder is \(repositoryFolder); the variant must be exactly that name, not \(requested)."
         }
     }
 
