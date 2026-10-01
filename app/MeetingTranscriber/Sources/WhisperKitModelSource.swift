@@ -29,6 +29,43 @@ struct WhisperKitModelSource {
         folder.path(percentEncoded: false)
     }
 
+    /// Run a Hub download with the token WhisperKit finds on its own, and once more
+    /// without any token when the Hub turns that token away.
+    ///
+    /// WhisperKit's downloader sends whatever Hugging Face token the machine carries
+    /// (`HF_TOKEN`, `~/.cache/huggingface/token`, and a few more places) with every
+    /// request, and the Hub answers a revoked or expired token with 401 even for a
+    /// public repository. A token left behind by some other tool would then fail
+    /// every download with "authentication required", for a model that needs no
+    /// authentication at all. The token is still tried first, so a private or gated
+    /// repository keeps working with a valid one. When the anonymous attempt fails
+    /// too, the first error is the one reported, because it names the actual problem.
+    ///
+    /// `attempt` receives nil to let WhisperKit look the token up, and `""` for no
+    /// token: WhisperKit only falls back to its lookup for nil, and sends no
+    /// `Authorization` header for an empty token.
+    static func downloadRetryingAnonymously(
+        _ attempt: (String?) async throws -> URL,
+    ) async throws -> URL {
+        do {
+            return try await attempt(nil)
+        } catch where isRejectedToken(error) {
+            do {
+                return try await attempt("")
+            } catch _ {
+                throw error
+            }
+        }
+    }
+
+    /// Whether `error` is the Hub refusing the request's credentials. WhisperKit
+    /// keeps its Hub error type internal, so it is matched by its fully qualified
+    /// name, which `testRejectedTokenMatchesWhisperKitsOwnError` pins against the
+    /// real type.
+    nonisolated static func isRejectedToken(_ error: any Error) -> Bool {
+        String(reflecting: error) == "ArgmaxCore.Hub.HubClientError.authorizationRequired"
+    }
+
     /// Resolve every step against WhisperKit itself, for the model's origin.
     static func production(for origin: WhisperKitModelOrigin) -> Self {
         switch origin {
@@ -50,11 +87,14 @@ struct WhisperKitModelSource {
                 // for the stock models: the locator derives its root from the same
                 // id, and a changed default would otherwise have the two point at
                 // different repositories, which shows up as "the model is never found".
-                try await WhisperKit.download(
-                    variant: variant,
-                    from: repoID,
-                    progressCallback: progress,
-                )
+                try await downloadRetryingAnonymously { token in
+                    try await WhisperKit.download(
+                        variant: variant,
+                        from: repoID,
+                        token: token,
+                        progressCallback: progress,
+                    )
+                }
             },
             makePipe: { variant, folder in
                 try await WhisperKit(WhisperKitConfig(model: variant, modelFolder: modelFolderArgument(folder)))
