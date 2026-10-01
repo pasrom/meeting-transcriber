@@ -54,7 +54,7 @@ enum A11yID {
     static let liveCaptionsSizePicker = "liveCaptionsSizePicker"
     static let channelIndicatorSection = "channelIndicatorSection"
     static let experimentalTuningDisclosure = "experimentalTuningDisclosure"
-    static let sortformerCapHint = "sortformer-cap-hint"
+    static let speakerCapHint = "speaker-cap-hint"
 
     /// Mic speaker-name field (Settings → Speakers). The `/ui/type` allowlist's
     /// only entry: a plain, non-secret text field whose write-back is readable in

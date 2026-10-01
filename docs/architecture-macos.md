@@ -63,7 +63,7 @@ Native SwiftUI menu bar application that orchestrates meeting detection, recordi
         │      └─ TranscribingEngine: WhisperKit | Parakeet             │
         │         (dual-source: each track separately, then merge)       │
         │ 4. (opt) Diarize via FluidDiarizer                             │
-        │      └─ Mode: .offline | .sortformer                           │
+        │      └─ Mode: .offline | .sortformer | .nemotron               │
         │      └─ Dual-source: app + mic diarized separately,            │
         │         IDs prefixed R_ (remote) / M_ (mic), then merged       │
         │ 5. SpeakerMatcher: cosine match against speakers.json          │
@@ -212,7 +212,8 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `RecordStatusDTO.swift` | Wire shape for `GET`/`POST /v1/record` — the microphone-recording lifecycle, same audience as `WatchStatusDTO` (Stream Deck key, Shortcut, shell script) |
 | `WavHeaderRepair.swift` | Repairs unfinalized WAV files from crash-interrupted recordings (RIFF/data chunk size fix) |
 | `FluidDiarizer.swift` | On-device speaker diarization via FluidAudio CoreML/ANE |
-| `FluidDiarizer+SortformerEmbeddings.swift` | Post-hoc WeSpeaker embedding extraction for Sortformer mode — overlap-excluded masks feed `SpeakerMatcher` (DiariZen-style hybrid) |
+| `FluidDiarizer+SortformerEmbeddings.swift` | Post-hoc WeSpeaker embedding extraction for the Sortformer and Nemotron 3 modes — overlap-excluded masks feed `SpeakerMatcher` (DiariZen-style hybrid) |
+| `FluidDiarizer+Nemotron.swift` | Nemotron 3 mode: model download/load and the streaming loop that feeds a recording through `Nemotron3Diarizer` in 60 s pieces |
 | `SpeakerMatcher.swift` | Speaker embedding DB + cosine similarity matching |
 | `SpeakerMatcher+Logging.swift` | Forensic match-decision logging (pseudonymized speaker names via `String.pseudonymized`) |
 | `LiveSpeakerMatcher.swift` | Actor for real-time speaker matching per finalized live-caption utterance; same WeSpeaker CoreML model as batch path; caches mask frame count in `UserDefaults` for fast cold start |
@@ -536,9 +537,10 @@ compile/load concurrently at launch.
 
 On-device speaker diarization using FluidAudio (CoreML/ANE). No HuggingFace token or Python subprocess needed. Models downloaded automatically on first run (~50 MB).
 
-Two modes selected via `AppSettings.diarizerMode`:
+Three modes selected via `AppSettings.diarizerMode`:
 - **`.offline`** (default) — `OfflineDiarizerManager`, standard speaker segmentation
 - **`.sortformer`** — `SortformerDiarizer`, overlap-aware diarization (handles simultaneous speech); speaker embeddings extracted post-hoc via `FluidDiarizer+SortformerEmbeddings` using overlap-excluded WeSpeaker masks
+- **`.nemotron`** — `Nemotron3Diarizer`, NVIDIA's Nemotron 3 Diarization (an 8-speaker streaming Sortformer), overlap-aware for up to eight speakers; the `fast128` preset (~200 MB, downloaded on first use). The recording is streamed through the model in 60 s pieces, so the mel spectrogram of the whole file is never held; embeddings come from the same post-hoc WeSpeaker extraction as `.sortformer`. Like `.sortformer`, it ignores `numSpeakers`
 
 Flow: `FluidDiarizer.run(audioPath, numSpeakers)` → selected diarizer → `DiarizationResult` with segments, speaking times, and speaker embeddings.
 

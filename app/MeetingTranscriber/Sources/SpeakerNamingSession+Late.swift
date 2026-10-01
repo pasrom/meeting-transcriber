@@ -130,7 +130,7 @@ extension SpeakerNamingSession {
     ///
     /// - Parameters:
     ///   - jobID: the job to re-diarize.
-    ///   - speakerCount: target speaker count (ignored by Sortformer mode).
+    ///   - speakerCount: target speaker count (ignored by the Sortformer and Nemotron 3 modes).
     ///   - mode: optional override for the diarizer mode. `nil` (default)
     ///     keeps the original behaviour — re-instantiate the diarizer with
     ///     the current global setting via `diarizationFactory()`. Non-nil

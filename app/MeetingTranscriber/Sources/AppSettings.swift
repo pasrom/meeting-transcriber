@@ -56,25 +56,41 @@ enum DiarizerMode: String, CaseIterable, Codable {
     // is the regression gate that surfaces the need.
     case offline
     case sortformer
+    case nemotron
 
     var label: String {
         switch self {
         case .offline: "Offline (Clustering)"
         case .sortformer: "Sortformer (Overlap-aware)"
+        case .nemotron: "Nemotron 3 (8 speakers)"
+        }
+    }
+
+    /// Name without the qualifier, for the places that are too narrow for
+    /// `label` (the naming dialog's re-run picker) or that already state the
+    /// qualifier themselves (the speaker-cap hints).
+    var shortLabel: String {
+        switch self {
+        case .offline: "Offline"
+        case .sortformer: "Sortformer"
+        case .nemotron: "Nemotron 3"
         }
     }
 
     /// Maximum selectable speaker count for this mode. Sortformer's cap
     /// is a hard architectural limit (`SortformerConfig.numSpeakers = 4`
-    /// in FluidAudio). Offline's cap is the upper bound of the Settings
-    /// Stepper — the diarizer has no hard limit, but anything above 10
-    /// is past the useful range for typical meetings. Surfaced as a
+    /// in FluidAudio), and so is Nemotron 3's (`Nemotron3Config.numSpeakers
+    /// = 8`, the checkpoint's eight output slots). Offline's cap is the
+    /// upper bound of the Settings Stepper — the diarizer has no hard
+    /// limit, but anything above 10 is past the useful range for typical
+    /// meetings. Surfaced as a
     /// single source of truth so the Stepper ranges in Settings + the
     /// SpeakerNamingView re-run UI + the cap-hint label all agree.
     var speakerCap: Int {
         switch self {
         case .offline: 10
         case .sortformer: 4
+        case .nemotron: 8
         }
     }
 }

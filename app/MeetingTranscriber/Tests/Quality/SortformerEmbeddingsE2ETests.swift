@@ -15,9 +15,21 @@ import XCTest
 /// Gated via `RUN_QUALITY_TESTS=1` because the first run pulls the
 /// `pyannote_segmentation` + `wespeaker_v2` CoreML models (~150 MB).
 /// Subsequent runs are model-cached and complete in ~5 s on M-series.
+///
+/// Nemotron 3 mode runs the same extraction on its own timeline (an
+/// 8-speaker streaming Sortformer at 10 ms frames), so it carries the same
+/// contract; the Nemotron case additionally pulls its ~200 MB model.
 @MainActor
 final class SortformerEmbeddingsE2ETests: XCTestCase {
     func testSortformerProducesPerSpeakerEmbeddingsAfterPhase1() async throws {
+        try await assertPostHocEmbeddings(mode: .sortformer)
+    }
+
+    func testNemotronProducesPerSpeakerEmbeddings() async throws {
+        try await assertPostHocEmbeddings(mode: .nemotron)
+    }
+
+    private func assertPostHocEmbeddings(mode: DiarizerMode) async throws {
         try skipUnlessQualityRun()
 
         let truth = try GroundTruth.load(named: "two_speakers_de")
@@ -26,7 +38,7 @@ final class SortformerEmbeddingsE2ETests: XCTestCase {
             "Audio fixture missing: \(truth.audioURL.path)",
         )
 
-        let diarizer = FluidDiarizer(mode: .sortformer)
+        let diarizer = FluidDiarizer(mode: mode)
         let result = try await diarizer.run(
             audioPath: truth.audioURL, numSpeakers: nil, meetingTitle: "two_speakers_de",
         )
@@ -35,7 +47,7 @@ final class SortformerEmbeddingsE2ETests: XCTestCase {
         // dialog branch in PipelineQueue lights up (closes #109).
         let embeddings = try XCTUnwrap(
             result.embeddings,
-            "Sortformer mode must populate result.embeddings post-Phase 1 (issue #165) — was nil",
+            "\(mode.rawValue) mode must populate result.embeddings (issue #165) — was nil",
         )
 
         // (2) Fixture has two speakers, expect at least 2 active speaker slots.
@@ -73,7 +85,7 @@ final class SortformerEmbeddingsE2ETests: XCTestCase {
         }
         XCTAssertTrue(
             sawDistinctPair,
-            "All Sortformer post-hoc speaker embeddings collapse below the SpeakerMatcher threshold (0.40) "
+            "All \(mode.rawValue) post-hoc speaker embeddings collapse below the SpeakerMatcher threshold (0.40) "
                 + "— extraction not differentiating speakers",
         )
     }
