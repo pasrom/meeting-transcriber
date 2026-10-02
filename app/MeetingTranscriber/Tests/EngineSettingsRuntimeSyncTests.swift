@@ -104,6 +104,28 @@ final class EngineSettingsRuntimeSyncTests: XCTestCase {
         XCTAssertNotEqual(engines.whisperKit.modelVariant, original)
     }
 
+    /// A custom model reaches the engine with its repository, and turning it off
+    /// hands the engine back the stock variant from the stock repository.
+    func test_runtimeChange_customWhisperKitModel_propagatesToEngine() async {
+        settings.transcriptionEngine = .whisperKit
+        settings.whisperKitModel = "openai_whisper-small"
+        settings.whisperKitCustomRepo = "spert/flix-swissgerman-whisperkit"
+        settings.whisperKitCustomVariant = "flix-swissgerman-large-v3_8bit"
+        let engines = EngineController(settings: settings)
+        XCTAssertEqual(engines.whisperKit.modelOrigin, .stock, "Filled-in fields alone must not switch the model")
+
+        settings.whisperKitCustomModelEnabled = true
+
+        let swissGerman = WhisperKitModelOrigin.hub(repoID: "spert/flix-swissgerman-whisperkit")
+        await waitFor(engines.whisperKit.modelOrigin == swissGerman)
+        XCTAssertEqual(engines.whisperKit.modelVariant, "flix-swissgerman-large-v3_8bit")
+
+        settings.whisperKitCustomModelEnabled = false
+
+        await waitFor(engines.whisperKit.modelOrigin == .stock)
+        XCTAssertEqual(engines.whisperKit.modelVariant, "openai_whisper-small")
+    }
+
     func test_runtimeChange_customVocabularyPath_propagatesToParakeet() async {
         settings.transcriptionEngine = .parakeet
         let engines = EngineController(settings: settings)
