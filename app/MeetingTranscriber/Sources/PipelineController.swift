@@ -194,12 +194,18 @@ final class PipelineController {
             //   1. repair unfinalized WAV headers so a crashed mic track reads,
             //   2. re-mix crashed recordings (raw app .tmp + mic) into a _mix.wav,
             //   3. delete any temp the re-mix couldn't use.
+            // The staging folder comes from the queue, not from `AppPaths`: the
+            // three calls below repair, re-mix and delete files, so a controller
+            // built against another staging folder would otherwise reach into the
+            // real one, which is exactly what injecting the folder was meant to
+            // prevent.
+            let staging = q.stagingDir
             await Task.detached(priority: .utility) {
-                let repaired = WavHeaderRepair.repairUnfinalized(in: AppPaths.recordingsDir)
+                let repaired = WavHeaderRepair.repairUnfinalized(in: staging)
                 if repaired > 0 { logger.info("Repaired \(repaired) unfinalized recording(s) on launch") }
-                let recovered = DualSourceRecorder.recoverCrashedRecordings()
+                let recovered = DualSourceRecorder.recoverCrashedRecordings(in: staging)
                 if recovered > 0 { logger.info("Recovered \(recovered) crashed recording(s) on launch") }
-                DualSourceRecorder.cleanupTempFiles()
+                DualSourceRecorder.cleanupTempFiles(recordingsDir: staging)
             }.value
             await q.recoverOrphanedRecordings()
         }
