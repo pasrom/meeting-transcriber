@@ -175,6 +175,33 @@ extension AppAudioCapture {
         applyAction(action)
     }
 
+    /// Called by the first buffer of every installed tap, on the write queue.
+    /// One lock, once per tap, and nothing at all when the watchdog is off.
+    func noteTapDeliveredForWatchdog() {
+        guard silentTrackWatchdog else { return }
+        silentTrackDiagnostics.watchdogRebuiltTapDelivered()
+    }
+
+    /// Called by every tap installation, on the main queue. A tap installed
+    /// while a watchdog rebuild waits for its verdict gets a deadline: the
+    /// verdict comes from ticks, ticks only come with buffers, and a tap that
+    /// starts without running an IO cycle (issue #693) delivers none. Armed at
+    /// installation rather than at the rebuild's start, so the restart's own
+    /// wait, retries and back-off are not counted against the tap.
+    func armRebuiltTapDeadline() {
+        guard silentTrackWatchdog, let number = silentTrackDiagnostics.watchdogRebuildAwaitingFirstBuffer
+        else { return }
+        let window = SilentTrackWatchdogPolicy.recoveryWindowSeconds
+        silentTrackDiagnostics.scheduleWatchdogDeadline(after: window) { [weak self] in
+            guard let self,
+                  self.silentTrackDiagnostics.watchdogRebuiltTapDeadlinePassed(rebuild: number)
+            else { return }
+            logger.error(
+                "App audio watchdog: rebuild \(number, privacy: .public) installed a tap that delivered no buffer within \(Self.seconds(window), privacy: .public) s; counted as not restoring signal",
+            )
+        }
+    }
+
     /// Called from the restart path's two give-up points, on the main queue.
     /// A watchdog rebuild that was open when the restart gave up is what ended
     /// the channel, and that is the one outcome the evidence most needs.
@@ -206,7 +233,8 @@ extension AppAudioCapture {
             "watchdogChecks=\(counters.checks) watchdogDeclined=\(counters.declined) "
                 + "watchdogDropped=\(counters.dropped) watchdogRebuilds=\(counters.rebuilds) "
                 + "watchdogRecoveries=\(counters.recoveries) watchdogGaveUp=\(counters.gaveUp) "
-                + "watchdogCapped=\(counters.capped) watchdogEndedChannel=\(counters.endedChannel)"
+                + "watchdogCapped=\(counters.capped) watchdogEndedChannel=\(counters.endedChannel) "
+                + "watchdogRebuiltTapSilent=\(counters.rebuiltTapSilent)"
         }
     }
 }

@@ -253,6 +253,34 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         withWatchdog { watchdog, _ in watchdog?.restartGaveUp() }
     }
 
+    /// See `SilentTrackWatchdogPolicy.rebuildAwaitingFirstBuffer`.
+    var watchdogRebuildAwaitingFirstBuffer: Int? {
+        withWatchdog { watchdog, _ in watchdog?.rebuildAwaitingFirstBuffer }
+    }
+
+    /// Called on the write queue by the first buffer of every installed tap.
+    func watchdogRebuiltTapDelivered() {
+        withWatchdog { watchdog, _ in watchdog?.rebuiltTapDelivered() }
+    }
+
+    /// See `SilentTrackWatchdogPolicy.rebuiltTapDeadlinePassed`.
+    func watchdogRebuiltTapDeadlinePassed(rebuild: Int) -> Bool {
+        withWatchdog { watchdog, _ in watchdog?.rebuiltTapDeadlinePassed(rebuild: rebuild) } ?? false
+    }
+
+    /// Run `work` on the diagnostics queue after `delay`, through the same
+    /// injected scheduler as the no-first-buffer probes. Not cancelled by the
+    /// first buffer or by a stop: the policy decides whether the deadline
+    /// still means anything when it lands.
+    func scheduleWatchdogDeadline(after delay: TimeInterval, _ work: @escaping @Sendable () -> Void) {
+        let item = DispatchWorkItem(block: work)
+        if let delayedWork {
+            delayedWork(delay, item)
+        } else {
+            queue.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+    }
+
     func watchdogClaimSkipLine() -> Bool {
         withWatchdog { watchdog, _ in watchdog?.claimSkipLine() } ?? false
     }

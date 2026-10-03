@@ -106,6 +106,10 @@ struct SilentTrackWatchdogPolicy: Equatable {
         /// A watchdog rebuild's restart gave up (retry budget, or an attempt
         /// that never returned, issue #588) and the channel ended with it.
         var endedChannel = false
+        /// Rebuilds whose new tap was installed and then delivered no buffer
+        /// at all inside the recovery window: started, never running (the
+        /// failure of issue #693). Each also counts as unrecovered.
+        var rebuiltTapSilent = 0
     }
 
     enum TickEvent: Equatable {
@@ -171,6 +175,10 @@ struct SilentTrackWatchdogPolicy: Equatable {
     private var lastCheckAt: TimeInterval?
     private var skipLinesLogged = 0
     private var declineLoggedThisRun = false
+    /// Whether the tap installed for the open rebuild has delivered a buffer.
+    /// Reset by every rebuild start, so one tap's delivery never vouches for
+    /// the next one's.
+    private var rebuiltTapHasDelivered = false
     private(set) var stopped = false
 
     /// Whether one more line for a skipped check fits the budget. Never after
@@ -281,6 +289,7 @@ struct SilentTrackWatchdogPolicy: Equatable {
     mutating func rebuildStarted(now: TimeInterval) -> Int {
         counters.rebuilds += 1
         unrecoveredStreak += 1
+        rebuiltTapHasDelivered = false
         phase = .rebuilding(number: counters.rebuilds, startedAt: now)
         return counters.rebuilds
     }
@@ -301,6 +310,39 @@ struct SilentTrackWatchdogPolicy: Equatable {
         phase = .idle
         counters.endedChannel = true
         return number
+    }
+
+    /// The rebuild still waiting for its verdict, while its new tap has not
+    /// delivered a buffer; nil otherwise. Read when a tap is installed, to arm
+    /// the deadline `rebuiltTapDeadlinePassed` closes.
+    var rebuildAwaitingFirstBuffer: Int? {
+        guard !stopped, !rebuiltTapHasDelivered, case let .rebuilding(number, _) = phase else { return nil }
+        return number
+    }
+
+    /// The tap installed for the open rebuild delivered its first buffer, so
+    /// ticks will come and judge the rebuild; its deadline stands down.
+    mutating func rebuiltTapDelivered() {
+        guard case .rebuilding = phase else { return }
+        rebuiltTapHasDelivered = true
+    }
+
+    /// The deadline armed when rebuild `rebuild`'s tap was installed has
+    /// passed. True when it closed that rebuild as unrecovered: its tap was
+    /// installed and has not delivered a single buffer since.
+    ///
+    /// Needed because ticks only come with buffers. A tap that starts without
+    /// running an IO cycle (issue #693) never ticks, so without this the
+    /// rebuild would wait for a verdict until the recording stops. Closed, not
+    /// stopped: the rebuild already counts against the run's budget, and if
+    /// buffers come back later the watchdog carries on from there.
+    mutating func rebuiltTapDeadlinePassed(rebuild: Int) -> Bool {
+        // A deadline armed for an earlier rebuild says nothing about this
+        // one, whose own tap may not even be installed yet.
+        guard rebuildAwaitingFirstBuffer == rebuild else { return false }
+        phase = .idle
+        counters.rebuiltTapSilent += 1
+        return true
     }
 
     /// The processes could not be asked, because an earlier read is still

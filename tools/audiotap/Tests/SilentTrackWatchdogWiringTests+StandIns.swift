@@ -135,4 +135,21 @@ extension SilentTrackWatchdogWiringTests {
             }
         }
     }
+
+    /// Holds every deadline the diagnostics arm instead of running it, so a
+    /// test fires the one it means, when it means to. Real time would make
+    /// "the deadline passed with no buffer" a ten-second sleep.
+    final class Deadlines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var armed: [(offset: TimeInterval, item: DispatchWorkItem)] = []
+
+        var schedule: SilentTrackDiagnostics.DelayedWork {
+            { [self] offset, item in lock.withLock { armed.append((offset, item)) } }
+        }
+
+        /// The deadlines armed at `offset` that were not cancelled.
+        func pending(at offset: TimeInterval) -> [DispatchWorkItem] {
+            lock.withLock { armed.filter { $0.offset == offset && !$0.item.isCancelled }.map(\.item) }
+        }
+    }
 }

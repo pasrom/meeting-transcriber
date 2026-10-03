@@ -23,6 +23,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         let attempts: Attempts
         let state: ProcessState
         let clock: TestClock
+        let deadlines: Deadlines
     }
 
     /// A capture wired to the stand-ins, not yet started. `readAges` is what
@@ -39,6 +40,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         let attempts = Attempts()
         let state = ProcessState()
         let clock = TestClock()
+        let deadlines = Deadlines()
         state.running = running
         state.hold = hold
         let readClock: @Sendable () -> TimeInterval = { clock.read() }
@@ -47,7 +49,9 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
                 pids: [1],
                 outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
                 attemptBody: { try attempts.run() },
-                silentTrackDiagnostics: SilentTrackDiagnostics(probe: state.probe, sink: sink),
+                silentTrackDiagnostics: SilentTrackDiagnostics(
+                    probe: state.probe, sink: sink, delayedWork: deadlines.schedule,
+                ),
                 silentTrackWatchdog: watchdog,
                 signalAgesOverride: readAges,
                 clockOverride: readClock,
@@ -55,6 +59,7 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
             attempts: attempts,
             state: state,
             clock: clock,
+            deadlines: deadlines,
         )
     }
 
@@ -207,6 +212,59 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         let counters = rig.capture.silentTrackDiagnostics.watchdogCounters
         XCTAssertEqual(counters?.rebuilds, 1)
         XCTAssertEqual(counters?.endedChannel, true)
+    }
+
+    // MARK: - A rebuilt tap that never delivers
+
+    /// The rebuild's tap is installed and never delivers a buffer (the #693
+    /// failure), so no tick will ever judge it. The deadline its installation
+    /// armed closes it, and nothing is rebuilt on the strength of that alone.
+    func testARebuiltTapThatDeliversNothingIsClosedByItsDeadline() throws {
+        let rig = try startedRig()
+        defer { rig.capture.stop() }
+
+        rig.capture.evaluateSilentTrackWatchdog(ages: ages(energy: 61), now: 1000, processes: processes)
+        wait(for: [rig.attempts.expectation(reaching: 2)], timeout: RestartArbiter.attemptTimeout + 5)
+        settle(0.3)
+        let deadline = try XCTUnwrap(
+            rig.deadlines.pending(at: recovery).first, "installing the rebuilt tap armed a deadline",
+        )
+        deadline.perform()
+        settle(0.3)
+
+        let counters = rig.capture.silentTrackDiagnostics.watchdogCounters
+        XCTAssertEqual(counters?.rebuiltTapSilent, 1)
+        XCTAssertEqual(counters?.rebuilds, 1)
+        XCTAssertEqual(rig.attempts.starts, 2, "the verdict alone rebuilds nothing")
+        let summary = try XCTUnwrap(rig.capture.silentTrackWatchdogSummary)
+        XCTAssertTrue(summary.contains("watchdogRebuiltTapSilent=1"), "the stop summary carries it")
+    }
+
+    /// The rebuilt tap delivered, so ticks will come and judge the rebuild:
+    /// the deadline stands down.
+    func testARebuiltTapThatDeliveredLeavesTheVerdictToTheTick() throws {
+        let rig = try startedRig()
+        defer { rig.capture.stop() }
+
+        rig.capture.evaluateSilentTrackWatchdog(ages: ages(energy: 61), now: 1000, processes: processes)
+        wait(for: [rig.attempts.expectation(reaching: 2)], timeout: RestartArbiter.attemptTimeout + 5)
+        settle(0.3)
+        let deadline = try XCTUnwrap(rig.deadlines.pending(at: recovery).first, "precondition: a deadline was armed")
+        // What the IOProc's first callback does; a stand-in tap runs no IOProc.
+        rig.capture.silentTrackDiagnostics.watchdogRebuiltTapDelivered()
+        deadline.perform()
+
+        XCTAssertEqual(rig.capture.silentTrackDiagnostics.watchdogCounters?.rebuiltTapSilent, 0)
+        XCTAssertNil(rig.capture.silentTrackDiagnostics.watchdogRebuildAwaitingFirstBuffer)
+    }
+
+    /// The recording's own first tap is not a rebuild and arms nothing.
+    func testTheFirstTapArmsNoDeadline() throws {
+        let rig = try startedRig()
+        defer { rig.capture.stop() }
+        settle(0.3)
+
+        XCTAssertTrue(rig.deadlines.pending(at: recovery).isEmpty)
     }
 
     // MARK: - The 5 s tick
@@ -385,7 +443,8 @@ final class SilentTrackWatchdogWiringTests: XCTestCase {
         XCTAssertEqual(
             rig.capture.silentTrackWatchdogSummary,
             "watchdogChecks=1 watchdogDeclined=1 watchdogDropped=0 watchdogRebuilds=0 "
-                + "watchdogRecoveries=0 watchdogGaveUp=false watchdogCapped=false watchdogEndedChannel=false",
+                + "watchdogRecoveries=0 watchdogGaveUp=false watchdogCapped=false watchdogEndedChannel=false "
+                + "watchdogRebuiltTapSilent=0",
         )
     }
 

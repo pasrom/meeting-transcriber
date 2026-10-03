@@ -480,3 +480,95 @@ final class SilentTrackWatchdogPolicyTests: XCTestCase {
         )
     }
 }
+
+// MARK: - A rebuilt tap that never delivers
+
+// Ticks only come with buffers. A rebuild whose new tap starts but never runs
+// an IO cycle (issue #693) would otherwise wait for a verdict forever, so the
+// tap's installation arms a deadline that closes it. An extension only to keep
+// the class body inside the length limit.
+extension SilentTrackWatchdogPolicyTests {
+    private func openRebuild(_ policy: inout Policy, at now: TimeInterval) -> Int? {
+        guard case .rebuild = cycle(&policy, now: now, zeroRun: 61) else { return nil }
+        return policy.counters.rebuilds
+    }
+
+    func testARebuildWhoseTapDeliveredNothingIsClosedByItsDeadline() throws {
+        var policy = Policy()
+        let rebuild = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        XCTAssertEqual(policy.rebuildAwaitingFirstBuffer, rebuild, "the installed tap arms a deadline for it")
+
+        XCTAssertTrue(policy.rebuiltTapDeadlinePassed(rebuild: rebuild))
+        XCTAssertEqual(policy.counters.rebuiltTapSilent, 1)
+        XCTAssertEqual(policy.unrecoveredStreak, 1, "it counts against the run's budget like any fruitless rebuild")
+        XCTAssertNil(policy.rebuildAwaitingFirstBuffer)
+        // Closed: if buffers come back later, the next tick opens a new check
+        // instead of judging a rebuild that already has its verdict.
+        XCTAssertEqual(policy.tick(ages(energy: 200), now: 1000 + interval), .check(zeroRunSeconds: 200))
+    }
+
+    func testARebuildWhoseTapDeliveredIsLeftToTheTick() throws {
+        var policy = Policy()
+        let rebuild = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        policy.rebuiltTapDelivered()
+
+        XCTAssertNil(policy.rebuildAwaitingFirstBuffer)
+        XCTAssertFalse(policy.rebuiltTapDeadlinePassed(rebuild: rebuild))
+        XCTAssertEqual(policy.counters.rebuiltTapSilent, 0)
+        XCTAssertEqual(
+            policy.tick(ages(energy: 1), now: 1005), .recovered(rebuild: rebuild, withinSeconds: 4),
+            "still open, and judged the usual way",
+        )
+    }
+
+    /// Rebuild 1's deadline lands after rebuild 2 has started. It must not
+    /// close rebuild 2, whose own tap has had no chance to deliver yet.
+    func testAStaleDeadlineDoesNotCloseALaterRebuild() throws {
+        var policy = Policy()
+        let first = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        policy.rebuiltTapDelivered()
+        expire(&policy, startedAt: 1000, zeroRun: 61)
+        let second = try XCTUnwrap(openRebuild(&policy, at: 1000 + interval))
+        XCTAssertNotEqual(first, second, "precondition")
+
+        XCTAssertFalse(policy.rebuiltTapDeadlinePassed(rebuild: first))
+        XCTAssertEqual(policy.counters.rebuiltTapSilent, 0)
+        XCTAssertEqual(policy.rebuildAwaitingFirstBuffer, second, "rebuild 2 is still open")
+    }
+
+    /// The delivery of one rebuild's tap says nothing about the next one's.
+    func testTheNextRebuildWaitsForItsOwnFirstBuffer() throws {
+        var policy = Policy()
+        _ = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        policy.rebuiltTapDelivered()
+        expire(&policy, startedAt: 1000, zeroRun: 61)
+        let second = try XCTUnwrap(openRebuild(&policy, at: 1000 + interval))
+
+        XCTAssertTrue(policy.rebuiltTapDeadlinePassed(rebuild: second))
+    }
+
+    func testADeadlineAfterTheTickJudgedTheRebuildDoesNothing() throws {
+        var policy = Policy()
+        let rebuild = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        expire(&policy, startedAt: 1000, zeroRun: 61)
+
+        XCTAssertFalse(policy.rebuiltTapDeadlinePassed(rebuild: rebuild))
+        XCTAssertEqual(policy.counters.rebuiltTapSilent, 0)
+    }
+
+    func testADeadlineAfterStopDoesNothing() throws {
+        var policy = Policy()
+        let rebuild = try XCTUnwrap(openRebuild(&policy, at: 1000))
+        policy.stop()
+
+        XCTAssertFalse(policy.rebuiltTapDeadlinePassed(rebuild: rebuild))
+        XCTAssertEqual(policy.counters.rebuiltTapSilent, 0)
+    }
+
+    func testNoRebuildOpenArmsNothing() {
+        var policy = Policy()
+        XCTAssertNil(policy.rebuildAwaitingFirstBuffer)
+        policy.rebuiltTapDelivered()
+        XCTAssertEqual(policy.counters, Policy.Counters(), "a first buffer outside a rebuild changes nothing")
+    }
+}
