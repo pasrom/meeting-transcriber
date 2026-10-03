@@ -548,7 +548,15 @@ class PipelineQueue {
             // folder for them and the job is gone from the snapshot that would
             // have named them. Resolved jobs have nothing left here, so this
             // costs them a no-op.
-            naming.removeNamingData(jobID: id, slug: jobs[index].namingSlug)
+            // `in:` is load-bearing: without it the cleanup runs against this
+            // queue's own store, so a job whose sidecars were written under a
+            // different output folder gets looked for in the wrong one and its
+            // files stay behind for good. `removeNamingDataOfDiscardedJobs` has
+            // always passed it; this call was the one that did not.
+            naming.removeNamingData(
+                jobID: id, slug: jobs[index].namingSlug,
+                in: jobs[index].sidecarOutputDir ?? outputDir,
+            )
             jobs.remove(at: index)
         }
         stageStartByJob.removeValue(forKey: id)
