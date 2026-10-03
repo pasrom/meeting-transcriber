@@ -222,6 +222,8 @@ Use the `/git-workflow` skill. Commit proactively after every logical unit of wo
 - The marking is the snapshot state itself, held in memory as `protocolResumeDispositions` for the span of one restore. Nothing is persisted: a quit before the resume runs degrades to a full run rather than losing anything, and a second persisted field would have to be kept in step with the state it was derived from.
 - Why it is not merely a saving: a late confirm transits `.generatingProtocol` too, so a full run there re-diarizes, discards the names the user just confirmed and parks the job back in the dialog they just closed.
 
+**Retrying a failed job:** `PipelineQueue.retryJob(id:)` puts a failed job back to `.waiting` under its own ID, so its snapshot entry and event log continue instead of forking a second job — the only previous way back, re-importing the staged audio by hand, is what a user did in issue #724 after a since-fixed defect failed the job. Eligibility is decided live by `canRetryJob(id:)`, which both the menu's Retry button and `retryJob` itself call, so the button is never shown for a click the queue would refuse: a job in `.error` whose audio file still exists, with no run elsewhere claiming the job or its mix file and no other non-failed job in the queue holding the same mix file. It does not consult `ProcessedRecordingsLedger`, which still exists to keep a failed recording from re-running on every launch — a retry is an explicit request, like a re-import. Before the job runs again, everything the failed run keyed on its ID is cleared (naming state/sidecars, error/warnings/track-viability/echo verdicts, the naming-dialog entry time, the stage-timing audio length, a protocol-only resume marker, the automation API's durable terminal record), since the retry reuses the ID and would otherwise inherit it. Manual, not automatic: most failures are deterministic, and the queue can't tell a transient failure from a permanent one — the user can.
+
 **Protocol generation:**
 - `ProtocolGenerating` protocol with two implementations: `ClaudeCLIProtocolGenerator` and `OpenAIProtocolGenerator`.
 - `AppSettings.protocolProvider` enum (`.claudeCLI` / `.openAICompatible` / `.none`) selects the provider. `.none` skips LLM generation and saves the transcript only.
@@ -435,7 +437,7 @@ Two build variants controlled by compile-time flag `APPSTORE` (`-Xswiftc -DAPPST
 | **Safari call audio** | Yes (`ProcessResponsibility` via `dlsym`) | No (private symbol unavailable; bundle-derived PIDs only) |
 | **Entitlements** | Mic only | Sandbox + mic + network + file picker |
 | **Build** | `./scripts/build_release.sh` | `./scripts/build_release.sh --appstore` |
-| **Tests** | ~1,900 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
+| **Tests** | ~3,300 | fewer (CLI + RPC tests excluded via `#if !APPSTORE`) |
 
 - CLI-specific code lives in `ClaudeCLIProtocolGenerator.swift` and `DebugRPCServer.swift` (each entire file `#if !APPSTORE`)
 - `ProtocolProvider` enum uses `CaseIterable` — `.claudeCLI` case excluded at compile time, picker adapts automatically
