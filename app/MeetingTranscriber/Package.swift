@@ -6,7 +6,7 @@ let package = Package(
     name: "MeetingTranscriber",
     platforms: [.macOS(.v14)],
     dependencies: [
-        .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.3"),
+        .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.5"),
         .package(url: "https://github.com/pointfreeco/swift-snapshot-testing", from: "1.19.1"),
         .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "1.0.0"),
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.13.4"),
