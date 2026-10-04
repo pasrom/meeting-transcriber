@@ -538,6 +538,16 @@ class PipelineQueue {
         }
     }
 
+    /// The folder a job's naming sidecars were written under.
+    ///
+    /// One place for a decision that was spelled out at each call site in three
+    /// different ways. `nil` in the job means it predates the field or never
+    /// wrote sidecars, and then the folder this queue writes to is what the
+    /// code did before the field existed.
+    func sidecarDir(of job: PipelineJob) -> URL? {
+        job.sidecarOutputDir ?? outputDir
+    }
+
     func removeJob(id: UUID) {
         if let index = jobs.firstIndex(where: { $0.id == id }) {
             processedLedger.markProcessed(mixPath: jobs[index].mixPath)
@@ -551,11 +561,10 @@ class PipelineQueue {
             // `in:` is load-bearing: without it the cleanup runs against this
             // queue's own store, so a job whose sidecars were written under a
             // different output folder gets looked for in the wrong one and its
-            // files stay behind for good. `removeNamingDataOfDiscardedJobs` has
-            // always passed it; this call was the one that did not.
+            // files stay behind for good, since the job is then gone from the
+            // snapshot that would have named them.
             naming.removeNamingData(
-                jobID: id, slug: jobs[index].namingSlug,
-                in: jobs[index].sidecarOutputDir ?? outputDir,
+                jobID: id, slug: jobs[index].namingSlug, in: sidecarDir(of: jobs[index]),
             )
             jobs.remove(at: index)
         }
@@ -931,6 +940,20 @@ class PipelineQueue {
     /// a stalled `replaceItemAt` (macOS 26 `mds_stores` rename deadlock)
     /// can't freeze the UI / RPC / watch loop. Rapid successive calls
     /// coalesce: only the last state is actually written.
+    /// Drop a snapshot write this queue still owes, for a queue that is being
+    /// replaced.
+    ///
+    /// Both queues share one `logDir`, so they share `pipeline_queue.tmp`, and
+    /// their serializing actors are per-queue and know nothing of each other.
+    /// Left in place, the replaced queue's pending write and the replacement's
+    /// own race on that one staging file: the loser of `replaceItemAt` fails
+    /// with a missing source, and the winner may be the queue that is going
+    /// away. Dropping the batch is enough to end the worker, which stops as
+    /// soon as `takeNextSnapshotBatch` hands it nothing.
+    func discardPendingSnapshot() {
+        pendingSnapshotJobs = nil
+    }
+
     func saveSnapshot() {
         ensureLogDir()
         pendingSnapshotJobs = jobs

@@ -374,7 +374,7 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
         try writeRawFloat32([Float](repeating: 0.3, count: 16000 * 2), to: appTmp)
         let micWav = dir.appendingPathComponent(stem + "_mic.wav")
         try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
-        try leaveHeaderUnfinalized(at: micWav) // what a killed writer leaves behind
+        try zeroDataChunkSize(at: micWav) // what a killed writer leaves behind
         try backdate([appTmp, micWav])
 
         _ = WavHeaderRepair.repairUnfinalized(in: dir)
@@ -424,24 +424,6 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
             guard case RecorderError.noAudioData = error else {
                 return XCTFail("expected noAudioData, got \(error)")
             }
-        }
-    }
-
-    /// Zero the `data` size the way a writer killed mid-stream does.
-    private func leaveHeaderUnfinalized(at url: URL) throws {
-        var data = try Data(contentsOf: url)
-        let marker = try XCTUnwrap(data.range(of: Data("data".utf8)), "no data chunk")
-        data.replaceSubrange(marker.upperBound ..< marker.upperBound + 4, with: [0, 0, 0, 0])
-        data.replaceSubrange(4 ..< 8, with: [4, 0, 0, 0])
-        try data.write(to: url)
-    }
-
-    /// Age every file past the in-progress guard, the way a crash does.
-    private func backdate(_ urls: [URL]) throws {
-        for url in urls {
-            try FileManager.default.setAttributes(
-                [.modificationDate: Date(timeIntervalSinceNow: -120)], ofItemAtPath: url.path,
-            )
         }
     }
 }

@@ -125,7 +125,7 @@ class DualSourceRecorder: RecordingProvider {
     /// without the guard an unconditional delete could race a live temp and
     /// silently drop its app track. Same guard as `recoverCrashedRecordings`.
     nonisolated static func cleanupTempFiles(
-        recordingsDir: URL = AppPaths.recordingsDir,
+        recordingsDir: URL,
         minAge: TimeInterval = 30,
         reapMarkersWrittenBefore: Date? = nil,
     ) {
@@ -340,7 +340,7 @@ class DualSourceRecorder: RecordingProvider {
     /// load-bearing — not cosmetic.
     @discardableResult
     nonisolated static func recoverCrashedRecordings(
-        in dir: URL = AppPaths.recordingsDir,
+        in dir: URL,
         minAge: TimeInterval = 30,
     ) -> Int {
         let fm = FileManager.default

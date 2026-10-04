@@ -33,17 +33,37 @@ extension PipelineQueue {
     /// Failed jobs are kept, because the restore keeps them and a retry is
     /// what cleans up after them.
     func adoptJobs(of replaced: PipelineQueue) {
+        // Before anything is written: the replaced queue may still owe a write,
+        // and both queues share one staging file. See `discardPendingSnapshot`.
+        replaced.discardPendingSnapshot()
         var adopted = replaced.jobs
-        let finished = adopted.filter { $0.state == .done }
-        adopted.removeAll { $0.state == .done }
+        discardFinishedJobs(from: &adopted)
+        discardJobsWithMissingAudio(&adopted, interruptedIn: [:])
+        // Count, not equality: both calls above only ever remove, so a
+        // differing count is exactly "something was dropped". `PipelineJob` is
+        // not `Equatable`, and making it so for one bookkeeping line would put
+        // a conformance on a type with two dozen fields.
+        let changed = adopted.count != replaced.jobs.count
         jobs = adopted
+        // Only when this queue's list differs from what the replaced one held.
+        // Every rebuild comes through here once the controller has built a queue
+        // itself, including each watch start, and writing an unchanged (usually
+        // empty) list would spend an atomic replace on nothing. The replace is
+        // the syscall this queue keeps a serializing actor for.
+        if changed { saveSnapshot() }
+    }
+
+    /// Drop finished jobs and let their sidecars go with them.
+    ///
+    /// Shared by the restore and the adoption so the two cannot drift: both
+    /// start a queue's job list, and which jobs a fresh list may contain is one
+    /// decision, not two. It used to be written out at both call sites, held
+    /// together only by a comment saying they had to agree.
+    private func discardFinishedJobs(from list: inout [PipelineJob]) {
+        let finished = list.filter { $0.state == .done }
+        guard !finished.isEmpty else { return }
+        list.removeAll { $0.state == .done }
         removeNamingDataOfDiscardedJobs(finished)
-        // Load-bearing, not redundant. The replaced queue's snapshot worker is a
-        // detached task holding `self` weakly, and it hops to the main actor
-        // before it writes; by then the replaced queue is gone, `self` is nil and
-        // its pending batch is dropped. This is therefore the only write that
-        // records the terminal state, and removing it would lose it.
-        saveSnapshot()
     }
 
     // MARK: - Snapshot Recovery
@@ -81,10 +101,7 @@ extension PipelineQueue {
             }
         }
 
-        // Discard done jobs, and let their sidecars go with them.
-        let doneJobs = loaded.filter { $0.state == .done }
-        loaded.removeAll { $0.state == .done }
-        removeNamingDataOfDiscardedJobs(doneJobs)
+        discardFinishedJobs(from: &loaded)
 
         discardJobsWithMissingAudio(&loaded, interruptedIn: interruptedStates)
 
@@ -122,7 +139,7 @@ extension PipelineQueue {
         let missingNamingDataJobIDs = jobs.compactMap { job -> UUID? in
             guard job.state == .speakerNamingPending else { return nil }
             if let slug = job.namingSlug,
-               naming.restore(jobID: job.id, slug: slug, in: job.sidecarOutputDir ?? outputDir) {
+               naming.restore(jobID: job.id, slug: slug, in: sidecarDir(of: job)) {
                 return nil
             }
             logger.warning("Naming data not found for job \(job.id), marking as done")
@@ -157,7 +174,7 @@ extension PipelineQueue {
     private func resumeDispositions(for loaded: [PipelineJob]) -> [UUID: ProtocolResumeDisposition] {
         var dispositions: [UUID: ProtocolResumeDisposition] = [:]
         for job in loaded where job.state == .generatingProtocol {
-            let store = SpeakerNamingStore(outputDir: job.sidecarOutputDir ?? outputDir)
+            let store = SpeakerNamingStore(outputDir: sidecarDir(of: job))
             let disposition = ProtocolResumePolicy.decide(
                 interruptedIn: job.state,
                 namingDataOnDisk: store.hasNamingData(slug: job.namingSlug),
@@ -301,7 +318,7 @@ extension PipelineQueue {
     private func removeNamingDataOfDiscardedJobs(_ discarded: [PipelineJob]) {
         for job in discarded where !inFlightRuns.isInFlight(job) {
             naming.removeNamingData(
-                jobID: job.id, slug: job.namingSlug, in: job.sidecarOutputDir ?? outputDir,
+                jobID: job.id, slug: job.namingSlug, in: sidecarDir(of: job),
             )
         }
     }

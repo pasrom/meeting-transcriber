@@ -701,7 +701,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         let slug = try XCTUnwrap(queue.jobs.first { $0.id == jobID }?.namingSlug)
         let recordingsDir = tmpDir.appendingPathComponent("recordings")
-        let leftovers = sidecarURLs(slug: slug, in: recordingsDir)
+        let leftovers = SidecarFixture.urls(slug: slug, in: recordingsDir)
 
         // Premise: naming really did park with data on disk, or the test proves
         // nothing about cleaning it up.
@@ -4270,35 +4270,6 @@ final class PipelineQueueTests: XCTestCase {
 
     // MARK: - Snapshot Restore Cleans Up What It Discards
 
-    /// Write the per-slug sidecars `removeNamingData` owns. Suffixes come from
-    /// the production list, so adding one there fails these tests rather than
-    /// quietly stranding the new file.
-    private func sidecarURLs(slug: String, in recordingsDir: URL) -> [URL] {
-        (SpeakerNamingStore.sidecarSuffixes + [SpeakerNamingStore.namingJSONSuffix])
-            .map { recordingsDir.appendingPathComponent("\(slug)\($0)") }
-    }
-
-    private func writeSidecars(slug: String, in recordingsDir: URL) throws -> [URL] {
-        let urls = sidecarURLs(slug: slug, in: recordingsDir)
-        for url in urls {
-            try Data([0]).write(to: url)
-        }
-        return urls
-    }
-
-    private func assertSidecars(
-        _ sidecars: [URL], exist: Bool,
-        file: StaticString = #filePath, line: UInt = #line,
-    ) {
-        for sidecar in sidecars {
-            XCTAssertEqual(
-                FileManager.default.fileExists(atPath: sidecar.path), exist,
-                "\(sidecar.lastPathComponent): expected exists=\(exist)",
-                file: file, line: line,
-            )
-        }
-    }
-
     private func makeRestoreQueue(
         outputDir: URL, diarizeEnabled: Bool = false, inFlightRuns: InFlightRunRegistry? = nil,
     ) -> PipelineQueue {
@@ -4331,7 +4302,7 @@ final class PipelineQueueTests: XCTestCase {
         job.namingSlug = "reaped_before_quit"
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let sidecars = try writeSidecars(slug: "reaped_before_quit", in: recordingsDir)
+        let sidecars = try SidecarFixture.write(slug: "reaped_before_quit", in: recordingsDir)
 
         let freshQueue = makeRestoreQueue(outputDir: outputDir)
         freshQueue.loadSnapshot()
@@ -4358,7 +4329,7 @@ final class PipelineQueueTests: XCTestCase {
         job.namingSlug = "running_elsewhere"
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let sidecars = try writeSidecars(slug: "running_elsewhere", in: recordingsDir)
+        let sidecars = try SidecarFixture.write(slug: "running_elsewhere", in: recordingsDir)
 
         let registry = InFlightRunRegistry()
         XCTAssertEqual(registry.begin(jobID: job.id, mixPath: mixPath), .claimed)
@@ -4387,7 +4358,7 @@ final class PipelineQueueTests: XCTestCase {
         job.namingSlug = "audio_relocated"
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let sidecars = try writeSidecars(slug: "audio_relocated", in: recordingsDir)
+        let sidecars = try SidecarFixture.write(slug: "audio_relocated", in: recordingsDir)
 
         let freshQueue = makeRestoreQueue(outputDir: outputDir)
         freshQueue.loadSnapshot()
@@ -4420,7 +4391,7 @@ final class PipelineQueueTests: XCTestCase {
         job.sidecarOutputDir = oldOutputDir
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let sidecars = try writeSidecars(slug: "folder_moved", in: oldRecordingsDir)
+        let sidecars = try SidecarFixture.write(slug: "folder_moved", in: oldRecordingsDir)
 
         // The user repointed the output folder; the queue is built on the new one.
         let freshQueue = makeRestoreQueue(outputDir: newOutputDir)
@@ -4448,7 +4419,7 @@ final class PipelineQueueTests: XCTestCase {
         job.namingSlug = "awaiting_names"
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let sidecars = try writeSidecars(slug: "awaiting_names", in: recordingsDir)
+        let sidecars = try SidecarFixture.write(slug: "awaiting_names", in: recordingsDir)
 
         // Overwrite the placeholder with decodable naming data so restore keeps
         // the job; the audio and segment sidecars stay as written above.

@@ -17,16 +17,12 @@ final class StagedRecoveryFolderTests: XCTestCase {
         let staging = try makeTempDirectory(prefix: "StagedRecoveryStaging")
         let output = try makeTempDirectory(prefix: "StagedRecoveryOutput")
 
-        // A mic track whose writer was killed: a RIFF header claiming zero bytes
-        // of payload, which is what `repairUnfinalized` exists to correct.
+        // A mic track whose writer was killed, built from a real WAV the app
+        // wrote and then left unfinalized and aged, so the repair is pinned
+        // against the file shape it actually meets instead of an invented one.
         let unfinalized = staging.appendingPathComponent("20260101_1200_mic.wav")
-        try unfinalizedWav(frames: 1600).write(to: unfinalized)
-        // Older than the repair's minimum age, so it counts as abandoned rather
-        // than as a recording still being written.
-        try FileManager.default.setAttributes(
-            [.modificationDate: Date().addingTimeInterval(-600)], ofItemAtPath: unfinalized.path,
-        )
-        let before = try XCTUnwrap(try? Data(contentsOf: unfinalized).count)
+        try writeUnfinalizedWav(at: unfinalized)
+        XCTAssertEqual(try dataChunkSize(at: unfinalized), 0, "test premise: the header starts unfinalized")
 
         let queue = try PipelineQueue(
             engine: MockEngine(),
@@ -40,39 +36,14 @@ final class StagedRecoveryFolderTests: XCTestCase {
         recover(queue)
 
         var repaired = false
-        for _ in 0 ..< 200 where !repaired {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !repaired, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(10))
-            let header = try? Data(contentsOf: unfinalized)
-            repaired = (header?.count ?? 0) == before && readDataChunkSize(header) > 0
+            repaired = ((try? dataChunkSize(at: unfinalized)) ?? 0) > 0
         }
         XCTAssertTrue(
             repaired,
             "the staging recovery did not touch the queue's staging folder, so it was working somewhere else",
         )
-    }
-
-    /// A 16 kHz mono WAV whose `data` chunk size is still zero, the state a
-    /// recording left behind when its writer died before finalising.
-    private func unfinalizedWav(frames: Int) -> Data {
-        var d = Data()
-        d.append(contentsOf: Array("RIFF".utf8))
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(36 + frames * 2).littleEndian) { Array($0) })
-        d.append(contentsOf: Array("WAVEfmt ".utf8))
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(16000).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(32000).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt16(2).littleEndian) { Array($0) })
-        d.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) })
-        d.append(contentsOf: Array("data".utf8))
-        d.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Array($0) })
-        d.append(Data(count: frames * 2))
-        return d
-    }
-
-    private func readDataChunkSize(_ data: Data?) -> UInt32 {
-        guard let data, data.count >= 44 else { return 0 }
-        return data.subdata(in: 40 ..< 44).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).littleEndian }
     }
 }

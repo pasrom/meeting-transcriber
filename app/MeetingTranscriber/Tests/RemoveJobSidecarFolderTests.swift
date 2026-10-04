@@ -13,13 +13,11 @@ final class RemoveJobSidecarFolderTests: XCTestCase {
         let current = try makeTempDirectory(prefix: "RemoveJobCurrent")
         let logDir = try makeTempDirectory(prefix: "RemoveJobLog")
 
-        // One sidecar per suffix the cleanup knows, under the recorded folder.
+        // Every sidecar the cleanup owns, including the `_naming.json` that the
+        // same call deletes, under the recorded folder.
         let recordings = recorded.appendingPathComponent("recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
-        let sidecars = SpeakerNamingStore.sidecarSuffixes.map {
-            recordings.appendingPathComponent("meeting\($0)")
-        }
-        for url in sidecars { try Data("sidecar".utf8).write(to: url) }
+        let sidecars = try SidecarFixture.write(slug: "meeting", in: recordings)
 
         let queue = PipelineQueue(
             engine: MockEngine(),
@@ -40,11 +38,7 @@ final class RemoveJobSidecarFolderTests: XCTestCase {
 
         queue.removeJob(id: job.id)
 
-        let left = sidecars.filter { FileManager.default.fileExists(atPath: $0.path) }
-        XCTAssertTrue(
-            left.isEmpty,
-            "\(left.count) sidecar(s) stayed behind: the cleanup ran against the queue's current folder "
-                + "instead of the one the job recorded, and nothing else ever sweeps them up",
-        )
+        // Named assertion rather than a count: it reports which file stayed.
+        assertSidecars(sidecars, exist: false)
     }
 }

@@ -106,9 +106,22 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
     }
 
     /// Give the controller's observation a chance to run.
+    /// Give the deferred rebuild its turn. It hangs off a single
+    /// `Task { @MainActor }` hop, which `waitFor` drains by yielding.
     private func settle(until condition: () -> Bool) async {
-        for _ in 0 ..< 200 where !condition() {
-            try? await Task.sleep(for: .milliseconds(10))
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !condition(), ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+    }
+
+    /// For the cases that assert a rebuild does NOT happen. Named so the call
+    /// site says what it waits for, instead of handing the positive helper a
+    /// condition that must never come true, and short because there is nothing
+    /// to wait for beyond the one hop.
+    private func settleWithoutRebuild() async {
+        for _ in 0 ..< 10 {
+            await Task.yield()
         }
     }
 
@@ -172,7 +185,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         )
 
         settings.setCustomOutputDir(second)
-        await settle { false }
+        await settleWithoutRebuild()
         XCTAssertIdentical(pc.queue, busyQueue, "the queue was replaced under an unfinished job")
 
         busyQueue.updateJobState(id: jobID, to: .done)
@@ -200,7 +213,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         pc.queue = injected
 
         settings.setCustomOutputDir(second)
-        await settle { pc.queue !== injected }
+        await settleWithoutRebuild()
 
         XCTAssertIdentical(pc.queue, injected, "the controller replaced a queue it did not build")
         XCTAssertTrue(recorder.resolved.isEmpty, "a queue was built from the production wiring")
