@@ -40,15 +40,16 @@ final class ConsentPromptCoordinator: @unchecked Sendable {
         await withCheckedContinuation { (continuation: CheckedContinuation<ConsentAnswer, Never>) in
             let sleep = self.sleep
             let timeout = self.timeout
-            let timeoutTask = Task { [weak self] in
+
+            // Start the timeout under the lock, so its `resolve` cannot run
+            // before the continuation is registered and strand the caller.
+            lock.lock()
+            pending[id] = continuation
+            timeouts[id] = Task { [weak self] in
                 await sleep(timeout)
                 guard !Task.isCancelled else { return }
                 self?.resolve(id: id, answer: .expired)
             }
-
-            lock.lock()
-            pending[id] = continuation
-            timeouts[id] = timeoutTask
             lock.unlock()
 
             onParked()

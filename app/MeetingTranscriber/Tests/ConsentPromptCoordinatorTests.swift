@@ -1,4 +1,5 @@
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 final class ConsentPromptCoordinatorTests: XCTestCase {
@@ -44,6 +45,64 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         }
         let declined = await task.value
         XCTAssertEqual(declined, .declined)
+    }
+
+    /// A timeout that fires at once must still find the prompt registered.
+    /// The timeout task used to be started before the continuation was stored,
+    /// so when the timeout ran first its `resolve` found nothing, the
+    /// continuation stored right after was never resumed, and the caller hung
+    /// for good. Nothing to inject sits inside that window, so the test widens
+    /// it the way a loaded machine does: callers run on a background-priority
+    /// thread, their timeout tasks inherit a high priority, and every core is
+    /// busy at a priority between the two, so starting a timeout task tends to
+    /// preempt its caller right inside the window. Against the old order this
+    /// stranded prompts in every run it was tried on; the wait is bounded so
+    /// that shows up as a failure, not as a hung suite.
+    func testInstantTimeoutNeverStrandsThePrompt() async throws {
+        guard #available(macOS 15, *) else {
+            throw XCTSkip("needs a task executor preference (macOS 15)")
+        }
+        let instant: @Sendable (TimeInterval) async -> Void = { _ in }
+        let coordinator = ConsentPromptCoordinator(timeout: 0, sleep: instant)
+        let callerExecutor = BackgroundTaskExecutor()
+        let prompts = 300
+        let finished = OSAllocatedUnfairLock<Int>(initialState: 0)
+
+        let busy = OSAllocatedUnfairLock<Bool>(initialState: true)
+        for _ in 0 ..< ProcessInfo.processInfo.activeProcessorCount * 2 {
+            let hog = Thread { while busy.withLock({ $0 }) {} }
+            hog.qualityOfService = .default
+            hog.start()
+        }
+        for index in 0 ..< prompts {
+            Task(priority: .high) {
+                _ = await withTaskExecutorPreference(callerExecutor) {
+                    await coordinator.awaitDecision(id: "race-\(index)") {}
+                }
+                finished.withLock { $0 += 1 }
+            }
+        }
+        // Keep the cores busy until every prompt has finished, for at most a
+        // second; a passing run frees them as soon as it can.
+        let busyUntil = Date().addingTimeInterval(1)
+        while finished.withLock({ $0 }) < prompts, Date() < busyUntil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        busy.withLock { $0 = false }
+        // Under a parallel suite the other workers keep the cores busy too, and
+        // a background queue can then wait far longer than any bound; lifting
+        // it leaves only the prompts that can never finish.
+        callerExecutor.raisePriority()
+
+        let deadline = Date().addingTimeInterval(30)
+        while finished.withLock({ $0 }) < prompts, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let resolved = finished.withLock { $0 }
+        XCTAssertEqual(
+            resolved, prompts,
+            "\(prompts - resolved) of \(prompts) prompts never resolved: their timeout fired before they were registered",
+        )
     }
 
     func testUnansweredPromptTimesOutToDeny() async {
@@ -135,5 +194,30 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
     /// `withCheckedContinuation` before the test resolves it.
     private func yieldUntilParked() async {
         try? await Task.sleep(nanoseconds: 30_000_000)
+    }
+}
+
+/// Runs the jobs of tasks that prefer it on one serial queue, at background
+/// priority until `raisePriority()`. An unstructured `Task {}` started from such
+/// a job does not inherit the preference, so it lands on the global pool at the
+/// task's own priority.
+@available(macOS 15, *)
+private final class BackgroundTaskExecutor: TaskExecutor {
+    private let queue = DispatchQueue(label: "ConsentPromptCoordinatorTests.caller", qos: .background)
+    private let qos = OSAllocatedUnfairLock<DispatchQoS>(initialState: .background)
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedTaskExecutor()
+        queue.async(qos: qos.withLock { $0 }, flags: .enforceQoS) {
+            job.runSynchronously(on: executor)
+        }
+    }
+
+    /// Later jobs run at high priority, and the empty block makes the serial
+    /// queue drain what is already waiting at that priority too.
+    func raisePriority() {
+        qos.withLock { $0 = .userInitiated }
+        queue.async(qos: .userInitiated, flags: .enforceQoS) {}
     }
 }
