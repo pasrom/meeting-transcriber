@@ -66,9 +66,10 @@ extension AppAudioCapture {
         guard let (event, generation) = silentTrackDiagnostics.watchdogTick(ages, now: now) else { return }
         switch event {
         case let .recovered(rebuild, withinSeconds):
-            logger.info(
-                "App audio watchdog: signal returned within \(Self.seconds(withinSeconds), privacy: .public) s of rebuild \(rebuild, privacy: .public)",
-            )
+            Self.logRecovered(rebuild, withinSeconds: withinSeconds)
+
+        case let .superseded(rebuild):
+            Self.logSuperseded(rebuild)
 
         case let .unrecovered(rebuild, afterSeconds):
             logger.info(
@@ -175,31 +176,74 @@ extension AppAudioCapture {
         applyAction(action)
     }
 
-    /// Called by the first buffer of every installed tap, on the write queue.
-    /// One lock, once per tap, and nothing at all when the watchdog is off.
-    func noteTapDeliveredForWatchdog() {
-        guard silentTrackWatchdog else { return }
-        silentTrackDiagnostics.watchdogRebuiltTapDelivered()
+    /// Called by every tap installation, on the main queue. A tap installed
+    /// while a watchdog rebuild waits for its verdict restarts that rebuild's
+    /// recovery window and gets a deadline of its own. The verdict comes from
+    /// ticks, ticks only come with buffers, and a tap that starts without
+    /// running an IO cycle (issue #693) delivers none, so without the deadline
+    /// the rebuild would stay open until the recording stops. Armed per
+    /// installation rather than at the rebuild's start, so the restart's own
+    /// wait, retries and back-off are not charged to the tap, and a later
+    /// installation's deadline replaces an earlier one's.
+    func armRebuiltTapDeadline() {
+        guard silentTrackWatchdog,
+              let tap = silentTrackDiagnostics.watchdogRebuiltTapInstalled(now: { watchdogNow })
+        else { return }
+        let deadline = SilentTrackWatchdogPolicy.rebuiltTapDeadlineSeconds
+        silentTrackDiagnostics.scheduleWatchdogDeadline(after: deadline) { [weak self] in
+            guard let self, let outcome = self.silentTrackDiagnostics.watchdogRebuiltTapDeadlinePassed(
+                rebuild: tap.rebuild, install: tap.install, ages: self.liveSignalAges, now: self.watchdogNow,
+            ) else { return }
+            switch outcome {
+            case let .stalled(rebuild, deliveredSinceInstall):
+                let what = deliveredSinceInstall ? "stopped delivering buffers" : "delivered no buffer"
+                logger.error(
+                    "App audio watchdog: rebuild \(rebuild, privacy: .public) installed a tap that \(what, privacy: .public) within \(Self.seconds(deadline), privacy: .public) s; counted as not restoring signal",
+                )
+
+            case let .superseded(rebuild):
+                Self.logSuperseded(rebuild)
+            }
+        }
     }
 
-    /// Called by every tap installation, on the main queue. A tap installed
-    /// while a watchdog rebuild waits for its verdict gets a deadline: the
-    /// verdict comes from ticks, ticks only come with buffers, and a tap that
-    /// starts without running an IO cycle (issue #693) delivers none. Armed at
-    /// installation rather than at the rebuild's start, so the restart's own
-    /// wait, retries and back-off are not counted against the tap.
-    func armRebuiltTapDeadline() {
-        guard silentTrackWatchdog, let number = silentTrackDiagnostics.watchdogRebuildAwaitingFirstBuffer
+    /// Called by every output device change, on the main queue, before the
+    /// restart path decides whether to act on it: a change it ignores, or one
+    /// that lands while a restart has capture stopped, still moves the device
+    /// the rebuild's tap is built on. Signal already back inside the window is
+    /// credited to the rebuild; otherwise its verdict will be withheld.
+    func noteOutputDeviceChangeForWatchdog() {
+        guard silentTrackWatchdog,
+              let outcome = silentTrackDiagnostics.watchdogOutputDeviceChanged(liveSignalAges, now: watchdogNow)
         else { return }
-        let window = SilentTrackWatchdogPolicy.recoveryWindowSeconds
-        silentTrackDiagnostics.scheduleWatchdogDeadline(after: window) { [weak self] in
-            guard let self,
-                  self.silentTrackDiagnostics.watchdogRebuiltTapDeadlinePassed(rebuild: number)
-            else { return }
-            logger.error(
-                "App audio watchdog: rebuild \(number, privacy: .public) installed a tap that delivered no buffer within \(Self.seconds(window), privacy: .public) s; counted as not restoring signal",
+        switch outcome {
+        case let .recovered(rebuild, withinSeconds):
+            Self.logRecovered(rebuild, withinSeconds: withinSeconds)
+
+        case let .tainted(rebuild):
+            logger.info(
+                "App audio watchdog: output device changed during rebuild \(rebuild, privacy: .public); it will close without a verdict",
             )
         }
+    }
+
+    /// Called when a tap is torn down, on the main queue: a tap on trial for
+    /// a rebuild is no longer there to be judged.
+    func noteTapRemovedForWatchdog() {
+        guard silentTrackWatchdog else { return }
+        silentTrackDiagnostics.watchdogRebuiltTapRemoved()
+    }
+
+    private static func logRecovered(_ rebuild: Int, withinSeconds: TimeInterval) {
+        logger.info(
+            "App audio watchdog: signal returned within \(seconds(withinSeconds), privacy: .public) s of rebuild \(rebuild, privacy: .public)",
+        )
+    }
+
+    private static func logSuperseded(_ rebuild: Int) {
+        logger.info(
+            "App audio watchdog: rebuild \(rebuild, privacy: .public) closed without a verdict, the output device changed while it was open",
+        )
     }
 
     /// Called from the restart path's two give-up points, on the main queue.
@@ -234,7 +278,7 @@ extension AppAudioCapture {
                 + "watchdogDropped=\(counters.dropped) watchdogRebuilds=\(counters.rebuilds) "
                 + "watchdogRecoveries=\(counters.recoveries) watchdogGaveUp=\(counters.gaveUp) "
                 + "watchdogCapped=\(counters.capped) watchdogEndedChannel=\(counters.endedChannel) "
-                + "watchdogRebuiltTapSilent=\(counters.rebuiltTapSilent)"
+                + "watchdogRebuiltTapStalled=\(counters.rebuiltTapStalled) watchdogSuperseded=\(counters.superseded)"
         }
     }
 }

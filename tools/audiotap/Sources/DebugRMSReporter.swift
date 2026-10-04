@@ -32,9 +32,13 @@ struct DebugRMSReporter {
         lastBufferHadEnergy = rms > 0
     }
 
+    /// How often `tick()` reports by default: the cadence of the app track's
+    /// 5 s tick, which the silent-track observer and watchdog ride.
+    static let reportIntervalSeconds: Double = 5.0
+
     /// Returns (dBFS, samples) when at least `intervalSeconds` have elapsed since the
     /// previous report (or first call); otherwise nil.
-    mutating func tick(intervalSeconds: Double = 5.0) -> (dBFS: Double, samples: Int)? {
+    mutating func tick(intervalSeconds: Double = reportIntervalSeconds) -> (dBFS: Double, samples: Int)? {
         let now = mach_absolute_time()
         if nextReportTicks == 0 {
             nextReportTicks = now + secondsToMachTicks(intervalSeconds)

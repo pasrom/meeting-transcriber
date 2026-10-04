@@ -15,6 +15,9 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 @available(macOS 14.2, *)
 extension AppAudioCapture {
     func handleOutputDeviceChanged() {
+        // Before both guards: a change the restart path drops still moves the
+        // device a watchdog rebuild's tap is built on.
+        noteOutputDeviceChangeForWatchdog()
         guard isRunning else { return }
         let action = deviceChangeCoordinator.handle(.deviceChanged)
         guard action != .ignore else { return }

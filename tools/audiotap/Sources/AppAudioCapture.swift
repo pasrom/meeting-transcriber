@@ -426,7 +426,6 @@ public class AppAudioCapture: @unchecked Sendable {
                 // any thread, and it takes only the diagnostics object's own
                 // lock, never the HAL.
                 self.silentTrackDiagnostics.cancelNoBufferProbes()
-                self.noteTapDeliveredForWatchdog()
                 // Only record the very first frame time — not after device restarts.
                 // MicCaptureHandler uses the same guard. Without this, a device change
                 // mid-recording overwrites the timestamp, corrupting the micDelay
@@ -541,6 +540,7 @@ public class AppAudioCapture: @unchecked Sendable {
         tapSession?.destroy()
         tapSession = nil
         didLogFormat = false
+        noteTapRemovedForWatchdog()
     }
 
     public func stop() {

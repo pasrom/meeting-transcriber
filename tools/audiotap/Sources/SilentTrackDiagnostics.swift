@@ -150,11 +150,7 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         armedNoBufferProbes = items.map(\.1)
         armedLock.unlock()
         for (offset, item) in items {
-            if let delayedWork {
-                delayedWork(offset, item)
-            } else {
-                queue.asyncAfter(deadline: .now() + offset, execute: item)
-            }
+            arm(item, after: offset, on: queue)
         }
     }
 
@@ -253,27 +249,49 @@ final class SilentTrackDiagnostics: @unchecked Sendable {
         withWatchdog { watchdog, _ in watchdog?.restartGaveUp() }
     }
 
-    /// See `SilentTrackWatchdogPolicy.rebuildAwaitingFirstBuffer`.
-    var watchdogRebuildAwaitingFirstBuffer: Int? {
-        withWatchdog { watchdog, _ in watchdog?.rebuildAwaitingFirstBuffer }
+    /// See `SilentTrackWatchdogPolicy.rebuiltTapInstalled`. The clock is
+    /// read under the lock, and only when a rebuild is open.
+    func watchdogRebuiltTapInstalled(now: () -> TimeInterval) -> (rebuild: Int, install: Int)? {
+        withWatchdog { watchdog, _ in watchdog?.rebuiltTapInstalled(now: now) }
     }
 
-    /// Called on the write queue by the first buffer of every installed tap.
-    func watchdogRebuiltTapDelivered() {
-        withWatchdog { watchdog, _ in watchdog?.rebuiltTapDelivered() }
+    /// See `SilentTrackWatchdogPolicy.rebuiltTapRemoved`.
+    func watchdogRebuiltTapRemoved() {
+        withWatchdog { watchdog, _ in watchdog?.rebuiltTapRemoved() }
     }
 
     /// See `SilentTrackWatchdogPolicy.rebuiltTapDeadlinePassed`.
-    func watchdogRebuiltTapDeadlinePassed(rebuild: Int) -> Bool {
-        withWatchdog { watchdog, _ in watchdog?.rebuiltTapDeadlinePassed(rebuild: rebuild) } ?? false
+    func watchdogRebuiltTapDeadlinePassed(
+        rebuild: Int, install: Int, ages: ChannelSignalAges, now: TimeInterval,
+    ) -> SilentTrackWatchdogPolicy.DeadlineOutcome? {
+        withWatchdog { watchdog, _ in
+            watchdog?.rebuiltTapDeadlinePassed(rebuild: rebuild, install: install, ages: ages, now: now)
+        }
     }
 
-    /// Run `work` on the diagnostics queue after `delay`, through the same
-    /// injected scheduler as the no-first-buffer probes. Not cancelled by the
-    /// first buffer or by a stop: the policy decides whether the deadline
-    /// still means anything when it lands.
+    /// See `SilentTrackWatchdogPolicy.outputDeviceChanged`.
+    func watchdogOutputDeviceChanged(
+        _ ages: ChannelSignalAges, now: TimeInterval,
+    ) -> SilentTrackWatchdogPolicy.DeviceChangeOutcome? {
+        withWatchdog { watchdog, _ in watchdog?.outputDeviceChanged(ages, now: now) }
+    }
+
+    /// Run `work` after `delay` on a queue of its own, through the same
+    /// injected scheduler as the no-first-buffer probes. Not the diagnostics
+    /// queue: process-state reads run on it synchronously, and one wedged
+    /// inside coreaudiod (issue #588) would hold back the deadline that closes
+    /// a rebuild whose tap never delivered. The work needs no HAL access. Not
+    /// cancelled by a stop or a newer installation: the policy decides whether
+    /// the deadline still means anything when it lands.
     func scheduleWatchdogDeadline(after delay: TimeInterval, _ work: @escaping @Sendable () -> Void) {
-        let item = DispatchWorkItem(block: work)
+        arm(DispatchWorkItem(block: work), after: delay, on: Self.deadlineQueue)
+    }
+
+    private static let deadlineQueue = DispatchQueue(label: "com.meetingtranscriber.audiotap.watchdog-deadline")
+
+    /// Run `item` on `queue` after `delay`, or hand it to the injected
+    /// scheduler, which then decides when it runs.
+    private func arm(_ item: DispatchWorkItem, after delay: TimeInterval, on queue: DispatchQueue) {
         if let delayedWork {
             delayedWork(delay, item)
         } else {

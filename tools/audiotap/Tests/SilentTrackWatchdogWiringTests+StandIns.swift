@@ -47,28 +47,39 @@ extension SilentTrackWatchdogWiringTests {
         private var hanging = false
         let release = DispatchSemaphore(value: 0)
 
+        /// When set, the next attempt succeeds with a session at rate 0,
+        /// which the restart path installs and then retries.
+        var zeroRateOnce: Bool {
+            get { lock.withLock { zeroRate } }
+            set { lock.withLock { zeroRate = newValue } }
+        }
+
+        private var zeroRate = false
+
         func run() throws -> AppTapSession? {
-            let (fails, hangs) = lock.withLock {
+            let (fails, hangs, rate) = lock.withLock {
                 count += 1
                 waiters.removeAll { target, expectation in
                     guard count >= target else { return false }
                     expectation.fulfill()
                     return true
                 }
-                return (failing, hanging)
+                let rate = zeroRate ? 0 : 48000
+                zeroRate = false
+                return (failing, hanging, rate)
             }
             if hangs { release.wait() }
             if fails { throw MicCaptureError.noInputDevice }
-            return Self.session(tapID: 7)
+            return Self.session(tapID: 7, rate: rate)
         }
 
-        static func session(tapID: AudioObjectID) -> AppTapSession {
+        static func session(tapID: AudioObjectID, rate: Int = 48000) -> AppTapSession {
             let hal = AppTapSessionHAL(
                 stopDevice: { _, _ in }, destroyIOProc: { _, _ in },
                 destroyAggregate: { _ in }, destroyTap: { _ in },
             )
             let session = AppTapSession(tapID: tapID, hal: hal) {}
-            session.attach(aggregateID: tapID &+ 1, resolvedSampleRate: 48000)
+            session.attach(aggregateID: tapID &+ 1, resolvedSampleRate: rate)
             return session
         }
     }
@@ -150,6 +161,52 @@ extension SilentTrackWatchdogWiringTests {
         /// The deadlines armed at `offset` that were not cancelled.
         func pending(at offset: TimeInterval) -> [DispatchWorkItem] {
             lock.withLock { armed.filter { $0.offset == offset && !$0.item.isCancelled }.map(\.item) }
+        }
+    }
+
+    /// One capture with its hardware stand-ins and its clock.
+    struct Rig {
+        let capture: AppAudioCapture
+        let attempts: Attempts
+        let state: ProcessState
+        let clock: TestClock
+        let deadlines: Deadlines
+
+        /// A capture wired to the stand-ins, not yet started. `readAges` is
+        /// what the capture reads as the track's live ages; by default the
+        /// ages of a run still going.
+        static func make(
+            watchdog: Bool = true,
+            running: Bool = true,
+            hold: Bool = false,
+            readAges: @escaping @Sendable () -> ChannelSignalAges = { ages(energy: 65) },
+            // After `readAges`, so a trailing closure keeps binding to that one.
+            sink: @escaping SilentTrackDiagnostics.Sink = { _, _ in },
+        ) -> Self {
+            let attempts = Attempts()
+            let state = ProcessState()
+            let clock = TestClock()
+            let deadlines = Deadlines()
+            state.running = running
+            state.hold = hold
+            let readClock: @Sendable () -> TimeInterval = { clock.read() }
+            return Self(
+                capture: AppAudioCapture(
+                    pids: [1],
+                    outputFileDescriptor: FileHandle.nullDevice.fileDescriptor,
+                    attemptBody: { try attempts.run() },
+                    silentTrackDiagnostics: SilentTrackDiagnostics(
+                        probe: state.probe, sink: sink, delayedWork: deadlines.schedule,
+                    ),
+                    silentTrackWatchdog: watchdog,
+                    signalAgesOverride: readAges,
+                    clockOverride: readClock,
+                ),
+                attempts: attempts,
+                state: state,
+                clock: clock,
+                deadlines: deadlines,
+            )
         }
     }
 }

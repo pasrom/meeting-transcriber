@@ -49,6 +49,23 @@ final class SilentTrackDiagnosticsTests: XCTestCase {
         XCTAssertEqual(spy.calls, 1)
     }
 
+    /// The watchdog's deadline for a rebuilt tap needs no HAL access, and it
+    /// must not wait behind one that does: the start probe for the very tap it
+    /// guards is queued on the diagnostics queue, and a read wedged there
+    /// (issue #588) would otherwise keep the rebuild open as long as the read.
+    func testAWatchdogDeadlineIsNotHeldBehindAWedgedRead() {
+        let spy = ProbeSpy()
+        let diagnostics = SilentTrackDiagnostics(probe: spy.probe(hold: true)) { _, _ in }
+        defer { spy.release.signal() }
+        XCTAssertTrue(diagnostics.probeAsync(processes, aggregateID: 0, reason: "wedged"))
+        XCTAssertEqual(spy.entered.wait(timeout: .now() + 2), .success, "precondition: the read is in progress")
+
+        let fired = expectation(description: "the deadline ran")
+        diagnostics.scheduleWatchdogDeadline(after: 0.05) { fired.fulfill() }
+
+        wait(for: [fired], timeout: 2)
+    }
+
     func testAProbeCanRunAgainOnceTheFirstReturned() {
         // The sink is the only word a caller gets that a read has returned, so
         // the guard must already be open when it fires: whoever the sink wakes
