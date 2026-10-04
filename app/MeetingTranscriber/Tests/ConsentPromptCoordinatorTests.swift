@@ -3,10 +3,12 @@ import os
 import XCTest
 
 final class ConsentPromptCoordinatorTests: XCTestCase {
-    /// A timeout sleep that effectively never returns, so the timeout can't win
-    /// and the test drives resolution explicitly.
+    /// A timeout sleep that only ends when its task is cancelled (an answer
+    /// cancels it), so the timeout can't win and the test drives resolution.
     private let neverSleep: @Sendable (TimeInterval) async -> Void = { _ in
-        try? await Task.sleep(nanoseconds: 60_000_000_000)
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 3_600_000_000_000)
+        }
     }
 
     func testResolvesToGrantedAnswer() async {
@@ -35,13 +37,20 @@ final class ConsentPromptCoordinatorTests: XCTestCase {
         let expired = await coordinator.awaitDecision(id: "a") {}
         XCTAssertEqual(expired, .expired)
 
-        let slow: @Sendable (TimeInterval) async -> Void = { _ in
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-        }
-        let answered = ConsentPromptCoordinator(timeout: 5, sleep: slow)
+        // The timeout here only ends when the decline cancels it. A real sleep
+        // could win on a loaded runner, leaving nothing for the decline to find,
+        // and an unbounded wait for a prompt that is already gone never ends.
+        let answered = ConsentPromptCoordinator(timeout: 5, sleep: neverSleep)
         let task = Task { await answered.awaitDecision(id: "b") {} }
-        while !answered.resolvePending(granted: false) {
-            try? await Task.sleep(nanoseconds: 5_000_000)
+        let deadline = Date().addingTimeInterval(10)
+        var parked = false
+        repeat {
+            parked = answered.resolvePending(granted: false)
+            if !parked { try? await Task.sleep(nanoseconds: 5_000_000) }
+        } while !parked && Date() < deadline
+        guard parked else {
+            XCTFail("prompt never parked or already expired")
+            return
         }
         let declined = await task.value
         XCTAssertEqual(declined, .declined)
