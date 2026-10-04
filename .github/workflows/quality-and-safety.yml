@@ -651,7 +651,11 @@ jobs:
         github.event.pull_request.head.repo.full_name == github.repository &&
         (github.event.action != 'labeled' || github.event.label.name == 'run-quality')
       )
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 45
     permissions:
       contents: read

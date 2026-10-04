@@ -16,7 +16,7 @@ on:
   pull_request:
     # Self-validate only PRs that touch the harness, its request/response + routing
     # layer, the build path it drives, or this lane. Unrelated PRs aren't burdened
-    # with a full release build on the macos-26 runner budget.
+    # with a full release build on the hosted macOS runner budget.
     paths:
       - '.github/workflows/e2e-ui-smoke.yml'
       - 'scripts/e2e-settings-smoke.sh'
@@ -88,12 +88,18 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
       - uses: ./.github/actions/verify-xcode
+        with:
+          developer-dir: ${{ env.DEVELOPER_DIR }}
 
       - name: UI smoke — drive /ui/* against the live app
         run: ./scripts/e2e-settings-smoke.sh

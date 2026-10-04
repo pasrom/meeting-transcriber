@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
   pull_request:
     # Self-validate any PR that touches this workflow or the build script.
-    # Other PRs are NOT burdened — keeps the macos-26 runner budget for the
+    # Other PRs are NOT burdened — keeps the hosted macOS runner budget for the
     # cases where it actually matters.
     paths:
       - '.github/workflows/appstore.yml'
@@ -53,12 +53,18 @@ concurrency:
 
 jobs:
   smoke:
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
       - uses: ./.github/actions/verify-xcode
+        with:
+          developer-dir: ${{ env.DEVELOPER_DIR }}
 
       # `--no-notarize` keeps the signing path on the ad-hoc fallback so we
       # don't need a Developer ID secret for a smoke run. `build_release.sh`

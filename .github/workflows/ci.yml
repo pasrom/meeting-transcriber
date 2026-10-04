@@ -122,7 +122,11 @@ jobs:
     needs: changes
     # Fail closed; see the `changes` job for why this exact condition.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 10
     permissions:
       contents: read
@@ -168,7 +172,11 @@ jobs:
     needs: changes
     # Fail closed; see the `changes` job for why this exact condition.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 30
     permissions:
       contents: read
@@ -228,7 +236,11 @@ jobs:
     needs: changes
     # Fail closed; see the `changes` job for why this exact condition.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     # 25 min job-timeout = 20 min setup (cold cache) + ~5 min margin. The
     # `Swift tests` step below has its own 18 min step-timeout so a hang
     # surfaces as `timed_out` (clearly distinguishable from cancellation),
@@ -322,7 +334,11 @@ jobs:
     needs: changes
     # Fail closed; see the `changes` job for why this exact condition.
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
-    runs-on: macos-26
+    runs-on: xcode-27
+    env:
+      # Xcode 27.0 by its own path rather than /Applications/Xcode.app: the image also
+      # ships 27.1 and a 27.2 beta, and a moved default must never reach a build here.
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     timeout-minutes: 10
     permissions:
       contents: read
