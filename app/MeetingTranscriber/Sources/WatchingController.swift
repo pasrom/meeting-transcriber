@@ -49,7 +49,7 @@ final class WatchingController {
     private let pipeline: PipelineController
     private let channelHealth: ChannelHealthController
     private let permissions: PermissionsController
-    private let liveTranscription: LiveTranscriptionCoordinator
+    let liveTranscription: LiveTranscriptionCoordinator
 
     /// Microphone-access gate. Injectable so tests skip the real TCC prompt; the
     /// return value is intentionally ignored (the loop is created regardless, and
@@ -113,7 +113,7 @@ final class WatchingController {
     /// staging directory that orphan recovery scans, which is not somewhere a
     /// unit test may leave files. (It does start on the hosted CI runners, so
     /// this is about where the bytes land, not about whether capture works.)
-    private let makeRecorder: @MainActor () -> any RecordingProvider
+    let makeRecorder: @MainActor () -> any RecordingProvider
 
     /// Engine-sync hook, wired by `activate`. Bridges to
     /// `EngineController.syncEngineSettings()`; nil until `activate` runs, in
@@ -527,26 +527,6 @@ final class WatchingController {
     func stopManualRecording() {
         watchLoop?.stopManualRecording()
         watchLoop = nil
-    }
-
-    // MARK: - Recorder factory
-
-    /// Build the `recorderFactory` closure for `WatchLoop`. Returns a fresh
-    /// `DualSourceRecorder` on each invocation; when live captions are eligible,
-    /// the coordinator installs mic + app live sinks that pipe captured buffers to
-    /// the `LiveTranscriptionController`. `async` so the coordinator can await the
-    /// prior recording's stop-time flush before reusing a kept EOU session.
-    private func makeRecorderFactory() -> @MainActor () async -> any RecordingProvider {
-        { [weak self, makeRecorder] in
-            let recorder = makeRecorder()
-            // Live captions tap the concrete recorder's buffer sinks, so this is
-            // the production recorder or nothing. An injected double has no
-            // sinks and needs none: captions are off in every test that uses one.
-            if let dualSource = recorder as? DualSourceRecorder {
-                await self?.liveTranscription.attachSinks(to: dualSource)
-            }
-            return recorder
-        }
     }
 
     // MARK: - State-change handler
