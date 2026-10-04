@@ -16,8 +16,13 @@ import XCTest
 /// the two control types, and tying it to a real screen would make it fail for
 /// reasons that have nothing to do with the rule.
 private struct ProbeView: View {
+    // Both are read only through their `$` bindings. Built with Xcode 27,
+    // `swiftlint analyze` no longer sees a reference made through the projected
+    // value and reports them as unused.
+    // swiftlint:disable unused_declaration
     @State private var choice = 1
     @State private var amount = 1.0
+    // swiftlint:enable unused_declaration
 
     var body: some View {
         VStack {
