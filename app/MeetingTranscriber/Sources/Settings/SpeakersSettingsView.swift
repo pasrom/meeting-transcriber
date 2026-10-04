@@ -30,6 +30,10 @@ struct SpeakersSettingsView: View {
     /// the SwiftUI race where the first present snapshots a still-nil matcher
     /// and shows an empty window (worked only on the second tap).
     @State private var knownVoicesSheet: KnownVoicesSheetItem?
+    // Read only through `$experimentalTuningExpanded` below. Built with Xcode 27,
+    // `swiftlint analyze` no longer sees a reference made through the projected
+    // value and reports the property as unused.
+    // swiftlint:disable:next unused_declaration
     @State private var experimentalTuningExpanded = false
 
     /// Stepper range for `numSpeakers` given the active diarizer mode.
