@@ -53,6 +53,7 @@
                 searchPaths: Self.searchPaths,
                 anthropicAPIKey: anthropicAPIKey,
             )
+            process.currentDirectoryURL = try Self.prepareWorkingDirectory()
 
             let stdinPipe = Pipe()
             let stdoutPipe = Pipe()
@@ -442,6 +443,28 @@
                 env["ANTHROPIC_API_KEY"] = anthropicAPIKey
             }
             return env
+        }
+
+        /// The directory the CLI is started in: a folder of its own, never `/`
+        /// or the home folder. Without one the child inherits the app's
+        /// working directory, which for a launched app is `/`, and Claude Code
+        /// looks around its working directory at startup, so macOS asked the
+        /// user for Desktop, Documents, Downloads and iCloud Drive on the
+        /// app's behalf. The CLI needs no folder at all: the transcript
+        /// arrives on stdin. Placed in the per-user temporary directory, which
+        /// is already private to the user and has no privacy-protected folder
+        /// on its path or beneath it.
+        static let workingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MeetingTranscriber-claude-cli", isDirectory: true)
+
+        /// Create `directory`, readable by its owner only, unless it already
+        /// exists, and return it. Called on every run because the system
+        /// clears old items out of the temporary directory.
+        static func prepareWorkingDirectory(_ directory: URL = workingDirectory) throws -> URL {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700],
+            )
+            return directory
         }
     }
 
