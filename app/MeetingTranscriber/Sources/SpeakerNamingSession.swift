@@ -383,15 +383,49 @@ final class SpeakerNamingSession {
     /// Remove all naming-related data for a job: RAM caches, disk JSON, and
     /// sidecar files. Also clears the recognition-stats stash dicts so they
     /// don't leak across rerun / stale-cleanup paths.
-    /// `outputDir` overrides where the sidecars are looked for. Callers acting
-    /// on a live job leave it nil and get this session's own store; the snapshot
-    /// restore passes the directory the job recorded, because the setting may
-    /// have been repointed since those files were written.
+    /// `outputDir` overrides where the sidecars are looked for. Left nil, the
+    /// folder is taken from the job; the session's own store is the fallback
+    /// when that yields nothing, which happens for a job that recorded no
+    /// folder, for a job the delegate no longer tracks, and when the delegate
+    /// is gone.
+    ///
+    /// Following the job rather than the session matters because the two can
+    /// disagree: a job's sidecars sit under the folder that was current when
+    /// they were written, this store writes to the folder that is current now.
+    /// Reaching that state takes a restart, not just a new folder: while a job
+    /// is parked for naming it is not terminal, so it blocks the queue rebuild
+    /// and the session keeps the old folder. Change the folder, quit, and the
+    /// next launch restores that job against the new one.
+    ///
+    /// The cost is not mainly leftover files. For the confirm and auto-accept
+    /// paths the job goes `.done`, and the reaper 60 seconds later removes it
+    /// through `removeJob`, which passes the job's folder: those leaked a
+    /// delay, not the files. `cancelJob` has no reaper and did leak them for
+    /// good, reachable through a late re-diarization, which puts an
+    /// already-named job back into `.diarizing` where Cancel is offered.
+    ///
+    /// The lasting damage is a wrong resume verdict: a `_naming.json` left in
+    /// the old folder makes `ProtocolResumePolicy` read the job as still
+    /// needing a full run, so after a quit mid-protocol the job starts over
+    /// and parks in the dialog again. The confirmed transcript file is not
+    /// deleted, it is stranded under the old folder while the job points at a
+    /// fresh one, and the confirmed names are already in the speaker
+    /// database, so the returning dialog comes pre-filled. What is lost is the
+    /// run, not the file.
+    ///
+    /// In the sandboxed build the old folder carries no security scope, so the
+    /// deletion there fails and is logged once per sidecar; that is no worse
+    /// than deleting in a folder that holds nothing, only louder.
+    ///
+    /// The parameter stays for the one caller that cannot use the job: the
+    /// snapshot restore's discard path has already taken the jobs out of the
+    /// list, so the delegate cannot find them.
     func removeNamingData(jobID: UUID, slug: String?, in outputDir: URL? = nil) {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         stashedSuggestedAtDialog.removeValue(forKey: jobID)
         stashedTopCandidates.removeValue(forKey: jobID)
-        let store = outputDir.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
+        let resolved = outputDir ?? delegate?.job(withID: jobID)?.sidecarOutputDir
+        let store = resolved.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
         store.deleteNamingJSON(slug: slug)
         store.cleanupSidecarFiles(slug: slug)
     }
@@ -406,7 +440,9 @@ final class SpeakerNamingSession {
     /// Rebuild the RAM naming cache for a restored `.speakerNamingPending` job
     /// from its on-disk sidecar. Returns false when the sidecar is missing (the
     /// queue then marks the job `.done`). Called from `loadSnapshot`.
-    /// `outputDir` is the directory the job recorded, as for `removeNamingData`.
+    /// `outputDir` is the directory the job recorded. Unlike `removeNamingData`,
+    /// nil here means this session's own store, because the only caller resolves
+    /// the folder itself.
     func restore(jobID: UUID, slug: String, in outputDir: URL? = nil) -> Bool {
         let store = outputDir.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
         guard let data = store.load(slug: slug) else { return false }

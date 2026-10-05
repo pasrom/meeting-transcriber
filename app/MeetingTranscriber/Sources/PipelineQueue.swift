@@ -558,11 +558,10 @@ class PipelineQueue {
             // folder for them and the job is gone from the snapshot that would
             // have named them. Resolved jobs have nothing left here, so this
             // costs them a no-op.
-            // `in:` is load-bearing: without it the cleanup runs against this
-            // queue's own store, so a job whose sidecars were written under a
-            // different output folder gets looked for in the wrong one and its
-            // files stay behind for good, since the job is then gone from the
-            // snapshot that would have named them.
+            // The folder is passed explicitly although `nil` would now resolve
+            // to the same one: the discard path next door has to pass it (its
+            // jobs are not in the list any more), and spelling it out at every
+            // queue-side call keeps the three readable side by side.
             naming.removeNamingData(
                 jobID: id, slug: jobs[index].namingSlug, in: sidecarDir(of: jobs[index]),
             )
@@ -1015,6 +1014,14 @@ extension PipelineQueue: SpeakerNamingSessionDelegate {
             // folder. Stage 3 records the same, but a run that fails before
             // it would leave the data where nothing that reads the job finds
             // it once the setting moves.
+            //
+            // Only when the job records nothing yet. Writing it unconditionally
+            // looks more correct and is not: the audio sidecars do not move
+            // until stage 3, so between here and there the pointer would name
+            // the new folder while an earlier run's tracks still sit in the old
+            // one, and a failure in that window strands them with no reference.
+            // The write above can also fail silently. Making pointer and files
+            // agree is a separate change; see the issue linked from the PR.
             if jobs[idx].sidecarOutputDir == nil { jobs[idx].sidecarOutputDir = outputDir }
         }
         if let usedDiarizerMode { jobs[idx].usedDiarizerMode = usedDiarizerMode }

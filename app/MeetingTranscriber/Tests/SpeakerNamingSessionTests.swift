@@ -451,4 +451,81 @@ final class SpeakerNamingSessionTests: XCTestCase {
 
         await fulfillment(of: [expectation], timeout: 2)
     }
+
+    // MARK: - Cleanup without an explicit folder follows the job
+
+    /// A caller acting on a live job passes no folder, and that used to mean
+    /// "this session's own store", which is the folder the queue writes to
+    /// *now*. Once the user picks a new output folder, a job's sidecars sit
+    /// under the folder it recorded, so the cleanup looked in the new one, found
+    /// nothing, and left hundreds of megabytes of 16 kHz tracks behind for a
+    /// dual-source hour. Nothing else sweeps them: the job is gone from the
+    /// snapshot that would have named them.
+    ///
+    /// The restore path always passed the folder explicitly and was therefore
+    /// correct; these are the five call sites that did not, among them the late
+    /// confirmation, the auto-name accept and cancelling a job.
+    func testCleanupWithoutAFolderUsesTheOneTheJobRecorded() throws {
+        let recorded = try makeTempDirectory(prefix: "SidecarRecorded")
+        let current = try makeTempDirectory(prefix: "SidecarCurrent")
+        let recordings = recorded.appendingPathComponent("recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        let sidecars = try SidecarFixture.write(slug: "meeting", in: recordings)
+
+        // The session writes to `current`; the job recorded `recorded`. The
+        // session's own store gets `current` too, so a cleanup that ignores the
+        // job has a real folder to miss rather than no folder at all.
+        let session = SpeakerNamingSession(
+            namingStore: SpeakerNamingStore(outputDir: current),
+            speakerMatcherFactory: PipelineQueue.throwawayMatcherFactory(),
+            outputDir: current,
+        )
+        let delegate = MockDelegate()
+        session.delegate = delegate
+        var job = PipelineJob(
+            meetingTitle: "Meeting", appName: "Teams",
+            mixPath: recordings.appendingPathComponent("meeting_mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.namingSlug = "meeting"
+        job.sidecarOutputDir = recorded
+        delegate.jobs[job.id] = job
+
+        session.removeNamingData(jobID: job.id, slug: "meeting")
+
+        assertSidecars(sidecars, exist: false)
+    }
+
+    /// A job that recorded no folder, so there is nothing to follow: the
+    /// session's own folder stays the answer, which is what every caller got
+    /// before the field existed.
+    ///
+    /// Green before and after the change, deliberately: it guards the fallback
+    /// rather than proving the fix. An implementation that resolved nil to a
+    /// store with no folder would do nothing at all and still look correct.
+    func testCleanupFallsBackToTheSessionFolderWhenTheJobRecordedNone() throws {
+        let current = try makeTempDirectory(prefix: "SidecarFallback")
+        let recordings = current.appendingPathComponent("recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        let sidecars = try SidecarFixture.write(slug: "meeting", in: recordings)
+
+        let session = SpeakerNamingSession(
+            namingStore: SpeakerNamingStore(outputDir: current),
+            speakerMatcherFactory: PipelineQueue.throwawayMatcherFactory(),
+            outputDir: current,
+        )
+        let delegate = MockDelegate()
+        session.delegate = delegate
+        var job = PipelineJob(
+            meetingTitle: "Meeting", appName: "Teams",
+            mixPath: recordings.appendingPathComponent("meeting_mix.wav"),
+            appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.namingSlug = "meeting"
+        delegate.jobs[job.id] = job
+
+        session.removeNamingData(jobID: job.id, slug: "meeting")
+
+        assertSidecars(sidecars, exist: false)
+    }
 }
