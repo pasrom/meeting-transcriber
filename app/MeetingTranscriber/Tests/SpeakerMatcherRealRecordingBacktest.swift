@@ -11,11 +11,23 @@ import XCTest
 /// back to diarizing the mix. The fresh embeddings are then matched against
 /// the user's real `speakers.json` using both the **legacy** algorithm
 /// (min-distance over recent samples) and the **hybrid** algorithm (centroid
-/// added as an extra anchor — the production code in this PR).
+/// added as an extra anchor, which is what production uses).
 ///
-/// Skipped on CI / when neither the recordings dir nor speakers.json exists.
-/// Run manually:
-///   swift test --filter SpeakerMatcherRealRecordingBacktest
+/// Opt-in, because it reads the developer's own meeting recordings and their
+/// real speaker database, and the presence of those folders is not consent to
+/// touch them. On the machine that has them, a plain `swift test` pulled up to
+/// `MAX_BACKTEST_RECORDINGS` recording groups (eight by default) through
+/// diarization, and a dual-source group is diarized twice, once per track, so
+/// up to sixteen runs. That is minutes of work in a run meant to check
+/// something else.
+///
+/// Observed twice on this machine, not derivable from the code: the run ends in
+/// SIGSEGV somewhere under the CoreML models. A process-level crash sets the
+/// suite's exit code even when every test passed, which makes "did anything
+/// break" unanswerable from it. Unexplained, and not what this gate fixes; it
+/// only keeps it out of runs that were asking about something else. Run it
+/// deliberately:
+///   RUN_SPEAKER_BACKTEST=1 swift test --filter SpeakerMatcherRealRecordingBacktest
 ///   (use `MAX_BACKTEST_RECORDINGS=5` to cap the run for a quicker iteration)
 final class SpeakerMatcherRealRecordingBacktest: XCTestCase {
     private struct Config {
@@ -111,6 +123,15 @@ final class SpeakerMatcherRealRecordingBacktest: XCTestCase {
     }
 
     func testCompareMatchersOnLocalRecordings() async throws {
+        // First line, before any folder probe, so a skip cannot be read as "no
+        // recordings on this machine". A method added here later needs the same
+        // line: the gate cannot live in `setUpWithError`, because the suite's
+        // lint rule then demands a matching `tearDown`, and it must not live in
+        // the config loader, which a future method could simply not call.
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["RUN_SPEAKER_BACKTEST"] == "1",
+            "gated: set RUN_SPEAKER_BACKTEST=1 (reads your own recordings)",
+        )
         let config = try loadConfigOrSkip()
         let dbData = try Data(contentsOf: config.speakersDB)
         let db = try JSONDecoder().decode([StoredSpeaker].self, from: dbData)
