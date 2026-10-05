@@ -53,7 +53,9 @@
                 searchPaths: Self.searchPaths,
                 anthropicAPIKey: anthropicAPIKey,
             )
-            process.currentDirectoryURL = try Self.prepareWorkingDirectory()
+            let workingDirectory = try Self.makeWorkingDirectory()
+            defer { try? FileManager.default.removeItem(at: workingDirectory) }
+            process.currentDirectoryURL = workingDirectory
 
             let stdinPipe = Pipe()
             let stdoutPipe = Pipe()
@@ -445,24 +447,31 @@
             return env
         }
 
-        /// The directory the CLI is started in: a folder of its own, never `/`
-        /// or the home folder. Without one the child inherits the app's
-        /// working directory, which for a launched app is `/`, and Claude Code
-        /// looks around its working directory at startup, so macOS asked the
-        /// user for Desktop, Documents, Downloads and iCloud Drive on the
-        /// app's behalf. The CLI needs no folder at all: the transcript
-        /// arrives on stdin. Placed in the per-user temporary directory, which
-        /// is already private to the user and has no privacy-protected folder
+        /// Create a new, empty, owner-only (`0700`) directory under `parent`
+        /// for one CLI run, and return it. `generate()` starts the CLI there
+        /// and removes the directory again when it returns or throws; a
+        /// removal that fails is ignored.
+        ///
+        /// Without a working directory of its own the child inherits the
+        /// app's, which for a launched app is `/`, and Claude Code looks
+        /// around its working directory at startup, so macOS asked the user
+        /// for Desktop, Documents, Downloads and iCloud Drive on the app's
+        /// behalf. The CLI needs no folder at all: the transcript arrives on
+        /// stdin. The default parent is the per-user temporary directory,
+        /// which is private to the user and has no privacy-protected folder
         /// on its path or beneath it.
-        static let workingDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MeetingTranscriber-claude-cli", isDirectory: true)
-
-        /// Create `directory`, readable by its owner only, unless it already
-        /// exists, and return it. Called on every run because the system
-        /// clears old items out of the temporary directory.
-        static func prepareWorkingDirectory(_ directory: URL = workingDirectory) throws -> URL {
+        ///
+        /// A new directory per run, not one shared folder, so a run never
+        /// sees what an earlier or concurrent run left there. The name is
+        /// unique and creation fails rather than reuse a directory that
+        /// already exists. Throws when the directory cannot be created;
+        /// there is deliberately no fallback to the inherited directory.
+        static func makeWorkingDirectory(in parent: URL = FileManager.default.temporaryDirectory) throws -> URL {
+            let directory = parent.appendingPathComponent(
+                "MeetingTranscriber-claude-cli-\(UUID().uuidString)", isDirectory: true,
+            )
             try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700],
+                at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700],
             )
             return directory
         }
