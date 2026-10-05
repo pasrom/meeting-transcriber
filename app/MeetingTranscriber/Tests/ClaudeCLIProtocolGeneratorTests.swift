@@ -507,33 +507,85 @@
             XCTAssertEqual(reply.last, "0", "the CLI's working directory \(directory) is not empty")
         }
 
-        func testPrepareWorkingDirectoryCreatesAnEmptyOwnerOnlyDirectory() throws {
-            let base = FileManager.default.temporaryDirectory
-                .appendingPathComponent("claude-cli-cwd-test-\(UUID().uuidString)", isDirectory: true)
-            defer { try? FileManager.default.removeItem(at: base) }
-            let directory = base.appendingPathComponent("cwd", isDirectory: true)
+        /// A run must not inherit what an earlier run left behind. The fake
+        /// binary reports its directory and how many entries it found there,
+        /// then leaves a file in it; the second run must start in another,
+        /// empty directory, and neither directory may outlive its run.
+        func testGenerateGivesEachRunAFreshDirectoryAndRemovesIt() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                found=$(ls -A | wc -l | tr -d ' ')
+                touch left-by-previous-run
+                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s|%s"}}\\n' \
+                    "$(pwd -P)" "$found"
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
 
-            let prepared = try ClaudeCLIProtocolGenerator.prepareWorkingDirectory(directory)
-            XCTAssertEqual(prepared, directory)
-            // The next run finds it in place, which must not fail.
-            XCTAssertEqual(try ClaudeCLIProtocolGenerator.prepareWorkingDirectory(directory), directory)
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            var runs: [(directory: String, found: String)] = []
+            for _ in 0 ..< 2 {
+                let result = try await generator.generate(
+                    transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+                )
+                let reply = result.split(separator: "|").map(String.init)
+                XCTAssertEqual(reply.count, 2, "unexpected fake CLI reply: \(result)")
+                runs.append((reply.first ?? "", reply.last ?? ""))
+            }
+            let (first, second) = (runs[0], runs[1])
 
-            var isDirectory: ObjCBool = false
-            XCTAssertTrue(FileManager.default.fileExists(atPath: prepared.path, isDirectory: &isDirectory))
-            XCTAssertTrue(isDirectory.boolValue)
-            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: prepared.path), [])
-            let attributes = try FileManager.default.attributesOfItem(atPath: prepared.path)
-            XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+            XCTAssertEqual(first.found, "0", "the first run's directory \(first.directory) was not empty")
+            XCTAssertNotEqual(first.directory, second.directory, "both runs shared one directory")
+            XCTAssertEqual(second.found, "0", "the second run found what the first run left behind")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: first.directory),
+                "the first run's directory \(first.directory) outlived its run",
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: second.directory),
+                "the second run's directory \(second.directory) outlived its run",
+            )
         }
 
-        func testWorkingDirectoryIsAFolderOfItsOwnInTheTemporaryDirectory() {
-            let directory = ClaudeCLIProtocolGenerator.workingDirectory
+        func testMakeWorkingDirectoryCreatesANewEmptyOwnerOnlyDirectoryPerCall() throws {
+            let parent = FileManager.default.temporaryDirectory
+                .appendingPathComponent("claude-cli-cwd-test-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: parent) }
+
+            let first = try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: parent)
+            let second = try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: parent)
+
+            XCTAssertNotEqual(first, second)
+            for directory in [first, second] {
+                XCTAssertEqual(
+                    directory.deletingLastPathComponent().standardizedFileURL.path, parent.standardizedFileURL.path,
+                )
+                var isDirectory: ObjCBool = false
+                XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory))
+                XCTAssertTrue(isDirectory.boolValue)
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
+                let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+                XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+            }
+        }
+
+        func testMakeWorkingDirectoryDefaultsToTheTemporaryDirectory() throws {
+            let directory = try ClaudeCLIProtocolGenerator.makeWorkingDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
             XCTAssertEqual(
                 directory.deletingLastPathComponent().standardizedFileURL.path,
                 FileManager.default.temporaryDirectory.standardizedFileURL.path,
             )
-            XCTAssertNotEqual(directory.standardizedFileURL.path, "/")
-            XCTAssertNotEqual(directory.standardizedFileURL.path, NSHomeDirectory())
+        }
+
+        /// No fallback: a directory that cannot be created is an error, never
+        /// a reason to start the CLI in the inherited working directory.
+        func testMakeWorkingDirectoryThrowsWhenItCannotCreateTheDirectory() {
+            let missingParent = FileManager.default.temporaryDirectory
+                .appendingPathComponent("claude-cli-missing-\(UUID().uuidString)", isDirectory: true)
+            XCTAssertThrowsError(try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: missingParent))
         }
 
         /// `path` with every symlink resolved, as `pwd -P` reports it
