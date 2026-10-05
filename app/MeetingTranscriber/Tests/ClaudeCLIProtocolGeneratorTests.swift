@@ -470,4 +470,79 @@
             return path
         }
     }
+
+    // MARK: - Working directory
+
+    extension ClaudeCLIProtocolGeneratorTests {
+        /// The CLI must start in an empty directory of its own, not in the
+        /// working directory of the process that launches it. A launched app's
+        /// is `/`, and Claude Code looks around its working directory at
+        /// startup, so from `/` it reached into Desktop, Documents, Downloads
+        /// and iCloud Drive, and macOS asked the user for each of them on the
+        /// app's behalf. The fake binary replies with the directory it was
+        /// started in and the number of entries that directory holds.
+        func testGenerateStartsCLIInAnEmptyDirectoryOfItsOwn() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s|%s"}}\\n' \
+                    "$(pwd -P)" "$(ls -A | wc -l | tr -d ' ')"
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let result = try await generator.generate(
+                transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+            )
+            let reply = result.split(separator: "|").map(String.init)
+            XCTAssertEqual(reply.count, 2, "unexpected fake CLI reply: \(result)")
+            let directory = reply.first ?? ""
+            XCTAssertNotEqual(directory, "/")
+            XCTAssertNotEqual(directory, Self.physicalPath(NSHomeDirectory()))
+            XCTAssertNotEqual(
+                directory, Self.physicalPath(FileManager.default.currentDirectoryPath),
+                "the CLI inherited the working directory of the process that launched it",
+            )
+            XCTAssertEqual(reply.last, "0", "the CLI's working directory \(directory) is not empty")
+        }
+
+        func testPrepareWorkingDirectoryCreatesAnEmptyOwnerOnlyDirectory() throws {
+            let base = FileManager.default.temporaryDirectory
+                .appendingPathComponent("claude-cli-cwd-test-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: base) }
+            let directory = base.appendingPathComponent("cwd", isDirectory: true)
+
+            let prepared = try ClaudeCLIProtocolGenerator.prepareWorkingDirectory(directory)
+            XCTAssertEqual(prepared, directory)
+            // The next run finds it in place, which must not fail.
+            XCTAssertEqual(try ClaudeCLIProtocolGenerator.prepareWorkingDirectory(directory), directory)
+
+            var isDirectory: ObjCBool = false
+            XCTAssertTrue(FileManager.default.fileExists(atPath: prepared.path, isDirectory: &isDirectory))
+            XCTAssertTrue(isDirectory.boolValue)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: prepared.path), [])
+            let attributes = try FileManager.default.attributesOfItem(atPath: prepared.path)
+            XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+        }
+
+        func testWorkingDirectoryIsAFolderOfItsOwnInTheTemporaryDirectory() {
+            let directory = ClaudeCLIProtocolGenerator.workingDirectory
+            XCTAssertEqual(
+                directory.deletingLastPathComponent().standardizedFileURL.path,
+                FileManager.default.temporaryDirectory.standardizedFileURL.path,
+            )
+            XCTAssertNotEqual(directory.standardizedFileURL.path, "/")
+            XCTAssertNotEqual(directory.standardizedFileURL.path, NSHomeDirectory())
+        }
+
+        /// `path` with every symlink resolved, as `pwd -P` reports it
+        /// (`/var` → `/private/var`). Foundation's `resolvingSymlinksInPath`
+        /// strips `/private` instead, so it cannot be compared with the shell.
+        private static func physicalPath(_ path: String) -> String? {
+            guard let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+    }
 #endif
