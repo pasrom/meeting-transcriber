@@ -383,8 +383,8 @@ final class SpeakerNamingSession {
     /// Remove all naming-related data for a job: RAM caches, disk JSON, and
     /// sidecar files. Also clears the recognition-stats stash dicts so they
     /// don't leak across rerun / stale-cleanup paths.
-    /// `outputDir` overrides where the sidecars are looked for. Left nil, the
-    /// folder is taken from the job; the session's own store is the fallback
+    /// `outputDirs` overrides where the sidecars are looked for. Left nil, the
+    /// folders are taken from the job; the session's own store is the fallback
     /// when that yields nothing, which happens for a job that recorded no
     /// folder, for a job the delegate no longer tracks, and when the delegate
     /// is gone.
@@ -420,14 +420,29 @@ final class SpeakerNamingSession {
     /// The parameter stays for the one caller that cannot use the job: the
     /// snapshot restore's discard path has already taken the jobs out of the
     /// list, so the delegate cannot find them.
-    func removeNamingData(jobID: UUID, slug: String?, in outputDir: URL? = nil) {
+    ///
+    /// Several folders, because a job can have written sidecars under more than
+    /// one: the naming data goes down when it is saved and the audio tracks only
+    /// in stage 3, with an output-folder change possible in between. Cleaning up
+    /// only the latest would strand the rest for good, so every recorded folder
+    /// is visited; one that holds nothing costs a no-op.
+    ///
+    /// An empty list and a list left out come to the same thing: the session's
+    /// own store. They can, because that store is always built on the folder
+    /// the queue writes to, so the only way to reach it with an empty list is a
+    /// queue with no output folder, whose store is a no-op anyway.
+    func removeNamingData(jobID: UUID, slug: String?, in outputDirs: [URL] = []) {
         speakerNamingDataByJob.removeValue(forKey: jobID)
         stashedSuggestedAtDialog.removeValue(forKey: jobID)
         stashedTopCandidates.removeValue(forKey: jobID)
-        let resolved = outputDir ?? delegate?.job(withID: jobID)?.sidecarOutputDir
-        let store = resolved.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
-        store.deleteNamingJSON(slug: slug)
-        store.cleanupSidecarFiles(slug: slug)
+        let resolved = outputDirs.isEmpty
+            ? (delegate?.job(withID: jobID)?.sidecarOutputDirs ?? [])
+            : outputDirs
+        let stores = resolved.isEmpty ? [namingStore] : resolved.map { SpeakerNamingStore(outputDir: $0) }
+        for store in stores {
+            store.deleteNamingJSON(slug: slug)
+            store.cleanupSidecarFiles(slug: slug)
+        }
     }
 
     /// Removes only the transcript-bearing segment sidecar. The queue uses this
@@ -438,16 +453,21 @@ final class SpeakerNamingSession {
     }
 
     /// Rebuild the RAM naming cache for a restored `.speakerNamingPending` job
-    /// from its on-disk sidecar. Returns false when the sidecar is missing (the
-    /// queue then marks the job `.done`). Called from `loadSnapshot`.
-    /// `outputDir` is the directory the job recorded. Unlike `removeNamingData`,
-    /// nil here means this session's own store, because the only caller resolves
-    /// the folder itself.
-    func restore(jobID: UUID, slug: String, in outputDir: URL? = nil) -> Bool {
-        let store = outputDir.map { SpeakerNamingStore(outputDir: $0) } ?? namingStore
-        guard let data = store.load(slug: slug) else { return false }
-        speakerNamingDataByJob[jobID] = data
-        return true
+    /// from its on-disk sidecar. Returns false when no candidate folder holds
+    /// one (the queue then marks the job `.done`). Called from `loadSnapshot`.
+    ///
+    /// `outputDirs` are the folders to try in order, empty meaning this
+    /// session's own store. The first that holds the file wins; which folders
+    /// those are and in what order is `sidecarDirsNewestFirst`'s decision, and
+    /// the reason there is more than one is documented there.
+    func restore(jobID: UUID, slug: String, in outputDirs: [URL] = []) -> Bool {
+        let stores = outputDirs.isEmpty ? [namingStore] : outputDirs.map { SpeakerNamingStore(outputDir: $0) }
+        for store in stores {
+            guard let data = store.load(slug: slug) else { continue }
+            speakerNamingDataByJob[jobID] = data
+            return true
+        }
+        return false
     }
 
     /// Auto-resolve pending naming items older than maxAge. Generates the

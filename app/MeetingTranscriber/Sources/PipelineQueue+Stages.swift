@@ -841,8 +841,9 @@ extension PipelineQueue {
             jobs[idx].transcriptPath = txtPath
             jobs[idx].namingSlug = ctx.slug
             // Where the sidecars below land, so a later restore can clean them
-            // up even if the output folder setting has moved on since.
-            jobs[idx].sidecarOutputDir = outputDir
+            // up even if the output folder setting has moved on since. Records
+            // rather than overwrites; see `previousSidecarOutputDirs`.
+            jobs[idx].recordSidecarOutputDir(outputDir)
         }
 
         let recordingsDir = outputDir.appendingPathComponent("recordings")

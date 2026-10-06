@@ -139,7 +139,7 @@ extension PipelineQueue {
         let missingNamingDataJobIDs = jobs.compactMap { job -> UUID? in
             guard job.state == .speakerNamingPending else { return nil }
             if let slug = job.namingSlug,
-               naming.restore(jobID: job.id, slug: slug, in: sidecarDir(of: job)) {
+               naming.restore(jobID: job.id, slug: slug, in: sidecarDirsNewestFirst(of: job)) {
                 return nil
             }
             logger.warning("Naming data not found for job \(job.id), marking as done")
@@ -171,13 +171,17 @@ extension PipelineQueue {
     /// answer. `loadSnapshot` runs on the main actor at launch, and the output
     /// folder may be a network mount, so statting every restored job's
     /// transcript here would be blocking work the state guard then discards.
+    /// A job that recorded a second folder costs one more stat, and only until
+    /// the first candidate that holds the file answers.
     private func resumeDispositions(for loaded: [PipelineJob]) -> [UUID: ProtocolResumeDisposition] {
         var dispositions: [UUID: ProtocolResumeDisposition] = [:]
         for job in loaded where job.state == .generatingProtocol {
-            let store = SpeakerNamingStore(outputDir: sidecarDir(of: job))
+            let namingDataOnDisk = sidecarDirsNewestFirst(of: job).contains { folder in
+                SpeakerNamingStore(outputDir: folder).hasNamingData(slug: job.namingSlug)
+            }
             let disposition = ProtocolResumePolicy.decide(
                 interruptedIn: job.state,
-                namingDataOnDisk: store.hasNamingData(slug: job.namingSlug),
+                namingDataOnDisk: namingDataOnDisk,
                 transcriptExists: Self.fileExists(job.transcriptPath),
                 hasNamingSlug: job.namingSlug != nil,
                 protocolExists: Self.fileExists(job.protocolPath),
@@ -315,10 +319,20 @@ extension PipelineQueue {
     /// further down. The realistic set is one job, the measured worst case a
     /// few hundred unlinks, and the precedent for moving filesystem work off
     /// this actor is a rename deadlock rather than unlink.
+    ///
+    /// Five unlinks per recorded folder, not per job, since the cleanup visits
+    /// every folder the job wrote under, so a job that recorded a second one
+    /// doubles its share. Whether those extra unlinks hit depends on the job:
+    /// one whose sidecars were already swept leaves the older folder empty, but
+    /// a job that reached `.done` without any sweep (the branch below that
+    /// finishes a job whose naming data went missing, or a kill right after the
+    /// terminal transition) still has its audio sidecars there, and removing
+    /// those is the point of this path. Bounded by the same argument either way,
+    /// because a job records at most one folder per run it survived.
     private func removeNamingDataOfDiscardedJobs(_ discarded: [PipelineJob]) {
         for job in discarded where !inFlightRuns.isInFlight(job) {
             naming.removeNamingData(
-                jobID: job.id, slug: job.namingSlug, in: sidecarDir(of: job),
+                jobID: job.id, slug: job.namingSlug, in: allSidecarDirs(of: job),
             )
         }
     }
@@ -364,7 +378,7 @@ extension PipelineQueue {
     func retryJob(id: UUID) -> Bool {
         guard canRetryJob(id: id), let index = jobs.firstIndex(where: { $0.id == id }) else { return false }
         naming.removeNamingData(
-            jobID: id, slug: jobs[index].namingSlug, in: jobs[index].sidecarOutputDir,
+            jobID: id, slug: jobs[index].namingSlug, in: allSidecarDirs(of: jobs[index]),
         )
         jobAudioSeconds.removeValue(forKey: id)
         protocolResumeDispositions.removeValue(forKey: id)

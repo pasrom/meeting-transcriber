@@ -538,14 +538,33 @@ class PipelineQueue {
         }
     }
 
-    /// The folder a job's naming sidecars were written under.
+    /// Every folder a job's sidecars may sit in, newest last. What a cleanup
+    /// wants: it has to reach all of them, since a job can have written under
+    /// more than one root.
     ///
     /// One place for a decision that was spelled out at each call site in three
-    /// different ways. `nil` in the job means it predates the field or never
-    /// wrote sidecars, and then the folder this queue writes to is what the
-    /// code did before the field existed.
-    func sidecarDir(of job: PipelineJob) -> URL? {
-        job.sidecarOutputDir ?? outputDir
+    /// different ways. An empty record in the job means it predates the field or
+    /// never wrote sidecars, and then the folder this queue writes to is what
+    /// the code did before the field existed.
+    func allSidecarDirs(of job: PipelineJob) -> [URL] {
+        let recorded = job.sidecarOutputDirs
+        return recorded.isEmpty ? [outputDir].compactMap(\.self) : recorded
+    }
+
+    /// The same folders a read should try, newest first.
+    ///
+    /// Newest first because that is where the latest write put the file, and
+    /// several rather than one because a recorded folder is not proof that the
+    /// file arrived: saving naming data logs its failure and carries on, so the
+    /// newest folder can be one the write never reached while an earlier one
+    /// still holds a usable cache.
+    ///
+    /// The same folders, not more: adding this queue's own folder for a job
+    /// that recorded some would let a `_naming.json` the user already resolved,
+    /// left behind in the current folder by a build that recorded only one
+    /// folder, make the resume read the job as still needing a full run.
+    func sidecarDirsNewestFirst(of job: PipelineJob) -> [URL] {
+        allSidecarDirs(of: job).reversed()
     }
 
     func removeJob(id: UUID) {
@@ -563,7 +582,7 @@ class PipelineQueue {
             // jobs are not in the list any more), and spelling it out at every
             // queue-side call keeps the three readable side by side.
             naming.removeNamingData(
-                jobID: id, slug: jobs[index].namingSlug, in: sidecarDir(of: jobs[index]),
+                jobID: id, slug: jobs[index].namingSlug, in: allSidecarDirs(of: jobs[index]),
             )
             jobs.remove(at: index)
         }
@@ -1013,16 +1032,9 @@ extension PipelineQueue: SpeakerNamingSessionDelegate {
             // The naming data was just written under this queue's output
             // folder. Stage 3 records the same, but a run that fails before
             // it would leave the data where nothing that reads the job finds
-            // it once the setting moves.
-            //
-            // Only when the job records nothing yet. Writing it unconditionally
-            // looks more correct and is not: the audio sidecars do not move
-            // until stage 3, so between here and there the pointer would name
-            // the new folder while an earlier run's tracks still sit in the old
-            // one, and a failure in that window strands them with no reference.
-            // The write above can also fail silently. Making pointer and files
-            // agree is a separate change; see the issue linked from the PR.
-            if jobs[idx].sidecarOutputDir == nil { jobs[idx].sidecarOutputDir = outputDir }
+            // it once the setting moves. Records rather than overwrites; see
+            // `previousSidecarOutputDirs`.
+            if let outputDir { jobs[idx].recordSidecarOutputDir(outputDir) }
         }
         if let usedDiarizerMode { jobs[idx].usedDiarizerMode = usedDiarizerMode }
     }
