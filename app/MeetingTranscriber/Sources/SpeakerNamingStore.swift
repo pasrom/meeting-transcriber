@@ -46,7 +46,10 @@ struct SpeakerNamingStore {
     /// separate because `deleteNamingJSON` removes only that one.
     static let namingJSONSuffix = "_naming.json"
     static let segmentsSuffix = "_segments.json"
-    static let sidecarSuffixes = ["_16k.wav", "_app_16k.wav", "_mic_16k.wav", segmentsSuffix]
+    static let mixSuffix = "_16k.wav"
+    static let appTrackSuffix = "_app_16k.wav"
+    static let micTrackSuffix = "_mic_16k.wav"
+    static let sidecarSuffixes = [mixSuffix, appTrackSuffix, micTrackSuffix, segmentsSuffix]
 
     private var recordingsDir: URL? {
         outputDir?.appendingPathComponent("recordings")
@@ -97,10 +100,27 @@ struct SpeakerNamingStore {
     /// Read by the snapshot restore: a confirm drops this the moment it has
     /// rewritten the transcript, so finding it means the rewrite did not
     /// happen and the transcript still carries the auto-names.
+    ///
+    /// Existence, deliberately, not a successful decode. False is the dangerous
+    /// direction here: it yields `.resumeProtocolOnly`, which publishes the
+    /// auto-names and discards what the user confirmed, while true only costs a
+    /// re-run that asks again. A file that does not decode is most likely one
+    /// this build's type has moved past, and answering "absent" for it would
+    /// drop confirmed names for every sidecar written before the change.
     func hasNamingData(slug: String?) -> Bool {
-        guard let slug, let recordingsDir else { return false }
+        guard let slug else { return false }
+        return hasSidecar(slug: slug, suffix: Self.namingJSONSuffix)
+    }
+
+    /// Whether this store's folder holds the given sidecar of `slug`.
+    ///
+    /// The probe a reader needs: a recorded folder is not proof that the write
+    /// landed, so "which folder holds this job's audio" is a question about the
+    /// filesystem, not about the order the folders were recorded in.
+    func hasSidecar(slug: String, suffix: String) -> Bool {
+        guard let recordingsDir else { return false }
         return FileManager.default.fileExists(
-            atPath: recordingsDir.appendingPathComponent("\(slug)\(Self.namingJSONSuffix)").path,
+            atPath: recordingsDir.appendingPathComponent("\(slug)\(suffix)").path,
         )
     }
 

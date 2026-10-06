@@ -547,8 +547,7 @@ class PipelineQueue {
     /// never wrote sidecars, and then the folder this queue writes to is what
     /// the code did before the field existed.
     func allSidecarDirs(of job: PipelineJob) -> [URL] {
-        let recorded = job.sidecarOutputDirs
-        return recorded.isEmpty ? [outputDir].compactMap(\.self) : recorded
+        job.sidecarDirs(orCurrent: outputDir)
     }
 
     /// The same folders a read should try, newest first.
@@ -1025,18 +1024,20 @@ extension PipelineQueue: SpeakerNamingSessionDelegate {
     /// Persist the per-job naming metadata on the (queue-owned) job. `nil` for
     /// either field means "leave unchanged". Mutates `jobs` in place (no
     /// snapshot write — matches the previous inline mutations).
-    func setNamingMetadata(jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?) {
+    func setNamingMetadata(
+        jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?, wroteSidecarsIn: URL?,
+    ) {
         guard let idx = jobs.firstIndex(where: { $0.id == jobID }) else { return }
-        if let slug {
-            jobs[idx].namingSlug = slug
-            // The naming data was just written under this queue's output
-            // folder. Stage 3 records the same, but a run that fails before
-            // it would leave the data where nothing that reads the job finds
-            // it once the setting moves. Records rather than overwrites; see
-            // `previousSidecarOutputDirs`.
-            if let outputDir { jobs[idx].recordSidecarOutputDir(outputDir) }
-        }
+        if let slug { jobs[idx].namingSlug = slug }
         if let usedDiarizerMode { jobs[idx].usedDiarizerMode = usedDiarizerMode }
+        // Only the folder the caller says it wrote to. Stage 3 records its own,
+        // but a run that fails before it would leave the naming data where
+        // nothing that reads the job finds it once the setting moves. Recording
+        // a folder the write never reached is worse than not recording it: the
+        // read trusts this order to find the newest payload, so a folder that
+        // holds nothing would take the front of the queue. Records rather than
+        // overwrites; see `previousSidecarOutputDirs`.
+        if let wroteSidecarsIn { jobs[idx].recordSidecarOutputDir(wroteSidecarsIn) }
     }
 
     /// Enter the diarizing stage for a late re-run: transition + start the

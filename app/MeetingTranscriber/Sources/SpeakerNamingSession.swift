@@ -20,7 +20,12 @@ protocol SpeakerNamingSessionDelegate: AnyObject {
     func addWarning(id: UUID, _ message: String)
     /// Persist the per-job naming metadata on the (queue-owned) job. `nil`
     /// for either field means "leave unchanged".
-    func setNamingMetadata(jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?)
+    /// `wroteSidecarsIn` records a folder as holding this job's sidecars, and
+    /// only a write that succeeded may pass one: the recorded order is what a
+    /// read trusts to find the newest payload.
+    func setNamingMetadata(
+        jobID: UUID, slug: String?, usedDiarizerMode: DiarizerMode?, wroteSidecarsIn: URL?,
+    )
     /// Apply a speaker DB update AND refresh the queue's cached known-names in
     /// one step (issue #155): the write+refresh pairing must stay atomic.
     func updateSpeakerDB(
@@ -210,7 +215,6 @@ final class SpeakerNamingSession {
         // (generateProtocol guards on factory()) and the job sits in
         // .speakerNamingPending forever.
         let canGenerateProtocol = (protocolGeneratorFactory?() != nil)
-            && outputDir != nil
             && delegate?.job(withID: jobID)?.transcriptPath != nil
 
         removeNamingData(jobID: jobID, slug: slug)
@@ -240,7 +244,6 @@ final class SpeakerNamingSession {
         // protocol ever written.
         guard let job = delegate.job(withID: jobID) else { return }
         guard let transcriptPath = job.transcriptPath,
-              let outputDir,
               let transcript = try? String(contentsOf: transcriptPath, encoding: .utf8)
         else {
             // Reachable when the transcript was moved or deleted between the
@@ -254,7 +257,9 @@ final class SpeakerNamingSession {
             jobID: jobID,
             transcript: transcript,
             title: job.meetingTitle,
-            protocolsDir: outputDir.appendingPathComponent("protocols"),
+            // Beside the transcript it is made from, which is the rule the
+            // protocol-only resume uses too.
+            protocolsDir: transcriptPath.deletingLastPathComponent(),
         )
         finishIfUnresolved(jobID: jobID, delegate: delegate)
     }
@@ -328,8 +333,11 @@ final class SpeakerNamingSession {
         )
 
         // Persist naming data and set slug + mode early.
-        saveNamingData(namingData, slug: slug)
-        delegate?.setNamingMetadata(jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode)
+        let saved = saveNamingData(namingData, slug: slug, in: outputDir)
+        delegate?.setNamingMetadata(
+            jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode,
+            wroteSidecarsIn: saved ? outputDir : nil,
+        )
         delegate?.namingStageDidEnd()
 
         // Stash recognition forensics so the late-confirm path can write the
@@ -365,18 +373,30 @@ final class SpeakerNamingSession {
 
     // MARK: - Persistence
 
-    /// Persist naming data via `namingStore`, surfacing a per-job warning on
-    /// failure (the store stays I/O-only; the session owns the job-state side
-    /// effect). A silent failure would mean late-confirm won't work after a
-    /// restart, so make it visible: log + warning on the job.
-    func saveNamingData(_ data: SpeakerNamingData, slug: String) {
+    /// Persist naming data, surfacing a per-job warning on failure (the store
+    /// stays I/O-only; the session owns the job-state side effect). A silent
+    /// failure would mean late-confirm won't work after a restart, so make it
+    /// visible: log + warning on the job.
+    ///
+    /// The folder is passed, never implied: the late paths write beside the
+    /// audio the payload describes, while a job running here now writes under
+    /// this session's.
+    ///
+    /// Returns whether the write landed, because only a folder that actually
+    /// received the payload may be recorded on the job. Recording one that did
+    /// not is what made the recorded order unable to answer "which of these
+    /// files is newest".
+    @discardableResult
+    func saveNamingData(_ data: SpeakerNamingData, slug: String, in outputDir: URL) -> Bool {
         do {
-            try namingStore.save(data, slug: slug)
+            try SpeakerNamingStore(outputDir: outputDir).save(data, slug: slug)
+            return true
         } catch {
             // Error left redacted: the write target is `<title-slug>_naming.json`,
             // so a file-write error description would leak the meeting title.
             logger.error("Failed to save naming data: \(error.localizedDescription)")
             delegate?.addWarning(id: data.jobID, "Late re-confirm unavailable — naming data could not be persisted")
+            return false
         }
     }
 
@@ -438,8 +458,7 @@ final class SpeakerNamingSession {
         let resolved = outputDirs.isEmpty
             ? (delegate?.job(withID: jobID)?.sidecarOutputDirs ?? [])
             : outputDirs
-        let stores = resolved.isEmpty ? [namingStore] : resolved.map { SpeakerNamingStore(outputDir: $0) }
-        for store in stores {
+        for store in stores(in: resolved) {
             store.deleteNamingJSON(slug: slug)
             store.cleanupSidecarFiles(slug: slug)
         }
@@ -452,18 +471,61 @@ final class SpeakerNamingSession {
         try namingStore.deleteTranscriptSegments(slug: slug)
     }
 
+    /// Stores for each of `outputDirs`, or this session's own when the list is
+    /// empty.
+    private func stores(in outputDirs: [URL]) -> [SpeakerNamingStore] {
+        outputDirs.isEmpty ? [namingStore] : outputDirs.map { SpeakerNamingStore(outputDir: $0) }
+    }
+
+    /// The folder a job's sidecars are in: the newest folder the job recorded,
+    /// else this session's own.
+    ///
+    /// The newest folder the job recorded that holds any of `suffixes`, or nil
+    /// when none does.
+    ///
+    /// Probed rather than assumed, because a recorded folder is not proof that
+    /// the file is there: the newest can be one the user has since removed, and
+    /// stage 3 persists the mix, the two tracks and the segments as four
+    /// independent best-effort moves, so one folder can hold some of them and
+    /// another the rest.
+    ///
+    /// Each caller asks for what it reads, for the same reason. Nil rather than
+    /// a folder known to lack the file, so the caller reports "not found"
+    /// instead of failing later against a path it was handed.
+    func sidecarDir(of job: PipelineJob, slug: String, holdingAnyOf suffixes: [String]) -> URL? {
+        let root = job.sidecarDirs(orCurrent: outputDir).reversed().first { folder in
+            let store = SpeakerNamingStore(outputDir: folder)
+            return suffixes.contains { store.hasSidecar(slug: slug, suffix: $0) }
+        }
+        return root.map { $0.appendingPathComponent("recordings") }
+    }
+
+    /// The `recordings` folder of the newest root the job recorded, for a caller
+    /// that must carry on when the file it wants is in none of them.
+    func recordingsDir(of job: PipelineJob) -> URL? {
+        job.sidecarDirs(orCurrent: outputDir).last?.appendingPathComponent("recordings")
+    }
+
     /// Rebuild the RAM naming cache for a restored `.speakerNamingPending` job
     /// from its on-disk sidecar. Returns false when no candidate folder holds
     /// one (the queue then marks the job `.done`). Called from `loadSnapshot`.
     ///
-    /// `outputDirs` are the folders to try in order, empty meaning this
-    /// session's own store. The first that holds the file wins; which folders
-    /// those are and in what order is `sidecarDirsNewestFirst`'s decision, and
-    /// the reason there is more than one is documented there.
+    /// `outputDirs` are the folders to try, empty meaning this session's own
+    /// store. The freshest readable payload that names this job wins; which
+    /// folders are offered is `sidecarDirsNewestFirst`'s decision, and ties fall
+    /// back to that order.
     func restore(jobID: UUID, slug: String, in outputDirs: [URL] = []) -> Bool {
-        let stores = outputDirs.isEmpty ? [namingStore] : outputDirs.map { SpeakerNamingStore(outputDir: $0) }
-        for store in stores {
-            guard let data = store.load(slug: slug) else { continue }
+        // In the order given, which is newest recorded first, and that order is
+        // now truthful: a folder is recorded only by a write that landed there.
+        // Taking the file's modification time instead was tried and dropped — a
+        // backup restore or a sync client can restamp an older copy, and a
+        // backward clock correction between two real writes inverts it.
+        //
+        // Only payloads that name this job. The slug carries the title, the
+        // start minute and eight hex digits of the id, so two jobs can agree on
+        // it, and a file left by another job would otherwise be restored here.
+        for store in stores(in: outputDirs) {
+            guard let data = store.load(slug: slug), data.jobID == jobID else { continue }
             speakerNamingDataByJob[jobID] = data
             return true
         }

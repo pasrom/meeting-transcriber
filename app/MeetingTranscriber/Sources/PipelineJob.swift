@@ -200,6 +200,18 @@ struct PipelineJob: Identifiable, Codable {
         (previousSidecarOutputDirs ?? []) + [sidecarOutputDir].compactMap(\.self)
     }
 
+    /// Every folder this job's sidecars may sit in, oldest first, falling back
+    /// to `current` for a job that recorded none.
+    ///
+    /// The one place that answers it, because the queue asks for the cleanup's
+    /// list, the queue's readers ask for the same list reversed, and the naming
+    /// session asks for the newest alone. Three spellings of one rule is what
+    /// the field's accessor was introduced to end.
+    func sidecarDirs(orCurrent current: URL?) -> [URL] {
+        let recorded = sidecarOutputDirs
+        return recorded.isEmpty ? [current].compactMap(\.self) : recorded
+    }
+
     /// Record that sidecars were written under `dir`, keeping any folder a
     /// previous write recorded.
     ///

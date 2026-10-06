@@ -43,7 +43,7 @@ extension SpeakerNamingSession {
             namingData.embeddings,
             verdict: EchoVerdict(job.echo),
             isDualSource: namingData.isDualSource,
-            provenSilentAppTrack: micSpeakersOverSilence(namingData, verdict: EchoVerdict(job.echo), slug: slug),
+            provenSilentAppTrack: micSpeakersOverSilence(namingData, of: job),
         )
         if admissible.count != namingData.embeddings.count {
             let held = namingData.embeddings.count - admissible.count
@@ -84,14 +84,16 @@ extension SpeakerNamingSession {
                 // the paths that never reach this line.
                 removeNamingData(jobID: jobID, slug: slug)
 
-                if let outputDir {
-                    await delegate.generateProtocol(
-                        jobID: jobID,
-                        transcript: transcript,
-                        title: job.meetingTitle,
-                        protocolsDir: outputDir.appendingPathComponent("protocols"),
-                    )
-                }
+                await delegate.generateProtocol(
+                    jobID: jobID,
+                    transcript: transcript,
+                    title: job.meetingTitle,
+                    // Beside the transcript it is made from, which is the rule
+                    // the protocol-only resume uses too. The session's own
+                    // folder is wherever the setting points now, which after a
+                    // repoint is not where this `.txt` is.
+                    protocolsDir: transcriptPath.deletingLastPathComponent(),
+                )
             } catch {
                 logger.error("Failed to re-apply speaker names: \(error.localizedDescription, privacy: .public)")
             }
@@ -110,13 +112,23 @@ extension SpeakerNamingSession {
     /// sidecar, the same file late re-diarization reads; if it is missing, the
     /// answer is "no evidence", and the whole microphone track stays held.
     private func micSpeakersOverSilence(
-        _ namingData: SpeakerNamingData, verdict: EchoVerdict, slug: String?,
+        _ namingData: SpeakerNamingData, of job: PipelineJob,
     ) -> Set<String> {
-        guard verdict == .affected, let outputDir, let slug else { return [] }
+        // Both halves of the precondition `admissible` applies, so the two
+        // cannot drift: a single-source job has no app track to clear anyone
+        // with, and probing for one costs folder stats, an audio open and a
+        // per-segment RMS for a result that is then discarded.
+        guard EchoVerdict(job.echo) == .affected,
+              namingData.isDualSource,
+              let slug = job.namingSlug,
+              let recordingsDir = sidecarDir(
+                  of: job, slug: slug, holdingAnyOf: [SpeakerNamingStore.appTrackSuffix],
+              )
+        else { return [] }
         let proven = AppTrackSilence.micSpeakersProvenClean(
             segments: namingData.segments,
-            appTrackURL: outputDir.appendingPathComponent("recordings")
-                .appendingPathComponent("\(slug)_app_16k.wav"),
+            appTrackURL: recordingsDir
+                .appendingPathComponent("\(slug)\(SpeakerNamingStore.appTrackSuffix)"),
         )
         if !proven.isEmpty {
             logger.info("echo_quarantine_admitted count=\(proven.count, privacy: .public) spoke only over a silent app track")
@@ -151,12 +163,13 @@ extension SpeakerNamingSession {
               let job = delegate.job(withID: jobID),
               let diarizationFactory,
               let slug = job.namingSlug,
-              let outputDir else {
-            logger.warning("Cannot re-diarize: missing data or configuration")
+              let recordingsDir = lateRunRecordingsDir(
+                  of: job, slug: slug, isDualSource: namingData.isDualSource,
+              )
+        else {
+            logger.warning("Cannot re-diarize: audio not found in any folder this job recorded")
             return
         }
-
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
         let diarizeProcess = resolveLateDiarizer(mode: mode, defaultFactory: diarizationFactory)
         guard diarizeProcess.isAvailable else {
             logger.warning("Diarization not available for late re-run")
@@ -189,7 +202,9 @@ extension SpeakerNamingSession {
             }
 
             speakerNamingDataByJob[jobID] = newNamingData
-            saveNamingData(newNamingData, slug: slug)
+            let saved = saveNamingData(
+                newNamingData, slug: slug, in: recordingsDir.deletingLastPathComponent(),
+            )
             // Re-segment the saved transcript to match the fresh diarization.
             // A re-run can change the speaker count and segment boundaries, but
             // the late-confirm path only renames labels already present in the
@@ -205,7 +220,13 @@ extension SpeakerNamingSession {
             // `setNamingMetadata` re-resolves the job by id, so the diarization
             // await outliving another job's `completedJobLifetime` eviction
             // (which shifts the queue's array) can't corrupt a stale index.
-            delegate.setNamingMetadata(jobID: jobID, slug: nil, usedDiarizerMode: diarizeProcess.mode)
+            delegate.setNamingMetadata(
+                jobID: jobID, slug: slug, usedDiarizerMode: diarizeProcess.mode,
+                // The folder this run wrote to, and only if it landed. For a
+                // job that recorded none that is the queue's own folder, which
+                // nothing had recorded yet.
+                wroteSidecarsIn: saved ? recordingsDir.deletingLastPathComponent() : nil,
+            )
 
             delegate.updateJobState(id: jobID, to: .speakerNamingPending)
             NotificationCenter.default.post(name: .showSpeakerNaming, object: nil)
@@ -243,6 +264,23 @@ extension SpeakerNamingSession {
     /// Re-diarize the persisted 16 kHz audio for a job. Dispatches between
     /// dual-source (separate app + mic tracks merged, via the shared queue
     /// helper) and single-source (mix only).
+    /// The recordings folder a late re-run reads from, or nil when none of the
+    /// folders this job recorded holds its audio.
+    ///
+    /// What the run actually opens: the two tracks for a dual-source job, which
+    /// the diarization degrades to whichever one survived, and the mix
+    /// otherwise.
+    private func lateRunRecordingsDir(
+        of job: PipelineJob, slug: String, isDualSource: Bool,
+    ) -> URL? {
+        sidecarDir(
+            of: job, slug: slug,
+            holdingAnyOf: isDualSource
+                ? [SpeakerNamingStore.appTrackSuffix, SpeakerNamingStore.micTrackSuffix]
+                : [SpeakerNamingStore.mixSuffix],
+        )
+    }
+
     private func runLateDiarization(
         diarizer: any DiarizationProvider,
         recording: (dir: URL, slug: String, jobID: UUID, micDelay: TimeInterval),
@@ -317,9 +355,18 @@ extension SpeakerNamingSession {
         run: DiarizationRun, autoNames: [String: String],
         isDualSource: Bool, slug: String, jobID: UUID,
     ) {
-        guard let outputDir,
-              let transcriptPath = delegate?.job(withID: jobID)?.transcriptPath else { return }
-        let recordingsDir = outputDir.appendingPathComponent("recordings")
+        guard let job = delegate?.job(withID: jobID),
+              let transcriptPath = job.transcriptPath,
+              // The folder holding the segments, else the newest the job
+              // recorded. A missing segments file has to reach the load below,
+              // which warns the user that the re-run's speakers never made it
+              // into the transcript; disappearing in this guard would make that
+              // re-run look like it worked.
+              let recordingsDir = sidecarDir(
+                  of: job, slug: slug, holdingAnyOf: [SpeakerNamingStore.segmentsSuffix],
+              )
+              ?? recordingsDir(of: job)
+        else { return }
         guard let cachedSegments = loadCachedSegments(dir: recordingsDir, slug: slug) else {
             logger.warning("Late re-diarization: no persisted transcript segments — speaker labels not re-segmented")
             // Don't let the re-run silently appear to succeed: an older recording
