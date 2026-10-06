@@ -4388,7 +4388,7 @@ final class PipelineQueueTests: XCTestCase {
         )
         job.state = .done
         job.namingSlug = "folder_moved"
-        job.sidecarOutputDir = oldOutputDir
+        job.recordSidecarOutputDir(oldOutputDir)
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
         let sidecars = try SidecarFixture.write(slug: "folder_moved", in: oldRecordingsDir)
@@ -4448,43 +4448,133 @@ final class PipelineQueueTests: XCTestCase {
     /// setting points now. Reading the current folder found nothing after a
     /// repoint and finished the job with auto-names the user never confirmed.
     func testLoadSnapshotRestoresNamingDataFromTheJobsOwnOutputDir() throws {
-        let oldOutputDir = tmpDir.appendingPathComponent("old-output")
-        let newOutputDir = tmpDir.appendingPathComponent("new-output")
-        for dir in [oldOutputDir, newOutputDir] {
-            try FileManager.default.createDirectory(
-                at: dir.appendingPathComponent("recordings"), withIntermediateDirectories: true,
+        let test = try makePendingJobInSnapshot(title: "Named Elsewhere", folders: 1)
+        try SpeakerNamingStore(outputDir: test.folders[0])
+            .save(test.namingData(in: test.folders[0]), slug: test.slug)
+
+        let restored = restoreIntoAnotherFolder()
+
+        XCTAssertEqual(restored.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(restored.naming.speakerNamingDataByJob[test.job.id])
+    }
+
+    /// A job that wrote sidecars under two folders is read from the one it
+    /// wrote last, while the cleanup visits both. Without that order a restore
+    /// would take the folder of the run before, which holds the mapping the
+    /// later run replaced.
+    func testLoadSnapshotRestoresNamingDataFromTheFolderTheJobWroteLast() throws {
+        let test = try makePendingJobInSnapshot(title: "Named Twice", folders: 2)
+        // Only under the folder written last, which is where the save that
+        // recorded it put the file.
+        try SpeakerNamingStore(outputDir: test.folders[1])
+            .save(test.namingData(in: test.folders[1]), slug: test.slug)
+
+        let restored = restoreIntoAnotherFolder()
+
+        XCTAssertEqual(restored.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(restored.naming.speakerNamingDataByJob[test.job.id])
+    }
+
+    /// A recorded folder is not proof that the file arrived there: saving the
+    /// naming data logs its failure and carries on, so the newest recorded
+    /// folder can be one the write never reached. Reading only the newest would
+    /// finish the job with the auto-names in its transcript and drop the
+    /// mapping the user is owed, which is the silent loss the recorded folder
+    /// exists to prevent.
+    func testLoadSnapshotFallsBackToAnEarlierFolderWhenTheNewestHasNoNamingData() throws {
+        let test = try makePendingJobInSnapshot(title: "Save Failed", folders: 2)
+        // Only under the folder written first: the save under the folder
+        // recorded last is the one that failed.
+        try SpeakerNamingStore(outputDir: test.folders[0])
+            .save(test.namingData(in: test.folders[0]), slug: test.slug)
+
+        let restored = restoreIntoAnotherFolder()
+
+        XCTAssertEqual(restored.jobs.first?.state, .speakerNamingPending)
+        XCTAssertNotNil(restored.naming.speakerNamingDataByJob[test.job.id])
+    }
+
+    /// When both recorded folders hold naming data, the newest wins. A run that
+    /// saved under the old folder and then again under the new one leaves two
+    /// files, and reading the older one restores the mapping the second run
+    /// replaced, so the dialog comes back pre-filled with names the user has
+    /// already corrected.
+    func testLoadSnapshotPrefersTheNewestFolderWhenBothHoldNamingData() throws {
+        let test = try makePendingJobInSnapshot(title: "Saved Twice", folders: 2)
+        for (folder, speaker) in zip(test.folders, ["Speaker A", "Speaker B"]) {
+            try SpeakerNamingStore(outputDir: folder)
+                .save(test.namingData(in: folder, speaker: speaker), slug: test.slug)
+        }
+
+        let restored = restoreIntoAnotherFolder()
+
+        XCTAssertEqual(
+            restored.naming.speakerNamingDataByJob[test.job.id]?.mapping["SPEAKER_0"], "Speaker B",
+        )
+    }
+
+    // MARK: - Restore arrangement
+
+    /// One `.speakerNamingPending` job in a snapshot, having recorded each of
+    /// `folders` in turn, with their `recordings/` subfolders created.
+    ///
+    /// Shared because these tests differ only in which folder receives the
+    /// naming data: the same arrangement written out four times is how a
+    /// fixture in this area went wrong once before, which is what
+    /// `SidecarFixture` records.
+    private struct RestoreCase {
+        let job: PipelineJob
+        let folders: [URL]
+        let slug: String
+
+        /// Naming data for this job, pointing at the audio under `folder`.
+        func namingData(
+            in folder: URL, speaker: String = "Speaker A",
+        ) -> PipelineQueue.SpeakerNamingData {
+            PipelineQueue.SpeakerNamingData(
+                jobID: job.id,
+                meetingTitle: job.meetingTitle,
+                mapping: ["SPEAKER_0": speaker],
+                speakingTimes: ["SPEAKER_0": 60.0],
+                embeddings: ["SPEAKER_0": [0.1, 0.2]],
+                audioPath: folder.appendingPathComponent("recordings/\(slug)_16k.wav"),
+                segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+                participants: [],
+                isDualSource: false,
             )
+        }
+    }
+
+    private func makePendingJobInSnapshot(title: String, folders count: Int) throws -> RestoreCase {
+        let dirs = try (0 ..< count).map { index in
+            let dir = tmpDir.appendingPathComponent("restore-output-\(index)")
+            _ = try makeRecordingsDir(in: dir)
+            return dir
         }
         let mixPath = tmpDir.appendingPathComponent("mix.wav")
         try Data([0]).write(to: mixPath)
 
+        let slug = title.lowercased().replacingOccurrences(of: " ", with: "_")
         var job = PipelineJob(
-            meetingTitle: "Named Elsewhere", appName: "App",
+            meetingTitle: title, appName: "App",
             mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
         )
         job.state = .speakerNamingPending
-        job.namingSlug = "named_elsewhere"
-        job.sidecarOutputDir = oldOutputDir
+        job.namingSlug = slug
+        for dir in dirs {
+            job.recordSidecarOutputDir(dir)
+        }
         try JSONEncoder().encode([job])
             .write(to: tmpDir.appendingPathComponent(PipelineSnapshot.snapshotFilename))
-        let namingData = PipelineQueue.SpeakerNamingData(
-            jobID: job.id,
-            meetingTitle: "Named Elsewhere",
-            mapping: ["SPEAKER_0": "Speaker A"],
-            speakingTimes: ["SPEAKER_0": 60.0],
-            embeddings: ["SPEAKER_0": [0.1, 0.2]],
-            audioPath: oldOutputDir.appendingPathComponent("recordings/named_elsewhere_16k.wav"),
-            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
-            participants: [],
-            isDualSource: false,
-        )
-        try SpeakerNamingStore(outputDir: oldOutputDir).save(namingData, slug: "named_elsewhere")
+        return RestoreCase(job: job, folders: dirs, slug: slug)
+    }
 
-        let freshQueue = makeRestoreQueue(outputDir: newOutputDir)
-        freshQueue.loadSnapshot()
-
-        XCTAssertEqual(freshQueue.jobs.first?.state, .speakerNamingPending)
-        XCTAssertNotNil(freshQueue.naming.speakerNamingDataByJob[job.id])
+    /// Restores into a queue writing to a folder none of the recorded ones is,
+    /// which is the state after the user repointed the output setting.
+    private func restoreIntoAnotherFolder() -> PipelineQueue {
+        let queue = makeRestoreQueue(outputDir: tmpDir.appendingPathComponent("current-output"))
+        queue.loadSnapshot()
+        return queue
     }
 
     // MARK: - Snapshot Restore + Speaker Naming Cache

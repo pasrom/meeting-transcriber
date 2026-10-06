@@ -27,6 +27,14 @@ enum SidecarFixture {
 }
 
 extension XCTestCase {
+    /// The `recordings/` subfolder of an output directory, created. Spelled out
+    /// inline in three suites before the third one needed it twice.
+    func makeRecordingsDir(in outputDir: URL) throws -> URL {
+        let recordings = outputDir.appendingPathComponent("recordings", isDirectory: true)
+        try FileManager.default.createDirectory(at: recordings, withIntermediateDirectories: true)
+        return recordings
+    }
+
     func assertSidecars(
         _ sidecars: [URL], exist: Bool,
         file: StaticString = #filePath, line: UInt = #line,

@@ -488,7 +488,7 @@ final class SpeakerNamingSessionTests: XCTestCase {
             appPath: nil, micPath: nil, micDelay: 0,
         )
         job.namingSlug = "meeting"
-        job.sidecarOutputDir = recorded
+        job.recordSidecarOutputDir(recorded)
         delegate.jobs[job.id] = job
 
         session.removeNamingData(jobID: job.id, slug: "meeting")
