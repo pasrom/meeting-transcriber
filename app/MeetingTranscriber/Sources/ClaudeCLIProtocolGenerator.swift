@@ -112,7 +112,9 @@
             }
 
             // Read stream-json output concurrently with stdin write
-            let (text, resultEvent) = try await Self.readStreamJSON(from: stdoutPipe, process: process)
+            let (text, resultEvent) = try await Self.readStreamJSON(
+                from: stdoutPipe, process: process, exited: exitStream,
+            )
 
             // Ensure stdin write completes (should be done by now)
             _ = await stdinWriteTask.value
@@ -201,7 +203,7 @@
         /// Parse Claude CLI stream-json output, accumulate text, and capture
         /// the terminal `result` event (if any) for failure diagnostics.
         private static func readStreamJSON(
-            from pipe: Pipe, process: Process,
+            from pipe: Pipe, process: Process, exited: AsyncStream<Void>,
         ) async throws -> (text: String, resultEvent: ResultEventInfo?) {
             let handle = pipe.fileHandleForReading
             var parts: [String] = []
@@ -218,6 +220,9 @@
                         "claude_cli_timeout elapsed=\(elapsedStr, privacy: .public)s parts_received=\(parts.count, privacy: .public)",
                     )
                     process.terminate()
+                    // The caller removes the run's folders next, which a CLI
+                    // still shutting down could write into afterwards.
+                    await awaitExit(of: process, exited: exited)
                     throw ProtocolError.timeout
                 }
 
