@@ -45,16 +45,14 @@
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
 
             let process = Process()
-            let resolvedBin = Self.resolveClaudePath(claudeBin)
+            let launch = await Self.launchConfiguration(claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey)
+            let resolvedBin = launch.resolvedBin
             process.executableURL = URL(fileURLWithPath: resolvedBin)
-            process.arguments = Self.buildSubprocessArgs(claudeBin: claudeBin, resolvedBin: resolvedBin)
-            process.environment = Self.buildEnvironment(
-                baseEnvironment: ProcessInfo.processInfo.environment,
-                searchPaths: Self.searchPaths,
-                anthropicAPIKey: anthropicAPIKey,
-            )
+            process.arguments = launch.arguments
+            process.environment = launch.environment
             let workingDirectory = try Self.makeWorkingDirectory()
-            defer { try? FileManager.default.removeItem(at: workingDirectory) }
+            let projectFolder = Self.cliProjectFolder(workingDirectory: workingDirectory, environment: launch.environment)
+            defer { Self.removeRunFolders(workingDirectory: workingDirectory, projectFolder: projectFolder) }
             process.currentDirectoryURL = workingDirectory
 
             let stdinPipe = Pipe()
@@ -412,9 +410,14 @@
 
         /// Build the CLI argument vector. When `resolvedBin` is the
         /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve
-        /// it from PATH.
-        static func buildSubprocessArgs(claudeBin: String, resolvedBin: String) -> [String] {
+        /// it from PATH. `noSessionPersistence` adds
+        /// `noSessionPersistenceFlag`; pass what
+        /// `cliSupportsNoSessionPersistence` found for this binary.
+        static func buildSubprocessArgs(claudeBin: String, resolvedBin: String, noSessionPersistence: Bool) -> [String] {
             var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
+            if noSessionPersistence {
+                args.append(noSessionPersistenceFlag)
+            }
             if resolvedBin == "/usr/bin/env" {
                 args.insert(claudeBin, at: 0)
             }
