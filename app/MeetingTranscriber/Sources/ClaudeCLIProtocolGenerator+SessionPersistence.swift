@@ -79,50 +79,86 @@
             help.contains(noSessionPersistenceFlag)
         }
 
-        /// The CLI's `--help` output, or nil when it could not be started.
-        /// Runs in a working directory of its own, like a real run, so the
-        /// probe neither inherits the app's directory nor touches the one
-        /// the real run is about to get.
-        private static func readHelp(
-            resolvedBin: String, claudeBin: String, environment: [String: String],
+        /// The CLI's `--help` output, or nil when it could not be started or
+        /// did not exit within `timeout`. Runs in a working directory of its
+        /// own, like a real run, so the probe neither inherits the app's
+        /// directory nor touches the one the real run is about to get.
+        ///
+        /// Output goes to a file in that directory rather than a pipe, and
+        /// the wait is for the process to exit, bounded by `timeout`: a
+        /// wrapper script that ignores SIGTERM, or leaves a child holding its
+        /// output open, must not hold up the protocol. A probe that runs out
+        /// of time is sent SIGTERM, then SIGKILL a second later, and is not
+        /// waited for again.
+        static func readHelp(
+            resolvedBin: String,
+            claudeBin: String,
+            environment: [String: String],
+            timeout: TimeInterval = helpProbeTimeoutSeconds,
         ) async -> String? {
             guard let directory = try? makeWorkingDirectory() else { return nil }
             defer { try? FileManager.default.removeItem(at: directory) }
+            let outputFile = directory.appendingPathComponent("help.txt")
+            guard FileManager.default.createFile(atPath: outputFile.path, contents: nil),
+                  let output = try? FileHandle(forWritingTo: outputFile) else { return nil }
 
             let process = Process()
             process.executableURL = URL(fileURLWithPath: resolvedBin)
             process.arguments = (resolvedBin == "/usr/bin/env" ? [claudeBin] : []) + ["--help"]
             process.environment = environment
             process.currentDirectoryURL = directory
-            let stdout = Pipe()
-            process.standardOutput = stdout
+            process.standardOutput = output
             process.standardError = FileHandle.nullDevice
             process.standardInput = FileHandle.nullDevice
-            do {
-                try process.run()
-            } catch {
-                return nil
-            }
-            let watchdog = Task {
-                try await Task.sleep(for: .seconds(helpProbeTimeoutSeconds))
-                process.terminate()
-            }
-            defer { watchdog.cancel() }
-            let handle = stdout.fileHandleForReading
-            let data = await Task.detached { handle.readDataToEndOfFile() }.value
+
+            let exited = await runBounded(process, timeout: timeout)
+            try? output.close()
+            guard exited, let data = try? Data(contentsOf: outputFile) else { return nil }
             return String(bytes: data, encoding: .utf8)
+        }
+
+        /// Starts `process` and reports whether it exited within `timeout`.
+        /// False also when it could not be started.
+        private static func runBounded(_ process: Process, timeout: TimeInterval) async -> Bool {
+            await withCheckedContinuation { continuation in
+                let resumed = OSAllocatedUnfairLock(initialState: false)
+                let finish: @Sendable (Bool) -> Void = { exited in
+                    let first = resumed.withLock { done in
+                        defer { done = true }
+                        return !done
+                    }
+                    if first { continuation.resume(returning: exited) }
+                }
+                process.terminationHandler = { _ in finish(true) }
+                do {
+                    try process.run()
+                } catch {
+                    finish(false)
+                    return
+                }
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    guard process.isRunning else { return }
+                    finish(false)
+                    process.terminate()
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                    }
+                }
+            }
         }
 
         /// The folder the CLI keeps for a run started in `workingDirectory`:
         /// `<config dir>/projects/<name>`, where the config dir is
-        /// `CLAUDE_CONFIG_DIR` or `~/.claude`, and the name is the directory's
+        /// `CLAUDE_CONFIG_DIR` or `.claude` in the child's `HOME` (the app's
+        /// home directory when the environment sets none), and the name is the directory's
         /// physical path with every character other than an ASCII letter or
         /// digit replaced by `-`. Nil when the path cannot be resolved.
         static func cliProjectFolder(workingDirectory: URL, environment: [String: String]) -> URL? {
             guard let resolved = realpath(workingDirectory.path, nil) else { return nil }
             defer { free(resolved) }
+            let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
             let configDirectory = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
-                ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude")
+                ?? URL(fileURLWithPath: home).appendingPathComponent(".claude")
             return configDirectory
                 .appendingPathComponent("projects", isDirectory: true)
                 .appendingPathComponent(projectFolderName(forPath: String(cString: resolved)), isDirectory: true)

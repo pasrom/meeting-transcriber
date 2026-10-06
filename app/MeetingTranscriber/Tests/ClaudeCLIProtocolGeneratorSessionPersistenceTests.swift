@@ -54,6 +54,38 @@
             XCTAssertTrue(result.contains("--output-format stream-json"), "arguments were: \(result)")
         }
 
+        /// A wrapper that ignores SIGTERM and does not exit must not hold up
+        /// the protocol: the probe gives up after its timeout and the run
+        /// goes ahead without the flag.
+        func testHelpProbeGivesUpOnACLIThatDoesNotExit() async throws {
+            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
+            try "#!/bin/sh\ntrap '' TERM\necho '--no-session-persistence'\nsleep 5\n"
+                .write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+            defer { try? FileManager.default.removeItem(atPath: path) }
+
+            let start = Date()
+            let help = await ClaudeCLIProtocolGenerator.readHelp(
+                resolvedBin: path, claudeBin: path, environment: ProcessInfo.processInfo.environment, timeout: 0.5,
+            )
+
+            XCTAssertNil(help, "a probe that ran out of time counts as no help text")
+            XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the probe waited for a CLI that never exits")
+        }
+
+        func testHelpProbeReadsTheHelpOfACLIThatExits() async throws {
+            let path = NSTemporaryDirectory() + "fake-claude-\(UUID().uuidString).sh"
+            try "#!/bin/sh\necho \"called with $1\"\n".write(toFile: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+            defer { try? FileManager.default.removeItem(atPath: path) }
+
+            let help = await ClaudeCLIProtocolGenerator.readHelp(
+                resolvedBin: path, claudeBin: path, environment: ProcessInfo.processInfo.environment,
+            )
+
+            XCTAssertEqual(help, "called with --help\n")
+        }
+
         // MARK: - Project folder
 
         /// The name Claude Code gives the folder, as measured on this
@@ -82,6 +114,19 @@
                 folder.path,
                 "/tmp/claude-config/projects/" + ClaudeCLIProtocolGenerator.projectFolderName(forPath: physical),
             )
+        }
+
+        /// The CLI inherits the environment, so a `HOME` set there is where it
+        /// keeps `.claude`, not the account's home directory.
+        func testCLIProjectFolderFollowsTheChildsHome() throws {
+            let workingDirectory = try ClaudeCLIProtocolGenerator.makeWorkingDirectory()
+            defer { try? FileManager.default.removeItem(at: workingDirectory) }
+
+            let folder = try XCTUnwrap(ClaudeCLIProtocolGenerator.cliProjectFolder(
+                workingDirectory: workingDirectory, environment: ["HOME": "/tmp/other-home"],
+            ))
+
+            XCTAssertEqual(folder.deletingLastPathComponent().path, "/tmp/other-home/.claude/projects")
         }
 
         func testCLIProjectFolderDefaultsToDotClaudeInTheHomeDirectory() throws {
