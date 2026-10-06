@@ -54,7 +54,10 @@ final class RemoveJobSidecarFolderTests: XCTestCase {
 
         // The production call that records a folder: the second run has just
         // saved its naming data under the folder this queue writes to.
-        test.queue.setNamingMetadata(jobID: test.job.id, slug: Self.slug, usedDiarizerMode: nil)
+        test.queue.setNamingMetadata(
+            jobID: test.job.id, slug: Self.slug, usedDiarizerMode: nil,
+            wroteSidecarsIn: test.current,
+        )
         test.queue.removeJob(id: test.job.id)
 
         assertSidecars(test.sidecars + underCurrent, exist: false)
@@ -70,7 +73,10 @@ final class RemoveJobSidecarFolderTests: XCTestCase {
             slug: Self.slug, in: makeRecordingsDir(in: test.current),
         )
 
-        test.queue.setNamingMetadata(jobID: test.job.id, slug: Self.slug, usedDiarizerMode: nil)
+        test.queue.setNamingMetadata(
+            jobID: test.job.id, slug: Self.slug, usedDiarizerMode: nil,
+            wroteSidecarsIn: test.current,
+        )
         test.queue.cancelJob(id: test.job.id)
 
         assertSidecars(test.sidecars + underCurrent, exist: false)

@@ -4513,6 +4513,41 @@ final class PipelineQueueTests: XCTestCase {
         )
     }
 
+    /// A folder is recorded only by a write that landed there. The read trusts
+    /// the recorded order to find the newest payload, so a folder that holds
+    /// nothing must not take the front of it — which is what happened while the
+    /// folder was recorded next to the slug rather than next to the write.
+    func testOnlyAWriteThatLandedRecordsItsFolder() throws {
+        let test = try makePendingJobInSnapshot(title: "Not Written", folders: 1)
+        let queue = makeRestoreQueue(outputDir: tmpDir.appendingPathComponent("current-output"))
+        queue.insertJobForTesting(test.job)
+        let before = queue.jobs.first?.sidecarOutputDirs
+
+        queue.setNamingMetadata(
+            jobID: test.job.id, slug: test.slug, usedDiarizerMode: nil, wroteSidecarsIn: nil,
+        )
+
+        XCTAssertEqual(queue.jobs.first?.sidecarOutputDirs, before)
+        XCTAssertEqual(queue.jobs.first?.namingSlug, test.slug, "the slug is still set")
+    }
+
+    /// A payload that names another job is not this job's mapping. The slug
+    /// carries the title, the start minute and eight hex digits of the id, so
+    /// two jobs can agree on it.
+    func testLoadSnapshotIgnoresNamingDataThatNamesAnotherJob() throws {
+        let test = try makePendingJobInSnapshot(title: "Not Mine", folders: 1)
+        let foreign = test.namingData(in: test.folders[0], jobID: UUID())
+        try SpeakerNamingStore(outputDir: test.folders[0]).save(foreign, slug: test.slug)
+
+        let restored = restoreIntoAnotherFolder()
+
+        XCTAssertNil(restored.naming.speakerNamingDataByJob[test.job.id])
+        XCTAssertEqual(
+            restored.jobs.first?.state, .done,
+            "no mapping of its own, so the job finishes rather than waiting for one",
+        )
+    }
+
     // MARK: - Restore arrangement
 
     /// One `.speakerNamingPending` job in a snapshot, having recorded each of
@@ -4529,10 +4564,10 @@ final class PipelineQueueTests: XCTestCase {
 
         /// Naming data for this job, pointing at the audio under `folder`.
         func namingData(
-            in folder: URL, speaker: String = "Speaker A",
+            in folder: URL, speaker: String = "Speaker A", jobID: UUID? = nil,
         ) -> PipelineQueue.SpeakerNamingData {
             PipelineQueue.SpeakerNamingData(
-                jobID: job.id,
+                jobID: jobID ?? job.id,
                 meetingTitle: job.meetingTitle,
                 mapping: ["SPEAKER_0": speaker],
                 speakingTimes: ["SPEAKER_0": 60.0],
