@@ -594,16 +594,16 @@ struct SpeakerNamingView: View { // swiftlint:disable:this type_body_length
             return
         }
 
-        guard let audioPath = data.audioPath else { return }
-
-        // Pick the longest pure segment to avoid cross-voice contamination.
-        guard let chosen = Self.selectSampleSegment(for: label, in: data.segments) else { return }
+        // Pick the longest pure segment to avoid cross-voice contamination,
+        // and play it from the speaker's own track where there is one.
+        guard let chosen = Self.selectSampleSegment(for: label, in: data.segments),
+              let source = data.sampleSource(for: chosen) else { return }
 
         // Perform file I/O off the main thread
-        Task.detached { [audioPath, chosen] in
+        Task.detached { [source] in
             do {
                 guard let snippet = try Self.snippetWAVData(
-                    audioPath: audioPath, start: chosen.start, end: chosen.end,
+                    audioPath: source.url, start: source.start, end: source.end,
                 ) else { return }
 
                 let newPlayer = try AVAudioPlayer(data: snippet)

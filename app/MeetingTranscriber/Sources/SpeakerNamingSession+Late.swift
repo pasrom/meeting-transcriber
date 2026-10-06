@@ -503,7 +503,7 @@ extension SpeakerNamingSession {
             )
         }
 
-        return SpeakerNamingData(
+        var data = SpeakerNamingData(
             jobID: jobID, meetingTitle: title, mapping: autoNames,
             speakingTimes: diarization.speakingTimes, embeddings: embeddings,
             audioPath: prior.audioPath,
@@ -512,6 +512,8 @@ extension SpeakerNamingSession {
             },
             participants: prior.participants, isDualSource: prior.isDualSource,
         )
+        data.tracks = prior.tracks
+        return data
     }
 
     /// Rewrite the persisted transcript so its speaker segmentation reflects a
