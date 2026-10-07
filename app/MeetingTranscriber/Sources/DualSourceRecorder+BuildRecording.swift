@@ -28,6 +28,35 @@ extension DualSourceRecorder {
         }
     }
 
+    /// Write the mix through `write` into a staging file next to `mixPath`
+    /// and rename it into place only once `write` has returned, so `mixPath`
+    /// exists only complete (see `RecordingFileSuffix.mixStaging`). A throw
+    /// leaves no mix; the staging file it leaves is removed here, or by
+    /// `removeStaleMixStaging` if the process ends first. `rename(2)`
+    /// replaces an existing mix atomically.
+    ///
+    /// The staging name is unique per write, not per stem: two re-mixes of
+    /// one stem can overlap (every queue rebuild starts a staging recovery),
+    /// and with a shared name one write unlinked the other's file and that
+    /// one's rename then put a half-written file in place as the mix.
+    nonisolated static func writeMixAtomically(to mixPath: URL, _ write: (URL) throws -> Void) throws {
+        let name = mixPath.lastPathComponent
+        let stem = name.hasSuffix(RecordingFileSuffix.mix) ? String(name.dropLast(RecordingFileSuffix.mix.count)) : name
+        let staging = mixPath.deletingLastPathComponent()
+            .appendingPathComponent("\(stem).\(UUID().uuidString)\(RecordingFileSuffix.mixStaging)")
+        do {
+            try write(staging)
+        } catch {
+            try? FileManager.default.removeItem(at: staging)
+            throw error
+        }
+        guard rename(staging.path, mixPath.path) == 0 else {
+            let code = POSIXErrorCode(rawValue: errno) ?? .EIO
+            try? FileManager.default.removeItem(at: staging)
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSUnderlyingErrorKey: POSIXError(code)])
+        }
+    }
+
     /// Convert a finished `AudioCaptureResult` (raw app `.tmp` + optional mic
     /// WAV) into a mixed 16 kHz `RecordingResult`: cross-check the rate, downmix
     /// + resample the app track, load the mic track, then mix or fall back to a
@@ -188,21 +217,24 @@ extension DualSourceRecorder {
         let mixRate = format.targetRate
         let mixPath = recDir.appendingPathComponent("\(ts)\(RecordingFileSuffix.mix)")
 
-        if let app = appPath, let mic = micPath {
-            // Delegate mute masking, echo suppression, delay alignment, and mixing
-            try AudioMixer.mix(
-                appAudioPath: app,
-                micAudioPath: mic,
-                outputPath: mixPath,
-                micDelay: normalisation.reportedDelay,
-                sampleRate: mixRate,
-            )
-        } else if !appSamples16k.isEmpty {
-            try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: mixRate, url: mixPath)
-        } else if !micSamples.isEmpty {
-            try AudioMixer.saveWAV(samples: micSamples, sampleRate: mixRate, url: mixPath)
-        } else {
+        guard (appPath != nil && micPath != nil) || !appSamples16k.isEmpty || !micSamples.isEmpty else {
             throw RecorderError.noAudioData
+        }
+        try writeMixAtomically(to: mixPath) { staging in
+            if let app = appPath, let mic = micPath {
+                // Delegate mute masking, echo suppression, delay alignment, and mixing
+                try AudioMixer.mix(
+                    appAudioPath: app,
+                    micAudioPath: mic,
+                    outputPath: staging,
+                    micDelay: normalisation.reportedDelay,
+                    sampleRate: mixRate,
+                )
+            } else if !appSamples16k.isEmpty {
+                try AudioMixer.saveWAV(samples: appSamples16k, sampleRate: mixRate, url: staging)
+            } else {
+                try AudioMixer.saveWAV(samples: micSamples, sampleRate: mixRate, url: staging)
+            }
         }
 
         logger.info("Mix saved: \(mixPath.lastPathComponent)")
@@ -221,5 +253,18 @@ extension DualSourceRecorder {
             micDelay: normalisation.reportedDelay,
             recordingStartDate: recordingStartDate,
         )
+    }
+
+    /// Delete mix staging files a write cut off by the process exit left
+    /// behind. Runs after crash recovery, which re-mixes a rescuable stem
+    /// under a staging name of its own, so what is left is litter whether or
+    /// not the stem got a mix. `cutoff` spares a write still in progress.
+    nonisolated static func removeStaleMixStaging(in entries: [URL], olderThan cutoff: Date) {
+        let fm = FileManager.default
+        for file in entries where file.lastPathComponent.hasSuffix(RecordingFileSuffix.mixStaging) {
+            if let mtime = (try? fm.attributesOfItem(atPath: file.path)[.modificationDate]) as? Date,
+               mtime > cutoff { continue }
+            try? fm.removeItem(at: file)
+        }
     }
 }

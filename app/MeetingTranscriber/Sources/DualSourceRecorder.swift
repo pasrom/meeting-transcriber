@@ -146,6 +146,7 @@ class DualSourceRecorder: RecordingProvider {
             try? fm.removeItem(at: file)
             logger.info("Removed orphaned temp file: \(file.lastPathComponent)")
         }
+        removeStaleMixStaging(in: entries, olderThan: cutoff)
 
         // Markers whose recording can never be rescued. A start that threw
         // before capture opened leaves one with no tracks at all; a track that

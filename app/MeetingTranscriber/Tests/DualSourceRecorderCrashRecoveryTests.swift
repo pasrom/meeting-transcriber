@@ -104,6 +104,146 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: appTmp.path), "the raw temp should be consumed")
     }
 
+    /// The mix is the file that says a recording finished, so it must not
+    /// exist until it is complete. A process that dies mid-mix exits with the
+    /// write half done; a `_mix.wav` left that way would stop the
+    /// next launch from re-mixing the stem and let the raw temp be cleaned up,
+    /// leaving a truncated mix as the only audio.
+    func testAMixWriteThatDoesNotFinishLeavesNoMix() throws {
+        let dir = try makeTempDirectory(prefix: "mix_atomic_cut")
+        let mix = dir.appendingPathComponent("20260311_140000_mix.wav")
+
+        XCTAssertThrowsError(try DualSourceRecorder.writeMixAtomically(to: mix) { staging in
+            try Data(repeating: 0x52, count: 1024).write(to: staging)
+            throw RecorderError.noAudioData
+        })
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mix.path), "a half-written mix reads as a finished one")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertEqual(
+            DualSourceRecorder.crashedRecordingStems(in: [
+                "20260311_140000_recording.marker",
+                "20260311_140000_mic.wav",
+            ] + leftovers),
+            ["20260311_140000"],
+            "the leftover of a cut-off mix hid the stem from recovery",
+        )
+    }
+
+    func testAMixWriteThatFinishesLeavesOnlyTheMix() throws {
+        let dir = try makeTempDirectory(prefix: "mix_atomic_done")
+        let mix = dir.appendingPathComponent("20260311_140000_mix.wav")
+        let samples = [Float](repeating: 0.2, count: 1600)
+
+        try DualSourceRecorder.writeMixAtomically(to: mix) { staging in
+            try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: staging)
+        }
+
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: dir.path), ["20260311_140000_mix.wav"])
+        XCTAssertEqual(try AudioMixer.loadAudioFileAsFloat32(url: mix).count, samples.count)
+    }
+
+    /// Two re-mixes of one stem can run at once: every queue rebuild starts its
+    /// own staging recovery, and the launch build and an auto-watch start
+    /// follow each other within milliseconds. With one staging name per stem
+    /// the second write unlinked the first one's file and the first rename
+    /// then put the second's half-written file in place as the finished mix.
+    func testTwoOverlappingMixWritesNeverExposeAHalfWrittenMix() throws {
+        let dir = try makeTempDirectory(prefix: "mix_atomic_overlap")
+        let mix = dir.appendingPathComponent("20260311_140000_mix.wav")
+        let half = Data(repeating: 0x41, count: 512)
+        let firstMayFinish = DispatchSemaphore(value: 0)
+        let secondHasStarted = DispatchSemaphore(value: 0)
+        let firstHasFinished = DispatchSemaphore(value: 0)
+        let secondMayFinish = DispatchSemaphore(value: 0)
+        let group = DispatchGroup()
+
+        DispatchQueue.global().async(group: group) {
+            try? DualSourceRecorder.writeMixAtomically(to: mix) { staging in
+                // One open handle for the whole write, as AVAudioFile keeps.
+                let handle = try Self.createForWriting(staging)
+                try handle.write(contentsOf: half)
+                secondHasStarted.signal()
+                firstMayFinish.wait()
+                try handle.write(contentsOf: half)
+                try handle.close()
+            }
+            firstHasFinished.signal()
+            firstHasFinished.signal()
+        }
+        DispatchQueue.global().async(group: group) {
+            secondHasStarted.wait()
+            try? DualSourceRecorder.writeMixAtomically(to: mix) { staging in
+                let handle = try Self.createForWriting(staging)
+                try handle.write(contentsOf: half)
+                firstMayFinish.signal()
+                firstHasFinished.wait()
+                secondMayFinish.wait()
+                try handle.write(contentsOf: half)
+                try handle.close()
+            }
+        }
+
+        XCTAssertEqual(firstHasFinished.wait(timeout: .now() + 5), .success)
+        let sizeWhileTheSecondWrites = (try? Data(contentsOf: mix))?.count
+        secondMayFinish.signal()
+        XCTAssertEqual(group.wait(timeout: .now() + 5), .success)
+
+        XCTAssertEqual(sizeWhileTheSecondWrites, 1024, "a half-written mix was in place as the finished one")
+        XCTAssertEqual(try Data(contentsOf: mix).count, 1024)
+    }
+
+    nonisolated private static func createForWriting(_ url: URL) throws -> FileHandle {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        return try FileHandle(forWritingTo: url)
+    }
+
+    /// What a cut-off mix leaves behind (tracks, marker, a staging file) is
+    /// re-mixed on the next launch like any interrupted recording, and the
+    /// cleanup that follows recovery removes the staging file.
+    func testAStemWhoseMixWasCutOffIsRecoveredOnTheNextLaunch() throws {
+        let dir = try makeTempDirectory(prefix: "mix_atomic_recover")
+        let stem = "20260311_140000"
+        let appTmp = dir.appendingPathComponent(stem + RecordingFileSuffix.appRaw)
+        try writeRawFloat32([Float](repeating: 0.3, count: 16000 * 2), to: appTmp)
+        let micWav = dir.appendingPathComponent(stem + RecordingFileSuffix.mic)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micWav)
+        let staging = dir.appendingPathComponent(stem + RecordingFileSuffix.mixStaging)
+        try Data(repeating: 0x52, count: 1024).write(to: staging)
+        try Data().write(to: DualSourceRecorder.inProgressMarker(stem: stem, in: dir))
+        try backdate([appTmp, micWav, staging])
+
+        XCTAssertEqual(DualSourceRecorder.recoverCrashedRecordings(in: dir), 1)
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir)
+
+        let mix = dir.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        XCTAssertEqual(try AudioMixer.loadAudioFileAsFloat32(url: mix).count, 16000 * 2)
+        let left = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        XCTAssertFalse(
+            left.contains { $0.hasSuffix(RecordingFileSuffix.mixStaging) },
+            "recovery left a staging file behind: \(left)",
+        )
+    }
+
+    /// A staging file recovery could not consume is litter, and the header
+    /// repair would touch it on every launch. The cleanup after recovery
+    /// removes it, but never one still being written.
+    func testTheCleanupRemovesAStaleMixStagingFileButNotAFreshOne() throws {
+        let dir = try makeTempDirectory(prefix: "mix_staging_cleanup")
+        let stale = dir.appendingPathComponent("20260311_140000" + RecordingFileSuffix.mixStaging)
+        let fresh = dir.appendingPathComponent("20260311_150000" + RecordingFileSuffix.mixStaging)
+        try Data(repeating: 0x52, count: 1024).write(to: stale)
+        try Data(repeating: 0x52, count: 1024).write(to: fresh)
+        try backdate([stale])
+
+        DualSourceRecorder.cleanupTempFiles(recordingsDir: dir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path), "a mix still being written was deleted")
+    }
+
     /// A pre-upgrade temp (`_app_raw.tmp`, raw device-rate stereo) must also be
     /// detected as a crash orphan — upgrading the app must not strand audio
     /// recorded by the previous version.
