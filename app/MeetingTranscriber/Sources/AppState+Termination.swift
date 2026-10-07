@@ -1,9 +1,13 @@
 // What a quit waits for, as `AppState` answers it (see `TerminationFlush`).
-// It reads `pipeline` at quit time rather than capturing a queue earlier, so
-// it follows whichever queue exists by then.
+// All of it reads `watching` and `pipeline` at quit time rather than capturing
+// a loop or a queue earlier, so it follows whichever ones exist by then.
 extension AppState: AppTerminating {
     var hasWorkBeforeQuit: Bool {
-        pipeline.hasPendingSnapshotWrites
+        watching.hasWorkBeforeQuit || pipeline.hasPendingSnapshotWrites
+    }
+
+    func finishRecordingBeforeQuit() async {
+        await watching.finishForQuit()
     }
 
     func flushSnapshotsBeforeQuit() async {

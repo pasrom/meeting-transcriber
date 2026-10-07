@@ -105,8 +105,8 @@ final class DualSourceRecorderCrashRecoveryTests: XCTestCase {
     }
 
     /// The mix is the file that says a recording finished, so it must not
-    /// exist until it is complete. A process that dies mid-mix exits with the
-    /// write half done; a `_mix.wav` left that way would stop the
+    /// exist until it is complete. A quit whose budget runs out mid-mix exits
+    /// with the write half done; a `_mix.wav` left that way would stop the
     /// next launch from re-mixing the stem and let the raw temp be cleaned up,
     /// leaving a truncated mix as the only audio.
     func testAMixWriteThatDoesNotFinishLeavesNoMix() throws {

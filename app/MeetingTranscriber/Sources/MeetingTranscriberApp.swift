@@ -417,8 +417,10 @@ struct MeetingTranscriberApp: App {
         NSWorkspace.shared.open(protocols)
     }
 
+    /// Only asks to terminate: stopping watching and finishing a recording
+    /// happen in `AppDelegate`, which every quit path goes through, and this
+    /// one alone used to do them.
     private func quit() {
-        appState.watching.watchLoop?.stop()
         NSApplication.shared.terminate(nil)
     }
 

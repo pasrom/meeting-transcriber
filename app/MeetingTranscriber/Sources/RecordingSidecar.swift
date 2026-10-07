@@ -88,6 +88,12 @@ struct RecordingSidecar: Codable {
     @discardableResult
     func write(toDirectory directory: URL, basename: String) throws -> URL {
         let url = directory.appendingPathComponent("\(basename)\(Self.filenameSuffix)")
+        try write(to: url)
+        return url
+    }
+
+    /// Writes the sidecar to `url`, owner-only.
+    func write(to url: URL) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -96,7 +102,6 @@ struct RecordingSidecar: Codable {
         // Holds meeting title + participants — match the owner-only (0600)
         // treatment of the audio it sits beside.
         try FileManager.default.restrictToOwner(url)
-        return url
     }
 
     /// Decode `<directory>/<basename>\(filenameSuffix)`, or nil when missing/malformed.

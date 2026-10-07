@@ -480,17 +480,30 @@ class DualSourceRecorder: RecordingProvider {
         logger.info("Recording started: \(source.logDescription), \(self.recordRate) Hz, \(self.appChannels)ch")
     }
 
-    /// Stop recording and produce a mixed WAV. The capture session is the only
-    /// hardware-bound part; everything after `session.stop()` is delegated to
-    /// the testable `buildRecording`.
+    /// Stop recording and produce a mixed WAV: `stopCapture` is the only
+    /// hardware-bound part, `finish` the testable file work.
     func stop() throws -> RecordingResult {
+        try Self.finish(stopCapture())
+    }
+
+    /// `stop()` with `finish` on a detached task: file work that takes
+    /// seconds at the end of a long recording (17 s an hour, debug build).
+    /// `stopCapture` stays on the main actor: the capture objects serialize
+    /// their device and restart callbacks on the main queue, and their stop
+    /// mutates the same state.
+    func stopOffMain() async throws -> RecordingResult {
+        let stopped = try stopCapture()
+        return try await Task.detached(priority: .userInitiated) { try Self.finish(stopped) }.value
+    }
+
+    /// End the capture session and take what the file work needs.
+    private func stopCapture() throws -> StoppedCapture {
         guard isRecording else {
             throw RecorderError.notRecording
         }
 
         isRecording = false
 
-        // Stop capture session and get result
         guard let session = captureSession else {
             throw RecorderError.noAudioData
         }
@@ -504,23 +517,13 @@ class DualSourceRecorder: RecordingProvider {
         // not the device-facing recordRate/appChannels — is the expected file
         // format; a buildRecording mismatch warning then means the resampler
         // fallback wrote raw native-rate audio.
-        let recording = try Self.buildRecording(
-            from: captureResult,
+        return StoppedCapture(
+            captureResult: captureResult,
             recordingsDir: recordingsDir,
             timestamp: ts,
             recordingStartDate: recordingStartDate,
             format: CaptureFormat(requestedChannels: 1, requestedRate: targetRate, targetRate: targetRate),
         )
-
-        // Dropped only once the mix exists, exactly where `buildRecording`
-        // drops the raw app temp. A stop whose mix write fails has not
-        // finished anything, and the failure (a full disk, say) usually
-        // survives to the next launch: keeping the marker lets that launch
-        // re-mix from the surviving tracks, which is what the app-audio path
-        // has always got from its temp. The mix itself is what stops a
-        // completed recording from being recovered twice.
-        try? FileManager.default.removeItem(at: Self.inProgressMarker(stem: ts, in: recordingsDir))
-        return recording
     }
 
     /// Downmix interleaved multi-channel audio to mono. Passthrough if already

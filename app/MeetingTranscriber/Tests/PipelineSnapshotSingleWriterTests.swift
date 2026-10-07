@@ -13,16 +13,6 @@ import XCTest
 /// describes another moment, and the next launch restores that.
 @MainActor
 final class PipelineSnapshotSingleWriterTests: XCTestCase {
-    /// A queue whose writer takes long enough that its write is still in
-    /// flight when the next queue starts.
-    private func makeSlowSnapshotQueue(in dir: URL) -> PipelineQueue {
-        // swiftlint:disable:next trailing_closure
-        PipelineQueue(logDir: dir, snapshotWriter: { jobs, url in
-            Thread.sleep(forTimeInterval: 0.3)
-            try PipelineSnapshot.save(jobs, to: url)
-        })
-    }
-
     /// A job the restore keeps as it is: terminal but not `.done` (which the
     /// restore discards), and without a mix path the missing-audio rule could
     /// drop.

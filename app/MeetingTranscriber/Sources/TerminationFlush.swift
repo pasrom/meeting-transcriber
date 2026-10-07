@@ -9,9 +9,12 @@
 // landed, bounded so a write wedged in the rename syscall cannot turn a quit
 // into a hang.
 //
-// Every AppKit quit comes through here: the menu's Quit, Cmd-Q, logout,
-// shutdown and an AppleScript quit. A `willTerminateNotification` observer
-// could not do this: `terminate` calls `exit` right after posting it.
+// It is also the one shutdown path. The menu's Quit only calls `terminate`;
+// Cmd-Q, logout, shutdown and an AppleScript quit never went through the menu,
+// so anything a quit owes has to happen here. First watching stops and an
+// in-flight recording is stopped and enqueued, then the snapshot that enqueue
+// produced is flushed. The other order would flush first and then enqueue a
+// job whose snapshot write the exit cuts off.
 //
 // The in-flight pipeline stage is deliberately not waited for: a transcription
 // or protocol call can run for minutes, and an interrupted job already resumes
@@ -27,6 +30,11 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Termina
 protocol AppTerminating: AnyObject {
     /// Whether a quit has anything to wait for. False lets it through at once.
     var hasWorkBeforeQuit: Bool { get }
+
+    /// Stop watching and return once an in-flight recording has been stopped
+    /// and enqueued. Runs before the flush, so the snapshot the enqueue
+    /// produced is among those flushed.
+    func finishRecordingBeforeQuit() async
 
     /// Return once every pending pipeline snapshot write has landed.
     func flushSnapshotsBeforeQuit() async
@@ -47,6 +55,21 @@ extension NSApplication: TerminationReplying {}
 
 @MainActor
 enum TerminationFlush {
+    /// How long a quit waits for an in-flight recording to be stopped and
+    /// enqueued: a manual start still in flight, then the recording's mix,
+    /// which runs off the main thread and takes seconds for a long recording.
+    /// A mix this cuts off is re-mixed by the next launch's crash recovery.
+    ///
+    /// The budget is a timer on the main actor, so it bounds only what leaves
+    /// the main thread. Ending the capture session does not: the HAL and
+    /// engine teardown at the start of `stopOffMain` runs on the main actor,
+    /// as every stop does, because the capture objects serialize their device
+    /// and restart callbacks on the main queue. A teardown that blocks holds
+    /// the quit for as long as it blocks. The one wedge known there, a
+    /// restart stuck inside the engine (issue #588), is skipped by the stop
+    /// itself; no other has been measured.
+    static let recordingBudget: Duration = .seconds(5)
+
     /// Long enough for any healthy snapshot write, short enough that a quit
     /// behind a wedged one still feels like a quit.
     static let flushBudget: Duration = .seconds(2)
@@ -153,9 +176,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The app's state, handed over by `MeetingTranscriberApp.init`. That runs
     /// before the run loop starts, so no quit request can arrive before it.
     /// Static because SwiftUI constructs this delegate itself and the app
-    /// cannot reach the instance from its `init`; handing it over from a view
-    /// instead would leave every quit before that view appeared, or without
-    /// it, with nothing to flush.
+    /// cannot reach the instance from its `init`; handing it over from a
+    /// view instead (the menu-bar label's `.task`, as it once was) left every
+    /// quit before that view appeared, or without it, with nothing to finish.
     private(set) static var installed: (any AppTerminating)?
 
     static func install(_ termination: any AppTerminating) {
@@ -176,6 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var injectedTermination: (any AppTerminating)?
 
+    var recordingBudget = TerminationFlush.recordingBudget
     var flushBudget = TerminationFlush.flushBudget
 
     /// Where a budget that ran out is reported. Tests capture it.
@@ -208,11 +232,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard let termination else { return .terminateNow }
         phase = .holdingOpen
+        let recordingBudget = recordingBudget
         let flushBudget = flushBudget
         let log = log
         Task { @MainActor in
-            if await !TerminationFlush.run(within: flushBudget, { await termination.flushSnapshotsBeforeQuit() }) {
+            // Each phase has its own budget, so a slow recording stop cannot
+            // use up the time the flush after it needs.
+            if await !TerminationFlush.run(within: recordingBudget, { await termination.finishRecordingBeforeQuit() }) {
+                log("Quit: the recording budget (\(recordingBudget)) ran out; a mix it cut off is left to crash recovery")
+            }
+            let flushedInTime = await TerminationFlush.run(within: flushBudget) {
+                await termination.flushSnapshotsBeforeQuit()
+            }
+            if !flushedInTime {
                 log("Quit: the snapshot flush budget (\(flushBudget)) ran out")
+            }
+            // A mix the recording budget cut off goes on running, and its
+            // enqueue can land in the hop between the flush and this line,
+            // with that snapshot write still in flight at exit. Ask once more,
+            // unless the first flush ran out of time: it is stuck on a write
+            // that has not returned, and a second one would wait on the same.
+            if flushedInTime, termination.hasWorkBeforeQuit,
+               await !TerminationFlush.run(within: flushBudget, { await termination.flushSnapshotsBeforeQuit() }) {
+                log("Quit: the second snapshot flush budget (\(flushBudget)) ran out")
             }
             // Logged lines first: the teardown stops the streamer that carries
             // them to the persistent log.

@@ -24,6 +24,8 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         /// The mic track `stop()` reports, set by a test after `start()` has
         /// picked the URL and the test has written fixture audio there.
         var micTrack: URL?
+        /// The raw app temp `stop()` reports; nil for the mic-only tests.
+        var appTrack: URL?
         var appLevelDBFS: Double = -120
         var micLevelDBFS: Double = -120
         var appCaptureGaveUp = false
@@ -41,7 +43,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
 
         func stop() -> AudioCaptureResult {
             AudioCaptureResult(
-                appAudioFileURL: nil, micAudioFileURL: micTrack,
+                appAudioFileURL: appTrack, micAudioFileURL: micTrack,
                 actualSampleRate: 16000, actualChannels: 1, micDelay: 0,
             )
         }
@@ -157,6 +159,59 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         )
     }
 
+    /// The quit's stop moves the file work off the main actor and must still
+    /// finish a recording exactly as `stop()` does: a mix on disk, the
+    /// recorder idle, the marker gone.
+    func testStopOffMainFinishesTheRecordingLikeStop() async throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_stop_off_main")
+        let (recorder, session) = makeRecorder(dir: dir)
+        let micURL = try startMicOnly(recorder: recorder, session: session)
+        try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micURL)
+        session.micTrack = micURL
+
+        let recording = try await recorder.stopOffMain()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recording.mixPath.path))
+        XCTAssertEqual(recording.micPath, micURL)
+        XCTAssertFalse(recorder.isRecording)
+        XCTAssertEqual(try markerStems(in: dir), [])
+    }
+
+    /// `stopOffMain` is only worth having if the file work really leaves the
+    /// main thread: the protocol's default is the synchronous `stop()`, so a
+    /// recorder without its own version would pass every other test. Measured
+    /// by a main-actor ticker: while the stop runs, the ticker keeps ticking
+    /// only if the main thread is free.
+    func testStopOffMainLeavesTheMainThreadFreeWhileItMixes() async throws {
+        let dir = try makeTempDirectory(prefix: "lifecycle_stop_off_main_free")
+        let (recorder, session) = makeRecorder(dir: dir)
+        let micURL = try startMicOnly(recorder: recorder, session: session)
+        // Both tracks, so the stop really mixes, and long enough that it takes
+        // a measurable time in a debug build.
+        let samples = [Float](repeating: 0.2, count: 16000 * 120)
+        try AudioMixer.saveWAV(samples: samples, sampleRate: 16000, url: micURL)
+        session.micTrack = micURL
+        let appTemp = dir.appendingPathComponent("app_temp" + RecordingFileSuffix.appRaw)
+        try writeRawFloat32(samples, to: appTemp)
+        session.appTrack = appTemp
+
+        let ticks = MainThreadTicker()
+        let ticker = Task { await ticks.run() }
+        await Task.yield()
+        let start = ContinuousClock.now
+        _ = try await recorder.stopOffMain()
+        let elapsed = ContinuousClock.now - start
+        ticks.ticking = false
+        await ticker.value
+        let longestGap = ticks.longestGap
+
+        XCTAssertGreaterThan(elapsed, .milliseconds(100), "test premise: the stop was too fast to tell")
+        XCTAssertLessThan(
+            longestGap, elapsed / 2,
+            "the main thread was held for \(longestGap) of a \(elapsed) stop",
+        )
+    }
+
     /// A stop whose mix write fails has finished nothing. Keeping the marker is
     /// what lets the next launch re-mix from the surviving tracks — the same
     /// second chance the app-audio path has always had from its raw temp.
@@ -269,5 +324,25 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         await waitFor(controller.watchLoop?.state == .recording, timeout: .seconds(2))
 
         XCTAssertEqual(session.lastConfiguration?.silentTrackWatchdog, true)
+    }
+}
+
+/// Ticks on the main actor and records the longest gap between two ticks,
+/// which is how long the main thread was held.
+@MainActor
+private final class MainThreadTicker {
+    var ticking = true
+    private(set) var longestGap = Duration.zero
+
+    func run() async {
+        var last = ContinuousClock.now
+        // Measured after each wake, before the stop flag is read, so the gap
+        // the stop caused is counted even when it ends the loop.
+        repeat {
+            try? await Task.sleep(for: .milliseconds(5))
+            let now = ContinuousClock.now
+            longestGap = max(longestGap, now - last)
+            last = now
+        } while ticking
     }
 }

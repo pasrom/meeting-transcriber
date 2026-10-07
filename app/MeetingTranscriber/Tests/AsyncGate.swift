@@ -65,6 +65,10 @@ final class MainActorGate {
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private var isOpen = false
 
+    var hasWaiter: Bool {
+        !continuations.isEmpty
+    }
+
     func wait() async {
         if isOpen { return }
         await withCheckedContinuation { continuations.append($0) }

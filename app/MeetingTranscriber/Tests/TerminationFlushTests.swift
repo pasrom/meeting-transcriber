@@ -1,5 +1,6 @@
 import AppKit
 @testable import MeetingTranscriber
+import os
 import XCTest
 
 /// What AppKit waits for between a quit request and the process exit.
@@ -13,24 +14,20 @@ import XCTest
 /// lines that wiring depends on, nothing more.
 @MainActor
 final class TerminationFlushTests: XCTestCase {
-    private final class FakeSender: TerminationReplying {
-        var replies: [Bool] = []
-        var onReply: (() -> Void)?
-
-        func reply(toApplicationShouldTerminate shouldTerminate: Bool) {
-            replies.append(shouldTerminate)
-            onReply?()
-        }
-    }
-
     private final class FakeTermination: AppTerminating {
         var hasWorkBeforeQuit: Bool
         var flushes = 0
         var steps: [String] = []
+        var finishRecording: @MainActor () async -> Void = {}
         var flush: @MainActor () async -> Void = {}
 
         init(hasWorkBeforeQuit: Bool) {
             self.hasWorkBeforeQuit = hasWorkBeforeQuit
+        }
+
+        func finishRecordingBeforeQuit() async {
+            steps.append("finish recording")
+            await finishRecording()
         }
 
         func flushSnapshotsBeforeQuit() async {
@@ -58,17 +55,11 @@ final class TerminationFlushTests: XCTestCase {
         )
     }
 
-    /// A queue whose writer takes long enough that the write cannot have
-    /// landed by accident before a quit is answered.
-    private func makeSlowSnapshotQueue(in dir: URL) -> PipelineQueue {
-        // swiftlint:disable:next trailing_closure
-        PipelineQueue(logDir: dir, snapshotWriter: { jobs, url in
-            Thread.sleep(forTimeInterval: 0.3)
-            try PipelineSnapshot.save(jobs, to: url)
-        })
+    nonisolated private static func blockThisThread(seconds: TimeInterval) {
+        Thread.sleep(forTimeInterval: seconds)
     }
 
-    private func waitForReply(_ sender: FakeSender, timeout: TimeInterval = 5) async {
+    private func waitForReply(_ sender: QuitTestSender, timeout: TimeInterval = 5) async {
         let replied = expectation(description: "reply")
         replied.assertForOverFulfill = false
         let observe = sender.onReply
@@ -148,17 +139,17 @@ final class TerminationFlushTests: XCTestCase {
         let termination = FakeTermination(hasWorkBeforeQuit: true)
         AppDelegate.install(termination)
         let delegate = AppDelegate()
-        let sender = FakeSender()
+        let sender = QuitTestSender()
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
         await waitForReply(sender)
 
-        XCTAssertEqual(termination.steps, ["flush", "tear down"])
+        XCTAssertEqual(termination.steps, ["finish recording", "flush", "tear down"])
     }
 
     func testWithoutStateTheQuitGoesThroughAtOnce() {
         let delegate = AppDelegate()
-        let sender = FakeSender()
+        let sender = QuitTestSender()
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateNow)
         XCTAssertEqual(sender.replies, [], "terminateNow must not also send a deferred reply")
     }
@@ -167,7 +158,7 @@ final class TerminationFlushTests: XCTestCase {
         let delegate = AppDelegate()
         let termination = FakeTermination(hasWorkBeforeQuit: false)
         delegate.termination = termination
-        let sender = FakeSender()
+        let sender = QuitTestSender()
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateNow)
         XCTAssertEqual(termination.flushes, 0)
@@ -200,7 +191,7 @@ final class TerminationFlushTests: XCTestCase {
             flushed = true
         }
         delegate.termination = termination
-        let sender = FakeSender()
+        let sender = QuitTestSender()
         var flushedAtReply = false
         sender.onReply = { flushedAtReply = flushed }
 
@@ -217,7 +208,7 @@ final class TerminationFlushTests: XCTestCase {
         let termination = FakeTermination(hasWorkBeforeQuit: true)
         termination.flush = { try? await Task.sleep(for: .seconds(30)) }
         delegate.termination = termination
-        let sender = FakeSender()
+        let sender = QuitTestSender()
         let start = ContinuousClock.now
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
@@ -238,8 +229,8 @@ final class TerminationFlushTests: XCTestCase {
         let termination = FakeTermination(hasWorkBeforeQuit: true)
         termination.flush = { try? await Task.sleep(for: .milliseconds(200)) }
         delegate.termination = termination
-        let first = FakeSender()
-        let second = FakeSender()
+        let first = QuitTestSender()
+        let second = QuitTestSender()
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: first), .terminateLater)
         XCTAssertEqual(
@@ -263,8 +254,8 @@ final class TerminationFlushTests: XCTestCase {
         let delegate = AppDelegate()
         let termination = FakeTermination(hasWorkBeforeQuit: true)
         delegate.termination = termination
-        let first = FakeSender()
-        let second = FakeSender()
+        let first = QuitTestSender()
+        let second = QuitTestSender()
 
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: first), .terminateLater)
         await waitForReply(first)
@@ -281,6 +272,50 @@ final class TerminationFlushTests: XCTestCase {
         XCTAssertEqual(second.replies, [], "terminateNow must not also send a deferred reply")
     }
 
+    /// The recording has to be enqueued before the flush, or the flush misses
+    /// the snapshot the enqueue produces.
+    func testTheRecordingIsFinishedBeforeTheSnapshotIsFlushed() async {
+        let delegate = AppDelegate()
+        let termination = FakeTermination(hasWorkBeforeQuit: true)
+        termination.finishRecording = { try? await Task.sleep(for: .milliseconds(50)) }
+        delegate.termination = termination
+        let sender = QuitTestSender()
+        var stepsAtReply: [String] = []
+        sender.onReply = { stepsAtReply = termination.steps }
+
+        XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
+        await waitForReply(sender)
+
+        XCTAssertEqual(stepsAtReply, ["finish recording", "flush", "tear down"])
+    }
+
+    /// A recording stop that overruns its budget does not take the flush's
+    /// budget with it: the flush still runs, and the quit still ends.
+    func testAWedgedRecordingStopStillLeavesTheFlushItsBudget() async {
+        let delegate = AppDelegate()
+        delegate.recordingBudget = .milliseconds(100)
+        let termination = FakeTermination(hasWorkBeforeQuit: true)
+        // A wedge that ignores cancellation, as a stuck stop would. A
+        // `Task.sleep` would end on the cancel and let the flush run anyway.
+        termination.finishRecording = {
+            await Task.detached { Self.blockThisThread(seconds: 3) }.value
+        }
+        var flushed = false
+        termination.flush = { flushed = true }
+        delegate.termination = termination
+        let sender = QuitTestSender()
+        var flushedAtReply = false
+        sender.onReply = { flushedAtReply = flushed }
+        let start = ContinuousClock.now
+
+        XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
+        await waitForReply(sender)
+
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(2))
+        XCTAssertTrue(flushedAtReply, "the flush did not run before the reply")
+        XCTAssertEqual(sender.replies, [true])
+    }
+
     // MARK: - The production state
 
     /// The case the issue describes: a state transition whose snapshot write
@@ -295,7 +330,7 @@ final class TerminationFlushTests: XCTestCase {
 
         let delegate = AppDelegate()
         delegate.termination = state
-        let sender = FakeSender()
+        let sender = QuitTestSender()
         var onDiskAtReply: [PipelineJob] = []
         sender.onReply = { onDiskAtReply = (try? PipelineSnapshot.load(from: dir)) ?? [] }
 
@@ -332,6 +367,32 @@ final class TerminationFlushTests: XCTestCase {
             XCTAssertFalse(controller.hasPendingSnapshotWrites)
         }
     #endif
+
+    /// A write that keeps failing (a full disk) is tried once more by the
+    /// quit, not once per flush: the second flush, which closes the gap for a
+    /// late enqueue, finds the same failed state and must not try it again.
+    func testAQuitRetriesAWriteThatKeepsFailingOnce() async throws {
+        let dir = try makeTempDirectory(prefix: "termination_flush_failing")
+        let attempts = OSAllocatedUnfairLock<Int>(initialState: 0)
+        // swiftlint:disable:next trailing_closure
+        let queue = PipelineQueue(logDir: dir, snapshotWriter: { _, _ in
+            attempts.withLock { $0 += 1 }
+            throw CocoaError(.fileWriteOutOfSpace)
+        })
+        let state = try makeIsolatedAppState(initialQueue: queue)
+        queue.insertJobForTesting(makeJob(title: "Never Written"))
+        queue.saveSnapshot()
+        await waitFor { attempts.withLock { $0 } == 1 }
+        XCTAssertTrue(state.hasWorkBeforeQuit, "test premise: the failed write is still owed")
+
+        let delegate = AppDelegate()
+        delegate.termination = state
+        let sender = QuitTestSender()
+        XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
+        await waitForReply(sender)
+
+        XCTAssertEqual(attempts.withLock { $0 }, 2, "the write before the quit, then one retry")
+    }
 
     func testAnIdleAppStateHasNothingToWaitFor() throws {
         let state = try makeIsolatedAppState(

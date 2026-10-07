@@ -9,7 +9,7 @@ enum RecordingFileSuffix {
     /// Where the mix is written before it is renamed to `mix`, so a `_mix.wav`
     /// only ever exists complete. The mix is what says a recording finished
     /// (crash recovery skips a stem that has one), and a write cut off by an
-    /// exit (a crash, a Force Quit, a power loss) must not leave a
+    /// exit, a quit whose budget ran out among them, must not leave a
     /// half-written one saying so. Deliberately not ending in `mix`, so no
     /// scan for finished mixes picks it up. Each write puts a unique token
     /// between the stem and this suffix (`writeMixAtomically`), and the

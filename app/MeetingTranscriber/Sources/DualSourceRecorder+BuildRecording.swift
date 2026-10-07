@@ -267,4 +267,37 @@ extension DualSourceRecorder {
             try? fm.removeItem(at: file)
         }
     }
+
+    /// What `finish` needs from a recording whose capture has stopped.
+    struct StoppedCapture {
+        let captureResult: AudioCaptureResult
+        let recordingsDir: URL
+        let timestamp: String
+        let recordingStartDate: Date
+        let format: CaptureFormat
+    }
+
+    /// The file half of a stop: build the tracks and the mix, then drop the
+    /// in-progress marker. Touches no recorder state, so it runs anywhere.
+    nonisolated static func finish(_ stopped: StoppedCapture) throws -> RecordingResult {
+        let recording = try buildRecording(
+            from: stopped.captureResult,
+            recordingsDir: stopped.recordingsDir,
+            timestamp: stopped.timestamp,
+            recordingStartDate: stopped.recordingStartDate,
+            format: stopped.format,
+        )
+
+        // Dropped only once the mix exists, exactly where `buildRecording`
+        // drops the raw app temp. A stop whose mix write fails has not
+        // finished anything, and the failure (a full disk, say) usually
+        // survives to the next launch: keeping the marker lets that launch
+        // re-mix from the surviving tracks, which is what the app-audio path
+        // has always got from its temp. The mix itself is what stops a
+        // completed recording from being recovered twice.
+        try? FileManager.default.removeItem(
+            at: inProgressMarker(stem: stopped.timestamp, in: stopped.recordingsDir),
+        )
+        return recording
+    }
 }
