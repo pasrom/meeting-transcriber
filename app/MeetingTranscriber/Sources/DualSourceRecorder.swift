@@ -131,13 +131,14 @@ class DualSourceRecorder: RecordingProvider {
         recordingsDir: URL,
         minAge: TimeInterval = 30,
         reapMarkersWrittenBefore: Date? = nil,
+        now: Date = Date(),
     ) {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: recordingsDir,
             includingPropertiesForKeys: nil,
         ) else { return }
-        let cutoff = Date().addingTimeInterval(-minAge)
+        let cutoff = now.addingTimeInterval(-minAge)
         let markerCutoff = reapMarkersWrittenBefore ?? launchedAt
 
         for file in entries where RecordingFileSuffix.stripAppRaw(from: file.lastPathComponent) != nil {
@@ -298,6 +299,12 @@ class DualSourceRecorder: RecordingProvider {
     /// would otherwise be lost.
     @discardableResult
     nonisolated static func recoverCrashedRecording(stem: String, in recDir: URL) throws -> URL {
+        // A stem another recovery has already mixed is done. Its raw app temp
+        // is gone by then, so what is left looks like a microphone-only
+        // recording, and rebuilding it would rename a microphone-only mix
+        // over the complete one.
+        let existingMix = recDir.appendingPathComponent(stem + RecordingFileSuffix.mix)
+        if FileManager.default.fileExists(atPath: existingMix.path) { return existingMix }
         let temp = crashedTemp(stem: stem, in: recDir)
         let micWav = recDir.appendingPathComponent(stem + RecordingFileSuffix.mic)
         let hasMic = FileManager.default.fileExists(atPath: micWav.path)
@@ -342,14 +349,19 @@ class DualSourceRecorder: RecordingProvider {
     /// gap). The queue-build Task that calls this is fired by a watch-start
     /// immediately before the loop may begin a new recording, so the guard is
     /// load-bearing — not cosmetic.
+    ///
+    /// Not safe to run twice at once on one folder: two overlapping calls
+    /// select the same stem before either has mixed it. Production calls it
+    /// through `StagingRecoveryGate`.
     @discardableResult
     nonisolated static func recoverCrashedRecordings(
         in dir: URL,
         minAge: TimeInterval = 30,
+        now: Date = Date(),
     ) -> Int {
         let fm = FileManager.default
         let names = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-        let cutoff = Date().addingTimeInterval(-minAge)
+        let cutoff = now.addingTimeInterval(-minAge)
         var recovered = 0
         for stem in crashedRecordingStems(in: names) {
             // Freshness is read off the TRACKS, not the marker: the marker is
