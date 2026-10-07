@@ -325,6 +325,109 @@ read_dev_default_effective() {
     fi
 }
 
+# --- mic-stall lane state that outlives one run -------------------------------
+#
+# The --mic-stall lane of e2e-app.sh switches the dev bundle's protocolProvider
+# to `none` and runs the app in a throwaway home. Both have to be undone even
+# when a run is killed, so what it needs to undo them is kept on disk and every
+# later run of e2e-app.sh, whatever its lane, finishes the job.
+
+# Restore protocolProvider from the record a mic-stall run wrote before it set
+# `lane_value`. Nothing to do without a record. Restores only while the current
+# value is still `lane_value`: anything else is a choice made since, which the
+# old record must not overwrite, so the record is dropped and that is said.
+# Verified by reading the value back, because the defaults helpers swallow
+# every error: on a mismatch the record is kept for a later run and this
+# returns 1.
+mic_stall_restore_protocol() {
+    local bundle="$1" container_plist="$2" record="$3" lane_value="$4"
+    [ -f "$record" ] || return 0
+    local before current after
+    before="$(cat "$record")"
+    current="$(read_dev_default_effective "$bundle" "$container_plist" protocolProvider)"
+    if [ "$current" != "$lane_value" ]; then
+        printf '[e2e-app] [mic-stall] protocolProvider is %s, not the %s a mic-stall run left; keeping it and dropping the record of %s\n' \
+            "'${current:-<unset>}'" "'$lane_value'" "'${before:-<unset>}'"
+        rm -f "$record"
+        return 0
+    fi
+    if [ -n "$before" ]; then
+        write_dev_default "$bundle" protocolProvider "$before"
+    else
+        delete_dev_default "$bundle" protocolProvider
+    fi
+    after="$(read_dev_default_effective "$bundle" "$container_plist" protocolProvider)"
+    if [ "$after" != "$before" ]; then
+        printf '[e2e-app] WARNING: could not restore protocolProvider to %s (it reads %s); keeping %s for the next run\n' \
+            "'${before:-<unset>}'" "'${after:-<unset>}'" "$record" >&2
+        return 1
+    fi
+    rm -f "$record"
+    return 0
+}
+
+# Whether `home` is one of the lane's own `mktemp` homes: directly inside the
+# directory the lane creates them in (MIC_STALL_HOME_PARENT, by default
+# $TMPDIR or /tmp, as the lane does), named `e2e-mic-stall-home.` plus the
+# letters and digits mktemp fills in. Anchored on purpose: a substring match
+# would take `<parent>/e2e-mic-stall-home.a/../../Documents` too, and the
+# callers remove what this accepts.
+mic_stall_is_lane_home() {
+    local home="$1"
+    local parent="${MIC_STALL_HOME_PARENT:-${TMPDIR:-/tmp}}"
+    parent="${parent%/}"
+    [[ "$home" =~ ^.*/e2e-mic-stall-home\.[A-Za-z0-9]+$ ]] || return 1
+    [ "${home%/*}" = "$parent" ]
+}
+
+# Remove a mic-stall run's throwaway home, unless the app that used it (`pid`)
+# is still running: a failed run leaves its app up and writing there. A kept
+# home is listed with that pid in `kept_list`, so a later run can remove it
+# once that app is gone (`mic_stall_sweep_kept_homes`). Only the lane's own
+# homes are ever touched (`mic_stall_is_lane_home`).
+mic_stall_release_home() {
+    local home="$1" pid="$2" kept_list="$3"
+    mic_stall_is_lane_home "$home" || return 0
+    [ -d "$home" ] || return 0
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        mkdir -p "$(dirname "$kept_list")"
+        printf '%s %s\n' "$pid" "$home" >>"$kept_list"
+        printf '[e2e-app] [mic-stall] app (pid %s) still running; leaving its home %s for a later run to remove\n' "$pid" "$home"
+    else
+        rm -rf "$home"
+    fi
+}
+
+# Remove every home in `kept_list` whose app has exited; keep the entries
+# whose app still runs. The list goes once it is empty.
+mic_stall_sweep_kept_homes() {
+    local kept_list="$1" keep="" pid home
+    [ -f "$kept_list" ] || return 0
+    while read -r pid home; do
+        [ -n "$home" ] || continue
+        mic_stall_is_lane_home "$home" || continue
+        if kill -0 "$pid" 2>/dev/null; then
+            keep="$keep$pid $home"$'\n'
+        elif [ -d "$home" ]; then
+            rm -rf "$home"
+        fi
+    done <"$kept_list"
+    if [ -n "$keep" ]; then
+        printf '%s' "$keep" >"$kept_list"
+    else
+        rm -f "$kept_list"
+    fi
+}
+
+# The pids of every running MeetingTranscriber that is not the dev app, the
+# installed one above all, space-separated. Matched on the exact process name,
+# then excluded by the dev bundle in its command line.
+non_dev_meetingtranscriber_pids() {
+    { pgrep -x MeetingTranscriber || true; } | while read -r p; do
+        ps -o command= -p "$p" 2>/dev/null | grep -q "MeetingTranscriber-Dev.app/" || printf '%s ' "$p"
+    done
+}
+
 # Delete the recording artifacts THIS run created — every file under `rec_dir`
 # newer than `marker` (create the marker before the run starts recording).
 # Killing the app mid-recording orphans a raw temp; the next run's app
