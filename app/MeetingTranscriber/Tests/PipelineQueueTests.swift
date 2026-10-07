@@ -148,8 +148,8 @@ final class PipelineQueueTests: XCTestCase {
     }
 
     func testSnapshotWorkerClearsItselfAfterFlush() async {
-        // Lifecycle guard: a drained worker must set `snapshotWorker = nil`
-        // so the next saveSnapshot starts a fresh task. Without this, a
+        // Lifecycle guard: a drained writer must clear itself so the next
+        // saveSnapshot starts a fresh one. Without this, a
         // leak-then-skip bug would silently drop later writes.
         queue.enqueue(makeJob())
         XCTAssertTrue(queue.isSnapshotWorkerActive)

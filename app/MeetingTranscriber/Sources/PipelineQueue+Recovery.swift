@@ -33,9 +33,12 @@ extension PipelineQueue {
     /// Failed jobs are kept, because the restore keeps them and a retry is
     /// what cleans up after them.
     func adoptJobs(of replaced: PipelineQueue) {
-        // Before anything is written: the replaced queue may still owe a write,
-        // and both queues share one staging file. See `discardPendingSnapshot`.
-        replaced.discardPendingSnapshot()
+        // A write the replaced queue still owes is left to land. Both queues
+        // write through the one `PipelineSnapshotStore` for this file, so it
+        // lands before anything this queue saves, and what it holds is the
+        // state just adopted. Dropping it lost that state whenever the
+        // adoption itself writes nothing (see below): a job that had just
+        // failed stayed on disk as running and ran again on the next launch.
         var adopted = replaced.jobs
         discardFinishedJobs(from: &adopted)
         discardJobsWithMissingAudio(&adopted, interruptedIn: [:])
@@ -48,8 +51,7 @@ extension PipelineQueue {
         // Only when this queue's list differs from what the replaced one held.
         // Every rebuild comes through here once the controller has built a queue
         // itself, including each watch start, and writing an unchanged (usually
-        // empty) list would spend an atomic replace on nothing. The replace is
-        // the syscall this queue keeps a serializing actor for.
+        // empty) list would spend an atomic replace on nothing.
         if changed { saveSnapshot() }
     }
 
@@ -74,7 +76,11 @@ extension PipelineQueue {
     func loadSnapshot() {
         var loaded: [PipelineJob]
         do {
-            guard let decoded = try PipelineSnapshot.load(from: logDir) else {
+            // A state saved but not yet on disk is the newer one: a queue that
+            // replaces another restores while that queue's last write may
+            // still be in flight, and the file would hand it the state before.
+            guard let decoded = try PipelineSnapshotStore.existing(for: logDir)?.latestSaved
+                ?? PipelineSnapshot.load(from: logDir) else {
                 logger.info("No pipeline snapshot to restore")
                 return
             }
@@ -486,7 +492,11 @@ extension PipelineQueue {
             }
         }.value
 
-        guard !candidates.isEmpty else { return }
+        // Left in staging for the active queue's next recovery: the one its
+        // build ran, or after a folder-change rebuild (which runs none), the
+        // next watch start or launch. Taking them on here would process each
+        // one on a queue nobody sees, and a second time on the active one.
+        guard !candidates.isEmpty, !isRetired else { return }
 
         for group in candidates {
             guard let mixURL = group.mix else { continue }

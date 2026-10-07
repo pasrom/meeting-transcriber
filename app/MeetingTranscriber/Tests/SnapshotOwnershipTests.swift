@@ -5,12 +5,9 @@ import XCTest
 ///
 /// The jobs list and its snapshot live in a fixed `logDir` but hang off the
 /// lifetime of a `PipelineQueue` instance. A rebuild therefore has two queues
-/// over one file, each with its own serializing actor, and the mitigations for
-/// that are a stack: a process-wide in-flight registry, `sidecarOutputDir` on
-/// the job, `adoptJobs`, and `discardPendingSnapshot`.
-///
-/// These tests pin what that stack does and does not cover, so a change that
-/// gives the file a single owner has something to be measured against.
+/// over one file. They write it through the one `PipelineSnapshotStore` for
+/// that file, which orders the writes by when they were saved, whichever queue
+/// saved them.
 @MainActor
 final class SnapshotOwnershipTests: XCTestCase {
     // swiftlint:disable implicitly_unwrapped_optional
@@ -46,16 +43,15 @@ final class SnapshotOwnershipTests: XCTestCase {
         try XCTUnwrap(PipelineSnapshot.load(from: logDir), "no snapshot was written")
     }
 
-    /// `discardPendingSnapshot` drops a write the replaced queue has not
-    /// started. It cannot drop one already inside the writer, and that is the
-    /// case the serializing actor exists for: `replaceItemAt` can stall for
-    /// seconds on macOS 26, which is a window wide enough for the controller to
-    /// build the replacement and move on.
-    ///
-    /// The stale write then lands last and the file describes the queue that
-    /// went away. A restart restores from there, which is how a finished job
-    /// gets queued a second time, the failure `adoptJobs` cites as issue #744.
-    func testAStalledWriteOfTheReplacedQueueOutlivesTheDiscard() async throws {
+    /// A write of the replaced queue that is already inside the writer when
+    /// the queue is replaced (`replaceItemAt` can stall for seconds on macOS 26)
+    /// lands first, and the replacement's later save lands after it, so the
+    /// file ends with the replacement's state. With a writer per queue the
+    /// stalled write landed last and the file described the queue that went
+    /// away; a restart restored from there, which is how a finished job got
+    /// queued a second time, the failure `adoptJobs` cites as issue #744. This
+    /// was pinned as a known failure before the single writer existed.
+    func testAStalledWriteOfTheReplacedQueueLandsBeforeTheReplacementsState() async throws {
         let writeStarted = expectation(description: "the replaced queue's write reached the writer")
         let writeFinished = expectation(description: "the replaced queue's write returned")
         let release = DispatchSemaphore(value: 0)
@@ -73,68 +69,32 @@ final class SnapshotOwnershipTests: XCTestCase {
         try replaced.insertJobForTesting(job("stale", state: .transcribing))
         replaced.saveSnapshot()
         // Yields the main actor so the worker can take the batch and enter the
-        // writer. Until it has, the discard below would simply succeed.
+        // writer, so the replacement is built while that write is stalled.
         await fulfillment(of: [writeStarted], timeout: 5)
 
         let replacement = PipelineQueue(logDir: logDir)
         replacement.adoptJobs(of: replaced)
         try replacement.insertJobForTesting(job("current", state: .done))
         replacement.saveSnapshot()
-        try await waitForSnapshot(toContain: 2)
+        // A window for the replacement's write to land while the stalled one
+        // is still held. A writer per queue uses it, so the stalled write then
+        // lands last; the single writer keeps it queued behind the stalled
+        // one. Without the window the two land in either order on the old
+        // design, and the test could not tell the designs apart.
+        try await Task.sleep(for: .milliseconds(300))
+        let titlesBeforeRelease = Set(((try? PipelineSnapshot.load(from: logDir)) ?? []).map(\.meetingTitle))
+        XCTAssertFalse(
+            titlesBeforeRelease.contains("current"),
+            "the replacement's write landed before the stalled write of the replaced queue",
+        )
 
         release.signal()
         await fulfillment(of: [writeFinished], timeout: 5)
-        // The replacement's own write is already on disk, so anything that
-        // lands after it can only be the stalled one.
-        try await Task.sleep(for: .milliseconds(200))
+        await replacement.awaitSnapshotFlush()
 
-        let onDisk = try snapshotOnDisk()
-        // Strict by default: the run fails if the overwrite stops happening, so
-        // the marker cannot outlive the defect quietly. Giving the jobs list and
-        // its file a single owner is what removes it, and this is the
-        // assertion that change is measured against.
-        XCTExpectFailure("a stalled write of the replaced queue still overwrites its replacement's state") {
-            XCTAssertEqual(
-                Set(onDisk.map(\.meetingTitle)), ["stale", "current"],
-                "a job the live queue holds vanished from the snapshot",
-            )
-        }
-    }
-
-    /// The pending-write drop does work for the case it was written for: a
-    /// write the replaced queue still owes and has not started.
-    func testDiscardDropsAWriteThatHasNotStarted() async throws {
-        let writes = WriteRecorder()
-        let recording: @Sendable ([PipelineJob], URL) -> Void = { jobs, _ in
-            Task { await writes.record(jobs.count) }
-        }
-        let replaced = PipelineQueue(logDir: logDir, snapshotWriter: recording)
-        try replaced.insertJobForTesting(job("stale", state: .transcribing))
-        replaced.saveSnapshot()
-        replaced.discardPendingSnapshot()
-
-        try await Task.sleep(for: .milliseconds(300))
-
-        let counts = await writes.counts
-        XCTAssertTrue(
-            counts.isEmpty,
-            "a dropped batch still reached the writer: \(counts)",
+        XCTAssertEqual(
+            try Set(snapshotOnDisk().map(\.meetingTitle)), ["stale", "current"],
+            "a job the live queue holds vanished from the snapshot",
         )
-    }
-
-    private func waitForSnapshot(toContain count: Int) async throws {
-        for _ in 0 ..< 50 {
-            if let jobs = try? PipelineSnapshot.load(from: logDir), jobs.count == count { return }
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        XCTFail("the snapshot never reached \(count) jobs")
-    }
-}
-
-private actor WriteRecorder {
-    private(set) var counts: [Int] = []
-
-    func record(_ count: Int) {
-        counts.append(count)
     }
 }

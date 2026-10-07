@@ -937,84 +937,46 @@ class PipelineQueue {
         logDirCreated = true
     }
 
-    // Latest jobs array queued for the snapshot worker. Overwritten on
-    // each `saveSnapshot()` so a burst of state changes collapses into a
-    // single write of the final state instead of N sequential writes.
-    // nil ≠ `[]`: nil means "nothing to write", `[]` would mean "write
-    // the empty-jobs state" (valid when the last job was removed).
-    // swiftlint:disable:next discouraged_optional_collection
-    private var pendingSnapshotJobs: [PipelineJob]?
-    private var snapshotWorker: Task<Void, Never>?
-
-    /// Dedicated actor that owns the `replaceItemAt` syscall. Calling
-    /// `await snapshotWriterActor.write(...)` from inside the detached task
-    /// is a genuine cross-actor hop — guaranteed to leave the caller's
-    /// executor (in particular MainActor) and run on the actor's own
-    /// executor. This sidesteps Swift Concurrency's synchronous-start
-    /// optimization that would otherwise keep `Task.detached`'s body on
-    /// the caller's thread until the first real suspension. A stalled
-    /// `renamex_np` (Spotlight indexer race on macOS 26) now blocks only
-    /// this actor — never the UI, RPC, or watch loop.
-    private let snapshotWriterActor = SnapshotWriterActor()
-
-    /// Persist the current `jobs` array to disk. The write runs on a
-    /// detached task and hops to `snapshotWriterActor` for the actual I/O —
-    /// a stalled `replaceItemAt` (macOS 26 `mds_stores` rename deadlock)
-    /// can't freeze the UI / RPC / watch loop. Rapid successive calls
-    /// coalesce: only the last state is actually written.
-    /// Drop a snapshot write this queue still owes, for a queue that is being
-    /// replaced.
-    ///
-    /// Both queues share one `logDir`, so they share `pipeline_queue.tmp`, and
-    /// their serializing actors are per-queue and know nothing of each other.
-    /// Left in place, the replaced queue's pending write and the replacement's
-    /// own race on that one staging file: the loser of `replaceItemAt` fails
-    /// with a missing source, and the winner may be the queue that is going
-    /// away. Dropping the batch is enough to end the worker, which stops as
-    /// soon as `takeNextSnapshotBatch` hands it nothing.
-    func discardPendingSnapshot() {
-        pendingSnapshotJobs = nil
-    }
-
+    /// Persist the current `jobs` array to disk. The write runs off the main
+    /// actor through the one `PipelineSnapshotStore` for this `logDir`, which
+    /// every queue writing there shares, so a stalled `replaceItemAt` cannot
+    /// freeze the UI / RPC / watch loop, rapid successive calls coalesce into
+    /// a write of the last state, and the order on disk follows the order of
+    /// the saves even across a queue replacement.
     func saveSnapshot() {
+        guard !isRetired else {
+            logger.info("Snapshot save skipped: this queue was replaced")
+            return
+        }
         ensureLogDir()
-        pendingSnapshotJobs = jobs
-        guard snapshotWorker == nil else { return }
-        let dir = logDir
-        let writer = snapshotWriter
-        let writeActor = snapshotWriterActor
-        snapshotWorker = Task.detached(priority: .utility) { [weak self] in
-            while let next = await self?.takeNextSnapshotBatch() {
-                await writeActor.write(jobs: next, to: dir, using: writer)
-            }
-        }
+        PipelineSnapshotStore.save(jobs, to: logDir, using: snapshotWriter)
     }
 
-    // swiftlint:disable discouraged_optional_collection
-    @MainActor
-    private func takeNextSnapshotBatch() -> [PipelineJob]? {
-        guard let next = pendingSnapshotJobs else {
-            snapshotWorker = nil
-            return nil
-        }
-        pendingSnapshotJobs = nil
-        return next
+    /// Set by `PipelineController.rebuild()` on the queue it replaced. Its
+    /// list stopped being the app's at the swap, so a save from it would put
+    /// that list back over the active queue's: the store orders writes by
+    /// when they were saved, not by which queue is current. Work that
+    /// outlives the swap still runs on it (the staging recovery it started
+    /// when it was built holds it until its scan returns); it just no longer
+    /// writes the snapshot or takes on recovered recordings.
+    private(set) var isRetired = false
+
+    func retire() {
+        isRetired = true
     }
 
-    // swiftlint:enable discouraged_optional_collection
-
-    /// Wait for any queued snapshot writes to land on disk. Used by tests
-    /// asserting on the file; production code may call this before quit if
-    /// it needs the last snapshot durable, but the recovery path doesn't
-    /// require it (orphans are re-scanned at next launch).
+    /// Wait until every snapshot write into this queue's `logDir` has landed,
+    /// whichever queue saved it, including writes saved while this waited.
+    /// Tests asserting on the file use it.
     func awaitSnapshotFlush() async {
-        await snapshotWorker?.value
+        await PipelineSnapshotStore.flush(logDir)
     }
 
-    /// Test-only: true while a background snapshot worker is running.
-    /// Lets tests assert the worker drains and clears itself.
+    /// True while a snapshot write into this queue's `logDir` has not landed
+    /// yet, whichever queue saved it. Tests read it to assert the writer
+    /// drains and clears itself.
     var isSnapshotWorkerActive: Bool {
-        snapshotWorker != nil
+        PipelineSnapshotStore.existing(for: logDir) != nil
     }
 }
 
