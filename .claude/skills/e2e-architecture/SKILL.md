@@ -164,6 +164,45 @@ PRs are excluded from the self-hosted runner.
   asserts the bundled model is in the deployed bundle up front: without it the
   stage correctly reports a missing model and leaves the track as recorded,
   which would read as a broken canceller.
+- The `--mic-stall` lane (issues #724, #706) covers the microphone progress
+  watchdog in the shipped app, a fault no runner produces on its own (the
+  loopback input always delivers; the field cases need a Bluetooth headset). It
+  builds the fault-injection bundle and launches it with
+  `MEETINGTRANSCRIBER_E2E_MIC_FAULT=stall`, so the real engine starts and runs
+  while the handler drops every buffer; `--mic-stall-late` lets the first ten
+  seconds through. It asserts, each from the layer that owns it: the capture
+  log's rebuilds after 3, 6, 12 and 24 s and its release after the 60 s budget;
+  `/state` reporting `micFault: "stalled"` with `micStallCount: 1` no earlier
+  than the budget, with the recording and the app channel still running after
+  it; one "Capture Channel Lost" notification with the stall wording; and a job
+  that finishes `done` with a German transcript, which can only come from the
+  app track. The microphone file is not empty in the `stall` variant, by design:
+  a capture restarted before it ever delivered bridges each wait with silence,
+  so the track runs to the last rebuild as exact zeros, and that is what is
+  asserted. It is the only lane that runs the app with an isolated home
+  (`CFFIXED_USER_HOME` set to a temp dir through `open --env`), so it neither
+  reads nor writes the host's data dir or output folder; UserDefaults are not
+  redirected by that variable, and protocol generation is switched off for the
+  run and restored after it, from a record kept under
+  `~/Library/Caches/MeetingTranscriber-e2e`: a killed run is repaired at the
+  start of the next `e2e-app.sh` run, whatever its lane (not by
+  `e2e-browser.sh`, `e2e-channel-fault.sh` or a hand launch, which run with
+  what is left until then), and only while the setting still reads
+  `none`, so a choice made since is kept. Its temporary home goes at exit
+  unless the app it launched is still running; such a home is listed there
+  and removed by a later run once that app is gone. The helpers behind this
+  and the installed-app guard are tested by
+  `scripts/tests/test_mic_stall_lane_helpers.sh`. The isolated home does not cover a MeetingTranscriber
+  that is not the dev app: it would record the synthetic meeting into the
+  host's real folders, so the lane refuses while one is running and never quits
+  it. The provenance marker of the app it launched lives in that same cache
+  directory, not in the throwaway home, so the next run of any lane recognises
+  an app a failed run left behind. The variable name exists only in a
+  `-DE2E_FAULT_INJECTION` build, and the lane checks the deployed binary for it
+  before recording. With the variable unset that build injects nothing, so the
+  fault bundle a lane leaves at the shared deploy path cannot inject into a
+  later launch; `--mic-device-change` asks for its fault with
+  `MEETINGTRANSCRIBER_E2E_MIC_FAULT=device-change`. It has no workflow yet: it is run by hand.
 - **One driver at a time.** `e2e-app.sh` refuses to start while another
   `e2e-app.sh` is live (they share the deployed bundle, the RPC port and the
   audio device, and each quits the other's app at launch, so neither result
