@@ -570,3 +570,227 @@ pipeline_output_artifacts() {
     fi
     printf '%s' "$found"
 }
+
+# snapshot_new_job_ids <snapshot.json> <title> [known-id...] — the ids of the
+# jobs in a pipeline snapshot file titled exactly <title> and not among the
+# known ids, one per line. Used by the --quit-flush lane to read what a quit
+# left on disk, after the process is gone and before anything relaunches.
+#
+# Status 2 when the file is missing or does not parse: that is not the same
+# as "the job is absent", and the lane reports the two differently. Empty
+# output with status 0 means the file was read and holds no such job.
+snapshot_new_job_ids() {
+    local snapshot="$1" title="$2"
+    shift 2
+    if [ ! -f "$snapshot" ]; then
+        echo "snapshot_new_job_ids: no snapshot at $snapshot" >&2
+        return 2
+    fi
+    # Validate before extracting. `jq -e` cannot carry both answers: measured
+    # with jq 1.7, a torn file exits 4, the same status as "no output", so a
+    # half-written snapshot would read as one that lacks the job.
+    if ! jq -e 'type == "array"' "$snapshot" >/dev/null 2>&1; then
+        echo "snapshot_new_job_ids: $snapshot does not parse as a job array" >&2
+        return 2
+    fi
+    local known
+    known="$(printf '%s\n' "$@" | jq -R . | jq -s .)"
+    jq -r --arg title "$title" --argjson known "$known" \
+        '.[] | select(.meetingTitle == $title) | .id | select(. as $id | $known | index($id) | not)' \
+        "$snapshot"
+}
+
+# Must equal `PersistentDiagnosticLog.streamPredicate`. A drift cannot pass
+# silently: the --quit-flush lane asserts at launch that the app has exactly
+# one child matching it, so a changed predicate fails there, before the
+# orphan check that relies on it could report a false "none left".
+MT_LOG_STREAM_PREDICATE="subsystem CONTAINS 'com.meetingtranscriber'"
+
+# streamer_pids <parent-pid> — read a `ps -axo pid=,ppid=,command=` table on
+# stdin and print the pids of the app's persistent-log `log stream` processes
+# whose parent is <parent-pid>, one per line. Parent 1 asks for orphans: a
+# streamer that outlived its app is re-parented to launchd. The predicate
+# match keeps a user's own `log stream` out of it.
+streamer_pids() {
+    local parent="$1"
+    awk -v parent="$parent" -v pred="$MT_LOG_STREAM_PREDICATE" '
+        $2 == parent && $3 == "/usr/bin/log" && $4 == "stream" && index($0, pred) { print $1 }
+    '
+}
+
+# queue_snapshot_is_empty <pipeline_queue.json> — 0 when the snapshot holds no
+# job (exactly an empty array, or no file at all: nothing was ever queued),
+# 1 when it holds any job, 2 when it does not parse. A lane that adds jobs to
+# the shared queue and restores it afterwards may only start from empty.
+queue_snapshot_is_empty() {
+    local snapshot="$1"
+    [ -f "$snapshot" ] || return 0
+    jq -e 'type == "array"' "$snapshot" >/dev/null 2>&1 || return 2
+    jq -e 'length == 0' "$snapshot" >/dev/null 2>&1
+}
+
+# backup_state_files <src-dir> <backup-dir> <name>... — copy each named file
+# with its metadata. Names that do not exist are listed in <backup-dir>/.absent
+# so a restore can tell "absent before" from "lost from the backup".
+backup_state_files() {
+    local src="$1" dst="$2" name
+    shift 2
+    mkdir -p "$dst"
+    : >"$dst/.absent"
+    for name in "$@"; do
+        if [ -f "$src/$name" ]; then
+            cp -p "$src/$name" "$dst/$name" || return 1
+        else
+            printf '%s\n' "$name" >>"$dst/.absent"
+        fi
+    done
+}
+
+# compare_state_files <backup-dir> <dir> <name>... — read-only SHA-256 compare,
+# one line per name: "<name>: match", "<name>: MISMATCH (...)", "<name>:
+# absent before, still absent", or "<name>: absent before, now present". Status
+# 1 when any backed-up file differs or a file absent before is present now: the
+# shared state did not end as it began.
+compare_state_files() {
+    local backup="$1" dir="$2" name status=0 want got
+    shift 2
+    for name in "$@"; do
+        if grep -qx "$name" "$backup/.absent" 2>/dev/null; then
+            if [ -f "$dir/$name" ]; then
+                echo "$name: absent before, now present"
+                status=1
+            else
+                echo "$name: absent before, still absent"
+            fi
+            continue
+        fi
+        want="$(shasum -a 256 "$backup/$name" 2>/dev/null | cut -d' ' -f1)"
+        got="$(shasum -a 256 "$dir/$name" 2>/dev/null | cut -d' ' -f1)"
+        if [ -n "$want" ] && [ "$want" = "$got" ]; then
+            echo "$name: match ($want)"
+        else
+            echo "$name: MISMATCH (backup ${want:-missing}, now ${got:-missing})"
+            status=1
+        fi
+    done
+    return "$status"
+}
+
+# state_file_records <file> <name> — the records of a shared state file, one per
+# line: job ids (lowercased) for the queue, the terminal-job store and the
+# pipeline log, paths for the processed-recordings ledger. Status 2 when the
+# file does not parse or <name> is not a file this helper knows.
+state_file_records() {
+    local file="$1" name="$2" filter slurp=()
+    case "$name" in
+        pipeline_queue.json) filter='.[] | .id | ascii_downcase' ;;
+        terminal_jobs.json) filter='.[] | .jobID | ascii_downcase' ;;
+        pipeline_log.jsonl) filter='.[] | .job_id | ascii_downcase'; slurp=(-s) ;;
+        processed_recordings.json) filter='.[]' ;;
+        *) return 2 ;;
+    esac
+    jq -e ${slurp[@]+"${slurp[@]}"} 'type == "array" and all(.[]; . != null)' "$file" >/dev/null 2>&1 || return 2
+    jq -r ${slurp[@]+"${slurp[@]}"} "$filter" "$file" 2>/dev/null || return 2
+}
+
+# state_file_foreign_records <file> <name> <ids-file> <paths-file> [<backup>] —
+# print each record of <file> that is neither this run's (a job id in
+# <ids-file>, or for the ledger a path in <paths-file>) nor already in the
+# backed-up copy <backup>. Nothing printed means everything in it is the run's
+# or was there before. Status 2 when either file does not parse.
+state_file_foreign_records() {
+    local file="$1" name="$2" ids="$3" paths="$4" backup="${5:-}" records known
+    records="$(state_file_records "$file" "$name")" || return 2
+    if [ "$name" = processed_recordings.json ]; then
+        known="$(cat "$paths" 2>/dev/null)"
+    else
+        known="$(tr '[:upper:]' '[:lower:]' <"$ids" 2>/dev/null)"
+    fi
+    if [ -n "$backup" ]; then
+        known="$known
+$(state_file_records "$backup" "$name")" || return 2
+    fi
+    [ -n "$records" ] || return 0
+    grep -Fxv -f <(printf '%s\n' "$known" | grep -v '^$' || true) <<<"$records" || true
+}
+
+# restore_state_files <backup-dir> <dir> <ids-file> <paths-file> <name>... —
+# put the shared state back as the backup found it, then report the compare.
+# Only this run's records may have changed in the meantime, so each file is
+# checked first (state_file_foreign_records):
+#   existed before: copied back byte for byte when everything added since the
+#     backup is the run's;
+#   absent before: removed when everything in it is the run's, so the run
+#     created it.
+# The pipeline log is append-only and its history holds torn fragments that do
+# not parse, so for it the check is on what the run appended: the backup must
+# be a byte prefix of the file, and every appended line the run's.
+# A file holding anyone else's record, or one that does not parse, is left as
+# it is, said so, and the compare fails: a blind copy would erase what another
+# writer added after the backup, and keeping it quietly would leave the run's
+# records in the app's data.
+restore_state_files() {
+    local backup="$1" dir="$2" ids="$3" paths="$4" name status foreign
+    shift 4
+    for name in "$@"; do
+        local before=""
+        grep -qx "$name" "$backup/.absent" 2>/dev/null || before="$backup/$name"
+        if [ -z "$before" ] && [ ! -f "$dir/$name" ]; then continue; fi
+        if [ -n "$before" ] && [ "$name" = pipeline_log.jsonl ] && [ -f "$dir/$name" ]; then
+            # Append-only, and its history is not all JSON (torn fragments of
+            # earlier interleaved appends): check only what the run appended.
+            local size appended
+            size="$(stat -f%z "$before")"
+            if ! head -c "$size" "$dir/$name" | cmp -s - "$before"; then
+                echo "$name: NOT RESTORED, no longer an append of the backup"
+                continue
+            fi
+            appended="$(mktemp)"
+            tail -c +"$((size + 1))" "$dir/$name" >"$appended"
+            status=0
+            foreign="$(state_file_foreign_records "$appended" "$name" "$ids" "$paths")" || status=$?
+            rm -f "$appended"
+            if [ "$status" -ne 0 ]; then
+                echo "$name: NOT RESTORED, what was appended since the backup does not parse"
+                continue
+            fi
+            if [ -n "$foreign" ]; then
+                echo "$name: NOT RESTORED, appended records that are not this run's: $(tr '\n' ' ' <<<"$foreign")"
+                continue
+            fi
+            cp -p "$before" "$dir/$name" || echo "$name: restore copy FAILED"
+            continue
+        fi
+        if [ -f "$dir/$name" ]; then
+            status=0
+            foreign="$(state_file_foreign_records "$dir/$name" "$name" "$ids" "$paths" "$before")" || status=$?
+            if [ "$status" -ne 0 ]; then
+                echo "$name: NOT RESTORED, does not parse, so what changed in it since the backup cannot be told apart"
+                continue
+            fi
+            if [ -n "$foreign" ]; then
+                echo "$name: NOT RESTORED, holds records neither in the backup nor this run's: $(tr '\n' ' ' <<<"$foreign")"
+                continue
+            fi
+        fi
+        if [ -z "$before" ]; then
+            rm -f "$dir/$name" && echo "$name: created by this run (only its records), removed"
+        else
+            cp -p "$before" "$dir/$name" || echo "$name: restore copy FAILED"
+        fi
+    done
+    compare_state_files "$backup" "$dir" "$@"
+}
+
+# remove_state_backup <backup-dir> <name>... — remove a backup taken by
+# backup_state_files for these names, once the state matched it: only the
+# files it wrote (each name, and .absent), then the directory if that leaves
+# it empty. Status 1, and the directory left, when anything else is in it.
+remove_state_backup() {
+    local backup="$1" name
+    shift
+    for name in "$@" .absent; do
+        rm -f "$backup/$name"
+    done
+    rmdir "$backup" 2>/dev/null || { echo "backup $backup holds files it did not write; left in place"; return 1; }
+}
