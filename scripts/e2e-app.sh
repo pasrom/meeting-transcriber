@@ -43,6 +43,7 @@ TITLE_SOURCE=false      # drive the window-title lookup with a no-usable-title c
 ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
 QUIT_FOREIGN_APP=false   # hand-runs: quit a dev app this driver did not start instead of refusing (see the app-provenance guard)
 ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
+MIC_STALL=""             # stall | stall-after-delivery: withhold the mic's buffers and assert the progress watchdog (see run_mic_stall)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -66,6 +67,8 @@ while [ $# -gt 0 ]; do
         --echo-bleed)       ECHO_BLEED=true ;;
         --echo-cancel)      ECHO_CANCEL=true ;;
         --quit-foreign-app) QUIT_FOREIGN_APP=true ;;
+        --mic-stall)        MIC_STALL=stall ;;
+        --mic-stall-late)   MIC_STALL=stall-after-delivery ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
@@ -188,6 +191,23 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        difference between the windows where the far end played and
                        the windows where it did not. Standalone lane. Needs python3
                        and the bundled model.
+  --mic-stall          Issues #724/#706: build with the fault-injection seam, run
+                       one ~110 s meeting whose microphone engine starts and runs
+                       but whose every buffer is withheld from the handler, and
+                       assert the progress watchdog end to end: rebuilds after 3,
+                       6, 12 and 24 s without a buffer, the microphone released
+                       at 60 s while the app track keeps recording, /state
+                       reporting micFault=stalled with micStallCount=1, one
+                       "Capture Channel Lost" notification with the stall
+                       wording, and the job still finishing with a German
+                       transcript from the app track. Runs the app with an
+                       isolated home (CFFIXED_USER_HOME, a temp dir removed on
+                       exit), so it never reads or writes the host's real
+                       MeetingTranscriber data or output folder, and with
+                       protocol generation off. Standalone lane.
+  --mic-stall-late     Same, but the microphone delivers for its first 10 s and
+                       then stops with no configuration change: the shape a
+                       one-shot first-buffer check never sees.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
   --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
                        not launch is running (someone may be using it). Pass this
@@ -279,6 +299,19 @@ if [ "$ECHO_CANCEL" = true ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESC
     exit 2
 fi
 
+# --mic-stall records its own long meeting with its own fault, home and
+# settings; sharing a run with another lane would put that lane's recording
+# under a withheld microphone or run this one against the host's real data.
+if [ -n "$MIC_STALL" ] && { [ "$NAMING_CONFIRM" = true ] || [ "$NAMING_ESCAPE" = true ] \
+    || [ "$NAMING_SWITCH" = true ] || [ "$RECORD_ONLY" = true ] || [ "$REIMPORT_RECORDED" = true ] \
+    || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
+    || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ] || [ "$MIC_ONLY" = true ] \
+    || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ] \
+    || [ -n "$SIMULATOR_FIXTURE" ]; }; then
+    echo "Error: --mic-stall/--mic-stall-late is a standalone lane; incompatible with the other lane flags and --fixture" >&2
+    exit 2
+fi
+
 # --mic-device-change needs the fault-injection seam compiled in, so it must
 # build — `defaults`/runtime flags can't add the -DE2E_FAULT_INJECTION code.
 if [ "$MIC_DEVICE_CHANGE" = true ] && [ "$NO_BUILD" = true ]; then
@@ -296,7 +329,9 @@ if [ "$REDEPLOY_ONLY" = true ] && [ "$MIC_DEVICE_CHANGE" = true ]; then
     exit 2
 fi
 # Export before the build step below so run_app.sh adds -DE2E_FAULT_INJECTION.
-if [ "$MIC_DEVICE_CHANGE" = true ]; then
+# --mic-stall may run --no-build against a fault build already deployed; the
+# preflight checks that the deployed bundle really is one.
+if [ "$MIC_DEVICE_CHANGE" = true ] || [ -n "$MIC_STALL" ]; then
     export MTT_FAULT_INJECTION=1
 fi
 
@@ -319,7 +354,57 @@ SIMULATOR_BIN="$SIMULATOR_PKG/.build/release/meeting-simulator"
 MTCLI_PKG="$ROOT/tools/mt-cli"
 MTCLI="$MTCLI_PKG/.build/release/mt-cli"
 DEFAULT_FIXTURE="$ROOT/app/MeetingTranscriber/Tests/Fixtures/two_speakers_de.wav"
-RPC_TOKEN_FILE="$HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
+
+# The home the APP sees. The host's own for every lane but --mic-stall, which
+# launches the app with CFFIXED_USER_HOME pointing at a temp dir of its own:
+# Foundation resolves Application Support and Downloads from it, so the app's
+# data dir (token, queue snapshot, speaker DB, staging recordings) and its
+# default output folder all land in that dir, and the host's real ones are
+# neither read (no orphan recovery of real recordings, no matching against a
+# real speaker DB) nor written. UserDefaults are NOT redirected by it (cfprefsd
+# ignores the variable), which is why the dev bundle's own domain still carries
+# the lane's settings. Every path below that the app owns derives from this.
+APP_HOME="$HOME"
+# Where the mic-stall lane keeps what must outlive one run: the host's protocol
+# provider as it was before the lane switched it off, the homes a failed run
+# had to leave behind, and the provenance marker of the app it launched. Not
+# the throwaway home, which the next run never sees, and not $TMPDIR, which a
+# reboot clears.
+_MS_STATE_DIR="$HOME/Library/Caches/MeetingTranscriber-e2e"
+_MS_PROTOCOL_RECORD="$_MS_STATE_DIR/mic-stall-protocolProvider"
+_MS_KEPT_HOMES="$_MS_STATE_DIR/mic-stall-kept-homes"
+# The mic-stall lane's cleanup, armed as soon as the lane has made anything of
+# its own and run again by on_exit; every step is idempotent (the helpers are in
+# lib/e2e-helpers.sh, tested by scripts/tests/test_mic_stall_lane_helpers.sh):
+#   - protocolProvider back from the record written right before the lane's
+#     write, only while it still reads `none`, verified, the record kept if
+#     the restore did not land. A run killed before it got here leaves the
+#     record, and the next run of any lane of this script repairs it (below,
+#     at its start).
+#   - its own home, unless the app it launched still runs: a failed run leaves
+#     it up and writing there. Then the home is listed for a later run to
+#     remove once that app is gone.
+_ms_cleanup() {
+    declare -F mic_stall_restore_protocol >/dev/null || return 0
+    mic_stall_restore_protocol "$DEV_BUNDLE_ID" "$(dev_container_plist)" "$_MS_PROTOCOL_RECORD" none || true
+    local pid="${_launched_app:-}"
+    [ -n "$pid" ] || pid="$( { pgrep -f "MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber" || true; } | head -1)"
+    mic_stall_release_home "$APP_HOME" "$pid" "$_MS_KEPT_HOMES"
+}
+if [ -n "$MIC_STALL" ]; then
+    # No trailing slash on the parent: the app reports its paths normalised, and
+    # the output-folder check below compares strings.
+    _app_home_parent="${TMPDIR:-/tmp}"
+    APP_HOME="$(mktemp -d "${_app_home_parent%/}/e2e-mic-stall-home.XXXXXX")"
+    trap '_ms_cleanup' EXIT
+    mkdir -p "$APP_HOME/Library/Application Support" "$APP_HOME/Downloads"
+    # The ASR and diarizer models are a multi-gigabyte cache, not user data;
+    # link the host's copy rather than download it into a throwaway home.
+    # rm -rf on APP_HOME removes the link, never what it points at.
+    [ -d "$HOME/Library/Application Support/FluidAudio" ] \
+        && ln -s "$HOME/Library/Application Support/FluidAudio" "$APP_HOME/Library/Application Support/FluidAudio"
+fi
+RPC_TOKEN_FILE="$APP_HOME/Library/Application Support/MeetingTranscriber/.rpc-token"
 RPC_BASE="http://127.0.0.1:9876"
 
 # The app's output folder — `AppPaths.downloadsProtocolsDir`. Unsandboxed
@@ -327,7 +412,7 @@ RPC_BASE="http://127.0.0.1:9876"
 # Recordings and protocols are SIBLINGS under it: audio and its sidecar go to
 # `recordings/`, transcripts and protocols to `protocols/`. Derive both from
 # one root so an assertion cannot end up pointed at the wrong sibling.
-OUTPUT_DIR="$HOME/Downloads/MeetingTranscriber"
+OUTPUT_DIR="$APP_HOME/Downloads/MeetingTranscriber"
 RECORDINGS_DIR="$OUTPUT_DIR/recordings"
 # `find -newer` marker so cleanup only touches THIS run's files — never
 # pre-existing user data (see CLAUDE.md feedback on destructive FS scans).
@@ -619,11 +704,39 @@ _other_drivers="$(_e2e_other_drivers)"
 # What this cannot tell apart: a foreign app from a sibling driver's leftover
 # on a hand-run host, and a stale marker pid reused by an unrelated process
 # (both rare, both reported with the pid and command so a person can decide).
+# The mic-stall lane plays a synthetic meeting for over a minute. Its own app
+# runs in a throwaway home, but a MeetingTranscriber that is not the dev app
+# (the installed one) runs in the host's: with auto-watch on it would detect
+# that meeting and record it into the real staging folder and Downloads. Its
+# output-folder check below cannot catch that, because it reads `/state` from
+# whichever app answers the RPC port, and an installed app with the automation
+# API off does not. So the lane refuses, and never quits it.
+if [ -n "$MIC_STALL" ]; then
+    _installed="$(non_dev_meetingtranscriber_pids)"
+    [ -z "$_installed" ] \
+        || fail "--mic-stall: a MeetingTranscriber that is not the dev app is running (pid(s): ${_installed% }). It would record the lane's synthetic meeting into the host's real folders. Quit it first; this lane does not quit it for you."
+fi
+
 _DEV_APP_PATTERN="MeetingTranscriber-Dev.app/Contents/MacOS/MeetingTranscriber"
-_E2E_APP_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-app-launched"
+# The marker a driver running the app in the host's own home leaves.
+_E2E_HOST_MARKER="$HOME/Library/Application Support/MeetingTranscriber/.e2e-app-launched"
+# The one a lane with an isolated home (--mic-stall) leaves. Outside that home,
+# which the next run never sees: kept there, an app a failed run left behind
+# read as foreign to every later run.
+_E2E_ISOLATED_MARKER="$_MS_STATE_DIR/isolated-home-app-launched"
+_E2E_APP_MARKER="$_E2E_HOST_MARKER"
+[ -n "$MIC_STALL" ] && _E2E_APP_MARKER="$_E2E_ISOLATED_MARKER"
 _running_app="$( { pgrep -f "$_DEV_APP_PATTERN" || true; } | head -1)"
 if [ -n "$_running_app" ]; then
-    _marker="$(cat "$_E2E_APP_MARKER" 2>/dev/null || true)"
+    # Whichever marker names the running app, whichever lane left it.
+    _marker=""
+    for _m in "$_E2E_HOST_MARKER" "$_E2E_ISOLATED_MARKER"; do
+        _c="$(cat "$_m" 2>/dev/null || true)"
+        if [ -n "$_c" ] && [ "${_c%% *}" = "$_running_app" ]; then
+            _marker="$_c"
+            break
+        fi
+    done
     _marker_pid="${_marker%% *}"
     _marker_state="${_marker#* }"
     _running_cmd="$(ps -o command= -p "$_running_app" 2>/dev/null | cut -c1-120)"
@@ -642,6 +755,15 @@ fi
 # Always — even with --no-build, since UserDefaults below take effect
 # only on launch and the running RPC server would shadow the new one.
 quit_running_app
+
+# Whatever lane of this script this is: finish what an earlier mic-stall run
+# could not. A killed one leaves protocolProvider at `none` and its record
+# behind, and this lane would otherwise launch the app with it; a failed one
+# leaves its home behind while its app was up, and that app is gone now. Only
+# this script does this: e2e-browser.sh, e2e-channel-fault.sh and a hand
+# launch of the dev bundle run with whatever is left until it next runs.
+mic_stall_restore_protocol "$DEV_BUNDLE_ID" "$(dev_container_plist)" "$_MS_PROTOCOL_RECORD" none || true
+mic_stall_sweep_kept_homes "$_MS_KEPT_HOMES"
 
 if [ "$NO_BUILD" = true ]; then
     [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
@@ -708,6 +830,18 @@ if [ "$REDEPLOY_ONLY" = true ]; then
     exit 0
 fi
 
+# The mic-stall lane's whole premise is a bundle that withholds the
+# microphone's buffers on request. Checked on the deployed binary, not on the
+# build flag, so a --no-build run against a canonical bundle fails here rather
+# than recording a healthy microphone and failing a minute later with "never
+# stalled". The variable name exists only in a -DE2E_FAULT_INJECTION build
+# (see E2EMicFault), which is also how a release build is shown not to carry it.
+if [ -n "$MIC_STALL" ]; then
+    grep -q -a "MEETINGTRANSCRIBER_E2E_MIC_FAULT" "$DEV_BUNDLE_DEPLOY/Contents/MacOS/MeetingTranscriber" \
+        || fail "--mic-stall needs a fault-injection build at $DEV_BUNDLE_DEPLOY (its binary does not carry MEETINGTRANSCRIBER_E2E_MIC_FAULT); run without --no-build"
+    log "[mic-stall] deployed bundle is a fault-injection build"
+fi
+
 if [ ! -x "$SIMULATOR_BIN" ]; then
     log "Building meeting-simulator"
     (cd "$SIMULATOR_PKG" && swift build -c release)
@@ -716,7 +850,7 @@ fi
 # Record-only lanes assert the captured app track is non-silent via
 # `mt-cli wav-verdict` (the same analyzer the browser lane uses). Only that
 # mode needs it, so build lazily to keep the processing lane unchanged.
-if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ]; } && [ ! -x "$MTCLI" ]; then
+if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ] || [ -n "$MIC_STALL" ]; } && [ ! -x "$MTCLI" ]; then
     # record-only asserts the app track carries signal; mic-only needs the same
     # analyzer for its mic track AND drives `record start/stop` through it.
     log "Building mt-cli (track silence guard + record control)"
@@ -809,6 +943,25 @@ _delete_dev_default() {
     delete_dev_default "$DEV_BUNDLE_ID" "$key"
 }
 
+# The mic-stall lane runs no protocol generation: it asserts the recording and
+# the transcript, and a configured Claude CLI or HTTP endpoint would otherwise be
+# sent the fixture's transcript on every run. Restored to the host's own value
+# in on_exit, since unlike the lane toggles above this one is a user's choice.
+if [ -n "$MIC_STALL" ]; then
+    # The record first, then the write, so no exit lands between a write and
+    # the means to undo it. A record still here is one the repair at this
+    # run's start could not restore (it said why): it still holds the host's
+    # value, and what is set now is an earlier run's `none`.
+    mkdir -p "$_MS_STATE_DIR"
+    if [ -f "$_MS_PROTOCOL_RECORD" ]; then
+        log "[mic-stall] an earlier run's protocolProvider record could not be restored yet; trying again with '$(cat "$_MS_PROTOCOL_RECORD")' at exit"
+    else
+        read_dev_default_effective "$DEV_BUNDLE_ID" "$_CONTAINER_PLIST" protocolProvider >"$_MS_PROTOCOL_RECORD"
+    fi
+    log "[mic-stall] protocol generation off for this run (was '$(cat "$_MS_PROTOCOL_RECORD")')"
+    _set_dev_default protocolProvider none
+fi
+
 if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
     log "Overriding diarizerMode=$MTT_DIARIZER_MODE for this run"
     _set_dev_default diarizerMode "$MTT_DIARIZER_MODE"
@@ -832,7 +985,7 @@ fi
 # the pipeline-queue reset above: the destructive reset/restore machinery must
 # never touch a developer's real speaker DB. A LOCAL run therefore does NOT
 # snapshot, so the confirm will enroll into your real DB (warned below).
-_APP_SUPPORT_DIR="$HOME/Library/Application Support/MeetingTranscriber"
+_APP_SUPPORT_DIR="$APP_HOME/Library/Application Support/MeetingTranscriber"
 # Durable, DETERMINISTIC backup siblings (not a random /tmp dir): a hard kill
 # between the reset and the trap-restore would strand a random mktemp backup
 # nothing ever finds again, losing the runner's real DB. Deterministic sibling
@@ -1031,11 +1184,14 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
 fi
 
 log "Launching $DEV_BUNDLE_DEPLOY"
-if [ "$MIC_DEVICE_CHANGE" = true ]; then
+if [ -n "$MIC_STALL" ]; then
     # `open --env`, not a leading `env`: only the former reaches a process
-    # LaunchServices starts (see the e2e-architecture skill). The fault build
-    # injects nothing unless asked, so a leftover fault bundle cannot inject
-    # into a later, unrelated launch.
+    # LaunchServices starts (see the e2e-architecture skill).
+    log "[mic-stall] app home $APP_HOME, microphone fault '$MIC_STALL'"
+    open --env CFFIXED_USER_HOME="$APP_HOME" --env MEETINGTRANSCRIBER_E2E_MIC_FAULT="$MIC_STALL" "$DEV_BUNDLE_DEPLOY"
+elif [ "$MIC_DEVICE_CHANGE" = true ]; then
+    # The fault build injects nothing unless asked, so a leftover fault bundle
+    # cannot inject into a later, unrelated launch.
     open --env MEETINGTRANSCRIBER_E2E_MIC_FAULT=device-change "$DEV_BUNDLE_DEPLOY"
 else
     open "$DEV_BUNDLE_DEPLOY"
@@ -1149,6 +1305,10 @@ on_exit() {
     # on this host. Unconditional, not gated on $MIC_ONLY, so a marker left by a
     # previous run is cleared even when this run never touched the routing.
     _mic_only_restore_output
+    # Mic-stall: the host's protocol provider back, then the lane's own home
+    # (see `_ms_cleanup`). Our own mktemp dir: the model link inside it is
+    # removed as a link.
+    [ -n "$MIC_STALL" ] && _ms_cleanup
     # Echo lane: drop the synthesised pairs (our own mktemp dir, never a real
     # recordings directory).
     if [ -n "${_ECHO_FIXTURE_DIR:-}" ] && [ -d "$_ECHO_FIXTURE_DIR" ]; then
@@ -2617,6 +2777,217 @@ run_title_source() {
     log "$label: PASS — no usable window title fell back to the clean placeholder ✅"
 }
 
+# --- mic-stall lane (issues #724, #706) ------------------------------------
+#
+# The field fault: a microphone engine that logged "Mic recording started" and
+# then delivered nothing, for 48 minutes in one report, while the app track
+# recorded on. The capture layer's progress watchdog rebuilds such an engine
+# with growing deadlines and releases it once a minute has passed without a
+# buffer, and the app tells the user. Nothing on a runner produces the fault
+# (the loopback input always delivers, the field cases need a Bluetooth
+# headset), so the fault-injection build withholds every buffer in the handler
+# on request: the real engine starts and runs, and the handler sees nothing.
+#
+# What is asserted, each from the layer that owns it:
+#   - the capture log: the fault was active, the engine was rebuilt after 3, 6,
+#     12 and 24 s without a buffer (rebuilds 1 to 4, in that order) and the
+#     microphone released after at least the 60 s budget;
+#   - /state during the recording: micFault becomes "stalled" with
+#     micStallCount 1, not before the budget could have run out; the
+#     microphone never delivered (or, late variant, did deliver before it
+#     stopped); and seconds after the release the recording is still running
+#     with the app channel delivering and no app fault;
+#   - /state.notifications: exactly one "Capture Channel Lost" with the stall
+#     wording, which is the notification fault path, not just the flag;
+#   - the job: it finishes done with no error and a German transcript, which
+#     can only come from the app track, and the files on disk agree (the app
+#     track carries the fixture, the mic track holds only digital silence,
+#     or only its first seconds in the late variant).
+#
+# The app runs with an isolated home (see APP_HOME), so everything it writes
+# lands in a temp dir this lane removes, and with protocol generation off.
+MIC_STALL_MEETING_S=110
+# The rebuild deadlines `MicCaptureProgressPolicy` must produce, in order.
+MIC_STALL_EXPECTED_REBUILDS="3:1 6:2 12:3 24:4"
+MIC_STALL_BUDGET_S=60
+# How long into the recording the stall may land on /state: the budget, plus
+# the late variant's delivery and its last healthy check, plus the 1 s tick
+# and the poll. Earlier than the budget means something other than the
+# watchdog released the microphone.
+MIC_STALL_EARLIEST_S=$((MIC_STALL_BUDGET_S - 3))
+MIC_STALL_LATEST_S=$((MIC_STALL_BUDGET_S + 25))
+
+_ms_float_lt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a < b) }'; }
+
+# The capture layer's own account since $1, for this run's app only.
+_ms_capture_log() {
+    /usr/bin/log show --style compact --info --start "$1" \
+        --predicate "processID == ${_launched_app:-0} AND subsystem == \"com.meetingtranscriber.audiotap\" AND category == \"MicCapture\"" 2>/dev/null || true
+}
+
+run_mic_stall() {
+    local label="[mic-stall:$MIC_STALL]"
+    local log_start
+    log_start="$(date '+%Y-%m-%d %H:%M:%S')"
+    log "$label: starting meeting-simulator (looping $SIMULATOR_FIXTURE for ${MIC_STALL_MEETING_S}s)"
+    "$SIMULATOR_BIN" "$SIMULATOR_FIXTURE" --loop --duration "$MIC_STALL_MEETING_S" >/tmp/e2e-app-sim.log 2>&1 &
+    SIM_PID=$!
+
+    _ms_recording() { [ "$(rpc /state | jq -r '.watchState // ""')" = recording ]; }
+    poll_until 60 1 _ms_recording || fail "$label: no recording started within 60s of the meeting"
+    local rec_at
+    rec_at="$(date +%s)"
+    log "$label: recording; watching /state for the microphone stall"
+
+    # Until the stall, keep what the microphone did: whether /state ever saw it
+    # deliver a buffer. One jq per tick, `|`-joined for the reason given at
+    # _poll_for_new_lastjob_terminal.
+    local snap fault count mic_age app_age watch elapsed saw_mic_buffer=false
+    while true; do
+        assert_app_alive
+        snap="$(rpc /state)"
+        fault=""; count=""; mic_age=""; app_age=""; watch=""
+        IFS='|' read -r fault count mic_age app_age watch < <(
+            jq -r '[.channelHealth.micFault // "", (.channelHealth.micStallCount // "" | tostring), (.channelHealth.micSecondsSinceLastBuffer // "" | tostring), (.channelHealth.appSecondsSinceLastBuffer // "" | tostring), .watchState // ""] | join("|")' <<<"$snap"
+        ) || true
+        elapsed=$(( $(date +%s) - rec_at ))
+        if [ -n "$mic_age" ] && _ms_float_lt "$mic_age" 2; then saw_mic_buffer=true; fi
+        [ "$fault" = stalled ] && break
+        [ "$watch" = recording ] || fail "$label: the recording ended after ${elapsed}s without the microphone ever being reported stalled (micFault='$fault')"
+        if [ "$elapsed" -gt "$MIC_STALL_LATEST_S" ]; then
+            # Which half broke: the capture layer releasing the microphone, or
+            # the release reaching /state.
+            if _ms_capture_log "$log_start" | grep -q "releasing the microphone"; then
+                fail "$label: the capture log shows the microphone released, but /state still reads micFault='$fault' ${elapsed}s into the recording: the stall never reached the app"
+            fi
+            fail "$label: no stall on /state ${elapsed}s into the recording (micFault='$fault' micSecondsSinceLastBuffer='$mic_age'), and no release in the capture log. The watchdog must release a microphone that went ${MIC_STALL_BUDGET_S}s without a buffer."
+        fi
+        sleep 1
+    done
+    log "$label: /state micFault=stalled micStallCount=$count after ${elapsed}s (micSecondsSinceLastBuffer='$mic_age')"
+    [ "$elapsed" -ge "$MIC_STALL_EARLIEST_S" ] \
+        || fail "$label: stalled after ${elapsed}s, before the ${MIC_STALL_BUDGET_S}s budget could have run out"
+    [ "$count" = 1 ] || fail "$label: micStallCount=$count at the first stall, expected 1"
+    if [ "$MIC_STALL" = stall ]; then
+        [ "$saw_mic_buffer" = false ] \
+            || fail "$label: /state saw the microphone deliver a buffer although every one was to be withheld; the fault did not hold"
+    else
+        [ "$saw_mic_buffer" = true ] \
+            || fail "$label: /state never saw the microphone deliver, so this run measured a microphone that never started, not one that stopped"
+    fi
+
+    # Released, not just flagged: seconds later the recording goes on, the app
+    # channel still delivers, and nothing is reported against it.
+    sleep 6
+    snap="$(rpc /state)"
+    local app_fault
+    IFS='|' read -r fault count mic_age app_age watch app_fault < <(
+        jq -r '[.channelHealth.micFault // "", (.channelHealth.micStallCount // "" | tostring), (.channelHealth.micSecondsSinceLastBuffer // "" | tostring), (.channelHealth.appSecondsSinceLastBuffer // "" | tostring), .watchState // "", .channelHealth.appFault // ""] | join("|")' <<<"$snap"
+    ) || true
+    log "$label: 6s after the stall: watchState=$watch micFault=$fault micStallCount=$count appSecondsSinceLastBuffer=$app_age appFault='${app_fault}'"
+    [ "$watch" = recording ] || fail "$label: the recording stopped with the microphone (watchState=$watch); only the microphone may be released"
+    [ "$fault" = stalled ] && [ "$count" = 1 ] || fail "$label: after the stall /state reads micFault='$fault' micStallCount='$count', expected stalled/1"
+    [ -n "$app_age" ] && _ms_float_lt "$app_age" 2 \
+        || fail "$label: the app channel is not delivering after the microphone was released (appSecondsSinceLastBuffer='$app_age')"
+    [ -z "$app_fault" ] || fail "$label: the app channel reports '$app_fault'; the stall must not touch it"
+
+    local lost lost_body lost_posted
+    lost="$(jq -c '[.notifications[]? | select(.title == "Capture Channel Lost")]' <<<"$snap")"
+    [ "$(jq 'length' <<<"$lost")" = 1 ] \
+        || fail "$label: expected exactly one \"Capture Channel Lost\" notification, got: $lost"
+    lost_body="$(jq -r '.[0].body' <<<"$lost")"
+    lost_posted="$(jq -r '.[0].posted' <<<"$lost")"
+    # Worded from the stall: a microphone withheld from the start never
+    # delivered, so it must not be told it "stopped"; the late variant did.
+    local expected_opening="The microphone stopped delivering audio and restarting it did not help"
+    [ "$MIC_STALL" = stall ] \
+        && expected_opening="The microphone has not delivered any audio in this recording and restarting it did not help"
+    case "$lost_body" in
+        "$expected_opening"*) ;;
+        *) fail "$label: the \"Capture Channel Lost\" notification does not carry the stall wording for '$MIC_STALL' (expected it to open with '$expected_opening'): $lost_body" ;;
+    esac
+    # `posted` is whether the notification centre was there to take it, a
+    # property of the host's notification settings rather than of the fault
+    # path, so it is reported and not asserted.
+    log "$label: notification \"Capture Channel Lost\" with the stall wording (posted=$lost_posted)"
+    log "$label: other notifications: $(jq -c '[.notifications[]? | select(.title != "Capture Channel Lost") | .title]' <<<"$snap")"
+
+    # The capture layer's own account, read for this app's pid only.
+    local caplog rebuilds stall_line stall_s
+    caplog="$(_ms_capture_log "$log_start")"
+    grep -q "\[debug-fault\] withholding every mic buffer" <<<"$caplog" \
+        || fail "$label: the capture log has no [debug-fault] line, so this run cannot show the fault was the one injected. Log:"$'\n'"$caplog"
+    log "$label: 'Mic recording started' lines in the capture log: $(grep -c 'Mic recording started' <<<"$caplog" || true)"
+    rebuilds="$(grep -oE 'no buffer for [0-9]+s, rebuilding the engine \(rebuild [0-9]+ without audio\)' <<<"$caplog" \
+        | sed -E 's/no buffer for ([0-9]+)s.*\(rebuild ([0-9]+) .*/\1:\2/' | tr '\n' ' ' | sed 's/ $//')"
+    log "$label: rebuilds (deadline:rebuild) from the capture log: '$rebuilds'"
+    [ "$rebuilds" = "$MIC_STALL_EXPECTED_REBUILDS" ] \
+        || fail "$label: the watchdog's rebuilds were '$rebuilds', expected '$MIC_STALL_EXPECTED_REBUILDS'"
+    stall_line="$(grep -oE 'no audio for [0-9]+s across [0-9]+ rebuilds, releasing the microphone' <<<"$caplog" || true)"
+    [ "$(grep -c . <<<"$stall_line")" = 1 ] && [ -n "$stall_line" ] \
+        || fail "$label: expected one release line in the capture log, got: '$stall_line'"
+    stall_s="$(sed -E 's/no audio for ([0-9]+)s.*/\1/' <<<"$stall_line")"
+    [ "$stall_s" -ge "$MIC_STALL_BUDGET_S" ] && grep -q "across 4 rebuilds" <<<"$stall_line" \
+        || fail "$label: released with '$stall_line', expected at least ${MIC_STALL_BUDGET_S}s across 4 rebuilds"
+    log "$label: capture log: '$stall_line'"
+
+    # The recording still goes through the pipeline: done, no error, and a
+    # German transcript, which with the microphone withheld can only come from
+    # the app track.
+    _poll_for_new_lastjob_terminal "$label" ignore-recovered
+    local final
+    final="$(rpc /state)"
+    jq '.lastJob' <<<"$final"
+    [ "$POLL_LJ_STATE" = "done" ] \
+        || fail "$label: lastJob.state == \"$POLL_LJ_STATE\", expected \"done\". Error: $(jq -r '.lastJob.error // "<none>"' <<<"$final")"
+    [ "$(jq -r '.lastJob.error // ""' <<<"$final")" = "" ] || fail "$label: the job finished with an error"
+    local transcript_path
+    transcript_path="$(jq -r '.lastJob.transcriptPath // empty' <<<"$final")"
+    [ -n "$transcript_path" ] && [ -f "$transcript_path" ] || fail "$label: no transcript file ('$transcript_path')"
+    case "$transcript_path" in
+        "$APP_HOME"/*) ;;
+        *) fail "$label: the transcript was written outside the lane's isolated home: $transcript_path" ;;
+    esac
+    assert_transcript_is_german "$label" "$transcript_path"
+
+    # The files: the app track carries the fixture, the microphone track holds
+    # no audio (or only its first seconds in the late variant). In the
+    # isolated home the only recording is this one.
+    local app_wav mic_wav mic_s verdict
+    app_wav="$(find "$RECORDINGS_DIR" -name "*_app.wav" -type f 2>/dev/null | head -1)"
+    mic_wav="$(find "$RECORDINGS_DIR" -name "*_mic.wav" -type f 2>/dev/null | head -1)"
+    [ -n "$app_wav" ] || fail "$label: no app track under $RECORDINGS_DIR"
+    if verdict="$("$MTCLI" wav-verdict "$app_wav" --threshold-dbfs=$WAV_VERDICT_THRESHOLD_DBFS --min-active-seconds="$WAV_VERDICT_FIXTURE_MIN_ACTIVE_S")"; then
+        log "$label: app track $(basename "$app_wav"): $verdict"
+    else
+        fail "$label: the app track is silent or short; the stall must not cost the app channel"
+    fi
+    if [ -n "$mic_wav" ]; then
+        mic_s="$(afinfo "$mic_wav" 2>/dev/null | sed -nE 's/^estimated duration: ([0-9.]+) sec.*/\1/p')"
+        log "$label: mic track $(basename "$mic_wav"): ${mic_s:-?}s"
+        if [ "$MIC_STALL" = stall ]; then
+            # Not empty, by design: a capture restarted before it ever
+            # delivered is anchored at its start and each rebuild writes the
+            # wait as silence, so the track runs to the last rebuild (about
+            # 3+6+12+24 s). What must hold is that none of it is audio: exact
+            # zeros, which a microphone in a room never produces.
+            verdict="$("$MTCLI" wav-verdict "$mic_wav" --threshold-dbfs=-100 --min-active-seconds=0.01 || true)"
+            log "$label: mic track content: $verdict"
+            grep -q '"overallRMSdBFS":-120' <<<"$verdict" \
+                || fail "$label: the mic track carries audio although no buffer reached the handler: $verdict"
+        else
+            [ -n "$mic_s" ] && _ms_float_lt 5 "$mic_s" && _ms_float_lt "$mic_s" 20 \
+                || fail "$label: the mic track holds ${mic_s:-?}s; expected roughly the 10s delivered before the fault"
+        fi
+    else
+        fail "$label: no mic track under $RECORDINGS_DIR; a stalled microphone keeps its file"
+    fi
+    log "$label: warnings on the job: $(jq -c '.lastJob.warnings' <<<"$final")"
+    echo
+    PRE_LAST_JOB_ID="$POLL_LJ_ID"
+    SIM_PID=""
+}
+
 # --- echo-bleed lane ------------------------------------------------------
 #
 # A dual-source recording made on loudspeakers carries the remote voices on the
@@ -3165,6 +3536,8 @@ elif [ "$ECHO_BLEED" = true ]; then
     run_echo_bleed
 elif [ "$ECHO_CANCEL" = true ]; then
     run_echo_cancel
+elif [ -n "$MIC_STALL" ]; then
+    run_mic_stall
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"
