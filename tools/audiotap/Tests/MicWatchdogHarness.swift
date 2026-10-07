@@ -34,7 +34,10 @@ final class MicWatchdogHarness {
         if let url { try? FileManager.default.removeItem(at: url) }
     }
 
-    func makeHandler(beforeBridgeChunk: @escaping @Sendable () -> Void = {}) throws -> MicCaptureHandler {
+    func makeHandler(
+        debugFault: DebugTapFault? = nil,
+        beforeBridgeChunk: @escaping @Sendable () -> Void = {},
+    ) throws -> MicCaptureHandler {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("progress-\(UUID().uuidString).wav")
         self.url = url
@@ -43,7 +46,7 @@ final class MicWatchdogHarness {
         // closure argument into a trailing one and mangles the call.
         let makeSession: () -> any MicEngineSessionProviding = { factory.make() }
         let handler = MicCaptureHandler(
-            outputURL: url, sessionFactory: makeSession,
+            outputURL: url, debugFault: debugFault, sessionFactory: makeSession,
             scheduleOnMain: clock.scheduler, clock: clock.reading,
         )
         handler.bridgeGate.beforeChunk = beforeBridgeChunk
