@@ -31,6 +31,7 @@ public class AudioCaptureSession {
     /// The two handlers' hardware seams, nil in production. See the internal init.
     private let appAttemptBody: (() throws -> AppTapSession?)?
     private let micSessionFactory: (() -> any MicEngineSessionProviding)?
+    private let micHandlerFactory: ((URL) -> MicCaptureHandler)?
 
     private var appCapture: AppAudioCapture?
     private var micCapture: MicCaptureHandler?
@@ -72,14 +73,22 @@ public class AudioCaptureSession {
     /// Test seam forwarding `AppAudioCapture.attemptBody` and
     /// `MicCaptureHandler.sessionFactory`; the reasoning is on each of those.
     /// Not `public` because neither of them is.
+    ///
+    /// `micHandlerFactory` replaces the whole microphone handler instead, for a
+    /// test that has to drive it: one on a manual clock, whose device change it
+    /// can post. What the session does with the handler's callbacks is only
+    /// observable that way, since a revival is started by a system input
+    /// change and a stall takes a minute of real time.
     init(
         _ configuration: AudioCaptureConfiguration,
         appAttemptBody: (() throws -> AppTapSession?)?,
         micSessionFactory: (() -> any MicEngineSessionProviding)?,
+        micHandlerFactory: ((URL) -> MicCaptureHandler)? = nil,
     ) {
         config = configuration
         self.appAttemptBody = appAttemptBody
         self.micSessionFactory = micSessionFactory
+        self.micHandlerFactory = micHandlerFactory
     }
 
     /// Start capturing app audio, mic audio, or both — whichever output URLs
@@ -207,7 +216,7 @@ public class AudioCaptureSession {
         guard let micURL = config.micOutputURL else { return }
 
         micFileWasAbsentBeforeStart = !FileManager.default.fileExists(atPath: micURL.path)
-        let mic = MicCaptureHandler(
+        let mic = micHandlerFactory?(micURL) ?? MicCaptureHandler(
             outputURL: micURL,
             debugLogging: config.debugLogging,
             liveSink: config.micLiveSink,
