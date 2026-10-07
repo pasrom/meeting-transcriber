@@ -88,7 +88,8 @@ struct MeetingTranscriberApp: App {
         // the notification centre is set up (issue #703).
         Self.reportPreviousExit(AppLauncher.previousExit, to: NotificationManager.shared)
         // Temp-file cleanup moved into the queue-build recovery flow
-        // (`PipelineController.makeQueue`): a crashed `_app_raw.tmp` must be
+        // (`PipelineController.recoverStagedRecordings`): a crashed
+        // `_app_raw.tmp` must be
         // re-mixed by `recoverCrashedRecordings` BEFORE it's cleaned up, so the
         // delete can no longer run first here (issue #379).
         let suppressAutoWatch = ProcessInfo.processInfo.environment["MEETINGTRANSCRIBER_DEBUG_SUPPRESS_AUTOWATCH"] == "1"

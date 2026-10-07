@@ -84,15 +84,15 @@ final class PipelineController {
     /// of folder can be noticed without resolving the bookmark again.
     @ObservationIgnored private var queueBuiltFromBookmark: Data?
 
-    /// The queue `makeQueue()` last built, the only one a folder change may
+    /// The queue `rebuild()` last installed, the only one a folder change may
     /// replace: a queue assigned to `queue` from outside (a test's, with mock
     /// engines and its own logs) is left alone, as `ensureQueue()` leaves it.
     @ObservationIgnored private weak var builtQueue: PipelineQueue?
 
-    /// Source of the currently-active engine. Set by `activate`; nil before then
-    /// (so `makeQueue()` safely returns the current queue if called early — only
-    /// reachable at process teardown, since `rebuild`/`ensureQueue` are driven by
-    /// user actions while `AppState` is alive). Captures the owner weakly.
+    /// Source of the currently-active engine. Set by `activate`; nil before
+    /// then, which makes `makeQueue()` return nil and `rebuild()` a no-op. Only
+    /// reachable at process teardown, since `rebuild`/`ensureQueue` are driven
+    /// by user actions while `AppState` is alive. Captures the owner weakly.
     private var engineProvider: (() -> (any TranscribingEngine)?)?
 
     init(
@@ -148,38 +148,45 @@ final class PipelineController {
     /// the shared engine instances meanwhile. The output folder is the
     /// exception, see `rebuildIfOutputFolderChanged()`.
     ///
-    /// `recoversStagedRecordings: false` skips the staging-folder recovery the
-    /// new queue would otherwise run, for a rebuild that can come while a
-    /// recording is in progress.
+    /// `recoversStagedRecordings: false` skips the staging-folder recovery; the
+    /// reason is at its one caller, `rebuildIfOutputFolderChanged()`.
     func rebuild(recoversStagedRecordings: Bool = true) {
         guard canReplaceQueue else {
             logger.info("Skipping queue rebuild: a job is unfinished or awaiting speaker naming")
             return
         }
         // Adopted from, rather than re-read from the file, whenever the queue
-        // being replaced is one this controller built. That is exactly the case
+        // being replaced is one this controller built: that is exactly the case
         // where it has already loaded the snapshot and holds the newer state in
-        // memory, and `queue === builtQueue` is the same test the folder change
-        // uses. The first queue is not one of those, so it reads the file, which
-        // is how a run interrupted by a crash or a quit comes back. Decided here
-        // and not by the caller: every path that swaps the queue needs it, and a
-        // parameter would let one of them pass a queue nobody checked.
-        let replaced = queue === builtQueue ? queue : nil
-        let built = makeQueue(recoversStagedRecordings: recoversStagedRecordings, adoptingJobsFrom: replaced)
-        // `makeQueue` hands back the current queue when no engine is wired yet.
-        // The bookkeeping below has to describe a queue that was actually
-        // installed, so a no-op must not advance it.
-        guard built !== queue else { return }
+        // memory. The first queue is not one of those, so it reads the file,
+        // which is how a run interrupted by a crash or a quit comes back.
+        //
+        // Captured before `makeQueue()`, which calls the owner's engine provider.
+        // `PipelineControllerTests.testTheAdoptionSourceIsDecidedBeforeTheEngineProviderRuns`
+        // says what reading the identity afterwards would cost.
+        let replaced = queueWasBuiltHere ? queue : nil
+        guard let built = makeQueue() else { return }
+        if let replaced {
+            built.adoptJobs(of: replaced)
+        } else {
+            built.loadSnapshot()
+        }
+        if recoversStagedRecordings { queueEnvironment.recoverStagedRecordings?(built) }
+        built.refreshKnownSpeakerNames()
         queue = built
-        // Recorded here and not in `makeQueue`, which is also called for its
-        // return value alone: doing it there left `builtQueue` pointing at a
-        // throwaway that died immediately, and the folder-change rebuild then
-        // stopped firing for the rest of the session while the bookmark it
-        // compares against had already advanced.
+        // Recorded only after an install, so a queue built for inspection and
+        // dropped cannot advance it; see
+        // `testAQueueBuiltWithoutBeingInstalledDoesNotDisarmTheFolderChange`.
         queueBuiltFromBookmark = settings.customOutputDirBookmark
         builtQueue = built
         configureCallbacks()
         onQueueReplaced?(queue)
+    }
+
+    /// Whether the installed queue is one this controller built, as opposed to
+    /// one assigned from outside.
+    private var queueWasBuiltHere: Bool {
+        queue === builtQueue
     }
 
     /// Whether the queue holds no unfinished work: nothing processing, and
@@ -199,7 +206,7 @@ final class PipelineController {
     /// Compared by bookmark data, not by resolving it: the check runs on every
     /// job change, and a resolution can touch a slow volume.
     func rebuildIfOutputFolderChanged() {
-        guard queue === builtQueue,
+        guard queueWasBuiltHere,
               settings.customOutputDirBookmark != queueBuiltFromBookmark,
               canReplaceQueue
         else { return }
@@ -241,15 +248,18 @@ final class PipelineController {
         rebuild()
     }
 
-    /// One-stop wired `PipelineQueue`: active engine from the provider, the
-    /// diarization/protocol factories, current settings, then load the persisted
-    /// snapshot + recover orphaned recordings off-main + refresh known names.
-    func makeQueue(
-        recoversStagedRecordings: Bool = true,
-        adoptingJobsFrom replaced: PipelineQueue? = nil,
-    ) -> PipelineQueue {
-        guard let engine = engineProvider?() else { return queue }
-        let q = PipelineQueue(
+    /// A `PipelineQueue` wired to the active engine, the diarization and
+    /// protocol factories and the current settings. Nil when no engine is wired
+    /// yet; see `engineProvider`.
+    ///
+    /// Wiring only; `rebuild` owns the steps that make a queue live.
+    ///
+    /// Not free of effect even so: a `PipelineQueue` takes the output folder's
+    /// security scope in its initialiser and holds it for its lifetime, so a
+    /// queue built and dropped takes and releases one.
+    func makeQueue() -> PipelineQueue? {
+        guard let engine = engineProvider?() else { return nil }
+        return PipelineQueue(
             engine: engine,
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
@@ -283,14 +293,6 @@ final class PipelineController {
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
         )
-        if let replaced {
-            q.adoptJobs(of: replaced)
-        } else {
-            q.loadSnapshot()
-        }
-        if recoversStagedRecordings { queueEnvironment.recoverStagedRecordings?(q) }
-        q.refreshKnownSpeakerNames()
-        return q
     }
 
     /// Fire-and-forget: dir scan + per-file attr probes run off-main so app
