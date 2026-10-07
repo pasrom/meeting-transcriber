@@ -160,7 +160,8 @@
 
             /// The capture fault reported for each channel in this recording:
             /// "noBuffers", "digitalSilence", "gaveUp", "rebuildsExhausted"
-            /// (the app channel only), or absent when the channel is fine.
+            /// (the app channel only), "stalled" (the microphone only), or
+            /// absent when the channel is fine.
             /// Distinct from `micSilent` / `appSilent`, which say only that
             /// one channel is quieter than the other and are true of a muted
             /// microphone, a quiet room and a dead tap alike.
@@ -180,6 +181,13 @@
             let appSecondsSinceLastBuffer: Double?
             let appSecondsSinceLastEnergy: Double?
 
+            /// How often the microphone was released for lack of audio in this
+            /// recording (issues #724, #706), every failed revival included.
+            /// `micFault` says "stalled" while it is released; this says how
+            /// often, since each stall is told anew. Absent before the first
+            /// tick of a recording.
+            let micStallCount: Int?
+
             static let inactive = Self(
                 micSilent: false,
                 appSilent: false,
@@ -192,6 +200,7 @@
                 micSecondsSinceLastEnergy: nil,
                 appSecondsSinceLastBuffer: nil,
                 appSecondsSinceLastEnergy: nil,
+                micStallCount: nil,
             )
         }
 

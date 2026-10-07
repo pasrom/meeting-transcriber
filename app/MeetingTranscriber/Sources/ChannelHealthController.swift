@@ -96,6 +96,12 @@ final class ChannelHealthController {
     @ObservationIgnored private(set) var micLevelDBFS: Double?
     @ObservationIgnored private(set) var appLevelDBFS: Double?
 
+    /// How often the microphone stalled in this recording, as of the last
+    /// tick; nil before the first. A stall is told again each time, so the
+    /// fault beside it cannot say whether a revival stalled once more.
+    /// `@ObservationIgnored` like the ages: only the RPC snapshot reads it.
+    @ObservationIgnored private(set) var micStallCount: Int?
+
     /// Per-channel "is this channel still delivering" decision, evaluated on
     /// every tick. Separate from `channelHealthMonitor`, which answers the
     /// louder-than-the-other question that drives the tint; see
@@ -264,6 +270,7 @@ final class ChannelHealthController {
         appAges = .unknown
         micLevelDBFS = nil
         appLevelDBFS = nil
+        micStallCount = nil
         firstTickAt = nil
         lastSpeechAt.removeAll()
     }
@@ -287,6 +294,7 @@ final class ChannelHealthController {
         }
         micLevelDBFS = mic
         appLevelDBFS = app
+        micStallCount = recorder.micCaptureStall.count
         // The monitor's own threshold, not a copy of its default: the init
         // allows a different one, and a second constant could then disagree
         // with the episode the tint is drawn from.
