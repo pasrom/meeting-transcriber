@@ -55,6 +55,37 @@
             XCTAssertEqual(state.rpcStateSnapshot().channelHealth.micFault, "digitalSilence")
         }
 
+        /// A stall is not a latch: every new one is told, so the verdict alone
+        /// cannot say whether a revival the user tried stalled again. The
+        /// count is what a driver or a field diagnosis reads that from (issues
+        /// #724, #706).
+        func testTheSnapshotCarriesTheMicrophoneStallAndItsCount() {
+            let state = makeRPCTestState()
+            let recorder = MockRecorder()
+            recorder.appLevelDBFS = -20
+            recorder.micLevelDBFS = -120
+            recorder.micCaptureStall = MicCaptureStall(isActive: true, count: 2)
+            state.channelHealth.simulateStartForTests()
+
+            state.channelHealth.applyTick(recorder: recorder, now: t0)
+
+            let health = state.rpcStateSnapshot().channelHealth
+            XCTAssertEqual(health.micFault, "stalled")
+            XCTAssertEqual(health.micStallCount, 2)
+        }
+
+        /// Zero once the recording is being watched, absent before: "never
+        /// stalled" and "not looked at" are different answers.
+        func testTheStallCountIsZeroWhileWatchedAndAbsentBefore() {
+            let state = makeRPCTestState()
+            XCTAssertNil(state.rpcStateSnapshot().channelHealth.micStallCount)
+
+            state.channelHealth.simulateStartForTests()
+            state.channelHealth.applyTick(recorder: MockRecorder(), now: t0)
+
+            XCTAssertEqual(state.rpcStateSnapshot().channelHealth.micStallCount, 0)
+        }
+
         func testTheSnapshotCarriesTheLevelsTheVerdictWasReadFrom() throws {
             // The two thresholds that decide the menu-bar tint are levels, and
             // nothing exposed them. Diagnosing why a channel did or did not
@@ -87,6 +118,7 @@
             XCTAssertNil(inactive.micFault)
             XCTAssertNil(inactive.appFault)
             XCTAssertNil(inactive.micSecondsSinceLastBuffer)
+            XCTAssertNil(inactive.micStallCount)
         }
     }
 #endif

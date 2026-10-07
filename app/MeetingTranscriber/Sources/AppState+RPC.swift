@@ -288,6 +288,7 @@
                 micSecondsSinceLastEnergy: channelHealth.micAges.secondsSinceLastEnergy,
                 appSecondsSinceLastBuffer: channelHealth.appAges.secondsSinceLastBuffer,
                 appSecondsSinceLastEnergy: channelHealth.appAges.secondsSinceLastEnergy,
+                micStallCount: channelHealth.micStallCount,
             )
         }
 
