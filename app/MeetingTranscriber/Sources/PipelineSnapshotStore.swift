@@ -121,8 +121,7 @@ final class PipelineSnapshotStore {
     /// Return once every save into `dir` has landed, including saves made
     /// while this waited, or once a write that failed has been tried once
     /// more and failed again. In that case the store stays, so the state is
-    /// still reported as owed. Not bounded; a caller that must not wait
-    /// forever bounds it.
+    /// still reported as owed. Not bounded; the quit bounds it.
     static func flush(_ dir: URL) async {
         while let store = existing(for: dir), !Task.isCancelled {
             if let worker = store.worker {

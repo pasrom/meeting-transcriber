@@ -967,13 +967,15 @@ class PipelineQueue {
 
     /// Wait until every snapshot write into this queue's `logDir` has landed,
     /// whichever queue saved it, including writes saved while this waited.
-    /// Tests asserting on the file use it.
+    /// The quit path waits through it (`PipelineController.awaitSnapshotFlushes`),
+    /// and tests asserting on the file use it too.
     func awaitSnapshotFlush() async {
         await PipelineSnapshotStore.flush(logDir)
     }
 
     /// True while a snapshot write into this queue's `logDir` has not landed
-    /// yet, whichever queue saved it. Tests read it to assert the writer
+    /// yet, whichever queue saved it. The quit path reads it to decide whether
+    /// there is anything to wait for; tests read it to assert the writer
     /// drains and clears itself.
     var isSnapshotWorkerActive: Bool {
         PipelineSnapshotStore.existing(for: logDir) != nil

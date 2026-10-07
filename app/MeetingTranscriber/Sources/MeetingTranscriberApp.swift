@@ -75,12 +75,25 @@ private struct WindowAccessor: NSViewRepresentable {
 // Not @main — AppLauncher owns the entry point so a selftest launch can
 // divert before this scene (and AppState with it) is ever constructed.
 struct MeetingTranscriberApp: App {
-    @State private var appState = AppState(notifier: NotificationManager.shared)
+    // Holds every quit open until the pending pipeline snapshot is on disk.
+    // Handed `appState` in `init`, through `AppDelegate.install`. Never read:
+    // declaring the adaptor is what makes SwiftUI install the delegate, and
+    // the analyzer cannot see that use.
+    @NSApplicationDelegateAdaptor(AppDelegate.self)
+    private var appDelegate // swiftlint:disable:this unused_declaration
+    @State private var appState: AppState
     @State private var captionsWindow: LiveCaptionsWindowController?
     @Environment(\.openWindow)
     private var openWindow
 
     init() {
+        // Built first, as the property initialiser it replaces was. Handed to
+        // the application delegate here because `init` runs before the run
+        // loop, so every quit request finds it, however early it comes and
+        // whether or not the menu-bar item is ever shown.
+        let state = AppState(notifier: NotificationManager.shared)
+        _appState = State(initialValue: state)
+        AppDelegate.install(state)
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
         // The verdict was taken in `AppLauncher.main()`, before `AppState` was

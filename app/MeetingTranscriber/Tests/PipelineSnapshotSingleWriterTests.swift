@@ -129,8 +129,7 @@ final class PipelineSnapshotSingleWriterTests: XCTestCase {
         replaced?.saveSnapshot()
         replaced = nil
 
-        // Another queue on the same file is how a later reader reaches these
-        // writes.
+        // Another queue on the same file is how the quit reaches these writes.
         let observer = PipelineQueue(logDir: dir)
         await observer.awaitSnapshotFlush()
 
