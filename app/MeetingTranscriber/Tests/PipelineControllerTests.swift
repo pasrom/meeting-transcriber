@@ -29,7 +29,13 @@ final class PipelineControllerTests: XCTestCase {
     /// A controller over this test's own settings and folders: a queue it
     /// builds keeps its logs and snapshot in `tmpDir` and runs no recovery over
     /// the real recordings folder.
-    private func makeController(terminalJobStore: TerminalJobStore? = nil) -> PipelineController {
+    /// `queue:` is the queue the controller starts with, injected through the
+    /// environment rather than assigned afterwards, so the controller never has
+    /// a queue the test did not choose.
+    private func makeController(
+        terminalJobStore: TerminalJobStore? = nil,
+        queue: PipelineQueue? = nil,
+    ) -> PipelineController {
         PipelineController(
             settings: settings,
             notifier: RecordingNotifier(),
@@ -38,6 +44,7 @@ final class PipelineControllerTests: XCTestCase {
                 logDir: tmpDir,
                 stagingDir: tmpDir.appendingPathComponent("staging", isDirectory: true),
                 recoverStagedRecordings: nil,
+                initialQueue: queue,
             ),
         )
     }
@@ -51,15 +58,13 @@ final class PipelineControllerTests: XCTestCase {
     /// `logDir`, so `ensureQueue()` short-circuits and no production-path I/O
     /// is touched.
     private func makeWiredController() -> PipelineController {
-        let pc = makeController()
-        pc.queue = PipelineQueue(
+        makeController(queue: PipelineQueue(
             engine: MockEngine(),
             diarizationFactory: { MockDiarization() },
             protocolGeneratorFactory: { MockProtocolGen() },
             outputDir: tmpDir,
             logDir: tmpDir,
-        )
-        return pc
+        ))
     }
 
     // MARK: - engineProvider seam
@@ -71,7 +76,6 @@ final class PipelineControllerTests: XCTestCase {
     /// wrong is what disarmed the folder-change rebuild for a whole session.
     func testMakeQueueWithoutAnEngineYieldsNothingAndRebuildLeavesTheQueueAlone() {
         let pc = makeController()
-        pc.queue = PipelineQueue(logDir: tmpDir)
         let before = pc.queue
 
         // No `activate(engineProvider:)` call.
@@ -84,7 +88,6 @@ final class PipelineControllerTests: XCTestCase {
 
     func testEnsureQueueRebuildsBareQueueUsingProviderEngine() {
         let pc = makeController()
-        pc.queue = PipelineQueue(logDir: tmpDir)
         XCTAssertNil(pc.queue.engine, "Precondition: fresh queue has no engine")
 
         let engine = MockEngine()
@@ -109,36 +112,39 @@ final class PipelineControllerTests: XCTestCase {
         )
     }
 
-    /// Which queue the rebuild adopts from is decided before the engine
-    /// provider runs, because the provider is a closure the owner supplies. A
-    /// provider that reassigns `queue` would otherwise flip the identity test
-    /// after the fact, and the rebuild would read the older file instead of
-    /// taking the in-memory jobs: they would be lost, or run a second time.
-    func testTheAdoptionSourceIsDecidedBeforeTheEngineProviderRuns() throws {
-        let pc = makeController()
-        let foreign = PipelineQueue(logDir: tmpDir)
-        let mixPath = tmpDir.appendingPathComponent("adopt-mix.wav")
-        try Data([0]).write(to: mixPath)
-        var hijack = false
-        pc.activate { [weak pc] in
-            if hijack { pc?.queue = foreign }
-            return MockEngine()
+    // The seam this test drives is debug-only, so the test is too.
+    #if DEBUG
+        /// Which queue the rebuild adopts from is decided before the engine
+        /// provider runs, because the provider is a closure the owner supplies. A
+        /// provider that reassigns `queue` would otherwise flip the identity test
+        /// after the fact, and the rebuild would read the older file instead of
+        /// taking the in-memory jobs: they would be lost, or run a second time.
+        func testTheAdoptionSourceIsDecidedBeforeTheEngineProviderRuns() throws {
+            let pc = makeController()
+            let foreign = PipelineQueue(logDir: tmpDir)
+            let mixPath = tmpDir.appendingPathComponent("adopt-mix.wav")
+            try Data([0]).write(to: mixPath)
+            var hijack = false
+            pc.activate { [weak pc] in
+                if hijack { pc?.installQueueForTesting(foreign) }
+                return MockEngine()
+            }
+            pc.ensureQueue()
+            // `.error` so the queue counts as replaceable, with its audio on disk so
+            // the adoption does not discard it for missing audio.
+            let jobID = pc.queue.insertJobForTesting(
+                mixPath: mixPath, state: .error, title: "In Memory",
+            )
+            hijack = true
+
+            pc.rebuild()
+
+            XCTAssertEqual(
+                pc.queue.jobs.map(\.id), [jobID],
+                "the rebuild read the file instead of adopting the queue it replaced",
+            )
         }
-        pc.ensureQueue()
-        // `.error` so the queue counts as replaceable, with its audio on disk so
-        // the adoption does not discard it for missing audio.
-        let jobID = pc.queue.insertJobForTesting(
-            mixPath: mixPath, state: .error, title: "In Memory",
-        )
-        hijack = true
-
-        pc.rebuild()
-
-        XCTAssertEqual(
-            pc.queue.jobs.map(\.id), [jobID],
-            "the rebuild read the file instead of adopting the queue it replaced",
-        )
-    }
+    #endif
 
     /// The queue the controller starts with takes its staging folder from the
     /// environment. It used to hardcode `AppPaths.recordingsDir`, so a
@@ -308,7 +314,6 @@ final class PipelineControllerTests: XCTestCase {
     func testJobStatusReturnsLiveJob() {
         let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_jobs.json"))
         let pc = makeController(terminalJobStore: store)
-        pc.queue = PipelineQueue(logDir: tmpDir)
         var job = PipelineJob(
             meetingTitle: "Live Sync", appName: "File",
             mixPath: URL(fileURLWithPath: "/tmp/x.wav"), appPath: nil, micPath: nil, micDelay: 0,
@@ -458,8 +463,7 @@ final class PipelineControllerTests: XCTestCase {
         // deterministically: enqueue records a terminal DTO and leaves `jobs`
         // empty.
         let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_reap.json"))
-        let pc = makeController(terminalJobStore: store)
-        pc.queue = ReapingQueue(store: store)
+        let pc = makeController(terminalJobStore: store, queue: ReapingQueue(store: store))
 
         let file = tmpDir.appendingPathComponent("reaped.wav")
         FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))

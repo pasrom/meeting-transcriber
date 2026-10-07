@@ -69,7 +69,9 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         }
     }
 
-    private func makeController(_ recorder: Recorder) throws -> PipelineController {
+    private func makeController(
+        _ recorder: Recorder, queue: PipelineQueue? = nil,
+    ) throws -> PipelineController {
         let staging = tmpDir.appendingPathComponent("staging", isDirectory: true)
         let logDir = tmpDir.appendingPathComponent("log", isDirectory: true)
         for dir in [staging, logDir] {
@@ -89,6 +91,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
                     recorder.resolved.append(url)
                     return url
                 },
+                initialQueue: queue,
             ),
         )
         pc.activate { MockEngine() }
@@ -193,8 +196,8 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         XCTAssertTrue(samePath(pc.queue.outputDir, second), "the deferred rebuild never happened")
     }
 
-    /// A queue the controller did not build (a test injects one through
-    /// `queue`) is not the controller's to replace. Replacing it would swap in a
+    /// A queue the controller did not build (a test passes one at
+    /// construction) is not the controller's to replace. Replacing it would swap in a
     /// queue with the production engine, logs and snapshot, which is what the
     /// injection was there to keep out.
     func testAFolderChangeLeavesAnInjectedQueueAlone() async throws {
@@ -202,7 +205,6 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let second = try makeFolder("second")
         settings.setCustomOutputDir(first)
         let recorder = Recorder()
-        let pc = try makeController(recorder)
         let injected = PipelineQueue(
             engine: MockEngine(),
             diarizationFactory: { MockDiarization() },
@@ -210,7 +212,10 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
             outputDir: first,
             logDir: tmpDir.appendingPathComponent("log", isDirectory: true),
         )
-        pc.queue = injected
+        // Through the environment, so the controller never holds a queue the
+        // test did not choose. An initial queue is foreign either way: only
+        // `rebuild()` records one as built here.
+        let pc = try makeController(recorder, queue: injected)
 
         settings.setCustomOutputDir(second)
         await settleWithoutRebuild()

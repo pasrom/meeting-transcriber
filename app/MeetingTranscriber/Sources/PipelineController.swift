@@ -25,11 +25,9 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 @Observable
 @MainActor
 final class PipelineController {
-    /// The active pipeline queue. Settable so tests can swap in a queue wired to
-    /// an isolated `logDir` (byte-equivalent to the prior `AppState.pipelineQueue`
-    /// var, which was likewise publicly settable). Production mutates it only via
-    /// `rebuild()` / `ensureQueue()`.
-    var queue: PipelineQueue
+    /// The active pipeline queue. Written by `rebuild()`, and in debug builds
+    /// by `installQueueForTesting`.
+    private(set) var queue: PipelineQueue
 
     private let settings: AppSettings
     private let notifier: any AppNotifying
@@ -60,15 +58,12 @@ final class PipelineController {
         /// Rescues crashed recordings from the staging folder and enqueues
         /// orphans into the queue it is handed; nil skips it.
         var recoverStagedRecordings: (@MainActor (PipelineQueue) -> Void)?
-        var resolveOutputDir: @MainActor (OutputDirectoryResolver) -> URL = { $0.resolve() }
 
-        static var production: Self {
-            Self(
-                logDir: nil,
-                stagingDir: AppPaths.recordingsDir,
-                recoverStagedRecordings: PipelineController.recoverStagedRecordings(into:),
-            )
-        }
+        var resolveOutputDir: @MainActor (OutputDirectoryResolver) -> URL = { $0.resolve() }
+        /// The queue the controller starts with; nil builds a bare one on this
+        /// environment's folders. A test passes one wired to mocks, so the
+        /// controller never holds a queue the test did not choose.
+        var initialQueue: PipelineQueue?
     }
 
     @ObservationIgnored private let queueEnvironment: QueueEnvironment
@@ -85,7 +80,7 @@ final class PipelineController {
     @ObservationIgnored private var queueBuiltFromBookmark: Data?
 
     /// The queue `rebuild()` last installed, the only one a folder change may
-    /// replace: a queue assigned to `queue` from outside (a test's, with mock
+    /// replace: a queue the controller did not build (a test's, with mock
     /// engines and its own logs) is left alone, as `ensureQueue()` leaves it.
     @ObservationIgnored private weak var builtQueue: PipelineQueue?
 
@@ -109,9 +104,10 @@ final class PipelineController {
             ?? TerminalJobStore(
                 path: (queueEnvironment.logDir ?? AppPaths.ipcDir).appendingPathComponent("terminal_jobs.json"),
             )
-        self.queue = PipelineQueue(
-            logDir: queueEnvironment.logDir, stagingDir: queueEnvironment.stagingDir,
-        )
+        self.queue = queueEnvironment.initialQueue
+            ?? PipelineQueue(
+                logDir: queueEnvironment.logDir, stagingDir: queueEnvironment.stagingDir,
+            )
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its
@@ -186,7 +182,7 @@ final class PipelineController {
     }
 
     /// Whether the installed queue is one this controller built, as opposed to
-    /// one assigned from outside.
+    /// one it was given.
     private var queueWasBuiltHere: Bool {
         queue === builtQueue
     }
@@ -242,6 +238,21 @@ final class PipelineController {
         }
     }
 
+    #if DEBUG
+        /// Test-only: replace the live queue, for the one case that must do so
+        /// while `rebuild()` runs. Construction goes through
+        /// `QueueEnvironment.initialQueue`, production through `rebuild()`.
+        ///
+        /// Debug-only, unlike the repo's other test seams, because it assigns
+        /// where `rebuild()` adopts jobs, configures callbacks, updates the
+        /// bookmark, runs recovery and announces the replacement. A production
+        /// caller would hand the UI a queue the running watch loop does not
+        /// use, and the jobs in flight would vanish from view.
+        func installQueueForTesting(_ replacement: PipelineQueue) {
+            queue = replacement
+        }
+    #endif
+
     /// Rebuild only when the queue isn't already wired to an engine. The
     /// manual-recording + file-enqueue paths call this so an already-configured
     /// queue (e.g. one a test injected) isn't replaced.
@@ -295,36 +306,6 @@ final class PipelineController {
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
         )
-    }
-
-    /// Fire-and-forget: dir scan + per-file attr probes run off-main so app
-    /// startup (and the first call to `enqueueFiles`) isn't blocked by a slow
-    /// filesystem. Recovered jobs appear in `queue.jobs` once the scan returns.
-    private static func recoverStagedRecordings(into q: PipelineQueue) {
-        Task {
-            // Rescue recordings whose writer was killed mid-stream (#379), then
-            // hand off to the orphan scan which enqueues the results. Detached
-            // so the dir scans + per-file rewrites/re-mixes run off-main and
-            // don't block startup (same reason the orphan scan offloads its own
-            // filesystem work). Order matters:
-            //   1. repair unfinalized WAV headers so a crashed mic track reads,
-            //   2. re-mix crashed recordings (raw app .tmp + mic) into a _mix.wav,
-            //   3. delete any temp the re-mix couldn't use.
-            // The staging folder comes from the queue, not from `AppPaths`: the
-            // three calls below repair, re-mix and delete files, so a controller
-            // built against another staging folder would otherwise reach into the
-            // real one, which is exactly what injecting the folder was meant to
-            // prevent.
-            let staging = q.stagingDir
-            await Task.detached(priority: .utility) {
-                let repaired = WavHeaderRepair.repairUnfinalized(in: staging)
-                if repaired > 0 { logger.info("Repaired \(repaired) unfinalized recording(s) on launch") }
-                let recovered = DualSourceRecorder.recoverCrashedRecordings(in: staging)
-                if recovered > 0 { logger.info("Recovered \(recovered) crashed recording(s) on launch") }
-                DualSourceRecorder.cleanupTempFiles(recordingsDir: staging)
-            }.value
-            await q.recoverOrphanedRecordings()
-        }
     }
 
     /// One-stop FluidDiarizer instantiation. Captures the current tuning fields
