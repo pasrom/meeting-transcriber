@@ -26,6 +26,7 @@ final class TerminationFlushTests: XCTestCase {
     private final class FakeTermination: AppTerminating {
         var hasWorkBeforeQuit: Bool
         var flushes = 0
+        var steps: [String] = []
         var flush: @MainActor () async -> Void = {}
 
         init(hasWorkBeforeQuit: Bool) {
@@ -34,10 +35,15 @@ final class TerminationFlushTests: XCTestCase {
 
         func flushSnapshotsBeforeQuit() async {
             flushes += 1
+            steps.append("flush")
             await flush()
             // A flush that finished leaves nothing to wait for, as the real
             // one does; one cut off by its budget never gets here.
             hasWorkBeforeQuit = false
+        }
+
+        func tearDownBeforeExit() {
+            steps.append("tear down")
         }
     }
 
@@ -115,9 +121,8 @@ final class TerminationFlushTests: XCTestCase {
     // MARK: - The answer
 
     func testTheAnswerToEachQuitRequest() {
-        XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: false, hasWork: false), .letThrough)
-        XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: false, hasWork: true), .letThrough)
-        XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: true, hasWork: false), .letThrough)
+        XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: false, hasWork: false), .letThrough(tearDown: false))
+        XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: true, hasWork: false), .letThrough(tearDown: true))
         XCTAssertEqual(QuitRequestAnswer.decide(phase: .idle, hasState: true, hasWork: true), .holdOpen)
         // Whatever else holds: a request while one is held open is answered
         // like the one being held, and one after the reply went out is let
@@ -129,7 +134,7 @@ final class TerminationFlushTests: XCTestCase {
                 )
                 XCTAssertEqual(
                     QuitRequestAnswer.decide(phase: .replied, hasState: hasState, hasWork: hasWork),
-                    .letThrough,
+                    .letThrough(tearDown: false),
                 )
             }
         }
@@ -148,7 +153,7 @@ final class TerminationFlushTests: XCTestCase {
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateLater)
         await waitForReply(sender)
 
-        XCTAssertEqual(termination.flushes, 1)
+        XCTAssertEqual(termination.steps, ["flush", "tear down"])
     }
 
     func testWithoutStateTheQuitGoesThroughAtOnce() {
@@ -167,6 +172,23 @@ final class TerminationFlushTests: XCTestCase {
         XCTAssertEqual(delegate.shouldTerminate(replyingTo: sender), .terminateNow)
         XCTAssertEqual(termination.flushes, 0)
         XCTAssertEqual(sender.replies, [])
+        XCTAssertEqual(termination.steps, ["tear down"], "a quit let through at once skipped the teardown")
+    }
+
+    /// The streamer used to be stopped from a `willTerminateNotification`
+    /// observer through a `Task` hop that `exit` always beat. Now the delegate
+    /// stops it synchronously before the quit is let through.
+    func testTearingDownStopsThePersistentLogStreamer() throws {
+        #if APPSTORE
+            throw XCTSkip("the App Store build has no persistent log streamer")
+        #else
+            let state = try makeIsolatedAppState()
+            try XCTSkipIf(state.persistentLogStreamer == nil, "the streamer did not start in this environment")
+
+            state.tearDownBeforeExit()
+
+            XCTAssertNil(state.persistentLogStreamer)
+        #endif
     }
 
     func testTheReplyWaitsForTheFlush() async {
@@ -254,6 +276,7 @@ final class TerminationFlushTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertEqual(termination.flushes, 1)
+        XCTAssertEqual(termination.steps.filter { $0 == "tear down" }.count, 1)
         XCTAssertEqual(first.replies, [true])
         XCTAssertEqual(second.replies, [], "terminateNow must not also send a deferred reply")
     }

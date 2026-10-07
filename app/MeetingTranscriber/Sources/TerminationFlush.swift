@@ -30,6 +30,9 @@ protocol AppTerminating: AnyObject {
 
     /// Return once every pending pipeline snapshot write has landed.
     func flushSnapshotsBeforeQuit() async
+
+    /// Last synchronous cleanup, run right before the quit is let through.
+    func tearDownBeforeExit()
 }
 
 /// The one thing the delegate needs from the application that asked to quit.
@@ -91,8 +94,9 @@ enum TerminationFlush {
 /// How a quit request is answered. Pure, so every case is pinned without a
 /// delegate, a sender or a clock.
 enum QuitRequestAnswer: Equatable {
-    /// Let the quit through now.
-    case letThrough
+    /// Let the quit through now. `tearDown` says whether there is state to
+    /// tear down first.
+    case letThrough(tearDown: Bool)
     /// Hold the quit open and start the work it owes.
     case holdOpen
     /// A quit is already held open: answer this one the same way and start
@@ -119,12 +123,13 @@ enum QuitRequestAnswer: Equatable {
         // AppKit queued behind it is let through with nothing left to do,
         // rather than held open for a reply nothing would send.
         case .replied:
-            return .letThrough
+            return .letThrough(tearDown: false)
 
         case .idle:
             break
         }
-        return hasState && hasWork ? .holdOpen : .letThrough
+        guard hasState else { return .letThrough(tearDown: false) }
+        return hasWork ? .holdOpen : .letThrough(tearDown: true)
     }
 }
 
@@ -194,7 +199,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .joinPending:
             return .terminateLater
 
-        case .letThrough:
+        case let .letThrough(tearDown):
+            if tearDown { termination?.tearDownBeforeExit() }
             return .terminateNow
 
         case .holdOpen:
@@ -208,6 +214,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if await !TerminationFlush.run(within: flushBudget, { await termination.flushSnapshotsBeforeQuit() }) {
                 log("Quit: the snapshot flush budget (\(flushBudget)) ran out")
             }
+            // Logged lines first: the teardown stops the streamer that carries
+            // them to the persistent log.
+            termination.tearDownBeforeExit()
             phase = .replied
             sender.reply(toApplicationShouldTerminate: true)
         }

@@ -9,4 +9,10 @@ extension AppState: AppTerminating {
     func flushSnapshotsBeforeQuit() async {
         await pipeline.awaitSnapshotFlushes()
     }
+
+    func tearDownBeforeExit() {
+        #if !APPSTORE
+            stopPersistentLogStreamer()
+        #endif
+    }
 }
