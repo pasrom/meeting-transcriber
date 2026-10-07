@@ -1031,7 +1031,15 @@ if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
 fi
 
 log "Launching $DEV_BUNDLE_DEPLOY"
-open "$DEV_BUNDLE_DEPLOY"
+if [ "$MIC_DEVICE_CHANGE" = true ]; then
+    # `open --env`, not a leading `env`: only the former reaches a process
+    # LaunchServices starts (see the e2e-architecture skill). The fault build
+    # injects nothing unless asked, so a leftover fault bundle cannot inject
+    # into a later, unrelated launch.
+    open --env MEETINGTRANSCRIBER_E2E_MIC_FAULT=device-change "$DEV_BUNDLE_DEPLOY"
+else
+    open "$DEV_BUNDLE_DEPLOY"
+fi
 
 log "Waiting up to ${RPC_READY_TIMEOUT_S}s for RPC /healthz"
 # Assigns RPC_TOKEN in caller scope on success so subsequent `rpc` calls
