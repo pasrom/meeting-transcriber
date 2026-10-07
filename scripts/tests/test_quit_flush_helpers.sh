@@ -283,4 +283,180 @@ else
     bad compare_reports_mismatch "status $status: $out"
 fi
 
+# --- the lane's exit cleanup with no job of its own --------------------------
+
+# A run that fails before its first job exists (the red run against a build
+# without the quit fix does exactly that) reaches the exit cleanup with an
+# empty job list. Under `set -u`, macOS's bash 3.2 treats "${a[@]}" of an empty
+# array as unbound, which aborted the exit trap before it restored the shared
+# state or released the lock. Run the two functions the trap and the release
+# use, taken from the lane itself, in that shell.
+LANE="$ROOT/scripts/e2e-app.sh"
+status=0
+out="$(/bin/bash -c '
+    set -euo pipefail
+    KEEP_RECORDINGS=false
+    _QF_JOBS=()
+    _QF_SNAPSHOT=/nonexistent
+    log() { :; }
+    _echo_release() { :; }
+    rpc() { :; }
+    # Patterns in variables: bash 3.2 misparses parentheses inside quotes
+    # within $( ), which is the shell this has to run in.
+    p1="/^_qf_job_file_paths() {/,/^}/p"
+    p2="/^_qf_remove_unreleased_files() {/,/^}/p"
+    p3="/^_qf_release_jobs() {/,/^}/p"
+    eval "$(sed -n -e "$p1" -e "$p2" -e "$p3" "$1")"
+    declare -F _qf_remove_unreleased_files _qf_release_jobs >/dev/null || { echo "functions not found in the lane"; exit 3; }
+    _qf_remove_unreleased_files
+    _qf_release_jobs
+    echo survived
+' _ "$LANE" 2>&1)" || status=$?
+if [ "$status" -eq 0 ] && [ "$out" = "survived" ]; then
+    ok exit_cleanup_survives_an_empty_job_list
+else
+    bad exit_cleanup_survives_an_empty_job_list "status $status: $out"
+fi
+
+# --- a failure before the lane's late on_exit is defined --------------------
+
+# The backup is taken, and the lane changes shared state (CI removes the queue
+# snapshot, the app launch writes it), well before `on_exit` exists. A launch
+# or readiness failure in that stretch must still restore the shared state,
+# remove the backup and release the lock, not only release the lock. Taken
+# from the lane: the early EXIT trap and the restore it calls.
+EARLY="$TMP/early"
+mkdir -p "$EARLY/ipc" "$EARLY/data"
+printf '[]' >"$EARLY/ipc/pipeline_queue.json"
+printf '{}' >"$EARLY/data/speakers.json"
+status=0
+out="$(/bin/bash -c '
+    set -euo pipefail
+    source "$2"
+    log() { :; }
+    quit_running_app() { :; }
+    QUIT_FLUSH=true
+    _QF_DATA_DIR="$3/data"; _QF_IPC_DIR="$3/ipc"; _QF_IPC_FILES=(pipeline_queue.json)
+    MT_LIVE_LOCK="$3/lock"; mkdir "$MT_LIVE_LOCK"; _QF_LOCK_HELD=yes
+    _QF_BACKUP_DIR="$3/backup"
+    backup_state_files "$_QF_IPC_DIR" "$_QF_BACKUP_DIR/ipc" pipeline_queue.json
+    backup_state_files "$_QF_DATA_DIR" "$_QF_BACKUP_DIR" speakers.json
+    p1="/^_qf_restore_shared_state() {/,/^}/p"
+    p2="/^_qf_release_lock() {/,/^}/p"
+    eval "$(sed -n -e "$p1" -e "$p2" "$1")"
+    declare -F _qf_restore_shared_state _qf_release_lock >/dev/null || { echo "functions not found in the lane"; exit 3; }
+    early_trap="$(grep -E "^ +trap .*_qf_restore_shared_state.* EXIT$" "$1" | head -1)"
+    [ -n "$early_trap" ] || { echo "early trap not found in the lane"; exit 3; }
+    eval "$early_trap"
+    # What the lane does before on_exit exists, then a failed launch.
+    rm -f "$_QF_IPC_DIR/pipeline_queue.json"
+    exit 1
+' _ "$LANE" "$ROOT/scripts/lib/e2e-helpers.sh" "$EARLY" 2>&1)" || status=$?
+if [ "$(cat "$EARLY/ipc/pipeline_queue.json" 2>/dev/null)" = "[]" ] && [ ! -e "$EARLY/lock" ] && [ ! -e "$EARLY/backup" ]; then
+    ok a_failure_before_on_exit_still_restores_the_shared_state
+else
+    bad a_failure_before_on_exit_still_restores_the_shared_state "status $status: $out; $(find "$EARLY" -maxdepth 2 2>&1 | tr '\n' ' ')"
+fi
+
+# --- second_quit_outcome -----------------------------------------------------
+
+# A second AppleScript quit sent while the first is held open was measured to
+# go two ways, both ending in one exit; the lane logs which one happened and
+# fails only on a trace that is neither. Lines as `log show --style compact`
+# prints them, from the two live runs.
+TRACE_CANCEL='12:09:41.101 I  MeetingTranscriber[1:2] [com.apple.appleevents:receive] RECEIVED:(aevt,quit) {aevt,quit target=osascript returnID=1}
+12:09:41.101 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] Asking app delegate whether applicationShouldTerminate:
+12:09:41.101 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] applicationShouldTerminate: NSTerminateLater
+12:09:41.105 I  MeetingTranscriber[1:2] [com.apple.appleevents:receive] RECEIVED:(aevt,quit) {aevt,quit target=osascript returnID=2}
+12:09:41.105 E  MeetingTranscriber[1:2] [com.apple.AppKit:Application] Failed responder chain validation for terminate: action. Canceling termination.
+12:09:41.130 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] replyToApplicationShouldTerminate:YES'
+TRACE_REASKED='06:42:20.547 I  MeetingTranscriber[1:2] [com.apple.appleevents:receive] RECEIVED:(aevt,quit) {aevt,quit target=osascript returnID=214}
+06:42:20.547 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] Asking app delegate whether applicationShouldTerminate:
+06:42:20.547 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] applicationShouldTerminate: NSTerminateLater
+06:42:20.551 I  MeetingTranscriber[1:2] [com.apple.appleevents:receive] RECEIVED:(aevt,quit) {aevt,quit target=osascript returnID=25895}
+06:42:20.569 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] replyToApplicationShouldTerminate:YES
+06:42:20.578 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] Asking app delegate whether applicationShouldTerminate:
+06:42:20.582 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] applicationShouldTerminate: NSTerminateNow'
+OSA_CANCEL='37:41: execution error: MeetingTranscriber got an error: User canceled. (-128)'
+
+expect_output second_quit_cancelled_by_appkit "cancelled" \
+    "$(second_quit_outcome "$TRACE_CANCEL" "$OSA_CANCEL")"
+expect_output second_quit_asked_after_the_reply "asked-after-reply NSTerminateNow" \
+    "$(second_quit_outcome "$TRACE_REASKED" "")"
+
+# Neither path: the run is not explained, so the lane must not pass it.
+check_unexplained() {
+    local name="$1" trace="$2" osa="$3" status=0 out
+    out="$(second_quit_outcome "$trace" "$osa")" || status=$?
+    if [ "$status" -ne 0 ] && [ -z "$out" ]; then ok "$name"; else bad "$name" "status $status, output '$out'"; fi
+}
+# A -128 that AppKit did not log as its cancel came from somewhere else.
+check_unexplained second_quit_minus_128_without_appkit_cancel "$TRACE_REASKED" "$OSA_CANCEL"
+# A cancel line but no -128 to the script: the script was not the one cancelled.
+check_unexplained second_quit_cancel_line_without_minus_128 "$TRACE_CANCEL" ""
+# Asked a second time BEFORE the first reply: the held-open guard path, which
+# was never measured; reported, not passed.
+TRACE_ASKED_WHILE_HELD="$(printf '%s\n' "$TRACE_REASKED" | sed -n '1,4p;6,7p')
+06:42:20.590 Df MeetingTranscriber[1:2] [com.apple.AppKit:Application] replyToApplicationShouldTerminate:YES"
+check_unexplained second_quit_asked_while_held "$TRACE_ASKED_WHILE_HELD" ""
+# Only one request in the trace: nothing about a second quit is shown.
+check_unexplained second_quit_never_asked "$(printf '%s\n' "$TRACE_REASKED" | sed -n '1,5p')" ""
+
+# --- a cycle that fails after its recording started --------------------------
+
+# Measured live: the second cycle's quit wrote its job into the shared queue,
+# an assertion failed before the cycle registered that job as the run's, and
+# the restore then refused the queue and the log as holding a foreign record,
+# leaving the lane's jobs in the real queue. A cycle registers its jobs from
+# the moment its recording starts, so cleanup and restore cover a failure at
+# any point after that. Taken from the lane: the early EXIT trap, the restore,
+# the cycle's start and its registration.
+CYC="$TMP/cycle"
+mkdir -p "$CYC/ipc" "$CYC/data"
+printf '[]' >"$CYC/ipc/pipeline_queue.json"
+printf '{"job_id":"OLD","event":"x"}\n' >"$CYC/ipc/pipeline_log.jsonl"
+printf '{}' >"$CYC/data/speakers.json"
+status=0
+out="$(/bin/bash -c '
+    set -euo pipefail
+    source "$2"
+    log() { :; }
+    quit_running_app() { :; }
+    QUIT_FLUSH=true
+    KEEP_RECORDINGS=false
+    _QF_JOBS=()
+    _QF_OWNED_PATHS=()
+    _QF_TITLE="Microphone Recording"
+    _QF_DATA_DIR="$3/data"; _QF_IPC_DIR="$3/ipc"; _QF_IPC_FILES=(pipeline_queue.json pipeline_log.jsonl)
+    _QF_SNAPSHOT="$_QF_IPC_DIR/pipeline_queue.json"
+    MT_LIVE_LOCK="$3/lock"; mkdir "$MT_LIVE_LOCK"; _QF_LOCK_HELD=yes
+    _QF_BACKUP_DIR="$3/backup"
+    backup_state_files "$_QF_IPC_DIR" "$_QF_BACKUP_DIR/ipc" pipeline_queue.json pipeline_log.jsonl
+    backup_state_files "$_QF_DATA_DIR" "$_QF_BACKUP_DIR" speakers.json
+    p1="/^_qf_restore_shared_state() {/,/^}/p"
+    p2="/^_qf_release_lock() {/,/^}/p"
+    p3="/^_qf_job_file_paths() {/,/^}/p"
+    p4="/^_qf_remove_unreleased_files() {/,/^}/p"
+    p5="/^_qf_cycle_started() {/,/^}/p"
+    p6="/^_qf_register_cycle_jobs() {/,/^}/p"
+    eval "$(sed -n -e "$p1" -e "$p2" -e "$p3" -e "$p4" -e "$p5" -e "$p6" "$1")"
+    declare -F _qf_restore_shared_state _qf_cycle_started _qf_register_cycle_jobs >/dev/null \
+        || { echo "functions not found in the lane"; exit 3; }
+    early_trap="$(grep -E "^ +trap .*_qf_restore_shared_state.* EXIT$" "$1" | head -1)"
+    eval "$early_trap"
+    # The cycle starts recording, the quit writes its job, then an assertion
+    # fails before anything else registered it.
+    _qf_cycle_started
+    printf "[{\"id\":\"NEW-1\",\"meetingTitle\":\"Microphone Recording\",\"state\":\"waiting\"}]" >"$_QF_SNAPSHOT"
+    printf "{\"job_id\":\"NEW-1\",\"event\":\"enqueued\"}\n" >>"$_QF_IPC_DIR/pipeline_log.jsonl"
+    exit 1
+' _ "$LANE" "$ROOT/scripts/lib/e2e-helpers.sh" "$CYC" 2>&1)" || status=$?
+if [ "$(cat "$CYC/ipc/pipeline_queue.json" 2>/dev/null)" = "[]" ] \
+    && [ "$(cat "$CYC/ipc/pipeline_log.jsonl" 2>/dev/null)" = '{"job_id":"OLD","event":"x"}' ] \
+    && [ ! -e "$CYC/lock" ] && [ ! -e "$CYC/backup" ]; then
+    ok a_cycle_failing_after_its_recording_started_still_restores
+else
+    bad a_cycle_failing_after_its_recording_started_still_restores "status $status: $out; queue $(cat "$CYC/ipc/pipeline_queue.json" 2>&1); $(find "$CYC" -maxdepth 2 2>&1 | tr '\n' ' ')"
+fi
+
 echo "$PASSED passed"

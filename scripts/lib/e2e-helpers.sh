@@ -606,6 +606,41 @@ snapshot_new_job_ids() {
 # orphan check that relies on it could report a false "none left".
 MT_LOG_STREAM_PREDICATE="subsystem CONTAINS 'com.meetingtranscriber'"
 
+# second_quit_outcome <trace> <osascript-output> — which of the two measured
+# answers a second AppleScript quit, sent while the first was held open, got.
+# <trace> is AppKit's and the Apple Event log of the quit (`log show --style
+# compact`, the lines the --quit-flush lane greps), <osascript-output> what the
+# script that sent the second quit printed. Prints one of:
+#   cancelled                    AppKit refused it itself: the script got -128
+#                                and AppKit logged "Canceling termination";
+#   asked-after-reply <answer>   AppKit queued it and asked the delegate only
+#                                after the held quit's reply, <answer> being
+#                                what the delegate returned (NSTerminateNow,
+#                                NSTerminateLater, ...).
+# Status 1 and nothing printed when the trace is neither: a -128 without
+# AppKit's cancel, a cancel without a -128, a second ask before the reply (the
+# delegate's held-open guard, never measured), or no second ask at all.
+second_quit_outcome() {
+    local trace="$1" osa="$2" minus128="" cancel="" after
+    grep -q -- '-128' <<<"$osa" && minus128=yes
+    grep -q 'Canceling termination' <<<"$trace" && cancel=yes
+    if [ -n "$minus128" ] || [ -n "$cancel" ]; then
+        [ -n "$minus128" ] && [ -n "$cancel" ] || return 1
+        echo cancelled
+        return 0
+    fi
+    # Asked twice, the second time after the first reply: the answer is the
+    # first delegate answer logged after that reply.
+    [ "$(grep -c 'Asking app delegate whether applicationShouldTerminate' <<<"$trace" || true)" -ge 2 ] || return 1
+    after="$(awk '/replyToApplicationShouldTerminate/ { seen = 1; next }
+        seen && /applicationShouldTerminate: NS/ { sub(/.*applicationShouldTerminate: /, ""); print $1; exit }' <<<"$trace")"
+    [ -n "$after" ] || return 1
+    # Both asks must not precede the reply: a second answer before it is the
+    # held-open path.
+    [ "$(awk '/replyToApplicationShouldTerminate/ { exit } /applicationShouldTerminate: NS/ { n++ } END { print n + 0 }' <<<"$trace")" -eq 1 ] || return 1
+    echo "asked-after-reply $after"
+}
+
 # streamer_pids <parent-pid> — read a `ps -axo pid=,ppid=,command=` table on
 # stdin and print the pids of the app's persistent-log `log stream` processes
 # whose parent is <parent-pid>, one per line. Parent 1 asks for orphans: a
