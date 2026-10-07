@@ -64,16 +64,22 @@ final class PipelineControllerTests: XCTestCase {
 
     // MARK: - engineProvider seam
 
-    func testMakeQueueReturnsCurrentQueueWhenProviderUnset() {
+    /// Without an engine there is no queue to build, and saying so with nil is
+    /// the point: this used to hand back the *current* queue as a sentinel, so
+    /// the caller had to tell a no-op from an install by object identity, and
+    /// `rebuild` carried a `guard built !== queue` to do it. Getting that guard
+    /// wrong is what disarmed the folder-change rebuild for a whole session.
+    func testMakeQueueWithoutAnEngineYieldsNothingAndRebuildLeavesTheQueueAlone() {
         let pc = makeController()
         pc.queue = PipelineQueue(logDir: tmpDir)
         let before = pc.queue
 
-        // No `activate(engineProvider:)` call → the defensive guard returns the
-        // current queue instead of building one without an engine.
-        let result = pc.makeQueue()
+        // No `activate(engineProvider:)` call.
+        XCTAssertNil(pc.makeQueue())
 
-        XCTAssertIdentical(result, before, "makeQueue must return the current queue when no engine provider is wired")
+        pc.rebuild()
+
+        XCTAssertIdentical(pc.queue, before, "a rebuild with no engine replaced the queue")
     }
 
     func testEnsureQueueRebuildsBareQueueUsingProviderEngine() {
@@ -100,6 +106,37 @@ final class PipelineControllerTests: XCTestCase {
         XCTAssertEqual(
             ObjectIdentifier(pc.queue), before,
             "ensureQueue must not replace a queue that is already wired to an engine",
+        )
+    }
+
+    /// Which queue the rebuild adopts from is decided before the engine
+    /// provider runs, because the provider is a closure the owner supplies. A
+    /// provider that reassigns `queue` would otherwise flip the identity test
+    /// after the fact, and the rebuild would read the older file instead of
+    /// taking the in-memory jobs: they would be lost, or run a second time.
+    func testTheAdoptionSourceIsDecidedBeforeTheEngineProviderRuns() throws {
+        let pc = makeController()
+        let foreign = PipelineQueue(logDir: tmpDir)
+        let mixPath = tmpDir.appendingPathComponent("adopt-mix.wav")
+        try Data([0]).write(to: mixPath)
+        var hijack = false
+        pc.activate { [weak pc] in
+            if hijack { pc?.queue = foreign }
+            return MockEngine()
+        }
+        pc.ensureQueue()
+        // `.error` so the queue counts as replaceable, with its audio on disk so
+        // the adoption does not discard it for missing audio.
+        let jobID = pc.queue.insertJobForTesting(
+            mixPath: mixPath, state: .error, title: "In Memory",
+        )
+        hijack = true
+
+        pc.rebuild()
+
+        XCTAssertEqual(
+            pc.queue.jobs.map(\.id), [jobID],
+            "the rebuild read the file instead of adopting the queue it replaced",
         )
     }
 

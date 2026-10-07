@@ -111,10 +111,7 @@ final class WatchingControllerManualRecordingTests: XCTestCase {
     ///
     /// Record-only is the seam here because it decides the destination per
     /// write, on the production closure `WatchingController` hands the loop.
-    /// The pipeline seam (`PipelineController.makeQueue`) decides it the same
-    /// way, but a unit test cannot call that with an engine wired: it runs
-    /// crash recovery and the orphan scan against the production staging
-    /// directory.
+    /// The pipeline seam decides it the same way, in the queue's initialiser.
     func testARecordingWhoseFolderIsGoneIsKeptInTheDefaultFolderAndTheUserIsTold() async throws {
         let notifier = RecordingNotifier()
         let recorder = makeMockRecorder()

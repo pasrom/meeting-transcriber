@@ -332,10 +332,40 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         )
     }
 
-    /// `makeQueue()` is also called for its return value alone, by tests and by
-    /// anything that wants a configured queue without installing it. It used to
-    /// record "this is the queue I built, from this bookmark" itself, so such a
-    /// call left the record pointing at a throwaway that died immediately. The
+    /// Building a queue only builds it. It used to load the snapshot, run the
+    /// staging recovery and refresh the known names as well, so a caller that
+    /// wanted a configured queue to look at got one that had already read the
+    /// job list, written the snapshot file back and triggered processing — on a
+    /// queue nobody installed and that died immediately.
+    ///
+    /// Not asserted on the file's bytes: `saveSnapshot` hands the write to a
+    /// detached task, so a synchronous read in the same turn cannot see it and
+    /// such an assertion would hold whether the snapshot was read or not.
+    func testBuildingAQueueReadsNoSnapshotAndRunsNoRecovery() throws {
+        let recorder = Recorder()
+        let pc = try makeController(recorder)
+        // The audio has to exist, or the restore discards the job for missing
+        // audio and an assertion on "no jobs" would hold whether the snapshot
+        // was read or not.
+        let mixPath = tmpDir.appendingPathComponent("mix.wav")
+        try Data([0]).write(to: mixPath)
+        var job = PipelineJob(
+            meetingTitle: "Interrupted", appName: "App",
+            mixPath: mixPath, appPath: nil, micPath: nil, micDelay: 0,
+        )
+        job.state = .error
+        try PipelineSnapshot.save([job], to: tmpDir.appendingPathComponent("log", isDirectory: true))
+
+        let built = try XCTUnwrap(pc.makeQueue())
+
+        XCTAssertTrue(built.jobs.isEmpty, "the snapshot was read")
+        XCTAssertEqual(recorder.recoveries, 0, "the staging recovery ran")
+    }
+
+    /// Building a queue is also done for the return value alone, by tests and by
+    /// anything that wants a configured queue without installing it. The
+    /// bookkeeping used to be recorded at build time, so such a call left the
+    /// record pointing at a throwaway that died immediately. The
     /// folder-change rebuild then never fired again for the rest of the session,
     /// while the bookmark it compares against had already advanced: a silent
     /// stop, with every job after it landing in the old folder.

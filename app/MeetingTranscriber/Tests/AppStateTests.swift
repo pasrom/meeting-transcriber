@@ -700,24 +700,22 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     // MARK: - pipeline.makeQueue
 
-    func testMakeQueueHasEngine() {
+    func testMakeQueueHasDiarizationFactory() throws {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.pipeline.makeQueue().engine)
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
+        XCTAssertNotNil(queue.diarizationFactory)
     }
 
-    func testMakeQueueHasDiarizationFactory() {
+    func testMakeQueueHasProtocolGeneratorFactory() throws {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.pipeline.makeQueue().diarizationFactory)
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
+        XCTAssertNotNil(queue.protocolGeneratorFactory)
     }
 
-    func testMakeQueueHasProtocolGeneratorFactory() {
+    func testMakeQueueSetsOutputDir() throws {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.pipeline.makeQueue().protocolGeneratorFactory)
-    }
-
-    func testMakeQueueSetsOutputDir() {
-        let (state, _) = makeState()
-        XCTAssertNotNil(state.pipeline.makeQueue().outputDir)
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
+        XCTAssertNotNil(queue.outputDir)
     }
 
     // MARK: - makeProtocolGenerator
@@ -817,12 +815,23 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         XCTAssertTrue(state.engines.activeTranscriptionEngine is WhisperKitEngine)
     }
 
-    func testMakeQueueUsesActiveEngine() {
+    /// Asserted on the engine's type, not on it being non-nil: `makeQueue` hands
+    /// the provider's engine to a non-optional initialiser parameter, so a queue
+    /// that exists always has one and `XCTAssertNotNil` on it could not fail.
+    /// The claim worth pinning is which engine the setting selects, which is
+    /// what the messages said all along.
+    func testMakeQueueUsesActiveEngine() throws {
         let (state, _) = makeState()
-        XCTAssertNotNil(state.pipeline.makeQueue().engine, "WhisperKit engine should be set")
+        XCTAssertTrue(
+            try XCTUnwrap(state.pipeline.makeQueue()).engine is WhisperKitEngine,
+            "WhisperKit engine should be set",
+        )
 
         state.settings.transcriptionEngine = .parakeet
-        XCTAssertNotNil(state.pipeline.makeQueue().engine, "Parakeet engine should be set")
+        XCTAssertTrue(
+            try XCTUnwrap(state.pipeline.makeQueue()).engine is ParakeetEngine,
+            "Parakeet engine should be set",
+        )
     }
 
     func testEnsureQueueWithParakeet() {
@@ -836,24 +845,24 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
 
     // MARK: - makeQueue settings
 
-    func testMakeQueueUsesDiarizeSettingFromSettings() {
+    func testMakeQueueUsesDiarizeSettingFromSettings() throws {
         let (state, _) = makeState()
         state.settings.diarize = true
-        let queue = state.pipeline.makeQueue()
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
         XCTAssertTrue(queue.diarizeEnabled)
     }
 
-    func testMakeQueueUsesMicLabelFromSettings() {
+    func testMakeQueueUsesMicLabelFromSettings() throws {
         let (state, _) = makeState()
         state.settings.micName = "Speaker A"
-        let queue = state.pipeline.makeQueue()
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
         XCTAssertEqual(queue.micLabel, "Speaker A")
     }
 
-    func testMakeQueueUsesNumSpeakersFromSettings() {
+    func testMakeQueueUsesNumSpeakersFromSettings() throws {
         let (state, _) = makeState()
         state.settings.numSpeakers = 4
-        let queue = state.pipeline.makeQueue()
+        let queue = try XCTUnwrap(state.pipeline.makeQueue())
         XCTAssertEqual(queue.numSpeakers, 4)
     }
 }
