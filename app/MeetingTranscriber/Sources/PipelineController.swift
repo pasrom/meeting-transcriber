@@ -109,7 +109,9 @@ final class PipelineController {
             ?? TerminalJobStore(
                 path: (queueEnvironment.logDir ?? AppPaths.ipcDir).appendingPathComponent("terminal_jobs.json"),
             )
-        self.queue = PipelineQueue(logDir: queueEnvironment.logDir)
+        self.queue = PipelineQueue(
+            logDir: queueEnvironment.logDir, stagingDir: queueEnvironment.stagingDir,
+        )
     }
 
     /// Wire the active-engine source. Called once from `AppState.init` after its

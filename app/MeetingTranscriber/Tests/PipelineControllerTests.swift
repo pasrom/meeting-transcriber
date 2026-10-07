@@ -140,6 +140,31 @@ final class PipelineControllerTests: XCTestCase {
         )
     }
 
+    /// The queue the controller starts with takes its staging folder from the
+    /// environment. It used to hardcode `AppPaths.recordingsDir`, so a
+    /// controller built for a test still decided from the installed app's
+    /// recordings folder whether finished audio was the app's own to relocate,
+    /// and the recovery that repairs and re-mixes files there reached into it.
+    func testTheInitialQueueTakesItsStagingFolderFromTheEnvironment() {
+        // A staging folder the controller cannot arrive at on its own: naming
+        // it `logDir/staging`, as the isolated-environment helper does, would
+        // let a controller that derived the path from `logDir` pass while
+        // still ignoring the environment.
+        let staging = tmpDir.appendingPathComponent("staging-elsewhere", isDirectory: true)
+        let pc = PipelineController(
+            settings: settings,
+            notifier: RecordingNotifier(),
+            queueEnvironment: .init(
+                logDir: tmpDir, stagingDir: staging, recoverStagedRecordings: nil,
+            ),
+        )
+
+        XCTAssertEqual(
+            pc.queue.stagingDir, staging,
+            "the initial queue did not take the staging folder it was given",
+        )
+    }
+
     // MARK: - rebuild() double-processing guard
 
     func testRebuildSkippedWhileQueueIsProcessing() {

@@ -276,8 +276,13 @@ class PipelineQueue {
     let snapshotWriter: @Sendable ([PipelineJob], URL) throws -> Void
 
     /// Simple init for skeleton tests and basic queue usage.
+    ///
+    /// `stagingDir` is a parameter rather than always `AppPaths.recordingsDir`
+    /// because this queue decides from it whether finished audio is the app's
+    /// own to relocate; a caller working in temp folders must be able to say so.
     init(
         logDir: URL? = nil,
+        stagingDir: URL = AppPaths.recordingsDir,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
         stageTimingLog: StageTimingLog? = nil,
@@ -297,7 +302,7 @@ class PipelineQueue {
         self.outputDir = nil
         securityScope = .live
         scopedOutputDir = nil
-        stagingDir = AppPaths.recordingsDir
+        self.stagingDir = stagingDir
         self.diarizeEnabled = false
         echoDedupEnabled = true
         isEchoCancellationEnabled = echoCancellationEnabled
