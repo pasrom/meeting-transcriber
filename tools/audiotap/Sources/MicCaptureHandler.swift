@@ -62,10 +62,11 @@ public class MicCaptureHandler: @unchecked Sendable {
     private let outputURL: URL
     private let debugLogging: Bool
     private let liveSink: LiveAudioSink?
-    // Debug fault injection (issue #379 repro): nil in production. An e2e
-    // build's composition root injects one (DualSourceRecorder, gated by
-    // #if E2E_FAULT_INJECTION) to verify the installTap NSException recovery.
-    private let debugFault: DebugTapFault?
+    // Debug fault injection (issues #379, #724/#706 repros): nil in
+    // production. An e2e build's composition root injects one
+    // (`LiveCaptureSession`, gated by #if E2E_FAULT_INJECTION). `internal`
+    // only for the `+DebugFault` extension.
+    let debugFault: DebugTapFault?
     /// Bounds a single restart attempt and decides what a late or superseded
     /// attempt is allowed to do (issue #588). Lock-guarded because the watchdog
     /// fires on main while the attempt runs on `restartQueue`, and the render
@@ -133,10 +134,13 @@ public class MicCaptureHandler: @unchecked Sendable {
     var timelineOriginTicks: UInt64 = 0
 
     // State for an injected DebugTapFault (above). Always compiled but inert
-    // unless a fault was injected — see resolveTapInstallFormat /
-    // armDebugFaultIfNeeded.
-    private var debugFaultArmed = false
-    private var injectBadTapFormatOnce = false
+    // unless a fault was injected; see `+DebugFault`. `internal` only for that
+    // extension.
+    var debugFaultArmed = false
+    var injectBadTapFormatOnce = false
+    /// When the capture started on the handler's clock, for a withheld-buffers
+    /// fault. Written once in `start()`, before any tap is installed.
+    var debugFaultStartedAt: TimeInterval = 0
 
     private var debugRMS = DebugRMSReporter()
     private let levelPublisher = LevelPublisher()
@@ -218,6 +222,7 @@ public class MicCaptureHandler: @unchecked Sendable {
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
         captureStartTicks = mach_absolute_time()
+        noteDebugFaultStart()
         try startEngine(deviceUID: deviceUID, on: session)
         _ = arbiter.withLock { $0.handle(.startSucceeded) }
         beginProgressWatch()
@@ -325,7 +330,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         let tapBlock: AVAudioNodeTapBlock = {
             [weak self] buffer, when in
             // swiftlint:enable closure_parameter_position closure_body_length
-            guard let self, self.isRecording else { return }
+            guard let self, self.isRecording, !self.debugFaultWithholdsBuffer() else { return }
             if self.firstFrameTime == 0 {
                 self.firstFrameTime = self.timelineOriginTicks != 0 ? self.timelineOriginTicks : mach_absolute_time()
             }
@@ -560,41 +565,6 @@ public enum MicCaptureError: LocalizedError {
 
         case let .invalidHardwareFormat(sampleRate, channelCount):
             "Microphone reported an invalid format (\(sampleRate) Hz, \(channelCount) ch)"
-        }
-    }
-}
-
-// MARK: - Debug fault injection (issue #379 recovery verification)
-
-private extension MicCaptureHandler {
-    /// In production (`debugFault == nil`) returns `real` unchanged. Under an
-    /// injected fault it returns an invalid (0 Hz) tap format exactly once —
-    /// the condition that makes installTapOnBus raise
-    /// `IsFormatSampleRateAndChannelCountValid` — so the e2e can verify the
-    /// NSException recovery path end-to-end.
-    func resolveTapInstallFormat(default real: AVAudioFormat) -> AVAudioFormat {
-        guard injectBadTapFormatOnce else { return real }
-        injectBadTapFormatOnce = false
-        guard let bad = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 0, channels: 1, interleaved: false,
-        ) else { return real }
-        logger.warning("[debug-fault] installing invalid (0 Hz) tap format (issue #379 repro)")
-        return bad
-    }
-
-    /// No-op in production. When a `DebugTapFault` was injected: once, after the
-    /// first successful start, schedule a single self-triggered device-change
-    /// restart whose tap install uses the bad format. Drives the real
-    /// handleDeviceChange -> launchRestartAttempt -> startEngine path so the
-    /// reproduction exercises production code, not a shortcut.
-    func armDebugFaultIfNeeded() {
-        guard let debugFault, !debugFaultArmed else { return }
-        debugFaultArmed = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + debugFault.triggerRestartAfter) { [weak self] in
-            guard let self, self.isRecording else { return }
-            logger.warning("[debug-fault] firing simulated mic device-change mid-recording (issue #379 repro)")
-            self.injectBadTapFormatOnce = true
-            self.handleDeviceChange()
         }
     }
 }
