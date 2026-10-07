@@ -125,11 +125,7 @@ extension XCTestCase {
         let pipeline = PipelineController(
             settings: settings,
             notifier: notifier,
-            queueEnvironment: .init(
-                logDir: logDir,
-                stagingDir: logDir.appendingPathComponent("staging", isDirectory: true),
-                recoverStagedRecordings: nil,
-            ),
+            queueEnvironment: IsolatedQueueEnvironment.make(logDir: logDir),
         )
         let channelHealth = ChannelHealthController(
             notifier: notifier,

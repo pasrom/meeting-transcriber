@@ -45,12 +45,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
         return AppState(
             settings: settings,
             notifier: notifier,
-            pipelineEnvironment: .init(
-                logDir: logs,
-                stagingDir: logs.appendingPathComponent("staging", isDirectory: true),
-                recoverStagedRecordings: nil,
-                initialQueue: queue,
-            ),
+            pipelineEnvironment: IsolatedQueueEnvironment.make(logDir: logs, initialQueue: queue),
         )
     }
 

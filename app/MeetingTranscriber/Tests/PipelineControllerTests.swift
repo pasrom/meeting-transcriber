@@ -40,12 +40,7 @@ final class PipelineControllerTests: XCTestCase {
             settings: settings,
             notifier: RecordingNotifier(),
             terminalJobStore: terminalJobStore,
-            queueEnvironment: .init(
-                logDir: tmpDir,
-                stagingDir: tmpDir.appendingPathComponent("staging", isDirectory: true),
-                recoverStagedRecordings: nil,
-                initialQueue: queue,
-            ),
+            queueEnvironment: IsolatedQueueEnvironment.make(logDir: tmpDir, initialQueue: queue),
         )
     }
 
