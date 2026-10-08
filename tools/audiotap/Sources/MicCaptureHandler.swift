@@ -62,10 +62,11 @@ public class MicCaptureHandler: @unchecked Sendable {
     private let outputURL: URL
     private let debugLogging: Bool
     private let liveSink: LiveAudioSink?
-    // Debug fault injection (issue #379 repro): nil in production. An e2e
-    // build's composition root injects one (DualSourceRecorder, gated by
-    // #if E2E_FAULT_INJECTION) to verify the installTap NSException recovery.
-    private let debugFault: DebugTapFault?
+    // Debug fault injection (issues #379, #724/#706 repros): nil in
+    // production. An e2e build's composition root injects one
+    // (`LiveCaptureSession`, gated by #if E2E_FAULT_INJECTION). `internal`
+    // only for the `+DebugFault` extension.
+    let debugFault: DebugTapFault?
     /// Bounds a single restart attempt and decides what a late or superseded
     /// attempt is allowed to do (issue #588). Lock-guarded because the watchdog
     /// fires on main while the attempt runs on `restartQueue`, and the render
@@ -85,6 +86,14 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// rest of the session keeps recording.
     public var onGiveUp: (() -> Void)?
 
+    /// Called when the microphone went without audio for the whole budget and
+    /// was released (issues #724, #706), with what the stall can say about
+    /// itself. Main queue. See `+Progress`.
+    public var onStall: ((MicStallDetails) -> Void)?
+    /// Called when a microphone a device change brought back after a stall
+    /// has delivered again. Main queue.
+    public var onResume: (() -> Void)?
+
     var isRecording: Bool {
         arbiter.withLock { $0.isCapturing }
     }
@@ -98,6 +107,17 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// channels default to the same shared policy; injected only so a test can
     /// use a schedule that does not spend six seconds proving a give-up.
     let decideRetry: @Sendable (Int) -> CaptureRestartRetryAction
+    /// Runs work on the main queue after a delay. Every timer of the restart
+    /// path goes through it, so a test can drive the backoff and the attempt
+    /// deadline on a manual clock instead of waiting them out.
+    let scheduleOnMain: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+    /// Seconds on a monotonic clock, for the progress watchdog. Injected for
+    /// the same reason as `scheduleOnMain`.
+    let clock: @Sendable () -> TimeInterval
+    /// What a stall's silence bridge is written under; see `TimelineBridgeGate`.
+    let bridgeGate = TimelineBridgeGate()
+    /// Whether the capture is getting anywhere. Main queue only.
+    var progress = MicProgressState()
     private var deviceChangeListener: AudioObjectPropertyListenerBlock?
     var configChangeObserver: (any NSObjectProtocol)?
     var selectedDeviceUID: String?
@@ -106,15 +126,29 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// `internal` for that cross-file extension; survives restarts (never reset).
     var timelineAnchor = TimelineAnchor(rate: Int(speechSampleRate))
     public private(set) var firstFrameTime: UInt64 = 0
+    /// Mach time `start()` began at.
+    var captureStartTicks: UInt64 = 0
+    /// Mach time the track was anchored at if it was restarted before its
+    /// first buffer (see `+Timeline`), else 0. Becomes `firstFrameTime` once
+    /// a buffer arrives, so the track's sample 0 and its reported start agree.
+    var timelineOriginTicks: UInt64 = 0
 
     // State for an injected DebugTapFault (above). Always compiled but inert
-    // unless a fault was injected — see resolveTapInstallFormat /
-    // armDebugFaultIfNeeded.
-    private var debugFaultArmed = false
-    private var injectBadTapFormatOnce = false
+    // unless a fault was injected; see `+DebugFault`. `internal` only for that
+    // extension.
+    var debugFaultArmed = false
+    var injectBadTapFormatOnce = false
+    /// When the capture started on the handler's clock, for a withheld-buffers
+    /// fault. Written once in `start()`, before any tap is installed.
+    var debugFaultStartedAt: TimeInterval = 0
 
     private var debugRMS = DebugRMSReporter()
     private let levelPublisher = LevelPublisher()
+
+    /// Mach time of the last buffer, for the progress watchdog.
+    var lastBufferTicks: UInt64 {
+        levelPublisher.lastBufferTicks
+    }
 
     /// Returns the instantaneous mic level in dBFS, decayed to -120 if no buffer
     /// arrived in the last 0.5 seconds (e.g. device muted or unplugged) — without
@@ -166,8 +200,13 @@ public class MicCaptureHandler: @unchecked Sendable {
         sessionFactory: @escaping () -> any MicEngineSessionProviding,
         decideRetry: @escaping @Sendable (Int) -> CaptureRestartRetryAction
             = CaptureRestartRetryPolicy.decide,
+        scheduleOnMain: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+            = { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
+        clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
     ) {
+        self.clock = clock
         self.decideRetry = decideRetry
+        self.scheduleOnMain = scheduleOnMain
         self.outputURL = outputURL
         self.debugLogging = debugLogging
         self.liveSink = liveSink
@@ -182,8 +221,11 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     public func start(deviceUID: String? = nil) throws {
         selectedDeviceUID = deviceUID
+        captureStartTicks = mach_absolute_time()
+        noteDebugFaultStart()
         try startEngine(deviceUID: deviceUID, on: session)
         _ = arbiter.withLock { $0.handle(.startSucceeded) }
+        beginProgressWatch()
         installDeviceChangeListener()
         installConfigChangeObserver()
     }
@@ -288,9 +330,9 @@ public class MicCaptureHandler: @unchecked Sendable {
         let tapBlock: AVAudioNodeTapBlock = {
             [weak self] buffer, when in
             // swiftlint:enable closure_parameter_position closure_body_length
-            guard let self, self.isRecording else { return }
+            guard let self, self.isRecording, !self.debugFaultWithholdsBuffer() else { return }
             if self.firstFrameTime == 0 {
-                self.firstFrameTime = mach_absolute_time()
+                self.firstFrameTime = self.timelineOriginTicks != 0 ? self.timelineOriginTicks : mach_absolute_time()
             }
             self.accumulateDebugRMS(buffer: buffer)
             self.publishCurrentLevel()
@@ -370,7 +412,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     private func handleEngineConfigChange() {
         logger.info("Mic: engine configuration changed (format/route change)")
-        handleDeviceChange()
+        handleDeviceChange(fromConfigurationChange: true)
     }
 
     private func handleDefaultInputDeviceChanged() {
@@ -414,12 +456,15 @@ public class MicCaptureHandler: @unchecked Sendable {
         case .sealAndSkipEngine:
             logger.warning("Mic: stopping while a restart attempt is outstanding — leaving its engine alone")
 
+        case .nothingToRelease:
+            logger.info("Mic: stopping a capture that stalled without audio; its engine was already released")
+
         default:
             // Already stopped. Nothing to release, and touching the engine again
             // would be a double teardown via deinit.
             break
         }
-        outputFile = nil
+        closeFileAfterBridgeChunk()
         logger.info("Mic recording stopped")
     }
 }
@@ -520,41 +565,6 @@ public enum MicCaptureError: LocalizedError {
 
         case let .invalidHardwareFormat(sampleRate, channelCount):
             "Microphone reported an invalid format (\(sampleRate) Hz, \(channelCount) ch)"
-        }
-    }
-}
-
-// MARK: - Debug fault injection (issue #379 recovery verification)
-
-private extension MicCaptureHandler {
-    /// In production (`debugFault == nil`) returns `real` unchanged. Under an
-    /// injected fault it returns an invalid (0 Hz) tap format exactly once —
-    /// the condition that makes installTapOnBus raise
-    /// `IsFormatSampleRateAndChannelCountValid` — so the e2e can verify the
-    /// NSException recovery path end-to-end.
-    func resolveTapInstallFormat(default real: AVAudioFormat) -> AVAudioFormat {
-        guard injectBadTapFormatOnce else { return real }
-        injectBadTapFormatOnce = false
-        guard let bad = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 0, channels: 1, interleaved: false,
-        ) else { return real }
-        logger.warning("[debug-fault] installing invalid (0 Hz) tap format (issue #379 repro)")
-        return bad
-    }
-
-    /// No-op in production. When a `DebugTapFault` was injected: once, after the
-    /// first successful start, schedule a single self-triggered device-change
-    /// restart whose tap install uses the bad format. Drives the real
-    /// handleDeviceChange -> launchRestartAttempt -> startEngine path so the
-    /// reproduction exercises production code, not a shortcut.
-    func armDebugFaultIfNeeded() {
-        guard let debugFault, !debugFaultArmed else { return }
-        debugFaultArmed = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + debugFault.triggerRestartAfter) { [weak self] in
-            guard let self, self.isRecording else { return }
-            logger.warning("[debug-fault] firing simulated mic device-change mid-recording (issue #379 repro)")
-            self.injectBadTapFormatOnce = true
-            self.handleDeviceChange()
         }
     }
 }

@@ -62,6 +62,27 @@ final class MicCaptureHandlerTimelineTests: XCTestCase {
         XCTAssertEqual(file.length, 0, "no gap, no write")
     }
 
+    /// The bridge counts only what reached the file, so the writer reports
+    /// that rather than what it was asked for: stopped between chunks, or by
+    /// a write that throws.
+    func testWriteSilenceReportsWhatItWrote() throws {
+        let url = tempURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let file = try AVAudioFile(forWriting: url, settings: wavSettings())
+
+        XCTAssertEqual(MicCaptureHandler.writeSilence(frames: 20000, to: file), 20000)
+        var chunks = 0
+        let stopped = MicCaptureHandler.writeSilence(frames: 40000, to: file) {
+            chunks += 1
+            return chunks == 1
+        }
+        XCTAssertEqual(stopped, Int(speechSampleRate), "one chunk of a second, then stopped")
+        XCTAssertEqual(file.length, AVAudioFramePosition(20000 + Int(speechSampleRate)))
+
+        let reader = try AVAudioFile(forReading: url)
+        XCTAssertEqual(MicCaptureHandler.writeSilence(frames: 16000, to: reader), 0, "a write that throws")
+    }
+
     // A mic whose sample clock runs a little slower than the mach clock
     // back-fills a few frames of silence roughly every 5 s. Those sub-50ms
     // slivers are load-bearing (they keep the track wall-clock aligned) but

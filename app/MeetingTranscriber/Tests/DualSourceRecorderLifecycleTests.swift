@@ -29,6 +29,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var appCaptureGaveUp = false
         var micCaptureGaveUp = false
         var appSilentTrackWatchdogGaveUp = false
+        var micCaptureStall = MicCaptureStall()
         var appSignalAges: ChannelSignalAges = .unknown
         var micSignalAges: ChannelSignalAges = .unknown
         /// The configuration the recorder handed the factory, so a test can

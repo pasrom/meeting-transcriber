@@ -23,6 +23,7 @@ protocol AudioCapturing: AnyObject {
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
     var appSilentTrackWatchdogGaveUp: Bool { get }
+    var micCaptureStall: MicCaptureStall { get }
 
     /// How long each channel has gone without a buffer, and without one
     /// carrying signal. See `ChannelSignalAges` for why the levels above
@@ -56,13 +57,15 @@ enum LiveCaptureSession {
     ///
     /// Mic device-change e2e (issue #379): the fault makes the app self-trigger
     /// a mid-recording restart with an invalid format so the lane can verify
-    /// the installTap NSException recovery. It is compiled ONLY into the e2e
-    /// build (run_app.sh -DE2E_FAULT_INJECTION).
+    /// the installTap NSException recovery. Mic stall e2e (issues #724, #706):
+    /// the microphone's buffers are withheld so the lane can verify the
+    /// progress watchdog. `E2EMicFault` picks one per launch. It is compiled
+    /// ONLY into the e2e build (run_app.sh -DE2E_FAULT_INJECTION).
     ///
-    /// The `#else` is what keeps the fault physically absent from every shipped
-    /// binary, and it is not redundant: the field is a `var` on a struct that
-    /// ships, so whatever a caller set would otherwise travel straight through
-    /// to a `MicCaptureHandler` whose fault machinery is always compiled.
+    /// The `#else` is what keeps every shipped binary from injecting a fault,
+    /// and it is not redundant: the field is a `var` on a struct that ships,
+    /// so whatever a caller set would otherwise travel straight through to a
+    /// `MicCaptureHandler` whose fault machinery is always compiled.
     /// Overwriting here means no shipped build can reach the session with a
     /// fault set, whoever built the configuration.
     ///
@@ -74,7 +77,7 @@ enum LiveCaptureSession {
     ) -> AudioCaptureConfiguration {
         var configuration = configuration
         #if E2E_FAULT_INJECTION
-            configuration.micDebugFault = DebugTapFault(triggerRestartAfter: 2)
+            configuration.micDebugFault = E2EMicFault.fault(from: ProcessInfo.processInfo.environment)
         #else
             configuration.micDebugFault = nil
         #endif

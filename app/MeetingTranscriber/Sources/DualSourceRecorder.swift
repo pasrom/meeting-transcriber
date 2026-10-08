@@ -36,10 +36,8 @@ struct CaptureFormat {
 @MainActor
 @Observable
 class DualSourceRecorder: RecordingProvider {
-    /// The session capturing right now, nil between recordings. Stored as the
-    /// `AudioCapturing` role rather than the concrete `AudioCaptureSession`,
-    /// which is what removes the `@available` gate from this property — the
-    /// reason the storage used to be a type-erased `AnyObject` plus a cast.
+    /// The session capturing right now, nil between recordings. Held as the `AudioCapturing` role,
+    /// which removes the `@available` gate the old type-erased `AnyObject` storage worked around.
     private var captureSession: (any AudioCapturing)?
     private(set) var isRecording = false
     private(set) var recordingStartDate: Date = .distantPast
@@ -71,6 +69,10 @@ class DualSourceRecorder: RecordingProvider {
 
     var appSilentTrackWatchdogGaveUp: Bool {
         captureSession?.appSilentTrackWatchdogGaveUp ?? false
+    }
+
+    var micCaptureStall: MicCaptureStall {
+        captureSession?.micCaptureStall ?? MicCaptureStall()
     }
 
     /// Requested app-audio capture format (what the CATap aggregate device is
