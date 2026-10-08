@@ -1,3 +1,4 @@
+import CoreML
 import FluidAudio
 import Foundation
 import os.log
@@ -262,9 +263,16 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
     private var manager: OfflineDiarizerManager?
     private var currentNumSpeakers: Int?
     private let tuning: OfflineDiarizerTuning
+    private let prepareModels: (OfflineDiarizerManager, MLModelConfiguration) async throws -> Void
 
-    init(tuning: OfflineDiarizerTuning = .defaults) {
+    init(
+        tuning: OfflineDiarizerTuning = .defaults,
+        prepareModels: @escaping (OfflineDiarizerManager, MLModelConfiguration) async throws -> Void = { manager, configuration in
+            try await manager.prepareModels(configuration: configuration)
+        },
+    ) {
         self.tuning = tuning
+        self.prepareModels = prepareModels
     }
 
     /// Build the `OfflineDiarizerConfig` from a tuning struct + optional speaker count.
@@ -283,6 +291,18 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
         return config
     }
 
+    /// Keep FluidAudio's offline inference off Metal. Core ML's `.all`
+    /// routing can send the WeSpeaker embedding model through MPSGraph, whose
+    /// in-process abort cannot be caught or retried by the pipeline. The CPU +
+    /// Neural Engine route retains hardware acceleration without invoking the
+    /// crash-prone GPU path. FluidAudio 0.15.5+ reads only `computeUnits` from
+    /// this configuration; older releases silently use `.all` instead.
+    static func makeModelConfiguration() -> MLModelConfiguration {
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = .cpuAndNeuralEngine
+        return configuration
+    }
+
     mutating func prepare(numSpeakers: Int?) async throws {
         guard manager == nil || numSpeakers != currentNumSpeakers else { return }
 
@@ -296,7 +316,7 @@ struct FluidOfflineProcessor: OfflineDiarizationProcessing {
                 "FluidAudio offline tuning (\(flag)): clusterThreshold=\(t.clusterThreshold) warmStartFa=\(t.warmStartFa) warmStartFb=\(t.warmStartFb) minSegmentDurationSeconds=\(t.minSegmentDurationSeconds) excludeOverlap=\(t.excludeOverlap)",
             )
         let newManager = OfflineDiarizerManager(config: config)
-        try await newManager.prepareModels()
+        try await prepareModels(newManager, Self.makeModelConfiguration())
         manager = newManager
         currentNumSpeakers = numSpeakers
         logger.info("FluidAudio offline models ready")
