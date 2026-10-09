@@ -59,6 +59,10 @@ class WatchLoop {
     /// `recordings/` subfolder. Calling start-access on a child URL silently
     /// fails inside the App Store sandbox — see `RecordOnlyDestination`.
     let recordOnlyDestination: () -> RecordOnlyDestination
+    /// Puts a copy of a record-only file in the destination (see
+    /// `RecordOnlyWrite`). A seam so a test can see which thread it runs on
+    /// (see `writeRecordOnlyOffMain`).
+    let recordOnlyFileTransfer: RecordOnlyWrite.Transfer
     /// Surface user-facing failures (e.g. sidecar write errors) that don't
     /// transition state to `.error`. Defaults to a silent no-op for tests.
     let notifier: any AppNotifying
@@ -123,6 +127,7 @@ class WatchLoop {
         recordOnlyDestination: @escaping () -> RecordOnlyDestination = {
             .unscoped(AppPaths.recordingsDir)
         },
+        recordOnlyFileTransfer: @escaping RecordOnlyWrite.Transfer = RecordOnlyWrite.linkOrCopy,
         notifier: any AppNotifying = SilentNotifier(),
         nowProvider: @escaping () -> Date = Date.init,
         sleepProvider: @escaping (TimeInterval) async throws -> Void = { interval in
@@ -143,6 +148,7 @@ class WatchLoop {
         self.verboseDiagnostics = verboseDiagnostics
         self.recordOnly = recordOnly
         self.recordOnlyDestination = recordOnlyDestination
+        self.recordOnlyFileTransfer = recordOnlyFileTransfer
         self.notifier = notifier
         self.nowProvider = nowProvider
         self.sleepProvider = sleepProvider
@@ -190,6 +196,32 @@ class WatchLoop {
             next.detail = ""
         }
         logger.info("Watch mode stopped")
+    }
+
+    /// Whether a quit has to wait for this loop: it is watching (and so may be
+    /// recording, or about to), or a manual recording is running.
+    var hasWorkBeforeQuit: Bool {
+        watchTask != nil || activeRecorder != nil
+    }
+
+    /// Set by `finishForQuit`: the recording in flight is stopped with
+    /// `stopOffMain`, so the quit's budget (a main-actor timer) can fire while
+    /// the mix runs (see `TerminationFlush.recordingBudget` for what it does
+    /// not bound), and a manual start still waiting for its recorder gives up
+    /// instead of recording into the exit.
+    var finishingForQuit = false
+
+    /// Stop for a quit, returning once whatever was recording has been
+    /// enqueued (or written record-only). `stop()` is not enough: it drops a
+    /// manual recording unstopped, and the watch task finalizes an auto one
+    /// after `stop()` has returned. A mix the exit cuts off is re-mixed by the
+    /// next launch's crash recovery, without the title, app and participants.
+    func finishForQuit() async {
+        finishingForQuit = true
+        await stopManualRecordingForQuit()
+        let recording = watchTask
+        stop()
+        await recording?.value
     }
 
     // MARK: - Manual Recording
@@ -242,6 +274,8 @@ class WatchLoop {
         declineParkedConsent()
 
         let recorder = await recorderFactory()
+        // The quit may have begun while the recorder was being built.
+        guard !finishingForQuit else { throw CancellationError() }
         try recorder.start(
             source: source, micDeviceUID: micDeviceUID,
             debugLogging: verboseDiagnostics(),
@@ -265,23 +299,43 @@ class WatchLoop {
     }
 
     func stopManualRecording() {
-        guard let recorder = activeRecorder, let info = manualRecordingInfo else { return }
+        guard let (recorder, info) = takeManualRecording() else { return }
+        do {
+            try enqueueRecording(title: info.title, appName: info.appName, recording: recorder.stop(), trigger: .manual)
+            finishManualRecording(failure: nil)
+        } catch {
+            finishManualRecording(failure: error)
+        }
+    }
 
+    private func stopManualRecordingForQuit() async {
+        guard let (recorder, info) = takeManualRecording() else { return }
+        do {
+            try await stopAndEnqueueForQuit(recorder, title: info.title, appName: info.appName, trigger: .manual)
+            finishManualRecording(failure: nil)
+        } catch {
+            finishManualRecording(failure: error)
+        }
+    }
+
+    /// Clears the bookkeeping before the recorder stops, so the level poll
+    /// and a second stop find no recorder that is half stopped.
+    private func takeManualRecording() -> (any RecordingProvider, ManualRecordingInfo)? {
+        guard let recorder = activeRecorder, let info = manualRecordingInfo else { return nil }
         manualRecordingTask?.cancel()
         manualRecordingTask = nil
+        activeRecorder = nil
+        return (recorder, info)
+    }
 
+    /// `failure` is what the stop threw, nil when it produced a recording.
+    private func finishManualRecording(failure: (any Error)?) {
         var failureMessage: String?
-        do {
-            let recording = try recorder.stop()
-            enqueueRecording(
-                title: info.title, appName: info.appName, recording: recording, trigger: .manual,
-            )
-        } catch {
-            logger.error("Failed to stop manual recording: \(error.localizedDescription, privacy: .public)")
-            failureMessage = error.localizedDescription
+        if let failure {
+            logger.error("Failed to stop manual recording: \(failure.localizedDescription, privacy: .public)")
+            if !isNothingRecordedAtQuit(failure) { failureMessage = failure.localizedDescription }
         }
 
-        activeRecorder = nil
         update { next in
             next.phase = .idle
             next.manualRecordingInfo = nil
@@ -332,7 +386,7 @@ class WatchLoop {
         do {
             try await handleMeeting(meeting)
         } catch {
-            if error is CancellationError { return true }
+            if error is CancellationError || isNothingRecordedAtQuit(error) { return true }
             let msg = "Recording error: \(error.localizedDescription)"
             logger.error("\(msg, privacy: .public)")
             update { next in
@@ -368,6 +422,9 @@ class WatchLoop {
 
         let source = RecordingSource.forApp(pid: meeting.windowPID, noMic: noMic)
         let recorder = await recorderFactory()
+        // A quit or a stop that came while the recorder was being built: a
+        // recording started now would end at once, empty, as an error.
+        try Task.checkCancellation()
         try recorder.start(
             source: source,
             micDeviceUID: micDeviceUID,
@@ -400,17 +457,18 @@ class WatchLoop {
             logger.info("Watch cancelled mid-recording — finalizing in-flight recording")
         }
 
-        // Stop recording
-        let recording = try recorder.stop()
-
-        // --- Enqueue for background processing ---
-        enqueueRecording(
-            title: title,
-            appName: meeting.pattern.appName,
-            recording: recording,
-            trigger: .auto,
-            participants: participants,
-        )
+        // Stop recording and enqueue; on a quit with the file work off the
+        // main actor.
+        if finishingForQuit {
+            try await stopAndEnqueueForQuit(
+                recorder, title: title, appName: meeting.pattern.appName, trigger: .auto, participants: participants,
+            )
+        } else {
+            try enqueueRecording(
+                title: title, appName: meeting.pattern.appName, recording: recorder.stop(), trigger: .auto,
+                participants: participants,
+            )
+        }
     }
 
     // MARK: - Meeting End Detection
@@ -448,7 +506,7 @@ class WatchLoop {
 
     // MARK: - Helpers
 
-    private func enqueueRecording(
+    func enqueueRecording(
         title: String,
         appName: String,
         recording: RecordingResult,
@@ -458,28 +516,10 @@ class WatchLoop {
         if recordOnly() {
             do {
                 try writeRecordOnlySidecar(
-                    title: title,
-                    appName: appName,
-                    recording: recording,
-                    trigger: trigger,
-                    participants: participants,
+                    title: title, appName: appName, recording: recording, trigger: trigger, participants: participants,
                 )
             } catch {
-                // Error left redacted: a sidecar/WAV write error embeds the
-                // meeting-title-derived basename in its description.
-                logger.error("Record-only: \(error.localizedDescription)")
-                update { next in
-                    next.lastError = "Record-only output failed: \(error.localizedDescription)"
-                }
-                // Record-only performs no state transition, so this notification
-                // is the entire report that a recording was lost. It breaks
-                // through Focus on the same test as `captureAlert`: a failed
-                // write has no benign reading.
-                notifier.notify(
-                    title: "Record-only output failed",
-                    body: error.localizedDescription,
-                    urgency: .timeSensitive,
-                )
+                reportRecordOnlyFailure(error)
             }
             return
         }
@@ -504,7 +544,8 @@ class WatchLoop {
     /// on a phase transition. Co-located mutations stay coherent
     /// (a phase-change-plus-detail-update is one funnel call, not two
     /// separate property writes that consumers could observe mid-flight).
-    private func update(_ transform: (inout WatchLoopState) -> Void) {
+    /// Internal so the extensions in `WatchLoop+*.swift` write through it too.
+    func update(_ transform: (inout WatchLoopState) -> Void) {
         var next = snapshot
         transform(&next)
         apply(next)
@@ -544,37 +585,5 @@ class WatchLoop {
         case .recording: .recording
         case .error: .error
         }
-    }
-}
-
-/// Pair of URLs used by `WatchLoop` when persisting record-only output: the
-/// `scope` URL is what `startAccessingSecurityScopedResource()` is called on
-/// (the bookmark-resolved parent the user actually picked), and `writeDir` is
-/// the sub-path under that scope where the WAV + sidecar files land.
-///
-/// The split exists because Apple's security-scoped-bookmark API only grants
-/// access on the URL that resolved from the bookmark — calling start-access
-/// on a *child* path silently fails inside the App Store sandbox while
-/// appearing to work in the unsandboxed Homebrew build. The factory methods
-/// below make the two cases (real bookmark vs. transient app dir) explicit
-/// at every call site.
-struct RecordOnlyDestination: Equatable {
-    let scope: URL
-    let writeDir: URL
-
-    /// Production path: `parent` is the user-picked Output Folder (potentially
-    /// resolved from a security-scoped bookmark) and the WAVs land under
-    /// `parent/recordings/` so a Syncthing or rsync pair has a stable subtree.
-    static func production(parent: URL) -> Self {
-        Self(
-            scope: parent,
-            writeDir: parent.appendingPathComponent("recordings", isDirectory: true),
-        )
-    }
-
-    /// Test/default path: no security scope to manage — `scope == writeDir`,
-    /// so start-access is a harmless no-op and the writer hits `url` directly.
-    static func unscoped(_ url: URL) -> Self {
-        Self(scope: url, writeDir: url)
     }
 }

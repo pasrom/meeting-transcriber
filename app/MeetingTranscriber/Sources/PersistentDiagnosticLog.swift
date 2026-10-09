@@ -278,6 +278,10 @@ enum PersistentDiagnosticLog {
 
             private let logExecutable: URL
             private let logArguments: [String]
+            /// Runs in a readability callback between reading the pipe and
+            /// appending to the file. A test seam: it lets a test hold a
+            /// callback in flight while `stop()` runs.
+            private let afterRead: (@Sendable (Data) -> Void)?
             private let restartPolicy: RestartPolicy
             private var recentFailures: [Date] = []
             private let restartQueue = DispatchQueue(
@@ -295,12 +299,14 @@ enum PersistentDiagnosticLog {
                     "--style", "syslog",
                     "--info",
                 ],
+                afterRead: (@Sendable (Data) -> Void)? = nil,
             ) throws {
                 self.logDirectory = logDirectory
                 self.now = now
                 self.restartPolicy = restartPolicy
                 self.logExecutable = logExecutable
                 self.logArguments = logArguments
+                self.afterRead = afterRead
                 let date = now()
                 let target = logDirectory.appendingPathComponent(logFileName(for: date))
                 let fm = FileManager.default
@@ -338,7 +344,11 @@ enum PersistentDiagnosticLog {
                 }
 
                 let handle = pipe.fileHandleForReading
+                let callbacks = callbacksInFlight
+                let afterRead = afterRead
                 handle.readabilityHandler = { [weak self] fh in
+                    callbacks.enter()
+                    defer { callbacks.leave() }
                     let data = fh.availableData
                     if data.isEmpty {
                         // Pipe writer closed (subprocess exited). Without
@@ -351,6 +361,7 @@ enum PersistentDiagnosticLog {
                         fh.readabilityHandler = nil
                         return
                     }
+                    afterRead?(data)
                     self?.append(data)
                 }
 
@@ -466,10 +477,47 @@ enum PersistentDiagnosticLog {
                     // Detach the readability callback before closing the file
                     // handle — otherwise a late callback could write to a
                     // recycled FD.
-                    pipe.fileHandleForReading.readabilityHandler = nil
+                    let reader = pipe.fileHandleForReading
+                    reader.readabilityHandler = nil
+                    // Take what the child wrote up to its exit, bounded. The
+                    // quit logs its last lines right before this stop, and
+                    // closing at once dropped whatever had not been read yet.
+                    let deadline = Date().addingTimeInterval(Self.stopDrainTimeout)
+                    while process.isRunning, Date() < deadline {
+                        Thread.sleep(forTimeInterval: 0.01)
+                    }
+                    // A callback already running may hold the last bytes it
+                    // read; let it append them before the drain and the close.
+                    _ = callbacksInFlight.wait(timeout: .now() + max(0, deadline.timeIntervalSinceNow))
+                    let rest = Self.readWithoutBlocking(reader)
+                    if !rest.isEmpty { append(rest) }
                     try? logFileHandle.close()
                     logger.info("persistent_log_streamer_stopped")
                 }
+            }
+
+            /// Readability callbacks that have started and not yet returned.
+            private let callbacksInFlight = DispatchGroup()
+
+            /// How long `stop()` waits for the child to exit, and for a
+            /// callback already running, before it takes what is in the pipe
+            /// and closes the file.
+            static let stopDrainTimeout: TimeInterval = 0.5
+
+            /// Everything readable from `handle` right now, without waiting
+            /// for more: our own process may still hold the pipe's write end,
+            /// so reading to end-of-file could block forever.
+            private static func readWithoutBlocking(_ handle: FileHandle) -> Data {
+                let fd = handle.fileDescriptor
+                _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 65536)
+                while true {
+                    let count = read(fd, &buffer, buffer.count)
+                    guard count > 0 else { break }
+                    data.append(contentsOf: buffer[0 ..< count])
+                }
+                return data
             }
 
             deinit {

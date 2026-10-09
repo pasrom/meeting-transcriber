@@ -98,13 +98,15 @@ enum WavHeaderRepair {
     /// guard in `repairIfNeeded` would reject it). The launch queue-build Task
     /// can fire right as a watch-started recording begins, so the window is
     /// real. Same guard as `recoverCrashedRecordings` / `cleanupTempFiles`.
+    /// `now` is when the caller decided to repair; a caller that waited first
+    /// (see `StagingRecoveryGate`) passes the time it asked.
     @discardableResult
-    static func repairUnfinalized(in dir: URL, minAge: TimeInterval = 30) -> Int {
+    static func repairUnfinalized(in dir: URL, minAge: TimeInterval = 30, now: Date = Date()) -> Int {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: nil,
         ) else { return 0 }
-        let cutoff = Date().addingTimeInterval(-minAge)
+        let cutoff = now.addingTimeInterval(-minAge)
         var repaired = 0
         for url in entries where url.pathExtension.lowercased() == "wav" {
             if let mtime = (try? fm.attributesOfItem(atPath: url.path)[.modificationDate]) as? Date,

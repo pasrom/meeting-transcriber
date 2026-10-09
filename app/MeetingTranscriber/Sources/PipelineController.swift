@@ -166,6 +166,7 @@ final class PipelineController {
         guard let built = makeQueue() else { return }
         if let replaced {
             built.adoptJobs(of: replaced)
+            replaced.retire()
         } else {
             built.loadSnapshot()
         }

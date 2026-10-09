@@ -7,6 +7,14 @@ protocol RecordingProvider {
     func start(source: RecordingSource, micDeviceUID: String?, debugLogging: Bool) throws
     func stop() throws -> RecordingResult
 
+    /// `stop()` with the file work (reading the tracks back, mixing, writing
+    /// the mix) off the main actor. Ending the capture itself still happens on
+    /// the caller's actor. Used where the main thread has to be free while the
+    /// mix runs: a quit, whose time budget is a timer on the main actor, and
+    /// the mix of a long recording takes seconds. Default: the synchronous
+    /// `stop()`, for doubles that have no file work to move.
+    func stopOffMain() async throws -> RecordingResult
+
     /// Instantaneous app-audio level in dBFS. -120 when no capture session is
     /// active or the tap stopped delivering buffers in the last 0.5 s.
     /// Drives the menu-bar asymmetric-silence indicator. Default: -120
@@ -49,6 +57,13 @@ extension ChannelSignalAges {
 }
 
 extension RecordingProvider {
+    // Async only to satisfy the requirement: a double has no file work to
+    // move, so its stop stays where it is called.
+    // swiftlint:disable:next async_without_await
+    func stopOffMain() async throws -> RecordingResult {
+        try stop()
+    }
+
     var appLevelDBFS: Double {
         -120
     }

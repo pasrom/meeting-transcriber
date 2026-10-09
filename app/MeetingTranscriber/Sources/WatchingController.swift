@@ -44,6 +44,9 @@ final class WatchingController {
     /// exists.
     var manualStartTask: Task<ManualRecordingStartResult, Never>?
 
+    /// Set by `finishForQuit`: a start parked on a permission prompt gives up.
+    var isQuitting = false
+
     let settings: AppSettings
     private let notifier: any AppNotifying
     private let pipeline: PipelineController
@@ -230,7 +233,7 @@ final class WatchingController {
                 // from replacing the queue the manual loop is already wired to.
                 // Nothing leaks: `loop.start()` has not run, so there is no
                 // self-retaining watch task yet.
-                guard !isManualRecording else { return }
+                guard !isManualRecording, !isQuitting else { return }
 
                 syncEngines?()
                 pipeline.rebuild()
@@ -282,17 +285,6 @@ final class WatchingController {
         if userInitiated, settings.watchTeams {
             requestAccessibility()
         }
-    }
-
-    /// Whether a manual start may take over the loop it found, given what that
-    /// loop is doing. False while it is recording: taking it over stops it, and
-    /// a recording in progress is not something a later start may end.
-    ///
-    /// A pure function over the phase rather than an inline comparison, because
-    /// the guard it backs only fires in a race that no test can schedule
-    /// reliably — this is the layer that can be pinned.
-    static func mayTakeOverLoop(in state: WatchLoop.State) -> Bool {
-        state != .recording
     }
 
     // MARK: - Settling in-flight starts (shared by both control surfaces)
@@ -454,6 +446,7 @@ final class WatchingController {
         }
 
         _ = await ensureMicAccess()
+        guard !isQuitting else { return .failed }
 
         pipeline.ensureQueue()
 
@@ -510,6 +503,9 @@ final class WatchingController {
                 body: "Recording: \(loop.manualRecordingInfo?.title ?? "")",
             )
             return .started
+        } catch is CancellationError {
+            watchLoop = nil // a quit began while the recorder was built: not an error
+            return .failed
         } catch {
             notifier.notify(title: "Error", body: error.localizedDescription)
             watchLoop = nil

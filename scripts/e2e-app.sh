@@ -43,6 +43,7 @@ TITLE_SOURCE=false      # drive the window-title lookup with a no-usable-title c
 ECHO_BLEED=false         # feed a synthesised affected + clean pair through /v1/jobs and assert the echo verdict (see run_echo_bleed)
 QUIT_FOREIGN_APP=false   # hand-runs: quit a dev app this driver did not start instead of refusing (see the app-provenance guard)
 ECHO_CANCEL=false        # same two pairs with the canceller ON: assert the far end is taken out of the mic audio (see run_echo_cancel)
+QUIT_FLUSH=false         # quit with a manual recording running + assert the recording survives as a job (issue #745, see run_quit_flush)
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -66,12 +67,13 @@ while [ $# -gt 0 ]; do
         --echo-bleed)       ECHO_BLEED=true ;;
         --echo-cancel)      ECHO_CANCEL=true ;;
         --quit-foreign-app) QUIT_FOREIGN_APP=true ;;
+        --quit-flush)       QUIT_FLUSH=true ;;
         -h|--help)
             cat <<'HELP'
 Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                   [--reimport-recorded | --reimport-latest] [--keep-recordings]
                   [--naming-escape] [--naming-switch] [--echo-bleed] [--echo-cancel]
-                  [--naming-confirm] [--fixture path/to.wav]
+                  [--naming-confirm] [--quit-flush] [--fixture path/to.wav]
 
   --no-build           Skip build/deploy/re-sign; use ~/Applications/MeetingTranscriber-Dev.app as-is.
   --keep-app           Leave the dev app running on exit. Default: quit it.
@@ -99,7 +101,9 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        import pipeline).
   --keep-recordings    Suppress the on-exit cleanup of record-only output, so
                        a follow-up --reimport-latest can pick the WAV up.
-                       Only meaningful with --record-only.
+                       Meaningful with --record-only, and with --quit-flush,
+                       where it leaves the jobs' transcripts and audio in place
+                       and lists them instead.
   --mic-device-change  Build with the issue #379 fault-injection seam
                        (-DE2E_FAULT_INJECTION) and run one meeting. The app
                        self-triggers a mic device-change restart mid-recording
@@ -188,6 +192,40 @@ Usage: e2e-app.sh [--no-build] [--keep-app] [--two-meetings] [--record-only]
                        difference between the windows where the far end played and
                        the windows where it did not. Standalone lane. Needs python3
                        and the bundled model.
+  --quit-flush         Issue #745: quit the app with an AppleScript quit while a
+                       manual recording (POST /v1/record) is running, and assert
+                       that the recording survives as a job. Read from the
+                       pipeline snapshot on disk after the process is gone and
+                       before anything relaunches, then from GET /v1/jobs/<id>
+                       after a relaunch. Two cycles: one quit, then a second quit
+                       sent while the first is held. AppKit either cancels
+                       it (-128) or asks the delegate again after the first
+                       reply; which one is logged from AppKit's own log, and
+                       either way the held quit must end the app exactly once,
+                       leave no app or 'log stream' process, and keep the
+                       recording.
+                       Does NOT prove that the snapshot flush is what saved the
+                       job (a no-op flush stays green) or anything about a
+                       logout. Each launch must have exactly one
+                       persistent-log `log stream` child, and none may outlive
+                       the app. Plays the fixture (afplay) so the microphone
+                       hears speech and the jobs finish as done; the lane then
+                       skips their naming and removes their transcripts and
+                       audio. The dev and the installed build share one data
+                       directory, so the lane aborts before changing anything
+                       when the live lock ($MT_LIVE_LOCK, default
+                       /tmp/mt-live-lock) is held, the installed app is
+                       running, or the pipeline queue is not empty; it backs the
+                       shared pipeline state up (E2E_QUIT_FLUSH_BACKUP_DIR,
+                       default under ~/Library/Caches/MeetingTranscriber-e2e)
+                       and restores it on exit: a file that existed is put
+                       back byte for byte and one that did not is removed,
+                       each only when what changed is this run's records;
+                       anything else fails the run. A checksum compare is
+                       printed; the backup is removed on a match and kept,
+                       with its path, otherwise. The queue check and the
+                       backup follow the quit of a running dev app.
+                       Standalone lane; incompatible with --keep-app.
   --fixture            Audio fixture for meeting-simulator. Default: two_speakers_de.wav.
   --quit-foreign-app   Outside CI the driver refuses to start while a dev app it did
                        not launch is running (someone may be using it). Pass this
@@ -241,6 +279,21 @@ fi
 # it defaults to the 2-speaker fixture further below.)
 if [ "$NAMING_CONFIRM" = true ] && [ -n "$SIMULATOR_FIXTURE" ]; then
     echo "Error: --naming-confirm ignores --fixture (it always uses the 2-speaker fixture)" >&2
+    exit 2
+fi
+# --quit-flush quits and relaunches the app itself, twice; any other lane in the
+# same run would have its app quit under it.
+if [ "$QUIT_FLUSH" = true ] && { [ "$RECORD_ONLY" = true ] || [ "$NAMING_CONFIRM" = true ] \
+    || [ "$NAMING_ESCAPE" = true ] || [ "$NAMING_SWITCH" = true ] || [ "$REIMPORT_RECORDED" = true ] \
+    || [ "$REIMPORT_LATEST" = true ] || [ "$MIC_DEVICE_CHANGE" = true ] || [ "$CRASH_RECOVERY" = true ] \
+    || [ "$REDEPLOY_ONLY" = true ] || [ "$TWO_MEETINGS" = true ] || [ "$MIC_ONLY" = true ] \
+    || [ "$TITLE_SOURCE" = true ] || [ "$ECHO_BLEED" = true ] || [ "$ECHO_CANCEL" = true ]; }; then
+    echo "Error: --quit-flush is a standalone lane; incompatible with the other lane flags" >&2
+    exit 2
+fi
+# It restores the shared pipeline state on exit, which needs the app stopped.
+if [ "$QUIT_FLUSH" = true ] && [ "$APP_AFTER" = leave ]; then
+    echo "Error: --quit-flush restores the shared pipeline state on exit and quits the app for it; incompatible with --keep-app" >&2
     exit 2
 fi
 # --mic-only drives its own recording over /v1/record and reroutes the machine's
@@ -598,6 +651,112 @@ _other_drivers="$(_e2e_other_drivers)"
 [ -z "$_other_drivers" ] \
     || fail "another e2e-app.sh is already running on this host (pid(s): ${_other_drivers}). Two drivers would share the deployed bundle, the RPC port and the audio device and quit each other's app, so neither result could be trusted. Wait for it to finish (ps -p ${_other_drivers% } -o pid,command)."
 
+# --quit-flush writes jobs into the pipeline state the dev and the installed
+# build SHARE (one data directory, only the preferences are per bundle id), so
+# it guards that state before it changes anything, and aborts rather than
+# continues on any of:
+#   - another live user of this host holds the lock directory ($MT_LIVE_LOCK,
+#     a bare `mkdir` lock any driver or agent session can share);
+#   - the installed app is running: it reads and writes the same snapshot file
+#     this lane reads its verdict from, and would adopt the lane's jobs;
+#   - the pipeline queue is not empty: the lane restores it on exit, and
+#     restoring over someone's queued work would lose it. Checked, and the
+#     backup taken, only after the dev app below has quit, since a dev app
+#     that was recording writes that recording on its quit.
+# Then it backs the shared state up, and `on_exit` restores it. Only this run's
+# records may have changed in the meantime: each of the four ipc files that
+# existed before is put back byte for byte when everything added to it since
+# the backup is one of this run's jobs (job ids, or for the processed-recordings
+# ledger the jobs' file paths), and each that did not exist before is removed
+# when everything in it is. A file with anyone else's record, or one that does
+# not parse, is left as it is and fails the run. A SHA-256 compare is printed
+# either way; speakers.json is compared, never written. The backup (it holds a
+# copy of speakers.json) is removed when the compare matches, and kept, with
+# its path printed, when it does not.
+_QF_DATA_DIR="$HOME/Library/Application Support/MeetingTranscriber"
+_QF_IPC_DIR="$_QF_DATA_DIR/ipc"
+_QF_IPC_FILES=(pipeline_queue.json terminal_jobs.json pipeline_log.jsonl processed_recordings.json)
+_QF_LOCK_HELD=""
+_QF_BACKUP_DIR=""
+# Quit-flush cleanup: stop the app, remove what this run's unreleased jobs
+# wrote, put the shared pipeline state back and remove the backup when it
+# matches. Defined before the backup is taken and called from the early EXIT
+# trap as well as from `on_exit`, so a failure before `on_exit` exists (a
+# launch or readiness failure) restores too. Runs once.
+_QF_RESTORED=""
+_qf_restore_shared_state() {
+    [ "$QUIT_FLUSH" = true ] && [ -n "$_QF_BACKUP_DIR" ] && [ -z "${_QF_RESTORED:-}" ] || return 0
+    _QF_RESTORED=1
+    [ -n "${_QF_AFPLAY_PID:-}" ] && kill "$_QF_AFPLAY_PID" 2>/dev/null || true
+    quit_running_app || log "[quit-flush] WARNING: the dev app did not stop; restoring anyway"
+    # A cycle that failed after its recording started may have a job in the
+    # shared state that nothing registered yet; the quit above may have just
+    # written it. Defined with the lane further down.
+    if declare -F _qf_register_cycle_jobs >/dev/null; then _qf_register_cycle_jobs; fi
+    # Defined with the lane further down; an abort before that point has
+    # no lane jobs to clean up.
+    # This run's records, for the shared files that did not exist before
+    # the lane: the restore removes such a file only when it holds nothing
+    # else. Collected before the unreleased files go, while the snapshot
+    # still names them.
+    local _qf_ids="$_QF_BACKUP_DIR/run-job-ids" _qf_paths="$_QF_BACKUP_DIR/run-paths" _qf_job
+    : >"$_qf_ids"
+    : >"$_qf_paths"
+    for _qf_job in ${_QF_JOBS[@]+"${_QF_JOBS[@]}"}; do
+        printf '%s\n' "$_qf_job" >>"$_qf_ids"
+        if declare -F _qf_job_file_paths >/dev/null; then _qf_job_file_paths "$_qf_job" >>"$_qf_paths"; fi
+    done
+    if [ -n "${_QF_OWNED_PATHS[*]+set}" ]; then printf '%s\n' "${_QF_OWNED_PATHS[@]}" >>"$_qf_paths"; fi
+    if declare -F _qf_remove_unreleased_files >/dev/null; then _qf_remove_unreleased_files; fi
+    # The double-quit cycle's osascript reply file, left when a failure
+    # came before that cycle removed it. Exact path, this run's pid.
+    rm -f "/tmp/e2e-quit-flush-q1.$$"
+    log "[quit-flush] restoring the shared pipeline state from $_QF_BACKUP_DIR"
+    local _qf_cmp _qf_cmp_status=0
+    _qf_cmp="$(restore_state_files "$_QF_BACKUP_DIR/ipc" "$_QF_IPC_DIR" "$_qf_ids" "$_qf_paths" "${_QF_IPC_FILES[@]}")" || _qf_cmp_status=$?
+    _qf_cmp="$_qf_cmp
+$(compare_state_files "$_QF_BACKUP_DIR" "$_QF_DATA_DIR" speakers.json)" || _qf_cmp_status=1
+    while IFS= read -r _qf_line; do log "[quit-flush]   $_qf_line"; done <<<"$_qf_cmp"
+    if [ "$_qf_cmp_status" -ne 0 ]; then
+        log "[quit-flush] FAIL: the shared pipeline state does not match its backup (see the lines above); the backup is kept at $_QF_BACKUP_DIR"
+        _QF_RESTORE_FAILED=1
+    else
+        # It holds a copy of speakers.json (voice embeddings and names) and
+        # of the queue: gone once the state is back, file by file.
+        rm -f "$_qf_ids" "$_qf_paths"
+        if remove_state_backup "$_QF_BACKUP_DIR/ipc" "${_QF_IPC_FILES[@]}" >/dev/null \
+            && remove_state_backup "$_QF_BACKUP_DIR" speakers.json >/dev/null; then
+            log "[quit-flush] state matches its backup; backup removed"
+        else
+            log "[quit-flush] state matches its backup, but $_QF_BACKUP_DIR holds files the lane did not write; left in place"
+        fi
+    fi
+}
+
+_qf_release_lock() {
+    if [ -n "${_QF_LOCK_HELD:-}" ]; then
+        rmdir "$MT_LIVE_LOCK" 2>/dev/null || true
+        _QF_LOCK_HELD=""
+    fi
+}
+
+if [ "$QUIT_FLUSH" = true ]; then
+    MT_LIVE_LOCK="${MT_LIVE_LOCK:-/tmp/mt-live-lock}"
+    mkdir "$MT_LIVE_LOCK" 2>/dev/null \
+        || fail "--quit-flush: the live lock $MT_LIVE_LOCK is held (since $(stat -f '%Sm' "$MT_LIVE_LOCK" 2>/dev/null)). Someone else is using the live app on this host; aborting without touching anything."
+    _QF_LOCK_HELD=yes
+    # Until `on_exit` is armed after the launch, an abort runs it if the script
+    # got far enough to define it, and otherwise does the quit-flush part of it
+    # itself: once the backup exists, the lane has started to change shared
+    # state (the app launch writes it), so a failure here restores too.
+    trap 'if declare -F on_exit >/dev/null; then on_exit; else _qf_restore_shared_state; _qf_release_lock; [ -z "${_QF_RESTORE_FAILED:-}" ] || exit 1; fi' EXIT
+    _qf_installed="$( { pgrep -x MeetingTranscriber || true; } | while read -r p; do
+        ps -o command= -p "$p" 2>/dev/null | grep -q "MeetingTranscriber-Dev.app/" || printf '%s ' "$p"; done)"
+    [ -z "$_qf_installed" ] \
+        || fail "--quit-flush: a MeetingTranscriber that is not the dev app is running (pid(s): ${_qf_installed% }). It shares the pipeline state this lane writes and restores. Quit it first."
+    log "[quit-flush] lock $MT_LIVE_LOCK held, installed app not running; the queue check and the backup follow the dev app's quit"
+fi
+
 # Second half of the guard: a dev app that is running when this driver starts.
 # The line below quits it, as this driver always has, so the question is whose
 # it is. A launch marker this driver owns answers it for apps a driver started:
@@ -642,6 +801,33 @@ fi
 # Always — even with --no-build, since UserDefaults below take effect
 # only on launch and the running RPC server would shadow the new one.
 quit_running_app
+
+# --quit-flush: the dev app just quit may have been recording, and its quit
+# writes that recording into the shared state. So the queue check and the
+# backup come only now, with no app of ours or anyone's left to write, or the
+# restore at exit would put the state back over that recording.
+if [ "$QUIT_FLUSH" = true ]; then
+    ! pgrep -f "$_DEV_APP_PATTERN" >/dev/null \
+        || fail "--quit-flush: the dev app is still running after the quit; refusing to back up state it may still write"
+    _qf_q_status=0
+    queue_snapshot_is_empty "$_QF_IPC_DIR/pipeline_queue.json" || _qf_q_status=$?
+    case "$_qf_q_status" in
+        0) ;;
+        1) fail "--quit-flush: the shared pipeline queue is not empty ($(jq -c '[.[] | {meetingTitle, state}]' "$_QF_IPC_DIR/pipeline_queue.json")). The lane restores it on exit and would lose that work. Let those jobs finish or dismiss them, then rerun." ;;
+        *) fail "--quit-flush: $_QF_IPC_DIR/pipeline_queue.json does not parse; refusing to run over it." ;;
+    esac
+    _QF_BACKUP_DIR="${E2E_QUIT_FLUSH_BACKUP_DIR:-$HOME/Library/Caches/MeetingTranscriber-e2e/quit-flush-$(date +%Y%m%d-%H%M%S)}"
+    if ! backup_state_files "$_QF_IPC_DIR" "$_QF_BACKUP_DIR/ipc" "${_QF_IPC_FILES[@]}" \
+        || ! backup_state_files "$_QF_DATA_DIR" "$_QF_BACKUP_DIR" speakers.json; then
+        # Nothing has been changed yet, so there is nothing to restore, and a
+        # copy that may be partial must not be restored over the real files.
+        # It may hold a copy of speakers.json, so its path is said.
+        _qf_incomplete="$_QF_BACKUP_DIR"
+        _QF_BACKUP_DIR=""
+        fail "--quit-flush: could not back up the shared pipeline state; nothing was changed. The incomplete backup (it may hold a copy of speakers.json) is at $_qf_incomplete: delete it by hand"
+    fi
+    log "[quit-flush] dev app stopped, queue empty; shared state backed up to $_QF_BACKUP_DIR"
+fi
 
 if [ "$NO_BUILD" = true ]; then
     [ -d "$DEV_BUNDLE_DEPLOY" ] || fail "--no-build given but $DEV_BUNDLE_DEPLOY doesn't exist — deploy a signed bundle there first"
@@ -716,7 +902,7 @@ fi
 # Record-only lanes assert the captured app track is non-silent via
 # `mt-cli wav-verdict` (the same analyzer the browser lane uses). Only that
 # mode needs it, so build lazily to keep the processing lane unchanged.
-if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ]; } && [ ! -x "$MTCLI" ]; then
+if { [ "$RECORD_ONLY" = true ] || [ "$MIC_ONLY" = true ] || [ "$QUIT_FLUSH" = true ]; } && [ ! -x "$MTCLI" ]; then
     # record-only asserts the app track carries signal; mic-only needs the same
     # analyzer for its mic track AND drives `record start/stop` through it.
     log "Building mt-cli (track silence guard + record control)"
@@ -808,6 +994,21 @@ _delete_dev_default() {
     local key="$1"
     delete_dev_default "$DEV_BUNDLE_ID" "$key"
 }
+
+if [ "$QUIT_FLUSH" = true ]; then
+    # No protocol provider, so a restored job finishes without calling out to
+    # an LLM; restored on exit. Auto-watch stays ON, as every lane leaves it,
+    # and here it is load-bearing: the app builds its pipeline queue, and with
+    # it restores the snapshot, only when watching or a recording starts or a
+    # file is imported. With auto-watch off a relaunch restores nothing until
+    # the user does one of those, so the post-relaunch read would fail on a
+    # property that is not the quit's. The manual start stops the watch loop,
+    # so no detected meeting records next to the lane's recording.
+    log "Disabling protocol generation for the quit-flush lane"
+    _QF_PRE_PROVIDER="$(read_dev_default_effective "$DEV_BUNDLE_ID" "$_CONTAINER_PLIST" protocolProvider)"
+    log "[quit-flush] protocolProvider before the lane: '${_QF_PRE_PROVIDER:-<unset>}' (restored on exit)"
+    _set_dev_default protocolProvider none
+fi
 
 if [ -n "${MTT_DIARIZER_MODE:-}" ]; then
     log "Overriding diarizerMode=$MTT_DIARIZER_MODE for this run"
@@ -1070,6 +1271,12 @@ on_exit() {
     # twice on a signal (harmless because every step is idempotent, but noisy).
     [ -n "$_ON_EXIT_RAN" ] && return 0
     _ON_EXIT_RAN=1
+    # Quit-flush: stop the app, remove what this run's unreleased jobs wrote,
+    # and put the shared pipeline state back. First, because the restore needs
+    # the app stopped, and the provenance marker below then sees it gone.
+    if [ "$QUIT_FLUSH" = true ] && [ -n "$_QF_BACKUP_DIR" ]; then
+        _qf_restore_shared_state
+    fi
     # Leave the app's provenance for the next driver: still running means this
     # run kept it (--keep-app) or failed before the quit; gone means we quit it.
     if [ -n "${_launched_app:-}" ]; then
@@ -1089,6 +1296,14 @@ on_exit() {
         # on, and a human using the dev app on this host would find detection
         # silently disabled.
         write_dev_default "$DEV_BUNDLE_ID" autoWatch true bool
+    fi
+    if [ "$QUIT_FLUSH" = true ]; then
+        [ -n "${_QF_AFPLAY_PID:-}" ] && kill "$_QF_AFPLAY_PID" 2>/dev/null || true
+        if [ -n "${_QF_PRE_PROVIDER:-}" ]; then
+            _set_dev_default protocolProvider "$_QF_PRE_PROVIDER"
+        else
+            _delete_dev_default protocolProvider
+        fi
     fi
     if [ "$ECHO_CANCEL" = true ]; then
         # Back to the shipped default rather than to whatever was there before:
@@ -1147,6 +1362,9 @@ on_exit() {
         rm -rf "$_ECHO_FIXTURE_DIR"
         _ECHO_FIXTURE_DIR=""
     fi
+    _qf_release_lock
+    # A restore that did not match turns any run red, a passing one included.
+    [ -z "${_QF_RESTORE_FAILED:-}" ] || exit 1
 }
 # Single cleanup hook, but the signal paths must EXIT after cleaning up: a
 # trapped INT/TERM otherwise returns into the interrupted command and execution
@@ -3080,6 +3298,364 @@ run_echo_cancel() {
     log "$label: PASS"
 }
 
+# --- quit-flush lane (issue #745) -------------------------------------------
+#
+# A quit has to finish the recording in progress, hand it to the pipeline and
+# wait for the snapshot write that hand-over produces before the process exits.
+# Unit tests pin each step against fakes; only a real quit through AppKit shows
+# that the delegate is installed, that an AppleScript quit reaches it at all
+# (it never went through the menu), and that `terminate` waits for it.
+#
+# The verdict is read from the snapshot FILE after the process is gone and
+# before anything relaunches. That is the only point where it says what the
+# quit wrote: once the app is back, the restore and the resumed pipeline write
+# the file again, and the crash recovery at launch rebuilds a lost recording
+# from its tracks under a different title, which an assertion made after the
+# relaunch alone could mistake for a flushed one.
+#
+# Three more things only a live quit shows, from the PR's manual checks:
+#   - a second quit sent while the first is held. Two answers were measured
+#     and the race between them is AppKit's: it cancels the second request
+#     itself (osascript gets -128, the app logs "Failed responder chain
+#     validation for terminate: action. Canceling termination."), or it queues
+#     it and asks the delegate again only after the held quit's reply. The
+#     lane logs which one happened and fails on a trace that is neither, and
+#     asserts what the user depends on either way: the held quit still
+#     completes, the app ends exactly once, nothing relaunches it, nothing is
+#     left running, and the recording is on disk and restored;
+#   - each launch starts exactly one persistent-log streamer (`AppState` is
+#     built in `App.init`, so a second `init` would start a second one);
+#   - no streamer outlives the app. Checked before the relaunch, because the
+#     launch reaps orphaned streamers and would hide one.
+#
+# What this lane does NOT prove:
+#   - that the snapshot FLUSH is what put the job on disk. Measured: with the
+#     flush made a no-op the lane stays green, because the background write
+#     lands in the few tens of milliseconds between the reply and the exit. It
+#     proves the recording survives a quit, not which step saved it; the unit
+#     tests pin the flush.
+#   - anything about a logout or shutdown. Those send their own quit request,
+#     which the lane does not produce; whether one arriving during a held quit
+#     is cancelled the same way is not measured here.
+#   - the menu's Quit and Cmd-Q, which need a UI driver; the lane quits through
+#     AppleScript, the path that never went through the menu.
+#
+# Audio: a manual recording is microphone only, and an empty transcript ends a
+# job in `error`, which the queue keeps until a person dismisses it. So the
+# fixture plays while recording, the jobs finish as `done`, and the lane skips
+# their naming and removes their transcripts and audio on the way out.
+
+_QF_TITLE="Microphone Recording"   # ManualRecordingInfo.microphoneTitle
+_QF_SNAPSHOT="$HOME/Library/Application Support/MeetingTranscriber/ipc/pipeline_queue.json"
+# TerminationFlush: 5 s recording budget, 2 s flush, a second 2 s flush, plus
+# AppKit and teardown. Past this the quit is not being held, it is stuck.
+_QF_EXIT_DEADLINE_S=20
+_QF_RECORD_S=8
+_QF_AFPLAY_PID=""
+_QF_STREAMER_PID=""
+_QF_JOB_ID=""
+_QF_JOBS=()
+# Every file path this run's jobs were seen to name, collected before the
+# release removes them, so the restore can tell this run's records from
+# anyone else's in a shared state file that did not exist before the lane.
+_QF_OWNED_PATHS=()
+
+# The cycle under way, from the moment its recording starts: the ids of the
+# lane-titled jobs already in the snapshot then, so any job with that title
+# that appears later is this cycle's. Registered as the run's (`_QF_JOBS`)
+# right after the exit, before any assertion, and again by the restore, so
+# cleanup and restore cover a failure at any point after the recording began,
+# including one before the exit.
+_QF_CYCLE_ACTIVE=""
+_QF_CYCLE_KNOWN=""
+_qf_cycle_started() {
+    _QF_CYCLE_KNOWN="$(jq -r '.[].id' "$_QF_SNAPSHOT" 2>/dev/null | tr '\n' ' ' || true)"
+    _QF_CYCLE_ACTIVE=yes
+}
+_qf_register_cycle_jobs() {
+    local new id j seen
+    [ -n "${_QF_CYCLE_ACTIVE:-}" ] || return 0
+    # shellcheck disable=SC2086 # one id per word, the known list is uuids
+    new="$(snapshot_new_job_ids "$_QF_SNAPSHOT" "$_QF_TITLE" $_QF_CYCLE_KNOWN)" || return 0
+    for id in $new; do
+        seen=""
+        for j in ${_QF_JOBS[@]+"${_QF_JOBS[@]}"}; do [ "$j" = "$id" ] && seen=yes; done
+        [ -n "$seen" ] || _QF_JOBS+=("$id")
+    done
+    return 0
+}
+
+# The app process itself, not anything whose command line mentions its path:
+# `pgrep -f` alone once returned a short-lived process naming the bundle, whose
+# pid was lower than the app's, and the lane looked for streamers under it.
+_qf_app_pid() {
+    local p
+    for p in $(pgrep -x MeetingTranscriber 2>/dev/null || true); do
+        case "$(ps -o command= -p "$p" 2>/dev/null)" in
+            *"$_DEV_APP_PATTERN"*) echo "$p"; return 0 ;;
+        esac
+    done
+}
+_qf_app_gone() { [ -z "$(_qf_app_pid)" ]; }
+_qf_streamers_of() { ps -axo pid=,ppid=,command= | streamer_pids "$1"; }
+_qf_has_streamer() { [ -n "$(_qf_streamers_of "$1")" ]; }
+_qf_quit() { osascript -e "tell application id \"$DEV_BUNDLE_ID\" to quit"; }
+
+# Exactly one persistent-log streamer under the running app; leaves its pid in
+# _QF_STREAMER_PID. Waits for the first, then looks again a moment later: a
+# second AppState would start its streamer a beat after the first.
+_qf_assert_one_streamer() {
+    local label="$1" app_pid pids n
+    app_pid="$(_qf_app_pid)"
+    [ -n "$app_pid" ] || fail "$label: the dev app is not running"
+    poll_until 15 1 _qf_has_streamer "$app_pid" \
+        || fail "$label: the app (pid $app_pid) started no persistent-log 'log stream' child within 15s. If the app's stream predicate changed, MT_LOG_STREAM_PREDICATE in scripts/lib/e2e-helpers.sh has to follow it. Children: $(pgrep -lP "$app_pid" | tr '\n' ' ')"
+    sleep 3
+    pids="$(_qf_streamers_of "$app_pid")"
+    n="$(grep -c . <<<"$pids" || true)"
+    [ "$n" -eq 1 ] \
+        || fail "$label: the app (pid $app_pid) has $n persistent-log 'log stream' children, expected exactly 1: $(tr '\n' ' ' <<<"$pids"). More than one means more than one AppState was built."
+    _QF_STREAMER_PID="$pids"
+    log "$label: exactly one 'log stream' child (pid $_QF_STREAMER_PID) under the app (pid $app_pid)"
+}
+
+_qf_relaunch() {
+    local label="$1" i
+    # Right after an exit LaunchServices can still hold the old instance and
+    # answer `open` with procNotFound (-600); measured on the second cycle of
+    # this lane. Retry, then force a new instance: the old one is already
+    # proven gone above, so -n cannot start a second copy.
+    local opened=""
+    for i in 1 2 3; do
+        if open "$DEV_BUNDLE_DEPLOY"; then opened=yes; break; fi
+        log "$label: open failed (attempt $i), retrying"
+        sleep 1
+    done
+    if [ -z "$opened" ]; then
+        open -n "$DEV_BUNDLE_DEPLOY" || fail "$label: could not relaunch $DEV_BUNDLE_DEPLOY"
+    fi
+    poll_until "$RPC_READY_TIMEOUT_S" 1 _rpc_ready || fail "$label: RPC did not come back after the relaunch"
+    _launched_app="$(_qf_app_pid)"
+    printf '%s launched' "$_launched_app" >"$_E2E_APP_MARKER"
+    log "$label: relaunched (pid $_launched_app)"
+}
+
+# One cycle: record, quit with one or two AppleScript quits, read the snapshot
+# the exit left, relaunch, read the restored job. Leaves its id in _QF_JOB_ID.
+_qf_cycle() {
+    local label="$1" mode="$2"
+    local app_pid status new n t0 t_exit q1 s1=0
+    local out1="/tmp/e2e-quit-flush-q1.$$"
+
+    _qf_assert_one_streamer "$label"
+    app_pid="$(_qf_app_pid)"
+
+    log "$label: starting a manual recording over POST /v1/record"
+    # From here on any new job with the lane's title is this cycle's.
+    _qf_cycle_started
+    "$MTCLI" record start >/dev/null || fail "$label: mt-cli record start failed (is the Microphone grant in place for $DEV_BUNDLE_DEPLOY?)"
+    "$MTCLI" record | jq -e '.recording == true' >/dev/null \
+        || fail "$label: /v1/record reports recording=false right after a successful start"
+    afplay "$SIMULATOR_FIXTURE" &
+    _QF_AFPLAY_PID=$!
+    log "$label: recording, fixture playing; quitting in ${_QF_RECORD_S}s"
+    sleep "$_QF_RECORD_S"
+    "$MTCLI" record | jq -e '.recording == true' >/dev/null \
+        || fail "$label: the recording ended before the quit; nothing below would exercise the quit path"
+
+    t0="$(date +%s)"
+    local log_start
+    log_start="$(date '+%Y-%m-%d %H:%M:%S')"
+    if [ "$mode" = double ]; then
+        # Both quits from one script: the first without waiting for its reply,
+        # the second right behind it, waiting for its own. The whole hold takes
+        # well under a second here (measured: two separate osascript calls
+        # 0.3 s apart found the app already gone), so only back-to-back events
+        # reach it while it is held. The second reply is the answer AppKit gave
+        # that request.
+        osascript -e 'ignoring application responses' \
+            -e "tell application id \"$DEV_BUNDLE_ID\" to quit" \
+            -e 'end ignoring' \
+            -e "tell application id \"$DEV_BUNDLE_ID\" to quit" >"$out1" 2>&1 &
+        q1=$!
+        log "$label: sent two quits back to back"
+    else
+        _qf_quit >"$out1" 2>&1 &
+        q1=$!
+        log "$label: sent one quit"
+    fi
+
+    _qf_exited() { ! _pid_is_alive "$app_pid"; }
+    poll_until "$_QF_EXIT_DEADLINE_S" 0.2 _qf_exited \
+        || fail "$label: the app (pid $app_pid) did not exit within ${_QF_EXIT_DEADLINE_S}s of the quit. The quit is being held open past every budget, or a second quit cancelled it."
+    t_exit="$(date +%s)"
+    log "$label: app exited about $(( t_exit - t0 ))s after the quit"
+    # Before any assertion: a failure below must still clean up and restore
+    # the job this quit wrote.
+    _qf_register_cycle_jobs
+    kill "$_QF_AFPLAY_PID" 2>/dev/null || true
+    _QF_AFPLAY_PID=""
+
+    wait "$q1" || s1=$?
+    log "$label: first osascript exited $s1: $(tr '\n' ' ' <"$out1")"
+    if [ "$mode" = double ]; then
+        # Staged or not is read from AppKit's own log of this process: the
+        # second quit event has to arrive before the held quit's reply, or the
+        # cycle proves nothing about a second quit (one that arrives after the
+        # exit ends the same way). The system log, not the app's: the measured
+        # answer to the second event comes from AppKit before the delegate is
+        # asked anything.
+        local trace received
+        trace="$(/usr/bin/log show --start "$log_start" --info --debug --style compact \
+            --predicate "processID == $app_pid AND (subsystem == \"com.apple.AppKit\" OR subsystem == \"com.apple.appleevents\")" 2>/dev/null \
+            | grep -E 'RECEIVED:\(aevt,quit\)|replyToApplicationShouldTerminate|Canceling termination|applicationShouldTerminate:' || true)"
+        log "$label: AppKit trace of the quit:"
+        while IFS= read -r line; do [ -n "$line" ] && log "    ${line:11:190}"; done <<<"$trace"
+        received="$(awk '/replyToApplicationShouldTerminate/ { exit } /RECEIVED:\(aevt,quit\)/ { n++ } END { print n + 0 }' <<<"$trace")"
+        [ "$received" -ge 2 ] \
+            || fail "$label: not staged: the app received $received quit event(s) before replying to the held quit, so the second quit did not arrive while the first was held"
+        log "$label: staged: both quit events reached the app while the first quit was held"
+        # Which way AppKit answered the second request is logged, not
+        # asserted: two outcomes were measured and both end in one exit.
+        # AppKit cancels it itself (the script gets -128, and AppKit logs
+        # "Canceling termination"), or it queues it and asks the delegate
+        # again after the held quit's reply. A trace that is neither fails:
+        # it is not a run this lane can explain.
+        local outcome
+        outcome="$(second_quit_outcome "$trace" "$(cat "$out1")")" \
+            || fail "$label: the second quit request was answered neither of the two measured ways (cancelled with -128, or asked again after the first reply); osascript said: $(tr '\n' ' ' <"$out1"). See the AppKit trace above."
+        case "$outcome" in
+            cancelled) log "$label: the second quit request was cancelled by AppKit (-128)" ;;
+            *) log "$label: the second quit request was asked again after the first reply; the delegate answered ${outcome#asked-after-reply }" ;;
+        esac
+        # Ended once: nothing brought the app back. An AppleScript quit sent to
+        # an app that has gone must not launch it again.
+        sleep 3
+        _qf_app_gone || fail "$label: a dev app is running again ($(_qf_app_pid)) after the double quit; the app did not end exactly once"
+        # No MeetingTranscriber at all: the preflight refused to start next to
+        # the installed app, so any instance now was started by this quit.
+        local left
+        left="$( { pgrep -x MeetingTranscriber || true; } | tr '\n' ' ')"
+        [ -z "$left" ] || fail "$label: a MeetingTranscriber process is running after the double quit (pid(s): $left)"
+        log "$label: the app ended once, nothing relaunched it, no MeetingTranscriber process left"
+    fi
+    rm -f "$out1"
+
+    # THE assertion: the snapshot the exit left holds the recording as a job.
+    status=0
+    # shellcheck disable=SC2086 # one id per word, the known list is uuids
+    new="$(snapshot_new_job_ids "$_QF_SNAPSHOT" "$_QF_TITLE" $_QF_CYCLE_KNOWN)" || status=$?
+    [ "$status" -eq 0 ] || fail "$label: the snapshot the quit left could not be read (see above)"
+    n="$(grep -c . <<<"$new" || true)"
+    [ "$n" -ge 1 ] \
+        || fail "$label: the snapshot on disk holds no new '$_QF_TITLE' job after the quit. The recording was not handed to the pipeline, or its snapshot write did not land before the exit. Jobs on disk: $(jq -c '[.[] | {meetingTitle, state}]' "$_QF_SNAPSHOT" 2>/dev/null)"
+    [ "$n" -eq 1 ] || fail "$label: the snapshot holds $n new '$_QF_TITLE' jobs after one quit, expected 1: $(tr '\n' ' ' <<<"$new")"
+    _QF_JOB_ID="$new"
+    _qf_register_cycle_jobs
+    log "$label: the snapshot on disk holds the recording as job $_QF_JOB_ID (state $(jq -r --arg id "$_QF_JOB_ID" '.[] | select(.id == $id) | .state' "$_QF_SNAPSHOT"))"
+
+    # The streamer this launch started must not outlive the app. Checked now,
+    # because the next launch reaps orphaned streamers.
+    _qf_streamer_gone() { _no_pid_alive "$_QF_STREAMER_PID"; }
+    poll_until 5 0.5 _qf_streamer_gone \
+        || fail "$label: the app's 'log stream' (pid $_QF_STREAMER_PID) is still running after the app exited: $(ps -o pid=,ppid=,command= -p "$_QF_STREAMER_PID")"
+    new="$(ps -axo pid=,ppid=,command= | streamer_pids 1 | grep -vxF -f <(printf '%s\n' "${_QF_PRE_ORPHANS:-}") || true)"
+    [ -z "$new" ] || fail "$label: orphaned persistent-log streamer(s) appeared: $(tr '\n' ' ' <<<"$new")"
+    log "$label: no 'log stream' left behind"
+
+    # And the next launch restores it under its title.
+    _qf_relaunch "$label"
+    # Polled: the restore runs when auto-watch starts, a beat after RPC is up.
+    local dto=""
+    _qf_restored() {
+        dto="$(rpc "/v1/jobs/$_QF_JOB_ID")"
+        [ "$(jq -r '.meetingTitle // empty' <<<"$dto" 2>/dev/null || true)" = "$_QF_TITLE" ]
+    }
+    poll_until 30 1 _qf_restored \
+        || fail "$label: after the relaunch GET /v1/jobs/$_QF_JOB_ID does not return the job with its title within 30s (last: ${dto:-<no response>})"
+    log "$label: restored after relaunch: $(jq -c '{jobID, state, meetingTitle}' <<<"$dto")"
+    _QF_CYCLE_ACTIVE=""
+}
+
+# The files a job in the snapshot names (its audio, transcript and protocol),
+# as filesystem paths. JSONEncoder writes a URL as its absolute string,
+# percent-encoded.
+_qf_job_file_paths() {
+    jq -r --arg id "$1" '.[] | select(.id == $id)
+        | (.mixPath, .appPath, .micPath, .transcriptPath, .protocolPath) | select(. != null)
+        | if type == "object" then .relative else . end' "$_QF_SNAPSHOT" 2>/dev/null \
+        | python3 -I -c 'import sys, urllib.parse
+for line in sys.stdin:
+    u = urllib.parse.urlparse(line.strip())
+    if u.scheme == "file": print(urllib.parse.unquote(u.path))'
+}
+
+# On exit, for jobs the release never reached (a failure before it): remove
+# the files the snapshot names for them, by exact path, before the restore
+# drops the jobs from the queue and nothing names those files any more.
+_qf_remove_unreleased_files() {
+    local job f
+    [ "$KEEP_RECORDINGS" = true ] && return 0
+    # `${a[@]+...}`: bash 3.2 under `set -u` calls an empty array unbound,
+    # and a run that fails before its first job gets here with none.
+    for job in ${_QF_JOBS[@]+"${_QF_JOBS[@]}"}; do
+        while IFS= read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] && rm -f "$f" && log "[quit-flush] removed $f"
+        done < <(_qf_job_file_paths "$job")
+    done
+    return 0
+}
+
+# Let the lane's jobs finish and remove what they wrote. Best effort, like the
+# echo lanes' release: this is teardown, and its own failure is reported, not
+# turned into the lane's verdict.
+_qf_release_jobs() {
+    local job dto state f
+    # `${a[@]+...}`: bash 3.2 under `set -u` calls an empty array unbound,
+    # and a run that fails before its first job gets here with none.
+    for job in ${_QF_JOBS[@]+"${_QF_JOBS[@]}"}; do
+        while IFS= read -r f; do
+            [ -n "$f" ] && _QF_OWNED_PATHS+=("$f")
+        done < <(_qf_job_file_paths "$job")
+        _echo_release "$job"
+        dto="$(rpc "/v1/jobs/$job")"
+        state="$(jq -r '.state // empty' <<<"$dto")"
+        if [ "$state" != "done" ]; then
+            log "[quit-flush] NOTE: job $job settled as '${state:-unknown}', not done; it stays in the queue until dismissed in the app. error=$(jq -r '.error // "<none>"' <<<"$dto")"
+            continue
+        fi
+        if [ "$KEEP_RECORDINGS" = true ]; then
+            log "[quit-flush] --keep-recordings: leaving job $job's files: $(jq -r '.transcriptPath // empty' <<<"$dto") $(_qf_job_file_paths "$job" | tr '\n' ' ')"
+            continue
+        fi
+        # Exact paths only, never a sweep: the output folder is the user's.
+        for f in "$(jq -r '.transcriptPath // empty' <<<"$dto")" "$(jq -r '.protocolPath // empty' <<<"$dto")"; do
+            [ -n "$f" ] && [ -f "$f" ] && rm -f "$f" && log "[quit-flush] removed $f"
+        done
+        while IFS= read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] && rm -f "$f" && log "[quit-flush] removed $f"
+        done < <(_qf_job_file_paths "$job")
+    done
+    # The loops above end on a false test whenever a file is already gone (the
+    # transcript is named twice), and under `set -e` that status would end the
+    # script here, before the lane's verdict is printed.
+    return 0
+}
+
+run_quit_flush() {
+    # Orphans that predate the lane are not its doing (another build that
+    # crashed); only new ones are.
+    _QF_PRE_ORPHANS="$(ps -axo pid=,ppid=,command= | streamer_pids 1)"
+    [ -z "$_QF_PRE_ORPHANS" ] || log "[quit-flush] note: orphaned streamer(s) predate the lane: $(tr '\n' ' ' <<<"$_QF_PRE_ORPHANS")"
+
+    _qf_cycle "[quit-flush 1/2 one quit]" single
+    _qf_cycle "[quit-flush 2/2 two quits]" double
+    _qf_assert_one_streamer "[quit-flush after relaunch]"
+
+    _qf_release_jobs
+    log "[quit-flush] PASS"
+}
+
 if [ "$REIMPORT_LATEST" = true ]; then
     # Skip the live-record phase and reuse a WAV produced by an earlier
     # `--record-only --keep-recordings` run on this host. Picks the
@@ -3157,6 +3733,8 @@ elif [ "$ECHO_BLEED" = true ]; then
     run_echo_bleed
 elif [ "$ECHO_CANCEL" = true ]; then
     run_echo_cancel
+elif [ "$QUIT_FLUSH" = true ]; then
+    run_quit_flush
 elif [ "$TWO_MEETINGS" = true ]; then
     run_one_meeting "[1/2]"
     log "Sleeping ${INTER_MEETING_COOLDOWN_S}s for WatchLoop cooldown before meeting 2"

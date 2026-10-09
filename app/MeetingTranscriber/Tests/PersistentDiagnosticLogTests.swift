@@ -335,6 +335,91 @@ final class PersistentDiagnosticLogTests: XCTestCase {
             return condition()
         }
 
+        /// What the child writes while it is being stopped still reaches the
+        /// file. A quit logs its budget lines right before the teardown stops
+        /// the streamer, so they are exactly that output. The stand-in prints
+        /// its last line when it is terminated, as a process that flushes on
+        /// SIGTERM does.
+        func test_streamer_stopKeepsWhatTheChildWritesWhileStopping() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerDrain")
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                logExecutable: URL(fileURLWithPath: "/bin/sh"),
+                logArguments: ["-c", "trap 'echo last-line; exit 0' TERM; echo ready; while :; do sleep 0.05; done"],
+            )
+            let file = tmp.appendingPathComponent(PersistentDiagnosticLog.logFileName(for: Date()))
+            try streamer.start()
+            XCTAssertTrue(
+                waitForCondition(timeout: 5) { (try? String(contentsOf: file))?.contains("ready") == true },
+                "test premise: the stand-in's output never reached the file",
+            )
+
+            streamer.stop()
+
+            XCTAssertTrue(
+                try (String(contentsOf: file)).contains("last-line"),
+                "a line the child wrote while being stopped was dropped",
+            )
+        }
+
+        /// A readability callback that has read the child's last line and not
+        /// yet appended it when `stop()` runs: the stop waits for it (within its
+        /// bound) before it closes the file, or the line is written to a closed
+        /// handle and lost. The hook holds the callback until the test has
+        /// started the stop.
+        func test_streamer_stopWaitsForACallbackThatHoldsTheLastLine() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerInFlight")
+            let holding = DispatchSemaphore(value: 0)
+            // Named rather than passed as a literal: as a trailing closure the
+            // formatter would bind it to another parameter.
+            let holdTheLastLine: @Sendable (Data) -> Void = { data in
+                guard String(bytes: data, encoding: .utf8)?.contains("last-line") == true else { return }
+                holding.signal()
+                Thread.sleep(forTimeInterval: 0.3)
+            }
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                logExecutable: URL(fileURLWithPath: "/bin/sh"),
+                logArguments: ["-c", "echo last-line; sleep 30"],
+                afterRead: holdTheLastLine,
+            )
+            let file = tmp.appendingPathComponent(PersistentDiagnosticLog.logFileName(for: Date()))
+            try streamer.start()
+            XCTAssertEqual(holding.wait(timeout: .now() + 5), .success, "test premise: no callback read the line")
+
+            streamer.stop()
+
+            let text = try String(contentsOf: file)
+            XCTAssertTrue(text.contains("last-line"), "the line a callback held while the stop ran was lost")
+        }
+
+        /// The wait in `stop()` is bounded, and the drain does not block: a
+        /// child that ignores SIGTERM (and holds the pipe open until it exits
+        /// on its own, three seconds later) must not hold the quit that stops
+        /// the streamer.
+        func test_streamer_stopIsBoundedWhenTheChildIgnoresTermination() throws {
+            let tmp = try makeTempDirectory(prefix: "StreamerDrainBound")
+            let streamer = try PersistentDiagnosticLog.Streamer(
+                logDirectory: tmp,
+                logExecutable: URL(fileURLWithPath: "/bin/sh"),
+                logArguments: ["-c", "trap '' TERM; echo ready; sleep 3"],
+            )
+            let file = tmp.appendingPathComponent(PersistentDiagnosticLog.logFileName(for: Date()))
+            try streamer.start()
+            XCTAssertTrue(
+                waitForCondition(timeout: 5) { (try? String(contentsOf: file))?.contains("ready") == true },
+                "test premise: the stand-in's output never reached the file",
+            )
+
+            let start = Date()
+            streamer.stop()
+
+            XCTAssertLessThan(
+                Date().timeIntervalSince(start), 1.5,
+                "stop() waited for a child that does not exit on SIGTERM",
+            )
+        }
+
         /// `/usr/bin/false` exits immediately with status 1 — a reliable
         /// crash-stub for the auto-restart path that doesn't need a real
         /// `log` daemon. Combined with `maxBackoff = 0.01` the whole loop
