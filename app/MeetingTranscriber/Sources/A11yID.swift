@@ -67,6 +67,10 @@ enum A11yID {
     static let micNameField = "micNameField"
     static let customVocabularyPathField = "customVocabularyPathField"
     static let whisperKitVocabularyPromptToggle = "whisperKitVocabularyPromptToggle"
+    static let whisperKitModelPicker = "whisperKitModelPicker"
+    static let whisperKitCustomRepoField = "whisperKitCustomRepoField"
+    static let whisperKitCustomVariantField = "whisperKitCustomVariantField"
+    static let whisperKitCustomModelFolderField = "whisperKitCustomModelFolderField"
     static let terminologyRulesEditor = "terminologyRulesEditor"
 
     /// Settings sidebar row for one tab (`settings-tab-<rawValue>`). The detail

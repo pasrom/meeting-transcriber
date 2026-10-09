@@ -279,9 +279,45 @@ final class AppSettings {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }
 
+    /// The stock variant picked in Settings. Stays a stock variant while a custom
+    /// model is in use, and is what an unfinished custom model falls back to.
     var whisperKitModel: String {
         didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
     }
+
+    /// Load `whisperKitCustomRepo`/`whisperKitCustomVariant` or the custom model
+    /// folder instead of `whisperKitModel`. Resolved by `whisperKitModelSelection`.
+    var whisperKitCustomModelEnabled: Bool {
+        didSet { defaults.set(whisperKitCustomModelEnabled, forKey: "whisperKitCustomModelEnabled") }
+    }
+
+    /// Hugging Face repository of the custom model, `owner/name`.
+    var whisperKitCustomRepo: String {
+        didSet {
+            defaults.set(whisperKitCustomRepo, forKey: "whisperKitCustomRepo")
+            refreshWhisperKitCustomModelValidation()
+        }
+    }
+
+    /// Variant folder inside `whisperKitCustomRepo`.
+    var whisperKitCustomVariant: String {
+        didSet {
+            defaults.set(whisperKitCustomVariant, forKey: "whisperKitCustomVariant")
+            refreshWhisperKitCustomModelValidation()
+        }
+    }
+
+    /// A model folder on disk; when set, it is used instead of the repository.
+    private(set) var whisperKitCustomModelFolderPath: String {
+        didSet { defaults.set(whisperKitCustomModelFolderPath, forKey: "whisperKitCustomModelFolderPath") }
+    }
+
+    private(set) var whisperKitCustomModelFolderBookmark: Data? {
+        didSet { defaults.set(whisperKitCustomModelFolderBookmark, forKey: "whisperKitCustomModelFolderBookmark") }
+    }
+
+    /// Not persisted: derived from the fields above and the folder's contents.
+    var whisperKitCustomModelValidation: WhisperKitCustomModelValidation
 
     /// Whisper transcription language. Empty string = auto-detect (maps to nil on WhisperKitEngine).
     var whisperLanguage: String {
@@ -309,6 +345,12 @@ final class AppSettings {
     /// Experimental opt-in: WhisperKit's prompt can reduce transcript completeness.
     var whisperKitVocabularyPromptEnabled: Bool {
         didSet { defaults.set(whisperKitVocabularyPromptEnabled, forKey: "whisperKitVocabularyPromptEnabled") }
+    }
+
+    func updateWhisperKitCustomModelFolder(path: String, bookmark: Data?) {
+        whisperKitCustomModelFolderPath = path
+        whisperKitCustomModelFolderBookmark = bookmark
+        refreshWhisperKitCustomModelValidation()
     }
 
     func updateCustomVocabularySelection(path: String, bookmark: Data?) {
@@ -603,6 +645,12 @@ final class AppSettings {
             .flatMap(TranscriptionEngineSetting.init(rawValue:))) ?? .whisperKit
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
+        whisperKitCustomModelEnabled = defaults.object(forKey: "whisperKitCustomModelEnabled") as? Bool ?? false
+        whisperKitCustomRepo = defaults.string(forKey: "whisperKitCustomRepo") ?? ""
+        whisperKitCustomVariant = defaults.string(forKey: "whisperKitCustomVariant") ?? ""
+        whisperKitCustomModelFolderPath = defaults.string(forKey: "whisperKitCustomModelFolderPath") ?? ""
+        whisperKitCustomModelFolderBookmark = defaults.data(forKey: "whisperKitCustomModelFolderBookmark")
+        whisperKitCustomModelValidation = .notConfigured
         whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
@@ -664,6 +712,7 @@ final class AppSettings {
         checkForUpdates = defaults.object(forKey: "checkForUpdates") as? Bool ?? true
         includePreReleases = defaults.object(forKey: "includePreReleases") as? Bool ?? false
         refreshCustomVocabularyValidation()
+        refreshWhisperKitCustomModelValidation()
     }
 
     /// Bag of values used during init to read all 5 tuning knobs in one go.
