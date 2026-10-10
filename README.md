@@ -81,7 +81,7 @@ flowchart TD
 
 ## Features
 
-- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp) — per app, off by default, and unlike the browser path it starts recording without a prompt
+- **Automatic meeting detection** — Recognizes Teams, Zoom, and Webex meetings via window title polling, opt-in browser meeting detection (Google Meet, Whereby, web Zoom/Teams in any Chromium browser) gated behind a recording-consent prompt, and opt-in mic-input detection for call apps without a reliable meeting signal (WeChat, Tencent Meeting, FaceTime, WhatsApp, or any other installed app added via "Add App…") — per app, off by default, and unlike the browser path it starts recording without a prompt
 - **Dual audio recording** — App audio ([CATapDescription](https://developer.apple.com/documentation/coreaudio/catap)) + microphone simultaneously
 - **On-device transcription** — Two engines, selectable in Settings:
   - [WhisperKit](https://github.com/argmaxinc/WhisperKit) — 99+ languages, ~1 GB model
@@ -227,6 +227,8 @@ When one capture channel goes silent while the other is still carrying audio for
 
 The tint follows the levels, and **Settings → Audio → Per-Channel Indicator** is what turns it on or off (default: on). Dual dBFS thresholds with hysteresis keep transient dips between syllables from resetting the debounce timer.
 
+The same section has an opt-in **"Rebuild a Silent App-Audio Capture"** toggle (default: off): when the app-audio channel sits at exact digital silence for a while despite buffers still arriving, it rebuilds the tap instead of only waiting for the notification above.
+
 Notifications do not follow the tint. A single channel is reported only once it stops delivering, either no buffers at all or buffers carrying nothing but digital zeroes, measured from what the capture layer records per buffer rather than from a level: a microphone whose owner is listening rather than talking is quiet, not broken, and is not reported. The separate "Recording Appears Silent" warning, for the case where *both* channels are quiet, is still decided from levels and can therefore still fire on a call in which nobody is speaking. How long the condition must last first is the **Warn after** slider (30–300 s, default 90 s), which applies whether or not the tint is switched on.
 
 If a permission problem coexists, the red exclamation badge takes precedence over the channel-silent tint.
@@ -249,8 +251,8 @@ Open Settings via the menu bar item or ⌘,.
 
 | Tab | What's in it |
 |---|---|
-| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp), detection timing, update checks |
-| **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator, echo cancellation (off by default) |
+| **General** | Record-only mode, apps to watch (Teams/Zoom/Webex/Browser/WeChat/Tencent Meeting/FaceTime/WhatsApp, or any other installed app via "Add App…"), detection timing, update checks |
+| **Audio** | Microphone device, voice activity detection (VAD), per-channel silence indicator (with an opt-in tap rebuild on a silent app-audio channel), echo cancellation (off by default) |
 | **Transcribe** | ASR engine (WhisperKit / Parakeet) and per-engine options (model, language, custom vocabulary), terminology normalization rules, live caption overlay (PoC) |
 | **Speakers** | Diarization, mic speaker name, known voices, recognition stats |
 | **Output** | LLM provider (Claude CLI / OpenAI-compatible / none), transcript-retention options, protocol language, output folder, custom prompt |

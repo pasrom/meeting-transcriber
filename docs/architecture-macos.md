@@ -267,6 +267,12 @@ State writes to `AppPaths.dataDir`; IPC + queue snapshots to `ipcDir`.
 | `tools/audiotap/Sources/CurrentLevel.swift` | Pure function: dBFS level read with staleness decay (stale tap → silence) |
 | `tools/audiotap/Sources/LevelPublisher.swift` | Cross-thread dBFS slot: audio callback writes, UI thread reads |
 | `tools/audiotap/Sources/ChannelSignalAges.swift` | How long ago a channel last delivered a buffer, and last delivered one carrying signal — a single dBFS reading can't tell "dead", "muted", and "quiet room" apart, ages can (feeds `ChannelFaultMonitor`) |
+| `tools/audiotap/Sources/SilentTrackObserver.swift` | Sensor: logs when the app track enters/leaves a run of exact zeros while buffers keep arriving, so a dying tap leaves a trail instead of only a finished silent file (issue #672) |
+| `tools/audiotap/Sources/SilentTrackWatchdogPolicy.swift` | Opt-in actuator's judgement: whether a logged zero run is worth rebuilding the app tap for, how often, whether it helped, and when to give up (issue #672 part 2; `AppSettings.silentTrackWatchdogEnabled`, off by default) |
+| `tools/audiotap/Sources/SilentTrackWatchdogLimits.swift` | The watchdog's public thresholds — user-facing copy and the policy both read from here so behaviour and copy can't drift apart |
+| `tools/audiotap/Sources/SilentTrackDiagnostics.swift` | Owns the watchdog's dedicated queue + single-read guard for HAL reads that can block, and the observer's state shared between the write and main queues |
+| `tools/audiotap/Sources/AppAudioCapture+SilentTrackWatchdog.swift` | Wiring for the watchdog: rebuilds the app tap/aggregate through the same restart path a device change uses |
+| `tools/audiotap/Sources/AppAudioCapture+SilentTrackDiagnostics.swift` | Log call sites for the silent-track instrumentation, split out to stay under the line cap |
 | `tools/audiotap/Sources/DebugRMSReporter.swift` | Throttled RMS accumulator/reporter for audio debug logging |
 | `tools/audiotap/Sources/Helpers.swift` | `machTicksToSeconds`, `getDefaultOutputDeviceUID`, `writeAllToFileHandle` |
 | `tools/audiotap/Sources/MicRestartPolicy.swift` | Pure decision logic for mic engine restart on device change |
@@ -417,7 +423,7 @@ AudioTapLib (CATapDescription)
 └─ Metadata: micDelay, actualSampleRate, actualChannels via AudioCaptureResult
 ```
 
-**Key:** CATapDescription requires NO Screen Recording permission (purple dot indicator only). Handles output device changes by recreating tap automatically.
+**Key:** CATapDescription is TCC-gated — it needs the `NSAudioCaptureUsageDescription` "Audio Recording" grant or, as a fallback, the Screen Recording grant; with neither, the tap returns `noErr` but captures silence, with no error and nothing logged (issue #524). Handles output device changes by recreating tap automatically.
 
 **Start order (issue #693):** `AudioCaptureSession.start()` opens the microphone first and the app tap second, and the order is load-bearing. Opening the input takes a Bluetooth headset out of A2DP into its call profile; with the tap opened first, the disturbance landed underneath an aggregate device that had been created and started but had not yet run its first IO cycle, and the tap then delivered nothing for the rest of the recording (no IO callback, zero bytes, no error). Measured with a throwaway probe that is not in this repository: 9 failures in 30 starts with the tap first, 0 in 30 with the microphone first, which bounds what is left rather than proving it gone. **The full argument, including what the order does and does not guarantee and the three accepted costs, is the doc comment on `AudioCaptureSession.start()`; it is kept in one place on purpose.** Downstream, the measured `micDelay` is now normally negative (the microphone leads), which `MicDelayNormalisation` turns into a padded app track and a reported delay of 0; two cases it does not cover are a dual-source recording whose `_mic.wav` turns out unreadable, where the raw negative value is still what gets reported, and a crash-recovered recording, which `DualSourceRecorder.recoverCrashedRecording` rebuilds with a hard-coded `micDelay: 0` and therefore does not realign at all.
 
@@ -679,7 +685,7 @@ AppSettings (UserDefaults)
 | Screen Recording | Meeting detection (window titles) | CGWindowListCopyWindowInfo |
 | Microphone | Mic recording | AVAudioEngine |
 | Accessibility | Mute detection, participant reading | Teams AX tree |
-| None | App audio capture | CATapDescription (purple dot only) |
+| Audio Recording (or Screen Recording as fallback) | App audio capture | CATapDescription; with neither grant, the tap captures silence with no error (issue #524) |
 
 ### Permission health check + badge overlay
 
