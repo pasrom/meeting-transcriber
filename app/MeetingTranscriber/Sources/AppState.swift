@@ -243,12 +243,7 @@ final class AppState {
             indicatorEnabled: { [settings] in settings.perChannelIndicatorEnabled },
         )
         self.liveTranscription = LiveTranscriptionCoordinator(
-            captions: liveCaptions,
-            liveEnabled: { [settings] in settings.liveTranscriptionEnabled },
-            engineSupportsLive: { [settings] in settings.transcriptionEngine.supportsLiveTranscription },
-            engineLanguage: { [settings] in settings.activeEngineLanguageOrNil },
-            verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
-            warmupQueue: warmupQueue,
+            captions: liveCaptions, settings: settings, warmupQueue: warmupQueue,
         )
         self.watching = WatchingController(
             settings: settings,
@@ -460,9 +455,10 @@ final class AppState {
         LiveCaptionsGate.overlayVisible(
             liveEnabled: settings.liveTranscriptionEnabled,
             engineLanguage: settings.activeEngineLanguageOrNil,
-            engineSupportsLive: settings.transcriptionEngine.supportsLiveTranscription,
+            engineSupportsLive: settings.liveEngineSupportsTranscription,
             isRecording: watching.isRecording,
             overlayEnabled: settings.liveCaptionsOverlayEnabled,
+            translateToEnglish: settings.liveTranslationEnabled,
         )
     }
 

@@ -10,6 +10,8 @@
 /// captions, regardless of the other inputs. `overlayEnabled` only gates the
 /// overlay window (`overlayVisible`); it is not a strategy input.
 ///
+/// **Whisper translation to English overrides language routing** and requires
+/// the engine-driven re-transcribe path. Otherwise:
 /// **The backend follows the active engine's EXPLICITLY configured language**
 /// (not auto-detect): `de` → German Nemotron streaming, `en` → English Parakeet
 /// EOU streaming. Both streaming sessions drive their FluidAudio models directly
@@ -41,18 +43,22 @@ enum LiveCaptionsGate {
     /// NOT pick a language-specific streaming model — it falls back to the
     /// engine-driven re-transcribe path.
     ///
+    /// Translation takes precedence over the language-specific streaming models.
     /// - Parameters:
     ///   - liveEnabled: master live-captions toggle.
     ///   - engineLanguage: the active engine's explicitly configured language
     ///     (ISO 639-1, e.g. `de`/`en`), or `nil` for auto-detect.
     ///   - engineSupportsLive: whether the active engine implements the
-    ///     in-memory `transcribeSamples` re-transcribe hook.
+    ///     in-memory `transcribeSamples` re-transcribe hook and its selected model is usable.
+    ///   - translateToEnglish: Whisper translation mode; never routes to an ASR-only streaming backend.
     static func strategy(
         liveEnabled: Bool,
         engineLanguage: String?,
         engineSupportsLive: Bool,
+        translateToEnglish: Bool = false,
     ) -> Strategy {
         guard liveEnabled else { return .none }
+        if translateToEnglish { return engineSupportsLive ? .reTranscribe : .none }
         guard let engineLanguage else { return engineSupportsLive ? .reTranscribe : .none }
         return engineLanguage == "en" ? .englishStreaming : .nemotronStreaming
     }
@@ -64,11 +70,13 @@ enum LiveCaptionsGate {
         liveEnabled: Bool,
         engineLanguage: String?,
         engineSupportsLive: Bool,
+        translateToEnglish: Bool = false,
     ) -> Bool {
         strategy(
             liveEnabled: liveEnabled,
             engineLanguage: engineLanguage,
             engineSupportsLive: engineSupportsLive,
+            translateToEnglish: translateToEnglish,
         ) != .none
     }
 
@@ -82,11 +90,13 @@ enum LiveCaptionsGate {
         engineSupportsLive: Bool,
         isRecording: Bool,
         overlayEnabled: Bool,
+        translateToEnglish: Bool = false,
     ) -> Bool {
         captionsAvailable(
             liveEnabled: liveEnabled,
             engineLanguage: engineLanguage,
             engineSupportsLive: engineSupportsLive,
+            translateToEnglish: translateToEnglish,
         ) && isRecording && overlayEnabled
     }
 }

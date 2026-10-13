@@ -4,6 +4,21 @@ import Foundation
 /// `AppSettings.swift` purely to keep that file under the `file_length` limit;
 /// there is no behavioural difference from declaring these inline.
 extension AppSettings {
+    var transcriptionConfiguration: TranscriptionConfiguration {
+        TranscriptionConfiguration(whisper: transcriptionEngine == .whisperKit
+            ? .init(modelVariant: whisperKitModel, language: whisperLanguageOrNil, outputMode: whisperOutputMode)
+            : nil)
+    }
+
+    var liveTranslationEnabled: Bool {
+        transcriptionEngine == .whisperKit && whisperOutputMode == .translateToEnglish
+    }
+
+    var liveEngineSupportsTranscription: Bool {
+        transcriptionEngine.supportsLiveTranscription
+            && transcriptionConfiguration.whisper?.translationUnavailable != true
+    }
+
     /// WhisperKit language as an optional value. Empty string means the engine
     /// should auto-detect the language.
     var whisperLanguageOrNil: String? {

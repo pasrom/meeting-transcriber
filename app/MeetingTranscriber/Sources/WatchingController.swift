@@ -247,6 +247,7 @@ final class WatchingController {
                     micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
                     verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
                     recordOnly: { [settings] in settings.recordOnly },
+                    transcriptionConfiguration: { [settings] in settings.transcriptionConfiguration },
                     // Decided per write, not per poll: the loop calls this once
                     // when a record-only recording is persisted, so a folder that
                     // cannot be reached is reported there (see the resolver).
@@ -473,6 +474,7 @@ final class WatchingController {
             micDeviceUID: settings.micDeviceUID.isEmpty ? nil : settings.micDeviceUID,
             verboseDiagnostics: { [settings] in settings.verboseDiagnostics },
             recordOnly: { [settings] in settings.recordOnly },
+            transcriptionConfiguration: { [settings] in settings.transcriptionConfiguration },
             // Same seam as the auto-watch loop above: per write, through the
             // shared resolver.
             recordOnlyDestination: { [pipeline] in

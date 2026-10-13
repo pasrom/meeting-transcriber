@@ -279,6 +279,10 @@ final class AppSettings {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: "transcriptionEngine") }
     }
 
+    var whisperOutputMode: WhisperOutputMode {
+        didSet { defaults.set(whisperOutputMode.rawValue, forKey: "whisperOutputMode") }
+    }
+
     var whisperKitModel: String {
         didSet { defaults.set(whisperKitModel, forKey: "whisperKitModel") }
     }
@@ -604,6 +608,8 @@ final class AppSettings {
         whisperKitModel = defaults.object(forKey: "whisperKitModel") as? String
             ?? "openai_whisper-large-v3-v20240930_turbo"
         whisperLanguage = defaults.object(forKey: "whisperLanguage") as? String ?? "de"
+        whisperOutputMode = defaults.string(forKey: "whisperOutputMode")
+            .flatMap(WhisperOutputMode.init(rawValue:)) ?? .original
         parakeetLanguage = defaults.object(forKey: "parakeetLanguage") as? String ?? ""
         customVocabularyPath = defaults.string(forKey: "customVocabularyPath") ?? ""
         customVocabularyBookmark = defaults.data(forKey: "customVocabularyBookmark")

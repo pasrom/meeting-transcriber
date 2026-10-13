@@ -258,6 +258,29 @@ Open Settings via the menu bar item or ⌘,.
 
 ---
 
+## English live captions and transcripts
+
+For a meeting mixing English and Chinese (or another supported source language):
+
+1. **Settings → Transcribe:** choose **WhisperKit**, a multilingual **Small**, **Large V2**
+   or **Large V3** model, and **Spoken language: Auto-detect**.
+2. Set **Whisper output: Translate to English**.
+3. Enable **live transcription** and **Show caption overlay**.
+4. **Settings → Output:** select **Protocol Language: English** and configure an LLM provider.
+
+Whisper translates audio directly into English, on device. The mode applies to both live
+caption updates and the saved transcript, so an appended Full Transcript is English too.
+**Large V3 Turbo cannot be used for translation.** The English Parakeet and multilingual
+Nemotron streaming backends are bypassed in this mode; latency depends on the selected
+Whisper model and your Mac. Short utterances and rapid language switching can reduce quality.
+
+The mode defaults to **Original language**. Translation replaces the original-language
+transcript; “Save raw transcript separately” saves the English engine output, not a second
+copy in the spoken languages. The selected Whisper task, source language and model are
+captured per recording/import and retained by queued jobs across restarts. Changes apply
+to the next recording/import. Live captions are provisional; the final transcript is
+decoded again from the recording and may differ.
+
 ## Output
 
 Files are saved to `~/Library/Application Support/MeetingTranscriber/protocols/`:

@@ -274,6 +274,7 @@ final class PipelineController {
         guard let engine = engineProvider?() else { return nil }
         return PipelineQueue(
             engine: engine,
+            transcriptionConfigurationProvider: { [settings] in settings.transcriptionConfiguration },
             diarizationFactory: { [self] in makeFluidDiarizer(mode: settings.diarizerMode) },
             diarizationFactoryWithMode: { [self] mode in makeFluidDiarizer(mode: mode) },
             protocolGeneratorFactory: { [self] in makeProtocolGenerator() },

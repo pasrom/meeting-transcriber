@@ -274,6 +274,7 @@ class PipelineQueue {
     /// `PipelineSnapshot.save`; tests inject substitutes to count writes or
     /// simulate a stalled `replaceItemAt`.
     let snapshotWriter: @Sendable ([PipelineJob], URL) throws -> Void
+    let transcriptionConfigurationProvider: () -> TranscriptionConfiguration
 
     /// Simple init for skeleton tests and basic queue usage.
     ///
@@ -296,6 +297,7 @@ class PipelineQueue {
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = nil
+        transcriptionConfigurationProvider = { .init() }
         self.diarizationFactory = nil
         self.diarizationFactoryWithMode = nil
         self.protocolGeneratorFactory = nil
@@ -381,6 +383,7 @@ class PipelineQueue {
     /// Full init with all processing dependencies.
     init(
         engine: any TranscribingEngine,
+        transcriptionConfigurationProvider: (() -> TranscriptionConfiguration)? = nil,
         diarizationFactory: @escaping () -> any DiarizationProvider,
         diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
@@ -411,6 +414,7 @@ class PipelineQueue {
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = engine
+        self.transcriptionConfigurationProvider = transcriptionConfigurationProvider ?? { engine.transcriptionConfiguration }
         self.diarizationFactory = diarizationFactory
         self.diarizationFactoryWithMode = diarizationFactoryWithMode
         self.protocolGeneratorFactory = protocolGeneratorFactory
@@ -484,6 +488,7 @@ class PipelineQueue {
     func enqueue(_ inputJob: PipelineJob) {
         var job = inputJob
         stampTranscriptOutputOptions(on: &job)
+        stampTranscriptionConfiguration(on: &job)
         jobs.append(job)
         eventLog.append(jobID: job.id, event: "enqueued", from: nil, to: job.state)
         saveSnapshot()

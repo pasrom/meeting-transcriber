@@ -24,6 +24,7 @@ import Observation
 @MainActor
 final class LiveTranscriptionCoordinator {
     private var controller: LiveTranscriptionController?
+    private var controllerConfiguration: TranscriptionConfiguration?
 
     /// Source of the currently-active engine. Set by `beginPrewarm`; nil before
     /// then (so `ensureController` safely no-ops if called early). Captures the
@@ -50,6 +51,7 @@ final class LiveTranscriptionCoordinator {
     private let liveEnabled: () -> Bool
     private let engineSupportsLive: () -> Bool
     private let engineLanguage: () -> String?
+    private let transcriptionConfiguration: () -> TranscriptionConfiguration
     private let verboseDiagnostics: () -> Bool
     private let makeController: ControllerFactory
 
@@ -76,6 +78,7 @@ final class LiveTranscriptionCoordinator {
         liveEnabled: @escaping () -> Bool,
         engineSupportsLive: @escaping () -> Bool,
         engineLanguage: @escaping () -> String? = { nil },
+        transcriptionConfiguration: @escaping () -> TranscriptionConfiguration = { .init() },
         verboseDiagnostics: @escaping () -> Bool,
         makeController: @escaping ControllerFactory = LiveTranscriptionCoordinator.makeDefaultController,
         warmupQueue: ModelWarmupQueue = ModelWarmupQueue(),
@@ -84,9 +87,22 @@ final class LiveTranscriptionCoordinator {
         self.liveEnabled = liveEnabled
         self.engineSupportsLive = engineSupportsLive
         self.engineLanguage = engineLanguage
+        self.transcriptionConfiguration = transcriptionConfiguration
         self.verboseDiagnostics = verboseDiagnostics
         self.makeController = makeController
         self.warmupQueue = warmupQueue
+    }
+
+    convenience init(captions: LiveCaptionsState, settings: AppSettings, warmupQueue: ModelWarmupQueue) {
+        self.init(
+            captions: captions,
+            liveEnabled: { settings.liveTranscriptionEnabled },
+            engineSupportsLive: { settings.liveEngineSupportsTranscription },
+            engineLanguage: { settings.activeEngineLanguageOrNil },
+            transcriptionConfiguration: { settings.transcriptionConfiguration },
+            verboseDiagnostics: { settings.verboseDiagnostics },
+            warmupQueue: warmupQueue,
+        )
     }
 
     private static func makeDefaultController(
@@ -116,6 +132,7 @@ final class LiveTranscriptionCoordinator {
             liveEnabled: liveEnabled(),
             engineLanguage: engineLanguage(),
             engineSupportsLive: engineSupportsLive(),
+            translateToEnglish: transcriptionConfiguration().whisper?.outputMode == .translateToEnglish,
         )
     }
 
@@ -153,7 +170,16 @@ final class LiveTranscriptionCoordinator {
         // async `prepare()`), so sinks attach and captions light up when the load
         // finishes. If it was never warmed, this recording gets no captions and
         // they come online at the next idle prewarm.
-        guard captionsEligible, let controller else { return }
+        guard captionsEligible, controller != nil else { return }
+        // The settings observer is scheduled asynchronously. A just-changed
+        // mode must not arm stale captions, but also must not cold-load a new
+        // model at the recording edge. Rewarm when this recording finishes.
+        if controllerConfiguration != transcriptionConfiguration() {
+            controller = nil
+            needsRewarmWhenIdle = true
+            return
+        }
+        guard let controller else { return }
         attachInFlight = true
         defer { attachInFlight = false }
         await controller.prepareForNextRecording()
@@ -200,6 +226,7 @@ final class LiveTranscriptionCoordinator {
             _ = liveEnabled()
             _ = engineSupportsLive()
             _ = engineLanguage()
+            _ = transcriptionConfiguration()
         } onChange: { [weak self] in
             Task { @MainActor in self?.handleSettingsChange() }
         }
@@ -240,18 +267,21 @@ final class LiveTranscriptionCoordinator {
     private func ensureController() -> LiveTranscriptionController? {
         if let existing = controller { return existing }
         guard let engine = engineProvider?() else { return nil }
-        let streamingEngine = engine as? any StreamingTranscribingEngine
+        let configuration = transcriptionConfiguration()
+        let streamingEngine = engine.session(for: configuration) as? any StreamingTranscribingEngine
         let language = engineLanguage()
         let strategy = LiveCaptionsGate.strategy(
             liveEnabled: liveEnabled(),
             engineLanguage: language,
             engineSupportsLive: engineSupportsLive(),
+            translateToEnglish: configuration.whisper?.outputMode == .translateToEnglish,
         )
         guard strategy != .none else { return nil }
         // Re-transcribe needs a streaming engine; the streaming backends don't.
         guard strategy != .reTranscribe || streamingEngine != nil else { return nil }
         let controller = makeController(streamingEngine, captions, language, verboseDiagnostics)
         self.controller = controller
+        controllerConfiguration = configuration
         // Route `prepare()` through the shared warm-up queue (see `warmupQueue`).
         // Bind it locally so the fire-and-forget Task doesn't capture `self`.
         let queue = warmupQueue

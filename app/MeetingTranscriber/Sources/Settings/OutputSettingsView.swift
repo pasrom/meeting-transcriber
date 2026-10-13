@@ -82,6 +82,7 @@ struct OutputSettingsView: View {
                     .accessibilityIdentifier(A11yID.includeFullTranscriptToggle)
                 Toggle("Save raw transcript separately", isOn: $settings.saveRawTranscriptSeparately)
                     .accessibilityIdentifier(A11yID.saveRawTranscriptToggle)
+                    .help("Saves the transcription engine's output. With Whisper translation enabled, this is English, not the original wording.")
 
                 Picker("LLM Provider", selection: $settings.protocolProvider) {
                     ForEach(ProtocolProvider.allCases, id: \.self) { provider in

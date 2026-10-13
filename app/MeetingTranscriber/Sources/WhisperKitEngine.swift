@@ -29,6 +29,36 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         }
     }
 
+    var outputMode: WhisperOutputMode = .original
+    var configuration: TranscriptionConfiguration.WhisperConfiguration {
+        .init(modelVariant: modelVariant, language: language, outputMode: outputMode)
+    }
+
+    /// Shares a warm decoder only when it belongs to the captured variant.
+    /// Await the shared load first, so launch prewarm and live prewarm remain single-flight.
+    func frozenEngine(for configuration: TranscriptionConfiguration.WhisperConfiguration) async -> WhisperKitEngine {
+        if modelVariant == configuration.modelVariant, decodingClient == nil {
+            await loadModel()
+        }
+        let frozen = WhisperKitEngine()
+        frozen.modelVariant = configuration.modelVariant
+        frozen.language = configuration.language
+        frozen.outputMode = configuration.outputMode
+        frozen.modelSource = modelSource
+        frozen.customVocabularyPath = customVocabularyPath
+        frozen.customVocabularyBookmark = customVocabularyBookmark
+        frozen.vocabularyPromptEnabled = vocabularyPromptEnabled
+        if modelVariant == configuration.modelVariant {
+            frozen.pipe = pipe
+            frozen.decodingClientOverride = decodingClientOverride
+            frozen.modelState = modelState
+            frozen.downloadProgress = downloadProgress
+        } else {
+            await frozen.loadModel()
+        }
+        return frozen
+    }
+
     var language: String?
     /// Path to the shared one-term-per-line vocabulary file. Whisper uses the
     /// terms as a soft decoder hint; unlike Parakeet CTC rescoring, it cannot
@@ -271,6 +301,10 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         logger.info("WhisperKit: model loaded successfully")
     }
 
+    var hasDecoder: Bool {
+        decodingClient != nil
+    }
+
     private var decodingClient: (any WhisperDecodingClient)? {
         decodingClientOverride ?? pipe
     }
@@ -304,6 +338,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 
     /// Transcribe a WAV file and return structured segments.
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
+        try validateOutputMode()
         try await ensureModel()
         guard let decodingClient else {
             throw TranscriptionError.modelNotLoaded
@@ -319,6 +354,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         let options = Self.decodingOptions(
             language: language,
             promptTokens: vocabularyPromptTokens(for: decodingClient),
+            outputMode: outputMode,
         )
 
         let results = await decodingClient.transcribeFile(
@@ -363,6 +399,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// segments) because the live overlay only renders one line at a time.
     /// Hallucination-filter logic matches `transcribeSegments`.
     func transcribeSamples(_ samples: [Float]) async throws -> String {
+        try validateOutputMode()
         try await ensureModel()
         guard let decodingClient else { throw TranscriptionError.modelNotLoaded }
         // The explicit experimental prompt choice applies to both saved and
@@ -370,6 +407,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         let options = Self.decodingOptions(
             language: language,
             promptTokens: vocabularyPromptTokens(for: decodingClient),
+            outputMode: outputMode,
         )
         let results = try await decodingClient.transcribeSamples(
             samples,
@@ -387,12 +425,21 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         return pieces.joined(separator: " ")
     }
 
+    private func validateOutputMode() throws {
+        guard !configuration.translationUnavailable else {
+            throw TranscriptionError.translationModelUnsupported
+        }
+    }
+
     // Build the WhisperKit `DecodingOptions` for a transcription run.
     // `language` is `nil` for "Auto-detect" and a BCP-47 code otherwise.
-    static func decodingOptions(language: String?, promptTokens: [Int]? = nil) -> DecodingOptions { // swiftlint:disable:this discouraged_optional_collection
+    static func decodingOptions(
+        language: String?, promptTokens: [Int]? = nil, outputMode: WhisperOutputMode = .original, // swiftlint:disable:this discouraged_optional_collection
+    ) -> DecodingOptions {
         // WhisperKit defaults `detectLanguage` to `!usePrefillPrompt` (= false),
         // so without this it skips detection and falls back to English (#339).
         DecodingOptions(
+            task: outputMode == .translateToEnglish ? .translate : .transcribe,
             language: language,
             detectLanguage: language == nil,
             wordTimestamps: false,
@@ -484,11 +531,13 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 enum TranscriptionError: LocalizedError {
     case modelNotLoaded
     case streamingNotSupported
+    case translationModelUnsupported
 
     var errorDescription: String? {
         switch self {
         case .modelNotLoaded: "WhisperKit model not loaded"
         case .streamingNotSupported: "This engine does not support sample-based live transcription"
+        case .translationModelUnsupported: "Translation to English requires a multilingual Whisper model other than Turbo. Choose Small, Large V2 or Large V3."
         }
     }
 }

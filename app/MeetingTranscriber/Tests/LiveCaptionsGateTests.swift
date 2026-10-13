@@ -60,6 +60,24 @@ final class LiveCaptionsGateTests: XCTestCase {
         )
     }
 
+    func testTranslationBypassesLanguageSpecificStreamingForEverySourceLanguage() {
+        for language in ["en", "zh", "de", nil] {
+            XCTAssertEqual(LiveCaptionsGate.strategy(
+                liveEnabled: true, engineLanguage: language, engineSupportsLive: true, translateToEnglish: true,
+            ), .reTranscribe)
+        }
+        XCTAssertEqual(LiveCaptionsGate.strategy(
+            liveEnabled: false, engineLanguage: "en", engineSupportsLive: true, translateToEnglish: true,
+        ), .none)
+        XCTAssertFalse(LiveCaptionsGate.captionsAvailable(
+            liveEnabled: true, engineLanguage: "en", engineSupportsLive: false, translateToEnglish: true,
+        ))
+        XCTAssertTrue(LiveCaptionsGate.overlayVisible(
+            liveEnabled: true, engineLanguage: "zh", engineSupportsLive: true,
+            isRecording: true, overlayEnabled: true, translateToEnglish: true,
+        ))
+    }
+
     // MARK: - captionsAvailable
 
     func testStreamingBackendsAvailableEvenWhenEngineUnsupported() {

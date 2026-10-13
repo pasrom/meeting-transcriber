@@ -13,7 +13,7 @@ import SwiftUI
 /// the bar back there, moving it only when it could not be reached (see
 /// `CaptionBarPlacement`).
 ///
-/// Uses a fixed-size panel (no `sizingOptions = .preferredContentSize`)
+/// Uses a fixed-size panel with `NSHostingView.sizingOptions` disabled
 /// because auto-sizing produced an infinite layout-feedback loop with the
 /// caption-bar content — the SwiftUI hierarchy's ideal size republished on
 /// every layout pass, NSHostingController called `setFrame`, which fired
@@ -156,6 +156,10 @@ final class LiveCaptionsWindowController {
         if let panel { return panel }
 
         let host = NSHostingView(rootView: LiveCaptionsOverlay(state: state))
+        // NSHostingView publishes content-size constraints by default. Caption
+        // updates then grow even this fixed-size panel, preserving its top edge
+        // and walking its bottom off-screen. Only the controller sizes the panel.
+        host.sizingOptions = []
         host.autoresizingMask = [.width, .height]
 
         let panel = NSPanel(

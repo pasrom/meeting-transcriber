@@ -52,6 +52,8 @@ class WatchLoop {
     /// Dynamic accessor — when true, skip the post-processing pipeline and
     /// instead write a `<basename>_meta.json` sidecar next to the recording.
     let recordOnly: () -> Bool
+    let transcriptionConfiguration: () -> TranscriptionConfiguration
+    private var recordingTranscriptionConfiguration: TranscriptionConfiguration?
     /// Dynamic accessor — destination for record-only output (WAVs + sidecar
     /// JSON). Returns a `(scope, writeDir)` pair so we can call
     /// `startAccessingSecurityScopedResource()` on the *bookmark-resolved
@@ -120,6 +122,7 @@ class WatchLoop {
         micDeviceUID: String? = nil,
         verboseDiagnostics: @escaping () -> Bool = { false },
         recordOnly: @escaping () -> Bool = { false },
+        transcriptionConfiguration: @escaping () -> TranscriptionConfiguration = { .init() },
         recordOnlyDestination: @escaping () -> RecordOnlyDestination = {
             .unscoped(AppPaths.recordingsDir)
         },
@@ -142,6 +145,7 @@ class WatchLoop {
         self.micDeviceUID = micDeviceUID
         self.verboseDiagnostics = verboseDiagnostics
         self.recordOnly = recordOnly
+        self.transcriptionConfiguration = transcriptionConfiguration
         self.recordOnlyDestination = recordOnlyDestination
         self.notifier = notifier
         self.nowProvider = nowProvider
@@ -241,6 +245,7 @@ class WatchLoop {
         // left to act on an answer, so the question must not stay open.
         declineParkedConsent()
 
+        recordingTranscriptionConfiguration = transcriptionConfiguration()
         let recorder = await recorderFactory()
         try recorder.start(
             source: source, micDeviceUID: micDeviceUID,
@@ -367,6 +372,7 @@ class WatchLoop {
         }
 
         let source = RecordingSource.forApp(pid: meeting.windowPID, noMic: noMic)
+        recordingTranscriptionConfiguration = transcriptionConfiguration()
         let recorder = await recorderFactory()
         try recorder.start(
             source: source,
@@ -493,6 +499,7 @@ class WatchLoop {
             micDelay: recording.micDelay,
             participants: participants,
             meetingStartTime: recording.recordingStartDate,
+            transcriptionConfiguration: recordingTranscriptionConfiguration,
         )
         pipelineQueue?.enqueue(job)
         logger.info("Enqueued pipeline job for: \(title, privacy: .private)")

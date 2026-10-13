@@ -182,7 +182,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
-        XCTAssertNoThrow(try body.find(text: "Language"))
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.whisperSpokenLanguagePicker))
     }
 
     func testWhisperKitModelPickerShownForWhisperKit() throws {
@@ -190,7 +190,7 @@ final class SettingsViewTests: XCTestCase { // swiftlint:disable:this type_body_
         settings.transcriptionEngine = .whisperKit
         let body = try makeTranscription(settings: settings).inspect()
         XCTAssertNoThrow(try body.find(text: "Model"))
-        XCTAssertNoThrow(try body.find(text: "Language"))
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.whisperSpokenLanguagePicker))
     }
 
     func testParakeetHidesLanguagePicker() throws {
