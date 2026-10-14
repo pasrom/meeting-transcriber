@@ -48,6 +48,8 @@ enum A11yID {
     static let protocolSection = "protocolSection"
     static let includeFullTranscriptToggle = "includeFullTranscriptToggle"
     static let saveRawTranscriptToggle = "saveRawTranscriptToggle"
+    static let openAIAPIKeyPlacementPicker = "openAIAPIKeyPlacementPicker"
+    static let openAIAPIKeyHeaderNameField = "openAIAPIKeyHeaderNameField"
     static let outputFolderSection = "outputFolderSection"
     static let vadSection = "vadSection"
     static let echoCancellationToggle = "echoCancellationToggle"

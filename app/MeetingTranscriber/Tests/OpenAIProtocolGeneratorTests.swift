@@ -178,12 +178,19 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         return URLSession(configuration: config)
     }
 
-    private func makeGenerator(session: URLSession, apiKey: String? = nil) -> OpenAIProtocolGenerator {
+    private func makeGenerator(
+        session: URLSession,
+        apiKey: String? = nil,
+        apiKeyPlacement: OpenAIAPIKeyPlacement = .bearerToken,
+        apiKeyHeaderName: String = "api-key",
+    ) -> OpenAIProtocolGenerator {
         OpenAIProtocolGenerator(
             endpoint: Self.testEndpoint,
             model: "test-model",
             language: "German",
             apiKey: apiKey,
+            apiKeyPlacement: apiKeyPlacement,
+            apiKeyHeaderName: apiKeyHeaderName,
             session: session,
         )
     }
@@ -347,14 +354,39 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
     }
 
+    func testGenerateSetsCustomAPIKeyHeaderWithoutBearerPrefix() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "api-key"), "secret-value")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return self.mockResponse(request, body: Data(Self.okSSE.utf8))
+        }
+
+        let gen = makeGenerator(
+            session: makeMockSession(),
+            apiKey: "secret-value",
+            apiKeyPlacement: .customHeader,
+            apiKeyHeaderName: "api-key",
+        )
+        _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+    }
+
     func testGenerateNoAuthHeaderWhenKeyNil() async throws {
         MockURLProtocol.handler = { request in
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            XCTAssertNil(request.value(forHTTPHeaderField: "api-key"))
             return self.mockResponse(request, body: Data(Self.okSSE.utf8))
         }
 
         let gen = makeGenerator(session: makeMockSession())
         _ = try await gen.generate(transcript: "Test", title: "Test", diarized: false)
+    }
+
+    func testCustomAPIKeyHeaderNameMustBeAValidNonContentTypeField() {
+        XCTAssertTrue(OpenAIProtocolGenerator.isValidAPIKeyHeaderName("api-key"))
+        XCTAssertTrue(OpenAIProtocolGenerator.isValidAPIKeyHeaderName("X-API_Key"))
+        XCTAssertFalse(OpenAIProtocolGenerator.isValidAPIKeyHeaderName(""))
+        XCTAssertFalse(OpenAIProtocolGenerator.isValidAPIKeyHeaderName("bad header"))
+        XCTAssertFalse(OpenAIProtocolGenerator.isValidAPIKeyHeaderName("Content-Type"))
     }
 
     // MARK: - max_tokens / max_completion_tokens negotiation
@@ -543,6 +575,44 @@ final class OpenAIProtocolGeneratorTests: XCTestCase { // swiftlint:disable:this
         } else {
             XCTFail("Expected success")
         }
+    }
+
+    func testTestConnectionSetsCustomAPIKeyHeaderWithoutBearerPrefix() async {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.absoluteString, "http://test.local/v1/models")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "api-key"), "secret-value")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+            return self.mockResponse(request, body: Data(#"{"data":[]}"#.utf8))
+        }
+
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1/chat/completions",
+            model: "test",
+            apiKey: "secret-value",
+            apiKeyPlacement: .customHeader,
+            apiKeyHeaderName: "api-key",
+            session: makeMockSession(),
+        )
+        guard case .success = result else {
+            XCTFail("Expected custom-header model request to succeed, got \(result)")
+            return
+        }
+    }
+
+    func testTestConnectionRejectsInvalidCustomAPIKeyHeaderName() async {
+        let result = await OpenAIProtocolGenerator.testConnection(
+            endpoint: "http://test.local/v1",
+            model: "test",
+            apiKey: "secret-value",
+            apiKeyPlacement: .customHeader,
+            apiKeyHeaderName: "Content-Type",
+            session: makeMockSession(),
+        )
+        guard case let .failure(error) = result else {
+            XCTFail("Expected an invalid-header failure")
+            return
+        }
+        XCTAssertTrue(error.localizedDescription.contains("Invalid API key header name"))
     }
 
     func testTestConnectionHTTPError() async {

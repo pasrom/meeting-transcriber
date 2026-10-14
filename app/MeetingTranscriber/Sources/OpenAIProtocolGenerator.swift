@@ -8,6 +8,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
     let endpoint: URL
     let model: String
     let apiKey: String?
+    let apiKeyPlacement: OpenAIAPIKeyPlacement
+    let apiKeyHeaderName: String
     let language: String
     /// Idle timeout (`URLRequest.timeoutInterval`): max time *between* received
     /// bytes. Catches a fully-stalled connection, but does NOT bound total time —
@@ -40,6 +42,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         model: String,
         language: String,
         apiKey: String? = nil,
+        apiKeyPlacement: OpenAIAPIKeyPlacement = .bearerToken,
+        apiKeyHeaderName: String = "api-key",
         timeoutSeconds: TimeInterval = 600,
         maxTotalSeconds: TimeInterval = 1800,
         maxOutputTokens: Int = 16000,
@@ -49,6 +53,8 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         self.model = model
         self.language = language
         self.apiKey = apiKey
+        self.apiKeyPlacement = apiKeyPlacement
+        self.apiKeyHeaderName = apiKeyHeaderName
         self.timeoutSeconds = timeoutSeconds
         self.maxTotalSeconds = maxTotalSeconds
         self.maxOutputTokens = maxOutputTokens
@@ -118,9 +124,12 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         var request = URLRequest(url: requestURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let apiKey, !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
+        try Self.setAPIKeyHeader(
+            apiKey,
+            placement: apiKeyPlacement,
+            headerName: apiKeyHeaderName,
+            on: &request,
+        )
         request.httpBody = bodyData
         request.timeoutInterval = timeoutSeconds
 
@@ -238,6 +247,38 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         return SSEChunk(content: content, finishReason: finishReason)
     }
 
+    /// Configure the key's HTTP header. Custom header names follow the HTTP
+    /// token grammar; Content-Type is reserved for the JSON request body.
+    private static func setAPIKeyHeader(
+        _ apiKey: String?,
+        placement: OpenAIAPIKeyPlacement,
+        headerName: String,
+        on request: inout URLRequest,
+    ) throws {
+        guard let apiKey, !apiKey.isEmpty else { return }
+
+        switch placement {
+        case .bearerToken:
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        case .customHeader:
+            let name = headerName.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isValidAPIKeyHeaderName(name) else {
+                throw ProtocolError.connectionFailed("Invalid API key header name")
+            }
+            request.setValue(apiKey, forHTTPHeaderField: name)
+        }
+    }
+
+    /// Return whether `name` is a valid HTTP field name that does not override
+    /// the JSON Content-Type header owned by this client.
+    static func isValidAPIKeyHeaderName(_ name: String) -> Bool {
+        let allowed = CharacterSet(charactersIn: "!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        return !name.isEmpty
+            && name.caseInsensitiveCompare("Content-Type") != .orderedSame
+            && name.unicodeScalars.allSatisfy(allowed.contains)
+    }
+
     /// Normalize a user-entered endpoint to the OpenAI API *base* URL (e.g.
     /// `http://host/v1`), from which the concrete `/chat/completions` and
     /// `/models` paths are derived.
@@ -258,7 +299,14 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
 
     /// Test connection to the API by querying available models.
     /// Returns model names on success.
-    static func testConnection(endpoint: String, model _: String, apiKey: String?, session: URLSession = .shared) async -> Result<[String], any Error> {
+    static func testConnection(
+        endpoint: String,
+        model _: String,
+        apiKey: String?,
+        apiKeyPlacement: OpenAIAPIKeyPlacement = .bearerToken,
+        apiKeyHeaderName: String = "api-key",
+        session: URLSession = .shared,
+    ) async -> Result<[String], any Error> {
         // Accept either the API base URL (.../v1) or the full chat-completions
         // URL (.../v1/chat/completions); both resolve to the same base + /models.
         guard let entered = URL(string: endpoint) else {
@@ -270,8 +318,15 @@ struct OpenAIProtocolGenerator: ProtocolGenerating {
         var request = URLRequest(url: modelsURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
-        if let apiKey, !apiKey.isEmpty {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        do {
+            try setAPIKeyHeader(
+                apiKey,
+                placement: apiKeyPlacement,
+                headerName: apiKeyHeaderName,
+                on: &request,
+            )
+        } catch {
+            return .failure(error)
         }
 
         do {
