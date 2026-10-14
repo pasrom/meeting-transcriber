@@ -349,6 +349,8 @@ final class PipelineController {
                 model: settings.openAIModel,
                 language: settings.protocolLanguage,
                 apiKey: settings.openAIAPIKey.isEmpty ? nil : settings.openAIAPIKey,
+                apiKeyPlacement: settings.openAIAPIKeyPlacement,
+                apiKeyHeaderName: settings.openAIAPIKeyHeaderName,
             )
 
         case .none:

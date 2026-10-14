@@ -70,6 +70,33 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertEqual(settings.protocolProvider, .openAICompatible)
     }
 
+    func testOpenAIAPIKeyPlacementPickerWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.protocolProvider = .openAICompatible
+        let view = OutputSettingsView(settings: settings)
+
+        let picker = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAIAPIKeyPlacementPicker)
+            .find(ViewType.Picker.self)
+        try picker.select(value: OpenAIAPIKeyPlacement.customHeader)
+
+        XCTAssertEqual(settings.openAIAPIKeyPlacement, .customHeader)
+    }
+
+    func testOpenAIAPIKeyHeaderNameFieldWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.protocolProvider = .openAICompatible
+        settings.openAIAPIKeyPlacement = .customHeader
+        let view = OutputSettingsView(settings: settings)
+
+        let field = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.openAIAPIKeyHeaderNameField)
+            .find(ViewType.TextField.self)
+        try field.setInput("api-key")
+
+        XCTAssertEqual(settings.openAIAPIKeyHeaderName, "api-key")
+    }
+
     // MARK: - Transcript output toggles
 
     func testIncludeFullTranscriptToggleWritesBackToSettings() throws {

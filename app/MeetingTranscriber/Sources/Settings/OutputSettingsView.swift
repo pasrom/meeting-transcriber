@@ -186,6 +186,34 @@ struct OutputSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
+        Picker("API Key Authentication", selection: $settings.openAIAPIKeyPlacement) {
+            ForEach(OpenAIAPIKeyPlacement.allCases, id: \.self) { placement in
+                Text(placement.label).tag(placement)
+            }
+        }
+        .accessibilityIdentifier(A11yID.openAIAPIKeyPlacementPicker)
+
+        if settings.openAIAPIKeyPlacement == .customHeader {
+            HStack {
+                Text("Header Name")
+                Spacer()
+                TextField("", text: $settings.openAIAPIKeyHeaderName)
+                    .frame(width: 200)
+                    .multilineTextAlignment(.trailing)
+                    .accessibilityIdentifier(A11yID.openAIAPIKeyHeaderNameField)
+            }
+            Text("Sends the API key unchanged in this HTTP header, e.g. api-key.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !OpenAIProtocolGenerator.isValidAPIKeyHeaderName(
+                settings.openAIAPIKeyHeaderName.trimmingCharacters(in: .whitespacesAndNewlines),
+            ) {
+                Text("Enter a valid HTTP header name other than Content-Type.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+
         HStack {
             Button {
                 testConnection()
@@ -279,6 +307,8 @@ struct OutputSettingsView: View {
                 endpoint: settings.openAIEndpoint,
                 model: settings.openAIModel,
                 apiKey: apiKey,
+                apiKeyPlacement: settings.openAIAPIKeyPlacement,
+                apiKeyHeaderName: settings.openAIAPIKeyHeaderName,
             )
             testingConnection = false
             switch result {
