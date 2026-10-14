@@ -18,6 +18,15 @@ extension AppAudioCapture {
         // Before both guards: a change the restart path drops still moves the
         // device a watchdog rebuild's tap is built on.
         noteOutputDeviceChangeForWatchdog()
+        // Before both guards too, for the same reason. A new default output is
+        // a new situation, so the anchor search starts over rather than staying
+        // parked on whatever fallback a previous stretch escaped to.
+        // Load-bearing for the case the search exists for: when the meeting app
+        // hands the default back to real hardware, the tap has to follow it
+        // there immediately. A change dropped while a restart is in flight
+        // must still reset, or that restart's next attempt resolves the old
+        // fallback position against a list now led by the new default.
+        anchorSearch.withLock { $0.resetToDefault() }
         guard isRunning else { return }
         let action = deviceChangeCoordinator.handle(.deviceChanged)
         guard action != .ignore else { return }
@@ -117,8 +126,9 @@ extension AppAudioCapture {
         onGiveUp?()
     }
 
-    /// Internal rather than private so the silent-track watchdog drives the
-    /// same restart path a device change does, not a copy of it.
+    /// Internal rather than private so the silent-track watchdog and the anchor
+    /// search (`+Anchor`) drive the same restart path a device change does, not
+    /// a copy of it.
     func applyAction(_ action: OutputDeviceChangeCoordinator.Action) {
         switch action {
         case .ignore:

@@ -20,6 +20,49 @@
             let health = state.rpcStateSnapshot().channelHealth
             XCTAssertNil(health.micFault)
             XCTAssertNil(health.appFault)
+            XCTAssertFalse(health.appDigitalSilence)
+        }
+
+        func testRollingDigitalSilenceReachesTheSnapshotWithoutReplacingNativeEvidence() throws {
+            let state = makeRPCTestState()
+            let recorder = MockRecorder()
+            recorder.micLevelDBFS = -80
+            recorder.appLevelDBFS = -100
+            recorder.appSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 0.1, secondsSinceLastEnergy: 2)
+            recorder.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 0.2, secondsSinceLastEnergy: 3)
+            recorder.appCaptureDigitallySilent = true
+            state.channelHealth.simulateStartForTests()
+
+            state.channelHealth.applyTick(recorder: recorder, now: t0)
+
+            let health = state.rpcStateSnapshot().channelHealth
+            XCTAssertTrue(health.appDigitalSilence)
+            XCTAssertEqual(health.appFault, "digitalSilence")
+            XCTAssertNil(health.micFault)
+            XCTAssertEqual(health.appSecondsSinceLastBuffer, 0.1)
+            XCTAssertEqual(health.appSecondsSinceLastEnergy, 2)
+            XCTAssertEqual(health.micSecondsSinceLastBuffer, 0.2)
+            XCTAssertEqual(health.micSecondsSinceLastEnergy, 3)
+            XCTAssertEqual(health.appLevelDBFS, -100)
+            XCTAssertEqual(health.micLevelDBFS, -80)
+
+            let json = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: JSONEncoder().encode(health)) as? [String: Any],
+            )
+            XCTAssertEqual(json["appDigitalSilence"] as? Bool, true)
+            XCTAssertEqual(json["appFault"] as? String, "digitalSilence")
+
+            recorder.appCaptureDigitallySilent = false
+            state.channelHealth.applyTick(recorder: recorder, now: t0.addingTimeInterval(1))
+            let recovered = state.rpcStateSnapshot().channelHealth
+            XCTAssertFalse(recovered.appDigitalSilence)
+            XCTAssertEqual(recovered.appFault, "digitalSilence", "the fault is history, the Boolean is live")
+
+            state.channelHealth.stop()
+            let stopped = state.rpcStateSnapshot().channelHealth
+            XCTAssertFalse(stopped.appDigitalSilence)
+            XCTAssertNil(stopped.appFault)
+            XCTAssertNil(stopped.appSecondsSinceLastEnergy)
         }
 
         func testTheSnapshotFollowsTheReportedFault() throws {
@@ -87,6 +130,7 @@
             XCTAssertNil(inactive.micFault)
             XCTAssertNil(inactive.appFault)
             XCTAssertNil(inactive.micSecondsSinceLastBuffer)
+            XCTAssertFalse(inactive.appDigitalSilence)
         }
     }
 #endif

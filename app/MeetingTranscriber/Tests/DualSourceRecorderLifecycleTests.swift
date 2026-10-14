@@ -31,6 +31,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         var appSilentTrackWatchdogGaveUp = false
         var appSignalAges: ChannelSignalAges = .unknown
         var micSignalAges: ChannelSignalAges = .unknown
+        var appCaptureDigitallySilent = false
         /// The configuration the recorder handed the factory, so a test can
         /// assert on the choices and write to the URLs it picked.
         var lastConfiguration: AudioCaptureConfiguration?
@@ -146,11 +147,13 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         let micURL = try startMicOnly(recorder: recorder, session: session)
         try AudioMixer.saveWAV(samples: [Float](repeating: 0.2, count: 16000), sampleRate: 16000, url: micURL)
         session.micTrack = micURL
+        session.appCaptureDigitallySilent = true
 
         let recording = try recorder.stop()
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: recording.mixPath.path))
         XCTAssertFalse(recorder.isRecording)
+        XCTAssertFalse(recorder.appCaptureDigitallySilent, "a stopped recording has no active capture verdict")
         XCTAssertEqual(
             try markerStems(in: dir), [],
             "a marker left beside a finished recording turns into a false crash on the next launch",
@@ -195,6 +198,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         session.appSilentTrackWatchdogGaveUp = true
         session.appSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 1, secondsSinceLastEnergy: 2)
         session.micSignalAges = ChannelSignalAges(secondsSinceLastBuffer: 3, secondsSinceLastEnergy: 4)
+        session.appCaptureDigitallySilent = true
 
         // Between recordings there is no session to ask, and silence plus "has
         // not given up" is the only safe answer: a spurious give-up would tell
@@ -208,6 +212,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         // the two apart, so the no-session answer has to be the absent one.
         XCTAssertEqual(recorder.appSignalAges, .unknown)
         XCTAssertEqual(recorder.micSignalAges, .unknown)
+        XCTAssertFalse(recorder.appCaptureDigitallySilent)
 
         try recorder.start(source: .micOnly)
 
@@ -224,6 +229,7 @@ final class DualSourceRecorderLifecycleTests: XCTestCase {
         XCTAssertEqual(recorder.appSignalAges.secondsSinceLastEnergy, 2)
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastBuffer, 3)
         XCTAssertEqual(recorder.micSignalAges.secondsSinceLastEnergy, 4)
+        XCTAssertTrue(recorder.appCaptureDigitallySilent)
     }
 
     // MARK: - Silent-track watchdog option (issue #672)

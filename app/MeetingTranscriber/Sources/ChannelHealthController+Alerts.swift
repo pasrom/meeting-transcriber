@@ -27,10 +27,13 @@ extension ChannelHealthController {
     /// does not go digitally silent while you are talking, and that is the case
     /// that cost a 62-minute interview 59 minutes of the other participant
     /// (issue #524).
+    /// The rolling app verdict uses the same urgency but different wording:
+    /// it needs no microphone corroboration and does not establish a cause.
     nonisolated static func captureAlert(
         channel: AudioChannel,
         fault: ChannelFault,
         everCarriedSignal: Bool,
+        rollingDigitalSilence: Bool = false,
     ) -> (title: String, body: String, urgency: NotificationUrgency) {
         if fault == .gaveUp {
             return gaveUpAlert(channel: channel)
@@ -38,10 +41,20 @@ extension ChannelHealthController {
         let suppressible = fault == .digitalSilence && channel == .mic
         return (
             "Capture Channel Silent",
-            faultMessage(channel: channel, fault: fault, everCarriedSignal: everCarriedSignal),
+            rollingDigitalSilence && channel == .app && fault == .digitalSilence
+                ? digitalSilenceMessage
+                : faultMessage(channel: channel, fault: fault, everCarriedSignal: everCarriedSignal),
             suppressible ? .standard : .timeSensitive,
         )
     }
+
+    /// The rolling verdict does not establish a cause or promise that a retry
+    /// is currently running: the capture layer may have exhausted its budget.
+    nonisolated static let digitalSilenceMessage =
+        "The app-audio channel contains mostly digital silence. If silence persists, compare "
+            + "the meeting app's output selection with the system output in "
+            + "\(SystemSettingsPaths.soundOutput). They may be using different output devices. "
+            + "Automatic recovery has a limited retry budget and may have stopped trying."
 
     /// What the user can actually do about each failure.
     ///
@@ -69,11 +82,11 @@ extension ChannelHealthController {
     /// remedy a user can apply instead.
     ///
     /// That message also carries no "while the microphone is still recording"
-    /// clause. `digitalSilence` needs corroboration from the other channel
-    /// before it is reported at all, so the clause would be true there by
+    /// clause. Age-based `digitalSilence` needs corroboration from the other
+    /// channel before it is reported, so the clause would be true there by
     /// construction; `noBuffers` is reported unconditionally, and in an app-only
     /// recording (`RecordingSource.appOnly`) there is no microphone, which made
-    /// the clause plainly false.
+    /// the clause plainly false. The rolling verdict uses its own copy above.
     ///
     /// **What to do comes before why.** A notification banner shows the first
     /// line or two and truncates the rest, so a message that diagnoses at length

@@ -49,6 +49,16 @@ public class AudioCaptureSession {
     /// unlike `appCaptureGaveUp`: the channel still captures, it captures
     /// zeros. Read from the same polling path.
     public private(set) var appSilentTrackWatchdogGaveUp = false
+
+    /// True while the app-audio tap is alive but its rolling window is mostly
+    /// zero samples (exact zeros, or buffers below one 16-bit step): what a
+    /// tap anchored where the meeting app does not play delivers, with no error
+    /// anywhere. Polled alongside the per-channel levels; see
+    /// `SilentTapWatchdog`.
+    public var appCaptureDigitallySilent: Bool {
+        appCapture?.isDeliveringDigitalSilence ?? false
+    }
+
     private var appFileHandle: FileHandle?
 
     /// Whether the microphone's output path was free when this start reached it.

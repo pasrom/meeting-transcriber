@@ -44,15 +44,20 @@ extension ChannelHealthController {
 
     /// The verdict that precedes a "Capture Channel Silent" or "Capture Channel
     /// Lost" notification, with the evidence it was reached on.
+    /// `fromRollingVerdict` marks an app `digitalSilence` that the capture
+    /// layer's rolling verdict reported before the age monitor did; the ages on
+    /// such a line need not be past the window.
     nonisolated static func faultLogLine(
         channel: AudioChannel,
         fault: ChannelFault,
         ages: ChannelSignalAges,
         elapsed: TimeInterval,
         window: TimeInterval,
+        fromRollingVerdict: Bool = false,
     ) -> String {
-        "Channel fault: channel=\(channel.rawValue) fault=\(fault.rawValue) \(describe(ages)) "
-            + "elapsed=\(seconds(elapsed)) window=\(seconds(window)), notifying"
+        "Channel fault: channel=\(channel.rawValue) fault=\(fault.rawValue)"
+            + (fromRollingVerdict ? " source=rollingVerdict" : "")
+            + " \(describe(ages)) elapsed=\(seconds(elapsed)) window=\(seconds(window)), notifying"
     }
 
     /// The verdict that precedes "Recording Appears Silent". Levels rather than

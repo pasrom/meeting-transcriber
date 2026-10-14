@@ -1,6 +1,14 @@
 import AudioTapLib
 import Foundation
 import Observation
+import os.log
+
+/// Channel-health events go to the same subsystem `PersistentDiagnosticLog`
+/// mirrors to `~/Library/Logs/MeetingTranscriber/`, so a recording that lost a
+/// channel leaves a record the user can export afterwards. Until this existed
+/// the controller logged nothing at all, and whether it had fired during a bad
+/// recording was simply unknowable after the fact.
+private let logger = Logger(subsystem: "com.meetingtranscriber", category: "ChannelHealth")
 
 // MARK: - ChannelHealthController
 
@@ -42,6 +50,14 @@ final class ChannelHealthController {
     /// `ChannelHealthMonitor` intentionally ignores (symmetric silence). Drives
     /// the menu-bar **full red** waveform (both halves tinted simultaneously).
     private(set) var recordingSilentActive: Bool = false
+
+    /// The capture layer's rolling verdict: at least 90% zero samples
+    /// across a full 120-second window, clearing at 50% or less. Already
+    /// windowed, so no extra debounce or microphone corroboration applies.
+    /// A listening user may never speak; this is evidence worth reporting,
+    /// not proof of a wrong output device. Notifications share `appFault`'s
+    /// per-recording silence policy rather than creating a parallel alert.
+    private(set) var appDigitalSilenceActive: Bool = false
 
     /// Pure state machine driven by the 10-Hz level poll while recording. Lives
     /// here (not on WatchLoop) so its lifecycle outlasts a single recording —
@@ -132,7 +148,7 @@ final class ChannelHealthController {
     /// Red tint for the menu bar's **bottom** half. See `micSilentOverlay` for
     /// why the flags are read before the topology is consulted.
     var appSilentOverlay: Bool {
-        let silent = appSilentActive || recordingSilentActive
+        let silent = appSilentActive || recordingSilentActive || appDigitalSilenceActive
         return indicatorEnabled() && channels.app && silent
     }
 
@@ -161,7 +177,6 @@ final class ChannelHealthController {
     /// Starts a ~10 Hz polling task that feeds the active recorder's per-channel
     /// levels into the monitors and flips the observable flags based on the
     /// resulting events. Idempotent: calling while already running is a no-op.
-    /// Skips entirely when the master toggle is off.
     ///
     /// `recorderProvider` is supplied by the caller (it resolves the live
     /// `WatchLoop.activeRecorder`) so the controller stays free of an AppState
@@ -260,6 +275,7 @@ final class ChannelHealthController {
         appFaultMonitor.reset()
         micFault = nil
         appFault = nil
+        appDigitalSilenceActive = false
         micAges = .unknown
         appAges = .unknown
         micLevelDBFS = nil
@@ -293,6 +309,13 @@ final class ChannelHealthController {
         let speechThreshold = channelHealthMonitor.speechThresholdDBFS
         if mic >= speechThreshold { lastSpeechAt[.mic] = now }
         if app >= speechThreshold { lastSpeechAt[.app] = now }
+        let digitallySilent = channels.app && recorder.appCaptureDigitallySilent
+        if appDigitalSilenceActive != digitallySilent {
+            appDigitalSilenceActive = digitallySilent
+            if !digitallySilent {
+                logger.info("The app-audio rolling digital-silence verdict cleared")
+            }
+        }
 
         // Before the monitors, because a terminal capture failure does not
         // depend on either monitor having something to say about it.
@@ -317,18 +340,34 @@ final class ChannelHealthController {
             // channel is actually broken is decided per tick, from the buffer
             // ages, in `notifyChannelFaults`.
 
-        case .recovered:
+        case let .recovered(channel):
             micSilentActive = false
             appSilentActive = false
+            logger.info(
+                "The \(String(describing: channel), privacy: .public) channel is carrying audio again",
+            )
 
         case .none:
             break
         }
 
         let silentEvent = silentRecordingMonitor.update(micDBFS: mic, appDBFS: app, now: now)
+        applySilentRecording(silentEvent, mic: mic, app: app)
+
+        return event
+    }
+
+    /// Handle the symmetric-silence monitor's verdict. Split from `applyTick`
+    /// purely for length; it has no callers of its own.
+    private func applySilentRecording(
+        _ silentEvent: SilentRecordingEvent?, mic: Double, app: Double,
+    ) {
         switch silentEvent {
         case .started:
             recordingSilentActive = true
+            // The app fault already explains this silent recording. Keep the
+            // level-driven tint, without a second notification about it.
+            guard !appDigitalSilenceActive else { return }
             log.notice(Self.silentRecordingLogLine(micDBFS: mic, appDBFS: app, window: silentRecordingMonitor.debounceSeconds))
             notifier.notify(
                 title: "Recording Appears Silent",
@@ -347,13 +386,11 @@ final class ChannelHealthController {
         case .none:
             break
         }
-
-        return event
     }
 
     /// Reports what is wrong with each channel this recording opened, at most
-    /// once per kind per channel, from the ages the capture layer records per
-    /// buffer plus the terminal give-up flag.
+    /// one silence report plus a terminal give-up per recording. Evidence comes
+    /// from native signal ages, the rolling app verdict, and the give-up flags.
     ///
     /// One pass over both, rather than a give-up pass and a fault pass with a
     /// guard between them. Two passes meant the precedence lived in the call
@@ -366,9 +403,15 @@ final class ChannelHealthController {
         for channel in [AudioChannel.mic, .app] {
             guard channel == .mic ? channels.mic : channels.app else { continue }
             let ages = channel == .mic ? micAges : appAges
-            guard let fault = updateFaultMonitor(
+            let rollingSilence = channel == .app && appDigitalSilenceActive
+            let monitorFault = updateFaultMonitor(
                 for: channel, ages: ages, recorder: recorder, elapsedSinceStart: elapsed, now: now,
-            ) else { continue }
+            )
+            guard let fault = monitorFault ?? (rollingSilence ? .digitalSilence : nil) else { continue }
+            // The rolling verdict bypasses the age monitor's debounce, but
+            // not its reporting policy: either source may report first, and
+            // the other catching up is not news.
+            guard Self.faultIsNews(fault, after: channel == .mic ? micFault : appFault) else { continue }
             switch channel {
             case .mic: micFault = fault
             case .app: appFault = fault
@@ -378,10 +421,32 @@ final class ChannelHealthController {
             let alert = Self.captureAlert(
                 channel: channel, fault: fault,
                 everCarriedSignal: ages.secondsSinceLastEnergy != nil,
+                rollingDigitalSilence: rollingSilence,
             )
             // Whether it was then posted is logged by the notifier, which decides that.
-            log.notice(Self.faultLogLine(channel: channel, fault: fault, ages: ages, elapsed: elapsed, window: faultWindow))
+            log.notice(Self.faultLogLine(
+                channel: channel, fault: fault, ages: ages, elapsed: elapsed, window: faultWindow,
+                fromRollingVerdict: monitorFault == nil,
+            ))
             notifier.notify(title: alert.title, body: alert.body, urgency: alert.urgency)
+        }
+    }
+
+    /// Whether a fault still tells the user something, given the one already
+    /// published for this channel in this recording. Two sources produce a
+    /// silence report for the app channel, the age monitor and the rolling
+    /// verdict, and this is the latch between them; within its own source the
+    /// age monitor already gates every kind to once. It mirrors that monitor's
+    /// precedence: one silence report per recording, `rebuildsExhausted`
+    /// saying more than a plain silence report and so covering a later one,
+    /// buffers then stopping altogether still worth reporting after it, and a
+    /// give-up always.
+    nonisolated static func faultIsNews(_ fault: ChannelFault, after published: ChannelFault?) -> Bool {
+        guard let published else { return true }
+        switch fault {
+        case .gaveUp, .rebuildsExhausted: return true
+        case .noBuffers: return published == .rebuildsExhausted
+        case .digitalSilence: return false
         }
     }
 
