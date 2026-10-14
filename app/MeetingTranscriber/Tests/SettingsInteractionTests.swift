@@ -98,6 +98,19 @@ final class SettingsInteractionTests: XCTestCase {
         XCTAssertFalse(settings.saveRawTranscriptSeparately)
     }
 
+    func testUseAITitleForFilenamesToggleWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.useAITitleForFilenames = false
+        let view = OutputSettingsView(settings: settings)
+
+        let toggle = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.useAITitleForFilenamesToggle)
+            .find(ViewType.Toggle.self)
+        try toggle.tap()
+
+        XCTAssertTrue(settings.useAITitleForFilenames)
+    }
+
     // MARK: - Stepper write-back
 
     func testPollIntervalStepperIncrementsSetting() throws {

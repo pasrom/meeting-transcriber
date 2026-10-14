@@ -200,7 +200,7 @@ enum ProtocolGenerator {
         return url
     }
 
-    private static let filenameFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmm")
+    nonisolated(unsafe) private static let filenameFormatter = DateFormatter.filenameStamp("yyyyMMdd_HHmm")
 
     /// Sanitize a title into a safe filename slug (path-traversal safe).
     /// Falls back to `"meeting"` if no allowed characters remain.
@@ -258,6 +258,107 @@ enum ProtocolGenerator {
     /// current time and no collision suffix. Thin wrapper over `basename`.
     static func filename(title: String, ext: String) -> String {
         "\(basename(title: title, startTime: Date(), shortID: "")).\(ext)"
+    }
+
+    /// Extract a meeting title from protocol markdown.
+    ///
+    /// Looks for the top-level `#` heading. If formatted as `# [Prefix] - [Title]`
+    /// (e.g. `# Meeting Protocol - Sprint Planning`), extracts the title component.
+    /// Strips enclosing brackets, quotes, markdown formatting, and whitespace.
+    /// Returns `nil` if no valid title is found or if the title is a placeholder
+    /// (e.g. `[Meeting Title]`).
+    static func extractTitle(from markdown: String) -> String? {
+        for line in markdown.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("# ") else { continue }
+            let header = trimmed.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            guard !header.isEmpty else { continue }
+
+            let separators = [" - ", " – ", " — ", ": "]
+            var candidate: String?
+            for sep in separators {
+                if let range = header.range(of: sep) {
+                    let suffix = String(header[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !suffix.isEmpty {
+                        candidate = suffix
+                        break
+                    }
+                }
+            }
+
+            let rawTitle = candidate ?? header
+            let cleaned = stripSurroundingPunctuation(rawTitle)
+            guard isValidTitle(cleaned) else { return nil }
+            return cleaned
+        }
+        return nil
+    }
+
+    private static func stripSurroundingPunctuation(_ text: String) -> String {
+        let trimChars = CharacterSet(charactersIn: "[]\"'*_`“”‘’")
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: trimChars)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let placeholderTitles: Set<String> = [
+        "meeting title",
+        "[meeting title]",
+        "meeting protocol",
+        "protocol",
+        "besprechungsprotokoll",
+        "protokol rapat",
+        "titel",
+        "[titel]",
+        "titel des meetings",
+        "[titel des meetings]",
+        "unknown",
+        "none",
+    ]
+
+    private static func isValidTitle(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let lower = text.lowercased()
+        if placeholderTitles.contains(lower) { return false }
+        if lower.hasPrefix("[") && lower.hasSuffix("]") { return false }
+        return true
+    }
+
+    /// Convert arbitrary text (e.g. meeting title) to a path-safe snake_case string.
+    /// Non-alphanumeric characters (spaces, hyphens, punctuation) are converted
+    /// to underscores, consecutive underscores are collapsed, leading/trailing
+    /// underscores are trimmed, and the result is lowercased.
+    /// Falls back to `"meeting"` if no alphanumeric characters remain.
+    static func toSnakeCase(_ text: String) -> String {
+        let stripped = stripExistingTimestampPrefix(text)
+        var result = ""
+        var prevWasUnderscore = false
+
+        for scalar in stripped.unicodeScalars {
+            if CharacterSet.alphanumerics.contains(scalar) {
+                result.append(String(scalar).lowercased())
+                prevWasUnderscore = false
+            } else {
+                if !prevWasUnderscore && !result.isEmpty {
+                    result.append("_")
+                    prevWasUnderscore = true
+                }
+            }
+        }
+
+        while result.hasSuffix("_") {
+            result.removeLast()
+        }
+
+        return result.isEmpty ? "meeting" : result
+    }
+
+    /// Build a filesystem basename from a meeting title in snake_case,
+    /// omitting the timestamp prefix. An optional `shortID` can be appended
+    /// to avoid collisions.
+    static func titleBasename(title: String, shortID: String = "") -> String {
+        let slug = toSnakeCase(title)
+        return [slug, shortID].filter { !$0.isEmpty }.joined(separator: "_")
     }
 }
 

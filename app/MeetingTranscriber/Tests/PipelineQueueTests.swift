@@ -2330,11 +2330,51 @@ final class PipelineQueueTests: XCTestCase {
         XCTAssertEqual(protocolGen.capturedMeetingStartTime, start)
     }
 
-    /// A job with no recorded meeting-start (reimport / orphan recovery) must
-    /// fall back to the enqueue time for the stamp and still produce a valid,
-    /// shortID-carrying basename — never an empty stamp or a crash.
+    /// When no protocol generator is configured, no AI title is generated,
+    /// so the meeting-start timestamped slug remains.
+    func testFallbackToMeetingStartTimestampBasenameWhenNoProtocolGenerated() async throws {
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: nil,
+        )
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: nil, stagingDir: tmpDir)
+        let start = try localDate(2026, 3, 4, 9, 15)
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Weekly Sync", appName: "Teams",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+            meetingStartTime: start,
+        )
+        q.enqueue(job)
+        await q.processNext()
+
+        let stem = "20260304_0915_weekly_sync_\(job.shortID)"
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        let fm = FileManager.default
+        XCTAssertTrue(
+            fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(stem).txt").path),
+            "without protocol generator, transcript must retain timestamp + shortID stem",
+        )
+    }
+
+    /// A job with no recorded meeting-start (reimport / orphan recovery) and no
+    /// protocol generator must fall back to the enqueue time for the stamp.
     func testBasenameFallsBackToEnqueuedAtWhenNoMeetingStart() async throws {
-        let (q, protocolGen) = makeStraightThroughQueue()
+        let engine = MockEngine()
+        engine.segmentsToReturn = [TimestampedSegment(start: 0, end: 5, text: "Hello")]
+        let diar = MockDiarization()
+        diar.resultToReturn = DiarizationResult(
+            segments: [.init(start: 0, end: 5, speaker: "SPEAKER_0")],
+            speakingTimes: ["SPEAKER_0": 5],
+            autoNames: [:],
+            embeddings: nil,
+        )
+        let q = makeCapturingQueue(engine: engine, diar: diar, protocolGen: nil, stagingDir: tmpDir)
         let audioPath = try createTestAudioFile(in: tmpDir)
         let job = PipelineJob(
             meetingTitle: "Reimport Test", appName: "Teams",
@@ -2351,9 +2391,48 @@ final class PipelineQueueTests: XCTestCase {
         let txt = tmpDir.appendingPathComponent("protocols").appendingPathComponent("\(expectedStem).txt")
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: txt.path),
-            "reimport job must stamp with enqueuedAt and keep the shortID, got stem: \(expectedStem)",
+            "reimport job without protocol gen must stamp with enqueuedAt and keep the shortID, got stem: \(expectedStem)",
         )
-        XCTAssertNil(protocolGen.capturedMeetingStartTime)
+    }
+
+    func testAIGeneratedTitleRenamesGenericAppRecordingToSnakeCaseWithoutTimestamp() async throws {
+        let (q, _) = makeStraightThroughQueue(stagingDir: tmpDir)
+        let start = try localDate(2026, 10, 14, 18, 0)
+        let audioPath = try createTestAudioFile(in: tmpDir)
+        let job = PipelineJob(
+            meetingTitle: "Google Chrome", appName: "Google Chrome",
+            mixPath: audioPath, appPath: nil, micPath: nil, micDelay: 0,
+            meetingStartTime: start,
+            useAITitleForFilenames: true,
+        )
+        q.enqueue(job)
+        await q.processNext()
+
+        let protocolsDir = tmpDir.appendingPathComponent("protocols")
+        let recordingsDir = tmpDir.appendingPathComponent("recordings")
+        let fm = FileManager.default
+
+        let expectedTitle = "google_chrome"
+        XCTAssertTrue(
+            fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(expectedTitle).md").path),
+            "protocol must be named with snake_cased meeting title without timestamp",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(expectedTitle).txt").path),
+            "transcript must be renamed with snake_cased meeting title without timestamp",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(expectedTitle)_mix.wav").path),
+            "mix audio must be renamed with snake_cased meeting title without timestamp",
+        )
+        XCTAssertTrue(
+            fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(expectedTitle)_16k.wav").path),
+            "16k audio must be renamed with snake_cased meeting title without timestamp",
+        )
+        // Verify old timestamped files are cleaned up
+        let oldStem = "20261014_1800_google_chrome_\(job.shortID)"
+        XCTAssertFalse(fm.fileExists(atPath: protocolsDir.appendingPathComponent("\(oldStem).txt").path))
+        XCTAssertFalse(fm.fileExists(atPath: recordingsDir.appendingPathComponent("\(oldStem)_mix.wav").path))
     }
 
     /// An engine that doesn't produce per-utterance timestamps (emitting one

@@ -461,6 +461,11 @@ final class AppSettings {
         didSet { defaults.set(saveRawTranscriptSeparately, forKey: "saveRawTranscriptSeparately") }
     }
 
+    /// Format output filenames using the AI-generated meeting title in snake_case without timestamps.
+    var useAITitleForFilenames: Bool {
+        didSet { defaults.set(useAITitleForFilenames, forKey: "useAITitleForFilenames") }
+    }
+
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
@@ -636,6 +641,7 @@ final class AppSettings {
         protocolLanguage = defaults.string(forKey: "protocolLanguage") ?? "German"
         includeFullTranscriptInProtocol = defaults.object(forKey: "includeFullTranscriptInProtocol") as? Bool ?? true
         saveRawTranscriptSeparately = defaults.object(forKey: "saveRawTranscriptSeparately") as? Bool ?? true
+        useAITitleForFilenames = defaults.object(forKey: "useAITitleForFilenames") as? Bool ?? false
 
         openAIEndpoint = defaults.object(forKey: "openAIEndpoint") as? String
             ?? Self.defaultOpenAIEndpoint

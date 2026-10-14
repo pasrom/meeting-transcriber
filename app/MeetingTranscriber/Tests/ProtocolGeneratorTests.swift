@@ -191,6 +191,111 @@ final class ProtocolGeneratorTests: XCTestCase {
         XCTAssertFalse(name.contains("/"), "Filename must not contain path separators")
     }
 
+    // MARK: - Snake Case & Title Basename
+
+    func testToSnakeCaseStandardTitle() {
+        XCTAssertEqual(ProtocolGenerator.toSnakeCase("Sprint Planning 24"), "sprint_planning_24")
+    }
+
+    func testToSnakeCaseHyphensAndPunctuation() {
+        XCTAssertEqual(
+            ProtocolGenerator.toSnakeCase("Sprint 24: Planning & Review (Q3)"),
+            "sprint_24_planning_review_q3",
+        )
+    }
+
+    func testToSnakeCaseMultipleSpacesAndDashes() {
+        XCTAssertEqual(
+            ProtocolGenerator.toSnakeCase("   Architecture   --   Design   "),
+            "architecture_design",
+        )
+    }
+
+    func testToSnakeCaseEmptyOrNonAlphanumericFallback() {
+        XCTAssertEqual(ProtocolGenerator.toSnakeCase("///"), "meeting")
+        XCTAssertEqual(ProtocolGenerator.toSnakeCase("   "), "meeting")
+    }
+
+    func testToSnakeCaseStripsExistingTimestampPrefix() {
+        XCTAssertEqual(
+            ProtocolGenerator.toSnakeCase("20261014_1200_Daily Standup"),
+            "daily_standup",
+        )
+    }
+
+    func testToSnakeCaseUnicodeAndDiacritics() {
+        XCTAssertEqual(
+            ProtocolGenerator.toSnakeCase("Pembahasan Anggaran 2026"),
+            "pembahasan_anggaran_2026",
+        )
+    }
+
+    func testTitleBasenameOmitsTimestamp() {
+        XCTAssertEqual(ProtocolGenerator.titleBasename(title: "Sprint Planning"), "sprint_planning")
+        XCTAssertEqual(
+            ProtocolGenerator.titleBasename(title: "Sprint Planning", shortID: "a1b2c3d4"),
+            "sprint_planning_a1b2c3d4",
+        )
+    }
+
+    // MARK: - AI Title Extraction
+
+    func testExtractTitleStandardHeading() {
+        let md = """
+        # Meeting Protocol - Sprint Planning
+        **Date:** 2026-10-14
+        ## Summary
+        Meeting summary.
+        """
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Sprint Planning")
+    }
+
+    func testExtractTitleWithBrackets() {
+        let md = "# Meeting Protocol - [Sprint Planning 24]\n**Date:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Sprint Planning 24")
+    }
+
+    func testExtractTitleWithColon() {
+        let md = "# Meeting Protocol: Architecture Review\n**Date:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Architecture Review")
+    }
+
+    func testExtractTitleWithEmDash() {
+        let md = "# Meeting Protocol — Q3 Roadmap Sync\n**Date:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Q3 Roadmap Sync")
+    }
+
+    func testExtractTitleWithEnDash() {
+        let md = "# Meeting Protocol – Q3 Roadmap Sync\n**Date:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Q3 Roadmap Sync")
+    }
+
+    func testExtractTitleDirectHeading() {
+        let md = "# Product Architecture Discussion\n**Date:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: md), "Product Architecture Discussion")
+    }
+
+    func testExtractTitleLocalized() {
+        let indonesian = "# Protokol Rapat - Pembahasan Anggaran\n**Tanggal:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: indonesian), "Pembahasan Anggaran")
+
+        let german = "# Besprechungsprotokoll - Budgetplanung 2026\n**Datum:** 2026-10-14"
+        XCTAssertEqual(ProtocolGenerator.extractTitle(from: german), "Budgetplanung 2026")
+    }
+
+    func testExtractTitleRejectsPlaceholders() {
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: "# Meeting Protocol - [Meeting Title]"))
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: "# Meeting Protocol - Meeting Title"))
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: "# Meeting Protocol"))
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: "# Protocol"))
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: "# Besprechungsprotokoll - [Titel]"))
+    }
+
+    func testExtractTitleNoHeadingReturnsNil() {
+        let text = "Just plain text without any markdown headings."
+        XCTAssertNil(ProtocolGenerator.extractTitle(from: text))
+    }
+
     // MARK: - Prompt Variable Substitution
 
     func testDefaultPromptContainsLanguagePlaceholder() {

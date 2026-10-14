@@ -423,10 +423,12 @@
                 let includeFullTranscriptInProtocol: Bool
                 /// Whether the completed job keeps a separate raw transcript file.
                 let saveRawTranscriptSeparately: Bool
+                let useAITitleForFilenames: Bool
 
                 static let empty = Self(
                     directory: nil, hasCustomDirectory: false, hasCustomPrompt: false,
                     includeFullTranscriptInProtocol: false, saveRawTranscriptSeparately: false,
+                    useAITitleForFilenames: false,
                 )
             }
 

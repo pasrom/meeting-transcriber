@@ -57,7 +57,7 @@ struct PipelineJob: Identifiable, Codable {
         String(id.uuidString.prefix(8).lowercased())
     }
 
-    let meetingTitle: String
+    var meetingTitle: String
     let appName: String
     /// nil when the job is a paired-import without a `_mix.wav` source — the
     /// pipeline mixes `appPath`+`micPath` directly to the workdir `mix_16k.wav`
@@ -132,6 +132,9 @@ struct PipelineJob: Identifiable, Codable {
     // See `includeFullTranscriptInProtocol`.
     // swiftlint:disable:next discouraged_optional_boolean
     var saveRawTranscriptSeparately: Bool?
+    // See `includeFullTranscriptInProtocol`.
+    // swiftlint:disable:next discouraged_optional_boolean
+    var useAITitleForFilenames: Bool?
     /// Diarizer mode that produced the *current* `speakerNamingDataByJob`
     /// entry. Set by `PipelineQueue` after diarisation completes (in the
     /// initial pipeline run and after `lateDiarization`). Used by the
@@ -267,6 +270,8 @@ struct PipelineJob: Identifiable, Codable {
         includeFullTranscriptInProtocol: Bool? = nil,
         // swiftlint:disable:next discouraged_optional_boolean
         saveRawTranscriptSeparately: Bool? = nil,
+        // swiftlint:disable:next discouraged_optional_boolean
+        useAITitleForFilenames: Bool? = nil,
     ) {
         self.id = UUID()
         self.meetingTitle = meetingTitle
@@ -287,6 +292,7 @@ struct PipelineJob: Identifiable, Codable {
         self.namingSlug = nil
         self.includeFullTranscriptInProtocol = includeFullTranscriptInProtocol
         self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
+        self.useAITitleForFilenames = useAITitleForFilenames
         self.usedDiarizerMode = nil
         self.autoSkipNaming = autoSkipNaming
     }

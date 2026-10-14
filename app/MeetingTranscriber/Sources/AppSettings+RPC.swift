@@ -96,6 +96,7 @@
                 hasCustomPrompt: FileManager.default.fileExists(atPath: AppPaths.customPromptFile.path),
                 includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
                 saveRawTranscriptSeparately: saveRawTranscriptSeparately,
+                useAITitleForFilenames: useAITitleForFilenames,
             )
         }
 

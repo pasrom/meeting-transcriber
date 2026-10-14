@@ -931,7 +931,7 @@ extension PipelineQueue {
         // only after a transcript exists, so namingSlug is set on every real
         // path; the fallback just keeps generation working if the job is gone.
         let job = jobs.first { $0.id == jobID }
-        let basename = job?.namingSlug
+        let initialBasename = job?.namingSlug
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
         let meetingStartTime = job?.meetingStartTime
         updateJobState(id: jobID, to: .generatingProtocol)
@@ -962,6 +962,28 @@ extension PipelineQueue {
             addWarning(id: jobID, "Protocol generation failed — transcript saved")
             return
         }
+
+        var basename = initialBasename
+        let outputOptions = transcriptOutputOptions(forJobID: jobID)
+        if outputOptions.useAITitleForFilenames, let extractedTitle = ProtocolGenerator.extractTitle(from: protocolMD) {
+            let titleSlug = ProtocolGenerator.toSnakeCase(extractedTitle)
+            let uniqueBasename = resolveUniqueBasename(
+                base: titleSlug,
+                shortID: shortID,
+                protocolsDir: protocolsDir,
+                currentBasename: initialBasename
+            )
+            if uniqueBasename != initialBasename {
+                basename = renameJobArtifacts(
+                    jobID: jobID,
+                    from: initialBasename,
+                    to: uniqueBasename,
+                    newTitle: extractedTitle,
+                    protocolsDir: protocolsDir
+                )
+            }
+        }
+
         let markdown = transcriptOutputOptions(forJobID: jobID).includeFullTranscriptInProtocol
             ? protocolMD + "\n\n---\n\n## Full Transcript\n\n" + transcript
             : protocolMD
@@ -977,6 +999,110 @@ extension PipelineQueue {
             logger.warning("[\(shortID, privacy: .public)] protocol_save_failed error=\(error.localizedDescription, privacy: .private)")
             addWarning(id: jobID, "Protocol was generated but could not be saved; the transcript was saved")
         }
+    }
+
+    /// Resolve a unique basename using the meeting title slug. If a file with
+    /// the base slug already exists, appends the shortID collision guard.
+    private func resolveUniqueBasename(
+        base: String,
+        shortID: String,
+        protocolsDir: URL,
+        currentBasename: String
+    ) -> String {
+        guard base != currentBasename else { return base }
+        let fm = FileManager.default
+        let candidateMD = protocolsDir.appendingPathComponent("\(base).md")
+        let candidateTXT = protocolsDir.appendingPathComponent("\(base).txt")
+        if !fm.fileExists(atPath: candidateMD.path) && !fm.fileExists(atPath: candidateTXT.path) {
+            return base
+        }
+        return [base, shortID].filter { !$0.isEmpty }.joined(separator: "_")
+    }
+
+    /// Renames all existing artifacts for a job from `oldBasename` to `newBasename`
+    /// when an AI-generated title is extracted from the protocol markdown.
+    ///
+    /// Updates the job's meetingTitle, namingSlug, transcriptPath, and relocated
+    /// audio paths on `PipelineJob`, and returns the active basename (`newBasename`
+    /// on success, `oldBasename` on failure).
+    @discardableResult
+    func renameJobArtifacts(
+        jobID: UUID,
+        from oldBasename: String,
+        to newBasename: String,
+        newTitle: String,
+        protocolsDir: URL
+    ) -> String {
+        guard oldBasename != newBasename else { return oldBasename }
+        let fm = FileManager.default
+        let shortID = PipelineJob.shortID(for: jobID)
+        let outputRoot = protocolsDir.deletingLastPathComponent()
+        let recordingsDir = outputRoot.appendingPathComponent("recordings")
+
+        var newTranscriptPath: URL?
+        let oldTxt = protocolsDir.appendingPathComponent("\(oldBasename).txt")
+        let newTxt = protocolsDir.appendingPathComponent("\(newBasename).txt")
+        if fm.fileExists(atPath: oldTxt.path) {
+            do {
+                if fm.fileExists(atPath: newTxt.path) {
+                    try fm.removeItem(at: newTxt)
+                }
+                try fm.moveItem(at: oldTxt, to: newTxt)
+                newTranscriptPath = newTxt
+                logger.info("[\(shortID, privacy: .public)] renamed_transcript from=\(oldTxt.lastPathComponent, privacy: .private) to=\(newTxt.lastPathComponent, privacy: .private)")
+            } catch {
+                logger.warning("[\(shortID, privacy: .public)] failed to rename transcript: \(error.localizedDescription)")
+            }
+        }
+
+        var newMixPath: URL?
+        var newAppPath: URL?
+        var newMicPath: URL?
+
+        if let contents = try? fm.contentsOfDirectory(at: recordingsDir, includingPropertiesForKeys: nil) {
+            for fileURL in contents {
+                let filename = fileURL.lastPathComponent
+                guard filename.hasPrefix(oldBasename) else { continue }
+                let suffix = String(filename.dropFirst(oldBasename.count))
+                let newTargetURL = recordingsDir.appendingPathComponent("\(newBasename)\(suffix)")
+                do {
+                    if fm.fileExists(atPath: newTargetURL.path) {
+                        try fm.removeItem(at: newTargetURL)
+                    }
+                    try fm.moveItem(at: fileURL, to: newTargetURL)
+                    logger.info("[\(shortID, privacy: .public)] renamed_recording_artifact from=\(filename, privacy: .private) to=\(newTargetURL.lastPathComponent, privacy: .private)")
+                    if suffix == RecordingFileSuffix.mix {
+                        newMixPath = newTargetURL
+                    } else if suffix == RecordingFileSuffix.app {
+                        newAppPath = newTargetURL
+                    } else if suffix == RecordingFileSuffix.mic {
+                        newMicPath = newTargetURL
+                    }
+                } catch {
+                    logger.warning("[\(shortID, privacy: .public)] failed to rename \(filename, privacy: .private): \(error.localizedDescription)")
+                }
+            }
+        }
+
+        if let idx = jobs.firstIndex(where: { $0.id == jobID }) {
+            jobs[idx].meetingTitle = newTitle
+            jobs[idx].namingSlug = newBasename
+            if let newTranscriptPath {
+                jobs[idx].transcriptPath = newTranscriptPath
+            }
+            let updatedMix = newMixPath ?? (jobs[idx].mixPath?.lastPathComponent.hasPrefix(oldBasename) == true ? recordingsDir.appendingPathComponent("\(newBasename)\(RecordingFileSuffix.mix)") : jobs[idx].mixPath)
+            let updatedApp = newAppPath ?? (jobs[idx].appPath?.lastPathComponent.hasPrefix(oldBasename) == true ? recordingsDir.appendingPathComponent("\(newBasename)\(RecordingFileSuffix.app)") : jobs[idx].appPath)
+            let updatedMic = newMicPath ?? (jobs[idx].micPath?.lastPathComponent.hasPrefix(oldBasename) == true ? recordingsDir.appendingPathComponent("\(newBasename)\(RecordingFileSuffix.mic)") : jobs[idx].micPath)
+
+            jobs[idx].recordRelocatedAudio(RelocatedAudioPaths(
+                mix: updatedMix,
+                app: updatedApp,
+                mic: updatedMic
+            ))
+            saveSnapshot()
+        }
+
+        return newBasename
     }
 
     // MARK: - VAD Preprocessing

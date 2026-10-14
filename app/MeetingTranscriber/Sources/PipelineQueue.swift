@@ -10,6 +10,7 @@ private let logger = Logger(subsystem: AppPaths.logSubsystem, category: "Pipelin
 struct TranscriptOutputOptions {
     let includeFullTranscriptInProtocol: Bool
     let saveRawTranscriptSeparately: Bool
+    let useAITitleForFilenames: Bool
 }
 
 /// Raw diarization output for one run of the diarize loop. `combined` is the
@@ -312,6 +313,7 @@ class PipelineQueue {
         let outputOptions = TranscriptOutputOptions(
             includeFullTranscriptInProtocol: true,
             saveRawTranscriptSeparately: true,
+            useAITitleForFilenames: false,
         )
         fallbackTranscriptOutputOptions = outputOptions
         transcriptOutputOptionsProvider = { outputOptions }
@@ -395,6 +397,7 @@ class PipelineQueue {
         micLabel: String = "Me",
         includeFullTranscriptInProtocol: Bool = true,
         saveRawTranscriptSeparately: Bool = true,
+        useAITitleForFilenames: Bool = false,
         transcriptOutputOptionsProvider: (() -> TranscriptOutputOptions)? = nil,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
@@ -435,6 +438,7 @@ class PipelineQueue {
         let outputOptions = TranscriptOutputOptions(
             includeFullTranscriptInProtocol: includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: saveRawTranscriptSeparately,
+            useAITitleForFilenames: useAITitleForFilenames,
         )
         fallbackTranscriptOutputOptions = outputOptions
         self.transcriptOutputOptionsProvider = transcriptOutputOptionsProvider ?? { outputOptions }
@@ -503,6 +507,8 @@ class PipelineQueue {
                 ?? fallbackTranscriptOutputOptions.includeFullTranscriptInProtocol,
             saveRawTranscriptSeparately: job.saveRawTranscriptSeparately
                 ?? fallbackTranscriptOutputOptions.saveRawTranscriptSeparately,
+            useAITitleForFilenames: job.useAITitleForFilenames
+                ?? fallbackTranscriptOutputOptions.useAITitleForFilenames,
         )
     }
 
@@ -516,6 +522,9 @@ class PipelineQueue {
         }
         if job.saveRawTranscriptSeparately == nil {
             job.saveRawTranscriptSeparately = outputOptions.saveRawTranscriptSeparately
+        }
+        if job.useAITitleForFilenames == nil {
+            job.useAITitleForFilenames = outputOptions.useAITitleForFilenames
         }
     }
 
