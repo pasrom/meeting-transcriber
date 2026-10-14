@@ -197,7 +197,7 @@ struct OutputSettingsView: View {
             HStack {
                 Text("Header Name")
                 Spacer()
-                TextField("api-key", text: $settings.openAIAPIKeyHeaderName)
+                TextField("", text: $settings.openAIAPIKeyHeaderName)
                     .frame(width: 200)
                     .multilineTextAlignment(.trailing)
                     .accessibilityIdentifier(A11yID.openAIAPIKeyHeaderNameField)
