@@ -92,7 +92,7 @@ struct OutputSettingsView: View {
                 providerConfigView
 
                 Picker("Protocol Language", selection: $settings.protocolLanguage) {
-                    ForEach(AppSettings.protocolLanguages, id: \.self) { lang in
+                    ForEach(languagePickerOptions, id: \.self) { lang in
                         Text(lang).tag(lang)
                     }
                 }
@@ -298,6 +298,10 @@ struct OutputSettingsView: View {
                 connectionTestResult = .failure(error.localizedDescription)
             }
         }
+    }
+
+    private var languagePickerOptions: [String] {
+        OutputSettingsLogic.mergePickerOptions(available: AppSettings.protocolLanguages, selected: settings.protocolLanguage)
     }
 
     private var modelPickerOptions: [String] {

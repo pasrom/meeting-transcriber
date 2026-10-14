@@ -93,6 +93,14 @@ final class OutputSettingsViewTests: XCTestCase {
         XCTAssertNoThrow(try view.inspect())
     }
 
+    func testViewRendersWithIndonesianLanguageSelected() throws {
+        let defaults = makeIsolatedDefaults()
+        let settings = AppSettings(defaults: defaults)
+        settings.protocolLanguage = "Indonesian"
+        let view = OutputSettingsView(settings: settings)
+        XCTAssertNoThrow(try view.inspect())
+    }
+
     // MARK: - Helpers
 
     private func makeIsolatedDefaults() -> UserDefaults {

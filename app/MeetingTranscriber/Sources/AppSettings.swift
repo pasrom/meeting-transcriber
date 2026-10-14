@@ -464,9 +464,9 @@ final class AppSettings {
     static let protocolLanguages = [
         "German", "English", "French", "Spanish", "Italian",
         "Dutch", "Portuguese", "Japanese", "Chinese", "Korean",
-        "Russian", "Arabic", "Turkish", "Hindi", "Swedish",
-        "Danish", "Finnish", "Polish", "Czech", "Greek",
-        "Hungarian", "Romanian",
+        "Russian", "Arabic", "Turkish", "Hindi", "Indonesian",
+        "Swedish", "Danish", "Finnish", "Polish", "Czech",
+        "Greek", "Hungarian", "Romanian",
     ]
 
     #if !APPSTORE

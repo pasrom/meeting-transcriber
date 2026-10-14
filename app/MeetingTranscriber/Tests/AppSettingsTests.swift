@@ -351,6 +351,30 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(fresh.protocolProvider, .openAICompatible)
     }
 
+    func testProtocolLanguageDefault() {
+        XCTAssertEqual(settings.protocolLanguage, "German")
+    }
+
+    func testProtocolLanguagePersistence() {
+        settings.protocolLanguage = "Indonesian"
+        XCTAssertEqual(defaults.string(forKey: "protocolLanguage"), "Indonesian")
+
+        let fresh = AppSettings(defaults: defaults)
+        XCTAssertEqual(fresh.protocolLanguage, "Indonesian")
+    }
+
+    func testProtocolLanguagesIncludesIndonesian() {
+        XCTAssertTrue(
+            AppSettings.protocolLanguages.contains("Indonesian"),
+            "Indonesian missing from protocolLanguages list"
+        )
+    }
+
+    func testProtocolLanguagesContainsNoDuplicates() {
+        let languages = AppSettings.protocolLanguages
+        XCTAssertEqual(languages.count, Set(languages).count, "protocolLanguages contains duplicate entries")
+    }
+
     func testTranscriptOutputOptionsDefaultToEnabled() {
         XCTAssertTrue(settings.includeFullTranscriptInProtocol)
         XCTAssertTrue(settings.saveRawTranscriptSeparately)
