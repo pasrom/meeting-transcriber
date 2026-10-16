@@ -244,7 +244,6 @@ extension PipelineQueue {
             jobID: job.id, transcript: transcript, title: job.meetingTitle,
             protocolsDir: transcriptPath.deletingLastPathComponent(),
         )
-        stopElapsedTimer()
         updateJobState(id: job.id, to: .done)
         return true
     }

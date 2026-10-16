@@ -176,7 +176,7 @@ extension SpeakerNamingSession {
             return
         }
 
-        delegate.namingStageDidStart(jobID: jobID)
+        delegate.updateJobState(id: jobID, to: .diarizing)
 
         do {
             let title = job.meetingTitle
@@ -186,7 +186,6 @@ extension SpeakerNamingSession {
                 isDualSource: namingData.isDualSource,
                 speakerCount: speakerCount, title: title,
             )
-            delegate.namingStageDidEnd()
 
             // Dual-track always yields a combined result (the merge, or the
             // app-only / mic-only single-track fallback); single-source sets it
@@ -239,7 +238,6 @@ extension SpeakerNamingSession {
             }
         } catch {
             logger.error("Late re-diarization failed: \(error.localizedDescription, privacy: .public)")
-            delegate.namingStageDidEnd()
             delegate.updateJobState(id: jobID, to: .speakerNamingPending)
         }
     }

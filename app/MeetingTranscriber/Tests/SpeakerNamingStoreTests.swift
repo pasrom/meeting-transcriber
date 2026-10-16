@@ -90,7 +90,7 @@ final class SpeakerNamingStoreTests: XCTestCase {
     func test_saveThenLoad_survivesNonConformingFloats() throws {
         let store = SpeakerNamingStore(outputDir: tmpDir)
         let slug = "nan_test"
-        try store.save(makeData(embeddings: ["SPEAKER_0": [.nan, .infinity, -.infinity, 0.5]]), slug: slug)
+        try store.save(makeData(embeddings: ["SPEAKER_0": [.nan, .infinity, -Float.infinity, 0.5]]), slug: slug)
 
         let loaded = try XCTUnwrap(store.load(slug: slug))
         let emb = try XCTUnwrap(loaded.embeddings["SPEAKER_0"])

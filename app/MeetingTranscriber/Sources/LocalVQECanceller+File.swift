@@ -210,11 +210,15 @@ struct WindowAccumulator {
         let refRMS = (refEnergy / n).squareRoot()
         let micRMS = (micEnergy / n).squareRoot()
         let outRMS = (outEnergy / n).squareRoot()
+        let referenceDBFS: Double = refRMS > 0 ? 20 * log10(refRMS) : -120
+        // Same arithmetic as `EchoReductionVerdict.reductionDb`, on running
+        // sums rather than on buffers the streaming path never holds whole.
+        let safeMicRMS: Double = max(micRMS, 1e-12)
+        let safeOutRMS: Double = max(outRMS, 1e-12)
+        let reductionDb: Double = 20 * log10(safeMicRMS / safeOutRMS)
         return EchoCancellationWindow(
-            referenceDBFS: Float(refRMS > 0 ? 20 * log10(refRMS) : -120),
-            // Same arithmetic as `EchoReductionVerdict.reductionDb`, on running
-            // sums rather than on buffers the streaming path never holds whole.
-            reductionDb: Float(20 * log10(max(micRMS, 1e-12) / max(outRMS, 1e-12))),
+            referenceDBFS: Float(referenceDBFS),
+            reductionDb: Float(reductionDb),
         )
     }
 

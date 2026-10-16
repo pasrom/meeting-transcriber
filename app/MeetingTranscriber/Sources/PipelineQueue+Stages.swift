@@ -231,7 +231,6 @@ extension PipelineQueue {
                 ctx: ctx, workDir: workDir, outputDir: outputDir,
             )
         } catch is CancellationError {
-            stopElapsedTimer()
             // Cleared here too, not only in the branch below. The set is what
             // tells a later generic error apart from a cancellation, so an ID
             // left in it outlives the job it described for the rest of the
@@ -241,7 +240,6 @@ extension PipelineQueue {
             logger.info("Job \(ctx.jobID) cancelled")
             // Job already removed by cancelJob()
         } catch {
-            stopElapsedTimer()
             if cancelledJobIDs.remove(ctx.jobID) != nil {
                 logger.info("Job \(ctx.jobID) cancelled")
             } else {
@@ -436,7 +434,6 @@ extension PipelineQueue {
         _ ctx: JobContext, engine: any TranscribingEngine, workDir: URL,
     ) async throws -> TranscriptionOutput {
         updateJobState(id: ctx.jobID, to: .transcribing)
-        startElapsedTimer()
         logger.info("[\(ctx.shortID, privacy: .public)] transcription_start title=\(ctx.title, privacy: .private)")
 
         // Snapshot terminology once per job. A user edit while either track is
@@ -487,8 +484,6 @@ extension PipelineQueue {
             // to annotate.
             transcript = segments.transcriptText(note: nil)
         }
-
-        stopElapsedTimer()
 
         let segCount = cachedSegments?.count ?? 0
         let totalSecs = cachedSegments?.last?.end ?? 0
@@ -560,7 +555,6 @@ extension PipelineQueue {
         }
 
         updateJobState(id: ctx.jobID, to: .diarizing)
-        startElapsedTimer()
         do {
             // Inside the block on purpose: preparing the mix is part of
             // diarizing, and this catch is what keeps a diarization problem from
@@ -891,7 +885,6 @@ extension PipelineQueue {
             )
         }
 
-        stopElapsedTimer()
         if let namingData = naming.speakerNamingDataByJob[ctx.jobID] {
             updateJobState(id: ctx.jobID, to: .speakerNamingPending)
             // Auto-pop the dialog now that the job is in the right state.
@@ -935,8 +928,6 @@ extension PipelineQueue {
             ?? Self.namingSlug(title: title, jobID: jobID, startTime: Date())
         let meetingStartTime = job?.meetingStartTime
         updateJobState(id: jobID, to: .generatingProtocol)
-        startElapsedTimer()
-        defer { stopElapsedTimer() }
         let protocolMD: String
         do {
             let diarized = transcript.range(

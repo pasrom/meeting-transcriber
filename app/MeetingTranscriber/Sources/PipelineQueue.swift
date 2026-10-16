@@ -154,8 +154,6 @@ class PipelineQueue {
     /// PipelineQueue+Stages.swift reads and writes it.
     var vad: FluidVAD?
 
-    /// Elapsed seconds since the current pipeline stage started.
-    private(set) var activeJobElapsed: TimeInterval = 0
     /// Internal setter (not `private(set)`) because `processNext` in
     /// PipelineQueue+Stages.swift clears this flag across the file boundary.
     var isProcessing = false
@@ -171,13 +169,12 @@ class PipelineQueue {
     /// When the current `.transcribing`/`.diarizing`/`.generatingProtocol` state
     /// was entered, per job — so `updateJobState` can record the state's duration
     /// on exit (keyed by job to stay correct if transitions ever interleave).
-    private var stageStartByJob: [UUID: ContinuousClock.Instant] = [:]
+    @ObservationIgnored private var stageStartByJob: [UUID: ContinuousClock.Instant] = [:]
     /// Audio length (seconds) each job processed, captured when transcription
     /// completes, so stage durations can be normalised into an RTF.
     /// Internal (not private) because `transcribe` in PipelineQueue+Stages.swift stamps it.
     var jobAudioSeconds: [UUID: Double] = [:]
 
-    private var elapsedTimer: Task<Void, Never>?
     private var processTask: Task<Void, Never>?
     /// Internal (not private) because `processNext` in PipelineQueue+Stages.swift
     /// reads this to distinguish a cancellation from a real pipeline error.
@@ -803,27 +800,14 @@ class PipelineQueue {
         jobs[index].echo?.removed = removed
     }
 
-    /// Reset the elapsed timer for a new pipeline stage.
-    /// Internal (not private) because the stage methods in PipelineQueue+Stages.swift call it.
-    func startElapsedTimer() {
-        elapsedTimer?.cancel()
-        activeJobElapsed = 0
-        elapsedTimer = Task { [weak self] in
-            let start = ContinuousClock.now
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(1))
-                let elapsed = ContinuousClock.now - start
-                self?.activeJobElapsed = Double(elapsed.components.seconds)
-                    + Double(elapsed.components.attoseconds) / 1e18
-            }
-        }
-    }
-
-    /// Stop the elapsed timer.
-    /// Internal (not private) because the stage methods in PipelineQueue+Stages.swift call it.
-    func stopElapsedTimer() {
-        elapsedTimer?.cancel()
-        elapsedTimer = nil
+    /// Sample this job's current stage directly. Naming follow-ups may overlap
+    /// another job, so they must not reset or stop a shared elapsed counter.
+    /// Ignoring the stage-start dictionary keeps clock reads out of SwiftUI
+    /// observation; the native menu updater owns the changing text.
+    func elapsedSeconds(forJobID id: UUID, at instant: ContinuousClock.Instant = ContinuousClock.now) -> TimeInterval {
+        guard let start = stageStartByJob[id] else { return 0 }
+        let elapsed = instant - start
+        return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     }
 
     // MARK: - Stage timing metrics
@@ -1043,17 +1027,5 @@ extension PipelineQueue: SpeakerNamingSessionDelegate {
         // holds nothing would take the front of the queue. Records rather than
         // overwrites; see `previousSidecarOutputDirs`.
         if let wroteSidecarsIn { jobs[idx].recordSidecarOutputDir(wroteSidecarsIn) }
-    }
-
-    /// Enter the diarizing stage for a late re-run: transition + start the
-    /// menu's elapsed timer (in that order, matching the original inline flow).
-    func namingStageDidStart(jobID: UUID) {
-        updateJobState(id: jobID, to: .diarizing)
-        startElapsedTimer()
-    }
-
-    /// Leave a timed naming stage.
-    func namingStageDidEnd() {
-        stopElapsedTimer()
     }
 }

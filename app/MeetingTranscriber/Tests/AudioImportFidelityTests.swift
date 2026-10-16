@@ -258,7 +258,11 @@ final class AudioImportFidelityTests: XCTestCase {
     }
 
     private func sine(frameCount: Int, rate: Double, amplitude: Float) -> [Float] {
-        (0 ..< frameCount).map { amplitude * sin(2 * .pi * 440 * Float($0) / Float(rate)) }
+        let angularFrequency: Float = 2 * .pi * 440
+        return (0 ..< frameCount).map { index in
+            let phase = angularFrequency * Float(index) / Float(rate)
+            return amplitude * sin(phase)
+        }
     }
 
     private func write(

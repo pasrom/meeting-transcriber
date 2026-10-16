@@ -190,9 +190,11 @@ final class AudioMixerStreamingTests: XCTestCase {
         ))
         buffer.frameLength = AVAudioFrameCount(frameCount)
         let channelData = try XCTUnwrap(buffer.floatChannelData)
+        let angularFrequency: Float = 2 * .pi * 440
         for (channel, amplitude) in [amplitudes.left, amplitudes.right].enumerated() {
             let samples = (0 ..< frameCount).map { index in
-                amplitude * sin(2 * .pi * 440 * Float(index) / Float(rate))
+                let phase = angularFrequency * Float(index) / Float(rate)
+                return amplitude * sin(phase)
             }
             channelData[channel].update(from: samples, count: frameCount)
         }

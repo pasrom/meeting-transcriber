@@ -87,10 +87,6 @@ final class AccidentalNamingAcceptTests: XCTestCase {
         ) -> String? {
             nil
         }
-
-        func namingStageDidStart(jobID _: UUID) {}
-
-        func namingStageDidEnd() {}
     }
 
     // MARK: - Helpers

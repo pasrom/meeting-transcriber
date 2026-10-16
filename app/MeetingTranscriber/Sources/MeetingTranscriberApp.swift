@@ -75,12 +75,18 @@ private struct WindowAccessor: NSViewRepresentable {
 // Not @main — AppLauncher owns the entry point so a selftest launch can
 // divert before this scene (and AppState with it) is ever constructed.
 struct MeetingTranscriberApp: App {
-    @State private var appState = AppState(notifier: NotificationManager.shared)
+    @State private var appState: AppState
     @State private var captionsWindow: LiveCaptionsWindowController?
+    @State private var menuProgressUpdater: MenuStageProgressUpdater
     @Environment(\.openWindow)
     private var openWindow
 
     init() {
+        let state = AppState(notifier: NotificationManager.shared)
+        _appState = State(initialValue: state)
+        let updater = MenuStageProgressUpdater()
+        updater.observe { [weak state] in state?.pipelineQueue }
+        _menuProgressUpdater = State(initialValue: updater)
         AppPaths.migrateIfNeeded()
         NotificationManager.shared.setUp()
         // The verdict was taken in `AppLauncher.main()`, before `AppState` was

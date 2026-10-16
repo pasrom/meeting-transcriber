@@ -26,8 +26,6 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
     /// a write that did not land must pass nil, which is what keeps the
     /// recorded order able to say which payload is newest.
     private(set) var recordedSidecarDirs: [URL?] = []
-    private(set) var stageStartCount = 0
-    private(set) var stageEndCount = 0
 
     func job(withID id: UUID) -> PipelineJob? {
         jobs[id]
@@ -74,14 +72,6 @@ final class NamingSessionMockDelegate: SpeakerNamingSessionDelegate {
         isDualSource _: Bool, autoNames _: [String: String], note _: String?,
     ) -> String? {
         nil
-    }
-
-    func namingStageDidStart(jobID _: UUID) {
-        stageStartCount += 1
-    }
-
-    func namingStageDidEnd() {
-        stageEndCount += 1
     }
 }
 

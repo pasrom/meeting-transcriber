@@ -383,9 +383,6 @@ final class SpeakerNamingSessionTests: XCTestCase {
         ) -> String? {
             nil
         }
-
-        func namingStageDidStart(jobID _: UUID) {}
-        func namingStageDidEnd() {}
     }
 
     /// Pins the strong per-flow delegate capture: the delegate is weak *at
