@@ -45,14 +45,15 @@
             let prompt = ProtocolGenerator.buildSystemPrompt(diarized: diarized, language: language, meetingStartTime: meetingStartTime) + transcript
 
             let process = Process()
-            let resolvedBin = Self.resolveClaudePath(claudeBin)
+            let launch = await Self.launchConfiguration(claudeBin: claudeBin, anthropicAPIKey: anthropicAPIKey)
+            let resolvedBin = launch.resolvedBin
             process.executableURL = URL(fileURLWithPath: resolvedBin)
-            process.arguments = Self.buildSubprocessArgs(claudeBin: claudeBin, resolvedBin: resolvedBin)
-            process.environment = Self.buildEnvironment(
-                baseEnvironment: ProcessInfo.processInfo.environment,
-                searchPaths: Self.searchPaths,
-                anthropicAPIKey: anthropicAPIKey,
-            )
+            process.arguments = launch.arguments
+            process.environment = launch.environment
+            let workingDirectory = try Self.makeWorkingDirectory()
+            let projectFolder = Self.cliProjectFolder(workingDirectory: workingDirectory, environment: launch.environment)
+            defer { Self.removeRunFolders(workingDirectory: workingDirectory, projectFolder: projectFolder) }
+            process.currentDirectoryURL = workingDirectory
 
             let stdinPipe = Pipe()
             let stdoutPipe = Pipe()
@@ -409,9 +410,14 @@
 
         /// Build the CLI argument vector. When `resolvedBin` is the
         /// `/usr/bin/env` fallback, prepend `claudeBin` so env can resolve
-        /// it from PATH.
-        static func buildSubprocessArgs(claudeBin: String, resolvedBin: String) -> [String] {
+        /// it from PATH. `noSessionPersistence` adds
+        /// `noSessionPersistenceFlag`; pass what
+        /// `cliSupportsNoSessionPersistence` found for this binary.
+        static func buildSubprocessArgs(claudeBin: String, resolvedBin: String, noSessionPersistence: Bool) -> [String] {
             var args = ["-p", "-", "--output-format", "stream-json", "--verbose", "--model", "sonnet"]
+            if noSessionPersistence {
+                args.append(noSessionPersistenceFlag)
+            }
             if resolvedBin == "/usr/bin/env" {
                 args.insert(claudeBin, at: 0)
             }
@@ -442,6 +448,35 @@
                 env["ANTHROPIC_API_KEY"] = anthropicAPIKey
             }
             return env
+        }
+
+        /// Create a new, empty, owner-only (`0700`) directory under `parent`
+        /// for one CLI run, and return it. `generate()` starts the CLI there
+        /// and removes the directory again when it returns or throws; a
+        /// removal that fails is ignored.
+        ///
+        /// Without a working directory of its own the child inherits the
+        /// app's, which for a launched app is `/`, and Claude Code looks
+        /// around its working directory at startup, so macOS asked the user
+        /// for Desktop, Documents, Downloads and iCloud Drive on the app's
+        /// behalf. The CLI needs no folder at all: the transcript arrives on
+        /// stdin. The default parent is the per-user temporary directory,
+        /// which is private to the user and has no privacy-protected folder
+        /// on its path or beneath it.
+        ///
+        /// A new directory per run, not one shared folder, so a run never
+        /// sees what an earlier or concurrent run left there. The name is
+        /// unique and creation fails rather than reuse a directory that
+        /// already exists. Throws when the directory cannot be created;
+        /// there is deliberately no fallback to the inherited directory.
+        static func makeWorkingDirectory(in parent: URL = FileManager.default.temporaryDirectory) throws -> URL {
+            let directory = parent.appendingPathComponent(
+                "MeetingTranscriber-claude-cli-\(UUID().uuidString)", isDirectory: true,
+            )
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700],
+            )
+            return directory
         }
     }
 

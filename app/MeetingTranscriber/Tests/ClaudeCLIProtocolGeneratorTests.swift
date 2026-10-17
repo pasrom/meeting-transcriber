@@ -120,7 +120,7 @@
         func testBuildSubprocessArgsForAbsolutePathDoesNotPrependBinary() {
             let args = ClaudeCLIProtocolGenerator.buildSubprocessArgs(
                 claudeBin: "claude",
-                resolvedBin: "/opt/homebrew/bin/claude",
+                resolvedBin: "/opt/homebrew/bin/claude", noSessionPersistence: false,
             )
             XCTAssertEqual(
                 args,
@@ -133,7 +133,7 @@
             // resolve it via PATH (set in buildEnvironment).
             let args = ClaudeCLIProtocolGenerator.buildSubprocessArgs(
                 claudeBin: "claude-work",
-                resolvedBin: "/usr/bin/env",
+                resolvedBin: "/usr/bin/env", noSessionPersistence: false,
             )
             XCTAssertEqual(
                 args,
@@ -468,6 +468,133 @@
                 [.posixPermissions: 0o755], ofItemAtPath: path,
             )
             return path
+        }
+    }
+
+    // MARK: - Working directory
+
+    extension ClaudeCLIProtocolGeneratorTests {
+        /// The CLI must start in an empty directory of its own, not in the
+        /// working directory of the process that launches it. A launched app's
+        /// is `/`, and Claude Code looks around its working directory at
+        /// startup, so from `/` it reached into Desktop, Documents, Downloads
+        /// and iCloud Drive, and macOS asked the user for each of them on the
+        /// app's behalf. The fake binary replies with the directory it was
+        /// started in and the number of entries that directory holds.
+        func testGenerateStartsCLIInAnEmptyDirectoryOfItsOwn() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s|%s"}}\\n' \
+                    "$(pwd -P)" "$(ls -A | wc -l | tr -d ' ')"
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            let result = try await generator.generate(
+                transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+            )
+            let reply = result.split(separator: "|").map(String.init)
+            XCTAssertEqual(reply.count, 2, "unexpected fake CLI reply: \(result)")
+            let directory = reply.first ?? ""
+            XCTAssertNotEqual(directory, "/")
+            XCTAssertNotEqual(directory, Self.physicalPath(NSHomeDirectory()))
+            XCTAssertNotEqual(
+                directory, Self.physicalPath(FileManager.default.currentDirectoryPath),
+                "the CLI inherited the working directory of the process that launched it",
+            )
+            XCTAssertEqual(reply.last, "0", "the CLI's working directory \(directory) is not empty")
+        }
+
+        /// A run must not inherit what an earlier run left behind. The fake
+        /// binary reports its directory and how many entries it found there,
+        /// then leaves a file in it; the second run must start in another,
+        /// empty directory, and neither directory may outlive its run.
+        func testGenerateGivesEachRunAFreshDirectoryAndRemovesIt() async throws {
+            let script = try Self.makeFakeClaudeScript(
+                body: """
+                cat > /dev/null
+                found=$(ls -A | wc -l | tr -d ' ')
+                touch left-by-previous-run
+                printf '{"type":"content_block_delta","delta":{"type":"text_delta","text":"%s|%s"}}\\n' \
+                    "$(pwd -P)" "$found"
+                """,
+            )
+            defer { try? FileManager.default.removeItem(atPath: script) }
+
+            let generator = ClaudeCLIProtocolGenerator(claudeBin: script, language: "German")
+            var runs: [(directory: String, found: String)] = []
+            for _ in 0 ..< 2 {
+                let result = try await generator.generate(
+                    transcript: "Speaker 1: hello", title: "Sync", diarized: false,
+                )
+                let reply = result.split(separator: "|").map(String.init)
+                XCTAssertEqual(reply.count, 2, "unexpected fake CLI reply: \(result)")
+                runs.append((reply.first ?? "", reply.last ?? ""))
+            }
+            let (first, second) = (runs[0], runs[1])
+
+            XCTAssertEqual(first.found, "0", "the first run's directory \(first.directory) was not empty")
+            XCTAssertNotEqual(first.directory, second.directory, "both runs shared one directory")
+            XCTAssertEqual(second.found, "0", "the second run found what the first run left behind")
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: first.directory),
+                "the first run's directory \(first.directory) outlived its run",
+            )
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: second.directory),
+                "the second run's directory \(second.directory) outlived its run",
+            )
+        }
+
+        func testMakeWorkingDirectoryCreatesANewEmptyOwnerOnlyDirectoryPerCall() throws {
+            let parent = FileManager.default.temporaryDirectory
+                .appendingPathComponent("claude-cli-cwd-test-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: parent) }
+
+            let first = try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: parent)
+            let second = try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: parent)
+
+            XCTAssertNotEqual(first, second)
+            for directory in [first, second] {
+                XCTAssertEqual(
+                    directory.deletingLastPathComponent().standardizedFileURL.path, parent.standardizedFileURL.path,
+                )
+                var isDirectory: ObjCBool = false
+                XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory))
+                XCTAssertTrue(isDirectory.boolValue)
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
+                let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+                XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o700)
+            }
+        }
+
+        func testMakeWorkingDirectoryDefaultsToTheTemporaryDirectory() throws {
+            let directory = try ClaudeCLIProtocolGenerator.makeWorkingDirectory()
+            defer { try? FileManager.default.removeItem(at: directory) }
+            XCTAssertEqual(
+                directory.deletingLastPathComponent().standardizedFileURL.path,
+                FileManager.default.temporaryDirectory.standardizedFileURL.path,
+            )
+        }
+
+        /// No fallback: a directory that cannot be created is an error, never
+        /// a reason to start the CLI in the inherited working directory.
+        func testMakeWorkingDirectoryThrowsWhenItCannotCreateTheDirectory() {
+            let missingParent = FileManager.default.temporaryDirectory
+                .appendingPathComponent("claude-cli-missing-\(UUID().uuidString)", isDirectory: true)
+            XCTAssertThrowsError(try ClaudeCLIProtocolGenerator.makeWorkingDirectory(in: missingParent))
+        }
+
+        /// `path` with every symlink resolved, as `pwd -P` reports it
+        /// (`/var` → `/private/var`). Foundation's `resolvingSymlinksInPath`
+        /// strips `/private` instead, so it cannot be compared with the shell.
+        private static func physicalPath(_ path: String) -> String? {
+            guard let resolved = realpath(path, nil) else { return nil }
+            defer { free(resolved) }
+            return String(cString: resolved)
         }
     }
 #endif
