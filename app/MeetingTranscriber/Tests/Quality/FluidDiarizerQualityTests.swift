@@ -58,6 +58,27 @@ final class FluidDiarizerQualityTests: XCTestCase {
         try await runDERFixture(named: "four_speakers_en_ami", mode: .sortformer, threshold: 0.50)
     }
 
+    // Nemotron 3 (pulls a ~200 MB model on first run). Measured 2026-09-30 on
+    // an M4 with FluidAudio 0.17.4: 0.12 / 0.43 / 0.31. The three-speaker clip
+    // is its weak spot: it hears two of the synthetic voices (B and C) as one
+    // speaker, which alone costs ~0.3. The bound sits above that and below the
+    // ~0.66 of collapsing everything onto one speaker. On the real AMI excerpt
+    // it is the best of the three modes, so it takes Sortformer's bound.
+    func test_nemotron_twoSpeakers_de_der() async throws {
+        try skipUnlessQualityRun()
+        try await runDERFixture(named: "two_speakers_de", mode: .nemotron, threshold: 0.50)
+    }
+
+    func test_nemotron_threeSpeakers_de_der() async throws {
+        try skipUnlessQualityRun()
+        try await runDERFixture(named: "three_speakers_de", mode: .nemotron, threshold: 0.55)
+    }
+
+    func test_nemotron_fourSpeakers_en_real_der() async throws {
+        try skipUnlessQualityRun()
+        try await runDERFixture(named: "four_speakers_en_ami", mode: .nemotron, threshold: 0.50)
+    }
+
     // MARK: - Helpers
 
     /// Each test method already names exactly one (fixture, mode) pair, so the

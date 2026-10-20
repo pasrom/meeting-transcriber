@@ -27,6 +27,21 @@ extension FluidDiarizer {
         audioPath: URL,
         timeline: DiarizerTimeline,
     ) async throws -> [String: [Float]] {
+        let converter = AudioConverter(sampleRate: 16000.0)
+        let audio = try converter.resampleAudioFile(audioPath)
+        return try await extractSortformerEmbeddings(audio: audio, timeline: timeline)
+    }
+
+    /// Same, for audio already decoded to 16 kHz mono. Nemotron 3 mode uses
+    /// this: its model is an 8-speaker streaming Sortformer, its timeline
+    /// has the same shape at 10 ms instead of 80 ms frames (the chunk walk
+    /// derives its frame counts from `timeline.config`), and it has the
+    /// samples in hand already, so decoding the file a second time would
+    /// only cost time.
+    func extractSortformerEmbeddings(
+        audio: [Float],
+        timeline: DiarizerTimeline,
+    ) async throws -> [String: [Float]] {
         if sortformerEmbeddingModels == nil {
             sortformerEmbeddingModels = try await DiarizerModels.load()
             embeddingLogger.info("WeSpeaker (wespeaker_v2) loaded for Sortformer post-hoc embeddings")
@@ -48,12 +63,10 @@ extension FluidDiarizer {
         }
         let weSpeakerFrameCount = segShape[1].intValue
 
-        let converter = AudioConverter(sampleRate: 16000.0)
-        let audio = try converter.resampleAudioFile(audioPath)
-
-        // Per-speaker masks at Sortformer's native frame rate (12.5 Hz),
-        // with frames where ≥2 speakers exceed onset zeroed across all
-        // speakers (overlap exclusion).
+        // Per-speaker masks at the diarizer's native frame rate (12.5 Hz
+        // for Sortformer, 100 Hz for Nemotron 3), with frames where ≥2
+        // speakers exceed onset zeroed across all speakers (overlap
+        // exclusion).
         let masks = Self.buildOverlapExcludedMasks(
             predictions: timeline.finalizedPredictions,
             numSpeakers: timeline.config.numSpeakers,
@@ -79,9 +92,9 @@ extension FluidDiarizer {
 
     /// Walk the audio in 10s chunks, run WeSpeaker on the top-3 active
     /// speakers per chunk (the model's mask shape only fits 3), accumulate
-    /// running sums + counts per global Sortformer speaker slot. Sortformer's
-    /// 4th speaker (when present) gets covered in chunks where they rank in
-    /// the top-3 of that window.
+    /// running sums + counts per global Sortformer speaker slot. A speaker
+    /// beyond the third (Sortformer's 4th, Nemotron 3's 4th to 8th) gets
+    /// covered in chunks where they rank in the top-3 of that window.
     private func accumulateChunkEmbeddings(
         audio: [Float],
         masks: [[Float]],

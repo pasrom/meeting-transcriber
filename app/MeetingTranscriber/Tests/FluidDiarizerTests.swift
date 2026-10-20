@@ -94,6 +94,30 @@ final class FluidDiarizerTests: XCTestCase {
         XCTAssertEqual(result.segments.count, 1)
     }
 
+    /// Nemotron 3 mode never reaches the offline clustering processor, and an
+    /// unreadable file fails before the model is fetched: a first run would
+    /// otherwise start a ~200 MB download it cannot use.
+    func testNemotronModeBypassesOfflineProcessorAndFailsBeforeModelLoad() async {
+        var mock = MockOfflineProcessor()
+        var processCalls = 0
+        mock.onProcess = { _ in
+            processCalls += 1
+            return Self.makeResult()
+        }
+        let diarizer = FluidDiarizer(mode: .nemotron, offlineProcessor: mock)
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nemotron-missing-\(UUID().uuidString).wav")
+
+        do {
+            _ = try await diarizer.run(audioPath: missing, numSpeakers: 3, meetingTitle: "Test")
+            XCTFail("Expected an unreadable file to throw")
+        } catch {
+            // Expected: AVAudioFile cannot open a file that does not exist.
+        }
+        XCTAssertEqual(processCalls, 0, "Nemotron 3 mode must not route through the offline processor")
+        XCTAssertNil(diarizer.nemotronDiarizer, "The model must not be loaded for a file that cannot be read")
+    }
+
     func testNoRetryWithoutNumSpeakers() async {
         var mock = MockOfflineProcessor()
         mock.onProcess = { _ in
