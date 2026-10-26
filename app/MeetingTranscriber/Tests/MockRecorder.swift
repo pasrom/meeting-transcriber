@@ -44,6 +44,9 @@ class MockRecorder: RecordingProvider {
     /// false, matching the protocol's default, so existing tests are unaffected.
     var micCaptureGaveUp = false
     var appCaptureGaveUp = false
+    /// Whether the microphone's first start timed out (issue #778). Default
+    /// false, matching the protocol's default.
+    var micCaptureStartTimedOut = false
     /// Whether the silent-track watchdog stopped rebuilding (issue #672).
     /// Default false, matching the protocol's default.
     var appSilentTrackWatchdogGaveUp = false

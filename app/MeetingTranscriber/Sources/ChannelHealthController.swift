@@ -390,6 +390,7 @@ final class ChannelHealthController {
                 channel: channel, fault: fault,
                 everCarriedSignal: ages.secondsSinceLastEnergy != nil,
                 stall: recorder.micCaptureStall.details,
+                startTimedOut: channel == .mic && recorder.micCaptureStartTimedOut,
             )
             // Whether it was then posted is logged by the notifier, which decides that.
             log.notice(Self.faultLogLine(channel: channel, fault: fault, ages: ages, elapsed: elapsed, window: faultWindow))

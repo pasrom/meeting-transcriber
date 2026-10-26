@@ -41,4 +41,21 @@ final class MicStallNoticeCopyTests: XCTestCase {
         XCTAssertFalse(ChannelHealthController.captureGaveUpMessage(for: .mic).contains("device change"))
         XCTAssertTrue(ChannelHealthController.captureGaveUpMessage(for: .app).contains("device change"))
     }
+
+    /// A first start that did not return within its deadline (issue #778)
+    /// was not restarted, so its notice must not say a restart failed. It
+    /// says only what was observed: the microphone did not answer within the
+    /// deadline, the recording goes on without it, and the app did not
+    /// respond while it waited. No remedy: that restarting the app clears the
+    /// call is not measured, the call may return by itself, and nothing is
+    /// promised about later recordings. Pinned whole, so an added claim fails
+    /// too; the number is the library's deadline, `MicStartLimits`.
+    func testAFirstStartThatTimedOutSaysOnlyWhatWasObserved() {
+        XCTAssertEqual(MicStartLimits.firstStartDeadlineSeconds, 5)
+        XCTAssertEqual(
+            ChannelHealthController.captureGaveUpMessage(for: .mic, startTimedOut: true),
+            "The microphone did not respond within 5 seconds of being opened, so this recording continues "
+                + "without it. Meeting Transcriber did not respond while it waited.",
+        )
+    }
 }

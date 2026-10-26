@@ -33,6 +33,11 @@ protocol RecordingProvider {
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
 
+    /// True when the microphone's give-up was a first start that did not
+    /// return within its deadline (issue #778), not a failed restart. Only
+    /// the notice's wording depends on it. Default false.
+    var micCaptureStartTimedOut: Bool { get }
+
     /// True once the opt-in silent-track watchdog stopped rebuilding the app
     /// capture because its rebuilds did not restore signal (issue #672). Not a
     /// give-up: the channel still captures. Default false.
@@ -83,6 +88,10 @@ extension RecordingProvider {
     }
 
     var micCaptureGaveUp: Bool {
+        false
+    }
+
+    var micCaptureStartTimedOut: Bool {
         false
     }
 

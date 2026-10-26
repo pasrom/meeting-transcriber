@@ -22,6 +22,7 @@ protocol AudioCapturing: AnyObject {
     var micLevelDBFS: Double { get }
     var appCaptureGaveUp: Bool { get }
     var micCaptureGaveUp: Bool { get }
+    var micCaptureStartTimedOut: Bool { get }
     var appSilentTrackWatchdogGaveUp: Bool { get }
     var micCaptureStall: MicCaptureStall { get }
 

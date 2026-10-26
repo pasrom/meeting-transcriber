@@ -67,6 +67,10 @@ class DualSourceRecorder: RecordingProvider {
         captureSession?.micCaptureGaveUp ?? false
     }
 
+    var micCaptureStartTimedOut: Bool {
+        captureSession?.micCaptureStartTimedOut ?? false
+    }
+
     var appSilentTrackWatchdogGaveUp: Bool {
         captureSession?.appSilentTrackWatchdogGaveUp ?? false
     }
