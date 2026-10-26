@@ -31,8 +31,8 @@ enum AppLauncher {
                 exit(LocalVQESelftest.run(mode))
             }
         #endif
-        // Before anything else is constructed. `MeetingTranscriberApp.main()`
-        // builds `AppState` as a stored-property initialiser, and that is the
+        // Before anything else is constructed. `MeetingTranscriberApp.init`
+        // builds `AppState` and starts the diagnostic log, and that is the
         // heavy part of launch (engines, the pipeline queue with its crash
         // recovery, model warm-up): a crash in there is the crashiest way to
         // stay down, and it has to leave a marker like any other. xctest

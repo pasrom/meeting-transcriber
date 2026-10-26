@@ -135,8 +135,8 @@ enum PersistentDiagnosticLog {
         /// Convenience: open today's log file as the stream target. Returns the
         /// running streamer so the caller can stop it on app shutdown.
         @discardableResult
-        static func startForToday() throws -> Streamer {
-            let streamer = try Streamer()
+        static func startForToday(in directory: URL = logDirectory) throws -> Streamer {
+            let streamer = try Streamer(logDirectory: directory)
             try streamer.start()
             return streamer
         }

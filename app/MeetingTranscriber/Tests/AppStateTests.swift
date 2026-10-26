@@ -419,6 +419,14 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     }
 
     #if !APPSTORE
+        /// The persistent log streamer writes the user's diagnostics folder and
+        /// spawns `log stream`, so it is the app's entry point that starts it,
+        /// not `init`, which every test that needs an `AppState` runs.
+        func testConstructionStartsNoPersistentLogStreamer() {
+            let state = makeAppState()
+            XCTAssertNil(state.persistentLogStreamer)
+        }
+
         func testBuildDebugRPCServerReturnsWiredServer() {
             let (state, _) = makeState()
             // Exercises buildDebugRPCServer's wiring, including the /v1 automation

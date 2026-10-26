@@ -286,26 +286,28 @@ final class AppState {
             // server. The closure is set here (post stored-property init) so it
             // can capture self.
             rpcController.activate { [weak self] in self?.buildDebugRPCServer() }
+            // The diagnostic log's launch steps (cleanup of expired files, the
+            // orphan reap and `startPersistentLogStreamer`) run from the app's
+            // entry point, not here: tests construct `AppState` too, and those
+            // steps touch the user's diagnostics folder and spawn `log stream`.
+        #endif
+    }
 
-            PersistentDiagnosticLog.cleanup()
-            // Reap any `log stream` children orphaned by a previous crash/SIGKILL
-            // (re-parented to launchd) so they can't accumulate across launches.
-            // Off the main thread: it shells out to `ps` + waitUntilExit(), which
-            // would otherwise stall launch proportional to the process-table size.
-            // The reap is deliberately NOT ordered before `startForToday()` — an
-            // orphan surviving a few extra ms is benign next to blocking launch,
-            // and the new streamer is matched by parent pid so it's never reaped.
-            Task.detached(priority: .utility) { PersistentDiagnosticLog.reapOrphans() }
+    #if !APPSTORE
+        /// Start mirroring the app's log into `directory`. Stopped on the quit
+        /// path (`tearDownBeforeExit`). A running streamer is kept: replacing it
+        /// would leave its `log stream` child writing on with nothing to stop it.
+        func startPersistentLogStreamer(in directory: URL = PersistentDiagnosticLog.logDirectory) {
+            guard persistentLogStreamer == nil else { return }
             do {
-                self.persistentLogStreamer = try PersistentDiagnosticLog.startForToday()
+                persistentLogStreamer = try PersistentDiagnosticLog.startForToday(in: directory)
             } catch {
                 Logger(subsystem: AppPaths.logSubsystem, category: "AppState")
                     .error("persistent_log_streamer_failed_to_start error=\(error.localizedDescription, privacy: .public)")
-                self.persistentLogStreamer = nil
+                persistentLogStreamer = nil
             }
-            // Stopped on the quit path (`tearDownBeforeExit`), not here.
-        #endif
-    }
+        }
+    #endif
 
     #if !APPSTORE
         /// Stop the persistent log streamer cleanly, so the file handle

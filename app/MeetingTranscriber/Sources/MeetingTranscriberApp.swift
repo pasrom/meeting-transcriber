@@ -96,6 +96,18 @@ struct MeetingTranscriberApp: App {
         // loop, so every quit request finds it, however early it comes and
         // whether or not the menu-bar item is ever shown.
         let state = AppState(pipelineEnvironment: .production, notifier: NotificationManager.shared)
+        #if !APPSTORE
+            PersistentDiagnosticLog.cleanup()
+            // Reap any `log stream` children orphaned by a previous crash/SIGKILL
+            // (re-parented to launchd) so they can't accumulate across launches.
+            // Off the main thread: it shells out to `ps` + waitUntilExit(), which
+            // would otherwise stall launch proportional to the process-table size.
+            // The reap is deliberately NOT ordered before the streamer start — an
+            // orphan surviving a few extra ms is benign next to blocking launch,
+            // and the new streamer is matched by parent pid so it's never reaped.
+            Task.detached(priority: .utility) { PersistentDiagnosticLog.reapOrphans() }
+            state.startPersistentLogStreamer()
+        #endif
         _appState = State(initialValue: state)
         AppDelegate.install(state)
         let updater = MenuStageProgressUpdater()

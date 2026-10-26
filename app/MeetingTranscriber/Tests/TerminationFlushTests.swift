@@ -174,12 +174,42 @@ final class TerminationFlushTests: XCTestCase {
             throw XCTSkip("the App Store build has no persistent log streamer")
         #else
             let state = try makeIsolatedAppState()
+            try state.startPersistentLogStreamer(in: makeTempDirectory(prefix: "diagnostics"))
             try XCTSkipIf(state.persistentLogStreamer == nil, "the streamer did not start in this environment")
 
             state.tearDownBeforeExit()
 
             XCTAssertNil(state.persistentLogStreamer)
         #endif
+    }
+
+    /// A second start keeps the running streamer. Replacing it would leave the
+    /// first `log stream` child writing into the same file with nothing left
+    /// to stop it.
+    func testStartingTheStreamerTwiceKeepsTheFirst() throws {
+        #if APPSTORE
+            throw XCTSkip("the App Store build has no persistent log streamer")
+        #else
+            let state = try makeIsolatedAppState()
+            let directory = try makeTempDirectory(prefix: "diagnostics")
+            state.startPersistentLogStreamer(in: directory)
+            let first = try XCTUnwrap(state.persistentLogStreamer, "the streamer did not start in this environment")
+            defer { first.stop() }
+
+            state.startPersistentLogStreamer(in: directory)
+
+            XCTAssertIdentical(state.persistentLogStreamer, first)
+            state.tearDownBeforeExit()
+        #endif
+    }
+
+    /// The app starts the streamer with the default folder, so the default is
+    /// what puts the diagnostics where the export looks for them.
+    func testTheStreamerDefaultsToTheDiagnosticsFolder() throws {
+        let source = try appSourceText("AppState.swift")
+        XCTAssertTrue(source.contains(
+            "func startPersistentLogStreamer(in directory: URL = PersistentDiagnosticLog.logDirectory)",
+        ))
     }
 
     func testTheReplyWaitsForTheFlush() async {
@@ -421,6 +451,20 @@ final class TerminationFlushTests: XCTestCase {
             "no init() in the app source",
         )
         XCTAssertTrue(initBody.contains("AppDelegate.install("), "the state is not handed over in init")
+        // `AppState.init` no longer starts the diagnostic log, so nothing
+        // but these lines does, and no test builds this initialiser.
+        let launchSteps = try XCTUnwrap(
+            initBody.components(separatedBy: "#if !APPSTORE").dropFirst().first?
+                .components(separatedBy: "#endif").first,
+            "no #if !APPSTORE block in init()",
+        )
+        for step in [
+            "PersistentDiagnosticLog.cleanup()",
+            "PersistentDiagnosticLog.reapOrphans()",
+            "state.startPersistentLogStreamer()",
+        ] {
+            XCTAssertTrue(launchSteps.contains(step), "the app's launch no longer runs \(step)")
+        }
         XCTAssertFalse(
             text.contains("appDelegate.termination = appState"),
             "the state is still handed over from a view's .task",
