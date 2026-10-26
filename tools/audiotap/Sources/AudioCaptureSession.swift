@@ -44,6 +44,12 @@ public class AudioCaptureSession {
     /// restarts. Read from the polling path that already watches channel levels.
     public private(set) var appCaptureGaveUp = false
     public private(set) var micCaptureGaveUp = false
+    /// Set with `micCaptureGaveUp` when the microphone's first start did not
+    /// return within its deadline and the recording went on without it
+    /// (issue #778). Tells that give-up apart from a restart's: nothing was
+    /// restarted. Says the call missed its deadline, not that it is still
+    /// out: a later return does not clear it.
+    public private(set) var micCaptureStartTimedOut = false
 
     /// Set when the opt-in silent-track watchdog stopped rebuilding the app tap
     /// because its rebuilds did not restore signal (issue #672). Not terminal,
@@ -143,10 +149,12 @@ public class AudioCaptureSession {
     /// from cached` is the only place it shows.
     ///
     /// Three costs, accepted rather than fixed here. A slow first microphone open
-    /// now delays app capture by that much, and since a *first* start is bounded
-    /// by no deadline (only restarts are, issue #588), a microphone open that
-    /// wedges now prevents app capture outright where it used to leave a running
-    /// tap behind it. A device change mid-recording restarts the two channels
+    /// now delays app capture by that much. A microphone open that wedges
+    /// delays it by `RestartArbiter.attemptTimeout`, the first start's deadline
+    /// (issue #778), and the recording then goes on without the microphone;
+    /// with the tap first it would have left a running tap behind it and lost
+    /// nothing of the app track. Before that deadline existed the same wedge
+    /// prevented app capture outright. A device change mid-recording restarts the two channels
     /// independently, so the same race stays reachable there. And an app-only
     /// recording opens no microphone at all, so the ordering buys it nothing:
     /// the meeting app opening its own input is the same trigger in the same
@@ -251,6 +259,14 @@ public class AudioCaptureSession {
             // a failure can leave one behind.
             discardMicCapture()
             guard config.appOutputURL != nil else { throw error }
+            // A start that did not return within its deadline is not a missing
+            // microphone, whose advice is to check the device, and the user
+            // needs to hear why the track is gone. Reported as a give-up too, so it is told at once and once, like the restart
+            // path's wedge, rather than as silence after a window.
+            if case MicCaptureError.firstStartTimedOut = error {
+                micCaptureStartTimedOut = true
+                micCaptureGaveUp = true
+            }
             // "Will continue", not "continuing": the tap has not been
             // attempted yet and can still fail after this line.
             logger.error("Failed to start mic capture: \(error.localizedDescription, privacy: .public). Will continue with app audio only.")
