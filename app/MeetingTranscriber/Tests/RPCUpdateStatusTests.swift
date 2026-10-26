@@ -23,7 +23,7 @@
         // MARK: - Wiring: snapshot.updateStatus follows updateChecker (non-vacuous)
 
         func testSnapshotUpdatesReflectAvailableUpdate() throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
 
             // Fresh app: no update, not checking, no error.
             let idle = state.rpcStateSnapshot().updateStatus

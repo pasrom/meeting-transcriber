@@ -31,7 +31,7 @@
         // MARK: - Wiring: snapshot.badge follows currentBadge (non-vacuous)
 
         func testSnapshotBadgeReflectsCurrentBadge() throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
 
             // Fresh idle app -> inactive, on both the computed property and the wire.
             XCTAssertEqual(state.currentBadge, .inactive)

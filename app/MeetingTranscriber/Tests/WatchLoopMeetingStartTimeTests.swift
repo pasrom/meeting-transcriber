@@ -15,7 +15,7 @@ final class WatchLoopMeetingStartTimeTests: XCTestCase {
         let recorder = MockRecorder()
         recorder.mixPath = URL(fileURLWithPath: "/tmp/test_meeting_start_time.wav")
         recorder.recordingStartDate = fixedStart
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let loop = WatchLoop(
             detector: ImmediatelyInactiveDetector(),
             recorderFactory: { recorder },

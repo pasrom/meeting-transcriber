@@ -291,10 +291,10 @@
         /// End-to-end within the process: the snapshot AppState hands the RPC
         /// server carries the live settings, so `mt-cli state | jq .settings`
         /// against the running app reflects a runtime change.
-        func test_appStateSnapshot_carriesLiveSettings() {
+        func test_appStateSnapshot_carriesLiveSettings() throws {
             settings.recordOnly = true
             settings.transcriptionEngine = .parakeet
-            let state = AppState(settings: settings)
+            let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
 
             let s = state.rpcStateSnapshot().settings
 

@@ -38,7 +38,7 @@
                 return
             }
             let settings = AppSettings(defaults: defaults)
-            state = AppState(settings: settings)
+            state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
             actions = state.makeSpeakerDBActions { [dbPath] in
                 SpeakerMatcher(dbPath: dbPath)
             }
@@ -241,7 +241,7 @@
         /// the posted flag (false here: `setUp()` never ran in the test host).
         func test_snapshot_notifications_readsInjectedNotifier() throws {
             let manager = NotificationManager()
-            let notifierState = AppState(settings: state.settings, notifier: manager)
+            let notifierState = try AppState(settings: state.settings, notifier: manager, pipelineEnvironment: makeIsolatedPipelineEnvironment())
             defer { notifierState.liveCaptions.clear() }
             manager.notify(title: "Silent Recording", body: "Both channels silent")
             manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")

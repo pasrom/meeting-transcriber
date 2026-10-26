@@ -8,7 +8,7 @@
     @MainActor
     final class RPCRecordStatusTests: XCTestCase {
         func testAMicrophoneRecordingIsThisEndpointsRecording() async throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
             XCTAssertFalse(state.recordStatusDTO().recording, "precondition: nothing is recording")
 
             let (loop, _) = makeTestWatchLoop()
@@ -25,7 +25,7 @@
         /// The narrowing that keeps a client from stopping a meeting it never
         /// started: an app recording is reported, but not as this endpoint's.
         func testAnAppRecordingIsReportedAsSomebodyElses() async throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
             let (loop, _) = makeTestWatchLoop()
             state.watching.watchLoop = loop
             try await loop.startManualRecording(pid: 42, appName: "Chrome", title: "Standup")
@@ -40,7 +40,7 @@
         /// read off a real projection: hardcoding it to `inactive` left the suite
         /// green while the key froze on the wrong glyph mid-recording.
         func testBadgeFollowsTheLiveBadge() async throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
             let (loop, _) = makeTestWatchLoop()
             state.watching.watchLoop = loop
             try await loop.startMicrophoneRecording()
@@ -74,7 +74,7 @@
         /// start, and reporting it as one would have a key wait for something
         /// that is never going to become its recording.
         func testOnlyAnInFlightStartCountsAsPending() async throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
             XCTAssertFalse(state.recordStatusDTO().startPending, "nothing in flight")
 
             let (loop, _) = makeTestWatchLoop()
@@ -87,8 +87,8 @@
             XCTAssertTrue(dto.otherRecordingActive, "it is reported here instead")
         }
 
-        func testTheNoMicrophoneSettingIsReported() {
-            let state = makeRPCTestState()
+        func testTheNoMicrophoneSettingIsReported() throws {
+            let state = try makeRPCTestState()
             XCTAssertFalse(state.recordStatusDTO().noMic)
 
             state.settings.noMic = true
@@ -101,8 +101,8 @@
         /// blocks no microphone recording, so reporting it here would describe
         /// the endpoint as broken on exactly the machines where it is the
         /// capture path that still works.
-        func testOnlyAMicrophoneProblemMakesTheStatusUnhealthy() {
-            let state = makeRPCTestState()
+        func testOnlyAMicrophoneProblemMakesTheStatusUnhealthy() throws {
+            let state = try makeRPCTestState()
             XCTAssertTrue(state.recordStatusDTO().microphoneHealthy, "an unprobed check is not a problem")
 
             state.permissions.handle(HealthCheckResult(screenRecording: .denied, microphone: .healthy))

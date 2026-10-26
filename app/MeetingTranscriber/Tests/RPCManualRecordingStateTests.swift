@@ -12,7 +12,7 @@
         // MARK: - Wiring: snapshot.isManualRecording follows AppState (non-vacuous)
 
         func testSnapshotReflectsManualRecording() async throws {
-            let state = makeRPCTestState()
+            let state = try makeRPCTestState()
 
             // Fresh app: no watch loop → not a manual recording.
             XCTAssertFalse(state.isManualRecording)

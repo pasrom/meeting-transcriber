@@ -30,6 +30,15 @@ extension XCTestCase {
         )
     }
 
+    /// A bare queue whose logs, snapshot and staging folder are temp folders,
+    /// for a test that only needs somewhere to enqueue. A queue writes its
+    /// snapshot in the background, so a test that enqueues into the app's own
+    /// folder leaves a job there for the installed app to run.
+    func makeIsolatedQueue() throws -> PipelineQueue {
+        let environment = try makeIsolatedPipelineEnvironment()
+        return PipelineQueue(logDir: environment.logDir, stagingDir: environment.stagingDir)
+    }
+
     func makeIsolatedAppState(
         notifier: any AppNotifying = SilentNotifier(), initialQueue: PipelineQueue? = nil,
     ) throws -> AppState {

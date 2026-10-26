@@ -70,7 +70,7 @@ final class ManualRecordingTests: XCTestCase {
     // MARK: - Stop
 
     func testStopManualRecordingEnqueuesJob() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let (loop, _) = makeLoop(pipelineQueue: queue)
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Standup")
 
@@ -203,7 +203,7 @@ final class ManualRecordingTests: XCTestCase {
     }
 
     func testStopMicrophoneRecordingEnqueuesJob() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let (loop, _) = makeLoop(pipelineQueue: queue)
         try await loop.startMicrophoneRecording()
 

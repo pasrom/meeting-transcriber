@@ -144,8 +144,8 @@ final class WatchLoopTests: XCTestCase {
         XCTAssertNil(loop.pipelineQueue)
     }
 
-    func testPipelineQueueInit() {
-        let queue = PipelineQueue()
+    func testPipelineQueueInit() throws {
+        let queue = try makeIsolatedQueue()
         let loop = makeLoop(pipelineQueue: queue)
         XCTAssertNotNil(loop.pipelineQueue)
     }
@@ -164,8 +164,8 @@ final class WatchLoopTests: XCTestCase {
 
     // MARK: - Pipeline Queue Wiring
 
-    func testPipelineQueuePassedToConstructor() {
-        let queue = PipelineQueue()
+    func testPipelineQueuePassedToConstructor() throws {
+        let queue = try makeIsolatedQueue()
         let loop = WatchLoop(
             detector: PowerAssertionDetector(),
             pipelineQueue: queue,
@@ -239,7 +239,7 @@ final class WatchLoopTests: XCTestCase {
     // MARK: - Stop Manual Recording Enqueues Job
 
     func testStopManualRecordingEnqueuesJob() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let (loop, recorder) = makeTestWatchLoop(pipelineQueue: queue)
         recorder.mixPath = URL(fileURLWithPath: "/tmp/test_mix.wav")
 
@@ -398,7 +398,7 @@ final class WatchLoopTests: XCTestCase {
     }
 
     func test_recordOnly_writesSidecarAndDoesNotEnqueue() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let tmp = try makeTempDirectory(prefix: "recordOnly")
 
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
@@ -460,7 +460,7 @@ final class WatchLoopTests: XCTestCase {
     /// `startedAt <= stoppedAt` so a downstream fleet consumer never computes a
     /// negative duration or rejects the JSON as malformed.
     func test_recordOnly_sidecarStartedAtNeverAfterStoppedAt_onBackwardClockStep() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let tmp = try makeTempDirectory(prefix: "recordOnlyClock")
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")
         try Data().write(to: mixURL)
@@ -493,7 +493,7 @@ final class WatchLoopTests: XCTestCase {
         try Data().write(to: mixURL)
         let notifier = RecordingNotifier()
 
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let loop = try await runManualRecordOnlyRecording(
             recorderMix: mixURL,
             outputDir: unwritable,
@@ -514,7 +514,7 @@ final class WatchLoopTests: XCTestCase {
     }
 
     func test_normalMode_enqueuesAndWritesNoSidecar() async throws {
-        let queue = PipelineQueue()
+        let queue = try makeIsolatedQueue()
         let tmp = try makeTempDirectory(prefix: "normalMode")
 
         let mixURL = tmp.appendingPathComponent("20260503_120000_mix.wav")

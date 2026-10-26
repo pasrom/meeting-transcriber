@@ -482,7 +482,7 @@ final class PipelineControllerTests: XCTestCase {
         // deterministically: enqueue records a terminal DTO and leaves `jobs`
         // empty.
         let store = TerminalJobStore(path: tmpDir.appendingPathComponent("terminal_reap.json"))
-        let pc = makeController(terminalJobStore: store, queue: ReapingQueue(store: store))
+        let pc = makeController(terminalJobStore: store, queue: ReapingQueue(store: store, logDir: tmpDir))
 
         let file = tmpDir.appendingPathComponent("reaped.wav")
         FileManager.default.createFile(atPath: file.path, contents: Data("RIFF".utf8))
@@ -501,9 +501,9 @@ final class PipelineControllerTests: XCTestCase {
 private final class ReapingQueue: PipelineQueue {
     private let store: TerminalJobStore
 
-    init(store: TerminalJobStore) {
+    init(store: TerminalJobStore, logDir: URL) {
         self.store = store
-        super.init(terminalJobStore: store)
+        super.init(logDir: logDir, terminalJobStore: store)
     }
 
     override func enqueue(_ job: PipelineJob) {

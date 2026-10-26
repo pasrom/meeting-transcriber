@@ -148,7 +148,7 @@
             let suite = "DebugRPCServerIntegrationTests-\(getpid())-\(UUID().uuidString)"
             let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
             defer { DefaultsSuite.remove(suite) }
-            let state = AppState(settings: AppSettings(defaults: defaults), notifier: manager)
+            let state = try AppState(settings: AppSettings(defaults: defaults), notifier: manager, pipelineEnvironment: makeIsolatedPipelineEnvironment())
             defer { state.liveCaptions.clear() }
             manager.notify(title: "Meeting Detected", body: "Recording: Standup (Teams)")
             manager.notify(title: "Silent Recording", body: "Both channels silent")
@@ -193,7 +193,7 @@
             // controller and kicks off actual CoreML/VAD model loads (network
             // download on a cold CI runner) in an unawaited background Task.
             settings.vadEnabled = true
-            let state = AppState(settings: settings)
+            let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
             defer { state.liveCaptions.clear() }
 
             let base = try await startServer(snapshot: state.rpcStateSnapshot())

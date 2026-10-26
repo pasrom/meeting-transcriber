@@ -336,7 +336,7 @@ final class MenuStageProgressUpdaterTests: XCTestCase {
         let menu = NSMenu()
         menu.autoenablesItems = false
         above.forEach(menu.addItem)
-        let target = MenuProgressCancelTarget(queue: PipelineQueue(), jobID: UUID())
+        let target = MenuProgressCancelTarget(queue: queue, jobID: UUID())
         for (index, job) in jobs.enumerated() {
             if index > 0 { menu.addItem(.separator()) }
             let title = NSMenuItem(title: job.meetingTitle, action: nil, keyEquivalent: "")

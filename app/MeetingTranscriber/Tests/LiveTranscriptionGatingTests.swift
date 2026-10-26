@@ -47,26 +47,26 @@ final class LiveTranscriptionGatingTests: XCTestCase {
 
     // MARK: - shouldShowLiveCaptions (watchLoop nil branch)
 
-    func testShouldShowFalseWhenToggleOff() {
+    func testShouldShowFalseWhenToggleOff() throws {
         settings.transcriptionEngine = .parakeet
         settings.liveTranscriptionEnabled = false
-        let state = AppState(settings: settings)
+        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 
-    func testShouldShowFalseWhenToggleOnSupportedEngineButNoActiveWatchLoop() {
+    func testShouldShowFalseWhenToggleOnSupportedEngineButNoActiveWatchLoop() throws {
         settings.transcriptionEngine = .parakeet
         settings.liveTranscriptionEnabled = true
-        let state = AppState(settings: settings)
+        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
         // No watch loop has been started → recording state is unreachable
         XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 
-    func testShouldShowFalseForWhisperKitWhenNoActiveWatchLoop() {
+    func testShouldShowFalseForWhisperKitWhenNoActiveWatchLoop() throws {
         settings.transcriptionEngine = .whisperKit
         settings.liveTranscriptionEnabled = true
-        let state = AppState(settings: settings)
+        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
         XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
@@ -81,7 +81,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         settings.parakeetLanguage = "en"
         settings.liveTranscriptionEnabled = true
         settings.liveCaptionsOverlayEnabled = true
-        let state = AppState(settings: settings)
+        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
         let (loop, _) = makeTestWatchLoop()
         state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")
