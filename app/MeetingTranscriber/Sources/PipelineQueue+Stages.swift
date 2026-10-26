@@ -176,7 +176,7 @@ extension PipelineQueue {
             return
         }
 
-        guard let engine, let outputDir else {
+        guard let engine = transcriptionEngine(for: job), let outputDir else {
             logger.warning("Processing dependencies not configured — skipping")
             isProcessing = false
             return

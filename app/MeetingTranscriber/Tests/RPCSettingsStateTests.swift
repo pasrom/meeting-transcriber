@@ -107,6 +107,7 @@
         func test_snapshot_enumRawValuesMatchSourceEnums() {
             settings.transcriptionEngine = .parakeet
             settings.parakeetLanguage = "fr"
+            settings.whisperOutputMode = .translateToEnglish
             settings.diarizerMode = .sortformer
             settings.protocolProvider = .openAICompatible
 
@@ -118,6 +119,7 @@
             XCTAssertEqual(s.transcription.engine, "parakeet")
             XCTAssertEqual(s.transcription.engine, TranscriptionEngineSetting.parakeet.rawValue)
             XCTAssertEqual(s.transcription.parakeetLanguage, "fr")
+            XCTAssertEqual(s.transcription.whisperOutputMode, WhisperOutputMode.translateToEnglish.rawValue)
             XCTAssertEqual(s.diarization.mode, "sortformer")
             XCTAssertEqual(s.diarization.mode, DiarizerMode.sortformer.rawValue)
             XCTAssertEqual(s.protocolGeneration.provider, "openAICompatible")
@@ -240,7 +242,7 @@
                 "recording.asymmetricSilenceWarningSeconds",
                 "transcription.engine", "transcription.whisperKitModel",
                 "transcription.whisperLanguage", "transcription.parakeetLanguage",
-                "transcription.customVocabularyPath",
+                "transcription.customVocabularyPath", "transcription.whisperOutputMode",
                 "diarization.diarize", "diarization.mode", "diarization.numSpeakers",
                 "diarization.vadEnabled", "diarization.vadThreshold",
                 "diarization.clusterThreshold", "diarization.warmStartFa",

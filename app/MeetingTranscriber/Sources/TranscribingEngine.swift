@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 protocol TranscribingEngine: AnyObject {
     var modelState: EngineModelState { get }
+    var outputMode: WhisperOutputMode { get }
     var downloadProgress: Double { get }
     var transcriptionProgress: Double { get } // swiftlint:disable:this unused_declaration
 
@@ -31,6 +32,10 @@ protocol TranscribingEngine: AnyObject {
 }
 
 extension TranscribingEngine {
+    var outputMode: WhisperOutputMode {
+        .original
+    }
+
     /// Most engines produce per-utterance timestamps; only the exceptions
     /// override this.
     var providesTimestamps: Bool {

@@ -66,6 +66,7 @@ final class LiveTranscriptionController {
             liveEnabled: true,
             engineLanguage: engineLanguage,
             engineSupportsLive: engine != nil,
+            translateToEnglish: engine?.outputMode == .translateToEnglish,
         )
     }
 
@@ -196,9 +197,11 @@ final class LiveTranscriptionController {
         let engine: String? = usingStreamingSession
             ? (captionStrategy == .nemotronStreaming ? "Nemotron" : "Parakeet EOU")
             : (micPipeline != nil ? "Re-transcribe" : nil)
-        let backend = engine.map { name in
-            engineLanguage.map { "\(name) · \($0.uppercased())" } ?? name
-        }
+        let backend = self.engine?.outputMode == .translateToEnglish
+            ? "Whisper · Translate to English"
+            : engine.map { name in
+                engineLanguage.map { "\(name) · \($0.uppercased())" } ?? name
+            }
         captions.setActiveBackend(backend)
         if verboseDiagnostics() {
             logger.info(

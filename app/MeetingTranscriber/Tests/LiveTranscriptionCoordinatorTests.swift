@@ -175,6 +175,36 @@ final class LiveTranscriptionCoordinatorTests: XCTestCase {
         XCTAssertNil(recorder.appLiveSink)
     }
 
+    func testChangedConfigurationSkipsStaleCaptionsWithoutColdBuildAtRecordingStart() async {
+        let engine = WhisperKitEngine()
+        engine.modelVariant = "openai_whisper-small"
+        engine.installDecodingClientForTesting(TranslationDecodingClient())
+        var configuration = engine.transcriptionConfiguration
+        let (factory, buildCount) = countingControllerFactory()
+        let coordinator = LiveTranscriptionCoordinator(
+            captions: LiveCaptionsState(),
+            liveEnabled: { true },
+            engineSupportsLive: { true },
+            engineLanguage: { "en" },
+            transcriptionConfiguration: { configuration },
+            verboseDiagnostics: { false },
+            makeController: factory,
+        )
+        coordinator.beginPrewarm { engine }
+        XCTAssertEqual(buildCount(), 1)
+
+        // Plain value change simulates the gap before the Settings observer runs.
+        configuration.whisper?.outputMode = .translateToEnglish
+        let recorder = DualSourceRecorder()
+        await coordinator.attachSinks(to: recorder)
+
+        XCTAssertEqual(buildCount(), 1, "A changed configuration must not cold-build at recording start")
+        XCTAssertNil(recorder.micLiveSink, "Never attach the old English-only backend for translation")
+        XCTAssertNil(recorder.appLiveSink)
+        await coordinator.flush()
+        XCTAssertEqual(buildCount(), 2, "Rebuild against the new mode once idle")
+    }
+
     /// The warm path: once the controller is prewarmed, repeated recordings reuse
     /// the SAME instance and never trigger a rebuild (which would recompile models).
     func testWarmedControllerIsReusedAcrossRecordingsWithoutRebuild() async {

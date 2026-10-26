@@ -521,6 +521,16 @@ function — shared by `AppState`, `LiveTranscriptionCoordinator`, and `LiveTran
 | auto-detect (`nil`) | re-transcribe | `StreamingTranscriber` via the active engine's `transcribeSamples`, if supported |
 | auto-detect + engine doesn't support live re-transcribe | none | captions off |
 
+Whisper's opt-in **Translate to English** output mode takes precedence over this language
+routing: it always uses the Whisper re-transcribe path, including partial updates. Turbo,
+English-only and unknown model variants are rejected rather than silently transcribed.
+`WhisperTranscriptionSession` freezes task/source/model and retains its decoder across
+Settings changes, sharing a warm WhisperKit pipe where possible. `TranscriptionConfiguration`
+is captured at recording start or import admission and stored on `PipelineJob`; legacy
+snapshots without it retain original-language output. The saved translated segments flow
+through existing diarization and protocol generation, including the Full Transcript appendix.
+`protocolLanguage` remains a separate LLM-output setting.
+
 Both streaming sessions are engine-independent (they drive their own FluidAudio models directly),
 so they're available even when the active `TranscribingEngine` has no live re-transcribe hook.
 `LiveTranscriptionController` wires the resolved per-channel pipeline to both `DualSourceRecorder`

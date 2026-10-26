@@ -67,10 +67,37 @@ struct TranscriptionSettingsView: View {
                 }
             }
 
-            Picker("Language", selection: $settings.whisperLanguage) {
+            Picker("Spoken language", selection: $settings.whisperLanguage) {
                 ForEach(PickerLanguages.whisperKit, id: \.code) { lang in
                     Text(lang.label).tag(lang.code)
                 }
+            }
+            .accessibilityIdentifier(A11yID.whisperSpokenLanguagePicker)
+            whisperOutputPicker
+        }
+    }
+
+    private var whisperOutputPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Whisper output", selection: $settings.whisperOutputMode) {
+                ForEach(WhisperOutputMode.allCases, id: \.self) { mode in
+                    Text(mode.label).tag(mode)
+                        .disabled(mode == .translateToEnglish
+                            && !WhisperOutputMode.supportsTranslation(modelVariant: settings.whisperKitModel))
+                }
+            }
+            .accessibilityIdentifier(A11yID.whisperOutputModePicker)
+            Text(
+                "Applies to live captions and saved transcripts. "
+                    + "For mixed-language meetings, choose Auto-detect as the spoken language. "
+                    + "Translation produces English instead of the original wording.",
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if settings.transcriptionConfiguration.whisper?.translationUnavailable == true {
+                Text("Translation is unavailable with this model. Choose Small, Large V2 or Large V3 (not Turbo), or switch to Original language.")
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
     }
@@ -226,6 +253,7 @@ struct TranscriptionSettingsView: View {
     /// the active language routes to Nemotron (set + non-English) and no model
     /// variant is on disk yet.
     private var needsCaptionModelConsent: Bool {
+        guard !settings.liveTranslationEnabled else { return false }
         guard let language = settings.activeEngineLanguageOrNil, language != "en" else { return false }
         return !nemotronModelDownloaded
     }
@@ -266,7 +294,11 @@ struct TranscriptionSettingsView: View {
     /// toggle): English → Parakeet EOU, any other set language → Nemotron
     /// multilingual streaming, auto-detect → the standard re-transcribe engine.
     private var captionBackendFootnote: String {
-        switch settings.activeEngineLanguageOrNil {
+        if settings.liveTranslationEnabled {
+            return "Translation uses your selected Whisper model for live captions, including partial updates. "
+                + "It bypasses Parakeet and Nemotron streaming; latency depends on the model and your Mac."
+        }
+        return switch settings.activeEngineLanguageOrNil {
         case .none:
             "Caption backend follows your transcription language. Auto-detect uses the "
                 + "standard re-transcribe engine; set a specific language for low-latency "

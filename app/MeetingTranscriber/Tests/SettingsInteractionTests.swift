@@ -40,6 +40,19 @@ final class SettingsInteractionTests: XCTestCase {
 
     // MARK: - Picker write-back
 
+    func testWhisperOutputPickerWritesBackToSettings() throws {
+        let settings = makeSettings()
+        settings.whisperKitModel = "openai_whisper-small"
+        let view = TranscriptionSettingsView(
+            settings: settings, whisperKitEngine: WhisperKitEngine(), parakeetEngine: ParakeetEngine(),
+        )
+        let picker = try view.inspect()
+            .find(viewWithAccessibilityIdentifier: A11yID.whisperOutputModePicker)
+            .find(ViewType.Picker.self)
+        try picker.select(value: WhisperOutputMode.translateToEnglish)
+        XCTAssertEqual(settings.whisperOutputMode, .translateToEnglish)
+    }
+
     func testEnginePickerSelectionWritesBackToSettings() throws {
         let settings = makeSettings()
         settings.transcriptionEngine = .whisperKit

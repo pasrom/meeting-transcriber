@@ -95,6 +95,7 @@ final class EngineController {
         switch settings.transcriptionEngine {
         case .whisperKit:
             whisperKit.applyModelVariant(settings.whisperKitModel)
+            whisperKit.outputMode = settings.whisperOutputMode
             let next = settings.whisperLanguageOrNil
             if whisperKit.language != next { whisperKit.language = next }
             let nextVocab = settings.customVocabularyPath
@@ -123,6 +124,7 @@ final class EngineController {
         withObservationTracking {
             _ = settings.transcriptionEngine
             _ = settings.whisperKitModel
+            _ = settings.whisperOutputMode
             _ = settings.whisperLanguage
             _ = settings.customVocabularyPath
             _ = settings.customVocabularyBookmark

@@ -59,6 +59,7 @@
                 engine: transcriptionEngine.rawValue,
                 whisperKitModel: whisperKitModel,
                 whisperLanguage: whisperLanguage,
+                whisperOutputMode: whisperOutputMode.rawValue,
                 parakeetLanguage: parakeetLanguage,
                 customVocabularyPath: customVocabularyPath,
             )

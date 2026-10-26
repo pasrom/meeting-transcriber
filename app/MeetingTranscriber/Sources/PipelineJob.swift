@@ -124,6 +124,8 @@ struct PipelineJob: Identifiable, Codable {
     var transcriptPath: URL?
     var protocolPath: URL?
     var namingSlug: String?
+    /// Task/source/model captured at recording start or enqueue; nil is a legacy original-language job.
+    var transcriptionConfiguration: TranscriptionConfiguration?
     // Output policy captured when this job enters the queue. Optional so
     // snapshots saved before transcript-output options existed still decode.
     // Nil falls back to the queue's legacy-compatible defaults.
@@ -263,6 +265,7 @@ struct PipelineJob: Identifiable, Codable {
         participants: [String] = [],
         meetingStartTime: Date? = nil,
         autoSkipNaming: Bool = false,
+        transcriptionConfiguration: TranscriptionConfiguration? = nil,
         // swiftlint:disable:next discouraged_optional_boolean
         includeFullTranscriptInProtocol: Bool? = nil,
         // swiftlint:disable:next discouraged_optional_boolean
@@ -285,6 +288,7 @@ struct PipelineJob: Identifiable, Codable {
         self.transcriptPath = nil
         self.protocolPath = nil
         self.namingSlug = nil
+        self.transcriptionConfiguration = transcriptionConfiguration
         self.includeFullTranscriptInProtocol = includeFullTranscriptInProtocol
         self.saveRawTranscriptSeparately = saveRawTranscriptSeparately
         self.usedDiarizerMode = nil
