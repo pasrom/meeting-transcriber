@@ -424,7 +424,7 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
             // Exercises buildDebugRPCServer's wiring, including the /v1 automation
             // closures (enqueueReturningIDs + jobStatus). Construction does not
             // start a listener, so boundPort is nil until start() is called.
-            let server = state.buildDebugRPCServer()
+            let server = state.buildDebugRPCServer(token: "test-token")
             XCTAssertNil(server.boundPort)
         }
 

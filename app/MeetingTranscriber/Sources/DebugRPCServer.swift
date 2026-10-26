@@ -145,8 +145,7 @@
 
         /// Generate a 32-byte hex token, persist atomically with mode 0600, return it.
         /// Reuses an existing non-empty file so `mt-cli` survives across launches.
-        nonisolated static func loadOrCreateToken() -> String {
-            let url = tokenFileURL
+        nonisolated static func loadOrCreateToken(at url: URL = tokenFileURL) -> String {
             if let data = try? Data(contentsOf: url),
                let existing = String(data: data, encoding: .utf8)?
                .trimmingCharacters(in: .whitespacesAndNewlines),

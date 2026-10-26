@@ -199,17 +199,25 @@
         // MARK: - Token persistence
 
         func testLoadOrCreateTokenIsStableAndChmod600() throws {
-            // We can't easily redirect AppPaths in a test, so just assert the
-            // function returns a 64-hex string and is idempotent.
-            let first = DebugRPCServer.loadOrCreateToken()
-            let second = DebugRPCServer.loadOrCreateToken()
+            let url = makeTempFile(suffix: "-rpc-token")
+            let first = DebugRPCServer.loadOrCreateToken(at: url)
+            let second = DebugRPCServer.loadOrCreateToken(at: url)
             XCTAssertEqual(first, second)
             XCTAssertEqual(first.count, 64)
             XCTAssertTrue(first.allSatisfy(\.isHexDigit))
 
-            let attrs = try FileManager.default.attributesOfItem(atPath: DebugRPCServer.tokenFileURL.path)
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
             let perms = (attrs[.posixPermissions] as? Int) ?? -1
             XCTAssertEqual(perms, 0o600)
+        }
+
+        /// The app loads the token with the default file, which is where
+        /// `mt-cli` reads it. Read from the source and compared, never
+        /// opened: loading it would create the user's own token file.
+        func testTheTokenDefaultsToTheDataFolderFile() throws {
+            XCTAssertEqual(DebugRPCServer.tokenFileURL, AppPaths.dataDir.appendingPathComponent(".rpc-token"))
+            let source = try appSourceText("DebugRPCServer.swift")
+            XCTAssertTrue(source.contains("static func loadOrCreateToken(at url: URL = tokenFileURL)"))
         }
 
         func testRotateTokenGeneratesNewValueAndPersistsAtomically() throws {
