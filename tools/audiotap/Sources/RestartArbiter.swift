@@ -38,8 +38,8 @@ struct RestartArbiter: Equatable {
         case idle
         /// Capturing normally; no restart outstanding.
         case capturing
-        /// A restart attempt was launched and has not reported back. It may be
-        /// wedged, so nothing may touch the engine and no second attempt starts.
+        /// A restart attempt, or the first start, was launched and has not
+        /// reported back. It may be wedged, so nothing may touch the engine and no second attempt starts.
         case attemptInFlight(generation: Int)
         /// An attempt came back with an error and the next one is waiting out its
         /// backoff. A device change here is deliberately ignored: a flapping
@@ -94,6 +94,12 @@ struct RestartArbiter: Equatable {
         case progressBudgetExhausted
         /// `stop()` was called.
         case stopRequested
+        /// `start()` is bringing up the capture's first engine (issue #778). It
+        /// runs as an attempt, because the call that wedges a restart is the
+        /// call that brings up the first engine too, and nothing else bounded
+        /// it: the first start ran on the main queue, so a wedge there froze
+        /// the whole app until it was quit.
+        case firstStartRequested
     }
 
     enum Action: Equatable {
@@ -131,6 +137,10 @@ struct RestartArbiter: Equatable {
         /// `stop()` while wedged or after giving up: seal the state and leave the
         /// engine alone, or the caller wedges too.
         case sealAndSkipEngine
+        /// The first start came back with an error. Not a retry: `start()` is
+        /// still waiting for this answer and throws it to its caller, which
+        /// owns what happens next. Nothing is outstanding afterwards.
+        case startFailed
     }
 
     private(set) var phase: Phase = .idle
@@ -141,6 +151,10 @@ struct RestartArbiter: Equatable {
     /// `.stalled` for those, terminal `.gaveUp` for a device-change restart,
     /// as before the watchdog existed.
     private var recoverable = false
+    /// The attempt in flight is the capture's first start. Decides only what
+    /// a failure that came back leads to. Set by every launch, so a restart
+    /// failing later is retried as before.
+    private var firstStart = false
 
     /// Whether the attempt out now, or backing off, is a rebuild or revival:
     /// its failures are retried until the progress watchdog's budget is spent
@@ -175,17 +189,25 @@ struct RestartArbiter: Equatable {
         // because the attempt it would race may be wedged inside AVFAudio and a
         // second one would leak another thread into the same loop. A stalled
         // capture has released its engine and nothing is in flight, so a device
-        // change may start it again.
+        // change may start it again. The first start launches here too: the
+        // call that wedges a restart is the one that brings up the first
+        // engine (issue #778).
         case (.capturing, .deviceChanged), (.capturing, .retryDue), (.backingOff, .retryDue),
-             (.capturing, .progressDeadlineElapsed), (.stalled, .deviceChanged):
+             (.capturing, .progressDeadlineElapsed), (.stalled, .deviceChanged), (.idle, .firstStartRequested):
             if phase == .stalled || event == .progressDeadlineElapsed { recoverable = true }
+            firstStart = event == .firstStartRequested
             generation += 1
             phase = .attemptInFlight(generation: generation)
             return .launchAttempt(generation: generation)
 
         case let (.attemptInFlight(current), .attemptReturned(reported, succeeded)) where reported == current:
-            phase = succeeded ? .committing(generation: current) : .backingOff
-            return succeeded ? .commit : .retry
+            if succeeded {
+                phase = .committing(generation: current)
+                return .commit
+            }
+            // A failed first start goes back to its caller, not into a backoff.
+            phase = firstStart ? .idle : .backingOff
+            return firstStart ? .startFailed : .retry
 
         case let (.committing(current), .commitReady(reported)) where reported == current:
             recoverable = false
@@ -240,7 +262,7 @@ struct RestartArbiter: Equatable {
         // a sealed session.
         case (_, .attemptTimedOut), (_, .deviceChanged), (_, .startSucceeded),
              (_, .stopRequested), (_, .retryDue), (_, .retryBudgetExhausted),
-             (_, .progressDeadlineElapsed), (_, .progressBudgetExhausted):
+             (_, .progressDeadlineElapsed), (_, .progressBudgetExhausted), (_, .firstStartRequested):
             return .ignore
         }
     }
