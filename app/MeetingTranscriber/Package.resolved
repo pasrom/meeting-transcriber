@@ -1,5 +1,5 @@
 {
-  "originHash" : "737035cc3ea1e44ab236a23b84fc49f4d1dd6aad5aa3b2022e127c4499311f9e",
+  "originHash" : "5c4a02cd92b8112641372c461a754fb28e7e0299f56c85bcbc178a6a789d8264",
   "pins" : [
     {
       "identity" : "fluidaudio",
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/argmaxinc/WhisperKit.git",
       "state" : {
-        "revision" : "1e2a163736dfa5a198e637ae44c114e1c6d5cc2d",
-        "version" : "1.1.0"
+        "revision" : "1bbc57cb7fe6410248a685b1c5a3c6d56adc2ed4",
+        "version" : "1.1.1"
       }
     },
     {
