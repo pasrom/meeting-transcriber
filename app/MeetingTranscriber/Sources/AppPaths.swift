@@ -62,7 +62,9 @@ enum AppPaths {
 
     /// Migrate IPC files from `~/.meeting-transcriber/` to `dataDir/ipc/`.
     /// Safe to call multiple times — copyItem fails gracefully if destination exists.
-    static func migrateIfNeeded() {
+    /// The folders are parameters so the migration can be exercised on temp
+    /// folders rather than on the user's own.
+    static func migrateIfNeeded(from legacyIpcDir: URL = legacyIpcDir, to ipcDir: URL = ipcDir) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: legacyIpcDir.path) else { return }
 

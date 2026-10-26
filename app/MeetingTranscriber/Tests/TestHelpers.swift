@@ -5,6 +5,19 @@ import Foundation
 import UserNotifications
 import XCTest
 
+// MARK: - App Source Text
+
+/// The text of an app source file under `Sources/`, for the few properties
+/// only the source can show without touching the user's files: a default
+/// argument that names one of the app's own folders, or a call in an
+/// initialiser no test can build.
+func appSourceText(_ name: String, file: StaticString = #filePath) throws -> String {
+    let url = URL(fileURLWithPath: "\(file)")
+        .deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Sources/\(name)")
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
 // MARK: - Temp-Directory / Temp-File Helpers
 
 extension XCTestCase {

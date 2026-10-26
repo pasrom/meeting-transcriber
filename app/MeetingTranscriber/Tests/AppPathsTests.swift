@@ -49,18 +49,41 @@ final class AppPathsTests: XCTestCase {
 
     // MARK: - migrateIfNeeded
 
-    func testMigrateIfNeededIsIdempotent() {
-        // Should not crash when called multiple times
-        AppPaths.migrateIfNeeded()
-        AppPaths.migrateIfNeeded()
-        // If we reach here, no crash occurred
+    // Both run on temp folders: with the defaults the migration reads the
+    // user's legacy folder and creates and fills the installed app's ipc folder.
+
+    func testMigrationCopiesTheLegacyFilesAndLeavesExistingOnesAlone() throws {
+        let legacy = try makeTempDirectory(prefix: "legacy_ipc")
+        let ipc = try makeTempDirectory(prefix: "ipc").appendingPathComponent("ipc", isDirectory: true)
+        try Data("legacy queue".utf8).write(to: legacy.appendingPathComponent("pipeline_queue.json"))
+        try Data("legacy log".utf8).write(to: legacy.appendingPathComponent("pipeline_log.jsonl"))
+
+        AppPaths.migrateIfNeeded(from: legacy, to: ipc)
+        try Data("newer log".utf8).write(to: ipc.appendingPathComponent("pipeline_log.jsonl"))
+        AppPaths.migrateIfNeeded(from: legacy, to: ipc)
+
+        XCTAssertEqual(try String(contentsOf: ipc.appendingPathComponent("pipeline_queue.json"), encoding: .utf8), "legacy queue")
+        XCTAssertEqual(try String(contentsOf: ipc.appendingPathComponent("pipeline_log.jsonl"), encoding: .utf8), "newer log")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ipc.appendingPathComponent("processed_recordings.json").path))
     }
 
-    func testIpcDirExistsAfterMigration() {
-        AppPaths.migrateIfNeeded()
-        let fm = FileManager.default
-        try? fm.createDirectory(at: AppPaths.ipcDir, withIntermediateDirectories: true)
-        XCTAssertTrue(fm.fileExists(atPath: AppPaths.ipcDir.path))
+    /// The app calls the migration without arguments, so its defaults decide
+    /// which folders it moves between. Read from the source: running it with
+    /// the defaults would touch the user's own folders.
+    func testTheMigrationDefaultsToTheLegacyAndTheIpcFolder() throws {
+        let source = try appSourceText("AppPaths.swift")
+        XCTAssertTrue(source.contains(
+            "static func migrateIfNeeded(from legacyIpcDir: URL = legacyIpcDir, to ipcDir: URL = ipcDir)",
+        ))
+    }
+
+    func testMigrationWithoutALegacyFolderCreatesNothing() throws {
+        let root = try makeTempDirectory(prefix: "no_legacy")
+        let ipc = root.appendingPathComponent("ipc", isDirectory: true)
+
+        AppPaths.migrateIfNeeded(from: root.appendingPathComponent("missing", isDirectory: true), to: ipc)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ipc.path))
     }
 
     /// Every constant that names a directory has to *be* a directory URL, and
