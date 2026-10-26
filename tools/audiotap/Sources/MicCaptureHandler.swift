@@ -18,14 +18,14 @@ private let logger = Logger(subsystem: "com.meetingtranscriber.audiotap", catego
 /// `restartQueue`, builds a candidate session from locals, and publishes nothing
 /// until the main queue adopts it with the arbiter's approval, so a stop and an
 /// adoption are totally ordered rather than racing. `outputFile` is created in
-/// `startEngine` on whichever queue runs it (main at first start, `restartQueue`
-/// during an attempt) and only when the arbiter's `mayCreateOutputFile` allows
-/// it under the lock; it is nilled only on the main queue, by stop and by
-/// give-up. The render-thread tap block reads it through optional chaining
-/// behind an `isCapturing` check, so a buffer arriving after a seal is a dropped
-/// write rather than a write to a closed file. Per-buffer level state is guarded
-/// by `LevelPublisher`. `@unchecked Sendable` reflects that this discipline
-/// isn't expressible to the compiler.
+/// `startEngine` on `restartQueue` (first start and every attempt), only when
+/// `mayCreateOutputFile` allows it; it is nilled on the main queue by stop and
+/// give-up, and on `restartQueue` by a stale first start, which only the
+/// terminal `.gaveUp` and `.stopped` reach. The render-thread tap block reads it
+/// through optional chaining behind an `isCapturing` check, so a buffer arriving
+/// after a seal is a dropped write rather than a write to a closed file. Per-buffer
+/// level state is guarded by `LevelPublisher`. `@unchecked Sendable` reflects
+/// that this discipline isn't expressible to the compiler.
 public class MicCaptureHandler: @unchecked Sendable {
     /// Builds a fresh engine session. Injectable so tests can supply one that
     /// never touches audio hardware (the CI runner has no input device) and can
@@ -36,9 +36,9 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// `internal` (not `private`) so the cross-file `+Timeline` extension can
     /// write gap-fill silence to it.
     ///
-    /// Lock-backed because three threads touch it: it is created on whichever
-    /// queue `startEngine` runs (main at first start, the restart queue during
-    /// an attempt), nilled on the main queue by stop and by give-up, and read by
+    /// Lock-backed because three threads touch it: it is created on the restart
+    /// queue, which runs `startEngine`, nilled on the main queue by stop and give-up
+    /// (and on the restart queue by a stale first start), and read by
     /// the render-thread tap block for every buffer. As a plain stored property
     /// that is a load racing a store-and-release. The getter hands out a strong
     /// reference and the write then happens outside the lock, so a buffer
@@ -59,7 +59,7 @@ public class MicCaptureHandler: @unchecked Sendable {
 
     private let outputFileLock = NSLock()
     private var storedOutputFile: AVAudioFile?
-    private let outputURL: URL
+    let outputURL: URL
     private let debugLogging: Bool
     private let liveSink: LiveAudioSink?
     // Debug fault injection (issues #379, #724/#706 repros): nil in
@@ -114,6 +114,10 @@ public class MicCaptureHandler: @unchecked Sendable {
     /// Seconds on a monotonic clock, for the progress watchdog. Injected for
     /// the same reason as `scheduleOnMain`.
     let clock: @Sendable () -> TimeInterval
+    /// Waits at most the given seconds for the first start's block to end, and
+    /// says whether it did; injected so a test can give up at a chosen moment.
+    let awaitFirstStart: @Sendable (DispatchGroup, TimeInterval) -> Bool
+    let startSeams = MicStartSeams()
     /// What a stall's silence bridge is written under; see `TimelineBridgeGate`.
     let bridgeGate = TimelineBridgeGate()
     /// Whether the capture is getting anywhere. Main queue only.
@@ -203,8 +207,11 @@ public class MicCaptureHandler: @unchecked Sendable {
         scheduleOnMain: @escaping @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
             = { delay, work in DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work) },
         clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        awaitFirstStart: @escaping @Sendable (DispatchGroup, TimeInterval) -> Bool
+            = { done, timeout in done.wait(timeout: .now() + timeout) == .success },
     ) {
         self.clock = clock
+        self.awaitFirstStart = awaitFirstStart
         self.decideRetry = decideRetry
         self.scheduleOnMain = scheduleOnMain
         self.outputURL = outputURL
@@ -219,12 +226,18 @@ public class MicCaptureHandler: @unchecked Sendable {
         stop()
     }
 
+    /// Brings up the first engine off the main queue under a deadline (see `+FirstStart`).
+    /// Watch and observers are armed only once it was adopted; a timed-out one is left alone.
     public func start(deviceUID: String? = nil) throws {
+        guard case let .launchAttempt(generation) = arbiter.withLock({ $0.handle(.firstStartRequested) }) else {
+            // A second start(); no production caller makes one.
+            logger.warning("Mic: start() on a capture that was already started, ignoring")
+            return
+        }
         selectedDeviceUID = deviceUID
         captureStartTicks = mach_absolute_time()
         noteDebugFaultStart()
-        try startEngine(deviceUID: deviceUID, on: session)
-        _ = arbiter.withLock { $0.handle(.startSucceeded) }
+        try bringUpFirstEngine(deviceUID: deviceUID, generation: generation)
         beginProgressWatch()
         installDeviceChangeListener()
         installConfigChangeObserver()
@@ -249,8 +262,13 @@ public class MicCaptureHandler: @unchecked Sendable {
     }
 
     // swiftlint:disable function_body_length
+    /// Runs for the attempt `generation`; a stale one stops at its checks (see `ensureAttemptIsCurrent`).
     @discardableResult
-    func startEngine(deviceUID: String?, on session: any MicEngineSessionProviding) throws -> Double {
+    func startEngine(
+        deviceUID: String?, on session: any MicEngineSessionProviding, generation: Int,
+        onOutputFileCreated: () -> Void = {},
+    ) throws -> Double {
+        try ensureAttemptIsCurrent(generation)
         // The one call in here that can block forever (issue #588).
         let hwFormat = try session.hardwareFormat(deviceUID: deviceUID)
         logger.info("Mic hardware format: \(hwFormat.sampleRate) Hz, \(hwFormat.channelCount)ch")
@@ -279,6 +297,7 @@ public class MicCaptureHandler: @unchecked Sendable {
         // this constant, which made it look like per-session state.
         let fileSampleRate = speechSampleRate
         if outputFile == nil, arbiter.withLock({ $0.mayCreateOutputFile }) {
+            startSeams.beforeOutputFile()
             let wavSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatLinearPCM,
                 AVSampleRateKey: fileSampleRate,
@@ -289,6 +308,7 @@ public class MicCaptureHandler: @unchecked Sendable {
                 AVLinearPCMIsNonInterleaved: false,
             ]
             outputFile = try AVAudioFile(forWriting: outputURL, settings: wavSettings)
+            onOutputFileCreated()
             // Restrict permissions to owner-only (0600) — audio may contain sensitive meeting content
             try FileManager.default.setAttributes(
                 [.posixPermissions: 0o600],
@@ -368,7 +388,9 @@ public class MicCaptureHandler: @unchecked Sendable {
             }
         }
 
+        try ensureAttemptIsCurrent(generation)
         try session.installTap(format: installFormat, block: tapBlock)
+        try ensureAttemptIsCurrent(generation)
         try session.start()
         logger.info("Mic recording started: \(self.outputURL.lastPathComponent)")
 
@@ -558,6 +580,9 @@ private func sumOfSquaresInt16(
 public enum MicCaptureError: LocalizedError {
     case noInputDevice
     case invalidHardwareFormat(sampleRate: Double, channelCount: UInt32)
+    /// The first start did not return within `RestartArbiter.attemptTimeout`
+    /// (issue #778). Its thread stays in the call for as long as it takes.
+    case firstStartTimedOut
 
     public var errorDescription: String? {
         switch self {
@@ -565,6 +590,11 @@ public enum MicCaptureError: LocalizedError {
 
         case let .invalidHardwareFormat(sampleRate, channelCount):
             "Microphone reported an invalid format (\(sampleRate) Hz, \(channelCount) ch)"
+
+        // The recording error when the microphone is the only track; says only what was observed.
+        case .firstStartTimedOut:
+            "The microphone did not respond within \(MicStartLimits.firstStartDeadlineSeconds) seconds of being "
+                + "opened, so the recording could not start."
         }
     }
 }

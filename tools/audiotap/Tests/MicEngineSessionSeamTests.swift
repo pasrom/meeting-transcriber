@@ -199,8 +199,16 @@ final class MicEngineSessionSeamTests: XCTestCase {
         let block = try XCTUnwrap(running.tapBlock)
         let sizeAfterStart = try Data(contentsOf: url).count
 
-        // A second attempt configures itself for a different format.
-        _ = try handler.startEngine(deviceUID: nil, on: attempt)
+        // A second attempt configures itself for a different format, and is
+        // adopted the way a restart is, so the capture is running again when
+        // the first session's block delivers.
+        guard case let .launchAttempt(generation) = handler.arbiter.withLock({ $0.handle(.deviceChanged) }) else {
+            XCTFail("the attempt must be launched")
+            return
+        }
+        _ = try handler.startEngine(deviceUID: nil, on: attempt, generation: generation)
+        _ = handler.arbiter.withLock { $0.handle(.attemptReturned(generation: generation, succeeded: true)) }
+        _ = handler.arbiter.withLock { $0.handle(.commitReady(generation: generation)) }
 
         // The first session's block is still installed and still delivering.
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: running.format, frameCapacity: 4096))

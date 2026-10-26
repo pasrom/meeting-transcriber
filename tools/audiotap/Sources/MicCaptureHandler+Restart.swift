@@ -121,7 +121,7 @@ extension MicCaptureHandler {
         var rate: Double?
         var thrown: (any Error)?
         do {
-            rate = try startEngine(deviceUID: deviceUID, on: candidate)
+            rate = try startEngine(deviceUID: deviceUID, on: candidate, generation: generation)
         } catch {
             thrown = error
         }
@@ -204,6 +204,27 @@ extension MicCaptureHandler {
         onGiveUp?()
     }
 
+    /// Throws `MicAttemptSuperseded` once the attempt for `generation` is no
+    /// longer the one in flight: it was given up at its deadline, with or
+    /// without a stop, or the capture was stopped. Called before the first
+    /// engine call, before `installTap`, which only attaches a tap to a node
+    /// and is checked as an early exit, and before `start`, the one step that
+    /// opens the input; the file and the converter between them are not
+    /// checked.
+    ///
+    /// What it cannot prevent: a step that passed this check and then takes
+    /// longer than the deadline itself, a slow Bluetooth profile switch say,
+    /// still opens the input after the deadline, under whatever records then,
+    /// until the stale attempt is torn down when the step returns. Closing
+    /// that would mean holding the arbiter's lock across a call that may never
+    /// return.
+    func ensureAttemptIsCurrent(_ generation: Int) throws {
+        guard arbiter.withLock({ $0.phase == .attemptInFlight(generation: generation) }) else {
+            logger.info("Mic: attempt \(generation) is no longer current, not going on with its engine")
+            throw MicAttemptSuperseded()
+        }
+    }
+
     func removeConfigChangeObserver() {
         guard let observer = configChangeObserver else { return }
         NotificationCenter.default.removeObserver(observer)
@@ -271,3 +292,8 @@ extension MicCaptureHandler {
         return MicEngineSession.deviceIDForUID(uid) != kAudioObjectUnknown ? uid : nil
     }
 }
+
+/// An attempt found it was no longer the current one part-way through
+/// bringing its engine up. Internal: it only ever reaches the arbiter, which
+/// rejects the attempt as stale.
+struct MicAttemptSuperseded: Error {}

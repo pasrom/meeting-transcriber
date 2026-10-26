@@ -153,6 +153,16 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         // the mutex the wedged call holds, so a call here would hang, but assert
         // it explicitly so the intent is visible.
         XCTAssertFalse(wedging.calls.contains("teardown"))
+
+        // The recording goes on, no stop. When the wedged call returns, the
+        // attempt is no longer current and must not open the input under it
+        // (issue #693), only release what it built.
+        wedging.release()
+        waitUntil("the late attempt tore its own work down") {
+            wedging.calls.contains("teardown")
+        }
+        XCTAssertFalse(wedging.calls.contains("start"), "a restart given up without a stop must not open the input")
+        XCTAssertFalse(wedging.calls.contains { $0.hasPrefix("installTap") }, "nor install a tap")
     }
 
     func testALateReturningAttemptDoesNotTruncateTheFinishedRecording() throws {
@@ -348,6 +358,14 @@ final class MicCaptureHandlerWedgeTests: XCTestCase {
         waitUntil("the late attempt tore its own work down") {
             candidate.calls.contains("teardown")
         }
+        // Opening the input after the recording ended is what a Bluetooth
+        // headset answers with a profile switch (issue #693), so a stale
+        // attempt must stop before it.
+        XCTAssertFalse(candidate.calls.contains("start"), "a restart that came back after the stop must not open the input")
+        XCTAssertFalse(
+            candidate.calls.contains { $0.hasPrefix("installTap") },
+            "nor install a tap on it",
+        )
         XCTAssertNotIdentical(
             handler.session as AnyObject, candidate,
             "a restart that finished after the stop must never become the live session",

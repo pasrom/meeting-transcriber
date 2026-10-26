@@ -26,8 +26,12 @@ import Foundation
 /// engine, following `OutputDeviceChangeCoordinator` and `CaptureRestartRetryPolicy`.
 struct RestartArbiter: Equatable {
     /// How long a single restart attempt may take before it counts as wedged.
+    /// It bounds the microphone's first start too (issue #778), which also
+    /// shows its number to the user (`MicStartLimits`).
     ///
-    /// A healthy restart completes in roughly 300 ms (measured). The timeout only
+    /// A healthy restart completes in roughly 300 ms (measured). How long a
+    /// healthy first start takes is not measured; a Bluetooth profile switch
+    /// or a first permission prompt may make it slower. The timeout only
     /// has to separate "never returns" from "slow", so it sits far above the
     /// healthy case: the cost of firing too early is a sacrificed microphone
     /// track on a Bluetooth renegotiation that would have succeeded.
