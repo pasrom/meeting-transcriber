@@ -48,6 +48,10 @@ class MockRecorder: RecordingProvider {
     /// Default false, matching the protocol's default.
     var appSilentTrackWatchdogGaveUp = false
 
+    /// Whether the app-audio tap's rolling window is mostly zero samples. Default
+    /// false, matching the protocol's default.
+    var appCaptureDigitallySilent = false
+
     /// What the capture layer reports about each channel. Defaults describe a
     /// channel delivering signal right now, so a test has to say explicitly
     /// that a channel is broken before the controller can report it. Deriving

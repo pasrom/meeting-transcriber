@@ -31,6 +31,22 @@ final class ChannelHealthLogLineTests: XCTestCase {
         )
     }
 
+    /// A rolling verdict reports before the ages are past the window, so the
+    /// line has to say where the verdict came from or its ages contradict it.
+    func testAFaultFromTheRollingVerdictSaysSo() {
+        let line = ChannelHealthController.faultLogLine(
+            channel: .app, fault: .digitalSilence,
+            ages: ChannelSignalAges(secondsSinceLastBuffer: 0, secondsSinceLastEnergy: 0.5),
+            elapsed: 121, window: 90, fromRollingVerdict: true,
+        )
+
+        XCTAssertEqual(
+            line,
+            "Channel fault: channel=app fault=digitalSilence source=rollingVerdict "
+                + "lastBuffer=0.0s lastEnergy=0.5s elapsed=121.0s window=90.0s, notifying",
+        )
+    }
+
     func testTheStopLineSaysNoneWhenNoVerdictWasReached() {
         let line = ChannelHealthController.stopLogLine(
             micFault: nil, appFault: .digitalSilence, recordingSilent: false, micAges: .unknown,
