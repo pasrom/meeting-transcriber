@@ -39,8 +39,8 @@ final class PipelineControllerTests: XCTestCase {
         PipelineController(
             settings: settings,
             notifier: RecordingNotifier(),
-            terminalJobStore: terminalJobStore,
             queueEnvironment: IsolatedQueueEnvironment.make(logDir: tmpDir, initialQueue: queue),
+            terminalJobStore: terminalJobStore,
         )
     }
 
@@ -79,6 +79,77 @@ final class PipelineControllerTests: XCTestCase {
         pc.rebuild()
 
         XCTAssertIdentical(pc.queue, before, "a rebuild with no engine replaced the queue")
+    }
+
+    /// A queue the controller builds reads its speakers from the environment's
+    /// database. It used to build `SpeakerMatcher()` on the installed app's
+    /// `speakers.json`, so every rebuild in a test read the user's own voice
+    /// profiles. The file sits outside `logDir`, so a controller deriving the
+    /// path from the log folder would not pass.
+    func testARebuiltQueueReadsTheEnvironmentsSpeakerDatabase() {
+        var environment = IsolatedQueueEnvironment.make(logDir: tmpDir)
+        environment.speakersDB = makeTempFile(suffix: "-speakers.json")
+        SpeakerMatcher(dbPath: environment.speakersDB).mutateDB { speakers in
+            speakers = [StoredSpeaker(name: "Speaker A", embeddings: [[1, 0, 0]])]
+        }
+        let pc = PipelineController(settings: settings, notifier: RecordingNotifier(), queueEnvironment: environment)
+        pc.activate { MockEngine() }
+
+        pc.rebuild()
+
+        XCTAssertEqual(pc.queue.knownSpeakerNames, ["Speaker A"])
+    }
+
+    /// The recognition history the queue appends to as speakers are named
+    /// goes to the environment's file. Written through the queue's own log
+    /// and read back from the path, which is the whole wiring.
+    func testARebuiltQueueWritesTheEnvironmentsRecognitionLog() async throws {
+        var environment = IsolatedQueueEnvironment.make(logDir: tmpDir)
+        environment.recognitionStatsLog = makeTempFile(suffix: "-recognition_log.jsonl")
+        let pc = PipelineController(settings: settings, notifier: RecordingNotifier(), queueEnvironment: environment)
+        pc.activate { MockEngine() }
+        pc.rebuild()
+
+        let log = try XCTUnwrap(pc.queue.recognitionStatsLog)
+        await log.append([RecognitionEvent(
+            ts: Date(), jobID: UUID(), meetingTitle: "Standup", track: .app, label: "R_S1",
+            autoName: nil, userName: "Speaker A", action: .added, topCandidates: nil,
+        )])
+
+        let written = await RecognitionStatsLog(path: environment.recognitionStatsLog).loadRecent(within: 3600)
+        XCTAssertEqual(written.map(\.userName), ["Speaker A"])
+    }
+
+    /// What production hands its queues. Compared, never opened: reading
+    /// these would touch the user's own files.
+    func testTheProductionEnvironmentNamesTheAppsOwnFiles() {
+        let production = PipelineController.QueueEnvironment.production
+        XCTAssertEqual(production.logDir, AppPaths.ipcDir)
+        XCTAssertEqual(production.stagingDir, AppPaths.recordingsDir)
+        XCTAssertEqual(production.speakersDB, AppPaths.speakersDB)
+        XCTAssertEqual(production.recognitionStatsLog, RecognitionStatsLog.defaultPath)
+        XCTAssertEqual(production.stageTimingLog, StageTimingLog.defaultPath)
+    }
+
+    /// Same for the stage-timing history the menu compares a running job
+    /// against: a rebuilt queue loads it from the environment's log.
+    func testARebuiltQueueReadsTheEnvironmentsStageTimingLog() async throws {
+        var environment = IsolatedQueueEnvironment.make(logDir: tmpDir)
+        environment.stageTimingLog = makeTempFile(suffix: "-stage_timing.jsonl")
+        await StageTimingLog(path: environment.stageTimingLog).append([StageTimingEvent(
+            ts: Date(), jobID: UUID(), stage: .transcribing, wallClockSeconds: 12, audioSeconds: 60,
+            engine: "parakeet", diarizerMode: nil,
+        )])
+        let pc = PipelineController(settings: settings, notifier: RecordingNotifier(), queueEnvironment: environment)
+        pc.activate { MockEngine() }
+
+        pc.rebuild()
+
+        // The queue reloads the history in a task of its own.
+        for _ in 0 ..< 200 where pc.queue.stageAverageByConfig.isEmpty {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(Array(pc.queue.stageAverageByConfig.values), [12])
     }
 
     func testEnsureQueueRebuildsBareQueueUsingProviderEngine() {
@@ -152,13 +223,9 @@ final class PipelineControllerTests: XCTestCase {
         // let a controller that derived the path from `logDir` pass while
         // still ignoring the environment.
         let staging = tmpDir.appendingPathComponent("staging-elsewhere", isDirectory: true)
-        let pc = PipelineController(
-            settings: settings,
-            notifier: RecordingNotifier(),
-            queueEnvironment: .init(
-                logDir: tmpDir, stagingDir: staging, recoverStagedRecordings: nil,
-            ),
-        )
+        var environment = IsolatedQueueEnvironment.make(logDir: tmpDir)
+        environment.stagingDir = staging
+        let pc = PipelineController(settings: settings, notifier: RecordingNotifier(), queueEnvironment: environment)
 
         XCTAssertEqual(
             pc.queue.stagingDir, staging,

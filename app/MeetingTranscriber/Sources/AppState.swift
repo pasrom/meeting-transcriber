@@ -211,10 +211,10 @@ final class AppState {
     // MARK: - Init
 
     init(
+        pipelineEnvironment: PipelineController.QueueEnvironment,
         settings: AppSettings = AppState.makeDefaultSettings(),
         notifier: any AppNotifying = SilentNotifier(),
         updateChecker: UpdateChecker? = nil,
-        pipelineEnvironment: PipelineController.QueueEnvironment = .production,
     ) {
         // Dependency defaults are resolved through explicitly-typed factory
         // helpers (above) rather than inline `?? SomeType()` expressions (and an

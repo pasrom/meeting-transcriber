@@ -533,7 +533,7 @@ extension XCTestCase {
             fatalError("Could not create test UserDefaults suite")
         }
         addTeardownBlock { DefaultsSuite.remove(suite) }
-        return try AppState(settings: AppSettings(defaults: defaults), pipelineEnvironment: makeIsolatedPipelineEnvironment())
+        return try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: AppSettings(defaults: defaults))
     }
 }
 

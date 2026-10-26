@@ -43,9 +43,9 @@ extension XCTestCase {
         notifier: any AppNotifying = SilentNotifier(), initialQueue: PipelineQueue? = nil,
     ) throws -> AppState {
         try AppState(
+            pipelineEnvironment: makeIsolatedPipelineEnvironment(initialQueue: initialQueue),
             settings: makeIsolatedSettings(),
             notifier: notifier,
-            pipelineEnvironment: makeIsolatedPipelineEnvironment(initialQueue: initialQueue),
         )
     }
 

@@ -57,7 +57,7 @@
         /// Build a snapshot of state for the debug RPC. Read-only.
         func rpcStateSnapshot() -> RPCStateSnapshot {
             let q = pipeline.queue
-            let stored = SpeakerMatcher().loadDB()
+            let stored = SpeakerMatcher(dbPath: pipeline.speakersDB).loadDB()
             let recentNames = SpeakerMatcher.rankByRecency(speakers: stored)
                 .prefix(10).map(\.name)
             let pendingJobs = q.pendingSpeakerNamingJobs.map { job in
@@ -358,14 +358,16 @@
         /// the cached `knownSpeakerNames` only when the mutation actually changed
         /// state — `.notFound` paths skip the redundant disk read.
         ///
-        /// The `speakerMatcherFactory` parameter exists so tests can route
-        /// mutations to a temp-path `SpeakerMatcher` instead of the real
-        /// `~/Library/Application Support/.../speakers.json`. Production uses
-        /// the default and is unaffected.
+        /// Without a `speakerMatcherFactory` the actions work on the speaker
+        /// database the pipeline's environment names, the app's own
+        /// `speakers.json` in production. Tests pass a factory to route them
+        /// to a matcher of their own.
         func makeSpeakerDBActions(
-            speakerMatcherFactory: @escaping () -> SpeakerMatcher = { SpeakerMatcher() },
+            speakerMatcherFactory: (() -> SpeakerMatcher)? = nil,
         ) -> SpeakerDBActions {
-            SpeakerDBActions(
+            let speakerMatcherFactory = speakerMatcherFactory
+                ?? { [speakersDB = pipeline.speakersDB] in SpeakerMatcher(dbPath: speakersDB) }
+            return SpeakerDBActions(
                 rename: { [weak self] from, to in
                     let result = speakerMatcherFactory().renameSpeaker(from: from, to: to)
                     let outcome: SpeakerActionOutcome = switch result {

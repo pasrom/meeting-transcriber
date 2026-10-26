@@ -281,8 +281,14 @@ class PipelineQueue {
     /// `stagingDir` is a parameter rather than always `AppPaths.recordingsDir`
     /// because this queue decides from it whether finished audio is the app's
     /// own to relocate; a caller working in temp folders must be able to say so.
+    ///
+    /// `logDir` has no default for the same reason, more strongly: the snapshot,
+    /// the event log and the processed-recordings ledger all live there, so a
+    /// default of the app's own folder put every caller that left it out into
+    /// the installed app's queue and history. Production passes
+    /// `AppPaths.ipcDir` through `PipelineController.QueueEnvironment.production`.
     init(
-        logDir: URL? = nil,
+        logDir: URL,
         stagingDir: URL = AppPaths.recordingsDir,
         speakerMatcherFactory: @escaping () -> SpeakerMatcher = PipelineQueue.throwawayMatcherFactory(),
         snapshotWriter: @escaping @Sendable ([PipelineJob], URL) throws -> Void = PipelineSnapshot.save,
@@ -293,7 +299,7 @@ class PipelineQueue {
         echoCancellationEnabled: @escaping () -> Bool = { false },
         echoCancellerFactory: (() -> (any EchoCancelling)?)? = nil,
     ) {
-        self.logDir = logDir ?? AppPaths.ipcDir
+        self.logDir = logDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = nil
@@ -387,7 +393,7 @@ class PipelineQueue {
         diarizationFactoryWithMode: ((DiarizerMode) -> any DiarizationProvider)? = nil,
         protocolGeneratorFactory: @escaping () -> (any ProtocolGenerating)?,
         outputDir: URL,
-        logDir: URL? = nil,
+        logDir: URL,
         stagingDir: URL = AppPaths.recordingsDir,
         diarizeEnabled: Bool = false,
         echoDedupEnabled: Bool = true,
@@ -410,7 +416,7 @@ class PipelineQueue {
         inFlightRuns: InFlightRunRegistry? = nil,
         securityScope: SecurityScopeAccess = .live,
     ) {
-        self.logDir = logDir ?? AppPaths.ipcDir
+        self.logDir = logDir
         self.processedLedger = ProcessedRecordingsLedger(logDir: self.logDir)
         eventLog = PipelineEventLog(logDir: self.logDir)
         self.engine = engine

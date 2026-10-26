@@ -8,8 +8,11 @@ import Foundation
 extension PipelineController.QueueEnvironment {
     static var production: Self {
         Self(
-            logDir: nil,
+            logDir: AppPaths.ipcDir,
             stagingDir: AppPaths.recordingsDir,
+            speakersDB: AppPaths.speakersDB,
+            recognitionStatsLog: RecognitionStatsLog.defaultPath,
+            stageTimingLog: StageTimingLog.defaultPath,
             recoverStagedRecordings: PipelineController.recoverStagedRecordings(into:),
         )
     }

@@ -95,7 +95,7 @@ struct MeetingTranscriberApp: App {
         // the application delegate here because `init` runs before the run
         // loop, so every quit request finds it, however early it comes and
         // whether or not the menu-bar item is ever shown.
-        let state = AppState(notifier: NotificationManager.shared)
+        let state = AppState(pipelineEnvironment: .production, notifier: NotificationManager.shared)
         _appState = State(initialValue: state)
         AppDelegate.install(state)
         let updater = MenuStageProgressUpdater()

@@ -50,10 +50,17 @@ final class PipelineController {
     /// scope is opened, the recovery of that staging folder a new queue runs,
     /// and how the output folder is resolved. Production uses `.production`,
     /// the app's own data directories; a test passes temp folders so a queue it
-    /// builds never reads or writes the installed app's data.
+    /// builds never reads or writes the installed app's data. Required wherever
+    /// it is taken, never defaulted, so leaving it out cannot silently mean the
+    /// app's own folders.
     struct QueueEnvironment {
-        var logDir: URL?
+        var logDir: URL
         var stagingDir: URL
+        /// The speaker database and the two history logs a queue appends to as
+        /// jobs run. Files, not folders; production names the app's own.
+        var speakersDB: URL
+        var recognitionStatsLog: URL
+        var stageTimingLog: URL
         var securityScope: SecurityScopeAccess = .live
         /// Rescues crashed recordings from the staging folder and enqueues
         /// orphans into the queue it is handed; nil skips it.
@@ -67,6 +74,13 @@ final class PipelineController {
     }
 
     @ObservationIgnored private let queueEnvironment: QueueEnvironment
+
+    /// The speaker database this controller's queues use, for the rest of the
+    /// app state that reads or changes it alongside them (the RPC snapshot and
+    /// speaker actions), so all of them agree on one file.
+    var speakersDB: URL {
+        queueEnvironment.speakersDB
+    }
 
     /// Called with the new queue whenever `rebuild()` replaces it, so a holder
     /// of the old one can follow. The active `WatchLoop` is one: it enqueues
@@ -93,8 +107,8 @@ final class PipelineController {
     init(
         settings: AppSettings,
         notifier: any AppNotifying,
+        queueEnvironment: QueueEnvironment,
         terminalJobStore: TerminalJobStore? = nil,
-        queueEnvironment: QueueEnvironment = .production,
     ) {
         self.settings = settings
         self.notifier = notifier
@@ -102,7 +116,7 @@ final class PipelineController {
         self.outputDirectory = OutputDirectoryResolver(settings: settings, notifier: notifier)
         self.terminalJobStore = terminalJobStore
             ?? TerminalJobStore(
-                path: (queueEnvironment.logDir ?? AppPaths.ipcDir).appendingPathComponent("terminal_jobs.json"),
+                path: queueEnvironment.logDir.appendingPathComponent("terminal_jobs.json"),
             )
         self.queue = queueEnvironment.initialQueue
             ?? PipelineQueue(
@@ -299,13 +313,13 @@ final class PipelineController {
                     useAITitleForFilenames: settings.useAITitleForFilenames,
                 )
             },
-            speakerMatcherFactory: { SpeakerMatcher() },
+            speakerMatcherFactory: { [speakersDB] in SpeakerMatcher(dbPath: speakersDB) },
             vadConfig: settings.vadEnabled ? VADConfig(threshold: settings.vadThreshold) : nil,
-            recognitionStatsLog: RecognitionStatsLog(),
+            recognitionStatsLog: RecognitionStatsLog(path: queueEnvironment.recognitionStatsLog),
             terminologyNormalizer: { [weak settings] in
                 TerminologyNormalizer(rulesText: settings?.terminologyRulesText ?? "")
             },
-            stageTimingLog: StageTimingLog(),
+            stageTimingLog: StageTimingLog(path: queueEnvironment.stageTimingLog),
             terminalJobStore: terminalJobStore,
             securityScope: queueEnvironment.securityScope,
         )

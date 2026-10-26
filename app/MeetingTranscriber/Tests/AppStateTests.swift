@@ -43,9 +43,9 @@ final class AppStateTests: XCTestCase { // swiftlint:disable:this type_body_leng
     ) -> AppState {
         let logs: URL = logDir ?? testLogDir
         return AppState(
+            pipelineEnvironment: IsolatedQueueEnvironment.make(logDir: logs, initialQueue: queue),
             settings: settings,
             notifier: notifier,
-            pipelineEnvironment: IsolatedQueueEnvironment.make(logDir: logs, initialQueue: queue),
         )
     }
 

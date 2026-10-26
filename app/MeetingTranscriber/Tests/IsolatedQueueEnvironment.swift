@@ -14,6 +14,9 @@ enum IsolatedQueueEnvironment {
         .init(
             logDir: logDir,
             stagingDir: logDir.appendingPathComponent("staging", isDirectory: true),
+            speakersDB: logDir.appendingPathComponent("speakers.json"),
+            recognitionStatsLog: logDir.appendingPathComponent("recognition_log.jsonl"),
+            stageTimingLog: logDir.appendingPathComponent("stage_timing.jsonl"),
             recoverStagedRecordings: nil,
             initialQueue: initialQueue,
         )

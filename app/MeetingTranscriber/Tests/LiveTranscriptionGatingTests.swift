@@ -50,14 +50,14 @@ final class LiveTranscriptionGatingTests: XCTestCase {
     func testShouldShowFalseWhenToggleOff() throws {
         settings.transcriptionEngine = .parakeet
         settings.liveTranscriptionEnabled = false
-        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
+        let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
 
     func testShouldShowFalseWhenToggleOnSupportedEngineButNoActiveWatchLoop() throws {
         settings.transcriptionEngine = .parakeet
         settings.liveTranscriptionEnabled = true
-        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
+        let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
         // No watch loop has been started → recording state is unreachable
         XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
@@ -66,7 +66,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
     func testShouldShowFalseForWhisperKitWhenNoActiveWatchLoop() throws {
         settings.transcriptionEngine = .whisperKit
         settings.liveTranscriptionEnabled = true
-        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
+        let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
         XCTAssertNil(state.watching.watchLoop)
         XCTAssertFalse(state.shouldShowLiveCaptions)
     }
@@ -81,7 +81,7 @@ final class LiveTranscriptionGatingTests: XCTestCase {
         settings.parakeetLanguage = "en"
         settings.liveTranscriptionEnabled = true
         settings.liveCaptionsOverlayEnabled = true
-        let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
+        let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
         let (loop, _) = makeTestWatchLoop()
         state.watching.watchLoop = loop
         try await loop.startManualRecording(pid: 1234, appName: "Chrome", title: "Meeting")

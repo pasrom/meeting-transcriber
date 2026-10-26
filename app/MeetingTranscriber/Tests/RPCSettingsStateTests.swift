@@ -294,7 +294,7 @@
         func test_appStateSnapshot_carriesLiveSettings() throws {
             settings.recordOnly = true
             settings.transcriptionEngine = .parakeet
-            let state = try AppState(settings: settings, pipelineEnvironment: makeIsolatedPipelineEnvironment())
+            let state = try AppState(pipelineEnvironment: makeIsolatedPipelineEnvironment(), settings: settings)
 
             let s = state.rpcStateSnapshot().settings
 

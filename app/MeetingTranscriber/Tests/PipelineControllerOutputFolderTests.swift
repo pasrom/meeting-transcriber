@@ -80,10 +80,12 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
         let pc = PipelineController(
             settings: settings,
             notifier: RecordingNotifier(),
-            terminalJobStore: TerminalJobStore(path: logDir.appendingPathComponent("terminal_jobs.json")),
             queueEnvironment: .init(
                 logDir: logDir,
                 stagingDir: staging,
+                speakersDB: logDir.appendingPathComponent("speakers.json"),
+                recognitionStatsLog: logDir.appendingPathComponent("recognition_log.jsonl"),
+                stageTimingLog: logDir.appendingPathComponent("stage_timing.jsonl"),
                 securityScope: recorder.access,
                 recoverStagedRecordings: { _ in recorder.recoveries += 1 },
                 resolveOutputDir: { resolver in
@@ -93,6 +95,7 @@ final class PipelineControllerOutputFolderTests: XCTestCase {
                 },
                 initialQueue: queue,
             ),
+            terminalJobStore: TerminalJobStore(path: logDir.appendingPathComponent("terminal_jobs.json")),
         )
         pc.activate { MockEngine() }
         return pc
