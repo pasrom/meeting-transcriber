@@ -52,6 +52,10 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
     private var offlineProcessor: any OfflineDiarizationProcessing
 
     private var sortformerDiarizer: SortformerDiarizer?
+    /// Builds a ready Sortformer diarizer for the requested compute units and
+    /// reports the units its loaded model carries. Everything that needs the
+    /// real model sits behind this one seam, so a test can supply a stub.
+    private let makeSortformerDiarizer: (MLComputeUnits) async throws -> (SortformerDiarizer, MLComputeUnits)
     /// Lazily-loaded WeSpeaker (pyannote `wespeaker_v2`) models, used only by
     /// `FluidDiarizer+SortformerEmbeddings.extractSortformerEmbeddings`. Not
     /// `private` because the extension lives in a separate file (codecov-
@@ -66,9 +70,16 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
         mode: DiarizerMode = .offline,
         tuning: OfflineDiarizerTuning = .defaults,
         offlineProcessor: (any OfflineDiarizationProcessing)? = nil,
+        makeSortformerDiarizer: @escaping (MLComputeUnits) async throws -> (SortformerDiarizer, MLComputeUnits) = { computeUnits in
+            let diarizer = SortformerDiarizer()
+            let models = try await SortformerModels.loadFromHuggingFace(config: .default, computeUnits: computeUnits)
+            diarizer.initialize(models: models)
+            return (diarizer, models.mainModel.configuration.computeUnits)
+        },
     ) {
         self.mode = mode
         self.offlineProcessor = offlineProcessor ?? FluidOfflineProcessor(tuning: tuning)
+        self.makeSortformerDiarizer = makeSortformerDiarizer
     }
 
     /// Normalize FluidAudio's "Speaker 0" format to "SPEAKER_0".
@@ -119,13 +130,27 @@ final class FluidDiarizer: DiarizationProvider, @unchecked Sendable {
 
     // MARK: - Sortformer Mode (SortformerDiarizer)
 
+    /// Compute units for the Sortformer model. Left to FluidAudio (nil), the
+    /// default config resolves to `.all`, and Core ML's plan then puts more
+    /// than a third of the graph's operations on the GPU. With CPU + Neural
+    /// Engine those move to the Neural Engine. Measured on an M3 Max with the
+    /// three quality fixtures: the Sortformer pass ran 21 to 24 % faster, DER
+    /// was identical on two fixtures and 0.0009 higher on the third. The first
+    /// run after a model or OS update pays a one-time compile for the new
+    /// routing. FluidAudio forwards an explicit value to Core ML unchanged;
+    /// only `nil` goes through its own `recommendedComputeUnits` choice.
+    /// This is a speed choice, not a crash fix: the WeSpeaker embeddings that
+    /// follow in Sortformer mode keep FluidAudio's default routing.
+    static let sortformerComputeUnits: MLComputeUnits = .cpuAndNeuralEngine
+
     private func runSortformer(audioPath: URL) async throws -> MeetingTranscriber.DiarizationResult {
         if sortformerDiarizer == nil {
-            let diarizer = SortformerDiarizer()
-            let models = try await SortformerModels.loadFromHuggingFace(config: .default)
-            diarizer.initialize(models: models)
+            let (diarizer, routed) = try await makeSortformerDiarizer(Self.sortformerComputeUnits)
             sortformerDiarizer = diarizer
-            logger.info("FluidAudio Sortformer models ready")
+            // `routed` is read back from the loaded model, so the log shows the
+            // routing Core ML was given rather than the value this file asked for.
+            let routedLabel = routed == .cpuAndNeuralEngine ? "cpuAndNeuralEngine" : "rawValue \(routed.rawValue)"
+            logger.info("FluidAudio Sortformer models ready (computeUnits: \(routedLabel, privacy: .public))")
         }
 
         logger.info("Starting Sortformer diarization: \(audioPath.lastPathComponent)")
