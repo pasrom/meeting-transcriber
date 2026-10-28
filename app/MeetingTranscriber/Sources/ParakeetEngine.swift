@@ -122,7 +122,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
         await loadModel()
         guard asrManager != nil else {
             logger.error("Parakeet: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
-            throw TranscriptionError.modelNotLoaded
+            throw TranscriptionError.modelNotLoaded()
         }
         logger.info("Parakeet: model loaded successfully")
     }
@@ -169,7 +169,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
                 return try await fileTranscriptionOverride(audioPath)
             }
         #endif
-        guard let manager = asrManager else { throw TranscriptionError.modelNotLoaded }
+        guard let manager = asrManager else { throw TranscriptionError.modelNotLoaded() }
         var decoderState = await TdtDecoderState.make(decoderLayers: manager.decoderLayerCount)
         return try await manager.transcribe(
             audioPath, decoderState: &decoderState, language: fluidLanguageHint,
@@ -182,7 +182,7 @@ final class ParakeetEngine: TranscribingEngine, StreamingTranscribingEngine {
                 return try await sampleTranscriptionOverride(samples)
             }
         #endif
-        guard let manager = asrManager else { throw TranscriptionError.modelNotLoaded }
+        guard let manager = asrManager else { throw TranscriptionError.modelNotLoaded() }
         var decoderState = await TdtDecoderState.make(decoderLayers: manager.decoderLayerCount)
         return try await manager.transcribe(
             samples, decoderState: &decoderState, language: fluidLanguageHint,

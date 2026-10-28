@@ -226,6 +226,26 @@ final class TranscriptionSettingsCustomModelTests: XCTestCase {
         XCTAssertEqual(try textField(A11yID.whisperKitCustomModelFolderField, in: view).input(), "")
     }
 
+    /// The status line is where the user looks when "Load Model" comes back; the
+    /// reason the load failed belongs next to it, not only in a redacted log line.
+    func testTheStatusLineShowsWhyTheLastLoadFailed() async throws {
+        let settings = AppSettings(defaults: defaults)
+        settings.whisperKitCustomModelEnabled = true
+        let engine = WhisperKitEngine()
+        engine.applyModelVariant("finetune", origin: .localFolder(path: "/picked/finetune", bookmark: nil))
+        engine.installModelSourceForTesting(WhisperKitModelSource(
+            locateLocal: { _ in nil },
+            download: { _, _ in throw WhisperKitModelError.folderIncomplete(missing: "tokenizer.json") },
+            makePipe: { _, _ in throw WhisperKitModelError.folderNotLoadable },
+        ))
+        await engine.loadModel()
+        XCTAssertEqual(engine.modelState, .unloaded, "Precondition: the load failed")
+
+        let view = makeView(settings: settings, whisperKitEngine: engine)
+
+        XCTAssertNoThrow(try view.inspect().find(text: "Model folder is missing tokenizer.json."))
+    }
+
     func testClearForgetsThePickedFolderAtOnce() throws {
         let settings = AppSettings(defaults: defaults)
         settings.whisperKitCustomModelEnabled = true

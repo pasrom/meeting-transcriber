@@ -69,6 +69,13 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     }
 
     private(set) var modelState: EngineModelState = .unloaded
+    /// Why the last load attempt failed, worded for the user
+    /// (`WhisperKitLoadFailureReason`), or nil while nothing has failed. Set only
+    /// where a load gives up with no model loaded, cleared when the next attempt
+    /// starts, when a load succeeds, and when the requested model changes, so it
+    /// never describes a model other than the one the state is about and never
+    /// sits next to a working one.
+    private(set) var loadFailureReason: String?
     private(set) var downloadProgress: Double = 0
     /// Transcription progress (0.0–1.0) based on WhisperKit's 30s window processing.
     private(set) var transcriptionProgress: Double = 0
@@ -227,6 +234,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         let variant = modelVariant
         let origin = modelOrigin
         let source = modelSource(origin)
+        loadFailureReason = nil
 
         if await loadFromLocalSnapshot(variant: variant, origin: origin, source: source) {
             return LoadAttempt(variant: variant, origin: origin, builtPipe: true)
@@ -249,6 +257,15 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
             logger.error(
                 "WhisperKit model load failed (\(String(describing: type(of: error)), privacy: .public): \(error.localizedDescription, privacy: .private))",
             )
+            // The redacted line above is for the log; the user gets a path-free
+            // sentence in Settings and in the job error (see `ensureModel`). Only
+            // for the model still requested: one changed mid-load has not been
+            // tried yet, and `applyModelVariant` already cleared the reason for it.
+            // And only with no pipe left: one still installed is the requested
+            // model (any model change drops it), working beside "Model ready".
+            if pipe == nil, variant == modelVariant, origin == modelOrigin {
+                loadFailureReason = WhisperKitLoadFailureReason.describe(error, variant: variant, origin: origin)
+            }
             // A failed *reload* keeps the prior pipe (see `unloadModel`), and the
             // state has to say so: `ensureModel` short-circuits on a non-nil pipe
             // and keeps transcribing, so reporting `.unloaded` would have Settings
@@ -280,6 +297,8 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         guard variant != modelVariant || origin != modelOrigin else { return }
         modelVariant = variant
         modelOrigin = origin
+        // Whatever failed, it was another model.
+        loadFailureReason = nil
         guard pipe != nil else { return }
         unloadModel()
     }
@@ -312,7 +331,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
         await loadModel()
         guard pipe != nil else {
             logger.error("WhisperKit: model load FAILED, state=\(String(describing: self.modelState), privacy: .public)")
-            throw TranscriptionError.modelNotLoaded
+            throw TranscriptionError.modelNotLoaded(reason: loadFailureReason)
         }
         logger.info("WhisperKit: model loaded successfully")
     }
@@ -357,7 +376,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     func transcribeSegments(audioPath: URL) async throws -> [TimestampedSegment] {
         try await ensureModel()
         guard let decodingClient else {
-            throw TranscriptionError.modelNotLoaded
+            throw TranscriptionError.modelNotLoaded()
         }
 
         transcriptionProgress = 0
@@ -415,7 +434,7 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
     /// Hallucination-filter logic matches `transcribeSegments`.
     func transcribeSamples(_ samples: [Float]) async throws -> String {
         try await ensureModel()
-        guard let decodingClient else { throw TranscriptionError.modelNotLoaded }
+        guard let decodingClient else { throw TranscriptionError.modelNotLoaded() }
         // The explicit experimental prompt choice applies to both saved and
         // live WhisperKit transcription while retaining an immutable snapshot.
         let options = Self.decodingOptions(
@@ -533,12 +552,15 @@ final class WhisperKitEngine: TranscribingEngine, StreamingTranscribingEngine {
 }
 
 enum TranscriptionError: LocalizedError {
-    case modelNotLoaded
+    /// `reason` is the engine's `loadFailureReason` when the load that was just
+    /// attempted failed, so the job error says why; nil where nothing is known.
+    /// The message keeps its prefix either way, which is what consumers match on.
+    case modelNotLoaded(reason: String? = nil)
     case streamingNotSupported
 
     var errorDescription: String? {
         switch self {
-        case .modelNotLoaded: "WhisperKit model not loaded"
+        case let .modelNotLoaded(reason): "WhisperKit model not loaded" + (reason.map { ": \($0)" } ?? "")
         case .streamingNotSupported: "This engine does not support sample-based live transcription"
         }
     }

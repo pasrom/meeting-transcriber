@@ -449,5 +449,15 @@ struct TranscriptionSettingsView: View {
                 Task { await engine.loadModel() }
             }
         }
+
+        // Why the last load failed, next to the state it explains. The engine keeps
+        // no reason while a model is loaded (a failed reload that keeps its pipe
+        // keeps the requested model, since any model change drops the pipe), so
+        // this shows only beside "Load Model".
+        if settings.transcriptionEngine == .whisperKit, let reason = whisperKitEngine.loadFailureReason {
+            Text(reason)
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
     }
 }
