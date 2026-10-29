@@ -91,6 +91,42 @@
             try assertGone(pidFile)
         }
 
+        /// A prompt larger than the pipe buffer that the CLI never reads,
+        /// while a process it started keeps its stdin open, must not hold
+        /// the run past its limit. The child leaves the CLI's process group,
+        /// so stopping the CLI does not take it along, and gets stdin through
+        /// fd 3 because the shell gives a background job /dev/null for stdin.
+        func testGenerateTimesOutWhileThePromptCanNeverBeWritten() async throws {
+            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let script = try makeFakeCLI(run: """
+            exec 3<&0
+            /usr/bin/perl -e 'setpgrp(0, 0); sleep 3' <&3 &
+            exec 3<&-
+            exec 1>&-
+            echo $$ > '\(pidFile.path)'
+            exec sleep 3
+            """)
+
+            await assertTimesOut(script: script, transcript: Self.largeTranscript)
+
+            try assertGone(pidFile)
+        }
+
+        /// Stopping a CLI that has not read its whole prompt breaks the pipe
+        /// under the write. That must fail the write, not raise SIGPIPE and
+        /// end the app (here: the test runner).
+        func testGenerateSurvivesStoppingACLIThatLeftThePromptUnread() async throws {
+            let pidFile = try XCTUnwrap(scratch).appendingPathComponent("cli.pid")
+            let script = try makeFakeCLI(run: """
+            echo $$ > '\(pidFile.path)'
+            exec sleep 3
+            """)
+
+            await assertTimesOut(script: script, transcript: Self.largeTranscript)
+
+            try assertGone(pidFile)
+        }
+
         // MARK: - Runs that end by themselves
 
         /// A CLI that exits while a process it started still holds its output
@@ -305,6 +341,9 @@
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
             return path
         }
+
+        /// Four times a pipe buffer.
+        private static let largeTranscript = String(repeating: "x", count: 256 * 1024)
 
         private static let replyLine =
             #"printf '%s\n' '{"type":"content_block_delta","delta":{"type":"text_delta","text":"Protocol body"}}'"#

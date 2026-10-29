@@ -11,7 +11,9 @@
     /// streams, with no thread blocked in a read, because a process the CLI
     /// started can hold them open after the CLI has gone. Each stream ends at
     /// end of file or `outputDrainGrace` after the CLI exits, whichever comes
-    /// first.
+    /// first. The prompt goes to stdin through a dispatch channel that is
+    /// stopped with the CLI and when the run ends, so a CLI that never reads
+    /// it cannot hold up the run either.
     extension ClaudeCLIProtocolGenerator {
         /// Default for `outputDrainGrace`: how long the CLI's output is still
         /// read after it has exited. What it wrote before exiting is in the
@@ -51,10 +53,12 @@
             async let read = Self.readStreamJSON(from: stdout.chunks)
             async let stderrTail = Self.collectTail(of: stderr.chunks, limit: Self.stderrTailBytes)
 
-            Self.writePrompt(prompt, to: stdinPipe)
+            let stdin = Self.writePrompt(prompt, to: stdinPipe)
+            defer { stdin.close(flags: .stop) }
             let outcome: BoundedProcess.Outcome
             do {
-                outcome = try await BoundedProcess(process, terminationGrace: terminationGrace).run(timeout: timeout)
+                outcome = try await BoundedProcess(process, terminationGrace: terminationGrace)
+                    .run(timeout: timeout) { stdin.close(flags: .stop) }
             } catch is CancellationError {
                 // The output stopped being read when the cancellation came,
                 // so a CLI writing more than a pipe buffer while it shuts
@@ -136,25 +140,29 @@
             Data(data.suffix(limit).drop { $0 & 0xC0 == 0x80 })
         }
 
-        /// Writes the prompt to the CLI's stdin and closes it, in a detached
-        /// task that nothing awaits: the pipe buffer is finite (~64KB), and a
-        /// larger prompt waits for the CLI to read it.
-        private static func writePrompt(_ prompt: String, to stdinPipe: Pipe) {
-            let promptData = Data(prompt.utf8)
-            logger.info("claude_cli_subprocess_start prompt_bytes=\(promptData.count, privacy: .public)")
-            Task.detached {
-                // The throwing `write(contentsOf:)`, not the deprecated
-                // `write(_:)`, which raises an uncatchable Obj-C exception on
-                // a write error such as EPIPE from a CLI that was stopped.
-                do {
-                    try stdinPipe.fileHandleForWriting.write(contentsOf: promptData)
-                } catch {
-                    logger.debug(
-                        "claude_cli_stdin_write_failed error=\(error.localizedDescription, privacy: .public)",
-                    )
-                }
-                try? stdinPipe.fileHandleForWriting.close()
+        /// Writes the prompt to the CLI's stdin and closes it, through a
+        /// dispatch channel, so no thread blocks while a prompt larger than
+        /// the pipe buffer (~64KB) waits for the CLI to read it. Closing the
+        /// returned channel with `.stop` abandons what is not yet written.
+        /// SIGPIPE is off for the descriptor: a CLI gone before reading its
+        /// prompt fails the write with EPIPE instead of ending the app.
+        private static func writePrompt(_ prompt: String, to pipe: Pipe) -> DispatchIO {
+            let handle = pipe.fileHandleForWriting
+            _ = fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1)
+            let channel = DispatchIO(type: .stream, fileDescriptor: handle.fileDescriptor, queue: .global()) { _ in
+                try? handle.close()
             }
+            var prompt = prompt
+            let data = prompt.withUTF8 { DispatchData(bytes: UnsafeRawBufferPointer($0)) }
+            logger.info("claude_cli_subprocess_start prompt_bytes=\(data.count, privacy: .public)")
+            channel.write(offset: 0, data: data, queue: .global()) { done, _, error in
+                guard done else { return }
+                if error != 0 {
+                    logger.debug("claude_cli_stdin_write_failed errno=\(error, privacy: .public)")
+                }
+                channel.close()
+            }
+            return channel
         }
     }
 
