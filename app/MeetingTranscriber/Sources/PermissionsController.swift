@@ -38,6 +38,15 @@ final class PermissionsController {
     private let notifier: any AppNotifying
     private let probe: () async -> HealthCheckResult
 
+    /// A second `check()` joins the check that is out rather than opening a
+    /// second engine on the same microphone. The debounce below cannot do
+    /// that: it only knows about checks that have finished, because
+    /// `lastCheckAt` is written after the probe returns. That mattered most
+    /// while the probe had no deadline (issue #778): a wedged probe never
+    /// finished, so every app activation started another one that wedged the
+    /// same way. The probe is bounded now, so a joiner waits at most that bound.
+    private let checkFlight = SingleFlight<Void>()
+
     init(
         notifier: any AppNotifying,
         probe: @escaping () async -> HealthCheckResult = { await PermissionHealthCheck.runLive() },
@@ -77,6 +86,10 @@ final class PermissionsController {
            Date().timeIntervalSince(last) < minimumInterval {
             return
         }
+        await checkFlight.run { [self] in await runCheck() }
+    }
+
+    private func runCheck() async {
         let result = await probe()
         // Cheap query, no HAL churn, so it rides along with the debounced TCC
         // probe rather than needing its own schedule.

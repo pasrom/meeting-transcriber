@@ -69,6 +69,10 @@ final class MainActorGate {
         !continuations.isEmpty
     }
 
+    var waiterCount: Int {
+        continuations.count
+    }
+
     func wait() async {
         if isOpen { return }
         await withCheckedContinuation { continuations.append($0) }
