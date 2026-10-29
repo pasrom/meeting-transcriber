@@ -18,10 +18,21 @@
         /// previously-working install (both measured — see PR #692 review).
         let anthropicAPIKey: String?
 
-        init(claudeBin: String, language: String, anthropicAPIKey: String? = nil) {
+        /// How long one run may take before the CLI is stopped and the run
+        /// fails with `ProtocolError.timeout`. Production uses
+        /// `timeoutSeconds`; tests pass a short one.
+        let timeout: TimeInterval
+
+        init(
+            claudeBin: String,
+            language: String,
+            anthropicAPIKey: String? = nil,
+            timeout: TimeInterval = Self.timeoutSeconds,
+        ) {
             self.claudeBin = claudeBin
             self.language = language
             self.anthropicAPIKey = anthropicAPIKey
+            self.timeout = timeout
         }
 
         static let timeoutSeconds: TimeInterval = 600
@@ -124,7 +135,7 @@
 
             // Read stream-json output concurrently with stdin write
             let (text, resultEvent) = try await Self.readStreamJSON(
-                from: stdoutPipe, process: process, exited: exitStream,
+                from: stdoutPipe, process: process, exited: exitStream, timeout: timeout,
             )
 
             // Ensure stdin write completes (should be done by now)
@@ -219,7 +230,7 @@
         /// Parse Claude CLI stream-json output, accumulate text, and capture
         /// the terminal `result` event (if any) for failure diagnostics.
         private static func readStreamJSON(
-            from pipe: Pipe, process: Process, exited: AsyncStream<Void>,
+            from pipe: Pipe, process: Process, exited: AsyncStream<Void>, timeout: TimeInterval,
         ) async throws -> (text: String, resultEvent: ResultEventInfo?) {
             let handle = pipe.fileHandleForReading
             var parts: [String] = []
@@ -229,7 +240,7 @@
             // Read line-by-line from stdout
             var buffer = Data()
             while true {
-                if ProcessInfo.processInfo.systemUptime - startTime > timeoutSeconds {
+                if ProcessInfo.processInfo.systemUptime - startTime > timeout {
                     let elapsed = ProcessInfo.processInfo.systemUptime - startTime
                     let elapsedStr = String(format: "%.1f", elapsed)
                     logger.error(
