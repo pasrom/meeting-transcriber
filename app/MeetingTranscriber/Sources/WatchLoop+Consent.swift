@@ -37,6 +37,7 @@ extension WatchLoop {
         }
 
         pendingConsentApp = app
+        logger.info("Browser meeting in \(app, privacy: .public) detected, asking for consent")
         // `app` is already the concrete browser: a browser meeting is carried
         // under the process that held the assertion, so the debounce above and
         // the name below refer to the same one browser. `ownerName` is kept as
@@ -100,9 +101,21 @@ extension WatchLoop {
             default:
                 consentPolicy.recordDecline(app: app, now: nowProvider())
             }
+            // One line covers the whole quiet spell that follows: the gate
+            // skips the call silently until the suppression ends, so this is
+            // where "why is it not asking" gets answered (issue #814).
+            let now = nowProvider()
+            let quiet = Self.quietPeriod(
+                consentPolicy.decision(app: app, now: now, isDenied: denyListStore.isDenied(app)), now: now,
+            )
+            logger.info("""
+            Consent for \(app, privacy: .public) resolved: \(String(describing: answer), privacy: .public); \
+            not asking again \(quiet, privacy: .public)
+            """)
             detector.reset(appName: app)
             return
         }
+        logger.info("Consent for \(app, privacy: .public) resolved: granted")
         // Minutes can pass between prompt and click, and watching may have been
         // switched off in between — recording then would be recording without
         // having been asked to watch at all.
@@ -116,5 +129,16 @@ extension WatchLoop {
             return
         }
         approvedConsentMeeting = meeting
+    }
+
+    /// How long the gate stays quiet after a non-granted answer, for the log.
+    /// A duration, not a `Date`: its description is UTC, which next to local
+    /// log timestamps reads as already over.
+    private static func quietPeriod(_ decision: BrowserConsentPolicy.Decision, now: Date) -> String {
+        switch decision {
+        case let .suppressed(until): "for \(Int(until.timeIntervalSince(now).rounded())) s"
+        case .denied: "for this app (Never for this app)"
+        case .ask: "before the next detection"
+        }
     }
 }
