@@ -447,9 +447,14 @@ extension BadgeKind {
         activeJobState: JobState?,
         updateAvailable: Bool,
         permissionProblem: Bool = false,
+        consentPending: Bool = false,
     ) -> BadgeKind {
         if watchLoopActive {
             if watchLoopState == .recording { return .recording }
+            // An open browser-consent prompt has a deadline and is the one
+            // question that can go unseen as a notification (issue #814), so
+            // it outranks everything but a running recording and an error.
+            if consentPending, transcriberState != .error { return .userAction }
             switch transcriberState {
             case .waitingForSpeakerCount, .waitingForSpeakerNames: return .userAction
             case .protocolReady: return .done

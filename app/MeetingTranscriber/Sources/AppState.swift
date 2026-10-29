@@ -472,6 +472,7 @@ final class AppState {
             activeJobState: pipeline.queue.activeJobs.first?.state,
             updateAvailable: updateChecker.availableUpdate != nil,
             permissionProblem: permissions.health?.isHealthy == false,
+            consentPending: loop?.pendingConsentApp != nil,
         )
     }
 

@@ -59,6 +59,46 @@ final class BadgeKindComputeTests: XCTestCase {
         XCTAssertEqual(badge, .userAction)
     }
 
+    /// An open browser-consent prompt shows on the icon, not only as a
+    /// notification that may never be seen (issue #814).
+    func testBadgeUserActionWhileConsentIsPending() {
+        let badge = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .watching,
+            activeJobState: .transcribing,
+            updateAvailable: true,
+            consentPending: true,
+        )
+        XCTAssertEqual(badge, .userAction)
+    }
+
+    func testAnErrorOutranksAPendingConsent() {
+        let badge = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .watching,
+            transcriberState: .error,
+            activeJobState: nil,
+            updateAvailable: false,
+            consentPending: true,
+        )
+        XCTAssertEqual(badge, .error)
+    }
+
+    func testRecordingOutranksAPendingConsent() {
+        // A native call recording while a browser prompt waits: the running
+        // recording is the state the icon must show.
+        let badge = BadgeKind.compute(
+            watchLoopActive: true,
+            watchLoopState: .recording,
+            transcriberState: .recording,
+            activeJobState: nil,
+            updateAvailable: false,
+            consentPending: true,
+        )
+        XCTAssertEqual(badge, .recording)
+    }
+
     func testBadgeDoneForProtocolReadyState() {
         let badge = BadgeKind.compute(
             watchLoopActive: true,
