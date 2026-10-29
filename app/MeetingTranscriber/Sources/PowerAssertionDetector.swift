@@ -188,6 +188,9 @@ class PowerAssertionDetector: MeetingDetecting {
     /// Diagnostic dedup: (process|name|type) keys already logged as unmatched,
     /// so a persistently-running unmatched meeting app logs once per session.
     private var loggedMissKeys: Set<String> = []
+    /// The keys the last poll reported as "did not match". Read by tests; the
+    /// log line is emitted from the same list.
+    private(set) var lastUnmatchedKeys: [String] = []
 
     /// Closure that provides assertion data. Defaults to IOPMCopyAssertionsByProcess.
     /// Override in tests to inject mock data.
@@ -242,6 +245,11 @@ class PowerAssertionDetector: MeetingDetecting {
     func checkOnce() -> DetectedMeeting? {
         let assertions = assertionProvider()
         var hitsThisRound: Set<String> = []
+        // Every identity whose assertion matched, including the ones skipped
+        // on purpose below (denied, or cooling down after a reset). Those are
+        // not misses, and the diagnostic must not call them "did not match"
+        // (issue #814); it reads this set, not `hitsThisRound`.
+        var matchedThisRound: Set<String> = []
         var firstMatch: [String: (pid: Int32, processName: String, pattern: AssertionPattern)] = [:]
 
         for (pid, pidAssertions) in assertions {
@@ -258,28 +266,33 @@ class PowerAssertionDetector: MeetingDetecting {
                     // sharing the browser pattern never share a slot.
                     let key = pattern.identityKey(processName: processName)
 
+                    // Only count each identity once per poll
+                    guard !matchedThisRound.contains(key),
+                          matchAssertion(
+                              processName: processName, assertName: assertName, assertType: assertType, pattern: pattern,
+                          ) else { continue }
+                    matchedThisRound.insert(key)
+
                     // Permanently refused: never confirm, so it cannot shadow
                     // another meeting or force a counter-wiping reset.
-                    if isIdentityDenied(key) { continue }
+                    if isIdentityDenied(key) {
+                        logDeniedOnce(key)
+                        continue
+                    }
 
                     // Skip apps in cooldown
                     if let until = cooldownUntil[key], Date() < until {
                         continue
                     }
 
-                    // Only count each identity once per poll
-                    guard !hitsThisRound.contains(key) else { continue }
-
-                    if matchAssertion(processName: processName, assertName: assertName, assertType: assertType, pattern: pattern) {
-                        hitsThisRound.insert(key)
-                        firstMatch[key] = (pid, processName, pattern)
-                        consecutiveHits[key, default: 0] += 1
-                    }
+                    hitsThisRound.insert(key)
+                    firstMatch[key] = (pid, processName, pattern)
+                    consecutiveHits[key, default: 0] += 1
                 }
             }
         }
 
-        logUnmatchedWatchedAssertions(assertions, hits: hitsThisRound)
+        logUnmatchedWatchedAssertions(assertions, matched: matchedThisRound)
 
         // Check confirmation threshold
         for (key, hits) in consecutiveHits {
@@ -470,10 +483,21 @@ class PowerAssertionDetector: MeetingDetecting {
         Self.matches(pattern: pattern, processName: processName, assertName: assertName, assertType: assertType)
     }
 
-    private func logUnmatchedWatchedAssertions(_ assertions: [Int32: [[String: Any]]], hits: Set<String>) {
-        for key in Self.unmatchedWatchedAssertionKeys(
-            assertions: assertions, patterns: patterns, hits: hits,
-        ) {
+    /// One line per denied identity per session, naming the list that holds
+    /// it, so a refused app is not mistaken for one the detector cannot see.
+    private func logDeniedOnce(_ identity: String) {
+        guard loggedMissKeys.insert("denied|\(identity)").inserted else { return }
+        logger.info("""
+        Meeting assertion from \(identity, privacy: .public) matched but is ignored: \
+        the app is on the "Never for this app" list (Settings → General).
+        """)
+    }
+
+    private func logUnmatchedWatchedAssertions(_ assertions: [Int32: [[String: Any]]], matched: Set<String>) {
+        lastUnmatchedKeys = Self.unmatchedWatchedAssertionKeys(
+            assertions: assertions, patterns: patterns, hits: matched,
+        )
+        for key in lastUnmatchedKeys {
             guard loggedMissKeys.insert(key).inserted else { continue }
             logger.info("""
             Watched meeting app is running but its power assertion did not match \

@@ -199,6 +199,45 @@ final class PowerAssertionDetectorIdentityTests: XCTestCase {
         XCTAssertEqual(detector.checkOnce()?.pattern.appName, "Brave Browser")
     }
 
+    // MARK: - Skipped is not "did not match" (issue #814)
+
+    func testADeniedMatchIsNotReportedAsAMiss() {
+        let detector = PowerAssertionFixture.browserDetector()
+        detector.isIdentityDenied = { $0 == "Google Chrome" }
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertions((7, "Google Chrome", PowerAssertionFixture.webRTC))
+        }
+        XCTAssertNil(detector.checkOnce())
+        XCTAssertEqual(detector.lastUnmatchedKeys, [], "a denied browser matched; it is not a miss")
+    }
+
+    func testAMatchInCooldownIsNotReportedAsAMiss() {
+        // The exact #814 shape: an expired consent prompt resets the detector,
+        // and the next poll falls inside the cooldown while the call goes on.
+        let detector = PowerAssertionFixture.browserDetector()
+        detector.assertionProvider = {
+            PowerAssertionFixture.assertions((7, "Google Chrome", PowerAssertionFixture.webRTC))
+        }
+        detector.reset(appName: "Google Chrome")
+        XCTAssertNil(detector.checkOnce())
+        XCTAssertEqual(detector.lastUnmatchedKeys, [])
+    }
+
+    func testANonMatchingBoundAssertionIsStillReportedAsAMiss() {
+        // Control: the diagnostic must keep firing for a real non-match, the
+        // case it exists for (issue #446).
+        let detector = PowerAssertionDetector(
+            patterns: PowerAssertionDetector.patterns(watching: ["Zoom"]),
+            confirmationCount: 1,
+        )
+        detector.windowListProvider = { [] }
+        detector.assertionProvider = {
+            PowerAssertionFixture.typedAssertions([(7, "zoom.us", "Something else", "PreventUserIdleSystemSleep")])
+        }
+        XCTAssertNil(detector.checkOnce())
+        XCTAssertEqual(detector.lastUnmatchedKeys, ["zoom.us|Something else|PreventUserIdleSystemSleep"])
+    }
+
     func testTitleComesFromTheDetectedBrowserOnly() {
         // With one shared identity the title matcher accepted any family
         // browser's window, leaking an unrelated tab title into the protocol

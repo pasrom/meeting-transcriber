@@ -13,6 +13,11 @@ extension PowerAssertionDetector {
     /// Keys ("process|name|type") for assertions from a watched meeting app that
     /// produced no match this round. Pure so the selection logic is unit-testable;
     /// the caller dedupes for the detector's lifetime and emits one log line each.
+    ///
+    /// `hits` must hold every identity that MATCHED, including those the
+    /// detector then set aside (denied, or in the re-detect cooldown). Passing
+    /// only the counted ones reported a cooldown after an expired consent
+    /// prompt as "did not match", which read as a detector bug (issue #814).
     static func unmatchedWatchedAssertionKeys(
         assertions: [Int32: [[String: Any]]],
         patterns: [AssertionPattern],
