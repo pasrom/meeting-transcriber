@@ -89,6 +89,45 @@ final class AboutSettingsViewTests: XCTestCase {
         XCTAssertTrue(checker.isChecking)
     }
 
+    private func checkerWithUpdate(installedCask: String?) throws -> UpdateChecker {
+        let checker = UpdateChecker(provider: MockUpdateProvider(), installedCask: installedCask)
+        checker.availableUpdate = try ReleaseInfo(
+            tagName: "v1.0.0",
+            name: "Release v1.0.0",
+            prerelease: false,
+            htmlURL: XCTUnwrap(URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")),
+            dmgURL: URL(string: "https://example.com/app.dmg"),
+        )
+        return checker
+    }
+
+    func testHomebrewInstallShowsBrewCommandInsteadOfDownload() throws {
+        let body = try makeAbout(updateChecker: checkerWithUpdate(installedCask: "meeting-transcriber")).inspect()
+        XCTAssertNoThrow(try body.find(text: "brew update && brew upgrade --cask pasrom/meeting-transcriber/meeting-transcriber"))
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.updateCopyBrewCommand))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.updateDownload))
+    }
+
+    func testCopyCommandButtonCopiesTheBrewCommand() throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("AboutSettingsViewTests-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        var view = try makeAbout(updateChecker: checkerWithUpdate(installedCask: "meeting-transcriber"))
+        view.pasteboard = pasteboard
+
+        try view.inspect().find(viewWithAccessibilityIdentifier: A11yID.updateCopyBrewCommand).button().tap()
+
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "brew update && brew upgrade --cask pasrom/meeting-transcriber/meeting-transcriber",
+        )
+    }
+
+    func testDMGInstallShowsDownload() throws {
+        let body = try makeAbout(updateChecker: checkerWithUpdate(installedCask: nil)).inspect()
+        XCTAssertNoThrow(try body.find(viewWithAccessibilityIdentifier: A11yID.updateDownload))
+        XCTAssertThrowsError(try body.find(viewWithAccessibilityIdentifier: A11yID.updateCopyBrewCommand))
+    }
+
     func testUpdatesSectionHiddenWhenNoChecker() throws {
         let body = try makeAbout().inspect()
         XCTAssertThrowsError(try body.find(text: "Check for Updates"))

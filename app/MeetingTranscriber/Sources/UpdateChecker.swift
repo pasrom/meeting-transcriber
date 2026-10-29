@@ -113,16 +113,28 @@ final class UpdateChecker {
     var lastCheckDate: Date?
     var lastError: String?
 
+    /// The Homebrew cask this app was installed from, `nil` for a DMG install.
+    let installedCask: String?
+
     private let provider: any UpdateProviding
     private let currentVersion: (Int, Int, Int)
     private var checkTask: Task<Void, Never>?
     private var periodicTask: Task<Void, Never>?
 
-    init(provider: any UpdateProviding = GitHubReleaseProvider()) {
+    /// `installedCask` defaults to `nil` rather than probing the Caskroom, so a
+    /// test never depends on whether the machine running it has the cask
+    /// installed. The app passes `UpdateInstallRoute.installedCask()`.
+    init(provider: any UpdateProviding = GitHubReleaseProvider(), installedCask: String? = nil) {
         self.provider = provider
+        self.installedCask = installedCask
         let version =
             Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
         self.currentVersion = Self.parseVersion(version) ?? (0, 0, 0)
+    }
+
+    /// How `update` should be installed on this machine.
+    func installRoute(for update: ReleaseInfo) -> UpdateInstallRoute {
+        UpdateInstallRoute.resolve(update: update, installedCask: installedCask)
     }
 
     func checkNow(includePreReleases: Bool = false) {

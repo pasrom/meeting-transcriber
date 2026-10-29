@@ -212,16 +212,23 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder private var updateSection: some View {
-        if let update = updateChecker?.availableUpdate {
+        if let updateChecker, let update = updateChecker.availableUpdate {
+            let route = updateChecker.installRoute(for: update)
             Divider()
             Button {
-                NSWorkspace.shared.open(update.dmgURL ?? update.htmlURL)
+                route.perform()
             } label: {
-                Label(
-                    "Update Available: \(update.tagName)",
-                    systemImage: "arrow.down.circle.fill",
-                )
+                Label(updateTitle(update, route: route), systemImage: "arrow.down.circle.fill")
             }
+        }
+    }
+
+    /// The menu closes on click, so the title has to say up front that the
+    /// item copies a command rather than opening a download.
+    private func updateTitle(_ update: ReleaseInfo, route: UpdateInstallRoute) -> String {
+        switch route {
+        case .homebrew: "Update Available: \(update.tagName) (Copy brew Command)"
+        case .download: "Update Available: \(update.tagName)"
         }
     }
 

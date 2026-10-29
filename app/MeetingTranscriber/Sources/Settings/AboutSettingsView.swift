@@ -4,6 +4,9 @@ import SwiftUI
 struct AboutSettingsView: View {
     @Bindable var settings: AppSettings
     var updateChecker: UpdateChecker?
+    /// Where "Copy Command" writes; tests pass a private one so they never
+    /// clobber the user's clipboard.
+    var pasteboard: NSPasteboard = .general
 
     var body: some View {
         Form {
@@ -99,15 +102,38 @@ struct AboutSettingsView: View {
                 }
             }
 
-            if let update = updateChecker.availableUpdate {
+            updateAction(updateChecker: updateChecker)
+        }
+    }
+
+    /// A Homebrew install gets the brew command instead of the DMG, so the
+    /// update keeps Homebrew's record in step with the installed app.
+    @ViewBuilder
+    private func updateAction(updateChecker: UpdateChecker) -> some View {
+        if let update = updateChecker.availableUpdate {
+            let route = updateChecker.installRoute(for: update)
+            switch route {
+            case let .homebrew(command):
+                Text(command)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
                 Button {
-                    NSWorkspace.shared.open(update.dmgURL ?? update.htmlURL)
+                    route.perform(pasteboard: pasteboard)
+                } label: {
+                    Label("Copy Command", systemImage: "doc.on.doc")
+                }
+                .accessibilityIdentifier(A11yID.updateCopyBrewCommand)
+
+            case .download:
+                Button {
+                    route.perform()
                 } label: {
                     Label(
                         "Download \(update.tagName)",
                         systemImage: "arrow.down.to.line",
                     )
                 }
+                .accessibilityIdentifier(A11yID.updateDownload)
             }
         }
     }

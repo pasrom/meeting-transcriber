@@ -762,8 +762,8 @@ final class MenuBarViewTests: XCTestCase {
 
     // MARK: - Update indicator
 
-    func testUpdateIndicatorShownWhenUpdateAvailable() throws {
-        let checker = UpdateChecker(provider: MockUpdateProvider())
+    private func checkerWithUpdate(installedCask: String? = nil) throws -> UpdateChecker {
+        let checker = UpdateChecker(provider: MockUpdateProvider(), installedCask: installedCask)
         checker.availableUpdate = try ReleaseInfo(
             tagName: "v1.0.0",
             name: "Release v1.0.0",
@@ -771,10 +771,22 @@ final class MenuBarViewTests: XCTestCase {
             htmlURL: XCTUnwrap(URL(string: "https://github.com/pasrom/meeting-transcriber/releases/tag/v1.0.0")),
             dmgURL: URL(string: "https://example.com/app.dmg"),
         )
+        return checker
+    }
 
-        let sut = try makeView(status: makeStatus(), updateChecker: checker)
+    func testUpdateIndicatorShownWhenUpdateAvailable() throws {
+        let sut = try makeView(status: makeStatus(), updateChecker: checkerWithUpdate())
         let body = try sut.inspect()
         XCTAssertNoThrow(try body.find(text: "Update Available: v1.0.0"))
+    }
+
+    func testUpdateIndicatorSaysItCopiesBrewCommandForHomebrewInstall() throws {
+        let sut = try makeView(
+            status: makeStatus(),
+            updateChecker: checkerWithUpdate(installedCask: "meeting-transcriber"),
+        )
+        let body = try sut.inspect()
+        XCTAssertNoThrow(try body.find(text: "Update Available: v1.0.0 (Copy brew Command)"))
     }
 
     func testUpdateIndicatorHiddenWhenNoUpdate() throws {

@@ -206,7 +206,13 @@ final class AppState {
     }
 
     private static func makeUpdateChecker() -> UpdateChecker {
-        UpdateChecker()
+        // The sandboxed App Store build is never a cask install, so it must
+        // never be offered a brew command.
+        #if APPSTORE
+            UpdateChecker()
+        #else
+            UpdateChecker(installedCask: UpdateInstallRoute.installedCask())
+        #endif
     }
 
     // MARK: - Init

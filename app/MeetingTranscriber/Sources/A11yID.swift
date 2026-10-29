@@ -89,6 +89,10 @@ enum A11yID {
     /// Same single-home pattern for the About tab.
     static let settingsTabAbout = settingsTab("about")
 
+    // About tab, update actions: one per install route.
+    static let updateDownload = "update-download"
+    static let updateCopyBrewCommand = "update-copy-brew-command"
+
     // Speaker-naming dialog.
     static let confirmButton = "confirm-button"
     static let skipButton = "skip-button"
